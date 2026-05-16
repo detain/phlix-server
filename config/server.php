@@ -9,7 +9,7 @@ return [
     ],
     'worker' => [
         'count' => 'auto',
-        'stdout_file' => '/var/log/phlex/stdout.log',
+        'stdout_file' => __DIR__ . '/../.logs/stdout.log',
         'pid_file' => '/var/run/phlex/pid',
     ],
     'process' => [

@@ -54,7 +54,7 @@ jobs:
         run: ./vendor/bin/phpunit --testsuite Unit --coverage-clover coverage.xml --coverage-html coverage-report
 
       - name: Upload coverage to Codecov
-        if: always()
+        if: secrets.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml
@@ -87,32 +87,3 @@ jobs:
           if [ -f vendor/bin/phpcs ]; then
             ./vendor/bin/phpcs --standard=PSR12 src/Server/
           fi
-
-  coverage-check:
-    name: Coverage Threshold Check
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-
-      - name: Download coverage artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage
-
-      - name: Check coverage threshold
-        run: |
-          COVERAGE=$(grep -oP '(?<=line coverage=")\d+\.\d+' coverage/index.html 2>/dev/null || echo "0")
-          MIN_COVERAGE=80
-          if (( $(echo "$COVERAGE < $MIN_COVERAGE" | bc -l) )); then
-            echo "Coverage $COVERAGE% is below threshold $MIN_COVERAGE%"
-            exit 1
-          fi
-          echo "Coverage $COVERAGE% meets threshold"

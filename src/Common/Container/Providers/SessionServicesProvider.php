@@ -8,6 +8,7 @@ use DI\ContainerBuilder;
 use Phlex\Common\Container\ServiceProviderInterface;
 use Phlex\Session\PlaybackController;
 use Phlex\Session\SessionManager;
+use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
 use function DI\get;
@@ -40,7 +41,8 @@ final class SessionServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.session')),
 
             PlaybackController::class => autowire()
-                ->constructorParameter('logger', get('logger.session')),
+                ->constructorParameter('logger', get('logger.session'))
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
         ]);
     }
 }

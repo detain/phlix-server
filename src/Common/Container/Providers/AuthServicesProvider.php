@@ -11,6 +11,7 @@ use Phlex\Auth\UserProfileManager;
 use Phlex\Auth\UserRepository;
 use Phlex\Auth\WatchHistory;
 use Phlex\Common\Container\ServiceProviderInterface;
+use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
 use function DI\factory;
@@ -70,7 +71,8 @@ final class AuthServicesProvider implements ServiceProviderInterface
             WatchHistory::class => autowire(),
 
             AuthManager::class => autowire()
-                ->constructorParameter('logger', get('logger.auth')),
+                ->constructorParameter('logger', get('logger.auth'))
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
         ]);
     }
 }

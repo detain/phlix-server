@@ -1261,11 +1261,6 @@ parameters:
 			path: src/Media/Library/MediaScanner.php
 
 		-
-			message: "#^Property Phlex\\\\Media\\\\Library\\\\MediaScanner\\:\\:\\$db is never read, only written\\.$#"
-			count: 1
-			path: src/Media/Library/MediaScanner.php
-
-		-
 			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
 			count: 17
 			path: src/Media/Metadata/FanartProvider.php

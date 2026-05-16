@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
+use Phlex\Common\Events\Auth\UserCreated;
+use Phlex\Common\Events\Auth\UserLoggedIn;
+use Phlex\Common\Events\Auth\UserLoggedOut;
 use Phlex\Common\Logger\AuditLogger;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Psr\EventDispatcher\EventDispatcherInterface;
 
 /**
  * Authentication manager for user registration, login, and token management.
@@ -38,6 +42,9 @@ class AuthManager
     /** @var StructuredLogger General application logger */
     private StructuredLogger $logger;
 
+    /** @var EventDispatcherInterface|null PSR-14 dispatcher for auth lifecycle events. */
+    private ?EventDispatcherInterface $eventDispatcher;
+
     /**
      * Create a new AuthManager instance.
      *
@@ -45,6 +52,12 @@ class AuthManager
      * @param JwtHandler $jwtHandler JWT token handler
      * @param AuditLogger $auditLogger Security audit logger
      * @param StructuredLogger|null $logger Optional application logger
+     * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher;
+     *                                       when supplied,
+     *                                       {@see UserCreated},
+     *                                       {@see UserLoggedIn}, and
+     *                                       {@see UserLoggedOut} are published from
+     *                                       the matching lifecycle methods.
      *
      * @example
      * ```php
@@ -59,12 +72,14 @@ class AuthManager
         UserRepository $userRepository,
         JwtHandler $jwtHandler,
         AuditLogger $auditLogger,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?EventDispatcherInterface $eventDispatcher = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
         $this->auditLogger = $auditLogger;
         $this->logger = $logger ?? $this->createDefaultLogger();
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -160,6 +175,8 @@ class AuthManager
 
         $this->logger->info('User registered', ['user_id' => $userId, 'username' => $username]);
 
+        $this->dispatchUserCreated($userId, $username, $email);
+
         return $this->createAuthResponse($userId);
     }
 
@@ -201,6 +218,9 @@ class AuthManager
         $this->auditLogger->logLogin($user['id'], $deviceId, true);
 
         $this->logger->info('User logged in', ['user_id' => $user['id'], 'device_id' => $deviceId]);
+
+        $userId = self::asString($user['id'] ?? null);
+        $this->dispatchUserLoggedIn($userId, $deviceId);
 
         return $this->createAuthResponse($user['id']);
     }
@@ -340,5 +360,128 @@ class AuthManager
             'expires_in' => 3600,
             'user' => $user,
         ];
+    }
+
+    /**
+     * Record that a user has logged out and publish {@see UserLoggedOut}.
+     *
+     * This is the lightweight A.2 hook: AuthManager does not yet own
+     * session-row deletion (that lives in `SessionManager` and is
+     * driven by the controllers), so this method simply emits the
+     * event so plugins / hub mirrors can react. Token revocation will
+     * be implemented in a later phase.
+     *
+     * @param string $userId    UUID of the user logging out.
+     * @param string $sessionId Opaque session identifier (device ID /
+     *                          session UUID, depending on phase).
+     * @param string $reason    One of {@see UserLoggedOut::REASON_EXPLICIT},
+     *                          {@see UserLoggedOut::REASON_EXPIRED},
+     *                          {@see UserLoggedOut::REASON_REVOKED}.
+     *                          Defaults to "explicit".
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    public function logout(
+        string $userId,
+        string $sessionId,
+        string $reason = UserLoggedOut::REASON_EXPLICIT
+    ): void {
+        $this->logger->info('User logged out', [
+            'user_id' => $userId,
+            'session_id' => $sessionId,
+            'reason' => $reason,
+        ]);
+        $this->dispatchUserLoggedOut($userId, $sessionId, $reason);
+    }
+
+    /**
+     * Emit {@see UserCreated}.
+     *
+     * @param string $userId   UUID of the newly-created user.
+     * @param string $username Validated username on the new account.
+     * @param string $email    Validated email on the new account.
+     *
+     * @return void
+     */
+    private function dispatchUserCreated(string $userId, string $username, string $email): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new UserCreated(
+            userId: $userId,
+            username: $username,
+            email: $email,
+        ));
+    }
+
+    /**
+     * Emit {@see UserLoggedIn}.
+     *
+     * IP address and user-agent are not yet plumbed through AuthManager
+     * (HTTP request context is created by the controller, not the
+     * manager). They are passed as empty strings for now; Phase B will
+     * route the request context through.
+     *
+     * @param string $userId    UUID of the user logging in.
+     * @param string $sessionId Session / device identifier.
+     *
+     * @return void
+     */
+    private function dispatchUserLoggedIn(string $userId, string $sessionId): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new UserLoggedIn(
+            userId: $userId,
+            sessionId: $sessionId,
+            ipAddress: '',
+            userAgent: '',
+        ));
+    }
+
+    /**
+     * Emit {@see UserLoggedOut}.
+     *
+     * @param string $userId    UUID of the user logging out.
+     * @param string $sessionId Session / device identifier.
+     * @param string $reason    Reason constant from {@see UserLoggedOut}.
+     *
+     * @return void
+     */
+    private function dispatchUserLoggedOut(string $userId, string $sessionId, string $reason): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new UserLoggedOut(
+            userId: $userId,
+            sessionId: $sessionId,
+            reason: $reason,
+        ));
+    }
+
+    /**
+     * Coerce a mixed value to a string for event payload use.
+     *
+     * Returns the empty string for nulls and non-scalars so the caller
+     * never has to special-case a missing row column.
+     *
+     * @param mixed $value Value to coerce.
+     *
+     * @return string Coerced string ('' when not coercible).
+     */
+    private static function asString(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value) || is_bool($value)) {
+            return (string)$value;
+        }
+        return '';
     }
 }

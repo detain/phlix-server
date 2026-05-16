@@ -13,6 +13,7 @@ use Phlex\Media\Library\MediaScanner;
 use Phlex\Media\Metadata\MetadataManager;
 use Phlex\Media\Streaming\HlsStreamer;
 use Phlex\Media\Streaming\QualitySelector;
+use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
 use function DI\factory;
@@ -56,7 +57,8 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.media')),
 
             MediaScanner::class => autowire()
-                ->constructorParameter('logger', get('logger.media')),
+                ->constructorParameter('logger', get('logger.media'))
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),

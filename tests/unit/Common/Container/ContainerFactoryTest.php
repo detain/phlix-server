@@ -10,6 +10,7 @@ use Phlex\Auth\JwtHandler;
 use Phlex\Common\Container\ContainerFactory;
 use Phlex\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Common\Container\Providers\CoreServicesProvider;
+use Phlex\Common\Container\Providers\EventServicesProvider;
 use Phlex\Common\Container\Providers\MediaServicesProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
 use Phlex\Common\Container\ServiceProviderInterface;
@@ -237,11 +238,12 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(4, $providers);
+        $this->assertCount(5, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
-        $this->assertInstanceOf(AuthServicesProvider::class, $providers[1]);
-        $this->assertInstanceOf(MediaServicesProvider::class, $providers[2]);
-        $this->assertInstanceOf(SessionServicesProvider::class, $providers[3]);
+        $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
+        $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
+        $this->assertInstanceOf(MediaServicesProvider::class, $providers[3]);
+        $this->assertInstanceOf(SessionServicesProvider::class, $providers[4]);
     }
 
     public function test_resolves_hls_streamer_with_config_overrides(): void

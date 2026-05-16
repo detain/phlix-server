@@ -64,6 +64,9 @@ public/
 ### Foundation
 - **PSR-11 DI container (PHP-DI 7)**: auto-wired services with provider-based
   composition; see `docs/dev/architecture-server.md`
+- **PSR-14 event dispatcher (Tukio)**: playback, library-scan, and auth
+  lifecycle events with typed `readonly` DTOs. Plugins subscribe by event
+  class FQCN; see `docs/dev/event-reference.md`.
 
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty

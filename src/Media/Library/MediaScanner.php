@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Library;
 
+use Phlex\Common\Events\Library\LibraryScanCompleted;
+use Phlex\Common\Events\Library\LibraryScanStarted;
+use Phlex\Common\Events\Library\MediaItemAdded;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
 
@@ -37,19 +41,35 @@ class MediaScanner
     /** @var ItemRepository Repository for media item persistence */
     private ItemRepository $itemRepository;
 
+    /** @var EventDispatcherInterface|null PSR-14 dispatcher for library lifecycle events. */
+    private ?EventDispatcherInterface $eventDispatcher;
+
     /**
      * Constructor for MediaScanner.
      *
      * @param Connection $db Database connection for media item persistence
      * @param ItemRepository $itemRepository Repository for media item operations
      * @param StructuredLogger|null $logger Optional custom logger, creates default if not provided
+     * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher;
+     *                                       when supplied,
+     *                                       {@see LibraryScanStarted},
+     *                                       {@see LibraryScanCompleted}, and
+     *                                       {@see MediaItemAdded} are published
+     *                                       during scans. Defaults to null so
+     *                                       legacy callers and tests not exercising
+     *                                       events do not need to wire one up.
      */
-    public function __construct(Connection $db, ItemRepository $itemRepository, ?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        Connection $db,
+        ItemRepository $itemRepository,
+        ?StructuredLogger $logger = null,
+        ?EventDispatcherInterface $eventDispatcher = null
+    ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->namingOptions = $this->loadNamingOptions();
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -118,6 +138,9 @@ class MediaScanner
             return;
         }
 
+        $startMs = (int)(microtime(true) * 1000);
+        $this->dispatchScanStarted($libraryId, $path);
+
         $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
 
         $iterator = new \RecursiveIteratorIterator(
@@ -126,6 +149,7 @@ class MediaScanner
 
         $scanned = 0;
         $skipped = 0;
+        $added = 0;
 
         foreach ($iterator as $file) {
             if ($file->isDir()) {
@@ -144,7 +168,9 @@ class MediaScanner
                 continue;
             }
 
-            $this->processFile($libraryId, $file, $type);
+            if ($this->processFile($libraryId, $file, $type)) {
+                $added++;
+            }
             $scanned++;
         }
 
@@ -153,7 +179,11 @@ class MediaScanner
             'path' => $path,
             'scanned' => $scanned,
             'skipped' => $skipped,
+            'added' => $added,
         ]);
+
+        $endMs = (int)(microtime(true) * 1000);
+        $this->dispatchScanCompleted($libraryId, $added, $endMs - $startMs);
     }
 
     /**
@@ -186,16 +216,18 @@ class MediaScanner
      * @param string $libraryId The library's unique identifier
      * @param SplFileInfo $file The file to process
      * @param string $type The media type
-     * @return void
+     *
+     * @return bool True when a new item was added to the repository; false
+     *              when the file was already known and was skipped.
      */
-    private function processFile(string $libraryId, SplFileInfo $file, string $type): void
+    private function processFile(string $libraryId, SplFileInfo $file, string $type): bool
     {
         $path = $file->getPathname();
 
         // Check if already exists
         $existing = $this->itemRepository->findByPath($path);
         if ($existing) {
-            return; // Already scanned
+            return false; // Already scanned
         }
 
         // Determine media type
@@ -218,6 +250,10 @@ class MediaScanner
             'name' => $metadata['name'] ?? 'unknown',
             'type' => $mediaType,
         ]);
+
+        $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
+
+        return true;
     }
 
     /**
@@ -278,5 +314,106 @@ class MediaScanner
         }
 
         return $metadata;
+    }
+
+    /**
+     * Best-effort lookup of a library's human-readable name for the
+     * `LibraryScanStarted` event. Falls back to the empty string when
+     * the row cannot be resolved (e.g. tests that mock the DB).
+     *
+     * @param string $libraryId Library UUID.
+     *
+     * @return string Library `name` column value or empty string.
+     */
+    private function lookupLibraryName(string $libraryId): string
+    {
+        try {
+            $rows = $this->db->query(
+                "SELECT name FROM libraries WHERE id = ? LIMIT 1",
+                [$libraryId]
+            );
+        } catch (\Throwable) {
+            return '';
+        }
+        if (!is_array($rows) || $rows === []) {
+            return '';
+        }
+        $name = $rows[0]['name'] ?? '';
+        return is_string($name) ? $name : '';
+    }
+
+    /**
+     * Emit {@see LibraryScanStarted}.
+     *
+     * @param string $libraryId Library UUID.
+     * @param string $path      Absolute scan path.
+     *
+     * @return void
+     */
+    private function dispatchScanStarted(string $libraryId, string $path): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new LibraryScanStarted(
+            libraryId: $libraryId,
+            libraryName: $this->lookupLibraryName($libraryId),
+            path: $path,
+        ));
+    }
+
+    /**
+     * Emit {@see LibraryScanCompleted}.
+     *
+     * Updated / removed counts are currently zero because A.2 ships the
+     * dispatch site without re-plumbing the upsert / cleanup paths;
+     * subsequent phases will populate the full tallies.
+     *
+     * @param string $libraryId  Library UUID.
+     * @param int    $added      Number of items added during this scan.
+     * @param int    $durationMs Wall-clock duration of the scan, in
+     *                           milliseconds.
+     *
+     * @return void
+     */
+    private function dispatchScanCompleted(string $libraryId, int $added, int $durationMs): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new LibraryScanCompleted(
+            libraryId: $libraryId,
+            itemsAdded: $added,
+            itemsUpdated: 0,
+            itemsRemoved: 0,
+            durationMs: $durationMs,
+        ));
+    }
+
+    /**
+     * Emit {@see MediaItemAdded}.
+     *
+     * @param string $mediaItemId UUID of the newly-persisted item.
+     * @param string $libraryId   Owning library UUID.
+     * @param string $path        Absolute filesystem path of the source file.
+     * @param string $type        Concrete media-item type (movie, episode, …).
+     *
+     * @return void
+     */
+    private function dispatchMediaItemAdded(
+        string $mediaItemId,
+        string $libraryId,
+        string $path,
+        string $type
+    ): void {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $this->eventDispatcher->dispatch(new MediaItemAdded(
+            mediaItemId: $mediaItemId,
+            libraryId: $libraryId,
+            path: $path,
+            type: $type,
+        ));
     }
 }

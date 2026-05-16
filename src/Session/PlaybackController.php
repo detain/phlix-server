@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace Phlex\Session;
 
+use Phlex\Common\Events\Playback\PlaybackPaused;
+use Phlex\Common\Events\Playback\PlaybackResumed;
+use Phlex\Common\Events\Playback\PlaybackStarted;
+use Phlex\Common\Events\Playback\PlaybackStopped;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
 /**
@@ -37,23 +42,37 @@ class PlaybackController
     /** @var StructuredLogger Application logger for playback events */
     private StructuredLogger $logger;
 
+    /** @var EventDispatcherInterface|null PSR-14 dispatcher for playback lifecycle events. */
+    private ?EventDispatcherInterface $eventDispatcher;
+
     /**
      * Create a new PlaybackController instance.
      *
      * @param Connection $db Workerman MySQL connection instance
      * @param SessionManager $sessionManager Session manager for activity tracking
      * @param StructuredLogger|null $logger Optional application logger
+     * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher;
+     *                                       when supplied, lifecycle events
+     *                                       (started/paused/resumed/stopped)
+     *                                       are dispatched as they occur. Defaults
+     *                                       to null so unit tests not exercising
+     *                                       events do not need to wire one up.
      *
      * @example
      * ```php
      * $controller = new PlaybackController($db, $sessionManager);
      * ```
      */
-    public function __construct(Connection $db, SessionManager $sessionManager, ?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        Connection $db,
+        SessionManager $sessionManager,
+        ?StructuredLogger $logger = null,
+        ?EventDispatcherInterface $eventDispatcher = null
+    ) {
         $this->db = $db;
         $this->sessionManager = $sessionManager;
         $this->logger = $logger ?? $this->createDefaultLogger();
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -111,6 +130,9 @@ class PlaybackController
      */
     public function reportProgress(string $sessionId, string $mediaItemId, int $positionTicks, int $durationTicks, bool $isPaused): void
     {
+        $previousStatus = $this->lookupPlaybackStatus($sessionId, $mediaItemId);
+        $newStatus = $isPaused ? 'paused' : 'playing';
+
         // Update or create playback state
         $this->db->query(
             "INSERT INTO playback_state (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
@@ -126,12 +148,31 @@ class PlaybackController
                 $mediaItemId,
                 $positionTicks,
                 $durationTicks,
-                $isPaused ? 'paused' : 'playing',
+                $newStatus,
             ]
         );
 
         // Update session activity
         $this->sessionManager->updateActivity($sessionId);
+
+        // Dispatch lifecycle events for state transitions. The session
+        // lookup is best-effort: when the session row is missing we
+        // simply fall back to the empty string so listeners can still
+        // observe the event (it just won't have user/device context).
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        if ($previousStatus === null) {
+            $this->dispatchPlaybackStarted($sessionId, $mediaItemId, $positionTicks);
+            return;
+        }
+        if ($previousStatus !== 'paused' && $newStatus === 'paused') {
+            $this->dispatchPlaybackPaused($sessionId, $mediaItemId, $positionTicks);
+            return;
+        }
+        if ($previousStatus === 'paused' && $newStatus === 'playing') {
+            $this->dispatchPlaybackResumed($sessionId, $mediaItemId, $positionTicks);
+        }
     }
 
     /**
@@ -207,10 +248,18 @@ class PlaybackController
      */
     public function markAsWatched(string $sessionId, string $mediaItemId): void
     {
+        $previous = $this->lookupPlaybackRow($sessionId, $mediaItemId);
+
         $this->db->query(
             "UPDATE playback_state SET playback_status = 'stopped', position_ticks = 0 WHERE session_id = ? AND media_item_id = ?",
             [$sessionId, $mediaItemId]
         );
+
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        $finalPosition = self::positionFromRow($previous);
+        $this->dispatchPlaybackStopped($sessionId, $mediaItemId, $finalPosition, reachedEnd: true);
     }
 
     /**
@@ -228,10 +277,18 @@ class PlaybackController
      */
     public function clearProgress(string $sessionId, string $mediaItemId): void
     {
+        $previous = $this->lookupPlaybackRow($sessionId, $mediaItemId);
+
         $this->db->query(
             "DELETE FROM playback_state WHERE session_id = ? AND media_item_id = ?",
             [$sessionId, $mediaItemId]
         );
+
+        if ($this->eventDispatcher === null || $previous === null) {
+            return;
+        }
+        $finalPosition = self::positionFromRow($previous);
+        $this->dispatchPlaybackStopped($sessionId, $mediaItemId, $finalPosition, reachedEnd: false);
     }
 
     /**
@@ -318,11 +375,231 @@ class PlaybackController
     {
         return sprintf(
             '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
             mt_rand(0, 0xffff),
             mt_rand(0, 0x0fff) | 0x4000,
             mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff)
         );
+    }
+
+    /**
+     * Look up the current `playback_status` for a `(session, media)` pair.
+     *
+     * Used to detect the started/paused/resumed transitions.
+     *
+     * @param string $sessionId   Session UUID.
+     * @param string $mediaItemId Media item UUID.
+     *
+     * @return string|null Status string from the DB, or null when no row exists.
+     */
+    private function lookupPlaybackStatus(string $sessionId, string $mediaItemId): ?string
+    {
+        $row = $this->lookupPlaybackRow($sessionId, $mediaItemId);
+        if ($row === null) {
+            return null;
+        }
+        $status = $row['playback_status'] ?? null;
+        return is_string($status) ? $status : null;
+    }
+
+    /**
+     * Look up the latest playback_state row for a `(session, media)` pair.
+     *
+     * @param string $sessionId   Session UUID.
+     * @param string $mediaItemId Media item UUID.
+     *
+     * @return array<string, mixed>|null Row data when found, null otherwise.
+     */
+    private function lookupPlaybackRow(string $sessionId, string $mediaItemId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM playback_state WHERE session_id = ? AND media_item_id = ? ORDER BY updated_at DESC LIMIT 1",
+            [$sessionId, $mediaItemId]
+        );
+        if (!is_array($result) || $result === []) {
+            return null;
+        }
+        $first = $result[0] ?? null;
+        return is_array($first) ? $first : null;
+    }
+
+    /**
+     * Resolve `(userId, deviceId)` for a session, falling back to empty
+     * strings when the session lookup yields nothing usable (e.g. tests
+     * that mock the DB).
+     *
+     * @param string $sessionId Session UUID.
+     *
+     * @return array{0: string, 1: string} `[userId, deviceId]`.
+     */
+    private function resolveSessionContext(string $sessionId): array
+    {
+        try {
+            $session = $this->sessionManager->getSession($sessionId);
+        } catch (\Throwable) {
+            $session = null;
+        }
+        if (!is_array($session)) {
+            return ['', ''];
+        }
+        $userId = self::stringFromMixed($session['user_id'] ?? null);
+        $deviceId = self::stringFromMixed($session['device_id'] ?? null);
+        return [$userId, $deviceId];
+    }
+
+    /**
+     * Coerce a mixed value into a string suitable for an event payload.
+     *
+     * Returns the empty string for null / non-scalar values so the
+     * caller never has to special-case a missing column.
+     *
+     * @param mixed $value Raw column value from a query result.
+     *
+     * @return string Coerced string (empty when not coercible).
+     */
+    private static function stringFromMixed(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value) || is_bool($value)) {
+            return (string)$value;
+        }
+        return '';
+    }
+
+    /**
+     * Pull the `position_ticks` column out of a playback_state row as
+     * a non-negative int, defaulting to zero when missing / unparseable.
+     *
+     * @param array<string, mixed>|null $row Row data, or null when none.
+     *
+     * @return int Position in ticks; zero when row missing.
+     */
+    private static function positionFromRow(?array $row): int
+    {
+        if ($row === null) {
+            return 0;
+        }
+        $raw = $row['position_ticks'] ?? 0;
+        if (is_int($raw)) {
+            return $raw;
+        }
+        if (is_string($raw) && is_numeric($raw)) {
+            return (int)$raw;
+        }
+        if (is_float($raw)) {
+            return (int)$raw;
+        }
+        return 0;
+    }
+
+    /**
+     * Emit {@see PlaybackStarted}.
+     *
+     * @param string $sessionId     Session UUID.
+     * @param string $mediaItemId   Media item UUID.
+     * @param int    $positionTicks Position at the moment of start, in ticks.
+     *
+     * @return void
+     */
+    private function dispatchPlaybackStarted(string $sessionId, string $mediaItemId, int $positionTicks): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+        $this->eventDispatcher->dispatch(new PlaybackStarted(
+            sessionId: $sessionId,
+            userId: $userId,
+            mediaItemId: $mediaItemId,
+            deviceId: $deviceId,
+            positionTicks: $positionTicks,
+        ));
+    }
+
+    /**
+     * Emit {@see PlaybackPaused}.
+     *
+     * @param string $sessionId     Session UUID.
+     * @param string $mediaItemId   Media item UUID.
+     * @param int    $positionTicks Position at the moment of pause, in ticks.
+     *
+     * @return void
+     */
+    private function dispatchPlaybackPaused(string $sessionId, string $mediaItemId, int $positionTicks): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+        $this->eventDispatcher->dispatch(new PlaybackPaused(
+            sessionId: $sessionId,
+            userId: $userId,
+            mediaItemId: $mediaItemId,
+            deviceId: $deviceId,
+            positionTicks: $positionTicks,
+        ));
+    }
+
+    /**
+     * Emit {@see PlaybackResumed}.
+     *
+     * @param string $sessionId     Session UUID.
+     * @param string $mediaItemId   Media item UUID.
+     * @param int    $positionTicks Position at the moment of resume, in ticks.
+     *
+     * @return void
+     */
+    private function dispatchPlaybackResumed(string $sessionId, string $mediaItemId, int $positionTicks): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+        $this->eventDispatcher->dispatch(new PlaybackResumed(
+            sessionId: $sessionId,
+            userId: $userId,
+            mediaItemId: $mediaItemId,
+            deviceId: $deviceId,
+            positionTicks: $positionTicks,
+        ));
+    }
+
+    /**
+     * Emit {@see PlaybackStopped}.
+     *
+     * @param string $sessionId          Session UUID.
+     * @param string $mediaItemId        Media item UUID.
+     * @param int    $finalPositionTicks Final position at stop, in ticks.
+     * @param bool   $reachedEnd         True when stop should be treated
+     *                                   as fully-watched (markAsWatched),
+     *                                   false when the user stopped
+     *                                   mid-stream (clearProgress).
+     *
+     * @return void
+     */
+    private function dispatchPlaybackStopped(
+        string $sessionId,
+        string $mediaItemId,
+        int $finalPositionTicks,
+        bool $reachedEnd
+    ): void {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+        $this->eventDispatcher->dispatch(new PlaybackStopped(
+            sessionId: $sessionId,
+            userId: $userId,
+            mediaItemId: $mediaItemId,
+            deviceId: $deviceId,
+            finalPositionTicks: $finalPositionTicks,
+            reachedEnd: $reachedEnd,
+        ));
     }
 }

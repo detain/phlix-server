@@ -7,6 +7,7 @@ namespace Phlex\Common\Container;
 use DI\ContainerBuilder;
 use Phlex\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Common\Container\Providers\CoreServicesProvider;
+use Phlex\Common\Container\Providers\EventServicesProvider;
 use Phlex\Common\Container\Providers\MediaServicesProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
 use Psr\Container\ContainerInterface;
@@ -103,6 +104,7 @@ final class ContainerFactory
     {
         return [
             new CoreServicesProvider(),
+            new EventServicesProvider(),
             new AuthServicesProvider(),
             new MediaServicesProvider(),
             new SessionServicesProvider(),

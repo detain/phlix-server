@@ -10,6 +10,12 @@ that consumes it.
 | -------------------------- | ------- | ----------- |
 | `PHLEX_CONTAINER_COMPILE`  | _unset_ | When truthy (`1`, `true`, `yes`, `on`) enables PHP-DI's compiled-container cache in `var/cache/container/`. Disabled by default for dev parity. See `Phlex\Common\Container\ContainerFactory`. |
 
+## Events
+
+| Variable               | Default | Description |
+| ---------------------- | ------- | ----------- |
+| `PHLEX_DEBUG_EVENTS`   | `0`     | When truthy (`1`, `true`, `yes`, `on`) wraps the PSR-14 dispatcher in Tukio's `DebugEventDispatcher`, which logs every dispatched event class at debug level on the `events` channel (`.logs/events.log`). Useful for tracing plugin behaviour; leave off in production. See `Phlex\Common\Events\EventDispatcherFactory` and `docs/dev/event-reference.md`. |
+
 ## Auth
 
 | Variable      | Default                       | Description |

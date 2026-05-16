@@ -61,6 +61,10 @@ public/
 
 ## Features
 
+### Foundation
+- **PSR-11 DI container (PHP-DI 7)**: auto-wired services with provider-based
+  composition; see `docs/dev/architecture-server.md`
+
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty
 - **REST API Endpoints**: Complete API for library browsing, media info, and user data

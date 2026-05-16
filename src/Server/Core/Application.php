@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Core;
 
+use Phlex\Common\Container\ContainerFactory;
+use Phlex\Common\Logger\LogChannels;
+use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
+use Psr\Container\ContainerInterface;
 use Throwable;
 
 /**
@@ -36,39 +38,70 @@ class Application
     /** @var array<string, mixed> Application configuration array */
     private array $config;
 
+    /** @var ContainerInterface|null PSR-11 container backing this application. */
+    private ?ContainerInterface $container = null;
+
     /** @var Application|null Singleton instance of the application */
     private static ?Application $instance = null;
 
     /**
-     * Creates a new Application instance.
+     * Creates a new Application instance from an already-built PSR-11 container.
      *
-     * Loads configuration from the specified path, initializes the router,
-     * loads all routes, and sets up the singleton instance.
+     * This is the canonical entry point in Phase A onwards. The legacy
+     * config-path constructor remains available through
+     * {@see Application::fromConfigPath()} for backwards compatibility.
      *
-     * @param string $configPath Absolute path to the PHP configuration file
-     * @throws RuntimeException If config file does not exist or returns invalid data
+     * @param ContainerInterface   $container PSR-11 container built by
+     *                                         {@see ContainerFactory::create()}.
+     * @param array<string, mixed> $config    Application config (the array
+     *                                         returned by config/server.php
+     *                                         plus any runtime additions).
+     *
+     * @since 0.10.0
+     */
+    public function __construct(ContainerInterface $container, array $config)
+    {
+        $this->container = $container;
+        $this->config = $config;
+        $this->router = new Router();
+        $this->loadRoutes();
+        self::$instance = $this;
+    }
+
+    /**
+     * Backwards-compatible factory that mirrors the pre-0.10.0 constructor
+     * signature `new Application(string $configPath)`.
+     *
+     * @param string $configPath Absolute path to a PHP file returning the
+     *                           server config array.
+     *
+     * @return self
+     *
+     * @throws \RuntimeException If the config file does not exist or does
+     *                           not return an array.
+     *
+     * @since 0.10.0
      *
      * @example
      * ```php
-     * $app = new Application('/etc/phlex/config.php');
+     * $app = Application::fromConfigPath('/etc/phlex/server.php');
      * $app->run();
      * ```
      */
-    public function __construct(string $configPath)
+    public static function fromConfigPath(string $configPath): self
     {
         if (!file_exists($configPath)) {
             throw new \RuntimeException("Configuration file not found: {$configPath}");
         }
 
-        $this->config = include $configPath;
+        $config = include $configPath;
 
-        if (!is_array($this->config)) {
-            throw new \RuntimeException("Configuration file must return an array");
+        if (!is_array($config)) {
+            throw new \RuntimeException('Configuration file must return an array');
         }
 
-        $this->router = new Router();
-        $this->loadRoutes();
-        self::$instance = $this;
+        $container = ContainerFactory::create($config);
+        return new self($container, $config);
     }
 
     /**
@@ -77,10 +110,29 @@ class Application
      * @return Application|null The singleton instance, or null if not yet constructed
      *
      * @description Returns the global application instance for access throughout the application.
+     *
+     * @deprecated 0.10.0 Resolve services through the PSR-11 container
+     *             ({@see ContainerInterface::get()}) instead of reaching for
+     *             this singleton. Slated for removal in Phase B once all
+     *             callers are migrated.
      */
     public static function getInstance(): ?Application
     {
         return self::$instance;
+    }
+
+    /**
+     * Get the PSR-11 container that backs this application.
+     *
+     * @return ContainerInterface|null Null only when the application was
+     *                                  built without a container (legacy
+     *                                  test helpers).
+     *
+     * @since 0.10.0
+     */
+    public function getContainer(): ?ContainerInterface
+    {
+        return $this->container;
     }
 
     /**
@@ -96,7 +148,7 @@ class Application
     private function loadRoutes(): void
     {
         // Health check endpoint - verifies server is responsive
-        $this->router->get('/health', function(Request $request): Response {
+        $this->router->get('/health', function (Request $request): Response {
             return (new Response())->json([
                 'status' => 'ok',
                 'timestamp' => time(),
@@ -105,7 +157,7 @@ class Application
         });
 
         // System info endpoint - returns server metadata
-        $this->router->get('/system/info', function(Request $request): Response {
+        $this->router->get('/system/info', function (Request $request): Response {
             return (new Response())->json([
                 'server' => $this->config['server']['name'] ?? 'Phlex Media Server',
                 'version' => '1.0.0',
@@ -129,7 +181,7 @@ class Application
     private function loadApiRoutes(): void
     {
         // Placeholder for API routes - will be populated in later phases
-        $this->router->get('/api/v1', function(Request $request): Response {
+        $this->router->get('/api/v1', function (Request $request): Response {
             return (new Response())->json([
                 'api' => 'Phlex Media Server',
                 'version' => 'v1',

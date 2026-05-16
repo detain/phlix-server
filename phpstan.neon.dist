@@ -1,0 +1,13 @@
+parameters:
+    level: 9
+    paths:
+        - src
+    excludePaths:
+        - src/Server/WebSocket/Events.php
+    bootstrapFiles:
+        - vendor/autoload.php
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors: []
+
+includes:
+    - phpstan-baseline.neon

@@ -4,16 +4,20 @@
     "license": "proprietary",
     "require": {
         "php": ">=8.1",
-        "workerman/workerman": "^5.0",
-        "workerman/webman-framework": "^2.0",
+        "monolog/monolog": "^3.0",
+        "php-di/php-di": "^7.0",
+        "psr/container": "^2.0",
+        "symfony/yaml": "^7.0",
         "workerman/mysql": "^1.0",
         "workerman/redis": "^2.0",
-        "symfony/yaml": "^7.0",
-        "monolog/monolog": "^3.0"
+        "workerman/webman-framework": "^2.0",
+        "workerman/workerman": "^5.0"
     },
     "require-dev": {
+        "mockery/mockery": "^1.6",
+        "phpstan/phpstan": "^1.11",
         "phpunit/phpunit": "^10.0",
-        "mockery/mockery": "^1.6"
+        "squizlabs/php_codesniffer": "^3.10"
     },
     "autoload": {
         "psr-4": {

@@ -1,0 +1,2886 @@
+parameters:
+	ignoreErrors:
+		-
+			message: "#^Parameter \\#1 \\$id of method Phlex\\\\Auth\\\\UserRepository\\:\\:updateLastLogin\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/AuthManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$id of method Phlex\\\\Auth\\\\UserRepository\\:\\:verifyPassword\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/AuthManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$userId of method Phlex\\\\Auth\\\\AuthManager\\:\\:createAuthResponse\\(\\) expects string, mixed given\\.$#"
+			count: 2
+			path: src/Auth/AuthManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$userId of method Phlex\\\\Common\\\\Logger\\\\AuditLogger\\:\\:logLogin\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/AuthManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\JwtHandler\\:\\:decode\\(\\) should return array\\<string, mixed\\> but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/JwtHandler.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\JwtHandler\\:\\:getUserIdFromToken\\(\\) should return string\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/JwtHandler.php
+
+		-
+			message: "#^Parameter \\#1 \\$data of method Phlex\\\\Auth\\\\JwtHandler\\:\\:base64UrlEncode\\(\\) expects string, string\\|false given\\.$#"
+			count: 2
+			path: src/Auth/JwtHandler.php
+
+		-
+			message: "#^Cannot access offset 'allow_unrated' on mixed\\.$#"
+			count: 2
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Cannot access offset 'content_rating' on mixed\\.$#"
+			count: 2
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Cannot access offset 'count' on mixed\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Cannot access offset 'pin_hash' on mixed\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 7
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:findById\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:findById\\(\\) should return array\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:findByIdWithSettings\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:findByUserId\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:getActiveProfile\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:hydrateProfile\\(\\) has parameter \\$row with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserProfileManager\\:\\:hydrateProfile\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$row of method Phlex\\\\Auth\\\\UserProfileManager\\:\\:hydrateProfile\\(\\) expects array, mixed given\\.$#"
+			count: 3
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$hash of function password_verify expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/UserProfileManager.php
+
+		-
+			message: "#^Cannot access offset 'avatar_url' on mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Cannot access offset 'transcoding…' on mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 5
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserRepository\\:\\:findByEmail\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserRepository\\:\\:findById\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserRepository\\:\\:findByUsername\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserRepository\\:\\:getAvatar\\(\\) should return string\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\UserRepository\\:\\:getSettings\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Parameter \\#1 \\$json of function json_decode expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Parameter \\#1 \\$password of function password_hash expects string, mixed given\\.$#"
+			count: 2
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Parameter \\#2 \\$hash of function password_verify expects string, mixed given\\.$#"
+			count: 1
+			path: src/Auth/UserRepository.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot access offset 'count' on mixed\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot access offset 'total' on mixed\\.$#"
+			count: 2
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot access offset 'total_ticks' on mixed\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot access offset 'watch_date' on mixed\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 4
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 3
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:getContinueWatching\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:getForMediaItem\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:getHistory\\(\\) should return array\\<int, array\\{id\\: string, profile_id\\: string, media_item_id\\: string, position_ticks\\: int, duration_ticks\\: int\\|null, playback_status\\: string, progress_percent\\: float, last_watched_at\\: string, \\.\\.\\.\\}\\> but returns array\\<array\\>\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:getRecentlyCompleted\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:hydrateEntry\\(\\) has parameter \\$row with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:hydrateEntry\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:markCompleted\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:updateProgress\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Method Phlex\\\\Auth\\\\WatchHistory\\:\\:updateProgress\\(\\) should return array but returns array\\|null\\.$#"
+			count: 1
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Parameter \\#1 \\$row of method Phlex\\\\Auth\\\\WatchHistory\\:\\:hydrateEntry\\(\\) expects array, mixed given\\.$#"
+			count: 4
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 3
+			path: src/Auth/WatchHistory.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Database\\\\ConnectionPool\\:\\:\\$connections type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/ConnectionPool.php
+
+		-
+			message: "#^Call to an undefined method Workerman\\\\MySQL\\\\Connection\\:\\:getLastInsertId\\(\\)\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:delete\\(\\) should return int but returns mixed\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:first\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:get\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:get\\(\\) should return array but returns mixed\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:insert\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:select\\(\\) has parameter \\$columns with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:update\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:update\\(\\) should return int but returns mixed\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Part \\$operator \\(mixed\\) of encapsed string cannot be cast to string\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:\\$bindings type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:\\$columns type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Database\\\\QueryBuilder\\:\\:\\$where type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Database/QueryBuilder.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\AuditLogger\\:\\:logFailedAuth\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/AuditLogger.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Logger\\\\LoggerFactory\\:\\:\\$loggers type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/LoggerFactory.php
+
+		-
+			message: "#^Call to an undefined method Monolog\\\\Handler\\\\HandlerInterface\\:\\:setLevel\\(\\)\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Call to an undefined method Monolog\\\\Logger\\:\\:withContext\\(\\)\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:__construct\\(\\) has parameter \\$config with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:alert\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:createHandler\\(\\) has parameter \\$config with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:critical\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:debug\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:emergency\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:error\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:info\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:log\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:notice\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:warning\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:withContext\\(\\) has parameter \\$context with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method class@anonymous/Common/Logger/StructuredLogger\\.php\\:83\\:\\:__invoke\\(\\) has parameter \\$record with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method class@anonymous/Common/Logger/StructuredLogger\\.php\\:83\\:\\:__invoke\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method class@anonymous/Common/Logger/StructuredLogger\\.php\\:98\\:\\:__invoke\\(\\) has parameter \\$record with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method class@anonymous/Common/Logger/StructuredLogger\\.php\\:98\\:\\:__invoke\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Parameter \\#1 \\$callback of method Monolog\\\\Logger\\:\\:pushProcessor\\(\\) expects callable\\(Monolog\\\\LogRecord\\)\\: Monolog\\\\LogRecord, class@anonymous/Common/Logger/StructuredLogger\\.php\\:83 given\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Parameter \\#1 \\$callback of method Monolog\\\\Logger\\:\\:pushProcessor\\(\\) expects callable\\(Monolog\\\\LogRecord\\)\\: Monolog\\\\LogRecord, class@anonymous/Common/Logger/StructuredLogger\\.php\\:98 given\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Property Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:\\$config type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Common/Logger/StructuredLogger.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:createErrorResult\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getCurrentTransportActions\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getDeviceCapabilities\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getMediaInfo\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getPositionInfo\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getTransportInfo\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:getTransportSettings\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:parseUriMetadata\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:pause\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:play\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:seek\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:setAvTransportUri\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:setPlayMode\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\AvTransport\\:\\:stop\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\AvTransport\\:\\:\\$nextInstanceId is never read, only written\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\TransportState\\:\\:\\$mediaDuration \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Dlna/AvTransport.php
+
+		-
+			message: "#^Call to an undefined method object\\:\\:findById\\(\\)\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Call to an undefined method object\\:\\:findByParent\\(\\)\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:addItemMetadata\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:browse\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:browseChildren\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:browseMetadata\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:browseMetadata\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:browseRoot\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:createErrorResult\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:generateDidl\\(\\) has parameter \\$items with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getChildren\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getLibraryContainers\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getLibraryItems\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getMimeType\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getProtocolInfo\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:getUpnpClass\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:itemMatchesCriteria\\(\\) has parameter \\$criteria with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:itemMatchesCriteria\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:itemToDidl\\(\\) has parameter \\$item with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:parseSearchCriteria\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:performSearch\\(\\) has parameter \\$criteria with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:performSearch\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:resolveObjectId\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:search\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:sortItems\\(\\) has parameter \\$items with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\ContentDirectory\\:\\:sortItems\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\ContentDirectory\\:\\:\\$currentObjectId is never read, only written\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\ContentDirectory\\:\\:\\$objectCache type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/ContentDirectory.php
+
+		-
+			message: "#^Access to private property Phlex\\\\Dlna\\\\DlnaDevice\\:\\:\\$presentationUrl\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Constant SOL_IP not found\\.$#"
+			count: 3
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:getDevices\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:getDevicesByType\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:getRenderers\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:getServers\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:receiveSsdpResponses\\(\\) has parameter \\$socket with no type specified\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DeviceRegistry\\:\\:toArray\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Parameter \\#1 \\$hostname of function gethostbynamel expects string, string\\|false given\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Parameter \\#1 \\$stream of function fclose expects resource, mixed given\\.$#"
+			count: 2
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Parameter \\#1 \\$stream of function fwrite expects resource, mixed given\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Parameter \\#1 \\$stream of function stream_set_timeout expects resource, mixed given\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Parameter \\#2 \\$callback of function array_filter expects \\(callable\\(string\\)\\: bool\\)\\|null, Closure\\(mixed\\)\\: \\(non\\-falsy\\-string\\|false\\) given\\.$#"
+			count: 1
+			path: src/Dlna/DeviceRegistry.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:addIcon\\(\\) has parameter \\$icon with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:fromArray\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:getCapabilities\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:getIcons\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:getService\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:getServices\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaDevice\\:\\:toArray\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\DlnaDevice\\:\\:\\$icons \\(array\\<int, array\\{mimetype\\: string, width\\: int, height\\: int, depth\\: int, url\\: string\\}\\>\\) does not accept non\\-empty\\-array\\<int, non\\-empty\\-array\\>\\.$#"
+			count: 1
+			path: src/Dlna/DlnaDevice.php
+
+		-
+			message: "#^Cannot access offset string on callable\\(\\)\\: mixed\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:buildBrowseResponse\\(\\) has parameter \\$result with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:buildGenericResponse\\(\\) has parameter \\$result with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:buildSoapResponse\\(\\) has parameter \\$result with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:parseSoapBody\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:processSoapRequest\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:processSoapRequest\\(\\) should return array but returns mixed\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method Phlex\\\\Dlna\\\\DlnaServer\\:\\:toArray\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:addStream\\(\\) has parameter \\$streamData with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:batchCreate\\(\\) has parameter \\$items with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:batchCreate\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:create\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:findById\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:findByParent\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:findByPath\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:getByLibrary\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:getByType\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:getItemStreams\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:getRecentlyAdded\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:search\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:searchFuzzy\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Method class@anonymous/Dlna/DlnaServer\\.php\\:117\\:\\:update\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Parameter \\#1 \\$data of class SimpleXMLElement constructor expects string, string\\|false given\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\DlnaServer\\:\\:\\$soapHandlers \\(array\\<string, callable\\(\\)\\: mixed\\>\\) does not accept non\\-empty\\-array\\<string, array\\{Browse\\: array\\{Phlex\\\\Dlna\\\\ContentDirectory, 'browse'\\}, Search\\: array\\{Phlex\\\\Dlna\\\\ContentDirectory, 'search'\\}, GetSearchCapabilities\\: Closure\\(\\)\\: array\\{SearchCaps\\: 'dc\\:title,dc\\:creator,upnp\\:artist,upnp\\:album'\\}, GetSortCapabilities\\: Closure\\(\\)\\: array\\{SortCaps\\: 'dc\\:title,dc\\:date,dc\\:creator'\\}, GetSystemUpdateID\\: Closure\\(\\)\\: array\\{Id\\: int\\}\\}\\|\\(callable\\(\\)\\: mixed\\)\\>\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\DlnaServer\\:\\:\\$soapHandlers \\(array\\<string, callable\\(\\)\\: mixed\\>\\) does not accept non\\-empty\\-array\\<string, array\\{GetCurrentConnectionInfo\\: Closure\\(\\)\\: array\\{ConnectionID\\: 0, AVTransportID\\: 0, ProtocolInfo\\: 'http\\-get\\:\\*\\:application/octet\\-stream\\:\\*', Direction\\: 'Output', Status\\: 'OK'\\}, GetProtocolInfo\\: Closure\\(\\)\\: array\\{Source\\: 'http\\-get\\:\\*\\:\\*\\:\\*', Sink\\: ''\\}\\}\\|\\(callable\\(\\)\\: mixed\\)\\>\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Property Phlex\\\\Dlna\\\\DlnaServer\\:\\:\\$soapHandlers \\(array\\<string, callable\\(\\)\\: mixed\\>\\) does not accept non\\-empty\\-array\\<string, array\\{SetAVTransportURI\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'setAvTransportUri'\\}, Play\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'play'\\}, Pause\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'pause'\\}, Stop\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'stop'\\}, Seek\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'seek'\\}, GetTransportInfo\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'getTransportInfo'\\}, GetPositionInfo\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'getPositionInfo'\\}, GetMediaInfo\\: array\\{Phlex\\\\Dlna\\\\AvTransport, 'getMediaInfo'\\}, \\.\\.\\.\\}\\|\\(callable\\(\\)\\: mixed\\)\\>\\.$#"
+			count: 1
+			path: src/Dlna/DlnaServer.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 4
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Cannot access offset 'channels' on mixed\\.$#"
+			count: 1
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Cannot access offset 'cnt' on mixed\\.$#"
+			count: 1
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 4
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 3
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\ChannelManager\\:\\:getLineup\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\ChannelManager\\:\\:getUserLineups\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns mixed\\.$#"
+			count: 1
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$row of method Phlex\\\\LiveTv\\\\ChannelManager\\:\\:mapChannel\\(\\) expects array\\<string, mixed\\>, mixed given\\.$#"
+			count: 6
+			path: src/LiveTv/ChannelManager.php
+
+		-
+			message: "#^Access to an undefined property Workerman\\\\MySQL\\\\Connection\\:\\:\\$affected_rows\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Cannot access property \\$num_rows on mixed\\.$#"
+			count: 2
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Cannot call method fetch\\(\\) on mixed\\.$#"
+			count: 8
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 6
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\GuideManager\\:\\:getProgramsForChannel\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns array\\<string, mixed\\>\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\GuideManager\\:\\:upsertProgram\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\GuideManager\\:\\:upsertProgram\\(\\) should return array but returns array\\<string, mixed\\>\\|null\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^PHPDoc tag @return with type array\\<string, mixed\\>\\|null is not subtype of native type array\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$channelId of method Phlex\\\\LiveTv\\\\GuideManager\\:\\:invalidateCacheForChannel\\(\\) expects string, mixed given\\.$#"
+			count: 2
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$programId of method Phlex\\\\LiveTv\\\\GuideManager\\:\\:getProgram\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Property Phlex\\\\LiveTv\\\\GuideManager\\:\\:\\$cache \\(array\\<string, array\\<string, mixed\\>\\>\\) does not accept array\\<string, array\\<int\\|string, mixed\\>\\>\\.$#"
+			count: 1
+			path: src/LiveTv/GuideManager.php
+
+		-
+			message: "#^Argument of an invalid type array\\<int, string\\>\\|false supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\LiveTvManager\\:\\:scanForTuners\\(\\) should return array\\<string, array\\{id\\: string, name\\: string, type\\: string, status\\: string, adapter\\: int\\|string, frontend\\: string, capabilities\\: array\\<string, mixed\\>\\}\\> but returns array\\<int\\<0, max\\>, array\\{id\\: non\\-falsy\\-string, name\\: non\\-falsy\\-string, type\\: string, status\\: 'idle', adapter\\: string\\|null, frontend\\: non\\-falsy\\-string, capabilities\\: array\\<string, int\\>\\}\\>\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$tunerId of method Phlex\\\\LiveTv\\\\LiveTvManager\\:\\:updateTunerStatus\\(\\) expects string, mixed given\\.$#"
+			count: 2
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$frequency of method Phlex\\\\LiveTv\\\\LiveTvManager\\:\\:scanFrequency\\(\\) expects int, mixed given\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Property Phlex\\\\LiveTv\\\\LiveTvManager\\:\\:\\$activeTuneRequests \\(array\\<string, array\\{id\\: string, channel_id\\: string, tuner_id\\: string, started_at\\: int, stream_url\\: string\\}\\>\\) does not accept non\\-empty\\-array\\<string, array\\{id\\: string, channel_id\\: string, tuner_id\\: mixed, started_at\\: int, stream_url\\: string\\}\\>\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Property Phlex\\\\LiveTv\\\\LiveTvManager\\:\\:\\$tuners type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/LiveTv/LiveTvManager.php
+
+		-
+			message: "#^Cannot access property \\$num_rows on mixed\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Cannot call method fetch\\(\\) on mixed\\.$#"
+			count: 7
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 6
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\Recorder\\:\\:scheduleRecording\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Method Phlex\\\\LiveTv\\\\Recorder\\:\\:scheduleRecording\\(\\) should return array but returns array\\<string, mixed\\>\\|null\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^PHPDoc tag @return with type array\\<string, mixed\\>\\|null is not subtype of native type array\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Parameter \\#1 \\$startTime of method Phlex\\\\LiveTv\\\\Recorder\\:\\:hasStorageSpace\\(\\) expects int, mixed given\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Parameter \\#2 \\$endTime of method Phlex\\\\LiveTv\\\\Recorder\\:\\:hasStorageSpace\\(\\) expects int, mixed given\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Parameter \\#2 \\$timestamp of function date expects int\\|null, mixed given\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Property Phlex\\\\LiveTv\\\\Recorder\\:\\:\\$activeRecordings \\(array\\<string, array\\{id\\: string, started_at\\: int, channel_id\\: string, stream_url\\: string\\}\\>\\) does not accept non\\-empty\\-array\\<string, array\\{id\\: string, started_at\\: int, channel_id\\: mixed, stream_url\\: string\\}\\>\\.$#"
+			count: 1
+			path: src/LiveTv/Recorder.php
+
+		-
+			message: "#^Cannot call method getMTime\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Cannot call method getPathname\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Cannot call method info\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 2
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Cannot call method isFile\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Cannot call method warning\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Library\\\\FolderWatcher\\:\\:\\$checkInterval is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Library\\\\FolderWatcher\\:\\:\\$running is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Library/FolderWatcher.php
+
+		-
+			message: "#^Cannot access offset 'count' on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Cannot access offset 'rating' on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 3
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:addStream\\(\\) should return string but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:create\\(\\) should return string but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getItemStreams\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Parameter \\#1 \\$row of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:hydrateItem\\(\\) expects array\\<string, mixed\\>, mixed given\\.$#"
+			count: 11
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 9
+			path: src/Media/Library/ItemRepository.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot access offset 'options' on mixed\\.$#"
+			count: 4
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot access offset 'paths' on mixed\\.$#"
+			count: 4
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot call method info\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 5
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot call method warning\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:getAllLibraries\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns array\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:getLibrary\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$filename of function is_dir expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$json of function json_decode expects string, mixed given\\.$#"
+			count: 4
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$path of method Phlex\\\\Media\\\\Library\\\\MediaScanner\\:\\:scan\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Parameter \\#3 \\$type of method Phlex\\\\Media\\\\Library\\\\MediaScanner\\:\\:scan\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Library/LibraryManager.php
+
+		-
+			message: "#^Cannot call method debug\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Cannot call method getExtension\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Cannot call method getFilename\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Cannot call method info\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Cannot call method isDir\\(\\) on mixed\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Cannot call method warning\\(\\) on Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\|null\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Offset 3 on array\\{string, non\\-empty\\-string\\} on left side of \\?\\? does not exist\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Parameter \\#2 \\$file of method Phlex\\\\Media\\\\Library\\\\MediaScanner\\:\\:processFile\\(\\) expects SplFileInfo, mixed given\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Library\\\\MediaScanner\\:\\:\\$db is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Library/MediaScanner.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 17
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Array has 2 duplicate keys with value 'logos' \\('logos', 'logos'\\)\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'clearart' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'hdmovielogo' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'hdtvlogo' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'moviebackground' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'moviebanner' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'movielogo' on mixed\\.$#"
+			count: 3
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'movieposter' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'moviescreencap' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'moviethumb' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'seasonbackground' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'seasonposter' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'seasonthumb' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'showbackground' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'tvcloud' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'tvlogo' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'tvposter' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Cannot access offset 'tvthumb' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\FanartProvider\\:\\:fetchArtwork\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\FanartProvider\\:\\:formatImage\\(\\) should return array\\{url\\: string, type\\: string, width\\: int, height\\: int, language\\: string\\|null, rating\\: float\\|null, likes\\: int\\} but returns array\\{url\\: mixed, type\\: string, width\\: mixed, height\\: mixed, language\\: mixed, rating\\: mixed, likes\\: mixed\\}\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$idType of method Phlex\\\\Media\\\\Metadata\\\\FanartProvider\\:\\:fetchArtwork\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$image of method Phlex\\\\Media\\\\Metadata\\\\FanartProvider\\:\\:formatImage\\(\\) expects array\\<string, mixed\\>, mixed given\\.$#"
+			count: 17
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#"
+			count: 8
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Metadata\\\\FanartProvider\\:\\:\\$apiKey is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Metadata/FanartProvider.php
+
+		-
+			message: "#^Argument of an invalid type array\\<int, string\\>\\|false supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^PHPDoc tag @param for parameter \\$xml with type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement is not subtype of native type SimpleXMLElement\\.$#"
+			count: 8
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$haystack of function str_contains expects string, string\\|false given\\.$#"
+			count: 4
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractActors\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractCredits\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractDirectors\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractEpisodeFromXml\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractGenres\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractMovieFromXml\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractStudios\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Parameter \\$xml of method Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:extractTvShowFromXml\\(\\) has invalid type Phlex\\\\Media\\\\Metadata\\\\SimpleXMLElement\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:\\$cache is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Metadata\\\\LocalNfoProvider\\:\\:\\$mediaPath is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Metadata/LocalNfoProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\MetadataHttpClient\\:\\:get\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/MetadataHttpClient.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Cannot access offset 'id' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Cannot access offset \\(int\\|string\\) on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Cannot access offset string on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$datetime of function strtotime expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$itemId of method Phlex\\\\Media\\\\Metadata\\\\MetadataManager\\:\\:refreshItemMetadata\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$json of method Phlex\\\\Media\\\\Metadata\\\\MetadataManager\\:\\:parseMetadataJson\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 2
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$mediaType of method Phlex\\\\Media\\\\Metadata\\\\MetadataManager\\:\\:getProvidersForType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#1 \\.\\.\\.\\$arrays of function array_merge expects array, mixed given\\.$#"
+			count: 2
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#5 \\$searchQuery of method Phlex\\\\Media\\\\Metadata\\\\MetadataManager\\:\\:tryProvider\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Parameter \\#6 \\$year of method Phlex\\\\Media\\\\Metadata\\\\MetadataManager\\:\\:tryProvider\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/MetadataManager.php
+
+		-
+			message: "#^Cannot access offset 'backdrop_path' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'cast' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'character' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'crew' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'id' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'name' on mixed\\.$#"
+			count: 4
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'order' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'original_title' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'overview' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'poster_path' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'release_date' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'title' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'vote_average' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'vote_count' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:findDirector\\(\\) should return string\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:formatImages\\(\\) should return array\\<int, array\\{url\\: string, url_original\\: string, width\\: int, height\\: int, language\\: string\\|null\\}\\> but returns array\\<int, array\\{url\\: non\\-falsy\\-string, url_original\\: non\\-falsy\\-string, width\\: mixed, height\\: mixed, language\\: mixed\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:search\\(\\) should return array\\<int, array\\{id\\: int, title\\: string, original_title\\: string, overview\\: string, poster_path\\: string\\|null, backdrop_path\\: string\\|null, release_date\\: string, vote_average\\: float, \\.\\.\\.\\}\\> but returns array\\<array\\{id\\: mixed, title\\: mixed, original_title\\: mixed, overview\\: mixed, poster_path\\: mixed, backdrop_path\\: mixed, release_date\\: mixed, vote_average\\: mixed, \\.\\.\\.\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$array of function array_slice expects array, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$crew of method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:findDirector\\(\\) expects array\\<int, array\\<string, mixed\\>\\>, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$datetime of function strtotime expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$images of method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:formatImages\\(\\) expects array\\<int, array\\<string, mixed\\>\\>, mixed given\\.$#"
+			count: 3
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 2
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:\\$cache is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Return type \\(array\\<int, array\\{id\\: int, title\\: string, original_title\\: string, overview\\: string, poster_path\\: string\\|null, backdrop_path\\: string\\|null, release_date\\: string, vote_average\\: float, \\.\\.\\.\\}\\>\\) of method Phlex\\\\Media\\\\Metadata\\\\TmdbProvider\\:\\:search\\(\\) should be compatible with return type \\(array\\<int, array\\{id\\: string, title\\: string, overview\\?\\: string, poster_path\\?\\: string\\}\\>\\) of method Phlex\\\\Media\\\\Metadata\\\\MetadataProviderInterface\\:\\:search\\(\\)$#"
+			count: 1
+			path: src/Media/Metadata/TmdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'airedEpisodeNumber' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'airedSeason' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'alias' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'average' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'banner' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'episodeName' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'filename' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'firstAired' on mixed\\.$#"
+			count: 4
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'genre' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'id' on mixed\\.$#"
+			count: 3
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'imdbId' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'network' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'overview' on mixed\\.$#"
+			count: 3
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'poster' on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'runtime' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'seriesName' on mixed\\.$#"
+			count: 4
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'siteRating' on mixed\\.$#"
+			count: 3
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 'status' on mixed\\.$#"
+			count: 2
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Cannot cast mixed to string\\.$#"
+			count: 3
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatActors\\(\\) should return array\\<int, array\\{name\\: string, role\\: string, image_url\\: string\\|null, sort_order\\: int\\}\\> but returns array\\<int, array\\{name\\: mixed, role\\: mixed, image_url\\: mixed, sort_order\\: mixed\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatEpisodes\\(\\) should return array\\<int, array\\{id\\: string, name\\: string, overview\\: string, season_number\\: int, episode_number\\: int, first_aired\\: string\\|null, runtime\\: int\\|null, rating\\: float\\|null, \\.\\.\\.\\}\\> but returns array\\<int, array\\{id\\: string, name\\: mixed, overview\\: mixed, season_number\\: mixed, episode_number\\: mixed, first_aired\\: mixed, runtime\\: mixed, rating\\: mixed, \\.\\.\\.\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatImages\\(\\) should return array\\<int, array\\{url\\: string, type\\: string, width\\: int, rating\\: float\\|null, language\\: string\\|null\\}\\> but returns array\\<int, array\\{url\\: mixed, type\\: string, width\\: mixed, rating\\: mixed, language\\: mixed\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:search\\(\\) should return array\\<int, array\\{id\\: string, title\\: string, original_title\\: string, overview\\: string, poster_path\\: string\\|null, banner_path\\: string\\|null, first_aired\\: string, network\\: string\\|null, \\.\\.\\.\\}\\> but returns array\\<array\\{id\\: string, title\\: mixed, original_title\\: mixed, overview\\: mixed, poster_path\\: mixed, banner_path\\: mixed, first_aired\\: mixed, network\\: mixed, \\.\\.\\.\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$actors of method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatActors\\(\\) expects array\\<int, array\\<string, mixed\\>\\>, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$datetime of function strtotime expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$episodes of method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatEpisodes\\(\\) expects array\\<int, array\\<string, mixed\\>\\>, mixed given\\.$#"
+			count: 2
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$genres of method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:parseGenres\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#1 \\$images of method Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:formatImages\\(\\) expects array\\<int, array\\<string, mixed\\>\\>, mixed given\\.$#"
+			count: 4
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Metadata\\\\TvdbProvider\\:\\:\\$cache is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Metadata/TvdbProvider.php
+
+		-
+			message: "#^Argument of an invalid type array\\<int, string\\>\\|false supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Media/Streaming/HlsStreamer.php
+
+		-
+			message: "#^Parameter \\#1 \\$value of function count expects array\\|Countable, array\\<int, string\\>\\|false given\\.$#"
+			count: 1
+			path: src/Media/Streaming/HlsStreamer.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Streaming\\\\HlsStreamer\\:\\:\\$qualitySelector is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Streaming/HlsStreamer.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Streaming\\\\HlsStreamer\\:\\:\\$variantPlaylists is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Streaming/HlsStreamer.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:canDirectPlay\\(\\) has parameter \\$audioStream with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:canDirectPlay\\(\\) has parameter \\$profile with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:canDirectPlay\\(\\) has parameter \\$videoStream with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:detectContainer\\(\\) has parameter \\$sourceInfo with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:getAudioStream\\(\\) has parameter \\$sourceInfo with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:getAudioStream\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:getProfile\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:getVideoStream\\(\\) has parameter \\$sourceInfo with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:getVideoStream\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:\\$deviceProfiles \\(array\\<string, array\\{max_bitrate\\: int, max_resolution\\: array\\<int, int\\>, direct_play\\: array\\<string\\>, transcode\\: array\\<string\\>, container\\: array\\<string\\>\\}\\>\\) does not accept array\\<string, array\\{max_bitrate\\?\\: int, max_resolution\\?\\: array\\<int, int\\>, direct_play\\?\\: array\\<string\\>, transcode\\?\\: array\\<string\\>, container\\?\\: array\\<string\\>\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Streaming\\\\QualitySelector\\:\\:\\$deviceProfiles \\(array\\<string, array\\{max_bitrate\\: int, max_resolution\\: array\\<int, int\\>, direct_play\\: array\\<string\\>, transcode\\: array\\<string\\>, container\\: array\\<string\\>\\}\\>\\) does not accept non\\-empty\\-array\\<string, array\\{max_bitrate\\?\\: int, max_resolution\\?\\: array\\<int, int\\>, direct_play\\?\\: array\\<string\\>, transcode\\?\\: array\\<string\\>, container\\?\\: array\\<string\\>\\}\\>\\.$#"
+			count: 1
+			path: src/Media/Streaming/QualitySelector.php
+
+		-
+			message: "#^Cannot access offset 'runtime_ticks' on mixed\\.$#"
+			count: 1
+			path: src/Media/Streaming/StreamManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$path of method Phlex\\\\Media\\\\Streaming\\\\StreamManager\\:\\:probeMedia\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Media/Streaming/StreamManager.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Streaming\\\\StreamState\\:\\:\\$durationTicks \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Media/Streaming/StreamManager.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Streaming\\\\StreamState\\:\\:toArray\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 2
+			path: src/Media/Streaming/StreamState.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getAudioStream\\(\\) has parameter \\$sourceInfo with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getAudioStream\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getVideoStream\\(\\) has parameter \\$sourceInfo with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getVideoStream\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:needsTranscode\\(\\) has parameter \\$audioStream with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:needsTranscode\\(\\) has parameter \\$profile with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:needsTranscode\\(\\) has parameter \\$videoStream with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:selectAudioBitrate\\(\\) has parameter \\$profile with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:selectVideoCodec\\(\\) has parameter \\$profile with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:selectVideoCodec\\(\\) has parameter \\$videoStream with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/EncodingHelper.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\FfmpegRunner\\:\\:probe\\(\\) should return array\\{streams\\: array\\<int, array\\<string, mixed\\>\\>, format\\: array\\<string, mixed\\>\\}\\|null but returns array\\|null\\.$#"
+			count: 1
+			path: src/Media/Transcoding/FfmpegRunner.php
+
+		-
+			message: "#^Parameter \\#2 \\$subject of function preg_match expects string, string\\|false\\|null given\\.$#"
+			count: 1
+			path: src/Media/Transcoding/FfmpegRunner.php
+
+		-
+			message: "#^Part \\$params\\['height'\\] \\(mixed\\) of encapsed string cannot be cast to string\\.$#"
+			count: 1
+			path: src/Media/Transcoding/FfmpegRunner.php
+
+		-
+			message: "#^Part \\$params\\['width'\\] \\(mixed\\) of encapsed string cannot be cast to string\\.$#"
+			count: 1
+			path: src/Media/Transcoding/FfmpegRunner.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Transcoding\\\\FfmpegRunner\\:\\:\\$transcodeDir is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Transcoding/FfmpegRunner.php
+
+		-
+			message: "#^Argument of an invalid type array\\<int, string\\>\\|false supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Call to method query\\(\\) on an unknown class Phlex\\\\Common\\\\Database\\\\Connection\\.$#"
+			count: 5
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Method Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:getMediaItem\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Offset 'status' on array\\{id\\: string, state\\: Phlex\\\\Media\\\\Streaming\\\\StreamState, output_path\\: string, encoding_params\\: array, started_at\\: int\\} on left side of \\?\\? does not exist\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$sourceInfo of method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getEncodingParams\\(\\) expects array\\{streams\\: array\\<int, array\\{codec_type\\: string, codec\\?\\: string, width\\?\\: int, height\\?\\: int, bitrate\\?\\: int, channels\\?\\: int\\}\\>, format\\?\\: array\\{format_name\\?\\: string\\}\\}, array\\{streams\\: array\\<int, array\\<string, mixed\\>\\>, format\\: array\\<string, mixed\\>\\} given\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$profile of method Phlex\\\\Media\\\\Transcoding\\\\EncodingHelper\\:\\:getEncodingParams\\(\\) expects array\\{max_bitrate\\?\\: int, max_resolution\\?\\: array\\<int, int\\>, direct_play\\?\\: array\\<string\\>, transcode\\?\\: array\\<string\\>\\}, mixed given\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Parameter \\$db of method Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:__construct\\(\\) has invalid type Phlex\\\\Common\\\\Database\\\\Connection\\.$#"
+			count: 2
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:\\$activeJobs type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:\\$db has unknown class Phlex\\\\Common\\\\Database\\\\Connection as its type\\.$#"
+			count: 2
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:\\$maxConcurrentTranscodes is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Property Phlex\\\\Media\\\\Transcoding\\\\TranscodeManager\\:\\:\\$segmentDir is never read, only written\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Strict comparison using \\=\\=\\= between '' and 'running' will always evaluate to false\\.$#"
+			count: 1
+			path: src/Media/Transcoding/TranscodeManager.php
+
+		-
+			message: "#^Access to constant VERSION on an unknown class Phlex\\\\Server\\\\Core\\\\Workerman\\\\Worker\\.$#"
+			count: 1
+			path: src/Server/Core/Application.php
+
+		-
+			message: "#^Cannot access offset 'name' on mixed\\.$#"
+			count: 1
+			path: src/Server/Core/Application.php
+
+		-
+			message: "#^Parameter \\#1 \\$refreshToken of method Phlex\\\\Auth\\\\AuthManager\\:\\:refreshToken\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Parameter \\#1 \\$username of method Phlex\\\\Auth\\\\AuthManager\\:\\:login\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Parameter \\#1 \\$username of method Phlex\\\\Auth\\\\AuthManager\\:\\:register\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Parameter \\#2 \\$email of method Phlex\\\\Auth\\\\AuthManager\\:\\:register\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Parameter \\#2 \\$password of method Phlex\\\\Auth\\\\AuthManager\\:\\:login\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Parameter \\#3 \\$password of method Phlex\\\\Auth\\\\AuthManager\\:\\:register\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/AuthController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\HlsController\\:\\:getMasterPlaylist\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/HlsController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\HlsController\\:\\:getPlaylist\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/HlsController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\HlsController\\:\\:getSegment\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/HlsController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\HlsController\\:\\:getVariantPlaylist\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/HlsController.php
+
+		-
+			message: "#^Parameter \\#2 \\$value of method Phlex\\\\Server\\\\Http\\\\Response\\:\\:header\\(\\) expects string, int\\<0, max\\> given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/HlsController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:create\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:delete\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:index\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:rescan\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:scan\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:show\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\LibraryController\\:\\:update\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Parameter \\#1 \\$name of method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:createLibrary\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Parameter \\#2 \\$type of method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:createLibrary\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Parameter \\#3 \\$paths of method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:createLibrary\\(\\) expects array\\<string\\>, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Parameter \\#4 \\$options of method Phlex\\\\Media\\\\Library\\\\LibraryManager\\:\\:createLibrary\\(\\) expects array\\<string, mixed\\>, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/LibraryController.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 3
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:children\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:delete\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:index\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:recentlyAdded\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:search\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Controllers\\\\MediaItemController\\:\\:show\\(\\) has parameter \\$params with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Parameter \\#1 \\$itemId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getItemStreams\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Parameter \\#1 \\$query of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:searchFuzzy\\(\\) expects string, mixed given\\.$#"
+			count: 2
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Parameter \\#2 \\$type of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getByType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/MediaItemController.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 2
+			path: src/Server/Http/Controllers/SessionController.php
+
+		-
+			message: "#^Parameter \\#2 \\$mediaItemId of method Phlex\\\\Session\\\\PlaybackController\\:\\:reportProgress\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/Http/Controllers/SessionController.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Request\\:\\:\\$body \\(array\\<string, mixed\\>\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Server/Http/Request.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Request\\:\\:\\$path \\(string\\) does not accept string\\|false\\.$#"
+			count: 1
+			path: src/Server/Http/Request.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Request\\:\\:\\$queryString \\(string\\) does not accept string\\|false\\.$#"
+			count: 1
+			path: src/Server/Http/Request.php
+
+		-
+			message: "#^PHPDoc tag @param references unknown parameter\\: \\$code$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Parameter \\#1 \\$finfo of function finfo_close expects finfo, finfo\\|false given\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Parameter \\#1 \\$finfo of function finfo_file expects finfo, finfo\\|false given\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Parameter \\#1 \\$string of function strlen expects string, string\\|false given\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Response\\:\\:\\$body \\(string\\) does not accept string\\|false\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Response\\:\\:\\$headers \\(array\\<string, string\\>\\) does not accept array\\<string, bool\\|string\\>\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Response\\:\\:\\$headers \\(array\\<string, string\\>\\) does not accept array\\<string, int\\|string\\>\\.$#"
+			count: 1
+			path: src/Server/Http/Response.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:addRoute\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:any\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:callHandler\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:delete\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:get\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:getRoutes\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:match\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:options\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:patch\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:post\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\Http\\\\Router\\:\\:put\\(\\) has parameter \\$handler with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Router\\:\\:\\$middleware is never read, only written\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Router\\:\\:\\$namedRoutes is never read, only written\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\Http\\\\Router\\:\\:\\$routes type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/Http/Router.php
+
+		-
+			message: "#^Call to method assign\\(\\) on an unknown class Smarty\\.$#"
+			count: 8
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Call to method fetch\\(\\) on an unknown class Smarty\\.$#"
+			count: 3
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Call to method setTemplateDir\\(\\) on an unknown class Smarty\\.$#"
+			count: 3
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Instantiated class Smarty not found\\.$#"
+			count: 3
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Parameter \\#1 \\$libraryId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getByLibrary\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Parameter \\#1 \\$libraryId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getRecentlyAdded\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Template type _variables of method Phlex\\\\Server\\\\WebPortal\\\\PageRenderer\\:\\:renderHome\\(\\) is not referenced in a parameter\\.$#"
+			count: 1
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Template type _variables of method Phlex\\\\Server\\\\WebPortal\\\\PageRenderer\\:\\:renderLibrary\\(\\) is not referenced in a parameter\\.$#"
+			count: 1
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Template type _variables of method Phlex\\\\Server\\\\WebPortal\\\\PageRenderer\\:\\:renderLogin\\(\\) is not referenced in a parameter\\.$#"
+			count: 1
+			path: src/Server/WebPortal/PageRenderer.php
+
+		-
+			message: "#^Cannot cast mixed to int\\.$#"
+			count: 2
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Parameter \\#1 \\$itemId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getItemStreams\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Parameter \\#1 \\$libraryId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:countByType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Parameter \\#2 \\$type of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:countByType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Parameter \\#2 \\$type of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getByType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\WebPortal\\\\WebPortalRouter\\:\\:\\$authManager is never read, only written\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Property Phlex\\\\Server\\\\WebPortal\\\\WebPortalRouter\\:\\:\\$sessionManager is never read, only written\\.$#"
+			count: 1
+			path: src/Server/WebPortal/WebPortalRouter.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\WebSocket\\\\Connection\\:\\:send\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/WebSocket/Connection.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\WebSocket\\\\ConnectionInterface\\:\\:send\\(\\) has parameter \\$data with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Server/WebSocket/ConnectionInterface.php
+
+		-
+			message: "#^Cannot access offset 'data' on mixed\\.$#"
+			count: 1
+			path: src/Server/WebSocket/MessageHandler.php
+
+		-
+			message: "#^Cannot access offset 'type' on mixed\\.$#"
+			count: 1
+			path: src/Server/WebSocket/MessageHandler.php
+
+		-
+			message: "#^Parameter \\#1 \\$data of method Phlex\\\\Server\\\\WebSocket\\\\ConnectionInterface\\:\\:send\\(\\) expects array\\|string, string\\|false given\\.$#"
+			count: 3
+			path: src/Server/WebSocket/MessageHandler.php
+
+		-
+			message: "#^Call to an undefined method Phlex\\\\Server\\\\WebSocket\\\\ConnectionInterface\\:\\:getConnection\\(\\)\\.$#"
+			count: 1
+			path: src/Server/WebSocket/WebSocketServer.php
+
+		-
+			message: "#^Method Phlex\\\\Server\\\\WebSocket\\\\WebSocketServer\\:\\:findConnection\\(\\) should return Phlex\\\\Server\\\\WebSocket\\\\Connection\\|null but returns Phlex\\\\Server\\\\WebSocket\\\\ConnectionInterface\\.$#"
+			count: 1
+			path: src/Server/WebSocket/WebSocketServer.php
+
+		-
+			message: "#^Part \\$host \\(mixed\\) of encapsed string cannot be cast to string\\.$#"
+			count: 1
+			path: src/Server/WebSocket/WebSocketServer.php
+
+		-
+			message: "#^Part \\$port \\(mixed\\) of encapsed string cannot be cast to string\\.$#"
+			count: 1
+			path: src/Server/WebSocket/WebSocketServer.php
+
+		-
+			message: "#^Cannot access offset 'metadata' on mixed\\.$#"
+			count: 2
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Cannot access offset 'metadata_json' on mixed\\.$#"
+			count: 2
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 2
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\PlaybackController\\:\\:getContinueWatching\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns array\\.$#"
+			count: 1
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\PlaybackController\\:\\:getPlaybackState\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\PlaybackController\\:\\:getRecentlyWatched\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns array\\.$#"
+			count: 1
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\PlaybackController\\:\\:getUserProgress\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Parameter \\#1 \\$json of function json_decode expects string, mixed given\\.$#"
+			count: 2
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Parameter \\#2 \\$array of function array_map expects array, mixed given\\.$#"
+			count: 2
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\PlaybackController\\:\\:\\$logger is never read, only written\\.$#"
+			count: 1
+			path: src/Session/PlaybackController.php
+
+		-
+			message: "#^Cannot access offset 0 on mixed\\.$#"
+			count: 2
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SessionManager\\:\\:createSession\\(\\) should return string but returns mixed\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SessionManager\\:\\:findByDeviceId\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SessionManager\\:\\:getSession\\(\\) should return array\\<string, mixed\\>\\|null but returns mixed\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SessionManager\\:\\:getUserSessions\\(\\) should return array\\<int, array\\<string, mixed\\>\\> but returns mixed\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$array of function array_column expects array, mixed given\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$sessionId of method Phlex\\\\Session\\\\SessionManager\\:\\:updateActivity\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$value of function count expects array\\|Countable, mixed given\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SessionManager\\:\\:\\$activeSessions type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SessionManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:getMember\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:getNextInQueue\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:getPlaybackQueue\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Parameter \\#1 \\$id of class Phlex\\\\Session\\\\SyncPlay\\\\GroupState constructor expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Parameter \\#2 \\$name of class Phlex\\\\Session\\\\SyncPlay\\\\GroupState constructor expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Parameter \\#3 \\$passwordHash of class Phlex\\\\Session\\\\SyncPlay\\\\GroupState constructor expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Parameter \\#4 \\$positionTolerance of class Phlex\\\\Session\\\\SyncPlay\\\\GroupState constructor expects int, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$chatMessages \\(array\\<int, array\\{member_id\\: string, message\\: string, timestamp\\: int\\}\\>\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$createdAt \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$currentMediaDuration \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$currentMediaId \\(string\\|null\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$hostId \\(string\\|null\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$lastActivityAt \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$members \\(array\\<string, array\\{name\\: string, connection_id\\: string\\|null, joined_at\\: int, is_active\\: bool, is_host\\?\\: bool\\}\\>\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$members \\(array\\<string, array\\{name\\: string, connection_id\\: string\\|null, joined_at\\: int, is_active\\: bool, is_host\\?\\: bool\\}\\>\\) does not accept non\\-empty\\-array\\<string, array\\{name\\?\\: string, connection_id\\?\\: string\\|null, joined_at\\: int, is_active\\: bool, is_host\\?\\: bool\\}\\>\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$members \\(array\\<string, array\\{name\\: string, connection_id\\: string\\|null, joined_at\\: int, is_active\\: bool, is_host\\?\\: bool\\}\\>\\) does not accept non\\-empty\\-array\\<string, non\\-empty\\-array\\<string, mixed\\>\\>\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$playbackPosition \\(int\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$playbackQueue \\(array\\<int, array\\{media_id\\: string, media_info\\: array, added_at\\: int, added_by\\: string\\|null\\}\\>\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$playbackQueue type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:\\$playbackState \\(string\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/GroupState.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\Messages\\:\\:error\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/Messages.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\Messages\\:\\:info\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/Messages.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\Messages\\:\\:playbackQueue\\(\\) has parameter \\$queue with no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/Messages.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\Messages\\:\\:playbackQueue\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/Messages.php
+
+		-
+			message: "#^Parameter \\#1 \\$type of static method Phlex\\\\Session\\\\SyncPlay\\\\Messages\\:\\:isValidType\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/Messages.php
+
+		-
+			message: "#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Cannot access offset 'media_id' on mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Cannot access offset 'media_info' on mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Cannot call method on\\(\\) on Phlex\\\\Server\\\\WebSocket\\\\MessageHandler\\|null\\.$#"
+			count: 9
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Constant Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:SYNC_INTERVAL is unused\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:createGroup\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:getGroupState\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:getStats\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:joinGroup\\(\\) return type has no value type specified in iterable type array\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Offset 'error' does not exist on array\\{success\\: false, group\\?\\: array, error\\?\\: string\\}\\.$#"
+			count: 2
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Offset 'error' does not exist on array\\{success\\: false, message\\?\\: string, error\\?\\: string\\}\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Offset 'group' does not exist on array\\{success\\: true, group\\?\\: array, error\\?\\: string\\}\\.$#"
+			count: 2
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$groupId of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:broadcastToGroup\\(\\) expects string, string\\|null given\\.$#"
+			count: 5
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$groupId of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:joinGroup\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$level of method Phlex\\\\Common\\\\Logger\\\\StructuredLogger\\:\\:log\\(\\) expects Monolog\\\\Level, string given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$mediaId of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:addToQueue\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:addChatMessage\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:getMember\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:isHost\\(\\) expects string, mixed given\\.$#"
+			count: 4
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:leaveGroup\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$name of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:createGroup\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$position of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:setPlaybackPosition\\(\\) expects int, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#1 \\$string of function trim expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$mediaInfo of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:addToQueue\\(\\) expects array\\<string, mixed\\>, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:joinGroup\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$message of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:addChatMessage\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$password of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:createGroup\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#2 \\$position of method Phlex\\\\Session\\\\SyncPlay\\\\GroupState\\:\\:updatePlayback\\(\\) expects int, mixed given\\.$#"
+			count: 2
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#3 \\$memberId of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:createGroup\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#3 \\$memberName of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:joinGroup\\(\\) expects string, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#4 \\$excludeIds of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:broadcastToGroup\\(\\) expects array\\<string\\>, array\\<int, mixed\\> given\\.$#"
+			count: 3
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#4 \\$memberName of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:createGroup\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Parameter \\#4 \\$password of method Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:joinGroup\\(\\) expects string\\|null, mixed given\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:\\$connectionToMember is never read, only written\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\SyncPlayManager\\:\\:\\$lastSyncTime is never read, only written\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/SyncPlayManager.php
+
+		-
+			message: "#^Constant Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:PING_WINDOW is unused\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Method Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:processPing\\(\\) should return array\\{type\\: string, client_time\\: int, server_time\\: int, protocol_version\\: int\\} but returns array\\{type\\: 'pong', client_time\\: mixed, server_time\\: int, protocol_version\\: 1\\}\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:\\$estimatedLatency is never read, only written\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:\\$lastSyncTimestamp \\(float\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:\\$localDriftRate \\(float\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:\\$offsetSamples \\(array\\<int, array\\{offset\\: int, rtt\\: int, timestamp\\: float\\}\\>\\) does not accept mixed\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php
+
+		-
+			message: "#^Property Phlex\\\\Session\\\\SyncPlay\\\\TimeSync\\:\\:\\$serverTimeOffset is never read, only written\\.$#"
+			count: 1
+			path: src/Session/SyncPlay/TimeSync.php

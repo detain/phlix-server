@@ -4,7 +4,7 @@
  * Web Portal Entry Point
  *
  * This is the main entry point for the Phlex Web Portal. It handles:
- * - Initialization of database connection and logger
+ * - Construction of the PSR-11 service container
  * - Request parsing and authentication
  * - Routing to either API endpoints or HTML page renderers
  *
@@ -12,8 +12,9 @@
  * @version 1.0.0
  * @description Web portal entry point with request routing
  *
- * @see PageRenderer For HTML page rendering
- * @see WebPortalRouter For API routing
+ * @see \Phlex\Common\Container\ContainerFactory For service wiring
+ * @see \Phlex\Server\WebPortal\PageRenderer For HTML page rendering
+ * @see \Phlex\Server\WebPortal\WebPortalRouter For API routing
  */
 
 declare(strict_types=1);
@@ -21,73 +22,40 @@ declare(strict_types=1);
 // Load Composer autoloader
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Phlex\Server\Core\Application;
-use Phlex\Server\Http\Request;
-use Phlex\Common\Database\ConnectionPool;
-use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Auth\AuthManager;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\UserRepository;
-use Phlex\Media\Library\LibraryManager;
+use Phlex\Common\Container\ContainerFactory;
 use Phlex\Media\Library\ItemRepository;
-use Phlex\Session\SessionManager;
-use Phlex\Session\PlaybackController;
+use Phlex\Media\Library\LibraryManager;
+use Phlex\Server\Http\Request;
 use Phlex\Server\WebPortal\PageRenderer;
+use Phlex\Session\PlaybackController;
 
 /**
- * Initialize configuration paths
+ * Initialize configuration paths and build the PSR-11 container.
  *
- * Configuration files are loaded from the config directory.
- * All paths are absolute to ensure consistent behavior.
+ * The bootstrap stays minimal: load config, inject the DB and logger
+ * config paths so providers can wire them, then resolve services on
+ * demand via the container. Auto-wiring keeps this entry point free of
+ * the long `new X(...)` chain that used to live here.
  */
-$configPath = __DIR__ . '/../config/server.php';
-$dbConfigPath = __DIR__ . '/../config/database.php';
-$loggerConfigPath = __DIR__ . '/../config/logger.php';
+$config = include __DIR__ . '/../config/server.php';
+$config['db_config_path']     = __DIR__ . '/../config/database.php';
+$config['logger_config_path'] = __DIR__ . '/../config/logger.php';
+
+$container = ContainerFactory::create($config);
 
 /**
- * Initialize core services
+ * Resolve the services this entry point hands to controllers.
  *
- * ConnectionPool provides database connections
- * LoggerFactory provides application logging
+ * @var AuthManager        $authManager
+ * @var LibraryManager     $libraryManager
+ * @var ItemRepository     $itemRepository
+ * @var PlaybackController $playbackController
  */
-ConnectionPool::init($dbConfigPath);
-LoggerFactory::init($loggerConfigPath);
-
-/**
- * Create database connection
- *
- * Uses the default MySQL connection from ConnectionPool.
- *
- * @var \Phlex\Common\Database\Connection $db
- */
-$db = ConnectionPool::getConnection('mysql');
-
-/**
- * Initialize authentication components
- *
- * JwtHandler creates and validates JWT tokens
- * UserRepository provides user data access
- * AuthManager orchestrates authentication workflows
- */
-$jwtHandler = new JwtHandler(getenv('JWT_SECRET') ?: 'default-secret-change-me');
-$userRepository = new UserRepository($db);
-$authManager = new AuthManager(
-    $userRepository,
-    $jwtHandler,
-    LoggerFactory::get(\Phlex\Common\Logger\LogChannels::AUTH)
-);
-
-/**
- * Initialize library and media components
- */
-$itemRepository = new ItemRepository($db);
-$libraryManager = new LibraryManager($db, $scanner ?? null, $watcher ?? null);
-
-/**
- * Initialize session and playback components
- */
-$sessionManager = new SessionManager($db);
-$playbackController = new PlaybackController($db, $sessionManager);
+$authManager        = $container->get(AuthManager::class);
+$libraryManager     = $container->get(LibraryManager::class);
+$itemRepository     = $container->get(ItemRepository::class);
+$playbackController = $container->get(PlaybackController::class);
 
 /**
  * Create request from global PHP variables
@@ -131,7 +99,7 @@ if (str_starts_with($path, '/api/')) {
      * This implementation currently returns a placeholder message.
      * Full API implementation is in WebPortalRouter.
      *
-     * @see WebPortalRouter For complete API handling
+     * @see \Phlex\Server\WebPortal\WebPortalRouter For complete API handling
      */
     header('Content-Type: application/json');
     echo json_encode(['message' => 'API endpoint - implement in Step 5.2']);
@@ -156,18 +124,14 @@ if (str_starts_with($path, '/api/')) {
     );
 
     if ($path === '/' || $path === '') {
-        /** @var Response Home page */
         $response = $renderer->renderHome($request);
     } elseif ($path === '/login') {
-        /** @var Response Login page */
         $response = $renderer->renderLogin($request);
     } else {
-        /** @var int 404 Not Found status code */
         http_response_code(404);
         echo '<h1>404 - Page not found</h1>';
         exit;
     }
 
-    /** @var Response Send the HTTP response */
     $response->send();
 }

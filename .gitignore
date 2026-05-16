@@ -4,3 +4,12 @@ vendor
 
 # Caliber local state
 .caliber/
+
+# Test / coverage artifacts
+.phpunit.cache/
+coverage.xml
+coverage-report/
+.phpunit.result.cache
+
+# PHP-DI compiled container
+var/cache/

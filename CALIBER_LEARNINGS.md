@@ -1,0 +1,12 @@
+# Caliber Learnings
+
+Accumulated patterns and anti-patterns from development sessions.
+Auto-managed by [caliber](https://github.com/caliber-ai-org/ai-setup) — do not edit manually.
+
+- **[gotcha]** `features.jellyfin.org` is a JS-rendered SPA — `WebFetch` returns only the page `<title>` ("Jellyfin Feature Requests") with no actual feature data. For competitor research on Jellyfin feature votes, use the GitHub `jellyfin-meta` issues or `awesome-jellyfin` instead, or rely on `WebSearch` snippets rather than `WebFetch`.
+- **[convention]** GitHub repos cap at **20 topic tags** per repo. When applying topics via `gh repo edit --add-topic ...`, reserve at least one slot for future-use; in this project we apply 19 and keep slot 20 for a later `phlex-plugin` tag.
+- **[convention]** This project uses three sibling repos under `detain/`: `phlex-server` (the local media server, code currently lives in this repo at `detain/phlex`), `phlex-hub` (central cloud directory + relay), and a future `phlex-shared` Composer package. `detain/phlex-server` and `detain/phlex-hub` already exist as empty public repos created 2026-05-16 — do NOT use `gh repo rename`; migrate code via `git remote set-url`.
+- **[convention]** Sibling client repos live at `/home/sites/phlex-{mobile,roku,tizen,windows}-client`, each in its own git repo under `detain/`. Don't conflate them with `/home/sites/phlex` — they evolve independently.
+- **[correction]** When the user shows you a list of empty repos they pre-created on GitHub, do NOT plan to rename or recreate them — plan to migrate code into them. The original PHLEX_EXPANSION_PLAN.md had to be edited from "rename `phlex` → `phlex-server`" to "migrate code to existing `detain/phlex-server`" after the user clarified the repos already existed.
+- **[correction]** For this project, tests + docs are per-step deliverables, NOT a final Phase. Every implementation step must ship: ≥85% coverage on new classes, PHPDoc on every public class/method, AND doc updates spanning three audiences — end-user (`docs/`), developer (`docs/dev/` or `DEVELOPER.md`), and hub-admin (`docs/hub-admin/`). A step that ships code without its doc updates is incomplete and gets sent back to the queue.
+- **[correction]** Every step must end on `master` with the merged PR already pulled, working tree clean, branch deleted. The next subagent's preconditions are: `git status --short` empty, `git branch --show-current` == `master`, `git log --oneline -1` shows the new squashed commit. The subagent's final report MUST quote these four postcondition checks.

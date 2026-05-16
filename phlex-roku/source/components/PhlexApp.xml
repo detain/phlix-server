@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<component name="PhlexApp" extends="Scene">
-    <interface>
-        <field id="serverUrl" type="string" />
-    </interface>
-    <children>
-    </children>
-</component>

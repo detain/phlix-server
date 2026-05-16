@@ -1,2 +1,6 @@
+vendor
 .codenomad
 .logs
+
+# Caliber local state
+.caliber/

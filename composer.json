@@ -6,7 +6,7 @@
         "php": ">=8.1",
         "workerman/workerman": "^5.0",
         "workerman/webman-framework": "^2.0",
-        "workerman/mysql": "^8.0",
+        "workerman/mysql": "^1.0",
         "workerman/redis": "^2.0",
         "symfony/yaml": "^7.0",
         "monolog/monolog": "^3.0"

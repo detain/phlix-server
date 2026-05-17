@@ -7,6 +7,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step D.5)
+
+- Hub-side invite-link sharing (D.5). Invite links are generated on
+  the hub and grant library access to recipients. Server-side is unchanged;
+  library shares are synced via the existing hub heartbeat mechanism.
+
 ### Added (Step D.4)
 
 - First-class passkey / WebAuthn support for passwordless login.

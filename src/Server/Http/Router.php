@@ -345,8 +345,15 @@ class Router
      * @param string $callbackMethod The callback method name
      * @return self
      */
-    public function oidcAuth(string $controllerClass, string $authorizeMethod = 'authorize', string $callbackMethod = 'callback'): self
-    {
+    public function oidcAuth(
+        string $controllerClass,
+        string $authorizeMethod = 'authorize',
+        string $callbackMethod = 'callback'
+    ): self {
+        $this->get('/auth/oidc/authorize', [$controllerClass, $authorizeMethod]);
+        $this->get('/auth/oidc/callback', [$controllerClass, $callbackMethod]);
+
+        return $this;
         $this->get('/auth/oidc/authorize', [$controllerClass, $authorizeMethod]);
         $this->get('/auth/oidc/callback', [$controllerClass, $callbackMethod]);
 
@@ -368,6 +375,29 @@ class Router
     {
         $this->get('/trickplay/{jobId}/thumb-{index}.jpg', [$controllerClass, 'getThumbnail']);
         $this->get('/trickplay/{jobId}/index.xml', [$controllerClass, 'getIndex']);
+
+        return $this;
+    }
+
+    /**
+     * Registers the marker (intro/outro/chapters) API routes.
+     *
+     * GET /api/v1/media/{id}/markers        — all markers for an item
+     * GET /api/v1/media/{id}/markers/intro  — intro marker only
+     * GET /api/v1/media/{id}/markers/outro  — outro marker only
+     * GET /api/v1/shows/{id}/markers/bulk   — all episode markers for a show
+     *
+     * @param string $controllerClass The MarkerController class name
+     * @return self
+     *
+     * @since 0.12.0
+     */
+    public function markers(string $controllerClass): self
+    {
+        $this->get('/api/v1/media/{id}/markers', [$controllerClass, 'getMarkers']);
+        $this->get('/api/v1/media/{id}/markers/intro', [$controllerClass, 'getIntroMarker']);
+        $this->get('/api/v1/media/{id}/markers/outro', [$controllerClass, 'getOutroMarker']);
+        $this->get('/api/v1/shows/{id}/markers/bulk', [$controllerClass, 'getShowMarkers']);
 
         return $this;
     }

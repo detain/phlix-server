@@ -325,6 +325,150 @@ class ItemRepository
     }
 
     /**
+     * Gets the intro marker columns for a media item.
+     *
+     * @param string $itemId The media item's unique identifier
+     * @return array{start_seconds: int|null, end_seconds: int|null, confidence: int|null}|null
+     *
+     * @since 0.12.0
+     */
+    public function getIntroMarker(string $itemId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT intro_start_seconds, intro_end_seconds, intro_confidence FROM media_items WHERE id = ?",
+            [$itemId]
+        );
+
+        if (empty($result)) {
+            return null;
+        }
+
+        return [
+            'start_seconds' => $result[0]['intro_start_seconds'] !== null
+                ? (int) $result[0]['intro_start_seconds']
+                : null,
+            'end_seconds' => $result[0]['intro_end_seconds'] !== null
+                ? (int) $result[0]['intro_end_seconds']
+                : null,
+            'confidence' => $result[0]['intro_confidence'] !== null
+                ? (int) $result[0]['intro_confidence']
+                : null,
+        ];
+    }
+
+    /**
+     * Gets the outro marker columns for a media item.
+     *
+     * @param string $itemId The media item's unique identifier
+     * @return array{start_seconds: int|null, end_seconds: int|null, confidence: int|null}|null
+     *
+     * @since 0.12.0
+     */
+    public function getOutroMarker(string $itemId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT outro_start_seconds, outro_end_seconds, outro_confidence FROM media_items WHERE id = ?",
+            [$itemId]
+        );
+
+        if (empty($result)) {
+            return null;
+        }
+
+        return [
+            'start_seconds' => $result[0]['outro_start_seconds'] !== null
+                ? (int) $result[0]['outro_start_seconds']
+                : null,
+            'end_seconds' => $result[0]['outro_end_seconds'] !== null
+                ? (int) $result[0]['outro_end_seconds']
+                : null,
+            'confidence' => $result[0]['outro_confidence'] !== null
+                ? (int) $result[0]['outro_confidence']
+                : null,
+        ];
+    }
+
+    /**
+     * Gets the chapters JSON for a media item.
+     *
+     * @param string $itemId The media item's unique identifier
+     * @return array<int, array{start: int, end: int, title?: string|null}>|null
+     *
+     * @since 0.12.0
+     */
+    public function getChapters(string $itemId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT chapters_json FROM media_items WHERE id = ?",
+            [$itemId]
+        );
+
+        if (empty($result) || $result[0]['chapters_json'] === null) {
+            return null;
+        }
+
+        $chapters = $result[0]['chapters_json'];
+        if (is_string($chapters)) {
+            $chapters = json_decode($chapters, true);
+        }
+
+        return is_array($chapters) ? $chapters : null;
+    }
+
+    /**
+     * Updates the marker columns for a media item.
+     *
+     * @param string $itemId The media item's unique identifier
+     * @param array<string, mixed> $markerData Marker data with optional keys:
+     *   intro_start_seconds, intro_end_seconds, intro_confidence,
+     *   outro_start_seconds, outro_end_seconds, outro_confidence,
+     *   chapters_json
+     *
+     * @since 0.12.0
+     */
+    public function updateMarkers(string $itemId, array $markerData): void
+    {
+        $sets = [];
+        $values = [];
+
+        $markerColumns = [
+            'intro_start_seconds',
+            'intro_end_seconds',
+            'intro_confidence',
+            'outro_start_seconds',
+            'outro_end_seconds',
+            'outro_confidence',
+        ];
+
+        foreach ($markerColumns as $col) {
+            if (array_key_exists($col, $markerData)) {
+                $sets[] = "{$col} = ?";
+                $values[] = $markerData[$col];
+            }
+        }
+
+        if (isset($markerData['chapters_json'])) {
+            $sets[] = "chapters_json = ?";
+            $chapters = $markerData['chapters_json'];
+            if (is_array($chapters)) {
+                $chapters = json_encode($chapters);
+            }
+            $values[] = $chapters;
+        }
+
+        if (empty($sets)) {
+            return;
+        }
+
+        $values[] = $itemId;
+
+        $this->db->query(
+            "UPDATE media_items SET " . implode(', ', $sets) . " WHERE id = ?",
+            $values
+        );
+    }
+
+    /**
      * Batch creates multiple media items.
      *
      * @param array<int, array<string, mixed>> $items Array of media item data arrays

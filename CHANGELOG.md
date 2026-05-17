@@ -7,6 +7,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step F.3)
+
+- Marker storage columns and GET API for chapters, intro, and outro markers.
+- `migrations/003_marker_columns.sql` — adds `intro_start_seconds`,
+  `intro_end_seconds`, `outro_start_seconds`, `outro_end_seconds`,
+  `chapters_json` columns to `media_items` table.
+- `IntroMarker` / `OutroMarker` / `ChapterMarker` — immutable DTOs for marker
+  segments with start/end times, confidence, and optional title.
+- `MarkerSet` — aggregate DTO containing intro, outro, and chapters array with
+  `hasMarkers()` and `toArray()` methods.
+- `MarkerService` — service for reading/promoting markers; reads formal columns
+  first, falls back to `metadata_json` candidates; exposes `getMarkers()`,
+  `promoteCandidates()`, `promoteShowMarkers()`, and `getShowMarkers()`.
+- `MarkerController` — HTTP controller with 4 GET endpoints:
+  - `GET /api/v1/media/{id}/markers` — all markers for an item
+  - `GET /api/v1/media/{id}/markers/intro` — intro marker only
+  - `GET /api/v1/media/{id}/markers/outro` — outro marker only
+  - `GET /api/v1/shows/{id}/markers/bulk` — all episode markers for a show
+- `Router::markers()` — registers the 4 marker routes.
+- `ItemRepository` — added `getIntroMarker()`, `getOutroMarker()`,
+  `getChapters()`, and `updateMarkers()` methods for marker column access.
+- `docs/reference/api.md` — API reference documentation for marker endpoints.
+- Unit tests: `MarkerSetTest` (10 tests), `MarkerServiceTest` (9 tests),
+  `MarkerControllerTest` (10 tests).
+
 ### Added (Step F.2)
 
 - Intro/outro detection background job system using audio fingerprint clustering.

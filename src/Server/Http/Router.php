@@ -354,6 +354,25 @@ class Router
     }
 
     /**
+     * Registers the trickplay (thumbnail seek) routes.
+     *
+     * GET /trickplay/{jobId}/thumb-{index}.jpg  — thumbnail grid image
+     * GET /trickplay/{jobId}/index.xml          — BIF index XML
+     *
+     * @param string $controllerClass The TrickplayController class name
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function trickplay(string $controllerClass): self
+    {
+        $this->get('/trickplay/{jobId}/thumb-{index}.jpg', [$controllerClass, 'getThumbnail']);
+        $this->get('/trickplay/{jobId}/index.xml', [$controllerClass, 'getIndex']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

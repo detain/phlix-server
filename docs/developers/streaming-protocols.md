@@ -192,3 +192,91 @@ $manifestUrl = $streamManager->getManifestUrl($jobId, $protocol);
 - [MediaSource Extensions API](https://developer.mozilla.org/en-US/docs/Web/API/MediaSource)
 - [dash.js Reference](https://github.com/Dash-Industry-Forum/dash.js)
 - [hls.js Reference](https://github.com/video-dev/hls.js)
+
+## Trickplay / Thumbnail Seek
+
+Trickplay (also called "scrub preview" or "thumbnail seek") allows users to preview a video by hovering over the progress bar and seeing thumbnail images at regular intervals.
+
+### Overview
+
+| Feature | Description |
+|---------|-------------|
+| Format | DASH-IF / HLS spec-compliant "BIF" (Bitmap Image Format) |
+| Grid layout | 8×4 (32 thumbnails per grid image, configurable) |
+| Thumbnail size | 160×90 pixels (configurable) |
+| Interval | 10 seconds between thumbnails (configurable) |
+| Image format | JPEG or PNG with quality settings |
+
+### How It Works
+
+1. **Generation** — After transcoding completes, `TrickplayGenerator` extracts frames at fixed intervals using FFmpeg batch extraction
+2. **Grid Assembly** — Frames are assembled into grid images using FFmpeg's `tile` filter (e.g., `tile=8x4:margin=2:padding=3`)
+3. **Index Generation** — A BIF index XML maps each thumbnail index to its time position and byte offset in the grid file
+4. **Serving** — `TrickplayController` serves grid images and the index XML with correct `Content-Type` headers
+
+### BIF Index Format
+
+```xml
+<ThumbList>
+  <Thumbs>
+    <Thumb index="0" time="0" offset="0" length="4096"/>
+    <Thumb index="1" time="10" offset="4096" length="4096"/>
+    <Thumb index="2" time="20" offset="8192" length="4096"/>
+    ...
+  </Thumbs>
+</ThumbList>
+```
+
+The `offset` and `length` attributes enable byte-range requests, allowing clients to download only the portion of the grid image needed for a single thumbnail.
+
+### Server-Side Implementation
+
+```
+StreamManager
+├── HlsStreamer          → generates .m3u8 playlists + .ts segments
+├── DashStreamer        → generates .mpd manifests + .m4s segments
+└── TrickplayGenerator → generates BIF thumbnail grids + index XML
+```
+
+### Routes
+
+| Endpoint | Description |
+|---------|-------------|
+| `GET /trickplay/{jobId}/thumb-{index}.jpg` | Thumbnail grid image |
+| `GET /trickplay/{jobId}/index.xml` | BIF index XML |
+
+### Configuration
+
+```php
+// config/trickplay.php
+[
+    'enabled' => true,
+    'interval_seconds' => 10,
+    'grid_columns' => 8,
+    'grid_rows' => 4,
+    'thumb_width' => 160,
+    'thumb_height' => 90,
+    'image_format' => 'jpeg',
+    'jpeg_quality' => 72,
+    'storage_dir' => '/var/trickplay',
+]
+```
+
+### FFmpeg Extension
+
+`FfmpegRunner::generateThumbnail()` now supports batch extraction:
+
+```php
+// Single thumbnail
+$runner->generateThumbnail('/video.mkv', '/thumb.jpg', 30);
+
+// Multiple thumbnails (batch)
+$runner->generateThumbnailBatch('/video.mkv', [0, 10, 20, 30], '/output/dir');
+```
+
+### Class Architecture
+
+- `TrickplayConfig` — Value object with grid dimensions, thumbnail size, interval, format
+- `TrickplayResult` — Result container with job ID, image file metadata, index XML path
+- `TrickplayGenerator` — Extracts frames, assembles grids, generates BIF index XML
+- `TrickplayController` — HTTP handler for serving thumbnails and index with byte-range support

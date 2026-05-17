@@ -250,7 +250,7 @@ class FfmpegRunner
      *
      * @param string $inputPath Source video path
      * @param string $outputPath Destination image path
-     * @param int $timeSeconds Timestamp to capture frame (default: 10)
+     * @param int|array<int> $timeSeconds Timestamp(s) to capture frame (default: 10)
      *
      * @return bool True if thumbnail generation succeeded
      *
@@ -258,9 +258,15 @@ class FfmpegRunner
      * ```php
      * $success = $runner->generateThumbnail('/video.mkv', '/thumb.jpg', 30);
      * ```
+     *
+     * @since 0.11.0 Supports array of timestamps for batch extraction
      */
-    public function generateThumbnail(string $inputPath, string $outputPath, int $timeSeconds = 10): bool
+    public function generateThumbnail(string $inputPath, string $outputPath, int|array $timeSeconds = 10): bool
     {
+        if (is_array($timeSeconds)) {
+            return $this->generateThumbnailBatch($inputPath, $timeSeconds, $outputPath);
+        }
+
         $cmd = sprintf(
             '%s -y -hide_banner -loglevel error -i %s -ss %d -vframes 1 -q:v 2 -f image2 %s',
             escapeshellarg($this->ffmpegPath),
@@ -271,6 +277,57 @@ class FfmpegRunner
 
         exec($cmd, $output, $exitCode);
         return $exitCode === 0;
+    }
+
+    /**
+     * Generates multiple thumbnails at different timestamps in a single command.
+     *
+     * Uses FFmpeg's capability to output multiple files from a single input
+     * with multiple -ss and -vframes pairs for efficient batch extraction.
+     *
+     * @param string $inputPath Source video path
+     * @param array<int> $timestamps Array of timestamps to capture
+     * @param string $outputDir Directory for output images (images named frame_00000.ext, frame_00001.ext, etc.)
+     *
+     * @return bool True if batch extraction succeeded
+     *
+     * @since 0.11.0
+     */
+    public function generateThumbnailBatch(string $inputPath, array $timestamps, string $outputDir): bool
+    {
+        if (empty($timestamps)) {
+            return true;
+        }
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($inputPath)
+        );
+
+        foreach ($timestamps as $index => $timestamp) {
+            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            $cmd .= sprintf(
+                ' -ss %d -vframes 1 %s',
+                escapeshellarg((string) $timestamp),
+                escapeshellarg($framePath)
+            );
+        }
+
+        exec($cmd, $output, $exitCode);
+        return $exitCode === 0;
+    }
+
+    /**
+     * Gets the configured FFmpeg binary path.
+     *
+     * @return string Path to the FFmpeg binary
+     *
+     * @since 0.11.0
+     */
+    public function getFfmpegPath(): string
+    {
+        return $this->ffmpegPath;
     }
 
     /**

@@ -9,6 +9,10 @@ use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Media\Library\ItemRepository;
 use Phlex\Media\Streaming\Dash\DashStreamer;
+use Phlex\Media\Streaming\Trickplay\TrickplayConfig;
+use Phlex\Media\Streaming\Trickplay\TrickplayController;
+use Phlex\Media\Streaming\Trickplay\TrickplayGenerator;
+use Phlex\Media\Streaming\Trickplay\TrickplayResult;
 use Workerman\MySQL\Connection;
 
 /**
@@ -46,6 +50,12 @@ class StreamManager
 
     /** @var DashStreamer DASH streaming support */
     private ?DashStreamer $dashStreamer = null;
+
+    /** @var TrickplayGenerator Trickplay thumbnail generator */
+    private ?TrickplayGenerator $trickplayGenerator = null;
+
+    /** @var TrickplayController Trickplay HTTP handler */
+    private ?TrickplayController $trickplayController = null;
 
     /** @var string Base URL for streaming endpoints */
     private string $baseUrl;
@@ -89,6 +99,57 @@ class StreamManager
     public function setDashStreamer(DashStreamer $dashStreamer): void
     {
         $this->dashStreamer = $dashStreamer;
+    }
+
+    /**
+     * Sets the trickplay generator and controller.
+     *
+     * @param TrickplayGenerator $generator Trickplay thumbnail generator
+     * @param TrickplayController $controller Trickplay HTTP handler
+     *
+     * @return void
+     *
+     * @since 0.11.0
+     */
+    public function setTrickplay(TrickplayGenerator $generator, TrickplayController $controller): void
+    {
+        $this->trickplayGenerator = $generator;
+        $this->trickplayController = $controller;
+    }
+
+    /**
+     * Generates trickplay thumbnails for a transcode job.
+     *
+     * This method should be called after the main transcode is complete
+     * as a post-processing step. It does not block the availability of the stream.
+     *
+     * @param string $jobId Transcode job identifier
+     * @param string $inputPath Path to the source video file
+     * @param TrickplayConfig|null $config Optional trickplay configuration
+     *
+     * @return TrickplayResult Result containing generated thumbnails info
+     *
+     * @throws \RuntimeException If trickplay generation fails
+     *
+     * @since 0.11.0
+     */
+    public function generateTrickplay(string $jobId, string $inputPath, ?TrickplayConfig $config = null): TrickplayResult
+    {
+        if ($this->trickplayGenerator === null) {
+            throw new \RuntimeException('TrickplayGenerator is not configured. Call setTrickplay() first.');
+        }
+
+        $this->logger->info('Starting trickplay generation', ['job_id' => $jobId]);
+
+        $result = $this->trickplayGenerator->generate($jobId, $inputPath, $config);
+
+        $this->logger->info('Trickplay generation complete', [
+            'job_id' => $jobId,
+            'thumbnail_count' => $result->getThumbnailCount(),
+            'grid_count' => $result->getGridCount(),
+        ]);
+
+        return $result;
     }
 
     /**
@@ -433,5 +494,17 @@ class StreamManager
     public function getDashStreamer(): ?DashStreamer
     {
         return $this->dashStreamer;
+    }
+
+    /**
+     * Gets the trickplay controller instance.
+     *
+     * @return TrickplayController|null The trickplay controller or null if not configured
+     *
+     * @since 0.11.0
+     */
+    public function getTrickplayController(): ?TrickplayController
+    {
+        return $this->trickplayController;
     }
 }

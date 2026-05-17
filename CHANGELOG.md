@@ -7,6 +7,38 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step E.5)
+
+- Trickplay (thumbnail seek / scrub preview) support for video progress bar
+  hover preview using DASH-IF / HLS spec-compliant "BIF" (Bitmap Image Format)
+  thumbnail grids.
+- `TrickplayConfig` — value object with grid dimensions (8×4), thumbnail size
+  (160×90px), interval (10s), image format (JPEG/PNG), and quality settings.
+- `TrickplayResult` — result container with job ID, interval, grid dimensions,
+  image file metadata (byte offsets for byte-range requests), and BIF index XML
+  path.
+- `TrickplayGenerator` — extracts frames at fixed intervals using FFmpeg batch
+  extraction (`generateThumbnailBatch`), assembles frames into grid images via
+  FFmpeg `tile` filter, generates BIF index XML with offset/length per thumbnail.
+- `TrickplayController` — HTTP handler serving thumbnail grid images and BIF
+  index XML with correct `Content-Type` headers.
+- `StreamManager` — added `setTrickplay()` and `generateTrickplay()` methods,
+  `TrickplayGenerator` and `TrickplayController` properties, and
+  `getTrickplayController()` getter.
+- `FfmpegRunner` — extended `generateThumbnail()` to accept `int|array` for
+  batch extraction, added `generateThumbnailBatch()` for multiple timestamps in
+  one command, added `getFfmpegPath()` accessor.
+- `Router` — added `trickplay()` route registration for
+  `GET /trickplay/{jobId}/thumb-{index}.jpg` and `GET /trickplay/{jobId}/index.xml`.
+- `config/trickplay.php` — trickplay configuration with `enabled`, `interval_seconds`,
+  `grid_columns`, `grid_rows`, `thumb_width`, `thumb_height`, `image_format`,
+  `jpeg_quality`, `storage_dir`.
+- `docs/developers/streaming-protocols.md` — added "Trickplay / Thumbnail Seek"
+  section documenting BIF format, generation pipeline, configuration, and
+  client-side usage.
+- Unit tests: `TrickplayConfigTest` (15 tests), `TrickplayResultTest` (9 tests),
+  `TrickplayGeneratorTest` (8 tests), `TrickplayControllerTest` (10 tests).
+
 ### Added (Step E.4)
 
 - DASH (Dynamic Adaptive Streaming over HTTP) streaming support alongside

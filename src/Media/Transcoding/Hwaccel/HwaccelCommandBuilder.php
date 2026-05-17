@@ -8,6 +8,9 @@ use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
 use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
 use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
 use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
+use Phlex\Media\Transcoding\Subtitles\SubtitleBurner;
+use Phlex\Media\Transcoding\Subtitles\SubtitleStyleOptions;
+use Phlex\Media\Transcoding\Subtitles\SubtitleTrack;
 
 /**
  * Fluent builder for FFmpeg hardware-accelerated transcoding commands.
@@ -67,6 +70,15 @@ final class HwaccelCommandBuilder
 
     /** @var HwaccelToneMapper|null Tone mapper instance */
     private ?HwaccelToneMapper $toneMapper = null;
+
+    /** @var SubtitleTrack|null Subtitle track for burn-in */
+    private ?SubtitleTrack $subtitleTrack = null;
+
+    /** @var SubtitleStyleOptions|null Style options for subtitle burn-in */
+    private ?SubtitleStyleOptions $subtitleStyle = null;
+
+    /** @var SubtitleBurner|null Subtitle burner instance */
+    private ?SubtitleBurner $subtitleBurner = null;
 
     /**
      * Creates a new HwaccelCommandBuilder.
@@ -283,6 +295,65 @@ final class HwaccelCommandBuilder
     }
 
     /**
+     * Sets the subtitle track for burn-in.
+     *
+     * When set, the builder will inject subtitle burn-in filter arguments
+     * into the transcoding command. The SubtitleBurner must also be set
+     * via setSubtitleBurner() to provide the filter chain.
+     *
+     * @param SubtitleTrack|null $track Subtitle track to burn in (null to disable)
+     *
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function setSubtitleTrack(?SubtitleTrack $track): self
+    {
+        $this->subtitleTrack = $track;
+
+        return $this;
+    }
+
+    /**
+     * Sets the subtitle style options for burn-in.
+     *
+     * Controls the appearance of burned-in subtitles including font,
+     * size, color, outline, position, and margin.
+     *
+     * @param SubtitleStyleOptions|null $style Style options (null for defaults)
+     *
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function setSubtitleStyle(?SubtitleStyleOptions $style): self
+    {
+        $this->subtitleStyle = $style;
+
+        return $this;
+    }
+
+    /**
+     * Sets the subtitle burner instance.
+     *
+     * Required when using subtitle burn-in. The burner generates
+     * the appropriate FFmpeg filter arguments based on the hardware
+     * vendor's subtitle capabilities.
+     *
+     * @param SubtitleBurner $burner Subtitle burner instance
+     *
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function setSubtitleBurner(SubtitleBurner $burner): self
+    {
+        $this->subtitleBurner = $burner;
+
+        return $this;
+    }
+
+    /**
      * Gets the tone map filter chain for the current HDR metadata and vendor.
      *
      * @return ToneMapFilterChain|null Filter chain or null if no HDR metadata set
@@ -377,7 +448,65 @@ final class HwaccelCommandBuilder
                 $this->width,
                 $this->height
             );
-            $cmd .= sprintf(' -vf "%s"', $scaleFilter);
+
+            // If subtitle burn-in is enabled, chain the subtitle filter before scaling
+            if ($this->subtitleTrack !== null && $this->subtitleBurner !== null) {
+                $styleOptions = $this->subtitleStyle ?? new SubtitleStyleOptions();
+                $styleArray = [
+                    'font_name' => $styleOptions->font_name,
+                    'font_size' => $styleOptions->font_size,
+                    'primary_color' => $styleOptions->primary_color,
+                    'outline_color' => $styleOptions->outline_color,
+                    'outline_thickness' => $styleOptions->outline_thickness,
+                    'position' => $styleOptions->position,
+                    'margin' => $styleOptions->margin,
+                ];
+                $subtitleArgs = $this->subtitleBurner->getBurnInArgs(
+                    $this->subtitleTrack,
+                    $this->capability->vendor,
+                    $styleArray
+                );
+
+                // Subtitle args contain -vf and filter string; chain with scale
+                if (count($subtitleArgs) >= 2 && $subtitleArgs[0] === '-vf') {
+                    $subtitleFilter = $subtitleArgs[1];
+                    $cmd .= sprintf(' -vf "%s,%s"', $subtitleFilter, $scaleFilter);
+                    // Add any extra args (e.g., -vaapi_device for VAAPI)
+                    for ($i = 2; $i < count($subtitleArgs); $i++) {
+                        $cmd .= ' ' . $subtitleArgs[$i];
+                    }
+                } else {
+                    $cmd .= sprintf(' -vf "%s"', $scaleFilter);
+                }
+            } else {
+                $cmd .= sprintf(' -vf "%s"', $scaleFilter);
+            }
+        } elseif ($this->subtitleTrack !== null && $this->subtitleBurner !== null) {
+            // Subtitle only, no scaling
+            $styleOptions = $this->subtitleStyle ?? new SubtitleStyleOptions();
+            $styleArray = [
+                'font_name' => $styleOptions->font_name,
+                'font_size' => $styleOptions->font_size,
+                'primary_color' => $styleOptions->primary_color,
+                'outline_color' => $styleOptions->outline_color,
+                'outline_thickness' => $styleOptions->outline_thickness,
+                'position' => $styleOptions->position,
+                'margin' => $styleOptions->margin,
+            ];
+            $subtitleArgs = $this->subtitleBurner->getBurnInArgs(
+                $this->subtitleTrack,
+                $this->capability->vendor,
+                $styleArray
+            );
+
+            // Subtitle args contain -vf and filter string
+            if (count($subtitleArgs) >= 2 && $subtitleArgs[0] === '-vf') {
+                $cmd .= sprintf(' -vf "%s"', $subtitleArgs[1]);
+                // Add any extra args (e.g., -vaapi_device, -qsv_device)
+                for ($i = 2; $i < count($subtitleArgs); $i++) {
+                    $cmd .= ' ' . $subtitleArgs[$i];
+                }
+            }
         }
 
         $cmd .= sprintf(' -c:a %s', $this->audioCodec);

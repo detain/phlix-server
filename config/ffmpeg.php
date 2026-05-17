@@ -20,6 +20,7 @@ return [
         ],
     ],
     'hwaccel_profiles' => require __DIR__ . '/hwaccel_profiles.php',
+    'subtitles' => require __DIR__ . '/subtitles.php',
     'dash' => [
         'enabled' => true,
         'segment_dir' => '/var/segments',

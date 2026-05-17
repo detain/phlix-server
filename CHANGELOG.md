@@ -7,6 +7,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step E.6)
+
+- Subtitle burn-in (hardsubbing) pipeline for embedding subtitles directly
+  in the video stream — required for players/devices that don't support
+  external subtitle tracks (many smart TVs, game consoles, some mobile browsers).
+- `SubtitleFormat` — enum with SRT, ASS, SSA, VTT, HDMV formats plus
+  `getFfmpegFormat()` and `supportsFontstyle()` methods.
+- `SubtitleTrack` — immutable value object with stream index, language code,
+  display label, format, and file path.
+- `SubtitleStyleOptions` — value object for burn-in styling (font, size,
+  primary/outline colors, outline thickness, position, margin) with
+  `toAssStyle()` and `toSrtStyle()` methods.
+- `SubtitleBurner` — core class for subtitle stream detection, extraction,
+  and FFmpeg filter graph generation for burn-in across all vendors.
+- `SubtitleBurnerFactory` — factory for creating vendor-specific burners.
+- `HwaccelCommandBuilder` — added `setSubtitleTrack()`, `setSubtitleStyle()`,
+  and `setSubtitleBurner()` methods; integrates subtitle burn-in filter
+  args into hardware transcoding commands.
+- `StreamManager` — added `setSubtitleBurnIn()` and `getSubtitleBurnInConfig()`
+  methods for configuring subtitle burn-in per streaming session.
+- `StreamState` — added `subtitleBurnInIndex` and `forceSubtitleBurnIn` properties.
+- `config/subtitles.php` — subtitle configuration with `enabled`, `default_language`,
+  `burn_in_by_default`, `extract_to_dir`, and `style` options.
+- `config/ffmpeg.php` — added `subtitles` key referencing `config/subtitles.php`.
+- `docs/developers/subtitle-processing.md` — developer documentation covering
+  soft vs. hard subtitling, vendor burn-in support matrix, styling reference,
+  and usage examples.
+- Unit tests: `SubtitleFormatTest` (11 tests), `SubtitleTrackTest` (4 tests),
+  `SubtitleStyleOptionsTest` (6 tests), `SubtitleBurnerTest` (13 tests).
+
 ### Added (Step E.5)
 
 - Trickplay (thumbnail seek / scrub preview) support for video progress bar

@@ -507,4 +507,65 @@ class StreamManager
     {
         return $this->trickplayController;
     }
+
+    /**
+     * Sets subtitle burn-in options for a stream.
+     *
+     * Configures which subtitle track to burn into the video during transcoding.
+     * This is required for devices that do not support external subtitle tracks
+     * (many smart TVs, game consoles, some mobile browsers).
+     *
+     * @param string $streamId Stream identifier
+     * @param int|null $subtitleIndex Subtitle stream index to burn in (null to disable)
+     * @param bool $force Force burn-in even if player supports soft subtitles
+     *
+     * @return void
+     *
+     * @throws \InvalidArgumentException If stream not found
+     *
+     * @since 0.11.0
+     */
+    public function setSubtitleBurnIn(string $streamId, ?int $subtitleIndex, bool $force = false): void
+    {
+        $stream = $this->getStream($streamId);
+        if (!$stream) {
+            throw new \InvalidArgumentException("Stream not found: {$streamId}");
+        }
+
+        $stream->subtitleBurnInIndex = $subtitleIndex;
+        $stream->forceSubtitleBurnIn = $force;
+
+        $this->logger->info('Subtitle burn-in configured', [
+            'stream_id' => $streamId,
+            'subtitle_index' => $subtitleIndex,
+            'force' => $force,
+        ]);
+    }
+
+    /**
+     * Gets the subtitle burn-in configuration for a stream.
+     *
+     * @param string $streamId Stream identifier
+     *
+     * @return array{
+     *     subtitle_burn_in_index: int|null,
+     *     force_subtitle_burn_in: bool
+     * } Subtitle burn-in configuration
+     *
+     * @throws \InvalidArgumentException If stream not found
+     *
+     * @since 0.11.0
+     */
+    public function getSubtitleBurnInConfig(string $streamId): array
+    {
+        $stream = $this->getStream($streamId);
+        if (!$stream) {
+            throw new \InvalidArgumentException("Stream not found: {$streamId}");
+        }
+
+        return [
+            'subtitle_burn_in_index' => $stream->subtitleBurnInIndex,
+            'force_subtitle_burn_in' => $stream->forceSubtitleBurnIn,
+        ];
+    }
 }

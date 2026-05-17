@@ -59,6 +59,12 @@ class StreamState
     /** @var string|null Direct stream URL if direct play is used */
     public ?string $directStreamUrl = null;
 
+    /** @var int|null Subtitle stream index to burn in (null = no burn-in) */
+    public ?int $subtitleBurnInIndex = null;
+
+    /** @var bool Whether to force subtitle burn-in (ignore soft-subtitle preference) */
+    public bool $forceSubtitleBurnIn = false;
+
     /** @var float Timestamp when playback started (microtime) */
     public float $startedAt;
 

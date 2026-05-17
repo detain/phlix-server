@@ -7,6 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step D.2)
+
+- `phlex-plugin-oidc` — OIDC/OAuth2 authentication provider plugin.
+  Supports any OIDC-compliant identity provider (Authelia, Authentik,
+  Keycloak, Google, GitHub). Includes:
+  - `OidcProvider` — implements `ProviderInterface` with authorization
+    code flow and direct API token authentication.
+  - `DiscoveryDocument` — cached OIDC discovery document (24 h TTL).
+  - `IdTokenValidator` — RS256/RS384/RS512 token validation with
+    cached JWKS.
+  - `OidcCallbackController` — handles `/auth/oidc/authorize` and
+    `/auth/oidc/callback` routes.
+  - `OidcAdminController` — admin API for OIDC settings management.
+  - Smarty settings form at `templates/oidc-settings.tpl`.
+- Routes wired in `Router::oidcAuth()`:
+  `GET /auth/oidc/authorize`, `GET /auth/oidc/callback`.
+- Admin routes in `AdminRoutes`:
+  `GET /api/v1/admin/auth-providers/oidc/config`,
+  `POST /api/v1/admin/auth-providers/oidc/config`,
+  `GET /api/v1/admin/auth-providers/oidc/schema`.
+- Composer dependencies added: `web-token/jwt-framework: ^3.0`,
+  `phpseclib/phpseclib: ^3.0`.
+
 ### Added (Step D.1)
 
 - `Phlex\Auth\AuthProviderRegistry` — singleton registry holding

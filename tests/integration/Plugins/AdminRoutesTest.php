@@ -11,6 +11,8 @@ use Phlex\Common\Logger\AuditLogger;
 use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
 use Phlex\Plugins\Manifest;
+use Phlex\Plugins\Oidc\Controller\OidcAdminController;
+use Phlex\Plugins\Oidc\Plugin;
 use Phlex\Plugins\PluginLoader;
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
@@ -52,11 +54,17 @@ final class AdminRoutesTest extends TestCase
         // run the router. Only the two services AdminRoutes::register
         // resolves from the container are needed.
         $container = new class ($this->loader, $this->users, $this->audit) implements ContainerInterface {
+            private Plugin $oidcPlugin;
+
             public function __construct(
                 private readonly FakePluginLoader $loader,
                 private readonly FakeUserRepository $users,
                 private readonly FakeAuditLogger $audit,
             ) {
+                $tempDir = sys_get_temp_dir() . '/phlex_oidc_test_' . uniqid('', true);
+                mkdir($tempDir, 0775, true);
+                Plugin::setPluginDirectory($tempDir);
+                $this->oidcPlugin = new Plugin();
             }
 
             public function get(string $id): mixed
@@ -73,13 +81,21 @@ final class AdminRoutesTest extends TestCase
                     AuthProviderController::class => new AuthProviderController(
                         new AuthProviderRegistry(),
                     ),
+                    OidcAdminController::class => new OidcAdminController(
+                        $this->oidcPlugin,
+                    ),
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
 
             public function has(string $id): bool
             {
-                return in_array($id, [PluginAdminController::class, AdminMiddleware::class, AuthProviderController::class], true);
+                return in_array($id, [
+                    PluginAdminController::class,
+                    AdminMiddleware::class,
+                    AuthProviderController::class,
+                    OidcAdminController::class,
+                ], true);
             }
         };
 

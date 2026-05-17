@@ -316,6 +316,25 @@ class Router
     }
 
     /**
+     * Registers the OIDC authentication routes.
+     *
+     * GET /auth/oidc/authorize  — redirect to OIDC provider authorization
+     * GET /auth/oidc/callback    — handle OIDC provider callback
+     *
+     * @param string $controllerClass The callback controller class
+     * @param string $authorizeMethod The authorize method name
+     * @param string $callbackMethod The callback method name
+     * @return self
+     */
+    public function oidcAuth(string $controllerClass, string $authorizeMethod = 'authorize', string $callbackMethod = 'callback'): self
+    {
+        $this->get('/auth/oidc/authorize', [$controllerClass, $authorizeMethod]);
+        $this->get('/auth/oidc/callback', [$controllerClass, $callbackMethod]);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

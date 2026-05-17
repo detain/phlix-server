@@ -6,6 +6,7 @@ namespace Phlex\Server\Http\Routes;
 
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
+use Phlex\Plugins\Oidc\Controller\OidcAdminController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Router;
 use Psr\Container\ContainerInterface;
@@ -79,6 +80,13 @@ final class AdminRoutes
                 $r->post('/auth-providers/{name}/enable', [$authProviderController, 'enableProvider']);
                 $r->post('/auth-providers/{name}/disable', [$authProviderController, 'disableProvider']);
                 $r->get('/auth-providers/{name}/config-schema', [$authProviderController, 'getConfigSchema']);
+
+                /** @var OidcAdminController $oidcAdminController */
+                $oidcAdminController = $container->get(OidcAdminController::class);
+
+                $r->get('/auth-providers/oidc/config', [$oidcAdminController, 'getSettings']);
+                $r->post('/auth-providers/oidc/config', [$oidcAdminController, 'saveSettings']);
+                $r->get('/auth-providers/oidc/schema', [$oidcAdminController, 'getSchema']);
             },
             [$adminMiddleware],
         );

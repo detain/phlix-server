@@ -1,0 +1,30 @@
+{
+    "name": "phlex-plugin-oidc",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.11.0",
+    "type": "auth-provider",
+    "entry": "Phlex\\Plugins\\Oidc\\Plugin",
+    "settings": {
+        "provider_url": {
+            "type": "string",
+            "required": true,
+            "secret": false
+        },
+        "client_id": {
+            "type": "string",
+            "required": true,
+            "secret": false
+        },
+        "client_secret": {
+            "type": "string",
+            "required": true,
+            "secret": true
+        },
+        "scopes": {
+            "type": "string",
+            "required": false,
+            "default": "openid profile email"
+        }
+    },
+    "events": []
+}

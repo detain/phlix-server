@@ -12,6 +12,20 @@ use Phlex\Server\Http\Request;
  */
 class RequestTest extends TestCase
 {
+    private array $originalServer = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->originalServer = $_SERVER;
+    }
+
+    protected function tearDown(): void
+    {
+        $_SERVER = $this->originalServer;
+        parent::tearDown();
+    }
+
     /**
      * @covers \Phlex\Server\Http\Request::getBearerToken
      */

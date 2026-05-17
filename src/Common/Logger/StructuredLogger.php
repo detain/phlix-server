@@ -26,7 +26,7 @@ class StructuredLogger
 
     private function setupHandlers(): void
     {
-        foreach ($this->config['handlers'] as $name => $handlerConfig) {
+        foreach ($this->config['handlers'] ?? [] as $name => $handlerConfig) {
             $handler = $this->createHandler($handlerConfig);
             $level = $this->mapLevel($handlerConfig['level'] ?? 'debug');
             $handler->setLevel($level);

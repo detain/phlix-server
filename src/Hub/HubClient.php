@@ -350,7 +350,16 @@ class HubClient
             'active_sessions' => 0,
             'active_transcodes' => 0,
             'hostname_candidates' => $this->getHostnameCandidates(),
-            'capabilities' => ['direct-play', 'transcode-h264', 'transcode-h265', 'syncplay', 'relay'],
+            'capabilities' => [
+                'direct-play',
+                'transcode-h264',
+                'transcode-h265',
+                'syncplay',
+                'relay',
+                'library-sharing',
+            ],
+            'library_count' => 0,
+            'total_size_bytes' => 0,
         ];
 
         try {

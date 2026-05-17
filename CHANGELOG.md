@@ -7,6 +7,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step C.9)
+
+- `Phlex\Hub\HubClient::sendHeartbeat()` — now includes `library_count`,
+  `total_size_bytes`, and `library-sharing` capability in heartbeat
+  payload to advertise library information to the hub.
+
 ### Added (Step C.8)
 
 - `Phlex\Hub\SubdomainResult` — DTO for subdomain allocation result with

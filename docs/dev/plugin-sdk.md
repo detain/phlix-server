@@ -111,8 +111,10 @@ plugins that want to enumerate or introspect other plugins:
 
 ## 2. Adding a new plugin type
 
-The eleven-value enum in `src/Plugins/ManifestType.php` is the master
-list of plugin categories. Each value also appears in:
+The eleven-value enum in `Phlex\Shared\Plugin\ManifestType` (shipped
+in the `detain/phlex-shared` Composer package) is the master list of
+plugin categories. The legacy `Phlex\Plugins\ManifestType` FQCN remains
+available as a deprecated alias through 0.11.x. Each value also appears in:
 
 - `docs/plugins/manifest.schema.json` (the `type` enum block).
 - `docs/plugins/manifest.md` (the field reference table).
@@ -130,8 +132,10 @@ multi-file edit** and every site needs to be touched in the same PR.
    type (e.g. `MetadataManager` calling `metadata-provider` plugins).
    Without a dispatch path, a new type is dead documentation — better
    to use one of the existing values until the host side is ready.
-2. **Add the enum case** in `src/Plugins/ManifestType.php`. Pick a
-   kebab-case value and document the use case in the docblock.
+2. **Add the enum case** in `detain/phlex-shared`'s
+   `src/Plugin/ManifestType.php`. Pick a kebab-case value and
+   document the use case in the docblock. Bump `phlex-shared` to a new
+   tag and bump `phlex-server`'s composer require accordingly.
 3. **Update the JSON schema** at `docs/plugins/manifest.schema.json`
    — add the value to the `type` enum array.
 4. **Update the field tables** in `docs/plugins/manifest.md` and
@@ -198,17 +202,19 @@ those subsystems gain plugin slots.
 
 ### Adding a new event
 
-1. Add the event class under `src/Common/Events/<Area>/<Name>.php`.
-   Extend `Phlex\Common\Events\AbstractEvent`. Make every payload
-   field `readonly`.
+1. Add the event class to `detain/phlex-shared` under
+   `src/Events/<Area>/<Name>.php`. Extend
+   `Phlex\Shared\Events\AbstractEvent`. Make every payload field
+   `readonly`. Tag a new `phlex-shared` release and bump
+   `phlex-server`'s composer require.
 2. Pick a manifest alias of the form
    `phlex.<area>.<verb>(.<sub>)*` (regex `^phlex\.[a-z]+(?:\.[a-z]+)*$`).
-3. Wire the alias in `src/Plugins/EventNameMap::ALIAS_TO_FQCN`. Keep
-   the array literal sorted by alias.
+3. Wire the alias in `Phlex\Shared\Plugin\EventNameMap::ALIAS_TO_FQCN`
+   (in `phlex-shared`). Keep the array literal sorted by alias.
 4. Add a row to the catalog table in
-   `docs/dev/event-reference.md` — payload fields, dispatch site,
-   typical listener — and to the twelve-events table in
-   `docs/plugins/developer-guide.md` §5.
+   `docs/dev/event-reference.md` (in `phlex-server`) — payload fields,
+   dispatch site, typical listener — and to the twelve-events table
+   in `docs/plugins/developer-guide.md` §5.
 5. Dispatch the event from the relevant service via
    `EventDispatcherInterface::dispatch(new …Event(...))`. Wrap the
    dispatch in a try/catch only if you genuinely want broken
@@ -220,35 +226,41 @@ those subsystems gain plugin slots.
 
 ---
 
-## 4. `phlex-shared` namespace migration plan
+## 4. `phlex-shared` migration
 
-Step B.1 of `PHLEX_EXPANSION_PLAN.md` extracts the **contracts** —
-the parts of the plugin system that plugin authors actually depend
-on — into a separate `phlex-shared` Composer package. The goal is for
-plugins to require:
+Step B.3 of `PHLEX_EXPANSION_PLAN.md` extracted the **contracts** —
+the parts of the plugin system that plugin authors depend on — into
+the separate [`detain/phlex-shared`](https://github.com/detain/phlex-shared)
+Composer package. Plugins can now require:
 
 ```json
 "require": {
-    "phlex/phlex-shared": "^1.0",
+    "detain/phlex-shared": "^0.2",
     "psr/container": "^1.1 || ^2.0"
 }
 ```
 
 rather than vendoring the entire phlex-server tree.
 
-### What moves to `phlex-shared` in B.1
+### What moved to `phlex-shared` in B.3
 
 - `Phlex\Plugins\Contract\LifecycleInterface`
   → `Phlex\Shared\Plugin\LifecycleInterface`
 - `Phlex\Plugins\ManifestType`
   → `Phlex\Shared\Plugin\ManifestType`
 - `Phlex\Plugins\Manifest`, `Phlex\Plugins\ManifestValidationError`,
-  `Phlex\Plugins\InstalledPlugin`
-  → `Phlex\Shared\Plugin\…` (likely; final shape decided in B.1's
-  brainstorm).
+  `Phlex\Plugins\EventNameMap`
+  → `Phlex\Shared\Plugin\…`. The validator
+  (`Phlex\Plugins\Manifest\ManifestSchema`) stays in phlex-server
+  because it depends on the bundled JSON Schema file.
 - `Phlex\Common\Events\AbstractEvent` and the twelve concrete event
   classes under `src/Common/Events/`
   → `Phlex\Shared\Events\…`. The manifest aliases stay stable.
+
+All legacy FQCNs remain available as deprecated `class_alias` /
+interface-bridge entries through 0.11.x; they are removed in 0.12.0.
+See `src/Plugins/AliasCompatShim.php` for the alias registrations and
+`src/Plugins/Contract/LifecycleInterface.php` for the interface bridge.
 
 ### What stays in `phlex/phlex` (host-only)
 

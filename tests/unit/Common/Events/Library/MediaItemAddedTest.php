@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Unit\Common\Events\Library;
 
-use Phlex\Common\Events\Library\MediaItemAdded;
+use Phlex\Shared\Events\Library\MediaItemAdded;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Common\Events\Library\MediaItemAdded
+ * @covers \Phlex\Shared\Events\Library\MediaItemAdded
  */
 final class MediaItemAddedTest extends TestCase
 {

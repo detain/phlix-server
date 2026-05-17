@@ -97,6 +97,29 @@ config path (long-running Workerman worker, certain tests). The legacy
 `Application::getInstance()` singleton is retained but `@deprecated`; resolve
 services from the container instead.
 
+## Dependencies → `detain/phlex-shared`
+
+Since 0.11.0 (Step B.3), `phlex-server` depends on the
+[`detain/phlex-shared`](https://github.com/detain/phlex-shared) Composer
+package for its framework-neutral pieces:
+
+- `Phlex\Shared\Plugin\{LifecycleInterface, Manifest, ManifestType, ManifestValidationError, EventNameMap}`
+- `Phlex\Shared\Events\*` — the 12 PSR-14 event DTOs.
+- `Phlex\Shared\Auth\JwtClaims` — value object capturing the Phlex JWT shape.
+- `Phlex\Shared\Hub\*` — placeholder DTOs for the hub claim/heartbeat
+  protocol (Phase C).
+
+`phlex-server` keeps the host-side runtime (PSR-14 dispatcher wiring,
+JSON-Schema validator, plugin loader, JWT signing, HTTP/WS layer). The
+shared package is the contract surface that `phlex-server`,
+`phlex-hub`, and plugin authors all import.
+
+Legacy FQCNs (`Phlex\Plugins\Contract\LifecycleInterface`,
+`Phlex\Plugins\EventNameMap`, etc.) remain available as deprecated
+aliases through 0.11.x via `src/Plugins/AliasCompatShim.php` and the
+3-line interface bridge at `src/Plugins/Contract/LifecycleInterface.php`.
+They are removed in 0.12.0.
+
 ## See also
 
 - `src/Common/Container/ContainerFactory.php` – the factory itself
@@ -105,3 +128,5 @@ services from the container instead.
   container (`PHLEX_CONTAINER_COMPILE`, `JWT_SECRET`)
 - `plans/expansion/a.1-di-container.md` – the plan that introduced the
   container
+- [`detain/phlex-shared`](https://github.com/detain/phlex-shared) –
+  the shared Composer package consumed since 0.11.0.

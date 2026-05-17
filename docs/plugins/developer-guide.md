@@ -47,7 +47,9 @@ Concretely, every plugin ships:
   per-plugin `vendor/` directory so plugins don't pollute the host's
   dependency tree.
 - One PHP entry class implementing
-  `Phlex\Plugins\Contract\LifecycleInterface`. The loader instantiates
+  `Phlex\Shared\Plugin\LifecycleInterface` (the legacy
+  `Phlex\Plugins\Contract\LifecycleInterface` FQCN still works as a
+  deprecated bridge through 0.11.x). The loader instantiates
   it through the host container, calls `onEnable()` on enable, and
   unsubscribes its listeners + calls `onDisable()` on disable.
 
@@ -189,19 +191,17 @@ returned from `Manifest::validate()`, read
 ## 4. Lifecycle reference
 
 Every plugin entry class implements
-`Phlex\Plugins\Contract\LifecycleInterface`:
+`Phlex\Shared\Plugin\LifecycleInterface` (in the `detain/phlex-shared`
+Composer package, since `phlex-server` 0.11.0).
 
-> **Namespace move warning.** This interface lives in
-> `Phlex\Plugins\Contract` today but **Step B.1 of the expansion plan
-> hoists it to `Phlex\Shared\Plugin\LifecycleInterface`** as part of
-> the `phlex-shared` package split. Once B.1 lands, the old
-> `Phlex\Plugins\Contract\LifecycleInterface` becomes a deprecated
-> alias for one minor release. Plugins targeting the current master
-> may pin to the existing FQCN; when you upgrade against B.1+, switch
-> the import.
+> **Migrating from 0.10.x.** Plugins compiled against
+> `Phlex\Plugins\Contract\LifecycleInterface` keep working in 0.11.x
+> because the old FQCN is a deprecated `interface … extends …` bridge.
+> The shim is removed in 0.12.0 — update your imports at your earliest
+> convenience.
 
 ```php
-namespace Phlex\Plugins\Contract;
+namespace Phlex\Shared\Plugin;
 
 use Psr\Container\ContainerInterface;
 
@@ -332,20 +332,20 @@ twelve events the server publishes today are:
 
 | Manifest alias                  | Event class FQCN                                       |
 | ------------------------------- | ------------------------------------------------------ |
-| `phlex.playback.started`        | `Phlex\Common\Events\Playback\PlaybackStarted`         |
-| `phlex.playback.paused`         | `Phlex\Common\Events\Playback\PlaybackPaused`          |
-| `phlex.playback.resumed`        | `Phlex\Common\Events\Playback\PlaybackResumed`         |
-| `phlex.playback.stopped`        | `Phlex\Common\Events\Playback\PlaybackStopped`         |
-| `phlex.library.scan.started`    | `Phlex\Common\Events\Library\LibraryScanStarted`       |
-| `phlex.library.scan.completed`  | `Phlex\Common\Events\Library\LibraryScanCompleted`     |
-| `phlex.library.item.added`      | `Phlex\Common\Events\Library\MediaItemAdded`           |
-| `phlex.library.item.updated`    | `Phlex\Common\Events\Library\MediaItemUpdated`         |
-| `phlex.library.item.removed`    | `Phlex\Common\Events\Library\MediaItemRemoved`         |
-| `phlex.user.created`            | `Phlex\Common\Events\Auth\UserCreated`                 |
-| `phlex.user.logged_in`          | `Phlex\Common\Events\Auth\UserLoggedIn`                |
-| `phlex.user.logged_out`         | `Phlex\Common\Events\Auth\UserLoggedOut`               |
+| `phlex.playback.started`        | `Phlex\Shared\Events\Playback\PlaybackStarted`         |
+| `phlex.playback.paused`         | `Phlex\Shared\Events\Playback\PlaybackPaused`          |
+| `phlex.playback.resumed`        | `Phlex\Shared\Events\Playback\PlaybackResumed`         |
+| `phlex.playback.stopped`        | `Phlex\Shared\Events\Playback\PlaybackStopped`         |
+| `phlex.library.scan.started`    | `Phlex\Shared\Events\Library\LibraryScanStarted`       |
+| `phlex.library.scan.completed`  | `Phlex\Shared\Events\Library\LibraryScanCompleted`     |
+| `phlex.library.item.added`      | `Phlex\Shared\Events\Library\MediaItemAdded`           |
+| `phlex.library.item.updated`    | `Phlex\Shared\Events\Library\MediaItemUpdated`         |
+| `phlex.library.item.removed`    | `Phlex\Shared\Events\Library\MediaItemRemoved`         |
+| `phlex.user.created`            | `Phlex\Shared\Events\Auth\UserCreated`                 |
+| `phlex.user.logged_in`          | `Phlex\Shared\Events\Auth\UserLoggedIn`                |
+| `phlex.user.logged_out`         | `Phlex\Shared\Events\Auth\UserLoggedOut`               |
 
-Each event extends `Phlex\Common\Events\AbstractEvent` and exposes
+Each event extends `Phlex\Shared\Events\AbstractEvent` and exposes
 an `int $timestamp` (UNIX seconds at construction). All other payload
 fields are documented per-event in `event-reference.md`.
 
@@ -356,9 +356,9 @@ A minimal scrobbler that fires on playback start and stop:
 ```php
 namespace Phlex\Plugins\Lastfm;
 
-use Phlex\Common\Events\Playback\PlaybackStarted;
-use Phlex\Common\Events\Playback\PlaybackStopped;
-use Phlex\Plugins\Contract\LifecycleInterface;
+use Phlex\Shared\Events\Playback\PlaybackStarted;
+use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlex\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -592,8 +592,9 @@ greeting for the fixed fixture path so the integration test in
 
 #### `dev-stubs/LifecycleInterface.php`
 
-A **byte-compatible** stub of the host server's
-`Phlex\Plugins\Contract\LifecycleInterface` so the plugin's PHPUnit
+A **byte-compatible** stub of the shared `Phlex\Shared\Plugin\LifecycleInterface`
+(or, for plugins still pinned to 0.10.x, the legacy
+`Phlex\Plugins\Contract\LifecycleInterface`) so the plugin's PHPUnit
 suite can run on developer machines that don't have a phlex-server
 checkout on the include path. `tests/bootstrap.php` autoloads this
 stub when the canonical class isn't already loaded. See

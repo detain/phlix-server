@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Fixtures\Events;
 
-use Phlex\Common\Events\AbstractEvent;
+use Phlex\Shared\Events\AbstractEvent;
 
 /**
  * Trivial event used by EventDispatcherFactoryTest /

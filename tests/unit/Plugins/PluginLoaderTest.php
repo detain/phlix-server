@@ -9,10 +9,10 @@ use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
 use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Events\Playback\PlaybackStarted;
+use Phlex\Shared\Events\Playback\PlaybackStarted;
 use Phlex\Common\Logger\AuditLogger;
 use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Contract\LifecycleInterface;
+use Phlex\Shared\Plugin\LifecycleInterface;
 use Phlex\Plugins\Exception\PluginEnableException;
 use Phlex\Plugins\Exception\PluginInstallException;
 use Phlex\Plugins\Exception\PluginNotFoundException;
@@ -490,7 +490,7 @@ final class PluginLoaderTest extends TestCase
     public function test_install_validationErrors_attached_to_exception(): void
     {
         $this->installer->shouldReceive('installFromDirectory')
-            ->andThrow(new PluginInstallException('bad', [new \Phlex\Plugins\ManifestValidationError('x', 'y', 'z')]));
+            ->andThrow(new PluginInstallException('bad', [new \Phlex\Shared\Plugin\ManifestValidationError('x', 'y', 'z')]));
 
         try {
             $this->makeLoader()->installFromDirectory('/x');

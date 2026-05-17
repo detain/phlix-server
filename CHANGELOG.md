@@ -7,7 +7,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored to depend on `detain/phlex-shared:^0.2`. The
+  `LifecycleInterface`, manifest DTOs, event DTOs, and `EventNameMap`
+  now live in the shared package. Old FQCNs
+  (`Phlex\Plugins\Contract\LifecycleInterface`,
+  `Phlex\Plugins\Manifest`, `Phlex\Plugins\ManifestType`,
+  `Phlex\Plugins\ManifestValidationError`,
+  `Phlex\Plugins\EventNameMap`, `Phlex\Common\Events\*`) remain as
+  deprecated aliases through 0.11.x; removed in 0.12.0.
+- Manifest schema validation extracted to
+  `Phlex\Plugins\Manifest\ManifestSchema`.
+
 ### Added
+
+- Composer require on `detain/phlex-shared:^0.2.0` via a VCS
+  repositories entry.
+- `src/Plugins/AliasCompatShim.php` registers the 16 `class_alias`
+  entries for the moved classes.
+- Three-line interface bridge at
+  `src/Plugins/Contract/LifecycleInterface.php` (extends the shared
+  interface — `class_alias` doesn't work for interfaces).
 
 - Complete plugin developer documentation
   ([`docs/plugins/developer-guide.md`](docs/plugins/developer-guide.md))

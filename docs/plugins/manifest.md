@@ -6,10 +6,13 @@ This file is the source of truth for the loader (A.4), the admin UI
 
 - **The schema** — `docs/plugins/manifest.schema.json` (JSON Schema
   draft 2020-12). IDEs and CI lint manifests against this file.
-- **The parser** — `Phlex\Plugins\Manifest`, an immutable PHP value
-  object. Parses `plugin.json` into typed properties and surfaces
-  schema-validation errors as a list of
-  `Phlex\Plugins\ManifestValidationError` instances.
+- **The parser** — `Phlex\Shared\Plugin\Manifest`, an immutable PHP
+  value object (shipped in the `detain/phlex-shared` Composer package).
+  Parses `plugin.json` into typed properties. The validator
+  (`Phlex\Plugins\Manifest\ManifestSchema`) stays in `phlex-server` and
+  emits `Phlex\Shared\Plugin\ManifestValidationError` instances. The
+  legacy `Phlex\Plugins\Manifest` and `Phlex\Plugins\ManifestValidationError`
+  FQCNs remain available as deprecated aliases through 0.11.x.
 
 > **Scope reminder.** A.3 ships the spec and the parser only. The
 > loader, sandbox, signature verification, and event-alias→FQCN
@@ -52,7 +55,7 @@ to bootstrap a new plugin.
 
 ### Plugin types (`type` enum)
 
-Mirrors `PHLEX_EXPANSION_PLAN.md` §5 and `Phlex\Plugins\ManifestType`:
+Mirrors `PHLEX_EXPANSION_PLAN.md` §5 and `Phlex\Shared\Plugin\ManifestType`:
 
 | Value | Purpose |
 | --- | --- |
@@ -99,18 +102,19 @@ only validates the format.
 ## Parsing and validating in PHP
 
 ```php
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\ManifestType;
-use Phlex\Plugins\Exception\InvalidManifestException;
+use Phlex\Plugins\Manifest\ManifestSchema;
+use Phlex\Shared\Plugin\Manifest;
+use Phlex\Shared\Plugin\ManifestType;
+use RuntimeException;
 
 try {
     $manifest = Manifest::fromJson(file_get_contents('plugin.json'));
-} catch (InvalidManifestException $e) {
+} catch (RuntimeException $e) {
     // Hard parse failure — the file isn't even valid JSON.
     throw $e;
 }
 
-$errors = $manifest->validate();
+$errors = (new ManifestSchema())->validate($manifest);
 if ($errors !== []) {
     foreach ($errors as $error) {
         printf("[%s] %s — %s\n", $error->code, $error->field, $error->message);

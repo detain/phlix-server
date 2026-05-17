@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Unit\Plugins;
 
-use Phlex\Plugins\ManifestType;
+use Phlex\Shared\Plugin\ManifestType;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\ManifestType
+ * @covers \Phlex\Shared\Plugin\ManifestType
  */
 final class ManifestTypeTest extends TestCase
 {

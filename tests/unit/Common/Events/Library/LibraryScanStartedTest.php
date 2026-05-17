@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Unit\Common\Events\Library;
 
-use Phlex\Common\Events\Library\LibraryScanStarted;
+use Phlex\Shared\Events\Library\LibraryScanStarted;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Common\Events\Library\LibraryScanStarted
+ * @covers \Phlex\Shared\Events\Library\LibraryScanStarted
  */
 final class LibraryScanStartedTest extends TestCase
 {

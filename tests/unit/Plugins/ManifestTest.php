@@ -6,13 +6,13 @@ namespace Phlex\Tests\Unit\Plugins;
 
 use Phlex\Plugins\Exception\InvalidManifestException;
 use Phlex\Plugins\Manifest;
-use Phlex\Plugins\ManifestType;
-use Phlex\Plugins\ManifestValidationError;
+use Phlex\Shared\Plugin\ManifestType;
+use Phlex\Shared\Plugin\ManifestValidationError;
 use PHPUnit\Framework\TestCase;
 
 /**
  * @covers \Phlex\Plugins\Manifest
- * @covers \Phlex\Plugins\ManifestValidationError
+ * @covers \Phlex\Shared\Plugin\ManifestValidationError
  * @covers \Phlex\Plugins\Exception\InvalidManifestException
  */
 final class ManifestTest extends TestCase

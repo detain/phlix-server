@@ -10,7 +10,6 @@ use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Common\Version;
-use Phlex\Plugins\Contract\LifecycleInterface;
 use Phlex\Plugins\Exception\PluginEnableException;
 use Phlex\Plugins\Exception\PluginInstallException;
 use Phlex\Plugins\Exception\PluginNotFoundException;
@@ -19,6 +18,8 @@ use Phlex\Plugins\Installer\HttpInstaller;
 use Phlex\Plugins\Repository\PluginRepository;
 use Phlex\Plugins\Signature\SignatureVerifier;
 use Phlex\Plugins\Util\RecursiveDelete;
+use Phlex\Shared\Plugin\EventNameMap;
+use Phlex\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Throwable;
 

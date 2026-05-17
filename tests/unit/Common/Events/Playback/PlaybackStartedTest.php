@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Unit\Common\Events\Playback;
 
-use Phlex\Common\Events\Playback\PlaybackStarted;
+use Phlex\Shared\Events\Playback\PlaybackStarted;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Common\Events\Playback\PlaybackStarted
+ * @covers \Phlex\Shared\Events\Playback\PlaybackStarted
  */
 final class PlaybackStartedTest extends TestCase
 {

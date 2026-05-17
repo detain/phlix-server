@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "81b10f50a245fc5e6fb5add36e1e5892",
+    "content-hash": "c1c6133c70330cbad87593c152930940",
     "packages": [
         {
             "name": "crell/attributeutils",
@@ -281,6 +281,66 @@
                 }
             ],
             "time": "2024-04-14T18:52:14+00:00"
+        },
+        {
+            "name": "detain/phlex-shared",
+            "version": "v0.2.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/detain/phlex-shared.git",
+                "reference": "4e06d6da88bf9c982cb8b7529f630b6d5e0ed3ab"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/detain/phlex-shared/zipball/4e06d6da88bf9c982cb8b7529f630b6d5e0ed3ab",
+                "reference": "4e06d6da88bf9c982cb8b7529f630b6d5e0ed3ab",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.3",
+                "psr/container": "^2.0",
+                "psr/event-dispatcher": "^1.0"
+            },
+            "require-dev": {
+                "phpstan/phpstan": "^2.0",
+                "phpunit/phpunit": "^10.0",
+                "squizlabs/php_codesniffer": "^3.10",
+                "vimeo/psalm": "^5.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Phlex\\Shared\\": "src/"
+                }
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "Phlex\\Shared\\Tests\\": "tests/"
+                }
+            },
+            "scripts": {
+                "test": [
+                    "phpunit"
+                ],
+                "stan": [
+                    "phpstan analyze --no-progress"
+                ],
+                "cs": [
+                    "phpcs --standard=PSR12 src/"
+                ],
+                "psalm": [
+                    "psalm --no-progress"
+                ]
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlex-server and phlex-hub. Composer-installable, PHP 8.3+, zero I/O.",
+            "support": {
+                "source": "https://github.com/detain/phlex-shared/tree/v0.2.0",
+                "issues": "https://github.com/detain/phlex-shared/issues"
+            },
+            "time": "2026-05-17T07:00:31+00:00"
         },
         {
             "name": "fig/event-dispatcher-util",

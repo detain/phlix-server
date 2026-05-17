@@ -14,7 +14,7 @@ use Phlex\Plugins\Exception\PluginInstallException;
 use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
 use Phlex\Plugins\Manifest;
-use Phlex\Plugins\ManifestValidationError;
+use Phlex\Shared\Plugin\ManifestValidationError;
 use Phlex\Plugins\PluginLoader;
 use Phlex\Server\Http\Controllers\PluginAdminController;
 use Phlex\Server\Http\Request;

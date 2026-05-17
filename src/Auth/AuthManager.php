@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
-use Phlex\Common\Events\Auth\UserCreated;
-use Phlex\Common\Events\Auth\UserLoggedIn;
-use Phlex\Common\Events\Auth\UserLoggedOut;
+use Phlex\Shared\Events\Auth\UserCreated;
+use Phlex\Shared\Events\Auth\UserLoggedIn;
+use Phlex\Shared\Events\Auth\UserLoggedOut;
 use Phlex\Common\Logger\AuditLogger;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;

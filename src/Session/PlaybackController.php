@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace Phlex\Session;
 
-use Phlex\Common\Events\Playback\PlaybackPaused;
-use Phlex\Common\Events\Playback\PlaybackResumed;
-use Phlex\Common\Events\Playback\PlaybackStarted;
-use Phlex\Common\Events\Playback\PlaybackStopped;
+use Phlex\Shared\Events\Playback\PlaybackPaused;
+use Phlex\Shared\Events\Playback\PlaybackResumed;
+use Phlex\Shared\Events\Playback\PlaybackStarted;
+use Phlex\Shared\Events\Playback\PlaybackStopped;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;

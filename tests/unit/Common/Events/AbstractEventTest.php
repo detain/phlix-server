@@ -10,7 +10,7 @@ use Phlex\Tests\Fixtures\Events\SampleEvent;
 /**
  * Smoke test for {@see \Phlex\Common\Events\AbstractEvent}.
  *
- * @covers \Phlex\Common\Events\AbstractEvent
+ * @covers \Phlex\Shared\Events\AbstractEvent
  */
 final class AbstractEventTest extends TestCase
 {

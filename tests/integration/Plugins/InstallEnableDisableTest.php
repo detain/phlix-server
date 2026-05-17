@@ -6,7 +6,7 @@ namespace Phlex\Tests\Integration\Plugins;
 
 use Phlex\Common\Container\ContainerFactory;
 use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Events\Playback\PlaybackStarted;
+use Phlex\Shared\Events\Playback\PlaybackStarted;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Plugins\Installer\HttpInstaller;
 use Phlex\Plugins\PluginLoader;

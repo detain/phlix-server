@@ -2,9 +2,16 @@
     "name": "phlex/media-server",
     "type": "project",
     "license": "proprietary",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "git@github.com:detain/phlex-shared.git"
+        }
+    ],
     "require": {
         "php": ">=8.1",
         "crell/tukio": "^2.0",
+        "detain/phlex-shared": "^0.2.0",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",
@@ -27,7 +34,10 @@
     "autoload": {
         "psr-4": {
             "Phlex\\": "src/"
-        }
+        },
+        "files": [
+            "src/Plugins/AliasCompatShim.php"
+        ]
     },
     "autoload-dev": {
         "psr-4": {

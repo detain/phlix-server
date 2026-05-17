@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Plugins\Exception;
 
-use Phlex\Plugins\ManifestValidationError;
+use Phlex\Shared\Plugin\ManifestValidationError;
 use RuntimeException;
 use Throwable;
 

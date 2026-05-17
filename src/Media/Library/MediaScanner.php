@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Library;
 
-use Phlex\Common\Events\Library\LibraryScanCompleted;
-use Phlex\Common\Events\Library\LibraryScanStarted;
-use Phlex\Common\Events\Library\MediaItemAdded;
+use Phlex\Shared\Events\Library\LibraryScanCompleted;
+use Phlex\Shared\Events\Library\LibraryScanStarted;
+use Phlex\Shared\Events\Library\MediaItemAdded;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;

@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Tests\Unit\Common\Events\Auth;
 
-use Phlex\Common\Events\Auth\UserLoggedIn;
+use Phlex\Shared\Events\Auth\UserLoggedIn;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Common\Events\Auth\UserLoggedIn
+ * @covers \Phlex\Shared\Events\Auth\UserLoggedIn
  */
 final class UserLoggedInTest extends TestCase
 {

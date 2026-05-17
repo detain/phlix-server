@@ -1,0 +1,264 @@
+openapi: 3.0.3
+info:
+  title: Phlex Admin Plugins API
+  description: |
+    JSON API for managing Phlex plugins from the admin web portal.
+    Introduced in **Step A.5** of `PHLEX_EXPANSION_PLAN.md`. All
+    endpoints require an authenticated user whose `users.is_admin`
+    flag is set; non-admin or anonymous requests receive 401 or 403.
+
+    Authentication uses the standard `Authorization: Bearer <jwt>`
+    header. Because the API is Bearer-token authenticated, CSRF tokens
+    are not required (browsers do not auto-attach Authorization across
+    origins).
+  version: '1.0.0'
+
+servers:
+  - url: /api/v1/admin
+    description: Admin sub-tree of the main Phlex HTTP API.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /plugins:
+    get:
+      summary: List installed plugins
+      operationId: listPlugins
+      responses:
+        '200':
+          description: Plugin list (possibly empty).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugins:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/InstalledPlugin'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /plugins/install:
+    post:
+      summary: Install a plugin from a URL
+      description: |
+        Downloads, validates, and installs the plugin source from the
+        provided URL. Accepted schemes are `https://` and `file://`;
+        `http://` is rejected at the controller boundary regardless of
+        `PHLEX_PLUGINS_ALLOW_HTTP`.
+      operationId: installPlugin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallRequest'
+      responses:
+        '201':
+          description: Installed manifest.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugin:
+                    $ref: '#/components/schemas/ManifestSummary'
+        '400':
+          description: Missing or invalid URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          description: Manifest invalid or install pipeline failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithFields'
+
+  /plugins/{name}/enable:
+    post:
+      summary: Enable a previously-installed plugin
+      operationId: enablePlugin
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Plugin enabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugin:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      enabled: { type: boolean, enum: [true] }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/EnableFailed'
+
+  /plugins/{name}/disable:
+    post:
+      summary: Disable an enabled plugin
+      operationId: disablePlugin
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Plugin disabled.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugin:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      enabled: { type: boolean, enum: [false] }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /plugins/{name}:
+    delete:
+      summary: Uninstall a plugin
+      description: |
+        Removes the plugin directory under `var/plugins/<name>/` and
+        deletes the `plugins` row. The plugin is disabled first if it
+        was enabled.
+      operationId: uninstallPlugin
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Plugin uninstalled.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: No bearer token or token invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Authenticated but not admin (`users.is_admin = 0`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Plugin not installed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    EnableFailed:
+      description: Plugin found but its enable hook failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    InstallRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: HTTPS or file:// URL of the plugin.json manifest.
+
+    InstalledPlugin:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: string }
+        type: { type: string }
+        entry: { type: string }
+        enabled: { type: boolean }
+        installed_at: { type: string, format: date-time }
+        signed: { type: boolean }
+        settings:
+          type: object
+          additionalProperties: true
+          description: Persisted settings; values flagged secret are masked with "***".
+
+    ManifestSummary:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        type: { type: string }
+        entry: { type: string }
+        phlex_min_server_version: { type: string }
+        signed: { type: boolean }
+        events:
+          type: array
+          items: { type: string }
+
+    Error:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+
+    ErrorWithFields:
+      allOf:
+        - $ref: '#/components/schemas/Error'
+        - type: object
+          properties:
+            fields:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  code: { type: string }
+                  message: { type: string }

@@ -190,4 +190,35 @@ class PageRenderer
 
         return (new Response())->html($html);
     }
+
+    /**
+     * Render an arbitrary Smarty template with the given variables and
+     * return the resulting HTML as a string. Centralised so subordinate
+     * page controllers (e.g.
+     * {@see \Phlex\Server\WebPortal\Controllers\PluginAdminPageController})
+     * don't each have to instantiate Smarty directly and so the
+     * default-on `escape_html` policy is applied uniformly.
+     *
+     * @param string               $templateDir Absolute path to the template root.
+     * @param string               $template    Template path relative to the root.
+     * @param array<string, mixed> $vars        Variables to assign before fetching.
+     *
+     * @return string Rendered HTML.
+     *
+     * @since 0.10.0 (Step A.5)
+     */
+    public static function renderTemplate(string $templateDir, string $template, array $vars): string
+    {
+        $smarty = new \Smarty();
+        $smarty->setTemplateDir($templateDir);
+        // Templates MUST use `|escape:'html'` on every user-controlled
+        // value. The admin-plugins templates are audited for this; new
+        // admin pages should follow the same convention rather than
+        // relying on a single "escape everything" toggle which Smarty
+        // applies inconsistently across plugin/function/modifier output.
+        foreach ($vars as $key => $value) {
+            $smarty->assign($key, $value);
+        }
+        return (string) $smarty->fetch($template);
+    }
 }

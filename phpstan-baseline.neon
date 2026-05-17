@@ -2326,26 +2326,6 @@ parameters:
 			path: src/Server/Http/Router.php
 
 		-
-			message: "#^Call to method assign\\(\\) on an unknown class Smarty\\.$#"
-			count: 8
-			path: src/Server/WebPortal/PageRenderer.php
-
-		-
-			message: "#^Call to method fetch\\(\\) on an unknown class Smarty\\.$#"
-			count: 3
-			path: src/Server/WebPortal/PageRenderer.php
-
-		-
-			message: "#^Call to method setTemplateDir\\(\\) on an unknown class Smarty\\.$#"
-			count: 3
-			path: src/Server/WebPortal/PageRenderer.php
-
-		-
-			message: "#^Instantiated class Smarty not found\\.$#"
-			count: 3
-			path: src/Server/WebPortal/PageRenderer.php
-
-		-
 			message: "#^Parameter \\#1 \\$libraryId of method Phlex\\\\Media\\\\Library\\\\ItemRepository\\:\\:getByLibrary\\(\\) expects string, mixed given\\.$#"
 			count: 1
 			path: src/Server/WebPortal/PageRenderer.php

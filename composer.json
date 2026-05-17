@@ -10,6 +10,7 @@
         "php-di/php-di": "^7.0",
         "psr/container": "^2.0",
         "psr/event-dispatcher": "^1.0",
+        "smarty/smarty": "^4.0",
         "symfony/process": "^7.0",
         "symfony/yaml": "^7.0",
         "workerman/mysql": "^1.0",

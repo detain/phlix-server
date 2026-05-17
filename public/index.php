@@ -26,7 +26,12 @@ use Phlex\Auth\AuthManager;
 use Phlex\Common\Container\ContainerFactory;
 use Phlex\Media\Library\ItemRepository;
 use Phlex\Media\Library\LibraryManager;
+use Phlex\Plugins\PluginLoader;
 use Phlex\Server\Http\Request;
+use Phlex\Server\Http\Response;
+use Phlex\Server\Http\Router;
+use Phlex\Server\Http\Routes\AdminRoutes;
+use Phlex\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlex\Server\WebPortal\PageRenderer;
 use Phlex\Session\PlaybackController;
 
@@ -85,13 +90,29 @@ if ($token) {
 /**
  * Route handling
  *
- * Routes are split into two categories:
- * - API routes (prefixed with /api/) - Return JSON
- * - Page routes - Return HTML rendered by Smarty
+ * Routes are split into three categories:
+ * - Admin JSON API (/api/v1/admin/*) — handled by the typed Router
+ *   with the AdminMiddleware gate so only admin users hit the
+ *   controllers. (Step A.5 plugin admin lives here.)
+ * - Other API routes (prefixed with /api/) — return JSON via the
+ *   placeholder dispatch below; the full WebPortalRouter wiring
+ *   arrives in a later phase.
+ * - Page routes — return HTML rendered by Smarty.
  */
 $path = $request->path;
 
-if (str_starts_with($path, '/api/')) {
+// Build the typed Router once and register the admin route group
+// (Step A.5). Future iterations should migrate the other /api/* routes
+// onto the same router so the whole HTTP surface goes through a single
+// dispatcher.
+$router = new Router();
+AdminRoutes::register($router, $container);
+
+if (str_starts_with($path, '/api/v1/admin/')) {
+    /** @var \Phlex\Server\Http\Response $response */
+    $response = $router->dispatch($request);
+    $response->send();
+} elseif (str_starts_with($path, '/api/')) {
     /**
      * API routes
      *
@@ -111,7 +132,9 @@ if (str_starts_with($path, '/api/')) {
      * Supported routes:
      * - / or '' : Home page
      * - /login : Login page
-     * - /library/{id} : Library browser (via PageRenderer::renderLibrary)
+     * - /admin/plugins : Plugin admin index (Step A.5)
+     * - /admin/plugins/install : Plugin install form (Step A.5)
+     * - /admin/plugins/{name} : Plugin detail page (Step A.5)
      * - Other : 404 Not Found
      *
      * @see PageRenderer For page rendering
@@ -127,6 +150,42 @@ if (str_starts_with($path, '/api/')) {
         $response = $renderer->renderHome($request);
     } elseif ($path === '/login') {
         $response = $renderer->renderLogin($request);
+    } elseif (str_starts_with($path, '/admin/plugins')) {
+        // Browser SSR routes for the plugin admin UI. Same admin gate
+        // as the JSON API: anonymous users get 401, non-admins 403.
+        // Use a Response so the upstream auth check is centralised.
+        $userId = $request->userId ?? null;
+        if ($userId === null || $userId === '') {
+            $response = (new Response())
+                ->status(401)
+                ->html('<h1>401 — admin authentication required</h1>');
+        } else {
+            /** @var \Phlex\Auth\UserRepository $users */
+            $users = $container->get(\Phlex\Auth\UserRepository::class);
+            if ($users->findAdminById($userId) === null) {
+                $response = (new Response())
+                    ->status(403)
+                    ->html('<h1>403 — administrator privileges required</h1>');
+            } else {
+                /** @var PluginLoader $loader */
+                $loader = $container->get(PluginLoader::class);
+                $pageController = new PluginAdminPageController(
+                    $loader,
+                    __DIR__ . '/templates'
+                );
+                if ($path === '/admin/plugins') {
+                    $response = $pageController->index($request, []);
+                } elseif ($path === '/admin/plugins/install') {
+                    $response = $pageController->install($request, []);
+                } elseif (preg_match('#^/admin/plugins/(?P<name>[^/]+)$#', $path, $matches) === 1) {
+                    $response = $pageController->detail($request, ['name' => $matches['name']]);
+                } else {
+                    http_response_code(404);
+                    echo '<h1>404 - Page not found</h1>';
+                    exit;
+                }
+            }
+        }
     } else {
         http_response_code(404);
         echo '<h1>404 - Page not found</h1>';

@@ -171,6 +171,30 @@ B.x will wire a real signing-key infrastructure; until then, A.4 lets
 operators opt into strict signing via env vars while accepting unsigned
 plugins by default.
 
+## Distributing your plugin
+
+A.5 adds the operator-facing install path. Once your plugin is
+packaged and ready to ship, operators can install it by URL:
+
+1. Publish `plugin.json`, your `composer.json`, your `src/` tree, and
+   any other files under a stable HTTPS URL — for example a tagged
+   tarball on GitHub releases that the operator can paste into the
+   admin UI.
+2. Tell operators to browse to `/admin/plugins`, paste the
+   `plugin.json` URL into the install form, and click **Install**. The
+   server downloads, validates, and stores the plugin under
+   `var/plugins/<your-name>/`.
+3. To enable, they flip the toggle in the table; the plugin's
+   `onEnable()` runs and its listeners are subscribed immediately.
+
+See [`install-from-url.md`](install-from-url.md) for the end-user
+walkthrough and [`trusted-plugin-list.md`](trusted-plugin-list.md) for
+how operators decide which signatures to trust.
+
+The curated catalog (operators browsing a list of trusted plugins
+without copy-pasting URLs) lives in the hub and ships with **Phase
+C**.
+
 ## Where to file issues
 
 Open a GitHub issue against

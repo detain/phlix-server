@@ -44,6 +44,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `PHLEX_PLUGINS_COMPOSER_TIMEOUT`. Adds `symfony/process:^7.0`.
   See `docs/plugins/developer-guide.md` for the lifecycle diagram and
   a sample `LifecycleInterface` implementation.
+- Plugin admin UI at `/admin/plugins` and JSON API under
+  `/api/v1/admin/plugins/*` (list / install / enable / disable /
+  uninstall). All routes gated by a new `AdminMiddleware` that reads
+  the new `users.is_admin` flag (migration `004_admin_user_flag.sql`).
+  The first user registered after the migration is auto-promoted to
+  admin; subsequent users default to `is_admin = 0`. Adds runtime
+  Composer dep `smarty/smarty:^4.0` (already used at runtime; now
+  declared). OpenAPI spec at `docs/reference/api/admin-plugins.yaml`;
+  end-user docs at `docs/plugins/install-from-url.md`. Editable
+  settings UI deferred to a later phase — A.5 renders settings
+  read-only with `secret: true` fields masked.
 
 ### Deprecated
 

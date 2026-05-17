@@ -83,6 +83,75 @@ class UserRepository
     }
 
     /**
+     * Find a user by id, but only when the row's `is_admin` flag is
+     * set. Returns `null` for unknown ids and for known-but-non-admin
+     * users alike. Used by
+     * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} to gate the
+     * `/api/v1/admin/*` JSON API in Step A.5.
+     *
+     * Security: callers MUST treat any non-null return as "this user
+     * is allowed to perform privileged operations". Do not leak the
+     * distinction between "user does not exist" and "user is not
+     * admin" to the HTTP boundary — both should map to 403 / 404.
+     *
+     * @param string $id User UUID to look up.
+     *
+     * @return array<string, mixed>|null Row when the user exists and
+     *         `is_admin = 1`, otherwise null.
+     *
+     * @since 0.10.0 (Step A.5)
+     */
+    public function findAdminById(string $id): ?array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM users WHERE id = ? AND is_admin = 1",
+            [$id]
+        );
+        if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
+            return null;
+        }
+        /** @var array<string, mixed> $row */
+        $row = $result[0];
+        return $row;
+    }
+
+    /**
+     * Total number of rows in the `users` table. Used by
+     * {@see \Phlex\Auth\AuthManager::register()} to detect the very
+     * first registration on a fresh install and auto-promote that user
+     * to admin (Step A.5 minimum-viable admin bootstrap).
+     *
+     * @return int Total user count (>= 0).
+     *
+     * @since 0.10.0 (Step A.5)
+     */
+    public function countUsers(): int
+    {
+        $rows = $this->db->query("SELECT COUNT(*) AS c FROM users");
+        if (!is_array($rows) || count($rows) === 0) {
+            return 0;
+        }
+        $raw = $rows[0]['c'] ?? 0;
+        return is_numeric($raw) ? (int) $raw : 0;
+    }
+
+    /**
+     * Promote (or demote) a user's admin flag.
+     *
+     * @param string $id      User UUID to update.
+     * @param bool   $isAdmin Whether the user should be admin.
+     *
+     * @since 0.10.0 (Step A.5)
+     */
+    public function setAdmin(string $id, bool $isAdmin): void
+    {
+        $this->db->query(
+            "UPDATE users SET is_admin = ? WHERE id = ?",
+            [$isAdmin ? 1 : 0, $id]
+        );
+    }
+
+    /**
      * Find a user by their email address.
      *
      * @param string $email Email address to look up (case-sensitive)

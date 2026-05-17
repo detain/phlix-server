@@ -16,3 +16,9 @@ var/cache/
 
 # Installed plugin sources (runtime data, not source)
 var/plugins/
+
+# Smarty compile cache (created when templates render)
+templates_c/
+
+# Claude Code transient runtime files
+.claude/scheduled_tasks.lock

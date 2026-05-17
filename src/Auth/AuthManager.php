@@ -165,6 +165,11 @@ class AuthManager
             throw new \InvalidArgumentException('Email already registered');
         }
 
+        // Detect first-user case BEFORE create() so we don't race
+        // ourselves: the row we are about to insert must not count as
+        // a "prior" user. See Step A.5 for the admin-bootstrap policy.
+        $isFirstUser = $this->userRepository->countUsers() === 0;
+
         // Create user
         $userId = $this->userRepository->create([
             'username' => $username,
@@ -172,6 +177,17 @@ class AuthManager
             'password' => $password,
             'display_name' => $username,
         ]);
+
+        if ($isFirstUser) {
+            // Minimum-viable admin bootstrap: the operator who
+            // registered first owns the box. Phase D will replace this
+            // with a real RBAC + invite flow.
+            $this->userRepository->setAdmin($userId, true);
+            $this->logger->info('Promoted first user to admin', [
+                'user_id' => $userId,
+                'username' => $username,
+            ]);
+        }
 
         $this->logger->info('User registered', ['user_id' => $userId, 'username' => $username]);
 

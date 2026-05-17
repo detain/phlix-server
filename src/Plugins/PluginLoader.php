@@ -44,7 +44,7 @@ use Throwable;
  * @package Phlex\Plugins
  * @since 0.10.0
  */
-final class PluginLoader
+class PluginLoader
 {
     /**
      * Live record of `(pluginName => list<array{eventClass, callable}>)`

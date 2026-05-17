@@ -35,6 +35,7 @@ that consumes it.
 | Variable                        | Default | Description |
 | ------------------------------- | ------- | ----------- |
 | `PHLEX_HUB_URL`                 | _unset_ | Base URL of the Phlex Hub to pair with (e.g. `https://hub.example.com`). When set, the server initiates pairing automatically on startup if enrolled. See `Phlex\Hub\HubClient` and `config/hub.php`. |
+| `PHLEX_HUB_JWKS_URL`            | _unset_ | URL of the hub's JWKS endpoint for validating hub-issued JWTs. Typically set automatically during enrollment. See `Phlex\Hub\HubJwtValidator` and `config/hub.php`. |
 | `PHLEX_HUB_ENROLLMENT_TOKEN`    | _unset_ | When set, overrides the enrollment token read from `config/hub-enrollment.json`. Mostly useful for automation / container orchestration. See `Phlex\Hub\HubClient::loadEnrollment()`. |
 | `PHLEX_HUB_HEARTBEAT_INTERVAL`  | `60`    | Interval in seconds between hub heartbeat calls. Must be between 30 and 3600. See `Phlex\Hub\HubClient::startHeartbeatLoop()` and `config/hub.php`. |
 

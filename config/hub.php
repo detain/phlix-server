@@ -10,6 +10,8 @@
 return [
     'hub_url' => getenv('PHLEX_HUB_URL') ?: null,
 
+    'hub_jwks_url' => getenv('PHLEX_HUB_JWKS_URL') ?: null,
+
     'heartbeat_interval' => (int)(getenv('PHLEX_HUB_HEARTBEAT_INTERVAL') ?: 60),
 
     'enrollment_token_ttl' => 7 * 86400,

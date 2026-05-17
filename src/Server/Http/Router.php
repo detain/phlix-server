@@ -304,6 +304,18 @@ class Router
     }
 
     /**
+     * Registers the hub token exchange endpoint.
+     *
+     * POST /api/v1/auth/hub-token — exchanges a hub JWT for a server session token.
+     *
+     * @return self
+     */
+    public function hubToken(string $controllerClass, string $method = 'handle'): self
+    {
+        return $this->post('/api/v1/auth/hub-token', [$controllerClass, $method]);
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

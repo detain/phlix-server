@@ -69,6 +69,9 @@ class Request
     /** @var string|null Authenticated user ID (set by auth middleware) */
     public ?string $userId = null;
 
+    /** @var \Phlex\Hub\HubUserClaims|null Hub user claims (set by HubJwtMiddleware when using hub auth) */
+    public ?\Phlex\Hub\HubUserClaims $hubUser = null;
+
     /** @var array<string, string> Extracted path parameters from route patterns */
     public array $pathParams = [];
 

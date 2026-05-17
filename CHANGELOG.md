@@ -44,6 +44,40 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - `src/Common\Container\ContainerFactory` now wires `HubServicesProvider`
   into the default provider list.
 
+### Added (Step C.5)
+
+- `Phlex\Hub\HubJwtValidator` — validates JWTs issued by the Phlex Hub
+  using the hub's JWKS. Supports Ed25519 signature verification via
+  `sodium_crypto_sign_verify_detached`, automatic JWKS caching with TTL,
+  and key rotation (refetches JWKS once on unknown `kid`).
+- `Phlex\Hub\HubUserClaims` — immutable DTO for extracted hub JWT claims
+  (`userId`, `serverId`, `subject`, `issuer`, `expiresAt`, `scope`).
+- `Phlex\Hub\JwksCache` — in-memory JWKS cache with TTL support.
+- `Phlex\Hub\HttpClientFactory` — factory for creating HTTP clients used
+  by `HubJwtValidator` to fetch JWKS (enables testability).
+- `Phlex\Server\Http\Middleware\HubJwtMiddleware` — validates hub JWTs on
+  routes that support hub-mediated access. Populates `$request->hubUser`
+  with `HubUserClaims` on success; returns 401 on invalid/expired tokens.
+- `Phlex\Server\Http\Controllers\HubTokenController` — exchanges a hub JWT
+  for a server-issued session token via `POST /api/v1/auth/hub-token`.
+  Provides backward compatibility for older clients that present a hub
+  JWT to get a server session token.
+- `Phlex\Server\Http\Request::$hubUser` — new property holding
+  `HubUserClaims` when the request was authenticated via hub JWT.
+- `config/hub.php` — added `hub_jwks_url` key (`PHLEX_HUB_JWKS_URL`
+  env var) for the hub's JWKS endpoint.
+- `docs/reference/env-vars.md` — documents `PHLEX_HUB_JWKS_URL`.
+- Unit tests: `HubJwtValidatorTest`, `HubUserClaimsTest`,
+  `JwksCacheTest`, `HubJwtMiddlewareTest` (18 new tests).
+
+### Changed (Step C.5)
+
+- `Phlex\Common\Container\Providers\HubServicesProvider` now registers
+  `HubJwtValidator`, `HubTokenController`, `HubJwtMiddleware`,
+  `HttpClientFactory`, and `JwksCache`.
+- `Phlex\Server\Core\Application` now registers the
+  `POST /api/v1/auth/hub-token` route.
+
 ## [0.11.0] — 2026-05-17
 
 ### Changed

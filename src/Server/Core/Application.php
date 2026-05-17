@@ -197,6 +197,12 @@ class Application
                 'endpoints' => '/health, /system/info',
             ]);
         });
+
+        // Hub JWT exchange endpoint
+        $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
+            $controller = $this->getHubTokenController();
+            return $controller->handle($request, $params);
+        });
     }
 
     /**
@@ -356,6 +362,30 @@ class Application
 
         /** @var HubJwksController */
         $controller = $this->container->get(HubJwksController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns a HubTokenController instance from the container.
+     *
+     * @return \Phlex\Server\Http\Controllers\HubTokenController The controller instance.
+     */
+    private function getHubTokenController(): \Phlex\Server\Http\Controllers\HubTokenController
+    {
+        if ($this->container === null) {
+            return new \Phlex\Server\Http\Controllers\HubTokenController(
+                new \Phlex\Hub\HubJwtValidator(
+                    'https://hub.example.com/.well-known/jwks.json',
+                    new \Phlex\Hub\HttpClientFactory(),
+                    new \Psr\Log\NullLogger(),
+                    'test-server-id',
+                ),
+                new \Phlex\Auth\JwtHandler('fallback-secret-for-tests'),
+            );
+        }
+
+        /** @var \Phlex\Server\Http\Controllers\HubTokenController */
+        $controller = $this->container->get(\Phlex\Server\Http\Controllers\HubTokenController::class);
         return $controller;
     }
 }

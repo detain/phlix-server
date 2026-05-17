@@ -7,6 +7,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step F.2)
+
+- Intro/outro detection background job system using audio fingerprint clustering.
+- `FingerprintClusterer` — Jaccard similarity-based clustering to detect shared
+  intro/outro segments across episodes using audio fingerprints.
+- `IntroDetectionJob` — orchestrates detection for all episodes of a TV show,
+  clusters fingerprints, returns marker candidates.
+- `IntroMarkerCandidate` / `OutroMarkerCandidate` — immutable DTOs for detected
+  intro/outro segments with start/end times, fingerprint, and confidence score.
+- `IntroDetectionResult` — result container for show-level detection results.
+- `ClusteringResult` — result container for fingerprint clustering output.
+- `StoredMarkers` — parses stored marker candidates from episode metadata.
+- `MarkerCandidateRepository` — persists intro/outro candidates to
+  `media_items.metadata_json` for consumption by F.3 API.
+- `MarkerCandidateStore` — file-based job queue (`/tmp/phlex_marker_jobs/`)
+  with one lock file per show being processed.
+- `BackgroundDetectorWorker` — queue consumer loop that processes detection
+  jobs continuously.
+- `scripts/run-marker-detection-worker.php` — CLI entry point for running
+  the background worker.
+- `config/marker_detection.php` — configuration for intro/max duration,
+  similarity threshold (0.85), minimum episodes (3), worker interval.
+- `docs/developers/intro-outro-detection.md` — developer documentation
+  covering the clustering algorithm, configuration, and usage.
+- Unit tests: `IntroDetectionJobTest` (5 tests), `FingerprintClustererTest`
+  (12 tests), `MarkerCandidateStoreTest` (10 tests),
+  `MarkerCandidateRepositoryTest` (5 tests).
+
 ### Added (Step E.6)
 
 - Subtitle burn-in (hardsubbing) pipeline for embedding subtitles directly

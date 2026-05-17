@@ -316,6 +316,36 @@ class HlsStreamer
     }
 
     /**
+     * Saves segment content to a file.
+     *
+     * This method allows the segment writer to store once and have both
+     * HLS and DASH streamers reference the same files (with DASH using
+     * .m4s containers).
+     *
+     * @param string $jobId Transcode job identifier
+     * @param int $variantIndex Variant index (0-based)
+     * @param int $segmentNumber Segment number
+     * @param string $content Segment content
+     *
+     * @throws \RuntimeException If file write fails
+     */
+    public function setSegmentContent(string $jobId, int $variantIndex, int $segmentNumber, string $content): void
+    {
+        $dir = "{$this->segmentDir}/{$jobId}";
+        if (!is_dir($dir)) {
+            if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
+                throw new \RuntimeException("Failed to create directory: {$dir}");
+            }
+        }
+
+        $path = $this->getSegmentPath($jobId, $variantIndex, $segmentNumber);
+        $result = file_put_contents($path, $content);
+        if ($result === false) {
+            throw new \RuntimeException("Failed to write segment file: {$path}");
+        }
+    }
+
+    /**
      * Counts the number of segments for a variant.
      *
      * @param string $jobId Transcode job identifier

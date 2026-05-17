@@ -316,6 +316,25 @@ class Router
     }
 
     /**
+     * Registers the DASH streaming routes.
+     *
+     * GET /dash/{jobId}/manifest.mpd           — master manifest
+     * GET /dash/{jobId}/{setId}/manifest.mpd  — adaptation set manifest
+     * GET /dash/{jobId}/{setId}/segment_{n}.m4s — segment file
+     *
+     * @param string $controllerClass The DashController class name
+     * @return self
+     */
+    public function dashStreaming(string $controllerClass): self
+    {
+        $this->get('/dash/{job_id}/manifest.mpd', [$controllerClass, 'getMasterManifest']);
+        $this->get('/dash/{job_id}/{set_id}/manifest.mpd', [$controllerClass, 'getAdaptationSetManifest']);
+        $this->get('/dash/{job_id}/{set_id}/segment_{segment_number}.m4s', [$controllerClass, 'getSegment']);
+
+        return $this;
+    }
+
+    /**
      * Registers the OIDC authentication routes.
      *
      * GET /auth/oidc/authorize  — redirect to OIDC provider authorization

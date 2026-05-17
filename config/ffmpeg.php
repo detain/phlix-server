@@ -20,4 +20,12 @@ return [
         ],
     ],
     'hwaccel_profiles' => require __DIR__ . '/hwaccel_profiles.php',
+    'dash' => [
+        'enabled' => true,
+        'segment_dir' => '/var/segments',
+        'default_codecs' => [
+            'video' => 'avc1.64001f',
+            'audio' => 'mp4a.40.2',
+        ],
+    ],
 ];

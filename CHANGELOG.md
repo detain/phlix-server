@@ -7,6 +7,34 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step E.4)
+
+- DASH (Dynamic Adaptive Streaming over HTTP) streaming support alongside
+  existing HLS implementation.
+- `DashStreamer` — DASH manifest generator and segment manager producing
+  DASH-IF compliant MPD manifests with SegmentTemplate elements.
+- `SegmentTemplate` — value object for DASH segment template handling
+  (SegmentTemplate vs. SegmentList for efficient live streaming).
+- `AdaptationSet` — value object representing DASH adaptation sets
+  (video, audio, text) with codec/bandwidth metadata.
+- `DashController` — HTTP endpoints for DASH streaming:
+  `GET /dash/{jobId}/manifest.mpd`, `GET /dash/{jobId}/{setId}/manifest.mpd`,
+  `GET /dash/{jobId}/{setId}/segment_{n}.m4s`.
+- `config/dash.php` — DASH-specific configuration with `enabled`,
+  `manifest_refresh_seconds`, `min_buffer_time`, `min_buffer_time_live`,
+  `time_shift_buffer_depth`, `default_codecs`.
+- `config/ffmpeg.php` — added `dash` key with `enabled`, `segment_dir`,
+  `default_codecs`.
+- `HlsStreamer` — added `setSegmentContent()` method so segment writer
+  can store once and both HLS and DASH streamers reference the same files.
+- `StreamManager` — added `DashStreamer` property and `getManifestUrl()`
+  method returning HLS or DASH manifest URL based on `$protocol` parameter.
+- `Router` — added `dashStreaming()` route registration method.
+- `docs/developers/streaming-protocols.md` — documentation covering HLS
+  vs. DASH tradeoffs, manifest structure, client-side selection, and usage.
+- Unit tests: `DashStreamerTest` (11 tests), `SegmentTemplateTest` (7 tests),
+  `AdaptationSetTest` (8 tests).
+
 ### Added (Step E.1)
 
 - Hardware acceleration probe system for detecting GPU encoders (NVENC,

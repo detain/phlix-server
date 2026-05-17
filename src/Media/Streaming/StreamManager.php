@@ -8,6 +8,7 @@ use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Media\Library\ItemRepository;
+use Phlex\Media\Streaming\Dash\DashStreamer;
 use Workerman\MySQL\Connection;
 
 /**
@@ -40,27 +41,54 @@ class StreamManager
     /** @var StructuredLogger Structured logger for streaming events */
     private StructuredLogger $logger;
 
+    /** @var HlsStreamer HLS streaming support */
+    private HlsStreamer $hlsStreamer;
+
+    /** @var DashStreamer DASH streaming support */
+    private ?DashStreamer $dashStreamer = null;
+
+    /** @var string Base URL for streaming endpoints */
+    private string $baseUrl;
+
     /**
      * Creates a new StreamManager instance.
      *
      * @param Connection $db Database connection for playback state persistence
      * @param ItemRepository $itemRepository Media item repository
      * @param QualitySelector $qualitySelector Quality selection engine
+     * @param HlsStreamer $hlsStreamer HLS streaming support
+     * @param string $baseUrl Base URL for streaming endpoints
      *
      * @example
      * ```php
-     * $manager = new StreamManager($db, $itemRepo, new QualitySelector());
+     * $manager = new StreamManager($db, $itemRepo, new QualitySelector(), $hlsStreamer, 'http://localhost:8096');
      * ```
      */
     public function __construct(
         Connection $db,
         ItemRepository $itemRepository,
-        QualitySelector $qualitySelector
+        QualitySelector $qualitySelector,
+        HlsStreamer $hlsStreamer,
+        string $baseUrl = ''
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
         $this->qualitySelector = $qualitySelector;
+        $this->hlsStreamer = $hlsStreamer;
+        $this->baseUrl = $baseUrl;
         $this->logger = LoggerFactory::get(LogChannels::STREAMING);
+    }
+
+    /**
+     * Sets the DASH streamer.
+     *
+     * @param DashStreamer $dashStreamer DASH streaming support
+     *
+     * @return void
+     */
+    public function setDashStreamer(DashStreamer $dashStreamer): void
+    {
+        $this->dashStreamer = $dashStreamer;
     }
 
     /**
@@ -355,5 +383,55 @@ class StreamManager
             mt_rand(0, 0xffff),
             mt_rand(0, 0xffff)
         );
+    }
+
+    /**
+     * Gets the manifest URL for a streaming protocol.
+     *
+     * Returns the appropriate manifest URL based on the requested protocol
+     * (HLS or DASH). The manifest URL is used by clients to begin streaming.
+     *
+     * @param string $jobId Transcode job identifier
+     * @param string $protocol Streaming protocol ('hls' or 'dash')
+     *
+     * @return string The manifest URL for the specified protocol
+     *
+     * @throws \InvalidArgumentException If protocol is not supported
+     *
+     * @example
+     * ```php
+     * $hlsUrl = $manager->getManifestUrl('job-123', 'hls');
+     * $dashUrl = $manager->getManifestUrl('job-123', 'dash');
+     * ```
+     */
+    public function getManifestUrl(string $jobId, string $protocol): string
+    {
+        return match ($protocol) {
+            'hls' => $this->hlsStreamer->getPlaylistUrl($jobId),
+            'dash' => $this->dashStreamer !== null
+                ? $this->dashStreamer->getMasterMpdUrl($jobId)
+                : throw new \InvalidArgumentException('DASH streaming is not configured'),
+            default => throw new \InvalidArgumentException("Unsupported streaming protocol: {$protocol}"),
+        };
+    }
+
+    /**
+     * Gets the HLS streamer instance.
+     *
+     * @return HlsStreamer The HLS streamer
+     */
+    public function getHlsStreamer(): HlsStreamer
+    {
+        return $this->hlsStreamer;
+    }
+
+    /**
+     * Gets the DASH streamer instance.
+     *
+     * @return DashStreamer|null The DASH streamer or null if not configured
+     */
+    public function getDashStreamer(): ?DashStreamer
+    {
+        return $this->dashStreamer;
     }
 }

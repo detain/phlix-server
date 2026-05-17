@@ -7,6 +7,35 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step E.1)
+
+- Hardware acceleration probe system for detecting GPU encoders (NVENC,
+  VAAPI, QSV, VideoToolbox, AMF, V4L2) at startup.
+- `HwaccelCapability` — immutable value object representing hardware
+  encoder capabilities (vendor, encoder/decoder names, supported codecs,
+  HDR tone mapping support, resolution/bitrate limits).
+- `HwaccelProbe` — runs vendor-specific probes via `ffmpeg -encoders`
+  and `ffmpeg -decoders`, aggregates results into a capability map.
+- `HwaccelRegistry` — lazy singleton holding probed capabilities;
+  `getEncoder()` / `getDecoder()` use vendor priority for best-match
+  selection.
+- `VendorProbeInterface` + 7 concrete implementations:
+  `NvencProbe`, `VaapiProbe`, `QsvProbe`, `VideoToolboxProbe`,
+  `AmfProbe`, `V4L2Probe`, `SoftwareProbe` (always-available fallback).
+- `config/hwaccel.php` — `enabled`, `prefer_hardware`,
+  `vendor_priority`, `probe_timeout`, `test_clip_path`,
+  `fallback_to_software` configuration.
+- `config/ffmpeg.php` — added `hwaccel` key with `enabled`,
+  `prefer_hardware`, `vendor_priority`.
+- `FfmpegRunner` — added `HwaccelRegistry` property and
+  `probeHardwareAcceleration()` + `buildHwaccelCommand()` methods.
+- `docs/developers/hardware-acceleration.md` — architecture overview,
+  capability fields, usage examples, and guide for adding new vendors.
+- Unit tests: `HwaccelCapabilityTest` (6 tests),
+  `HwaccelProbeTest` (9 tests), `HwaccelRegistryTest` (8 tests).
+- No user-visible behavior change yet — transcode remains software-only
+  until Step E.2 integrates hardware encoding into TranscodeManager.
+
 ### Added (Step D.5)
 
 - Hub-side invite-link sharing (D.5). Invite links are generated on

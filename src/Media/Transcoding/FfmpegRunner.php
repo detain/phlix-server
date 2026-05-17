@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Transcoding;
 
+use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -31,6 +33,12 @@ class FfmpegRunner
 
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
+
+    /** @var HwaccelRegistry|null Hardware acceleration registry */
+    private ?HwaccelRegistry $hwaccelRegistry = null;
+
+    /** @var bool Whether hardware acceleration has been probed */
+    private bool $hwaccelProbed = false;
 
     /**
      * Creates a new FFmpegRunner instance.
@@ -328,5 +336,155 @@ class FfmpegRunner
             return $matches[1];
         }
         return null;
+    }
+
+    /**
+     * Probes hardware acceleration capabilities and populates the registry.
+     *
+     * This method should be called at startup to detect available hardware
+     * acceleration. It initializes the HwaccelRegistry singleton with the
+     * detected capabilities.
+     *
+     * @param HwaccelRegistry|null $registry Optional custom registry (uses singleton if null)
+     *
+     * @return array<string, HwaccelCapability> Map of vendor name to capability
+     *
+     * @since 0.11.0
+     */
+    public function probeHardwareAcceleration(?HwaccelRegistry $registry = null): array
+    {
+        if ($this->hwaccelProbed) {
+            return $this->hwaccelRegistry?->getAll() ?? [];
+        }
+
+        $this->hwaccelRegistry = $registry ?? HwaccelRegistry::getInstance();
+        $capabilities = $this->hwaccelRegistry->getAll();
+
+        $this->logger->info('Hardware acceleration probed', [
+            'vendors' => array_keys($capabilities),
+        ]);
+
+        $this->hwaccelProbed = true;
+
+        return $capabilities;
+    }
+
+    /**
+     * Gets the hardware acceleration registry.
+     *
+     * @return HwaccelRegistry|null
+     *
+     * @since 0.11.0
+     */
+    public function getHwaccelRegistry(): ?HwaccelRegistry
+    {
+        return $this->hwaccelRegistry;
+    }
+
+    /**
+     * Builds a hardware-accelerated FFmpeg transcode command.
+     *
+     * Uses the hwaccel registry to select the best encoder for the codec,
+     * and builds the appropriate command with hardware-specific flags.
+     *
+     * @param string $inputPath Source file path
+     * @param string $outputPath Destination file path
+     * @param string $codec Codec to encode (e.g., 'h264', 'hevc')
+     * @param array<string, mixed> $params Additional encoding parameters
+     * @param bool $require_hdr_tone_map Require HDR tone mapping support
+     *
+     * @return string|null Complete FFmpeg command or null if no hwaccel available
+     *
+     * @since 0.11.0
+     */
+    public function buildHwaccelCommand(
+        string $inputPath,
+        string $outputPath,
+        string $codec,
+        array $params = [],
+        bool $require_hdr_tone_map = false
+    ): ?string {
+        if (!$this->hwaccelProbed) {
+            $this->probeHardwareAcceleration();
+        }
+
+        $capability = $this->hwaccelRegistry?->getEncoder($codec, $require_hdr_tone_map);
+
+        if ($capability === null) {
+            $this->logger->warning('No hardware encoder found', ['codec' => $codec]);
+            return null;
+        }
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error',
+            escapeshellarg($this->ffmpegPath)
+        );
+
+        $cmd .= $this->buildHwaccelInputFlags($capability);
+
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+
+        $cmd .= ' -c:v ' . $capability->encoder;
+
+        switch ($capability->vendor) {
+            case 'nvenc':
+                $cmd .= ' -preset:v p4';
+                break;
+            case 'vaapi':
+            case 'qsv':
+                $cmd .= ' -preset:v fast';
+                break;
+            default:
+                $cmd .= ' -preset:v medium';
+        }
+
+        if (isset($params['crf'])) {
+            $cmd .= ' -crf ' . $params['crf'];
+        }
+
+        if (isset($params['width']) && isset($params['height'])) {
+            $scaleFilter = "scale={$params['width']}:{$params['height']}:force_original_aspect_ratio=decrease";
+            $cmd .= ' -vf "' . $scaleFilter . '"';
+        }
+
+        if (isset($params['audio_codec'])) {
+            $cmd .= ' -c:a ' . $params['audio_codec'];
+            $cmd .= ' -b:a ' . ($params['audio_bitrate'] ?? '128k');
+            $cmd .= ' -ar ' . ($params['audio_sample_rate'] ?? 48000);
+        } else {
+            $cmd .= ' -c:a copy';
+        }
+
+        if (isset($params['format'])) {
+            $cmd .= ' -f ' . $params['format'];
+        }
+
+        $cmd .= ' -threads 0';
+
+        $cmd .= ' ' . escapeshellarg($outputPath);
+
+        return $cmd;
+    }
+
+    /**
+     * Builds the input hardware acceleration flags for a capability.
+     *
+     * @param HwaccelCapability $capability
+     *
+     * @return string
+     *
+     * @since 0.11.0
+     */
+    private function buildHwaccelInputFlags(HwaccelCapability $capability): string
+    {
+        return match ($capability->vendor) {
+            'nvenc' => ' -hwaccel cuda -hwaccel_device 0',
+            'vaapi' => ' -hwaccel vaapi -hwaccel_device /dev/dri/renderD128',
+            'qsv' => ' -hwaccel qsv -qsv_device /dev/dri/renderD128',
+            'videotoolbox' => ' -hwaccel videotoolbox',
+            'amf' => ' -hwaccel amf',
+            'v4l2' => ' -hwaccel v4l2m2m',
+            default => '',
+        };
     }
 }

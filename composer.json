@@ -11,7 +11,7 @@
     "require": {
         "php": ">=8.1",
         "crell/tukio": "^2.0",
-        "detain/phlex-shared": "^0.2.0",
+        "detain/phlex-shared": "^0.3.0",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",
         "php-di/php-di": "^7.0",

@@ -57,6 +57,9 @@ class AuthManager
      */
     private ?Connection $db;
 
+    /** @var ProviderManager|null Bridge to external auth providers (OIDC, LDAP, etc.). */
+    private ?ProviderManager $providerManager;
+
     /**
      * Create a new AuthManager instance.
      *
@@ -70,6 +73,8 @@ class AuthManager
      *                                       {@see UserLoggedIn}, and
      *                                       {@see UserLoggedOut} are published from
      *                                       the matching lifecycle methods.
+     * @param Connection|null $db Optional database connection for transactions.
+     * @param ProviderManager|null $providerManager Optional bridge to external providers.
      *
      * @example
      * ```php
@@ -86,7 +91,8 @@ class AuthManager
         AuditLogger $auditLogger,
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
-        ?Connection $db = null
+        ?Connection $db = null,
+        ?ProviderManager $providerManager = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -94,6 +100,7 @@ class AuthManager
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->eventDispatcher = $eventDispatcher;
         $this->db = $db;
+        $this->providerManager = $providerManager;
     }
 
     /**
@@ -287,6 +294,75 @@ class AuthManager
         $this->dispatchUserLoggedIn($userId, $deviceId);
 
         return $this->createAuthResponse($user['id']);
+    }
+
+    /**
+     * Authenticate a user via an external provider (OIDC, LDAP, SAML, passkey).
+     *
+     * Handles provider-prefixed usernames (e.g. "oidc:alice@example.com")
+     * by delegating to the registered external provider via {@see ProviderManager}.
+     * On successful auth, automatically creates a local user row if one does
+     * not already exist for the external identity (password_hash = NULL so
+     * the user can set a local password later).
+     *
+     * @param string $username    Provider-prefixed username (e.g. "oidc:alice@google.com")
+     *                            or plain username for fallback password auth.
+     * @param array<string, mixed> $credentials Provider-specific credentials (e.g. id_token,
+     *                            authorization_code) or password for fallback.
+     * @param string $deviceId   Unique identifier for the device/app.
+     *
+     * @return array<string, mixed> Authentication response with access_token,
+     *         refresh_token, token_type, expires_in, and user data.
+     *
+     * @throws \RuntimeException When ProviderManager is not configured.
+     * @throws \InvalidArgumentException When authentication fails or provider is unknown.
+     *
+     * @since 0.12.0 (Step D.1)
+     */
+    public function loginWithProvider(string $username, array $credentials, string $deviceId): array
+    {
+        if ($this->providerManager === null) {
+            throw new \RuntimeException(
+                'ProviderManager is not configured. External auth providers are unavailable.'
+            );
+        }
+
+        $result = $this->providerManager->authenticate($username, $credentials);
+
+        if ($result->isFailure()) {
+            $this->auditLogger->logFailedAuth($result->error ?? 'provider_auth_failed', [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+            throw new \InvalidArgumentException($result->error ?? 'Authentication failed');
+        }
+
+        $userId = $result->userId;
+
+        if ($userId === null) {
+            $externalId = $result->externalId ?? '';
+            $email = $result->getEmail();
+            $displayName = $result->getDisplayName();
+
+            $userId = $this->userRepository->findOrCreateByExternalId(
+                $externalId,
+                $email,
+                $displayName,
+            );
+        }
+
+        $this->userRepository->updateLastLogin($userId);
+
+        $this->auditLogger->logLogin($userId, $deviceId, true);
+
+        $this->logger->info('User logged in via external provider', [
+            'user_id' => $userId,
+            'device_id' => $deviceId,
+        ]);
+
+        $this->dispatchUserLoggedIn($userId, $deviceId);
+
+        return $this->createAuthResponse($userId);
     }
 
     /**

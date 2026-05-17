@@ -6,11 +6,14 @@ namespace Phlex\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlex\Auth\AuthManager;
+use Phlex\Auth\AuthProviderRegistry;
 use Phlex\Auth\JwtHandler;
+use Phlex\Auth\ProviderManager;
 use Phlex\Auth\UserProfileManager;
 use Phlex\Auth\UserRepository;
 use Phlex\Auth\WatchHistory;
 use Phlex\Common\Container\ServiceProviderInterface;
+use Phlex\Server\Http\Controllers\AuthProviderController;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -69,6 +72,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
             UserRepository::class => autowire(),
             UserProfileManager::class => autowire(),
             WatchHistory::class => autowire(),
+
+            AuthProviderRegistry::class => autowire(),
+            ProviderManager::class => autowire(),
+
+            AuthProviderController::class => autowire(),
 
             AuthManager::class => autowire()
                 ->constructorParameter('logger', get('logger.auth'))

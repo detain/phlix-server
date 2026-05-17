@@ -531,6 +531,137 @@ class UserRepository
     }
 
     /**
+     * Find a user by their external (provider-specific) identity.
+     *
+     * Used during external provider authentication to look up the local
+     * user account linked to a given external ID.
+     *
+     * @param string $provider   Provider name (e.g. "oidc", "ldap").
+     * @param string $externalId Provider's unique identifier for the user.
+     *
+     * @return array<string, mixed>|null User record or null if not found.
+     *
+     * @since 0.12.0 (Step D.1)
+     *
+     * @example
+     * ```php
+     * $user = $repo->findByExternalId('oidc', 'https://accounts.google.com/12345');
+     * ```
+     */
+    public function findByExternalId(string $provider, string $externalId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM users WHERE provider = ? AND external_id = ?",
+            [$provider, $externalId]
+        );
+
+        if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $result[0];
+
+        return $row;
+    }
+
+    /**
+     * Find or create a user by their external identity.
+     *
+     * On first login via an external provider, creates a new local user
+     * record with password_hash = NULL and the provider/external_id set.
+     * On subsequent logins, returns the existing user record.
+     *
+     * @param string $externalId  Provider's unique identifier.
+     * @param string|null $email  User's email (used as username seed).
+     * @param string|null $displayName User's display name.
+     *
+     * @return string The local user UUID (existing or newly created).
+     *
+     * @since 0.12.0 (Step D.1)
+     *
+     * @example
+     * ```php
+     * $userId = $repo->findOrCreateByExternalId(
+     *     'https://accounts.google.com/12345',
+     *     'alice@example.com',
+     *     'Alice'
+     * );
+     * ```
+     */
+    public function findOrCreateByExternalId(
+        string $externalId,
+        ?string $email = null,
+        ?string $displayName = null
+    ): string {
+        $provider = 'external';
+
+        $existing = $this->db->query(
+            "SELECT * FROM users WHERE external_id = ?",
+            [$externalId]
+        );
+
+        if (is_array($existing) && isset($existing[0]) && is_array($existing[0])) {
+            /** @var string $userId */
+            $userId = $existing[0]['id'];
+
+            return $userId;
+        }
+
+        $id = $this->generateUuid();
+        $username = $email ?? 'user_' . substr($externalId, 0, 16);
+
+        $this->db->query(
+            "INSERT INTO users (id, username, email, display_name, provider, external_id, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                $id,
+                $username,
+                $email ?? '',
+                $displayName ?? $username,
+                $provider,
+                $externalId,
+                null,
+            ],
+        );
+
+        $this->db->query(
+            "INSERT INTO user_settings (user_id) VALUES (?)",
+            [$id],
+        );
+
+        return $id;
+    }
+
+    /**
+     * Update the provider_data JSON column for a user.
+     *
+     * Stores arbitrary provider-specific metadata (e.g. OIDC claims,
+     * refresh tokens) on the user's local record.
+     *
+     * @param string $userId  Local user UUID.
+     * @param array<string, mixed> $data Key-value pairs to store in provider_data.
+     *
+     * @return void
+     *
+     * @since 0.12.0 (Step D.1)
+     *
+     * @example
+     * ```php
+     * $repo->updateProviderData('user-uuid-123', [
+     *     'refresh_token' => 'rt_abc123',
+     *     'expires_at' => 1717000000,
+     * ]);
+     * ```
+     */
+    public function updateProviderData(string $userId, array $data): void
+    {
+        $this->db->query(
+            "UPDATE users SET provider_data = ? WHERE id = ?",
+            [json_encode($data), $userId],
+        );
+    }
+
+    /**
      * Generate a UUID v4 string.
      *
      * @return string UUID in standard format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx

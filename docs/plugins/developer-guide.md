@@ -969,3 +969,157 @@ then, install-from-URL is the supported install path.
 Open a GitHub issue against
 [`detain/phlex-server`](https://github.com/detain/phlex-server) with
 the label `area:plugins`.
+
+---
+
+## 13. Auth Provider Plugins (Phase D)
+
+Phlex supports pluggable external authentication providers (OIDC,
+LDAP, SAML, passkeys) through the `auth-provider` plugin type. This
+section covers how to implement a custom auth provider.
+
+### Core interface
+
+All auth providers must implement
+`Phlex\Shared\Auth\ProviderInterface` (from `detain/phlex-shared:^0.3.0`).
+The interface is **pure PHP with zero I/O dependencies** — all network
+calls, token validation, and userinfo fetching happen inside the
+concrete implementation.
+
+```php
+namespace Phlex\Shared\Auth;
+
+interface ProviderInterface
+{
+    /** Lowercase ASCII identifier: "oidc", "ldap", "saml", "passkey" … */
+    public function name(): string;
+
+    /** True when this provider can handle the given credentials. */
+    public function supportsAuthentication(array $credentials): bool;
+
+    /** Authenticate and return an AuthResult. */
+    public function authenticate(array $credentials): AuthResult;
+
+    /** Look up user info by provider's external ID. */
+    public function getUserInfo(string $externalId): ?UserInfo;
+
+    /** Link an existing local user to this provider. */
+    public function linkAccount(string $localUserId, array $externalIds): void;
+}
+```
+
+### Result types
+
+`Phlex\Shared\Auth\AuthResult` is returned by `authenticate()`:
+
+```php
+final readonly class AuthResult
+{
+    public function __construct(
+        public bool   $success,
+        public ?string $userId     = null,  // local Phlex UUID
+        public ?string $externalId = null,  // provider-specific ID
+        public ?string $error      = null,
+        public array  $attributes  = [],    // email, name, avatarUrl …
+    ) {}
+
+    public function isSuccess(): bool;
+    public function isFailure(): bool;
+    public function getEmail(): ?string;
+    public function getDisplayName(): ?string;
+    public function getAvatarUrl(): ?string;
+}
+```
+
+`Phlex\Shared\Auth\UserInfo` is returned by `getUserInfo()`:
+
+```php
+final readonly class UserInfo
+{
+    public function __construct(
+        public string $externalId,
+        public ?string $email        = null,
+        public ?string $displayName  = null,
+        public ?string $avatarUrl    = null,
+        public array  $rawAttributes = [],
+    ) {}
+
+    public function hasEmail(): bool;
+    public function hasDisplayName(): bool;
+    public function hasAvatarUrl(): bool;
+    public function getClaim(string $name, mixed $default = null): mixed;
+}
+```
+
+### Manifest
+
+In `plugin.json`, set `type: "auth-provider"`:
+
+```json
+{
+    "name": "phlex-plugin-oidc-google",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.12.0",
+    "type": "auth-provider",
+    "entry": "Phlex\\Plugins\\GoogleOIDC\\Plugin",
+    "settings": {
+        "client_id":     { "type": "string", "required": true },
+        "client_secret": { "type": "string", "required": true, "secret": true },
+        "issuer":        { "type": "string", "required": true }
+    }
+}
+```
+
+### Lifecycle hooks
+
+```php
+use Phlex\Common\Container\ContainerInterface;
+use Phlex\Shared\Auth\ProviderInterface;
+
+class Plugin implements LifecycleInterface
+{
+    public function onEnable(ContainerInterface $container): void
+    {
+        $provider = new GoogleOidcProvider(
+            $container->get(\Phlex\Auth\AuthProviderRegistry::class)
+        );
+
+        $container->get(\Phlex\Auth\AuthProviderRegistry::class)
+            ->registerProvider($provider);
+    }
+
+    public function onDisable(): void
+    {
+        // ProviderManager automatically rejects unregistered providers.
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+```
+
+### Provider-prefixed login
+
+When a user logs in with a provider prefix (e.g.
+`oidc:alice@example.com`), `ProviderManager` resolves `oidc` to the
+registered provider and calls `authenticate()`. On first login,
+`AuthManager::loginWithProvider()` automatically creates a local user
+record with `password_hash = NULL` and the `provider` / `external_id`
+columns set, so the user can later set a local password.
+
+### Admin API
+
+The server exposes auth provider management at:
+
+```
+GET    /api/v1/admin/auth-providers              — list registered providers
+POST   /api/v1/admin/auth-providers/{name}/enable
+POST   /api/v1/admin/auth-providers/{name}/disable
+GET    /api/v1/admin/auth-providers/{name}/config-schema
+```
+
+See [`docs/reference/api/admin-auth-providers.md`](docs/reference/api/admin-auth-providers.md)
+for the full OpenAPI spec.
+

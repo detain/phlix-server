@@ -7,6 +7,42 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step D.1)
+
+- `Phlex\Auth\AuthProviderRegistry` — singleton registry holding
+  registered {@see \Phlex\Auth\ProviderInterface} instances; resolves
+  provider-prefixed usernames to the correct external provider.
+- `Phlex\Auth\ProviderManager` — bridges {@see AuthManager} to the
+  registry; handles `provider:username` parsing and delegates to either
+  an external provider or the standard password-based flow.
+- `Phlex\Auth\AuthProviderNotFoundException` — thrown when a
+  provider-prefix references an unregistered provider.
+- `Phlex\Auth\AuthManager::loginWithProvider()` — authenticates a user
+  via an external provider (OIDC, LDAP, SAML, passkey). On first login,
+  automatically creates a local user row with `password_hash = NULL`.
+- `Phlex\Auth\UserRepository::findByExternalId()`,
+  `findOrCreateByExternalId()`, `updateProviderData()` — data access
+  for provider-linked accounts.
+- `Phlex\Server\Http\Controllers\AuthProviderController` — admin API
+  for listing / enabling / disabling providers and retrieving their
+  configuration JSON schema.
+- Routes wired in `AdminRoutes`:
+  `GET /api/v1/admin/auth-providers`,
+  `POST /api/v1/admin/auth-providers/{name}/enable`,
+  `POST /api/v1/admin/auth-providers/{name}/disable`,
+  `GET /api/v1/admin/auth-providers/{name}/config-schema`.
+- Migration `009_auth_provider_schema.sql` adds `provider` (VARCHAR 64),
+  `external_id` (VARCHAR 255), `provider_data` (JSON) columns to
+  `users` table, with indexes `idx_provider` and `idx_external`.
+- `detain/phlex-shared:^0.3.0` — new package version with
+  `Phlex\Shared\Auth\ProviderInterface`, `AuthResult`, `UserInfo`.
+- `docs/plugins/developer-guide.md` — added "Auth Provider Plugins"
+  section (Section 13) covering the interface contract, result types,
+  manifest, lifecycle hooks, and admin API.
+- Unit tests: `AuthResultTest` (5 tests), `UserInfoTest` (6 tests),
+  `AuthProviderRegistryTest` (5 tests), `ProviderManagerTest` (8 tests),
+  `UserRepositoryExternalIdTest` (5 tests), `AuthProviderControllerTest` (6 tests).
+
 ### Added (Step C.9)
 
 - `Phlex\Hub\HubClient::sendHeartbeat()` — now includes `library_count`,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Routes;
 
+use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Router;
@@ -62,14 +63,22 @@ final class AdminRoutes
         $router->group(
             '/api/v1/admin',
             static function (Router $r) use ($container): void {
-                /** @var PluginAdminController $controller */
-                $controller = $container->get(PluginAdminController::class);
+                /** @var PluginAdminController $pluginController */
+                $pluginController = $container->get(PluginAdminController::class);
 
-                $r->get('/plugins', [$controller, 'index']);
-                $r->post('/plugins/install', [$controller, 'install']);
-                $r->post('/plugins/{name}/enable', [$controller, 'enable']);
-                $r->post('/plugins/{name}/disable', [$controller, 'disable']);
-                $r->delete('/plugins/{name}', [$controller, 'uninstall']);
+                $r->get('/plugins', [$pluginController, 'index']);
+                $r->post('/plugins/install', [$pluginController, 'install']);
+                $r->post('/plugins/{name}/enable', [$pluginController, 'enable']);
+                $r->post('/plugins/{name}/disable', [$pluginController, 'disable']);
+                $r->delete('/plugins/{name}', [$pluginController, 'uninstall']);
+
+                /** @var AuthProviderController $authProviderController */
+                $authProviderController = $container->get(AuthProviderController::class);
+
+                $r->get('/auth-providers', [$authProviderController, 'listProviders']);
+                $r->post('/auth-providers/{name}/enable', [$authProviderController, 'enableProvider']);
+                $r->post('/auth-providers/{name}/disable', [$authProviderController, 'disableProvider']);
+                $r->get('/auth-providers/{name}/config-schema', [$authProviderController, 'getConfigSchema']);
             },
             [$adminMiddleware],
         );

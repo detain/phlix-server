@@ -62,6 +62,9 @@ class Recorder
     /** @var array<string, array{id:string, session_id:string, channel_id:string, started_at:int, buffer_start:int, buffer_end:int, current_position?:int}> Active time-shift sessions */
     private array $activeTimeShifts = [];
 
+    /** @var callable[] Post-complete callbacks (media_item_id, recording_path) => void */
+    private array $onCompleteCallbacks = [];
+
     /**
      * Recording is scheduled but not yet started.
      *
@@ -139,6 +142,20 @@ class Recorder
         $this->storagePath = $storagePath;
         $this->maxStorageBytes = $maxStorageBytes;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
+    }
+
+    /**
+     * Register a callback to be invoked when a recording completes.
+     *
+     * @param callable $callback (string $mediaItemId, string $recordingPath) => void
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function onComplete(callable $callback): void
+    {
+        $this->onCompleteCallbacks[] = $callback;
     }
 
     /**
@@ -392,7 +409,34 @@ class Recorder
             'size' => $fileSize,
         ]);
 
+        // Fire post-complete callbacks
+        $this->fireOnCompleteCallbacks($recordingId, $filePath);
+
         return true;
+    }
+
+    /**
+     * Fire all registered onComplete callbacks.
+     *
+     * @param string $recordingId The recording ID
+     * @param string $recordingPath The path to the recording file
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function fireOnCompleteCallbacks(string $recordingId, string $recordingPath): void
+    {
+        foreach ($this->onCompleteCallbacks as $callback) {
+            try {
+                $callback($recordingId, $recordingPath);
+            } catch (\Throwable $e) {
+                $this->logger->error('onComplete callback threw exception', [
+                    'recording_id' => $recordingId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     /**

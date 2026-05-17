@@ -75,6 +75,31 @@ class MarkerService
     }
 
     /**
+     * Store chapter markers for a media item.
+     *
+     * Converts ChapterMarker DTOs to array format and persists them
+     * to the chapters_json column via the item repository.
+     *
+     * @param string $media_item_id The media item ID
+     * @param ChapterMarker[] $chapters Array of chapter markers to store
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function storeChapters(string $media_item_id, array $chapters): void
+    {
+        $chaptersArray = array_map(
+            fn(ChapterMarker $chapter) => $chapter->toArray(),
+            $chapters
+        );
+
+        $this->item_repo->updateMarkers($media_item_id, [
+            'chapters_json' => json_encode($chaptersArray),
+        ]);
+    }
+
+    /**
      * Get all markers for a media item.
      *
      * Returns a MarkerSet with intro, outro, and chapters. Reads from formal

@@ -7,6 +7,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step F.5)
+
+- `ComskipRunner` — detects and runs the comskip binary on Live TV recordings;
+  `isAvailable()` checks if the binary exists and is executable, `run()` executes
+  comskip with a 5-minute timeout and returns the path to the generated .edl file.
+- `ComskipEdlParser` — parses comskip EDL (Edit Decision List) files with 3-column
+  tab-separated format (start_seconds, end_seconds, scene_type); filters segments
+  shorter than `min_commercial_length`; converts to `ChapterMarker[]` DTOs.
+- `ComskipPostProcessor` — orchestrator that runs comskip after a recording
+  completes, parses the EDL, and stores chapters via `MarkerService::storeChapters()`.
+  Idempotent — skips recordings that already have chapters.
+- `RecordingHooks::register()` — wires `ComskipPostProcessor` into the `Recorder`
+  via the new `onComplete()` callback hook.
+- `Recorder::onComplete()` — registers callbacks to fire after a recording stops
+  with status COMPLETED; callbacks receive `(string $mediaItemId, string $recordingPath)`.
+- `MarkerService::storeChapters()` — persists `ChapterMarker[]` arrays to
+  `chapters_json` column via `ItemRepository::updateMarkers()`.
+- `config/comskip.php` — comskip binary path, `min_commercial_length` (30s),
+  `require_confidence` (0.7), `post_process_immediately` flag, and `edl_output_dir`.
+- `docs/advanced/live-tv-comskip.md` — user-facing documentation covering
+  comskip installation, configuration, EDL format, and troubleshooting.
+- Unit tests: `ComskipRunnerTest` (6 tests), `ComskipEdlParserTest` (12 tests),
+  `ComskipPostProcessorTest` (6 tests).
+
 ### Added (Step F.4)
 
 - `SkipButtonSpec` — immutable value object with `toArray()` serialization and

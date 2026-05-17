@@ -241,15 +241,16 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(8, $providers);
+        $this->assertCount(9, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
         $this->assertInstanceOf(\Phlex\Common\Container\Providers\HubServicesProvider::class, $providers[3]);
         $this->assertInstanceOf(MediaServicesProvider::class, $providers[4]);
-        $this->assertInstanceOf(SessionServicesProvider::class, $providers[5]);
-        $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[6]);
-        $this->assertInstanceOf(PluginsProvider::class, $providers[7]);
+        $this->assertInstanceOf(\Phlex\Common\Container\Providers\NetworkServicesProvider::class, $providers[5]);
+        $this->assertInstanceOf(SessionServicesProvider::class, $providers[6]);
+        $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[7]);
+        $this->assertInstanceOf(PluginsProvider::class, $providers[8]);
     }
 
     public function test_resolves_hls_streamer_with_config_overrides(): void

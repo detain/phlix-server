@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Hub;
 
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Network\PortForwardService;
 use Throwable;
 
 /**
@@ -49,6 +50,9 @@ class HubClient
     /** @var string Server software version. */
     private string $serverVersion;
 
+    /** @var PortForwardService|null Port forward service for hostname discovery. */
+    private ?PortForwardService $portForwardService = null;
+
     /**
      * Creates a new HubClient.
      *
@@ -57,6 +61,7 @@ class HubClient
      * @param StructuredLogger $logger     Logger instance.
      * @param string                $configDir   Directory for enrollment storage.
      * @param string                $serverVersion Server software version string.
+     * @param PortForwardService|null $portForwardService Port forward service for hostname discovery.
      */
     public function __construct(
         Ed25519KeyManager $keyManager,
@@ -64,12 +69,14 @@ class HubClient
         StructuredLogger $logger,
         string $configDir,
         string $serverVersion = '0.11.0',
+        ?PortForwardService $portForwardService = null,
     ) {
         $this->keyManager = $keyManager;
         $this->httpClient = $httpClient;
         $this->logger = $logger;
         $this->configDir = $configDir;
         $this->serverVersion = $serverVersion;
+        $this->portForwardService = $portForwardService;
         $this->processStartTime = time();
     }
 
@@ -426,6 +433,13 @@ class HubClient
             $scheme = 'http';
             $port = is_string($_SERVER['SERVER_PORT'] ?? null) ? (int) $_SERVER['SERVER_PORT'] : 8096;
             $candidates[] = $scheme . '://' . $serverAddr . ':' . $port;
+        }
+
+        if ($this->portForwardService !== null) {
+            $pfCandidates = $this->portForwardService->discoverHostnameCandidates();
+            foreach ($pfCandidates as $candidate) {
+                $candidates[] = $candidate['url'];
+            }
         }
 
         return $candidates;

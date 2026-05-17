@@ -7,6 +7,49 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step C.7)
+
+- `Phlex\Network\UpnpIgdClient` — UPnP-IGD client using raw sockets.
+  SSDP M-SEARCH discovery on `239.255.255.250:1900`, SOAP
+  `AddPortMapping` / `GetExternalIPAddress` / `DeletePortMapping`
+  actions for automatic port forwarding on compatible routers.
+- `Phlex\Network\StunClient` — RFC 5389 STUN client for discovering
+  the server's public IP address and testing port accessibility via
+  TCP connect probe.
+- `Phlex\Network\NatPmpClient` — RFC 6886 NAT-PMP client for Apple
+  AirPort routers and other NAT-PMP-compatible gateways.
+- `Phlex\Network\PortForwardService` — orchestrator that tries UPnP
+  first, then NAT-PMP, then STUN for IP detection; falls back to
+  manual port-forward instructions; stores result to
+  `config/port-forward.json`.
+- `scripts/port-forward.php` — CLI with `status`, `enable`,
+  `disable`, `info`, and `help` commands.
+- `src/Common\Container\Providers\NetworkServicesProvider` — registers
+  `UpnpIgdClient`, `StunClient`, `NatPmpClient`, and
+  `PortForwardService` in the PHP-DI container.
+- `config/port-forward.php` — `PHLEX_PORT_FORWARD_AUTO`,
+  `PHLEX_EXTERNAL_PORT`, `PHLEX_EXTERNAL_HTTP_PORT`,
+  `PHLEX_EXTERNAL_HTTPS_PORT`, `PHLEX_UPNP_ENABLED`,
+  `PHLEX_STUN_SERVER`, `PHLEX_STUN_PORT` configuration.
+- `docs/hub/remote-access.md` — end-user guide covering UPnP, NAT-PMP,
+  STUN, manual port forwarding setup, and troubleshooting.
+- `docs/hub-admin/network.md` — hub admin guide covering port forwarding
+  configuration, firewall rules, and network requirements.
+- `docs/reference/env-vars.md` — documents port-forwarding and STUN
+  environment variables.
+- `docs/reference/cli.md` — documents `port-forward.php` CLI commands.
+- Unit tests: `UpnpIgdClientTest` (5 tests), `StunClientTest` (8 tests),
+  `NatPmpClientTest` (6 tests), `PortForwardServiceTest` (9 tests),
+  `PortForwardScriptTest` (5 tests).
+
+### Changed (Step C.7)
+
+- `Phlex\Hub\HubClient` now injects `PortForwardService` and calls
+  `discoverHostnameCandidates()` to augment heartbeat hostname
+  candidates with LAN IP, mDNS, and public IP endpoints when available.
+- `Phlex\Common\Container\ContainerFactory::defaultProviders()` now
+  registers `NetworkServicesProvider`.
+
 ### Added (Step C.6)
 
 - `Phlex\Hub\RelayMessageFramer` — binary framing for HTTP-over-WebSocket

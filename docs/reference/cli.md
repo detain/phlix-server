@@ -49,3 +49,65 @@ Heartbeat loop has been started in the background.
 - `1` — Error (network failure, invalid arguments, hub rejection).
 
 See `Phlex\Hub\HubClient` and `docs/dev/pairing-protocol.md`.
+
+## Port forwarding
+
+### `php scripts/port-forward.php <command>`
+
+Manages UPnP-IGD and NAT-PMP port forwarding for direct server access without relay tunnel.
+
+**Commands:**
+
+| Command  | Description |
+| -------- | ----------- |
+| `status` | Show current port forwarding status, enabled state, method, and hostname candidates. |
+| `enable` | Attempt automatic port forwarding via UPnP-IGD or NAT-PMP. Falls back to manual instructions on failure. |
+| `disable` | Remove all port mappings and disable automatic port forwarding. |
+| `info`   | Display detailed network information: local IP, public IP (via STUN), port accessibility, and UPnP IGD discovery status. |
+| `help`   | Show usage information. |
+
+**Example output (status):**
+
+```
+Port Forwarding Status
+=======================
+Enabled:  YES
+Method:   upnp
+External IP: 203.0.113.42
+Port:     32400
+Endpoint: 203.0.113.42:32400
+
+Hostname Candidates:
+  [lan] http://192.168.1.100:32400
+  [lan-mdns] http://phlex.local:32400
+  [public] http://203.0.113.42:32400
+```
+
+**Example output (info):**
+
+```
+Network Information
+====================
+Local IP:  192.168.1.100
+Port:      32400
+
+Testing STUN (public IP detection)...
+Public IP: 203.0.113.42
+Port 32400 on 203.0.113.42: OPEN
+
+UPnP IGD Discovery...
+Gateway:  http://192.168.1.1:1900/gateway.xml
+External WAN IP: 203.0.113.42
+```
+
+**How it works:**
+
+1. **UPnP-IGD** — Sends SSDP M-SEARCH to `239.255.255.250:1900` to discover
+   a UPnP InternetGatewayDevice, then uses SOAP `AddPortMapping` to open the
+   port. See `Phlex\Network\UpnpIgdClient`.
+2. **NAT-PMP** — Falls back to Apple NAT-PMP (RFC 6886) on routers like
+   AirPort Extreme. See `Phlex\Network\NatPmpClient`.
+3. **STUN** — Uses RFC 5389 STUN binding to discover the server's public
+   IP address and test port accessibility. See `Phlex\Network\StunClient`.
+
+**See also:** `docs/hub/remote-access.md`.

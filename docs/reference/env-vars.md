@@ -50,6 +50,18 @@ that consumes it.
 | `PHLEX_RELAY_PING_INTERVAL`    | `30`                               | Seconds between keep-alive ping frames sent over the relay tunnel. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
 | `PHLEX_RELAY_PING_TIMEOUT`     | `10`                               | Seconds to wait for a pong response before considering the relay connection dead. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
 
+## Port forwarding / remote access
+
+| Variable                     | Default       | Description |
+| ---------------------------- | ------------- | ----------- |
+| `PHLEX_PORT_FORWARD_AUTO`    | `1`          | When truthy (`1`, `true`, `yes`, `on`) enables automatic port forwarding via UPnP-IGD on startup. See `Phlex\Network\PortForwardService` and `config/port-forward.php`. |
+| `PHLEX_EXTERNAL_PORT`        | `32400`      | Port to use for automatic port forwarding. Both external and internal ports use this value by default. See `Phlex\Network\PortForwardService` and `config/port-forward.php`. |
+| `PHLEX_EXTERNAL_HTTP_PORT`   | `8080`       | External HTTP port for the web portal when accessed remotely. See `config/port-forward.php`. |
+| `PHLEX_EXTERNAL_HTTPS_PORT`  | `8443`       | External HTTPS port for the web portal when accessed remotely. See `config/port-forward.php`. |
+| `PHLEX_UPNP_ENABLED`          | `1`          | When truthy enables UPnP-IGD port mapping attempts. When falsy, only STUN-based external IP detection is used. See `Phlex\Network\UpnpIgdClient` and `config/port-forward.php`. |
+| `PHLEX_STUN_SERVER`          | `stun.l.google.com` | STUN server hostname for discovering the server's public IP address. See `Phlex\Network\StunClient` and `config/port-forward.php`. |
+| `PHLEX_STUN_PORT`            | `19302`       | STUN server port. See `Phlex\Network\StunClient` and `config/port-forward.php`. |
+
 ## Database (test only)
 
 These are consumed by `phpunit.xml` only and have no effect on production.

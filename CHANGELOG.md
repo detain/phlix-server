@@ -7,6 +7,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step F.4)
+
+- `SkipButtonSpec` — immutable value object with `toArray()` serialization and
+  `fromMarkerSet()` factory for client-facing JSON.
+- `PlaybackMarkerService` — provides `getFullSpec()` and `getSkipSpec(id, position_ticks)`
+  to return position-aware skip button specs.
+- `WebPortalRouter::getPlaybackInfo()` — embeds `markers` key with
+  `skip_intro_start`, `skip_intro_end`, `skip_outro_start`, `skip_outro_end`
+  in the playback info response.
+- `docs/reference/skip-button-protocol.md` — full protocol specification for
+  client teams implementing skip button UI.
+- `docs/clients/skip-button-integration-brief.md` — concise hand-off brief
+  for Phase M client integration.
+- `docs/reference/api.md` — updated with `GET /api/v1/media/{id}/playback`
+  endpoint documentation including `markers` key.
+- Unit tests: `SkipButtonSpecTest` (4 tests), `PlaybackMarkerServiceTest` (4 tests).
+
 ### Added (Step F.3)
 
 - Marker storage columns and GET API for chapters, intro, and outro markers.

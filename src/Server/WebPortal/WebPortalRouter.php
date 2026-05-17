@@ -9,6 +9,7 @@ use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
 use Phlex\Media\Library\LibraryManager;
 use Phlex\Media\Library\ItemRepository;
+use Phlex\Media\Markers\PlaybackMarkerService;
 use Phlex\Session\SessionManager;
 use Phlex\Session\PlaybackController;
 use Phlex\Auth\AuthManager;
@@ -49,6 +50,9 @@ class WebPortalRouter
     /** @var AuthManager Handles authentication operations */
     private AuthManager $authManager;
 
+    /** @var PlaybackMarkerService Provides skip-button specs for playback */
+    private PlaybackMarkerService $playbackMarkerService;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -60,6 +64,7 @@ class WebPortalRouter
      * @param SessionManager $sessionManager Manages user/device sessions
      * @param PlaybackController $playbackController Handles playback state tracking
      * @param AuthManager $authManager Handles authentication operations
+     * @param PlaybackMarkerService $playbackMarkerService Provides skip-button specs
      *
      * @example
      * ```php
@@ -68,7 +73,8 @@ class WebPortalRouter
      *     $itemRepository,
      *     $sessionManager,
      *     $playbackController,
-     *     $authManager
+     *     $authManager,
+     *     $playbackMarkerService
      * );
      * ```
      */
@@ -77,13 +83,15 @@ class WebPortalRouter
         ItemRepository $itemRepository,
         SessionManager $sessionManager,
         PlaybackController $playbackController,
-        AuthManager $authManager
+        AuthManager $authManager,
+        PlaybackMarkerService $playbackMarkerService
     ) {
         $this->libraryManager = $libraryManager;
         $this->itemRepository = $itemRepository;
         $this->sessionManager = $sessionManager;
         $this->playbackController = $playbackController;
         $this->authManager = $authManager;
+        $this->playbackMarkerService = $playbackMarkerService;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -343,6 +351,9 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
+        // Get marker data for skip buttons
+        $skipSpec = $this->playbackMarkerService->getFullSpec($params['id']);
+
         // Build playback info
         $playbackInfo = [
             'id' => $item['id'],
@@ -356,6 +367,7 @@ class WebPortalRouter
                     'direct_play' => true,
                 ],
             ],
+            'markers' => $skipSpec->toArray(),
         ];
 
         return (new Response())->json(['playback_info' => $playbackInfo]);

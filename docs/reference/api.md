@@ -107,6 +107,55 @@ Returns markers for all episodes of a show.
 
 ---
 
+## Playback Endpoints
+
+### GET /api/v1/media/{id}/playback
+
+Returns playback information including stream URL and skip button markers.
+
+**Parameters:**
+- `id` (path) — Media item ID
+
+**Response 200:**
+```json
+{
+  "playback_info": {
+    "id": "abc123",
+    "name": "S1E01 - The Beginning",
+    "type": "episode",
+    "media_sources": [
+      {
+        "id": "default",
+        "container": "mkv",
+        "path": "/mnt/media/shows/show1/s01e01.mkv",
+        "direct_play": true
+      }
+    ],
+    "markers": {
+      "skip_intro_start": 10,
+      "skip_intro_end": 90,
+      "skip_outro_start": 2340,
+      "skip_outro_end": 2520
+    }
+  }
+}
+```
+
+**Fields:**
+- `markers.skip_intro_start` (int|null) — Intro start in seconds, null if no intro
+- `markers.skip_intro_end` (int|null) — Intro end in seconds, null if no intro
+- `markers.skip_outro_start` (int|null) — Outro start in seconds, null if no outro
+- `markers.skip_outro_end` (int|null) — Outro end in seconds, null if no outro
+
+**Notes:**
+- Clients should show "Skip Intro" button when position is between `skip_intro_start` and `skip_intro_end`
+- Clients should show "Skip Outro" button when position is between `skip_outro_start` and `skip_outro_end`
+- Clicking a skip button should seek to the corresponding `_end` position
+- Marker fields are `null` when no marker is detected
+- Introduced in Step F.4 (v0.12.0)
+
+---
+
 ## Marker Data Model
 
 ### IntroMarker / OutroMarker

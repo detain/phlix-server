@@ -9,6 +9,7 @@ use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Hub\HubClient;
 use Phlex\Hub\HubApplication;
+use Phlex\Hub\RelayApplication;
 use Phlex\Server\Http\Controllers\HubJwksController;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
@@ -249,6 +250,9 @@ class Application
         // Start hub heartbeat loop if already enrolled
         $this->startHubHeartbeatIfEnrolled();
 
+        // Start relay tunnel if enrolled and relay is enabled
+        $this->startRelayIfEnabled();
+
         $request = Request::fromGlobals();
 
         // Apply global middleware
@@ -326,6 +330,27 @@ class Application
      *
      * @return void
      */
+    /**
+     * Starts the relay tunnel worker if the server is enrolled and relay is enabled.
+     *
+     * @return void
+     */
+    private function startRelayIfEnabled(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $relayApp = $this->container->get(RelayApplication::class);
+            if ($relayApp instanceof RelayApplication) {
+                $relayApp->start();
+            }
+        } catch (\Throwable) {
+            // Relay not configured — silent ignore
+        }
+    }
+
     private function startHubHeartbeatIfEnrolled(): void
     {
         if ($this->container === null) {

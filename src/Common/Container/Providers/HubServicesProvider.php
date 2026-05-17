@@ -16,6 +16,10 @@ use Phlex\Hub\HttpClient;
 use Phlex\Hub\HttpClientFactory;
 use Phlex\Hub\HttpClientFactoryInterface;
 use Phlex\Hub\JwksCache;
+use Phlex\Hub\RelayApplication;
+use Phlex\Hub\RelayConfig;
+use Phlex\Hub\RelayConsumer;
+use Phlex\Hub\RelayMessageFramer;
 use Phlex\Server\Http\Controllers\HubJwksController;
 use Phlex\Server\Http\Controllers\HubTokenController;
 use Phlex\Server\Http\Middleware\HubJwtMiddleware;
@@ -80,7 +84,11 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('hubClient', get(HubClient::class)),
 
             HubJwtValidator::class => factory(
-                static function (HubClient $hubClient, HttpClientFactory $factory, LoggerInterface $logger) use ($cacheTtl): ?HubJwtValidator {
+                static function (
+                    HubClient $hubClient,
+                    HttpClientFactory $factory,
+                    LoggerInterface $logger,
+                ) use ($cacheTtl): ?HubJwtValidator {
                     $enrollment = $hubClient->loadEnrollment();
                     if ($enrollment === null || $enrollment->hubJwksUrl === '') {
                         return null;
@@ -104,6 +112,23 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('validator', get(HubJwtValidatorInterface::class)),
 
             HubJwtValidatorInterface::class => get(HubJwtValidator::class),
+
+            RelayConfig::class => factory(
+                static function () use ($appConfig): RelayConfig {
+                    $relayConfig = is_array($appConfig['relay'] ?? null) ? $appConfig['relay'] : [];
+                    return RelayConfig::fromEnv($relayConfig);
+                }
+            ),
+
+            RelayMessageFramer::class => autowire(),
+
+            RelayConsumer::class => autowire()
+                ->constructorParameter('logger', get('logger.hub'))
+                ->constructorParameter('config', get(RelayConfig::class)),
+
+            RelayApplication::class => autowire()
+                ->constructorParameter('logger', get('logger.hub'))
+                ->constructorParameter('consumer', get(RelayConsumer::class)),
         ]);
     }
 }

@@ -7,6 +7,46 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step C.6)
+
+- `Phlex\Hub\RelayMessageFramer` — binary framing for HTTP-over-WebSocket
+  tunnel. Wire format: `[1-byte type][4-byte seq][4-byte payload_len][payload]`.
+  Types: HTTP_REQUEST (1), HTTP_RESPONSE (2), PING (3), PONG (4).
+  All payloads are JSON.
+- `Phlex\Hub\RelayFrame` — immutable parsed frame DTO with accessors
+  (`isRequest()`, `isResponse()`, `isPing()`, `isPong()`).
+- `Phlex\Hub\RelayConfig` — relay tunnel configuration from environment
+  variables (`PHLEX_RELAY_ENABLED`, `PHLEX_RELAY_HUB_URL`,
+  `PHLEX_RELAY_TUNNEL_HOSTNAME`, etc.).
+- `Phlex\Hub\RelayConsumer` — server-side Workerman consumer that opens a
+  persistent WSS connection to the hub, receives framed HTTP requests,
+  dispatches them to the local router, and sends responses back over the
+  tunnel. Implements auto-reconnect with configurable delay and
+  keep-alive ping/pong.
+- `Phlex\Hub\RelayApplication` — thin Workerman Worker entry point
+  (`text://` protocol, timer-driven) wrapping `RelayConsumer`.
+- `config/relay.php` — `PHLEX_RELAY_ENABLED`, `PHLEX_RELAY_HUB_URL`,
+  `PHLEX_RELAY_TUNNEL_HOSTNAME`, `PHLEX_RELAY_RECONNECT_DELAY`,
+  `PHLEX_RELAY_PING_INTERVAL`, `PHLEX_RELAY_PING_TIMEOUT`.
+- `config/hub.php` — added `relay` capability to heartbeat payload.
+- `docs/dev/relay-protocol.md` — wire protocol reference for the
+  HTTP-over-WebSocket relay tunnel.
+- `docs/reference/env-vars.md` — documents relay env vars.
+- Unit tests: `RelayMessageFramerTest` (13 tests covering frame round-trips,
+  ping/pong, invalid/incomplete frames), `RelayConsumerTest` (11 tests
+  covering config, routing, connection state).
+
+### Changed (Step C.6)
+
+- `Phlex\Hub\HubClient::sendHeartbeat()` now advertises `relay`
+  in the server capabilities list.
+- `Phlex\Server\Core\Application` now starts `RelayApplication`
+  automatically when `config/hub-enrollment.json` exists and
+  `PHLEX_RELAY_ENABLED=true`.
+- `Phlex\Common\Container\Providers\HubServicesProvider` now registers
+  `RelayConfig`, `RelayMessageFramer`, `RelayConsumer`, and
+  `RelayApplication` in the PHP-DI container.
+
 ### Added (Step C.2)
 
 - `Phlex\Hub\HubClient` — server-side orchestrator for server↔hub pairing,

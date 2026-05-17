@@ -39,6 +39,17 @@ that consumes it.
 | `PHLEX_HUB_ENROLLMENT_TOKEN`    | _unset_ | When set, overrides the enrollment token read from `config/hub-enrollment.json`. Mostly useful for automation / container orchestration. See `Phlex\Hub\HubClient::loadEnrollment()`. |
 | `PHLEX_HUB_HEARTBEAT_INTERVAL`  | `60`    | Interval in seconds between hub heartbeat calls. Must be between 30 and 3600. See `Phlex\Hub\HubClient::startHeartbeatLoop()` and `config/hub.php`. |
 
+## Relay tunnel
+
+| Variable                       | Default                            | Description |
+| ------------------------------ | ---------------------------------- | ----------- |
+| `PHLEX_RELAY_ENABLED`          | `0`                                | When truthy (`1`, `true`, `yes`, `on`) enables the persistent WSS relay tunnel to the hub. Requires the server to be enrolled. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
+| `PHLEX_RELAY_HUB_URL`          | `wss://hub.example.com/api/v1/servers/{id}/relay` | WebSocket URL of the hub relay endpoint. `{id}` is replaced with the server's UUID from enrollment. See `Phlex\Hub\RelayConsumer` and `config/relay.php`. |
+| `PHLEX_RELAY_TUNNEL_HOSTNAME`  | _empty_                            | Public hostname assigned to this server's relay tunnel (e.g. `my-server.phlex.media`). See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
+| `PHLEX_RELAY_RECONNECT_DELAY`  | `5`                                | Seconds to wait before attempting to reconnect after the relay tunnel is disconnected. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
+| `PHLEX_RELAY_PING_INTERVAL`    | `30`                               | Seconds between keep-alive ping frames sent over the relay tunnel. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
+| `PHLEX_RELAY_PING_TIMEOUT`     | `10`                               | Seconds to wait for a pong response before considering the relay connection dead. See `Phlex\Hub\RelayConfig` and `config/relay.php`. |
+
 ## Database (test only)
 
 These are consumed by `phpunit.xml` only and have no effect on production.

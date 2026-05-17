@@ -152,6 +152,80 @@ Provider URL would be: `https://your-authelia.example.com`
 Note: GitHub is not a true OIDC provider but supports OAuth 2.0. The plugin
 will extract basic profile information from the `/userinfo` endpoint.
 
+## LDAP Provider Plugin (`phlex-plugin-ldap`)
+
+The LDAP plugin supports authentication against OpenLDAP directories and
+Active Directory via the LDAP protocol (RFC 4510). Users bind with their
+LDAP credentials; the plugin maps LDAP attributes to Phlex user fields.
+
+### Features
+
+- Bind authentication for OpenLDAP and Active Directory
+- SSL/TLS and StartTLS connection support
+- Configurable user search filters with `{{username}}` placeholder
+- Automatic attribute mapping (uid/sAMAccountName → username,
+  mail → email, displayname/cn → display name)
+- Avatar download from `jpegPhoto` or `thumbnailPhoto`
+- Admin group membership promotion
+- Connection caching per request to avoid repeated bind overhead
+- Test-connection action for admin UI
+
+### Configuration
+
+1. Install `phlex-plugin-ldap` via the admin UI (Plugins → Install from URL)
+2. Navigate to **Admin → Auth Providers → LDAP**
+3. Configure:
+   - **Host**: LDAP server hostname or IP
+   - **Port**: 389 (plain/StartTLS) or 636 (SSL)
+   - **SSL**: Enable for direct SSL connections
+   - **Base DN**: Base Distinguished Name for searches
+   - **Bind DN**: Optional bind DN for initial connection
+   - **Bind Password**: Optional bind password
+   - **User Filter**: LDAP filter for user search
+   - **Admin Group**: Optional group DN for admin promotion
+4. Save settings and use "Test Connection" to verify
+
+### OpenLDAP Configuration
+
+```yaml
+# slapd.conf or cn=config
+database mdb
+suffix "dc=example,dc=com"
+rootdn "cn=admin,dc=example,dc=com"
+rootpw secret
+```
+
+Recommended user filter: `(uid={{username}})`
+
+### Active Directory Configuration
+
+Recommended settings:
+- **Host**: Your AD domain controller
+- **Port**: 389 (or 636 for SSL)
+- **Base DN**: `DC=yourdomain,DC=com`
+- **Bind DN**: Service account (e.g., `CN=Phlex Service,OU=Service Accounts,DC=yourdomain,DC=com`)
+- **User Filter**: `(&(objectClass=user)(sAMAccountName={{username}}))`
+- **Admin Group**: `CN=Domain Admins,CN=Users,DC=yourdomain,DC=com`
+
+### User Attribute Mapping
+
+| LDAP Attribute | Phlex Field |
+|----------------|-------------|
+| `uid` / `sAMAccountName` / `userPrincipalName` | `username` |
+| `mail` / `userPrincipalName` | `email` |
+| `displayName` / `cn` | `display_name` |
+| `jpegPhoto` / `thumbnailPhoto` | `avatar_url` (base64 data URI) |
+
+### Security Considerations
+
+- LDAP passwords are never stored locally; they are only used to bind
+  at authentication time.
+- SSL/TLS is strongly recommended for production deployments.
+- The bind password (if configured) is stored encrypted in the plugin
+  settings file.
+- Admin group membership is checked on every login; no cached group
+  membership.
+
 ## Security Considerations
 
 ### Token Validation

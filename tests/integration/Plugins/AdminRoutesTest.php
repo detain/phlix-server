@@ -10,6 +10,8 @@ use Phlex\Auth\UserRepository;
 use Phlex\Common\Logger\AuditLogger;
 use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
+use Phlex\Plugins\Ldap\Controller\LdapAdminController;
+use Phlex\Plugins\Ldap\Plugin as LdapPlugin;
 use Phlex\Plugins\Manifest;
 use Phlex\Plugins\Oidc\Controller\OidcAdminController;
 use Phlex\Plugins\Oidc\Plugin;
@@ -55,6 +57,7 @@ final class AdminRoutesTest extends TestCase
         // resolves from the container are needed.
         $container = new class ($this->loader, $this->users, $this->audit) implements ContainerInterface {
             private Plugin $oidcPlugin;
+            private LdapPlugin $ldapPlugin;
 
             public function __construct(
                 private readonly FakePluginLoader $loader,
@@ -65,6 +68,11 @@ final class AdminRoutesTest extends TestCase
                 mkdir($tempDir, 0775, true);
                 Plugin::setPluginDirectory($tempDir);
                 $this->oidcPlugin = new Plugin();
+
+                $ldapTempDir = sys_get_temp_dir() . '/phlex_ldap_test_' . uniqid('', true);
+                mkdir($ldapTempDir, 0775, true);
+                LdapPlugin::setPluginDirectory($ldapTempDir);
+                $this->ldapPlugin = new LdapPlugin();
             }
 
             public function get(string $id): mixed
@@ -84,6 +92,9 @@ final class AdminRoutesTest extends TestCase
                     OidcAdminController::class => new OidcAdminController(
                         $this->oidcPlugin,
                     ),
+                    LdapAdminController::class => new LdapAdminController(
+                        $this->ldapPlugin,
+                    ),
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -95,6 +106,7 @@ final class AdminRoutesTest extends TestCase
                     AdminMiddleware::class,
                     AuthProviderController::class,
                     OidcAdminController::class,
+                    LdapAdminController::class,
                 ], true);
             }
         };

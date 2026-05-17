@@ -6,6 +6,7 @@ namespace Phlex\Server\Http\Routes;
 
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
+use Phlex\Plugins\Ldap\Controller\LdapAdminController;
 use Phlex\Plugins\Oidc\Controller\OidcAdminController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Router;
@@ -87,6 +88,14 @@ final class AdminRoutes
                 $r->get('/auth-providers/oidc/config', [$oidcAdminController, 'getSettings']);
                 $r->post('/auth-providers/oidc/config', [$oidcAdminController, 'saveSettings']);
                 $r->get('/auth-providers/oidc/schema', [$oidcAdminController, 'getSchema']);
+
+                /** @var LdapAdminController $ldapAdminController */
+                $ldapAdminController = $container->get(LdapAdminController::class);
+
+                $r->get('/auth-providers/ldap/config', [$ldapAdminController, 'getSettings']);
+                $r->post('/auth-providers/ldap/config', [$ldapAdminController, 'saveSettings']);
+                $r->post('/auth-providers/ldap/test', [$ldapAdminController, 'testConnection']);
+                $r->get('/auth-providers/ldap/schema', [$ldapAdminController, 'getSchema']);
             },
             [$adminMiddleware],
         );

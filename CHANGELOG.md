@@ -7,6 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step D.3)
+
+- `phlex-plugin-ldap` — LDAP authentication provider plugin.
+  Supports OpenLDAP and Active Directory via the LDAP protocol.
+  Includes:
+  - `LdapProvider` — implements `ProviderInterface` with bind
+    authentication and user attribute mapping.
+  - `LdapConnection` — wraps `directorytree/ldaprecord` Connection
+    with request-scoped caching per host:port:ssl triple.
+  - `UserMapper` — maps LDAP attributes to Phlex user fields
+    (uid/sAMAccountName → username, mail → email, displayname/cn →
+    display name, jpegPhoto/thumbnailPhoto → avatar_url).
+  - `LdapUserInfo` — LDAP-specific user info carrier.
+  - `LdapAdminController` — admin API for LDAP settings management
+    and test-connection action.
+  - Smarty settings form at `templates/ldap-settings.tpl`.
+- Routes wired in `AdminRoutes`:
+  `GET /api/v1/admin/auth-providers/ldap/config`,
+  `POST /api/v1/admin/auth-providers/ldap/config`,
+  `POST /api/v1/admin/auth-providers/ldap/test`,
+  `GET /api/v1/admin/auth-providers/ldap/schema`.
+- Composer dependency added: `directorytree/ldaprecord: ^3.0`.
+
 ### Added (Step D.2)
 
 - `phlex-plugin-oidc` — OIDC/OAuth2 authentication provider plugin.

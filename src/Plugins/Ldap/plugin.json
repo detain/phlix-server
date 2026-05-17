@@ -1,0 +1,53 @@
+{
+    "name": "phlex-plugin-ldap",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.11.0",
+    "type": "auth-provider",
+    "entry": "Phlex\\Plugins\\Ldap\\Plugin",
+    "settings": {
+        "host": {
+            "type": "string",
+            "required": true,
+            "secret": false
+        },
+        "port": {
+            "type": "int",
+            "required": false,
+            "default": 389,
+            "secret": false
+        },
+        "ssl": {
+            "type": "bool",
+            "required": false,
+            "default": false,
+            "secret": false
+        },
+        "base_dn": {
+            "type": "string",
+            "required": true,
+            "secret": false
+        },
+        "bind_dn": {
+            "type": "string",
+            "required": false,
+            "secret": false
+        },
+        "bind_pw": {
+            "type": "string",
+            "required": false,
+            "secret": true
+        },
+        "user_filter": {
+            "type": "string",
+            "required": false,
+            "default": "(uid={{username}})",
+            "secret": false
+        },
+        "admin_group": {
+            "type": "string",
+            "required": false,
+            "secret": false
+        }
+    },
+    "events": []
+}

@@ -9,7 +9,7 @@ use Workerman\MySQL\Connection;
 
 /**
  * Main DLNA Server class implementing UPnP/DLNA MediaServer.
- * 
+ *
  * Provides:
  * - SSDP device discovery and announcement
  * - SOAP-based content directory service
@@ -20,13 +20,13 @@ class DlnaServer
 {
     /** Server UDN prefix */
     public const SERVER_UDN_PREFIX = 'uuid:phlex-server-';
-    
+
     /** Default HTTP port */
     public const DEFAULT_PORT = 8200;
-    
+
     /** SSDP announcement interval in seconds */
     public const SSDP_ANNOUNCE_INTERVAL = 600;
-    
+
     private string $serverId;
     private string $friendlyName;
     private string $baseUrl;
@@ -36,10 +36,10 @@ class DlnaServer
     private DeviceRegistry $deviceRegistry;
     private StructuredLogger $logger;
     private bool $isRunning = false;
-    
+
     /** @var array<string, callable> SOAP action handlers */
     private array $soapHandlers = [];
-    
+
     /** @var array<string, string> Service SCPD URLs */
     private array $scpdUrls = [];
 
@@ -55,9 +55,9 @@ class DlnaServer
         $this->friendlyName = $friendlyName;
         $this->baseUrl = $baseUrl;
         $this->port = $port;
-        
+
         $this->logger = $logger ?? $this->createDefaultLogger();
-        
+
         // Initialize services
         $this->contentDirectory = new ContentDirectory(
             $itemRepository ?? $this->createDummyItemRepository(),
@@ -65,10 +65,10 @@ class DlnaServer
         );
         $this->avTransport = new AvTransport($this->logger);
         $this->deviceRegistry = new DeviceRegistry();
-        
+
         $this->setupSoapHandlers();
         $this->setupScpdUrls();
-        
+
         $this->logger->info('DLNA Server initialized', [
             'server_id' => $serverId,
             'friendly_name' => $friendlyName,
@@ -107,7 +107,7 @@ class DlnaServer
 
     /**
      * Create a dummy item repository for standalone operation.
-     * 
+     *
      * @return object An object implementing item repository methods
      */
     private function createDummyItemRepository()
@@ -115,22 +115,67 @@ class DlnaServer
         // Return an object that returns empty/null results
         // The ContentDirectory handles this gracefully
         return new class {
-            public function findById(string $id): ?array { return null; }
-            public function findByPath(string $path): ?array { return null; }
-            public function findByParent(string $parentId): array { return []; }
-            public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array { return []; }
-            public function getByLibrary(string $libraryId, int $limit = 100, int $offset = 0): array { return []; }
-            public function search(string $query, int $limit = 50): array { return []; }
-            public function searchFuzzy(string $query, int $limit = 50): array { return []; }
-            public function create(array $data): string { return ''; }
-            public function update(string $id, array $data): void {}
-            public function delete(string $id): void {}
-            public function deleteByLibrary(string $libraryId): void {}
-            public function countByType(string $libraryId, string $type): int { return 0; }
-            public function getRecentlyAdded(string $libraryId, int $limit = 20): array { return []; }
-            public function getItemStreams(string $itemId): array { return []; }
-            public function addStream(string $itemId, array $streamData): string { return ''; }
-            public function batchCreate(array $items): array { return []; }
+            public function findById(string $id): ?array
+            {
+                return null;
+            }
+            public function findByPath(string $path): ?array
+            {
+                return null;
+            }
+            public function findByParent(string $parentId): array
+            {
+                return [];
+            }
+            public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
+            {
+                return [];
+            }
+            public function getByLibrary(string $libraryId, int $limit = 100, int $offset = 0): array
+            {
+                return [];
+            }
+            public function search(string $query, int $limit = 50): array
+            {
+                return [];
+            }
+            public function searchFuzzy(string $query, int $limit = 50): array
+            {
+                return [];
+            }
+            public function create(array $data): string
+            {
+                return '';
+            }
+            public function update(string $id, array $data): void
+            {
+            }
+            public function delete(string $id): void
+            {
+            }
+            public function deleteByLibrary(string $libraryId): void
+            {
+            }
+            public function countByType(string $libraryId, string $type): int
+            {
+                return 0;
+            }
+            public function getRecentlyAdded(string $libraryId, int $limit = 20): array
+            {
+                return [];
+            }
+            public function getItemStreams(string $itemId): array
+            {
+                return [];
+            }
+            public function addStream(string $itemId, array $streamData): string
+            {
+                return '';
+            }
+            public function batchCreate(array $items): array
+            {
+                return [];
+            }
         };
     }
 
@@ -142,13 +187,13 @@ class DlnaServer
         $this->soapHandlers['ContentDirectory'] = [
             'Browse' => [$this->contentDirectory, 'browse'],
             'Search' => [$this->contentDirectory, 'search'],
-            'GetSearchCapabilities' => function() {
+            'GetSearchCapabilities' => function () {
                 return ['SearchCaps' => 'dc:title,dc:creator,upnp:artist,upnp:album'];
             },
-            'GetSortCapabilities' => function() {
+            'GetSortCapabilities' => function () {
                 return ['SortCaps' => 'dc:title,dc:date,dc:creator'];
             },
-            'GetSystemUpdateID' => function() {
+            'GetSystemUpdateID' => function () {
                 return ['Id' => $this->contentDirectory->getSystemUpdateId()];
             },
         ];
@@ -169,7 +214,7 @@ class DlnaServer
         ];
 
         $this->soapHandlers['ConnectionManager'] = [
-            'GetCurrentConnectionInfo' => function() {
+            'GetCurrentConnectionInfo' => function () {
                 return [
                     'ConnectionID' => 0,
                     'AVTransportID' => 0,
@@ -178,7 +223,7 @@ class DlnaServer
                     'Status' => 'OK',
                 ];
             },
-            'GetProtocolInfo' => function() {
+            'GetProtocolInfo' => function () {
                 return [
                     'Source' => 'http-get:*:*:*',
                     'Sink' => '',
@@ -210,9 +255,9 @@ class DlnaServer
         }
 
         $this->isRunning = true;
-        
+
         $this->logger->info('Starting DLNA Server');
-        
+
         // Register this server with device registry
         $serverDevice = $this->createServerDevice();
         $this->deviceRegistry->registerDevice($serverDevice);
@@ -245,7 +290,7 @@ class DlnaServer
     public function createServerDevice(): DlnaDevice
     {
         $udn = self::SERVER_UDN_PREFIX . $this->serverId;
-        
+
         $device = new DlnaDevice(
             $udn,
             DlnaDevice::TYPE_SERVER,
@@ -320,7 +365,7 @@ class DlnaServer
      */
     public function getScpdXml(string $service): ?string
     {
-        return match($service) {
+        return match ($service) {
             'ContentDirectory' => $this->contentDirectory->getScpdXml(),
             'AVTransport' => $this->avTransport->getScpdXml(),
             default => null,
@@ -329,7 +374,7 @@ class DlnaServer
 
     /**
      * Process a SOAP request.
-     * 
+     *
      * @param string $service The service name (e.g., 'ContentDirectory')
      * @param string $action The action name (e.g., 'Browse')
      * @param string $body The SOAP body XML
@@ -357,13 +402,13 @@ class DlnaServer
 
         try {
             $result = call_user_func_array($handler, $params);
-            
+
             $this->logger->debug('SOAP Response', [
                 'service' => $service,
                 'action' => $action,
                 'result' => $result,
             ]);
-            
+
             return $result;
         } catch (\Throwable $e) {
             $this->logger->error('SOAP Error', [
@@ -371,7 +416,7 @@ class DlnaServer
                 'action' => $action,
                 'error' => $e->getMessage(),
             ]);
-            
+
             return ['error' => 501, 'description' => $e->getMessage()];
         }
     }
@@ -382,11 +427,11 @@ class DlnaServer
     private function parseSoapBody(string $body, string $action): array
     {
         $params = [];
-        
+
         // Simple XML parsing for common parameters
         libxml_use_internal_errors(true);
         $doc = simplexml_load_string($body);
-        
+
         if ($doc === false) {
             return $params;
         }
@@ -415,16 +460,16 @@ class DlnaServer
         ];
 
         $pattern = $paramPatterns[$action] ?? [];
-        
+
         foreach ($pattern as $param) {
             // Try various XML paths
             $value = $this->extractXmlValue($doc, $param);
-            
+
             // Type conversion
             if (in_array($param, ['InstanceID', 'StartingIndex', 'RequestedCount', 'ConnectionID'])) {
                 $value = $value !== null ? (int)$value : 0;
             }
-            
+
             if ($value !== null) {
                 $params[] = $value;
             }
@@ -451,14 +496,14 @@ class DlnaServer
         // Use XPath for better namespace handling
         $xpath = new \SimpleXMLElement($doc->asXML());
         $xpath->registerXPathNamespace('s', 'http://schemas.xmlsoap.org/soap/envelope/');
-        
+
         // Try to find the element in Body/ActionName/parameterName pattern
         // This handles both namespaced and non-namespaced elements
         $result = $xpath->xpath("//s:Body/*/*[local-name()='{$name}']");
         if (!empty($result)) {
             return (string)$result[0];
         }
-        
+
         // Also try direct path without namespace
         $result2 = $xpath->xpath("//Body/*[local-name()='{$name}']");
         if (!empty($result2)) {
@@ -474,8 +519,8 @@ class DlnaServer
     public function buildSoapResponse(string $action, array $result): string
     {
         $actionLower = strtolower($action);
-        
-        $responseXml = match($action) {
+
+        $responseXml = match ($action) {
             'Browse', 'Search' => $this->buildBrowseResponse($result),
             default => $this->buildGenericResponse($action, $result),
         };
@@ -520,7 +565,7 @@ class DlnaServer
         }
 
         $responseAction = $action . 'Response';
-        
+
         return '<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
     <s:Body>

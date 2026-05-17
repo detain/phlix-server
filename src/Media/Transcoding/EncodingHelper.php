@@ -173,7 +173,7 @@ class EncodingHelper
      */
     private function selectCrf(string $codec): int
     {
-        return match($codec) {
+        return match ($codec) {
             'libx264' => 23,
             'libx265' => 28,
             'libvpx-vp9' => 31,

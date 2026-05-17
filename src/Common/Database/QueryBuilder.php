@@ -40,7 +40,7 @@ class QueryBuilder
             $value = $operator;
             $operator = '=';
         }
-        
+
         $this->where[] = "$column $operator ?";
         $this->bindings[] = $value;
         return $this;
@@ -77,14 +77,14 @@ class QueryBuilder
     {
         $columns = array_keys($data);
         $placeholders = array_fill(0, count($columns), '?');
-        
+
         $sql = sprintf(
             "INSERT INTO %s (%s) VALUES (%s)",
             $this->table,
             implode(', ', $columns),
             implode(', ', $placeholders)
         );
-        
+
         $this->connection->query($sql, array_values($data));
         return $this->connection->getLastInsertId();
     }
@@ -96,14 +96,14 @@ class QueryBuilder
             $sets[] = "$column = ?";
             $this->bindings[] = $data[$column];
         }
-        
+
         $sql = sprintf(
             "UPDATE %s SET %s %s",
             $this->table,
             implode(', ', $sets),
             $this->buildWhere()
         );
-        
+
         return $this->connection->query($sql, $this->bindings);
     }
 
@@ -114,7 +114,7 @@ class QueryBuilder
             $this->table,
             $this->buildWhere()
         );
-        
+
         return $this->connection->query($sql, $this->bindings);
     }
 
@@ -122,11 +122,11 @@ class QueryBuilder
     {
         $originalColumns = $this->columns;
         $this->columns = ['COUNT(*) as count'];
-        
+
         $result = $this->first();
-        
+
         $this->columns = $originalColumns;
-        
+
         return (int)($result['count'] ?? 0);
     }
 
@@ -137,20 +137,20 @@ class QueryBuilder
             implode(', ', $this->columns),
             $this->table
         );
-        
+
         $sql .= $this->buildWhere();
-        
+
         if ($this->orderBy) {
             $sql .= " ORDER BY {$this->orderBy} {$this->orderDirection}";
         }
-        
+
         if ($this->limit !== null) {
             $sql .= " LIMIT {$this->limit}";
             if ($this->offset !== null) {
                 $sql .= " OFFSET {$this->offset}";
             }
         }
-        
+
         return $sql;
     }
 

@@ -100,7 +100,7 @@ class DlnaDevice
         $this->presentationUrl = "http://{$baseUrl}:{$port}/";
         $this->discoveredAt = microtime(true);
         $this->lastSeenAt = microtime(true);
-        
+
         $this->initializeServices();
     }
 
@@ -126,7 +126,7 @@ class DlnaDevice
                     'SCPDURL' => '/scpd/ConnectionManager.xml',
                 ],
             ];
-            
+
             $this->capabilities = [
                 'Search' => true,
                 'Browse' => true,
@@ -152,7 +152,7 @@ class DlnaDevice
                     'SCPDURL' => '/scpd/ConnectionManager.xml',
                 ],
             ];
-            
+
             $this->capabilities = [
                 'Play' => true,
                 'Pause' => true,
@@ -337,7 +337,7 @@ class DlnaDevice
         // Return the largest icon
         $largest = null;
         $maxArea = 0;
-        
+
         foreach ($this->icons as $icon) {
             $area = ($icon['width'] ?? 48) * ($icon['height'] ?? 48);
             if ($area > $maxArea) {
@@ -345,7 +345,7 @@ class DlnaDevice
                 $largest = $icon;
             }
         }
-        
+
         return $largest['url'] ?? null;
     }
 
@@ -437,7 +437,7 @@ class DlnaDevice
         if ($this->lastSeenAt === null) {
             return true;
         }
-        
+
         return (microtime(true) - $this->lastSeenAt) > $timeoutSeconds;
     }
 
@@ -449,7 +449,7 @@ class DlnaDevice
         if ($this->deviceType === self::TYPE_SERVER) {
             return 'urn:schemas-upnp-org:device:MediaServer:1';
         }
-        
+
         return 'urn:schemas-upnp-org:device:MediaRenderer:1';
     }
 
@@ -589,7 +589,7 @@ class DlnaDevice
             $data['base_url'],
             $data['port'] ?? 80
         );
-        
+
         if (isset($data['manufacturer'])) {
             $device->setManufacturer($data['manufacturer']);
         }
@@ -602,7 +602,7 @@ class DlnaDevice
         if (isset($data['model_number'])) {
             $device->setModelNumber($data['model_number']);
         }
-        
+
         return $device;
     }
 }

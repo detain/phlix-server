@@ -89,7 +89,7 @@ class DeviceRegistry
 
     /**
      * Discover devices on the local network via SSDP.
-     * 
+     *
      * @param int $timeout Timeout in seconds
      * @param bool $force Force fresh discovery (ignore cache)
      * @return array<string, DlnaDevice> Discovered devices
@@ -116,10 +116,10 @@ class DeviceRegistry
         try {
             $this->sendSsdpSearch($timeout);
             $this->discoveryTimestamps['last'] = time();
-            
+
             // Clean up stale devices
             $this->removeStaleDevices();
-            
+
             $this->logger->info('Discovery complete', [
                 'devices_found' => count($this->devices),
             ]);
@@ -140,7 +140,7 @@ class DeviceRegistry
     private function sendSsdpSearch(int $timeout): void
     {
         $socket = $this->createSsdpSocket();
-        
+
         if ($socket === null) {
             $this->logger->warning('Could not create SSDP socket');
             return;
@@ -287,11 +287,11 @@ class DeviceRegistry
 
         // Fetch device description
         $device = $this->fetchDeviceDescription($usn, $st, $location, $sourceAddress, $server);
-        
+
         if ($device !== null) {
             $this->devices[$usn] = $device;
             $this->discoveryTimestamps[$usn] = time() + $maxAge;
-            
+
             $this->logger->info('Discovered device', [
                 'udn' => $device->getUdn(),
                 'name' => $device->getFriendlyName(),
@@ -334,7 +334,7 @@ class DeviceRegistry
 
         // Fetch device description
         $xml = $this->httpGet("http://{$host}:{$port}{$path}");
-        
+
         if ($xml === null) {
             // Try root device URL
             $xml = $this->httpGet("http://{$host}:{$port}/");
@@ -364,7 +364,7 @@ class DeviceRegistry
         ]);
 
         $content = @file_get_contents($url, false, $context);
-        
+
         return $content !== false ? $content : null;
     }
 
@@ -379,7 +379,7 @@ class DeviceRegistry
     ): ?DlnaDevice {
         libxml_use_internal_errors(true);
         $doc = @simplexml_load_string($xml);
-        
+
         if ($doc === false) {
             $this->logger->warning('Failed to parse device description XML');
             return null;
@@ -387,10 +387,10 @@ class DeviceRegistry
 
         // Register namespaces
         $namespaces = $doc->getNamespaces(true);
-        
+
         // Extract device info
         $deviceXml = $doc->device ?? $doc;
-        
+
         if (!$deviceXml) {
             return null;
         }
@@ -488,7 +488,7 @@ class DeviceRegistry
     {
         $this->devices[$device->getUdn()] = $device;
         $this->discoveryTimestamps[$device->getUdn()] = time();
-        
+
         $this->logger->info('Device registered manually', [
             'udn' => $device->getUdn(),
             'name' => $device->getFriendlyName(),
@@ -503,11 +503,11 @@ class DeviceRegistry
         if (isset($this->devices[$udn])) {
             unset($this->devices[$udn]);
             unset($this->discoveryTimestamps[$udn]);
-            
+
             $this->logger->info('Device unregistered', ['udn' => $udn]);
             return true;
         }
-        
+
         return false;
     }
 
@@ -530,10 +530,10 @@ class DeviceRegistry
     private function removeStaleDevices(): void
     {
         $now = time();
-        
+
         foreach ($this->devices as $udn => $device) {
             $expiry = $this->discoveryTimestamps[$udn] ?? 0;
-            
+
             if ($expiry > 0 && $now > $expiry) {
                 $this->logger->debug('Removing stale device', [
                     'udn' => $udn,
@@ -556,7 +556,7 @@ class DeviceRegistry
     {
         $this->devices = [];
         $this->discoveryTimestamps = [];
-        
+
         $this->logger->debug('Device registry cleared');
     }
 
@@ -570,7 +570,7 @@ class DeviceRegistry
         // Try to get local IP from system routes
         $output = [];
         @exec('ip route get 1 | head -1', $output, $result);
-        
+
         if ($result === 0 && !empty($output[0])) {
             if (preg_match('/src\s+(\d+\.\d+\.\d+\.\d+)/', $output[0], $matches)) {
                 $this->localAddresses[] = $matches[1];
@@ -582,7 +582,7 @@ class DeviceRegistry
             $hostname = gethostname();
             $addresses = gethostbynamel($hostname);
             if (is_array($addresses)) {
-                $this->localAddresses = array_filter($addresses, function($addr) {
+                $this->localAddresses = array_filter($addresses, function ($addr) {
                     return filter_var($addr, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
                 });
             }

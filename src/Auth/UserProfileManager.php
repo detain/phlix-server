@@ -421,9 +421,11 @@ class UserProfileManager
         }
 
         // Update settings if provided
-        if (isset($data['content_rating']) || isset($data['pin']) || isset($data['pin_required_for_admin'])
+        if (
+            isset($data['content_rating']) || isset($data['pin']) || isset($data['pin_required_for_admin'])
             || isset($data['max_daily_watch_time']) || isset($data['allowed_genres'])
-            || isset($data['blocked_genres']) || isset($data['allow_unrated'])) {
+            || isset($data['blocked_genres']) || isset($data['allow_unrated'])
+        ) {
             $this->updateProfileSettings($profileId, $data);
         }
     }
@@ -845,11 +847,14 @@ class UserProfileManager
     {
         return sprintf(
             '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
             mt_rand(0, 0xffff),
             mt_rand(0, 0x0fff) | 0x4000,
             mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff)
         );
     }
 }

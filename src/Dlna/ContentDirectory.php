@@ -99,7 +99,7 @@ class ContentDirectory
 
     /**
      * Handle Browse request.
-     * 
+     *
      * @param string $objectId The object ID to browse
      * @param string $browseFlag BrowseMetadata or BrowseDirectChildren
      * @param string $filter Comma-separated list of properties to return
@@ -133,7 +133,7 @@ class ContentDirectory
 
         // Check if it's a container or item
         $item = $this->resolveObjectId($objectId);
-        
+
         if ($item === null) {
             return $this->createErrorResult(701, 'No such object');
         }
@@ -149,7 +149,7 @@ class ContentDirectory
 
     /**
      * Handle Search request.
-     * 
+     *
      * @param string $containerId The container to search in (0 for root)
      * @param string $searchCriteria The search criteria (UPnP Search syntax)
      * @param string $filter Properties to return
@@ -174,7 +174,7 @@ class ContentDirectory
 
         // UPnP Search capabilities - simplified implementation
         // Real implementation would parse UPnP Search Expression syntax
-        
+
         if (empty($searchCriteria) || $searchCriteria === '*') {
             // Return all items
             return $this->browse($containerId, 'BrowseDirectChildren', $filter, $startingIndex, $requestedCount, $sortCriteria);
@@ -182,22 +182,22 @@ class ContentDirectory
 
         // Parse simple search criteria
         $parsedSearch = $this->parseSearchCriteria($searchCriteria);
-        
+
         if ($parsedSearch === null) {
             return $this->createErrorResult(800, 'Unsupported or invalid search criteria');
         }
 
         // Perform search based on parsed criteria
         $items = $this->performSearch($containerId, $parsedSearch);
-        
+
         $this->totalMatches = count($items);
-        
+
         // Apply pagination
         $resultItems = array_slice($items, $startingIndex, $requestedCount > 0 ? $requestedCount : null);
-        
+
         // Generate DIDL
         $didl = $this->generateDidl($resultItems);
-        
+
         return [
             'Result' => $didl,
             'NumberReturned' => count($resultItems),
@@ -213,14 +213,14 @@ class ContentDirectory
     {
         // Root contains library containers
         $libraries = $this->getLibraryContainers();
-        
+
         $this->totalMatches = count($libraries);
-        
+
         // Apply pagination
         $resultItems = array_slice($libraries, $startingIndex, $requestedCount > 0 ? $requestedCount : null);
-        
+
         $didl = $this->generateDidl($resultItems);
-        
+
         return [
             'Result' => $didl,
             'NumberReturned' => count($resultItems),
@@ -235,7 +235,7 @@ class ContentDirectory
     private function browseMetadata(string $objectId, array $item, string $filter): array
     {
         $didl = $this->generateDidl([$item], true);
-        
+
         return [
             'Result' => $didl,
             'NumberReturned' => 1,
@@ -256,19 +256,19 @@ class ContentDirectory
     ): array {
         // Get children based on object ID type
         $children = $this->getChildren($objectId);
-        
+
         // Sort if needed
         if (!empty($sortCriteria)) {
             $children = $this->sortItems($children, $sortCriteria);
         }
-        
+
         $this->totalMatches = count($children);
-        
+
         // Apply pagination
         $resultItems = array_slice($children, $startingIndex, $requestedCount > 0 ? $requestedCount : null);
-        
+
         $didl = $this->generateDidl($resultItems);
-        
+
         return [
             'Result' => $didl,
             'NumberReturned' => count($resultItems),
@@ -336,7 +336,7 @@ class ContentDirectory
      */
     private function getLibraryItems(string $libraryType): array
     {
-        $type = match($libraryType) {
+        $type = match ($libraryType) {
             'video' => 'movie',
             'audio' => 'audio',
             'images' => 'image',
@@ -375,7 +375,7 @@ class ContentDirectory
 
         // Try to find in database
         $item = $this->itemRepository->findById($objectId);
-        
+
         if ($item !== null) {
             $this->objectCache[$objectId] = $item;
         }
@@ -391,7 +391,7 @@ class ContentDirectory
     {
         // Handle property comparisons
         // Format: property op "value" or property op value
-        
+
         // Check for common patterns
         if (preg_match('/^(dc:title|dc:creator|upnp:artist|upnp:album)\s+contains\s+["\'](.+)["\']$/i', $criteria, $matches)) {
             return [
@@ -439,7 +439,7 @@ class ContentDirectory
         $op = $criteria['op'] ?? '';
         $value = $criteria['value'] ?? '';
 
-        $itemValue = match($property) {
+        $itemValue = match ($property) {
             'dc:title' => $item['name'] ?? '',
             'dc:creator' => $item['creator'] ?? '',
             'upnp:artist' => $item['artist'] ?? '',
@@ -447,7 +447,7 @@ class ContentDirectory
             default => '',
         };
 
-        return match($op) {
+        return match ($op) {
             'contains' => stripos($itemValue, $value) !== false,
             'exists' => !empty($itemValue) === $value,
             '=' => strcasecmp($itemValue, $value) === 0,
@@ -461,7 +461,7 @@ class ContentDirectory
      */
     private function sortItems(array $items, string $sortCriteria): array
     {
-        $sortField = match(trim($sortCriteria, '+- ')) {
+        $sortField = match (trim($sortCriteria, '+- ')) {
             'dc:title', 'title' => 'name',
             'dc:date', 'date' => 'created_at',
             'dc:creator', 'creator' => 'creator',
@@ -470,14 +470,14 @@ class ContentDirectory
 
         $descending = strpos($sortCriteria, '-') === 0;
 
-        usort($items, function($a, $b) use ($sortField, $descending) {
+        usort($items, function ($a, $b) use ($sortField, $descending) {
             $aVal = $a[$sortField] ?? '';
             $bVal = $b[$sortField] ?? '';
-            
-            $result = is_numeric($aVal) && is_numeric($bVal) 
-                ? $aVal <=> $bVal 
+
+            $result = is_numeric($aVal) && is_numeric($bVal)
+                ? $aVal <=> $bVal
                 : strcasecmp($aVal, $bVal);
-            
+
             return $descending ? -$result : $result;
         });
 
@@ -486,7 +486,7 @@ class ContentDirectory
 
     /**
      * Generate DIDL-Lite XML for items.
-     * 
+     *
      * @param array $items Items to include in DIDL
      * @param bool $includeMeta Whether to include full metadata
      * @return string DIDL-Lite XML string
@@ -515,10 +515,10 @@ class ContentDirectory
         $parentId = htmlspecialchars($item['parent_id'] ?? '0');
         $name = htmlspecialchars($item['name'] ?? 'Unknown');
         $type = $item['type'] ?? 'item';
-        
+
         // Determine UPnP class
         $upnpClass = $this->getUpnpClass($item);
-        
+
         $didl = sprintf(
             '<item id="%s" parentID="%s" restricted="true">',
             $id,
@@ -556,7 +556,7 @@ class ContentDirectory
         $type = $item['type'] ?? 'unknown';
         $mediaType = $item['media_type'] ?? '';
 
-        return match($type) {
+        return match ($type) {
             'container', 'folder' => 'object.container',
             'movie', 'video' => 'object.item.videoItem.' . ($item['class'] ?? 'movie'),
             'audio', 'music' => 'object.item.audioItem.' . ($item['class'] ?? 'musicTrack'),
@@ -649,7 +649,7 @@ class ContentDirectory
         $mimeType = $item['mime_type'] ?? $this->getMimeType($item);
         $type = $item['type'] ?? 'video';
 
-        $dlnaProfile = match($type) {
+        $dlnaProfile = match ($type) {
             'video', 'movie' => 'DLNA.ORG_PN=AVC_MP4_MP_HD',
             'audio', 'music' => 'DLNA.ORG_PN=AAC_ADTS',
             'image', 'photo' => 'DLNA.ORG_PN=JPEG_LRG',
@@ -671,7 +671,7 @@ class ContentDirectory
         $type = $item['type'] ?? '';
         $extension = pathinfo($item['path'] ?? '', PATHINFO_EXTENSION);
 
-        return match(strtolower($extension)) {
+        return match (strtolower($extension)) {
             'mp4', 'm4v' => 'video/mp4',
             'mkv' => 'video/x-matroska',
             'webm' => 'video/webm',

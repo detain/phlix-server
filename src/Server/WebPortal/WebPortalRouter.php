@@ -168,7 +168,7 @@ class WebPortalRouter
     public function getLibraries(Request $request, array $params): Response
     {
         $libraries = $this->libraryManager->getAllLibraries();
-        
+
         // Load item counts
         foreach ($libraries as &$lib) {
             $lib['item_count'] = $this->itemRepository->countByType($lib['id'], $lib['type']);

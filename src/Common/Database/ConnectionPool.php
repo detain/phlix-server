@@ -26,7 +26,7 @@ class ConnectionPool
         if (!isset(self::$connections[$name])) {
             $config = include self::$configPath;
             $connConfig = $config['connections'][$name];
-            
+
             self::$connections[$name] = new Connection(
                 $connConfig['host'],
                 $connConfig['port'],

@@ -19,7 +19,7 @@ class StructuredLogger
         $this->channel = $channel;
         $this->config = $config;
         $this->logger = new Logger($channel);
-        
+
         $this->setupHandlers();
         $this->setupProcessors();
     }
@@ -37,7 +37,7 @@ class StructuredLogger
     private function createHandler(array $config): \Monolog\Handler\HandlerInterface
     {
         $type = $config['type'] ?? 'rotating_file';
-        
+
         switch ($type) {
             case 'rotating_file':
                 return new RotatingFileHandler(
@@ -45,27 +45,27 @@ class StructuredLogger
                     $config['max_files'] ?? 30,
                     $this->mapLevel($config['level'] ?? 'debug')
                 );
-            
+
             case 'stream':
                 return new StreamHandler(
                     $config['path'],
                     $this->mapLevel($config['level'] ?? 'debug')
                 );
-            
+
             case 'error':
                 return new RotatingFileHandler(
                     $config['path'],
                     $config['max_files'] ?? 30,
                     Level::Error
                 );
-            
+
             case 'audit':
                 return new RotatingFileHandler(
                     $config['path'],
                     $config['max_files'] ?? 90,
                     Level::Info
                 );
-            
+
             default:
                 return new StreamHandler('php://stdout', Level::Debug);
         }
@@ -74,11 +74,11 @@ class StructuredLogger
     private function setupProcessors(): void
     {
         $this->logger->pushProcessor(new PsrLogMessageProcessor());
-        
+
         // Note: In Monolog 3, context is handled natively by PsrLogMessageProcessor
         // and the Logger's log() method. The 'context' processor config is kept for
         // backwards compatibility but no longer adds a separate processor.
-        
+
         if ($this->config['processors']['request_id'] ?? false) {
             $this->logger->pushProcessor(new class {
                 public function __invoke(array $record): array
@@ -86,14 +86,14 @@ class StructuredLogger
                     $record['extra']['request_id'] = $this->getRequestId();
                     return $record;
                 }
-                
+
                 private function getRequestId(): string
                 {
                     return $_SERVER['HTTP_X_REQUEST_ID'] ?? uniqid('req-');
                 }
             });
         }
-        
+
         if ($this->config['processors']['user_id'] ?? false) {
             $this->logger->pushProcessor(new class {
                 public function __invoke(array $record): array
@@ -101,7 +101,7 @@ class StructuredLogger
                     $record['extra']['user_id'] = $this->getUserId();
                     return $record;
                 }
-                
+
                 private function getUserId(): ?string
                 {
                     return $_SESSION['user_id'] ?? null;
@@ -112,7 +112,7 @@ class StructuredLogger
 
     private function mapLevel(string $level): Level
     {
-        return match(strtolower($level)) {
+        return match (strtolower($level)) {
             'debug' => Level::Debug,
             'info' => Level::Info,
             'notice' => Level::Notice,

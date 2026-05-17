@@ -204,6 +204,15 @@ class Application
             $controller = $this->getHubTokenController();
             return $controller->handle($request, $params);
         });
+
+        // WebAuthn / Passkey endpoints
+        $webauthn = $this->getWebAuthnController();
+        $this->router->post('/api/v1/auth/webauthn/register/options', [$webauthn, 'startRegistration']);
+        $this->router->post('/api/v1/auth/webauthn/register/verify', [$webauthn, 'finishRegistration']);
+        $this->router->post('/api/v1/auth/webauthn/login/options', [$webauthn, 'startAuthentication']);
+        $this->router->post('/api/v1/auth/webauthn/login/verify', [$webauthn, 'finishAuthentication']);
+        $this->router->get('/api/v1/me/webauthn/credentials', [$webauthn, 'listCredentials']);
+        $this->router->delete('/api/v1/me/webauthn/credentials/{id}', [$webauthn, 'deleteCredential']);
     }
 
     /**
@@ -411,6 +420,43 @@ class Application
 
         /** @var \Phlex\Server\Http\Controllers\HubTokenController */
         $controller = $this->container->get(\Phlex\Server\Http\Controllers\HubTokenController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns a WebAuthnController instance.
+     *
+     * @return \Phlex\Server\Http\Controllers\WebAuthnController The controller instance.
+     */
+    private function getWebAuthnController(): \Phlex\Server\Http\Controllers\WebAuthnController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlex',
+                'root',
+                'password'
+            );
+            $userRepo = new \Phlex\Auth\UserRepository($db);
+            $credentialRepo = new \Phlex\Auth\WebAuthn\WebAuthnCredentialRepository($db);
+            $settings = new \Phlex\Auth\WebAuthn\WebAuthnSettings(
+                rpId: 'localhost',
+                rpName: 'Phlex Media Server',
+                rpOrigin: 'http://localhost:8080'
+            );
+            $webauthnManager = new \Phlex\Auth\WebAuthn\WebAuthnManager(
+                $userRepo,
+                $db,
+                $credentialRepo,
+                $settings
+            );
+            $authManager = new \Phlex\Auth\AuthManager($userRepo, new \Phlex\Auth\JwtHandler('test-secret'));
+            return new \Phlex\Server\Http\Controllers\WebAuthnController($webauthnManager, $authManager);
+        }
+
+        /** @var \Phlex\Server\Http\Controllers\WebAuthnController */
+        $controller = $this->container->get(\Phlex\Server\Http\Controllers\WebAuthnController::class);
         return $controller;
     }
 }

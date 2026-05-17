@@ -7,6 +7,47 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step D.4)
+
+- First-class passkey / WebAuthn support for passwordless login.
+  Supports platform authenticators (Touch ID, Windows Hello, Face ID)
+  and roaming FIDO2 tokens (YubiKey, etc.).
+- `src/Auth/WebAuthn/WebAuthnManager` — orchestrates registration and
+  authentication ceremonies; generates cryptographically random
+  challenges; validates attestation and assertions.
+- `src/Auth/WebAuthn/WebAuthnCredential` — entity for stored credentials
+  with VARBINARY credential ID, sign counter, and device metadata.
+- `src/Auth/WebAuthn/WebAuthnSettings` — RP configuration (ID, name,
+  origin, attestation requirement).
+- `src/Auth/WebAuthn/WebAuthnCredentialRepository` — data access for
+  `webauthn_credentials` table; implements replay attack detection via
+  sign counter validation.
+- `src/Auth/WebAuthnProvider` — implements `ProviderInterface` for
+  WebAuthn as an auth provider alongside OIDC/LDAP.
+- `src/Server/Http/Controllers/WebAuthnController` — HTTP API with
+  6 endpoints for registration, authentication, and credential
+  management.
+- Database migration `migrations/010_webauthn_credentials.sql` —
+  creates `webauthn_credentials` table with VARBINARY credential_id
+  and foreign key to users.
+- Smarty template `public/templates/auth/webauthn-settings.tpl` —
+  user-facing passkey management UI.
+- Routes wired in `Application::loadApiRoutes()`:
+  `POST /api/v1/auth/webauthn/register/options`,
+  `POST /api/v1/auth/webauthn/register/verify`,
+  `POST /api/v1/auth/webauthn/login/options`,
+  `POST /api/v1/auth/webauthn/login/verify`,
+  `GET /api/v1/me/webauthn/credentials`,
+  `DELETE /api/v1/me/webauthn/credentials/{id}`.
+- Composer dependency added: `web-auth/webauthn-lib: ^4.0`.
+- Unit tests in `tests/unit/Auth/WebAuthn/`: `WebAuthnManagerTest`,
+  `WebAuthnCredentialTest`, `WebAuthnControllerTest`,
+  `WebAuthnProviderTest`.
+- Documentation:
+  - `docs/plugins/auth-providers.md` — passkeys section added.
+  - `docs/reference/api/auth-webauthn.md` — new API endpoint reference.
+  - `docs/security/passkeys.md` — user-facing passkey guide.
+
 ### Added (Step D.3)
 
 - `phlex-plugin-ldap` — LDAP authentication provider plugin.

@@ -489,6 +489,11 @@ class AuthManager
      */
     private function createAuthResponse(string $userId): array
     {
+        return $this->buildAuthResponse($userId);
+    }
+
+    public function buildAuthResponse(string $userId): array
+    {
         $accessToken = $this->jwtHandler->createAccessToken($userId);
         $refreshToken = $this->jwtHandler->createRefreshToken($userId);
         $user = $this->getUser($userId);

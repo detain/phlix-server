@@ -256,8 +256,66 @@ with:
 On subsequent logins, the existing local account is looked up by
 `external_id` and updated if needed.
 
+## Passkeys / WebAuthn (Built-in)
+
+Phlex includes native passkey support via the WebAuthn/FIDO2 standard.
+No plugin installation required — passkeys are available for all users.
+
+### Features
+
+- Register multiple passkeys per account
+- Support for platform authenticators (Touch ID, Windows Hello, etc.)
+- Support for roaming FIDO2 tokens (YubiKey, etc.)
+- No password required after initial registration
+- Phishing-resistant authentication
+- Sign counter detection for replay attack prevention
+
+### How It Works
+
+1. **Registration**: User visits Account Settings → Passkeys and clicks "Register New Passkey"
+2. **Challenge**: Server generates a cryptographically random challenge
+3. **Creation**: Browser creates a credential using the authenticator's private key
+4. **Verification**: Server validates the attestation and stores the credential public key
+5. **Login**: User authenticates by proving possession of the authenticator's private key
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/auth/webauthn/register/options` | Start passkey registration |
+| POST | `/api/v1/auth/webauthn/register/verify` | Complete registration |
+| POST | `/api/v1/auth/webauthn/login/options` | Start passkey login |
+| POST | `/api/v1/auth/webauthn/login/verify` | Complete login |
+| GET | `/api/v1/me/webauthn/credentials` | List user's credentials |
+| DELETE | `/api/v1/me/webauthn/credentials/{id}` | Delete a credential |
+
+### Configuration
+
+Server-side RP configuration in `config/server.php`:
+
+```php
+'webauthn' => [
+    'rp_id' => 'phlex.media',           // Default: registered domain
+    'rp_name' => 'Phlex Media Server',    // Default: server name
+    'rp_origin' => 'https://phlex.media',  // Must match actual origin
+    'attestation_required' => false,       // Allow any authenticator
+],
+```
+
+### Security Considerations
+
+- Challenges are 32 bytes of cryptographic randomness
+- Challenges expire after 60 seconds
+- Sign counter is validated on each authentication
+- Replay attacks detected when counter equals stored value
+- Credential IDs stored as VARBINARY for efficient binary comparison
+- Platform authenticators require the specific device
+- Roaming authenticators can be used on any compatible device
+
 ## See Also
 
+- [Passkeys User Guide](../security/passkeys.md)
+- [WebAuthn API Reference](../reference/api/auth-webauthn.md)
 - [Plugin Developer Guide](./developer-guide.md)
 - [Plugin Manifest](./manifest.md)
 - [Plugin Installation](./install-from-url.md)

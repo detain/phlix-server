@@ -70,6 +70,19 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
+     * Performs a DELETE request.
+     *
+     * @param string                     $path    Request path.
+     * @param array<string, string>      $headers Additional headers.
+     *
+     * @return HttpResponse The parsed response.
+     */
+    public function delete(string $path, array $headers = []): HttpResponse
+    {
+        return $this->request('DELETE', $path, null, $headers);
+    }
+
+    /**
      * Performs an HTTP request using cURL.
      *
      * @param string                     $method  HTTP method (GET, POST, etc.).

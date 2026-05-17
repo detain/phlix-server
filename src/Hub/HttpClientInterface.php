@@ -32,4 +32,14 @@ interface HttpClientInterface
      * @return HttpResponse The parsed response.
      */
     public function post(string $path, array $body, array $headers = []): HttpResponse;
+
+    /**
+     * Performs a DELETE request.
+     *
+     * @param string                 $path    Request path.
+     * @param array<string, string>  $headers Additional headers.
+     *
+     * @return HttpResponse The parsed response.
+     */
+    public function delete(string $path, array $headers = []): HttpResponse;
 }

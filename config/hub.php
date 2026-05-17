@@ -21,4 +21,10 @@ return [
     'key_path' => __DIR__ . '/hub-server-key.pem',
 
     'config_dir' => __DIR__,
+
+    'subdomain_auto_claim' => (bool)(getenv('PHLEX_SUBDOMAIN_AUTO_CLAIM') ?: true),
+
+    'tls_enabled' => (bool)(getenv('PHLEX_TLS_ENABLED') ?: true),
+
+    'domain' => getenv('PHLEX_DOMAIN') ?: 'phlex.media',
 ];

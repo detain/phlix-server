@@ -319,6 +319,18 @@ class HubClient
     }
 
     /**
+     * Get the HTTP client for hub communication.
+     *
+     * If not enrolled, returns the client without authentication.
+     *
+     * @return HttpClientInterface The HTTP client.
+     */
+    public function getHttpClient(): HttpClientInterface
+    {
+        return $this->httpClient;
+    }
+
+    /**
      * Sends a heartbeat to the hub.
      *
      * @return HeartbeatResult Success or failure with error details.

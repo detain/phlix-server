@@ -7,6 +7,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step C.8)
+
+- `Phlex\Hub\SubdomainResult` — DTO for subdomain allocation result with
+  subdomain, fqdn, tlsCertPath, and tlsKeyPath fields.
+- `Phlex\Hub\SubdomainClient` — client for claiming/releasing subdomains
+  from the hub and storing TLS configuration locally.
+- `Phlex\Hub\HttpClientInterface::delete()` — added DELETE method for
+  subdomain release.
+- `Phlex\Hub\HttpClient::delete()` — implements DELETE method.
+- `Phlex\Hub\HubClient::getHttpClient()` — exposes HTTP client for use
+  by SubdomainClient.
+- `scripts/claim-subdomain.php` — CLI script for claiming a subdomain.
+- `config/hub.php` — added `subdomain_auto_claim`, `tls_enabled`,
+  `domain` configuration options.
+- `docs/dev/tls-certificates.md` — guide covering TLS setup, certificate
+  sources (hub-provisioned vs self-signed), and security considerations.
+- `docs/reference/env-vars.md` — added `PHLEX_SUBDOMAIN_AUTO_CLAIM`,
+  `PHLEX_TLS_ENABLED`, `PHLEX_DOMAIN` environment variables.
+
 ### Added (Step C.7)
 
 - `Phlex\Network\UpnpIgdClient` — UPnP-IGD client using raw sockets.

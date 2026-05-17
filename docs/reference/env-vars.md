@@ -38,6 +38,9 @@ that consumes it.
 | `PHLEX_HUB_JWKS_URL`            | _unset_ | URL of the hub's JWKS endpoint for validating hub-issued JWTs. Typically set automatically during enrollment. See `Phlex\Hub\HubJwtValidator` and `config/hub.php`. |
 | `PHLEX_HUB_ENROLLMENT_TOKEN`    | _unset_ | When set, overrides the enrollment token read from `config/hub-enrollment.json`. Mostly useful for automation / container orchestration. See `Phlex\Hub\HubClient::loadEnrollment()`. |
 | `PHLEX_HUB_HEARTBEAT_INTERVAL`  | `60`    | Interval in seconds between hub heartbeat calls. Must be between 30 and 3600. See `Phlex\Hub\HubClient::startHeartbeatLoop()` and `config/hub.php`. |
+| `PHLEX_SUBDOMAIN_AUTO_CLAIM`    | `1`     | When truthy (`1`, `true`, `yes`, `on`) automatically claims a *.phlex.media subdomain from the hub after enrollment. See `Phlex\Hub\SubdomainClient` and `config/hub.php`. |
+| `PHLEX_TLS_ENABLED`            | `1`     | When truthy enables TLS/HTTPS for the server's public hostname. Requires a subdomain to be allocated. See `config/hub.php`. |
+| `PHLEX_DOMAIN`                 | `phlex.media` | The base domain for server subdomains (e.g. `abc12345.phlex.media`). See `config/hub.php`. |
 
 ## Relay tunnel
 

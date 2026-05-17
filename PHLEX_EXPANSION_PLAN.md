@@ -185,7 +185,7 @@ Verified via repo survey on 2026-05-16. Do not assume this is the state when you
 | `detain/phlex` (current) | Has all existing code | **Migrate** code to `detain/phlex-server`, then archive this repo with a README pointing to the new home |
 | `detain/phlex-server` | **Already exists, empty, public** (created 2026-05-16) | Initial push happens in step B.4; metadata (description + 19 topic tags) set in B.4a |
 | `detain/phlex-hub` | **Already exists, empty, public** (created 2026-05-16) | Scaffolded in step B.5; metadata set in B.5a |
-| `detain/phlex-shared` | Does not exist yet | Created in step B.2 (`gh repo create`); metadata set in B.2a |
+| `detain/phlex-shared` | **Already exists, empty, public** (created 2026-05-17) | Scaffolded in step B.2 — clone the existing empty repo, push initial commit; do NOT `gh repo create`. Metadata set in B.2a |
 | `detain/phlex-docs` | Does not exist yet | Created in step N.0 if the docs site lives in its own repo; otherwise docs stay in `docs/` inside `phlex-server` and `phlex-hub` |
 
 **Local dir naming:** the working dir stays `/home/sites/phlex` for continuity (CLAUDE.md, AGENTS.md, every existing reference). Only the **remote URL** changes (`git remote set-url origin git@github.com:detain/phlex-server.git`). Optional follow-up rename of the on-disk directory is documented as a separate, low-priority step (B.10) — do it only if it provides real value.
@@ -213,7 +213,7 @@ Step files are to be created by the first action of each phase's design step. Th
 | A.7 | Plugin developer docs | `plans/expansion/a.7-plugin-docs.md` | No | A.6 | `docs/plugin-development.md` — types, hooks, manifest reference |
 | **Phase B — Repo Split & Migration** |
 | B.1 | Design `phlex-shared` package | `plans/expansion/b.1-shared-design.md` | No | A.7 | Decide what's shared: interfaces, DTOs, event names, JWT claim shape, pairing protocol DTOs |
-| B.2 | Create `detain/phlex-shared` repo + initial v0.1.0 | `plans/expansion/b.2-shared-create.md` | Yes | B.1 | `gh repo create detain/phlex-shared --public`, push, tag, publish to Packagist (or git-vendor for now) |
+| B.2 | Scaffold `detain/phlex-shared` from existing empty repo + initial v0.1.0 | `plans/expansion/b.2-shared-create.md` | Yes | B.1 | Clone existing empty `detain/phlex-shared`, push initial commit, tag v0.1.0, publish to Packagist (or git-vendor for now). Do NOT `gh repo create` — repo already exists empty (created 2026-05-17). |
 | B.2a | Set `phlex-shared` description + 19 topic tags | `plans/expansion/b.2a-shared-metadata.md` | No | B.2 | Apply description and topics from §14 via `gh repo edit` |
 | B.3 | Refactor `phlex` to depend on `phlex-shared` | `plans/expansion/b.3-shared-consume.md` | Yes | B.2 | Composer require; move interfaces; tests stay green |
 | B.4 | Migrate code to `detain/phlex-server` | `plans/expansion/b.4-migrate-server.md` | Yes | B.3 | `git remote set-url origin git@github.com:detain/phlex-server.git`; push master + all branches + tags; update README badges + clone URLs; update Caliber config |
@@ -927,7 +927,7 @@ gh repo edit detain/phlex-hub \
   --add-topic websocket
 ```
 
-### 14.3 `detain/phlex-shared` (created in B.2)
+### 14.3 `detain/phlex-shared` (already exists, empty; scaffolded in B.2)
 
 **Description (≤ 140 chars):**
 

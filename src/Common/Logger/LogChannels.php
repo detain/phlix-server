@@ -43,6 +43,15 @@ final class LogChannels
     public const EVENTS = 'events';
 
     /**
+     * Channel used by the plugin subsystem (install / enable / disable /
+     * uninstall, manifest validation, composer-runner shell-outs,
+     * signature verification). Introduced in step A.4.
+     *
+     * @since 0.10.0
+     */
+    public const PLUGINS = 'plugins';
+
+    /**
      * Prevent instantiation — this class is a static constant holder only.
      */
     private function __construct()

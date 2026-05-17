@@ -13,3 +13,6 @@ coverage-report/
 
 # PHP-DI compiled container
 var/cache/
+
+# Installed plugin sources (runtime data, not source)
+var/plugins/

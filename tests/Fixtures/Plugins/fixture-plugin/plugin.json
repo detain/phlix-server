@@ -1,0 +1,8 @@
+{
+    "name": "phlex-plugin-fixture",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.10.0",
+    "type": "metadata-provider",
+    "entry": "Phlex\\Tests\\Fixtures\\Plugins\\FixturePlugin\\FixturePlugin",
+    "events": ["phlex.playback.started"]
+}

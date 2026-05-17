@@ -30,6 +30,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   Phase A.4. Twelve typed `readonly` event DTOs ship in
   `src/Common/Events/`. New env var `PHLEX_DEBUG_EVENTS` and `events`
   log channel. Canonical catalog in `docs/dev/event-reference.md`.
+- Plugin loader (`Phlex\Plugins\PluginLoader`) with the full
+  install / enable / disable / uninstall lifecycle. Plugins can be
+  installed from a URL (HTTPS + `file://` by default; HTTP behind
+  `PHLEX_PLUGINS_ALLOW_HTTP=1`) or from a local directory; each plugin
+  gets its own Composer-resolved `vendor/` tree under
+  `var/plugins/<name>/`. The lifecycle contract lives in
+  `Phlex\Plugins\Contract\LifecycleInterface` (temporary home — moves to
+  `Phlex\Shared\Plugin` in B.1). New table `plugins` (migration
+  `migrations/003_plugins.sql`). New `plugins` log channel and config
+  key. New env vars: `PHLEX_PLUGINS_ALLOW_HTTP`,
+  `PHLEX_PLUGINS_ALLOW_UNSIGNED`, `PHLEX_PLUGINS_REQUIRE_SIGNATURE`,
+  `PHLEX_PLUGINS_COMPOSER_TIMEOUT`. Adds `symfony/process:^7.0`.
+  See `docs/plugins/developer-guide.md` for the lifecycle diagram and
+  a sample `LifecycleInterface` implementation.
 
 ### Deprecated
 

@@ -23,5 +23,14 @@ return [
             'max_files' => 14,
             'level' => 'debug',
         ],
+        // Plugin lifecycle log — install / enable / disable / uninstall
+        // events, manifest validation failures, composer-runner output,
+        // signature verification. Introduced in step A.4.
+        'plugins' => [
+            'type' => 'rotating_file',
+            'path' => __DIR__ . '/../.logs/plugins.log',
+            'max_files' => 14,
+            'level' => 'debug',
+        ],
     ],
 ];

@@ -125,6 +125,7 @@ final class CoreServicesProvider implements ServiceProviderInterface
             'logger.audit' => LogChannels::AUDIT,
             'logger.dlna' => LogChannels::DLNA,
             'logger.livetv' => LogChannels::LIVETV,
+            'logger.plugins' => LogChannels::PLUGINS,
         ];
     }
 }

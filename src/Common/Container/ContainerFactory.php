@@ -9,6 +9,7 @@ use Phlex\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Common\Container\Providers\CoreServicesProvider;
 use Phlex\Common\Container\Providers\EventServicesProvider;
 use Phlex\Common\Container\Providers\MediaServicesProvider;
+use Phlex\Common\Container\Providers\PluginsProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
 use Psr\Container\ContainerInterface;
 
@@ -108,6 +109,7 @@ final class ContainerFactory
             new AuthServicesProvider(),
             new MediaServicesProvider(),
             new SessionServicesProvider(),
+            new PluginsProvider(),
         ];
     }
 

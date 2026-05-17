@@ -67,6 +67,11 @@ public/
 - **PSR-14 event dispatcher (Tukio)**: playback, library-scan, and auth
   lifecycle events with typed `readonly` DTOs. Plugins subscribe by event
   class FQCN; see `docs/dev/event-reference.md`.
+- **Plugin system**: install / enable / disable / uninstall lifecycle,
+  sandboxed per-plugin `vendor/` directories, signature-checked
+  manifests, and PSR-14 event subscription via
+  `Phlex\Plugins\Contract\LifecycleInterface`; see
+  `docs/plugins/developer-guide.md`.
 
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty

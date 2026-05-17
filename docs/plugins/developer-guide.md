@@ -1,40 +1,178 @@
 # Phlex plugin developer guide
 
-> **Status:** stub. The full developer guide arrives in **A.7**.
-> For now this page collects the bits that already exist.
+> **Status:** scaffold. The full developer guide arrives in **A.7**.
+> A.4 added the plugin loader; this page now documents the lifecycle
+> contract that A.4 puts in place.
 
-## What lives here today (A.3)
+## What lives here today (A.4)
 
 - The **plugin manifest specification** —
   [`manifest.md`](manifest.md) and
-  [`manifest.schema.json`](manifest.schema.json). These define the
-  shape of a `plugin.json` file. The PHP value object that parses
-  them is `Phlex\Plugins\Manifest`.
+  [`manifest.schema.json`](manifest.schema.json). PHP value object:
+  `Phlex\Plugins\Manifest`.
+- The **plugin lifecycle contract** — `Phlex\Plugins\Contract\LifecycleInterface`.
+- The **plugin loader** — `Phlex\Plugins\PluginLoader`. Operator
+  workflow today is to call `$loader->installFromDirectory($path)` or
+  `$loader->install($url)` from a CLI script; the admin UI lands in
+  **A.5**.
+- The **alias map** between manifest event names and PHP event classes —
+  `Phlex\Plugins\EventNameMap`. See the canonical catalog in
+  [`../dev/event-reference.md`](../dev/event-reference.md).
 
-## What is coming next
+## Lifecycle at a glance
 
-| Step | Adds |
-| --- | --- |
-| A.4 | Plugin loader, lifecycle contract, event-alias resolution, signature verification stub. |
-| A.5 | Admin UI for installing, enabling, disabling, and configuring plugins. |
-| A.6 | First reference plugin (`phlex-plugin-lastfm`) to exercise the whole stack. |
-| A.7 | This guide is rewritten into a full author-onboarding document. |
+```mermaid
+sequenceDiagram
+    actor Operator
+    participant Loader as PluginLoader
+    participant Installer as HttpInstaller
+    participant Composer as ComposerRunner
+    participant Repo as PluginRepository
+    participant Plugin as Plugin entry class
+    participant Dispatcher as Event dispatcher
 
-## Where to start
+    Operator->>Loader: install(sourceUrl)
+    Loader->>Installer: download / extract / validate manifest
+    Loader->>Composer: composer install --no-dev (per-plugin vendor)
+    Loader->>Repo: INSERT INTO plugins
+    Operator->>Loader: enable(name)
+    Loader->>Plugin: require vendor/autoload.php + container->get(entry)
+    Loader->>Plugin: onEnable($container)
+    Loader->>Dispatcher: subscribe each subscribedEvents() entry
+    Loader->>Repo: UPDATE plugins SET enabled = 1
+    Operator->>Loader: disable(name)
+    Loader->>Dispatcher: unsubscribe every previously-registered listener
+    Loader->>Plugin: onDisable()
+    Loader->>Repo: UPDATE plugins SET enabled = 0
+    Operator->>Loader: uninstall(name)
+    Loader->>Loader: disable(name) if currently enabled
+    Loader->>Repo: DELETE FROM plugins
+    Loader->>Loader: rm -rf var/plugins/<name>/
+```
 
-If you are building a plugin **today**, the only thing you can do
-authoritatively is author a manifest. Copy a fixture:
+## Authoring a `LifecycleInterface` plugin
 
-- `tests/Fixtures/Plugins/valid-lastfm.json` — minimal scrobbler.
-- `tests/Fixtures/Plugins/valid-oidc.json` — minimal auth provider with
-  secret settings.
+A plugin entry class is the FQCN that appears in `plugin.json#/entry`.
+It MUST implement `Phlex\Plugins\Contract\LifecycleInterface` (note:
+this interface is the temporary home until B.1 hoists it to
+`Phlex\Shared\Plugin\LifecycleInterface`; once that ships, the
+`Phlex\Plugins\Contract` namespace becomes a deprecated alias for one
+minor release).
 
-Then read [`manifest.md`](manifest.md) for what each field means.
+```php
+namespace Phlex\Plugins\Lastfm;
+
+use Phlex\Common\Events\Playback\PlaybackStarted;
+use Phlex\Common\Events\Playback\PlaybackStopped;
+use Phlex\Plugins\Contract\LifecycleInterface;
+use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
+
+final class Plugin implements LifecycleInterface
+{
+    private ?LoggerInterface $logger = null;
+    private ?LastfmClient $client = null;
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        // Pull whatever services the plugin needs from the host container.
+        $this->logger = $container->get(LoggerInterface::class);
+        $this->client = new LastfmClient(/* config */);
+    }
+
+    public function onDisable(): void
+    {
+        $this->client = null;
+    }
+
+    public function subscribedEvents(): array
+    {
+        // Keys are event FQCNs; values are method names on $this
+        // (or any PHP callable).
+        return [
+            PlaybackStarted::class => 'onPlaybackStarted',
+            PlaybackStopped::class => 'onPlaybackStopped',
+        ];
+    }
+
+    public function onPlaybackStarted(PlaybackStarted $event): void
+    {
+        $this->client?->nowPlaying($event->userId, $event->mediaItemId);
+    }
+
+    public function onPlaybackStopped(PlaybackStopped $event): void
+    {
+        if ($event->reachedEnd) {
+            $this->client?->scrobble($event->userId, $event->mediaItemId);
+        }
+    }
+}
+```
+
+## Per-plugin `composer.json`
+
+Every plugin MUST ship a `composer.json` so the loader can resolve
+its dependencies into an isolated `vendor/` tree under
+`var/plugins/<name>/vendor/`. Without composer the loader refuses to
+install the plugin.
+
+A minimum example:
+
+```json
+{
+    "name": "phlex/plugin-lastfm",
+    "type": "phlex-plugin",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Phlex\\Plugins\\Lastfm\\": "src/"
+        }
+    }
+}
+```
+
+## Manifest event aliases
+
+Plugin manifests reference events by alias rather than FQCN so the
+JSON stays human-readable. The loader translates each alias to its
+PHP class at enable time via `Phlex\Plugins\EventNameMap`. The full
+table lives in [`../dev/event-reference.md`](../dev/event-reference.md);
+add an alias declaration to your manifest like so:
+
+```json
+{
+    "events": [
+        "phlex.playback.started",
+        "phlex.playback.stopped"
+    ]
+}
+```
+
+If you subscribe to an alias that the loader doesn't recognise, the
+loader throws `Phlex\Plugins\Exception\PluginEnableException`. The
+list of supported aliases is fixed by the running server's release.
+
+## Signature & trust
+
+The manifest optionally includes a `signature` field of the shape
+`sha256:<64-hex>`. For Phase A the loader supports three outcomes:
+
+- **Valid** — signature is on the configured allowlist.
+- **Invalid** — signature is present but not on the allowlist (refuse
+  install when `PHLEX_PLUGINS_REQUIRE_SIGNATURE=1`).
+- **Unsigned** — no signature; logged as a warning and accepted unless
+  `PHLEX_PLUGINS_REQUIRE_SIGNATURE=1`.
+
+The trusted-key allowlist is empty out of the box (operator-supplied).
+B.x will wire a real signing-key infrastructure; until then, A.4 lets
+operators opt into strict signing via env vars while accepting unsigned
+plugins by default.
 
 ## Where to file issues
 
 Open a GitHub issue against
 [`detain/phlex`](https://github.com/detain/phlex) with the label
-`area:plugins` once your manifest is parsing cleanly but you cannot
-load the plugin — that almost certainly means the loader (A.4) is the
-missing piece.
+`area:plugins`.

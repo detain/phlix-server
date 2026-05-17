@@ -25,6 +25,26 @@ inside the plugin's directory, and stores the manifest in the
 `plugins` table. The plugin lands **disabled** by default — flip
 the toggle in the table to enable it.
 
+### Try it with the reference plugin
+
+The first plugin you should install on a fresh server is the
+**reference plugin**, a tiny `metadata-provider` that returns
+`{"title": "Hello, World"}` for one well-known fixture path. It's
+unsigned by design and has no external dependencies, so it's safe to
+install on any environment.
+
+Paste this URL into the **Install from URL** form and click
+**Install**:
+
+```
+https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json
+```
+
+After install, flip the toggle for `phlex-plugin-example` in the
+table to enable it. The plugin's source lives at
+[`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example);
+fork it as the starting point for your own plugin.
+
 ## From the command line
 
 The same operations are reachable via the JSON API. Substitute your

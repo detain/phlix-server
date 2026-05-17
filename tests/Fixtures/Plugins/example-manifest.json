@@ -1,0 +1,16 @@
+{
+    "name": "phlex-plugin-example",
+    "version": "0.1.0",
+    "phlex_min_server_version": "0.10.0",
+    "type": "metadata-provider",
+    "entry": "Phlex\\PluginExample\\HelloMetadataProvider",
+    "events": [],
+    "settings": {
+        "greeting": {
+            "type": "string",
+            "required": false,
+            "default": "Hello, World"
+        }
+    },
+    "signature": null
+}

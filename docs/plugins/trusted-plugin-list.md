@@ -43,6 +43,20 @@ $builder->addDefinitions([
 ]);
 ```
 
+## Canonical reference plugin
+
+| Plugin                                                                          | Type                | Version | Signature status                  |
+| ------------------------------------------------------------------------------- | ------------------- | ------- | --------------------------------- |
+| [`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example) | `metadata-provider` | `0.1.0` | `unsigned (reference implementation)` |
+
+`phlex-plugin-example` is the hello-world plugin Phlex publishes
+alongside the loader as a working template. It deliberately ships
+**unsigned** — its purpose is to be forked and modified, so pinning
+its hash to the trusted-key allowlist would be misleading. Operators
+who want to install it must accept the unsigned-plugin warning logged
+to the `plugins` channel, or set `PHLEX_PLUGINS_REQUIRE_SIGNATURE=0`
+(the default).
+
 ## What ships in Phase C
 
 - A curated allowlist published by the hub, signed with a long-lived

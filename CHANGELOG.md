@@ -55,6 +55,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   end-user docs at `docs/plugins/install-from-url.md`. Editable
   settings UI deferred to a later phase — A.5 renders settings
   read-only with `secret: true` fields masked.
+- Reference plugin
+  [`phlex-plugin-example`](https://github.com/detain/phlex-plugin-example)
+  — the first community-shaped Phlex plugin, published as its own
+  public GitHub repo. Implements
+  `Phlex\Plugins\Contract\LifecycleInterface` as a
+  `metadata-provider` that returns `['title' => 'Hello, World']` for a
+  fixed fixture path, and ships unsigned by design as the canonical
+  fork-as-starter template for plugin authors. Installable through the
+  A.5 admin UI by pasting
+  `https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json`
+  into **Install from URL**. Server-side wiring: new fixture
+  `tests/fixtures/plugins/example-manifest.json` mirrors the published
+  manifest so the loader's URL-install test can use a `file://` URL,
+  and `docs/plugins/install-from-url.md` /
+  `docs/plugins/trusted-plugin-list.md` now reference the live
+  example URL.
 
 ### Deprecated
 

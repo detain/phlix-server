@@ -1,0 +1,80 @@
+openapi: 3.0.3
+info:
+  title: Phlex Hub JWKS API
+  description: |
+    JWKS endpoint exposing this server's Ed25519 public key(s) for
+    verification of server-signed JWTs by the hub. Introduced in
+    **Step C.2** of `PHLEX_EXPANSION_PLAN.md`.
+
+    This document is self-hosted at `/.well-known/jwks.json` rather
+    than proxied through the hub. It is cacheable for up to 1 hour
+    (Cache-Control: public, max-age=3600).
+
+    The corresponding private key is stored in `config/hub-server-key.pem`
+    and is never exposed over the network.
+  version: '1.0.0'
+
+servers:
+  - url: /
+    description: Relative to the Phlex server root (Workerman HTTP server).
+
+paths:
+  /.well-known/jwks.json:
+    get:
+      summary: Server's public keys (JWKS)
+      operationId: getServerJwks
+      responses:
+        '200':
+          description: JWKS document containing the server's Ed25519 public key(s).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JWKS'
+          headers:
+            Cache-Control:
+              description: Cache-Control hint — public, max-age=3600.
+              schema:
+                type: string
+                example: public, max-age=3600
+            Content-Type:
+              schema:
+                type: string
+                example: application/json
+
+components:
+  schemas:
+    JWKS:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/JWK'
+
+    JWK:
+      type: object
+      required: [kty, crv, x, kid, use, alg]
+      properties:
+        kty:
+          type: string
+          enum: [OKP]
+          description: Octet Key Pair — Ed25519/Ed448 key type.
+        crv:
+          type: string
+          enum: [Ed25519]
+          description: Edwards curve identifier.
+        x:
+          type: string
+          description: Base64url-encoded 32-byte Ed25519 public key.
+        kid:
+          type: string
+          description: Key ID — base64url(SHA-256(publicKey)[0..8]) or ISO 8601 timestamp for new keys.
+        use:
+          type: string
+          enum: [sig]
+          description: Signature key usage.
+        alg:
+          type: string
+          enum: [EdDSA]
+          description: Algorithm — EdDSA signatures.

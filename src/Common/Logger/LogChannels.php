@@ -51,6 +51,8 @@ final class LogChannels
      */
     public const PLUGINS = 'plugins';
 
+    public const HUB = 'hub';
+
     /**
      * Prevent instantiation — this class is a static constant holder only.
      */

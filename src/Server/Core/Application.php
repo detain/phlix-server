@@ -7,6 +7,9 @@ namespace Phlex\Server\Core;
 use Phlex\Common\Container\ContainerFactory;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
+use Phlex\Hub\HubClient;
+use Phlex\Hub\HubApplication;
+use Phlex\Server\Http\Controllers\HubJwksController;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
@@ -166,6 +169,12 @@ class Application
             ]);
         });
 
+        // JWKS endpoint for hub-to-server JWT verification
+        $this->router->get('/.well-known/jwks.json', function (Request $request, array $params): Response {
+            $controller = $this->getHubJwksController();
+            return $controller->handle($request, $params);
+        });
+
         // API v1 routes
         $this->loadApiRoutes();
     }
@@ -231,6 +240,9 @@ class Application
      */
     public function run(): void
     {
+        // Start hub heartbeat loop if already enrolled
+        $this->startHubHeartbeatIfEnrolled();
+
         $request = Request::fromGlobals();
 
         // Apply global middleware
@@ -301,5 +313,49 @@ class Application
     public function getRouter(): Router
     {
         return $this->router;
+    }
+
+    /**
+     * Starts the hub heartbeat background worker if the server is enrolled.
+     *
+     * @return void
+     */
+    private function startHubHeartbeatIfEnrolled(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $hubApp = $this->container->get(HubApplication::class);
+            if ($hubApp instanceof HubApplication) {
+                $hubApp->start();
+            }
+        } catch (\Throwable) {
+            // Hub is not configured or not enrolled — silent ignore
+        }
+    }
+
+    /**
+     * Returns a HubJwksController instance from the container.
+     *
+     * @return HubJwksController The controller instance.
+     */
+    private function getHubJwksController(): HubJwksController
+    {
+        if ($this->container === null) {
+            return new HubJwksController(
+                new HubClient(
+                    new \Phlex\Hub\Ed25519KeyManager('config/hub-server-key.pem'),
+                    new \Phlex\Hub\HttpClient('https://hub.example.com'),
+                    new \Phlex\Common\Logger\StructuredLogger('hub', []),
+                    'config',
+                ),
+            );
+        }
+
+        /** @var HubJwksController */
+        $controller = $this->container->get(HubJwksController::class);
+        return $controller;
     }
 }

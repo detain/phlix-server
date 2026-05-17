@@ -7,6 +7,43 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step C.2)
+
+- `Phlex\Hub\HubClient` — server-side orchestrator for server↔hub pairing,
+  heartbeat loop, re-enrollment, and JWKS exposure. Implements the protocol
+  defined in `docs/dev/pairing-protocol.md`.
+- `Phlex\Hub\Ed25519KeyManager` — generates, stores, loads, and rotates
+  Ed25519 keypairs (libsodium `sodium_crypto_sign_*`). Key stored at
+  `config/hub-server-key.pem` (mode 0600). Key ID is SHA-256 first 8 bytes
+  of the public key (base64url).
+- `Phlex\Hub\HttpClient` — cURL-based HTTP client for hub API communication.
+  Always sends `Accept-Phlex-Protocol: v1` header.
+- `Phlex\Hub\HubApplication` — thin Workerman Worker wrapper for the
+  background heartbeat loop (`text://` protocol, timer-driven).
+- `Phlex\Server\Http\Controllers\HubJwksController` — serves
+  `GET /.well-known/jwks.json` with the server's Ed25519 JWK(s).
+  Cache-Control: public, max-age=3600.
+- `scripts/pair-with-hub.php` — CLI pairing script. Initiates claim request,
+  displays claim code, polls until claimed, stores enrollment, starts
+  heartbeat loop.
+- `config/hub.php` — hub subsystem configuration (`PHLEX_HUB_URL`,
+  `PHLEX_HUB_HEARTBEAT_INTERVAL`, key/enrollment paths).
+- `Phlex\Common\Container\Providers\HubServicesProvider` — registers
+  Ed25519KeyManager, HubClient, HubJwksController, HubApplication in
+  the PHP-DI container.
+- `docs/reference/api/hub-jwks.yaml` — OpenAPI 3.0 spec for
+  `/.well-known/jwks.json`.
+- `docs/reference/cli.md` — documents `php scripts/pair-with-hub.php`.
+- `docs/reference/env-vars.md` — documents `PHLEX_HUB_URL`,
+  `PHLEX_HUB_ENROLLMENT_TOKEN`, `PHLEX_HUB_HEARTBEAT_INTERVAL`.
+
+### Changed (Step C.2)
+
+- `src/Server/Core/Application` now starts the hub heartbeat background
+  worker automatically when `config/hub-enrollment.json` exists.
+- `src/Common\Container\ContainerFactory` now wires `HubServicesProvider`
+  into the default provider list.
+
 ## [0.11.0] — 2026-05-17
 
 ### Changed

@@ -8,6 +8,7 @@ use DI\ContainerBuilder;
 use Phlex\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Common\Container\Providers\CoreServicesProvider;
 use Phlex\Common\Container\Providers\EventServicesProvider;
+use Phlex\Common\Container\Providers\HubServicesProvider;
 use Phlex\Common\Container\Providers\MediaServicesProvider;
 use Phlex\Common\Container\Providers\PluginsProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
@@ -108,6 +109,7 @@ final class ContainerFactory
             new CoreServicesProvider(),
             new EventServicesProvider(),
             new AuthServicesProvider(),
+            new HubServicesProvider(),
             new MediaServicesProvider(),
             new SessionServicesProvider(),
             new WebPortalServicesProvider(),

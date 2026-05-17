@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Phlex\Tests\Integration\Plugins;
 
 use DateTimeImmutable;
+use Phlex\Auth\AuthProviderRegistry;
 use Phlex\Auth\UserRepository;
 use Phlex\Common\Logger\AuditLogger;
 use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
 use Phlex\Plugins\Manifest;
 use Phlex\Plugins\PluginLoader;
+use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Request;
@@ -68,13 +70,16 @@ final class AdminRoutesTest extends TestCase
                         $this->users,
                         $this->audit,
                     ),
+                    AuthProviderController::class => new AuthProviderController(
+                        new AuthProviderRegistry(),
+                    ),
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
 
             public function has(string $id): bool
             {
-                return in_array($id, [PluginAdminController::class, AdminMiddleware::class], true);
+                return in_array($id, [PluginAdminController::class, AdminMiddleware::class, AuthProviderController::class], true);
             }
         };
 

@@ -166,10 +166,15 @@ class PluginLoader
         $defaults = self::defaultSettings($manifest);
         $this->repository->insert($manifest, false, $defaults);
 
-        $this->auditLogger->logDataExport(
-            'system',
-            'plugin.install',
-            1,
+        $this->auditLogger->logPluginAction(
+            null,
+            'install',
+            $manifest->name,
+            [
+                'version'   => $manifest->version,
+                'source'    => $source,
+                'directory' => $directory,
+            ],
         );
         $this->logger()->info('plugin installed', [
             'plugin' => $manifest->name,
@@ -246,6 +251,11 @@ class PluginLoader
             ), 0, $e);
         }
 
+        // Fail fast on unknown manifest event aliases — the actual
+        // subscription happens off subscribedEvents() below, but if the
+        // manifest names an alias that EventNameMap can't translate the
+        // plugin is misconfigured and we'd rather surface that at enable
+        // time than at first dispatch.
         $subscriptions = [];
         foreach ($installed->manifest->events as $alias) {
             $fqcn = EventNameMap::fromAlias($alias);
@@ -277,7 +287,12 @@ class PluginLoader
 
         $this->repository->setEnabled($name, true);
 
-        $this->auditLogger->logDataExport('system', 'plugin.enable', 1);
+        $this->auditLogger->logPluginAction(
+            null,
+            'enable',
+            $name,
+            ['subscriptions' => count($subscriptions)],
+        );
         $this->logger()->info('plugin enabled', [
             'plugin' => $name,
             'subscriptions' => count($subscriptions),
@@ -317,7 +332,12 @@ class PluginLoader
 
         $this->repository->setEnabled($name, false);
 
-        $this->auditLogger->logDataExport('system', 'plugin.disable', 1);
+        $this->auditLogger->logPluginAction(
+            null,
+            'disable',
+            $name,
+            ['directory' => $installed->directory],
+        );
         $this->logger()->info('plugin disabled', [
             'plugin' => $name,
             'directory' => $installed->directory,
@@ -342,7 +362,12 @@ class PluginLoader
         RecursiveDelete::remove($installed->directory);
         $this->repository->delete($name);
 
-        $this->auditLogger->logDataExport('system', 'plugin.uninstall', 1);
+        $this->auditLogger->logPluginAction(
+            null,
+            'uninstall',
+            $name,
+            ['directory' => $installed->directory],
+        );
         $this->logger()->info('plugin uninstalled', [
             'plugin' => $name,
             'directory' => $installed->directory,

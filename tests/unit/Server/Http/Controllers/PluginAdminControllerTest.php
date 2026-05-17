@@ -78,9 +78,18 @@ final class PluginAdminControllerTest extends TestCase
             ->with('https://example.com/plugin.json')
             ->andReturn($manifest);
 
-        $this->audit->shouldReceive('logDataExport')
+        $this->audit->shouldReceive('logPluginAction')
             ->once()
-            ->with('admin-1', 'plugin.install.ui', 1);
+            ->with(
+                'admin-1',
+                'install',
+                'phlex-plugin-demo',
+                Mockery::on(static function ($ctx): bool {
+                    return is_array($ctx)
+                        && ($ctx['source'] ?? null) === 'ui'
+                        && ($ctx['url'] ?? null) === 'https://example.com/plugin.json';
+                })
+            );
 
         $response = $this->controller->install(
             $this->makeRequest('admin-1', ['url' => 'https://example.com/plugin.json']),
@@ -96,7 +105,7 @@ final class PluginAdminControllerTest extends TestCase
     public function test_install_returns_400_on_missing_url(): void
     {
         $this->loader->shouldNotReceive('install');
-        $this->audit->shouldNotReceive('logDataExport');
+        $this->audit->shouldNotReceive('logPluginAction');
 
         $response = $this->controller->install($this->makeRequest('admin-1', []), []);
 
@@ -144,9 +153,14 @@ final class PluginAdminControllerTest extends TestCase
     public function test_enable_returns_200_and_calls_loader(): void
     {
         $this->loader->shouldReceive('enable')->once()->with('phlex-plugin-demo');
-        $this->audit->shouldReceive('logDataExport')
+        $this->audit->shouldReceive('logPluginAction')
             ->once()
-            ->with('admin-1', 'plugin.enable.ui', 1);
+            ->with(
+                'admin-1',
+                'enable',
+                'phlex-plugin-demo',
+                Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
+            );
 
         $response = $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
 
@@ -181,9 +195,14 @@ final class PluginAdminControllerTest extends TestCase
     public function test_disable_returns_200(): void
     {
         $this->loader->shouldReceive('disable')->once()->with('phlex-plugin-demo');
-        $this->audit->shouldReceive('logDataExport')
+        $this->audit->shouldReceive('logPluginAction')
             ->once()
-            ->with('admin-1', 'plugin.disable.ui', 1);
+            ->with(
+                'admin-1',
+                'disable',
+                'phlex-plugin-demo',
+                Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
+            );
 
         $response = $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
 
@@ -206,9 +225,14 @@ final class PluginAdminControllerTest extends TestCase
     public function test_uninstall_returns_204(): void
     {
         $this->loader->shouldReceive('uninstall')->once()->with('phlex-plugin-demo');
-        $this->audit->shouldReceive('logDataExport')
+        $this->audit->shouldReceive('logPluginAction')
             ->once()
-            ->with('admin-1', 'plugin.uninstall.ui', 1);
+            ->with(
+                'admin-1',
+                'uninstall',
+                'phlex-plugin-demo',
+                Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
+            );
 
         $response = $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
 
@@ -239,7 +263,7 @@ final class PluginAdminControllerTest extends TestCase
         $this->loader->shouldReceive('disable')->andReturnNull();
         $this->loader->shouldReceive('uninstall')->andReturnNull();
 
-        $this->audit->shouldReceive('logDataExport')->times(4);
+        $this->audit->shouldReceive('logPluginAction')->times(4);
 
         $this->controller->install(
             $this->makeRequest('admin-1', ['url' => 'https://example.com/plugin.json']),

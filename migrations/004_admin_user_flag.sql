@@ -19,11 +19,22 @@ ALTER TABLE users
 -- The inner SELECT layer wraps the subquery so MySQL doesn't choke on
 -- "you can't specify target table for update in FROM clause" when the
 -- subquery references the same table being updated.
+--
+-- The migrations runner tracks applied migrations and will not re-run
+-- this file in normal operation, but the secondary `EXISTS` guard makes
+-- the statement defensively idempotent: once any user has `is_admin =
+-- 1` the UPDATE becomes a no-op even when replayed against an existing
+-- database during development or recovery.
 UPDATE users SET is_admin = 1
  WHERE id = (
      SELECT id FROM (
          SELECT id FROM users ORDER BY created_at ASC, id ASC LIMIT 1
      ) AS t
+ )
+ AND NOT EXISTS (
+     SELECT 1 FROM (
+         SELECT id FROM users WHERE is_admin = 1 LIMIT 1
+     ) AS already_admin
  );
 
 CREATE INDEX idx_users_is_admin ON users (is_admin);

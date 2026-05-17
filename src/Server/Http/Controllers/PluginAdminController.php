@@ -11,6 +11,7 @@ use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
 use Phlex\Plugins\Manifest;
 use Phlex\Plugins\PluginLoader;
+use Phlex\Plugins\SettingsMasker;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 
@@ -39,11 +40,11 @@ use Phlex\Server\Http\Response;
  *  | {@see PluginEnableException}    | 422  | `plugin.enable.failed`      |
  *
  * Every successful state-changing call emits one
- * {@see AuditLogger::logPermissionDenied()}-style audit entry via
- * {@see AuditLogger::logDataExport()} so the operator can see who
- * installed / enabled / disabled / uninstalled what. The actor user id
- * comes from `$request->userId`, which {@see \Phlex\Server\Http\Middleware\AdminMiddleware}
- * guarantees is set and admin.
+ * {@see AuditLogger::logPluginAction()} audit entry so the operator can
+ * see who installed / enabled / disabled / uninstalled what. The actor
+ * user id comes from `$request->userId`, which
+ * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} guarantees is set
+ * and admin.
  *
  * CSRF: the API is Bearer-token authenticated, so it is not subject to
  * cross-site cookie attacks. The middleware refuses anonymous traffic
@@ -143,7 +144,12 @@ final class PluginAdminController
             return (new Response())->status(422)->json($body);
         }
 
-        $this->audit->logDataExport($actor, 'plugin.install.ui', 1);
+        $this->audit->logPluginAction(
+            $actor,
+            'install',
+            $manifest->name,
+            ['source' => 'ui', 'url' => $url],
+        );
 
         return (new Response())->status(201)->json([
             'plugin' => $this->serializeManifest($manifest),
@@ -178,7 +184,12 @@ final class PluginAdminController
             return $this->jsonError(422, 'plugin.enable.failed', $e->getMessage());
         }
 
-        $this->audit->logDataExport($this->actor($request), 'plugin.enable.ui', 1);
+        $this->audit->logPluginAction(
+            $this->actor($request),
+            'enable',
+            $name,
+            ['source' => 'ui'],
+        );
 
         return (new Response())->json([
             'plugin' => ['name' => $name, 'enabled' => true],
@@ -211,7 +222,12 @@ final class PluginAdminController
             return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
         }
 
-        $this->audit->logDataExport($this->actor($request), 'plugin.disable.ui', 1);
+        $this->audit->logPluginAction(
+            $this->actor($request),
+            'disable',
+            $name,
+            ['source' => 'ui'],
+        );
 
         return (new Response())->json([
             'plugin' => ['name' => $name, 'enabled' => false],
@@ -244,7 +260,12 @@ final class PluginAdminController
             return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
         }
 
-        $this->audit->logDataExport($this->actor($request), 'plugin.uninstall.ui', 1);
+        $this->audit->logPluginAction(
+            $this->actor($request),
+            'uninstall',
+            $name,
+            ['source' => 'ui'],
+        );
 
         return (new Response())->status(204)->json([]);
     }
@@ -265,7 +286,7 @@ final class PluginAdminController
             'enabled'      => $plugin->enabled,
             'installed_at' => $plugin->installedAt->format(\DateTimeInterface::ATOM),
             'signed'       => $plugin->manifest->signature !== null,
-            'settings'     => self::maskSecretSettings($plugin),
+            'settings'     => SettingsMasker::mask($plugin),
         ];
     }
 
@@ -287,28 +308,6 @@ final class PluginAdminController
             'signed'                   => $manifest->signature !== null,
             'events'                   => $manifest->events,
         ];
-    }
-
-    /**
-     * Mask any setting flagged `secret: true` in the manifest. Returns
-     * a copy of the persisted settings with the secret values replaced
-     * by the string "***". Keeps the structure introspectable for the
-     * admin UI without leaking credentials in the JSON response.
-     *
-     * @return array<string, mixed>
-     */
-    private static function maskSecretSettings(InstalledPlugin $plugin): array
-    {
-        $masked = $plugin->settings;
-        foreach ($plugin->manifest->settings as $key => $schema) {
-            if (
-                array_key_exists($key, $masked)
-                && isset($schema['secret']) && $schema['secret'] === true
-            ) {
-                $masked[$key] = '***';
-            }
-        }
-        return $masked;
     }
 
     /**

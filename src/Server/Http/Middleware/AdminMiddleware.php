@@ -70,21 +70,53 @@ final class AdminMiddleware
      */
     public function __invoke(Request $request): ?Response
     {
-        $userId = $request->userId;
-        if ($userId === null || $userId === '') {
+        $status = $this->checkAccess($request);
+        if ($status === null) {
+            return null;
+        }
+        if ($status === 401) {
             return (new Response())->status(401)->json([
                 'error' => 'Unauthorized',
                 'code'  => 'auth.required',
             ]);
         }
+        return (new Response())->status(403)->json([
+            'error' => 'Forbidden',
+            'code'  => 'auth.not_admin',
+        ]);
+    }
+
+    /**
+     * Pure auth-decision helper that returns the would-be HTTP status
+     * (401/403) when the request fails the admin gate, or `null` when
+     * the request should be allowed through.
+     *
+     * Shared with the SSR page-route branch in `public/index.php` so
+     * the role-check logic lives in exactly one place. Side effects
+     * (audit logging for the 403 case) happen here too so the page
+     * route automatically gets the same security telemetry as the JSON
+     * API.
+     *
+     * @param Request $request Incoming request. {@see Request::$userId}
+     *                         is expected to be populated.
+     *
+     * @return int|null `null` to allow, otherwise an HTTP status code
+     *                   (401 or 403) the caller should map to its
+     *                   response format.
+     *
+     * @since 0.10.1
+     */
+    public function checkAccess(Request $request): ?int
+    {
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return 401;
+        }
 
         $admin = $this->users->findAdminById($userId);
         if ($admin === null) {
             $this->audit->logPermissionDenied($userId, 'admin', 'access');
-            return (new Response())->status(403)->json([
-                'error' => 'Forbidden',
-                'code'  => 'auth.not_admin',
-            ]);
+            return 403;
         }
 
         return null;

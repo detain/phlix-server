@@ -95,6 +95,44 @@ final class AdminMiddlewareTest extends TestCase
         $this->assertSame(401, $response->statusCode);
     }
 
+    public function test_checkAccess_returns_null_for_admin_user(): void
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->with('admin-1')
+            ->willReturn(['id' => 'admin-1', 'is_admin' => 1]);
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects($this->never())->method('logPermissionDenied');
+
+        $middleware = new AdminMiddleware($users, $audit);
+        $this->assertNull($middleware->checkAccess($this->makeRequest('admin-1')));
+    }
+
+    public function test_checkAccess_returns_401_when_anonymous(): void
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->expects($this->never())->method('findAdminById');
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects($this->never())->method('logPermissionDenied');
+
+        $middleware = new AdminMiddleware($users, $audit);
+        $this->assertSame(401, $middleware->checkAccess($this->makeRequest(null)));
+        $this->assertSame(401, $middleware->checkAccess($this->makeRequest('')));
+    }
+
+    public function test_checkAccess_returns_403_and_logs_when_not_admin(): void
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->with('user-x')->willReturn(null);
+
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects($this->once())
+            ->method('logPermissionDenied')
+            ->with('user-x', 'admin', 'access');
+
+        $middleware = new AdminMiddleware($users, $audit);
+        $this->assertSame(403, $middleware->checkAccess($this->makeRequest('user-x')));
+    }
+
     private function makeRequest(?string $userId): Request
     {
         $request           = new Request();

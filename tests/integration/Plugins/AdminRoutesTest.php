@@ -146,7 +146,7 @@ final class AdminRoutesTest extends TestCase
         ));
         $this->assertSame(201, $response->statusCode);
         $this->assertSame(1, $this->loader->installCalls);
-        $this->assertSame(1, $this->audit->dataExports['plugin.install.ui'] ?? 0);
+        $this->assertSame(1, $this->audit->pluginActions['install.ui'] ?? 0);
 
         // 2. Enable
         $response = $this->router->dispatch($this->request(
@@ -156,7 +156,7 @@ final class AdminRoutesTest extends TestCase
         ));
         $this->assertSame(200, $response->statusCode);
         $this->assertSame(['phlex-plugin-demo'], $this->loader->enableCalls);
-        $this->assertSame(1, $this->audit->dataExports['plugin.enable.ui'] ?? 0);
+        $this->assertSame(1, $this->audit->pluginActions['enable.ui'] ?? 0);
 
         // 3. Disable
         $response = $this->router->dispatch($this->request(
@@ -166,7 +166,7 @@ final class AdminRoutesTest extends TestCase
         ));
         $this->assertSame(200, $response->statusCode);
         $this->assertSame(['phlex-plugin-demo'], $this->loader->disableCalls);
-        $this->assertSame(1, $this->audit->dataExports['plugin.disable.ui'] ?? 0);
+        $this->assertSame(1, $this->audit->pluginActions['disable.ui'] ?? 0);
 
         // 4. Uninstall
         $response = $this->router->dispatch($this->request(
@@ -176,7 +176,7 @@ final class AdminRoutesTest extends TestCase
         ));
         $this->assertSame(204, $response->statusCode);
         $this->assertSame(['phlex-plugin-demo'], $this->loader->uninstallCalls);
-        $this->assertSame(1, $this->audit->dataExports['plugin.uninstall.ui'] ?? 0);
+        $this->assertSame(1, $this->audit->pluginActions['uninstall.ui'] ?? 0);
 
         // Cleanup fixture dir.
         @unlink($fixtureDir . '/plugin.json');
@@ -375,7 +375,7 @@ final class FakeUserRepository extends UserRepository
 final class FakeAuditLogger extends AuditLogger
 {
     /** @var array<string, int> */
-    public array $dataExports = [];
+    public array $pluginActions = [];
     public int $permissionDenied = 0;
 
     public function __construct()
@@ -383,9 +383,14 @@ final class FakeAuditLogger extends AuditLogger
         // Skip parent constructor; no Monolog wiring needed.
     }
 
-    public function logDataExport(string $userId, string $dataType, int $recordCount): void
-    {
-        $this->dataExports[$dataType] = ($this->dataExports[$dataType] ?? 0) + 1;
+    public function logPluginAction(
+        ?string $actorUserId,
+        string $action,
+        string $pluginName,
+        array $context = [],
+    ): void {
+        $key = $action . '.' . ($context['source'] ?? 'system');
+        $this->pluginActions[$key] = ($this->pluginActions[$key] ?? 0) + 1;
     }
 
     public function logPermissionDenied(string $userId, string $resource, string $action): void

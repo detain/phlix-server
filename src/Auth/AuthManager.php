@@ -12,6 +12,8 @@ use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Throwable;
+use Workerman\MySQL\Connection;
 
 /**
  * Authentication manager for user registration, login, and token management.
@@ -46,6 +48,16 @@ class AuthManager
     private ?EventDispatcherInterface $eventDispatcher;
 
     /**
+     * Optional handle to the underlying MySQL connection so register()
+     * can wrap the first-user admin promotion (create() + setAdmin()) in
+     * a transaction. When null (unit tests / legacy callers), register()
+     * falls back to the non-transactional execution and still works.
+     *
+     * @var Connection|null
+     */
+    private ?Connection $db;
+
+    /**
      * Create a new AuthManager instance.
      *
      * @param UserRepository $userRepository User data access repository
@@ -73,13 +85,15 @@ class AuthManager
         JwtHandler $jwtHandler,
         AuditLogger $auditLogger,
         ?StructuredLogger $logger = null,
-        ?EventDispatcherInterface $eventDispatcher = null
+        ?EventDispatcherInterface $eventDispatcher = null,
+        ?Connection $db = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
         $this->auditLogger = $auditLogger;
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->eventDispatcher = $eventDispatcher;
+        $this->db = $db;
     }
 
     /**
@@ -170,23 +184,57 @@ class AuthManager
         // a "prior" user. See Step A.5 for the admin-bootstrap policy.
         $isFirstUser = $this->userRepository->countUsers() === 0;
 
-        // Create user
-        $userId = $this->userRepository->create([
-            'username' => $username,
-            'email' => $email,
-            'password' => $password,
-            'display_name' => $username,
-        ]);
+        // Wrap create() + setAdmin() in a transaction for the first-user
+        // path so a failure between the two does not leave the database
+        // with an unauthorized half-promoted account. For the common
+        // case (Nth user, no promotion), we still open a transaction so
+        // a partial create() rolls back cleanly. When no Connection has
+        // been injected (legacy / unit-test callers), fall back to the
+        // non-transactional flow.
+        $db = $this->db;
+        if ($db !== null) {
+            $db->beginTrans();
+        }
 
-        if ($isFirstUser) {
-            // Minimum-viable admin bootstrap: the operator who
-            // registered first owns the box. Phase D will replace this
-            // with a real RBAC + invite flow.
-            $this->userRepository->setAdmin($userId, true);
-            $this->logger->info('Promoted first user to admin', [
-                'user_id' => $userId,
+        try {
+            // Create user
+            $userId = $this->userRepository->create([
                 'username' => $username,
+                'email' => $email,
+                'password' => $password,
+                'display_name' => $username,
             ]);
+
+            if ($isFirstUser) {
+                // Minimum-viable admin bootstrap: the operator who
+                // registered first owns the box. Phase D will replace
+                // this with a real RBAC + invite flow.
+                $this->userRepository->setAdmin($userId, true);
+                $this->logger->info('Promoted first user to admin', [
+                    'user_id' => $userId,
+                    'username' => $username,
+                ]);
+            }
+
+            if ($db !== null) {
+                $db->commitTrans();
+            }
+        } catch (Throwable $e) {
+            if ($db !== null) {
+                try {
+                    $db->rollBackTrans();
+                } catch (Throwable $rollbackError) {
+                    $this->logger->error('Failed to roll back failed registration', [
+                        'username' => $username,
+                        'rollback_error' => $rollbackError->getMessage(),
+                    ]);
+                }
+            }
+            $this->logger->error('User registration failed', [
+                'username' => $username,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
         }
 
         $this->logger->info('User registered', ['user_id' => $userId, 'username' => $username]);

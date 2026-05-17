@@ -50,8 +50,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `Phlex\Shared\Plugin` in B.1). New table `plugins` (migration
   `migrations/003_plugins.sql`). New `plugins` log channel and config
   key. New env vars: `PHLEX_PLUGINS_ALLOW_HTTP`,
-  `PHLEX_PLUGINS_ALLOW_UNSIGNED`, `PHLEX_PLUGINS_REQUIRE_SIGNATURE`,
-  `PHLEX_PLUGINS_COMPOSER_TIMEOUT`. Adds `symfony/process:^7.0`.
+  `PHLEX_PLUGINS_REQUIRE_SIGNATURE`, `PHLEX_PLUGINS_COMPOSER_TIMEOUT`.
+  Adds `symfony/process:^7.0`.
   See `docs/plugins/developer-guide.md` for the lifecycle diagram and
   a sample `LifecycleInterface` implementation.
 - Plugin admin UI at `/admin/plugins` and JSON API under

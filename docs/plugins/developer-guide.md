@@ -748,9 +748,9 @@ three results per install:
 | No signature                    | `1`                               | `invalid` | Install fails.                                                  |
 
 The only env var honoured today is **`PHLEX_PLUGINS_REQUIRE_SIGNATURE`**.
-(The `PHLEX_PLUGINS_ALLOW_UNSIGNED` name appears in earlier release
-notes but the loader reads only `PHLEX_PLUGINS_REQUIRE_SIGNATURE`;
-treat that as the source of truth.)
+When unset or falsy (the default) unsigned plugins install with a
+warning on the `plugins` log channel; set it to `1`, `true`, `yes`, or
+`on` to refuse unsigned installs.
 
 ### Registering a trusted key
 

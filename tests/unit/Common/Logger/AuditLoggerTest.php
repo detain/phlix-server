@@ -61,4 +61,45 @@ class AuditLoggerTest extends TestCase
         $this->auditLogger->logPermissionDenied('user-123', '/admin/settings', 'delete');
         $this->assertFileExists($this->tempDir . '/audit.log');
     }
+
+    public function testLogPluginActionWritesStructuredEntry(): void
+    {
+        $this->auditLogger->logPluginAction(
+            'user-42',
+            'install',
+            'detain/phlex-plugin-example',
+            ['source' => 'https://example.test/plugin.zip']
+        );
+
+        $this->assertFileExists($this->tempDir . '/audit.log');
+        $logContents = (string) file_get_contents($this->tempDir . '/audit.log');
+        $this->assertStringContainsString('"event":"plugin_action"', $logContents);
+        $this->assertStringContainsString('"action":"install"', $logContents);
+        $this->assertStringContainsString('"plugin":"detain/phlex-plugin-example"', $logContents);
+        $this->assertStringContainsString('"user_id":"user-42"', $logContents);
+        $this->assertStringContainsString('"source":"https://example.test/plugin.zip"', $logContents);
+        $this->assertStringContainsString('Plugin lifecycle action', $logContents);
+    }
+
+    public function testLogPluginActionNormalisesNullActorToSystem(): void
+    {
+        $this->auditLogger->logPluginAction(null, 'enable', 'plugin-x');
+
+        $this->assertFileExists($this->tempDir . '/audit.log');
+        $logContents = (string) file_get_contents($this->tempDir . '/audit.log');
+        $this->assertStringContainsString('"user_id":"system"', $logContents);
+        $this->assertStringContainsString('"action":"enable"', $logContents);
+        $this->assertStringContainsString('"plugin":"plugin-x"', $logContents);
+    }
+
+    public function testLogPluginActionNormalisesEmptyActorToSystem(): void
+    {
+        $this->auditLogger->logPluginAction('', 'disable', 'plugin-y');
+
+        $this->assertFileExists($this->tempDir . '/audit.log');
+        $logContents = (string) file_get_contents($this->tempDir . '/audit.log');
+        $this->assertStringContainsString('"user_id":"system"', $logContents);
+        $this->assertStringContainsString('"action":"disable"', $logContents);
+        $this->assertStringContainsString('"plugin":"plugin-y"', $logContents);
+    }
 }

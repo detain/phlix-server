@@ -14,6 +14,7 @@ use Phlex\Common\Container\Providers\EventServicesProvider;
 use Phlex\Common\Container\Providers\MediaServicesProvider;
 use Phlex\Common\Container\Providers\PluginsProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
+use Phlex\Common\Container\Providers\WebPortalServicesProvider;
 use Phlex\Common\Container\ServiceProviderInterface;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
@@ -40,6 +41,7 @@ use function DI\factory;
  * @covers \Phlex\Common\Container\Providers\AuthServicesProvider
  * @covers \Phlex\Common\Container\Providers\MediaServicesProvider
  * @covers \Phlex\Common\Container\Providers\SessionServicesProvider
+ * @covers \Phlex\Common\Container\Providers\WebPortalServicesProvider
  */
 final class ContainerFactoryTest extends TestCase
 {
@@ -239,13 +241,14 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(6, $providers);
+        $this->assertCount(7, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
         $this->assertInstanceOf(MediaServicesProvider::class, $providers[3]);
         $this->assertInstanceOf(SessionServicesProvider::class, $providers[4]);
-        $this->assertInstanceOf(PluginsProvider::class, $providers[5]);
+        $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[5]);
+        $this->assertInstanceOf(PluginsProvider::class, $providers[6]);
     }
 
     public function test_resolves_hls_streamer_with_config_overrides(): void
@@ -267,6 +270,73 @@ final class ContainerFactoryTest extends TestCase
         $this->assertSame(
             'https://example.test/stream',
             $this->readPrivate($streamer, 'baseUrl')
+        );
+    }
+
+    public function test_resolves_page_renderer_with_template_dir_config(): void
+    {
+        $customDir = $this->tempDir . '/my-templates';
+        @mkdir($customDir, 0775, true);
+
+        $providers = ContainerFactory::defaultProviders();
+        $mockConnection = $this->createMock(Connection::class);
+        $providers[] = new class ($mockConnection) implements ServiceProviderInterface {
+            public function __construct(private Connection $connection)
+            {
+            }
+
+            public function register(ContainerBuilder $builder, array $appConfig): void
+            {
+                $connection = $this->connection;
+                $builder->addDefinitions([
+                    Connection::class => factory(static fn (): Connection => $connection),
+                ]);
+            }
+        };
+
+        $container = ContainerFactory::create([
+            'logger_config_path' => $this->loggerConfigPath,
+            'db_config_path' => null,
+            'web_portal' => ['template_dir' => $customDir],
+        ], $providers);
+
+        /** @var \Phlex\Server\WebPortal\PageRenderer $renderer */
+        $renderer = $container->get(\Phlex\Server\WebPortal\PageRenderer::class);
+        $this->assertInstanceOf(\Phlex\Server\WebPortal\PageRenderer::class, $renderer);
+        $this->assertSame($customDir, $this->readPrivate($renderer, 'templateDir'));
+
+        // Singleton semantics: resolving twice yields the same instance.
+        $this->assertSame($renderer, $container->get(\Phlex\Server\WebPortal\PageRenderer::class));
+    }
+
+    public function test_resolves_page_renderer_with_default_template_dir_when_config_missing(): void
+    {
+        $mockConnection = $this->createMock(Connection::class);
+
+        $providers = ContainerFactory::defaultProviders();
+        $providers[] = new class ($mockConnection) implements ServiceProviderInterface {
+            public function __construct(private Connection $connection)
+            {
+            }
+
+            public function register(ContainerBuilder $builder, array $appConfig): void
+            {
+                $connection = $this->connection;
+                $builder->addDefinitions([
+                    Connection::class => factory(static fn (): Connection => $connection),
+                ]);
+            }
+        };
+
+        $container = ContainerFactory::create($this->baseConfig(), $providers);
+
+        /** @var \Phlex\Server\WebPortal\PageRenderer $renderer */
+        $renderer = $container->get(\Phlex\Server\WebPortal\PageRenderer::class);
+        $resolved = $this->readPrivate($renderer, 'templateDir');
+        $this->assertIsString($resolved);
+        $this->assertStringEndsWith(
+            DIRECTORY_SEPARATOR . WebPortalServicesProvider::DEFAULT_TEMPLATE_DIR,
+            (string) $resolved
         );
     }
 

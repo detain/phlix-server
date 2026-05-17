@@ -24,16 +24,14 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use Phlex\Auth\AuthManager;
 use Phlex\Common\Container\ContainerFactory;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\LibraryManager;
 use Phlex\Plugins\PluginLoader;
+use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
 use Phlex\Server\Http\Routes\AdminRoutes;
 use Phlex\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlex\Server\WebPortal\PageRenderer;
-use Phlex\Session\PlaybackController;
 
 /**
  * Initialize configuration paths and build the PSR-11 container.
@@ -46,21 +44,19 @@ use Phlex\Session\PlaybackController;
 $config = include __DIR__ . '/../config/server.php';
 $config['db_config_path']     = __DIR__ . '/../config/database.php';
 $config['logger_config_path'] = __DIR__ . '/../config/logger.php';
+$config['web_portal']         = array_merge(
+    is_array($config['web_portal'] ?? null) ? $config['web_portal'] : [],
+    ['template_dir' => __DIR__ . '/templates']
+);
 
 $container = ContainerFactory::create($config);
 
 /**
  * Resolve the services this entry point hands to controllers.
  *
- * @var AuthManager        $authManager
- * @var LibraryManager     $libraryManager
- * @var ItemRepository     $itemRepository
- * @var PlaybackController $playbackController
+ * @var AuthManager $authManager
  */
-$authManager        = $container->get(AuthManager::class);
-$libraryManager     = $container->get(LibraryManager::class);
-$itemRepository     = $container->get(ItemRepository::class);
-$playbackController = $container->get(PlaybackController::class);
+$authManager = $container->get(AuthManager::class);
 
 /**
  * Create request from global PHP variables
@@ -139,51 +135,46 @@ if (str_starts_with($path, '/api/v1/admin/')) {
      *
      * @see PageRenderer For page rendering
      */
-    $renderer = new PageRenderer(
-        __DIR__ . '/templates',
-        $libraryManager,
-        $itemRepository,
-        $playbackController
-    );
+    /** @var PageRenderer $renderer */
+    $renderer = $container->get(PageRenderer::class);
 
     if ($path === '/' || $path === '') {
         $response = $renderer->renderHome($request);
     } elseif ($path === '/login') {
         $response = $renderer->renderLogin($request);
     } elseif (str_starts_with($path, '/admin/plugins')) {
-        // Browser SSR routes for the plugin admin UI. Same admin gate
-        // as the JSON API: anonymous users get 401, non-admins 403.
-        // Use a Response so the upstream auth check is centralised.
-        $userId = $request->userId ?? null;
-        if ($userId === null || $userId === '') {
+        // Browser SSR routes for the plugin admin UI. Reuses the same
+        // AdminMiddleware role check as the JSON API so the gate logic
+        // (lookup + audit logging) lives in one place; only the response
+        // envelope differs (HTML vs JSON).
+        /** @var AdminMiddleware $adminMiddleware */
+        $adminMiddleware = $container->get(AdminMiddleware::class);
+        $gateStatus = $adminMiddleware->checkAccess($request);
+        if ($gateStatus === 401) {
             $response = (new Response())
                 ->status(401)
                 ->html('<h1>401 — admin authentication required</h1>');
+        } elseif ($gateStatus === 403) {
+            $response = (new Response())
+                ->status(403)
+                ->html('<h1>403 — administrator privileges required</h1>');
         } else {
-            /** @var \Phlex\Auth\UserRepository $users */
-            $users = $container->get(\Phlex\Auth\UserRepository::class);
-            if ($users->findAdminById($userId) === null) {
-                $response = (new Response())
-                    ->status(403)
-                    ->html('<h1>403 — administrator privileges required</h1>');
+            /** @var PluginLoader $loader */
+            $loader = $container->get(PluginLoader::class);
+            $pageController = new PluginAdminPageController(
+                $loader,
+                __DIR__ . '/templates'
+            );
+            if ($path === '/admin/plugins') {
+                $response = $pageController->index($request, []);
+            } elseif ($path === '/admin/plugins/install') {
+                $response = $pageController->install($request, []);
+            } elseif (preg_match('#^/admin/plugins/(?P<name>[^/]+)$#', $path, $matches) === 1) {
+                $response = $pageController->detail($request, ['name' => $matches['name']]);
             } else {
-                /** @var PluginLoader $loader */
-                $loader = $container->get(PluginLoader::class);
-                $pageController = new PluginAdminPageController(
-                    $loader,
-                    __DIR__ . '/templates'
-                );
-                if ($path === '/admin/plugins') {
-                    $response = $pageController->index($request, []);
-                } elseif ($path === '/admin/plugins/install') {
-                    $response = $pageController->install($request, []);
-                } elseif (preg_match('#^/admin/plugins/(?P<name>[^/]+)$#', $path, $matches) === 1) {
-                    $response = $pageController->detail($request, ['name' => $matches['name']]);
-                } else {
-                    http_response_code(404);
-                    echo '<h1>404 - Page not found</h1>';
-                    exit;
-                }
+                http_response_code(404);
+                echo '<h1>404 - Page not found</h1>';
+                exit;
             }
         }
     } else {

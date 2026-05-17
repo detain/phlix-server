@@ -72,7 +72,8 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
             AuthManager::class => autowire()
                 ->constructorParameter('logger', get('logger.auth'))
-                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class)),
         ]);
     }
 }

@@ -7,6 +7,7 @@ namespace Phlex\Server\WebPortal\Controllers;
 use Phlex\Plugins\Exception\PluginNotFoundException;
 use Phlex\Plugins\InstalledPlugin;
 use Phlex\Plugins\PluginLoader;
+use Phlex\Plugins\SettingsMasker;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Server\WebPortal\PageRenderer;
@@ -93,7 +94,7 @@ final class PluginAdminPageController
         $html = $this->render('admin/plugins/detail.tpl', [
             'current_page' => 'admin_plugins',
             'plugin'       => $this->viewModel($installed),
-            'settings'     => self::maskedSettingsView($installed),
+            'settings'     => SettingsMasker::view($installed),
         ]);
         return (new Response())->html($html);
     }
@@ -135,32 +136,6 @@ final class PluginAdminPageController
             'installed_at' => $plugin->installedAt->format('Y-m-d H:i'),
             'signed'       => $plugin->manifest->signature !== null,
         ];
-    }
-
-    /**
-     * Mask any setting flagged `secret: true` in the manifest. Returns
-     * a list of `[key, type, value, secret]` rows suitable for the
-     * Smarty `{foreach}`.
-     *
-     * @return list<array{key:string, type:string, value:mixed, secret:bool}>
-     */
-    private static function maskedSettingsView(InstalledPlugin $plugin): array
-    {
-        $rows = [];
-        foreach ($plugin->manifest->settings as $key => $schema) {
-            $isSecret = isset($schema['secret']) && $schema['secret'] === true;
-            $value = $plugin->settings[$key] ?? null;
-            if ($isSecret && $value !== null) {
-                $value = '***';
-            }
-            $rows[] = [
-                'key'    => $key,
-                'type'   => is_string($schema['type'] ?? null) ? (string) $schema['type'] : 'mixed',
-                'value'  => $value,
-                'secret' => $isSecret,
-            ];
-        }
-        return $rows;
     }
 
     /**

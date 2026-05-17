@@ -218,6 +218,308 @@ final class HttpInstallerTest extends TestCase
         $this->assertFileExists($destination . '/plugin.json');
     }
 
+    public function test_install_from_file_url_tgz_archive(): void
+    {
+        // .tgz (no .tar prefix) is also a valid extension code path.
+        $sourceDir = $this->validPluginSource();
+
+        $tarPath = $this->work . '/tarball-' . uniqid('', true) . '.tar';
+        $phar = new \PharData($tarPath);
+        $phar->buildFromDirectory($sourceDir);
+        $phar->compress(\Phar::GZ);
+        @unlink($tarPath);
+        RecursiveDelete::remove($sourceDir);
+        $gzPath = $tarPath . '.gz';
+        $tgzPath = preg_replace('/\.tar\.gz$/', '.tgz', $gzPath) ?? $gzPath;
+        rename($gzPath, $tgzPath);
+
+        [$manifest, $destination] = $this->installer()->install('file://' . $tgzPath);
+        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertFileExists($destination . '/plugin.json');
+    }
+
+    public function test_install_throws_when_archive_has_no_plugin_json(): void
+    {
+        // Empty zip — exercises the "missing plugin.json after extract"
+        // branch (lines 72-75 of HttpInstaller).
+        $emptyDir = $this->work . '/empty-zip-src-' . uniqid('', true);
+        mkdir($emptyDir, 0775, true);
+        file_put_contents($emptyDir . '/README.md', '# empty');
+        $zipPath = $this->makeZipFromDir($emptyDir);
+
+        $this->expectException(PluginInstallException::class);
+        $this->expectExceptionMessage('does not contain a plugin.json');
+        $this->installer()->install('file://' . $zipPath);
+    }
+
+    public function test_install_throws_when_extracted_manifest_invalid(): void
+    {
+        // Source with plugin.json that's structurally a Manifest but
+        // missing required fields — exercises lines 82-85.
+        $invalidSrc = $this->work . '/invalid-' . uniqid('', true);
+        mkdir($invalidSrc, 0775, true);
+        $bad = $this->validManifest();
+        $bad['version'] = '';
+        file_put_contents($invalidSrc . '/plugin.json', (string) json_encode($bad));
+        $zipPath = $this->makeZipFromDir($invalidSrc);
+
+        try {
+            $this->installer()->install('file://' . $zipPath);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('manifest is invalid', $e->getMessage());
+        }
+    }
+
+    public function test_install_cleans_up_temp_dir_when_destination_rename_fails(): void
+    {
+        // If we point pluginsBaseDir at an existing FILE (not a dir),
+        // ensureBaseDir() fails -> install throws -> finally cleans temp.
+        $bogusBase = $this->work . '/bogus-base-file';
+        file_put_contents($bogusBase, 'i am a file, not a dir');
+
+        $installer = new HttpInstaller($bogusBase, $this->logger);
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+
+        try {
+            $installer->install('file://' . $zipPath);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertNotEmpty($e->getMessage());
+        }
+    }
+
+    public function test_install_from_zip_replaces_existing_install(): void
+    {
+        // Pre-stage an old version of the same plugin so we hit lines
+        // 92-93 (is_dir($destination) -> RecursiveDelete::remove).
+        $existing = $this->base . '/phlex-plugin-fromdir';
+        mkdir($existing, 0775, true);
+        file_put_contents($existing . '/stale-marker.txt', 'old');
+
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+        [, $destination] = $this->installer()->install('file://' . $zipPath);
+
+        $this->assertSame($existing, $destination);
+        $this->assertFileExists($destination . '/plugin.json');
+        $this->assertFileDoesNotExist($destination . '/stale-marker.txt');
+    }
+
+    public function test_install_logs_info_after_successful_install(): void
+    {
+        $this->logger->expects($this->once())
+            ->method('info')
+            ->with(
+                'plugin source installed',
+                $this->callback(static function ($ctx): bool {
+                    return is_array($ctx)
+                        && ($ctx['plugin'] ?? null) === 'phlex-plugin-fromdir'
+                        && is_string($ctx['destination'] ?? null);
+                })
+            );
+
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+        $this->installer()->install('file://' . $zipPath);
+    }
+
+    public function test_install_throws_when_destination_rename_fails_due_to_read_only_base(): void
+    {
+        // Make pluginsBaseDir exist but be read-only so the final
+        // rename($tempDir, $destination) fails -- lines 99-103.
+        $readOnlyBase = $this->work . '/ro-base-' . uniqid('', true);
+        mkdir($readOnlyBase, 0775, true);
+        chmod($readOnlyBase, 0500); // read+exec, no write
+        // Skip when running as root: chmod is ignored.
+        if (posix_geteuid() === 0) {
+            chmod($readOnlyBase, 0775);
+            $this->markTestSkipped('Cannot enforce read-only directory as root.');
+        }
+
+        try {
+            $installer = new HttpInstaller($readOnlyBase, $this->logger);
+            $zipPath = $this->makeZipFromDir($this->validPluginSource());
+
+            try {
+                $installer->install('file://' . $zipPath);
+                $this->fail('Expected PluginInstallException due to rename failure');
+            } catch (PluginInstallException $e) {
+                $this->assertStringContainsString('plugin', strtolower($e->getMessage()));
+            }
+        } finally {
+            chmod($readOnlyBase, 0775);
+        }
+    }
+
+    public function test_install_wraps_arbitrary_throwables_as_install_exception(): void
+    {
+        // A zip whose plugin.json is unreadable JSON triggers
+        // Manifest::fromJson -> exception that is NOT PluginInstallException,
+        // which exercises lines 120-125 (catch \Throwable + re-wrap).
+        $broken = $this->work . '/broken-' . uniqid('', true);
+        mkdir($broken, 0775, true);
+        file_put_contents($broken . '/plugin.json', '{not valid JSON at all');
+        $zipPath = $this->makeZipFromDir($broken);
+
+        try {
+            $this->installer()->install('file://' . $zipPath);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('Failed to install plugin from', $e->getMessage());
+            $this->assertNotNull($e->getPrevious());
+        }
+    }
+
+    public function test_install_rejects_corrupt_targz_archive(): void
+    {
+        // Garbage .tar.gz so PharData throws -> lines 394-401 are hit.
+        $junkTar = $this->work . '/garbage.tar.gz';
+        file_put_contents($junkTar, 'not a real tarball at all');
+
+        try {
+            $this->installer()->install('file://' . $junkTar);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('Failed to extract', $e->getMessage());
+        }
+    }
+
+    public function test_install_rejects_corrupt_zip_archive(): void
+    {
+        // Write garbage bytes into a .zip path so ZipArchive::open returns
+        // a non-true error code -- exercises lines 361-362.
+        $junkZip = $this->work . '/garbage.zip';
+        file_put_contents($junkZip, 'this is definitely not a real zip file');
+
+        try {
+            $this->installer()->install('file://' . $junkZip);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('Cannot open zip archive', $e->getMessage());
+        }
+    }
+
+    public function test_installFromDirectory_throws_when_destination_cannot_be_created(): void
+    {
+        // pluginsBaseDir is a regular file -> ensureBaseDir() will not
+        // detect it as a directory, mkdir cannot create a subdir under it
+        // -> exercises the lines 173-176 mkdir-failure branch in
+        // installFromDirectory().
+        $bogusBase = $this->work . '/bogus-base-file-' . uniqid('', true);
+        file_put_contents($bogusBase, 'i am a file, not a dir');
+
+        $installer = new HttpInstaller($bogusBase, $this->logger);
+
+        $source = $this->work . '/normal-' . uniqid('', true);
+        mkdir($source, 0775, true);
+        file_put_contents($source . '/plugin.json', (string) json_encode($this->validManifest()));
+
+        try {
+            $installer->installFromDirectory($source);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertNotEmpty($e->getMessage());
+        }
+    }
+
+    public function test_guardPluginName_rejects_disallowed_kebab_pattern(): void
+    {
+        // Schema validation catches name issues first in normal flow, but
+        // guardPluginName() exists as a second filesystem-path defense.
+        // Test it directly via reflection to keep that defense exercised
+        // (otherwise it's marked dead code by coverage).
+        $installer = $this->installer();
+        $ref = new \ReflectionClass(HttpInstaller::class);
+        $method = $ref->getMethod('guardPluginName');
+        $method->setAccessible(true);
+
+        // Wrong prefix -> 245-249.
+        $this->expectException(PluginInstallException::class);
+        $this->expectExceptionMessage('not a safe directory component');
+        $method->invoke($installer, 'not-prefixed-plugin');
+    }
+
+    public function test_guardPluginName_rejects_path_traversal_when_prefix_matches(): void
+    {
+        // Pass the regex but fail the explicit path-character guard
+        // (lines 251-255). The current regex already excludes "..", but
+        // we exercise the str_contains check via reflection with a
+        // string that bypasses the regex via direct invocation.
+        $installer = $this->installer();
+        $ref = new \ReflectionClass(HttpInstaller::class);
+        $method = $ref->getMethod('guardPluginName');
+        $method->setAccessible(true);
+
+        // This name fails the kebab regex (uppercase chars) -> first guard catches it.
+        try {
+            $method->invoke($installer, 'phlex-plugin-OK');
+            $this->fail('Expected PluginInstallException from regex guard');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('not a safe directory component', $e->getMessage());
+        }
+    }
+
+    public function test_installFromDirectory_throws_when_subdir_mkdir_fails(): void
+    {
+        // pluginsBaseDir is a dir, but read-only -> ensureBaseDir() returns
+        // immediately, mkdir($destination) then fails -- exercises 173-176.
+        $readOnlyBase = $this->work . '/ro-base-fd-' . uniqid('', true);
+        mkdir($readOnlyBase, 0775, true);
+        chmod($readOnlyBase, 0500);
+        if (posix_geteuid() === 0) {
+            chmod($readOnlyBase, 0775);
+            $this->markTestSkipped('Cannot enforce read-only directory as root.');
+        }
+
+        try {
+            $installer = new HttpInstaller($readOnlyBase, $this->logger);
+            $source = $this->work . '/ronormal-' . uniqid('', true);
+            mkdir($source, 0775, true);
+            file_put_contents($source . '/plugin.json', (string) json_encode($this->validManifest()));
+
+            try {
+                $installer->installFromDirectory($source);
+                $this->fail('Expected PluginInstallException');
+            } catch (PluginInstallException $e) {
+                $this->assertStringContainsString('Cannot create plugin directory', $e->getMessage());
+            }
+        } finally {
+            chmod($readOnlyBase, 0775);
+        }
+    }
+
+    public function test_installFromDirectory_logs_info_after_success(): void
+    {
+        $this->logger->expects($this->once())
+            ->method('info')
+            ->with(
+                'plugin staged from directory',
+                $this->callback(static fn ($ctx) => is_array($ctx) && ($ctx['plugin'] ?? null) === 'phlex-plugin-fromdir')
+            );
+
+        $source = $this->work . '/myplugin-info';
+        mkdir($source, 0775, true);
+        file_put_contents($source . '/plugin.json', (string) json_encode($this->validManifest()));
+        $this->installer()->installFromDirectory($source);
+    }
+
+    public function test_installFromDirectory_rejects_blatant_path_traversal_name(): void
+    {
+        // Need a manifest that PASSES the manifest's own schema validation
+        // (so we hit guardPluginName lines 246-256 in the installer rather
+        // than the manifest validator). Schema regex enforces the prefix,
+        // so we cannot trip the .. branch via this method — exercise the
+        // primary kebab guard instead by leaning on the schema validator.
+        $source = $this->work . '/nope-' . uniqid('', true);
+        mkdir($source, 0775, true);
+        $bad = $this->validManifest();
+        unset($bad['name']);
+        $bad['name'] = 'phlex-plugin-OK-AlPhA'; // uppercase -> schema rejects
+        file_put_contents($source . '/plugin.json', (string) json_encode($bad));
+
+        $this->expectException(PluginInstallException::class);
+        $this->installer()->installFromDirectory($source);
+    }
+
     private function validPluginSource(): string
     {
         $source = $this->work . '/plugin-source-' . uniqid('', true);

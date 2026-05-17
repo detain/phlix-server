@@ -81,4 +81,43 @@ class AuditLogger
             'record_count' => $recordCount,
         ]);
     }
+
+    /**
+     * Record a plugin lifecycle action (install / enable / disable / uninstall).
+     *
+     * Centralises the audit trail for both system-driven and admin-UI
+     * triggered plugin lifecycle calls so reviewers can see who acted on
+     * which plugin without grepping for ad-hoc `logDataExport()` event
+     * names. The `$action` is opaque to this method but should be one of
+     * the canonical verbs (`install`, `enable`, `disable`, `uninstall`)
+     * so log queries can rely on a small enum.
+     *
+     * @param string|null          $actorUserId The user id that triggered the action,
+     *                                          or null when the action was
+     *                                          machine-initiated (e.g. bootstrap).
+     *                                          A null actor is normalised to
+     *                                          the string `"system"` in the
+     *                                          log payload so downstream
+     *                                          tooling never sees `null`.
+     * @param string               $action      Canonical verb (install/enable/disable/uninstall).
+     * @param string               $pluginName  Manifest name of the plugin.
+     * @param array<string, mixed> $context     Additional structured context (source,
+     *                                          version, etc.).
+     *
+     * @since 0.10.1
+     */
+    public function logPluginAction(
+        ?string $actorUserId,
+        string $action,
+        string $pluginName,
+        array $context = [],
+    ): void {
+        $payload = array_merge([
+            'event'   => 'plugin_action',
+            'user_id' => ($actorUserId === null || $actorUserId === '') ? 'system' : $actorUserId,
+            'action'  => $action,
+            'plugin'  => $pluginName,
+        ], $context);
+        $this->logger->info('Plugin lifecycle action', $payload);
+    }
 }

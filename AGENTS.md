@@ -8,8 +8,9 @@ PHP 8.3+ media server on Workerman 5.x with HTTP REST, WebSocket, Smarty web por
 composer install
 php scripts/run-migrations.php
 php public/index.php
-./vendor/bin/phpunit
+./vendor/bin/phpunit                        # Unit + Integration suites wired in phpunit.xml
 ./vendor/bin/phpunit --testsuite Unit
+./vendor/bin/phpunit --testsuite Integration
 ./vendor/bin/phpunit tests/unit/Auth/JwtHandlerTest.php --testdox
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/phpstan analyze src/ --level=9

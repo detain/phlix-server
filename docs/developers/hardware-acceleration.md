@@ -262,3 +262,132 @@ See `config/hwaccel.php` for configuration options:
 - FFmpeg compiled with hardware acceleration support
 - Appropriate drivers/gpu for the vendor
 - See [FFmpeg HWAccel Documentation](https://trac.ffmpeg.org/wiki/HWAccelIntro)
+
+## HDR Tone-Mapping (Since 0.11.0)
+
+When transcoding HDR (High Dynamic Range) content to SDR (Standard Dynamic Range), the system applies tone-mapping to preserve visual quality while converting the extended luminance range to displayable SDR levels.
+
+### HDR Metadata Detection
+
+The system detects HDR content via ffprobe color metadata:
+
+- **color_transfer**: `smpte2084` (PQ) or `arib-std-b67` (HLG) indicates HDR
+- **color_space**: Typically `bt2020nc` for HDR content
+- **color_primaries**: Typically `bt2020` for HDR content
+- **max_luminance**: Extracted from `mastering_display_luminance` tag (e.g., 1000, 4000 nits)
+- **avg_luminance**: Extracted from `ambient_luminance` tag
+
+### Tone-Mapping Architecture
+
+```
+HwaccelToneMapper
+├── Detects HDR from ffprobe results
+├── Selects appropriate vendor tone mapper
+└── Generates vendor-specific filter chain
+```
+
+### Vendor-Specific Tone Mapping
+
+| Vendor | Hardware Support | Filter Chain | Notes |
+|--------|-----------------|-------------|-------|
+| NVENC | ✅ Yes | `hwupload`, `tonemap_cuda`, `scale_cuda` | Primary: CUDA-based |
+| VAAPI | ✅ Yes | `hwupload`, `tonemap_vaapi`, `scale_vaapi` | Primary: VAAPI built-in |
+| QSV | ✅ Yes | `hwupload`, `vpp_tonemap`, `scale_qsv` | VPP filmic mode |
+| VideoToolbox | ❌ No | `zscale`, `format` | CPU fallback |
+| AMF | ✅ Yes | `hwupload`, `tonemap_amf` | AMD GPU |
+| V4L2 | ❌ No | `zscale`, `format` | V4L2 request API limitation |
+| Software | ❌ No | `zscale`, `format` | CPU fallback |
+
+### Tone-Mapping Filter Parameters
+
+#### NVENC (tonemap_cuda)
+
+```
+tonemap_cuda=transfer=smpte2084:primaries=bt2020:tonemap=hable:desat=0.5:peak=10.0
+```
+
+- **transfer**: Source transfer function (smpte2084 for PQ, arib-std-b67 for HLG)
+- **primaries**: Color primaries (bt2020)
+- **tonemap**: Tone mapping curve (hable, mobius, linear)
+- **desat**: Desaturation threshold for bright colors
+- **peak**: Reference peak luminance
+
+#### VAAPI (tonemap_vaapi)
+
+```
+tonemap_vaapi=transfer=bt2020:primaries=bt2020:tonemap=hable:desat=0.5
+```
+
+#### QSV (vpp_tonemap)
+
+```
+vpp_tonemap=mode=1:desat=0.5:peak=10.0
+```
+
+- **mode**: 1 = filmic, 2 = fixed, 3 = linear
+- **desat**: Desaturation parameter
+- **peak**: Peak luminance for tone mapping
+
+#### Software Fallback (zscale)
+
+```
+zscale=transfer=bt709:min_luminance=2.0:max_luminance=10.0:param1=0.18:param2=0.14
+```
+
+- **transfer**: Target transfer function (bt709 for SDR)
+- **min_luminance**: Minimum luminance reference
+- **max_luminance**: Maximum luminance reference
+- **param1/param2**: Tone mapping curve parameters
+
+### Usage Example
+
+```php
+use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
+use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+
+// Get HDR metadata from ffprobe
+$probeResult = $ffmpegRunner->probe('/path/to/hdr/video.mkv');
+$colorMeta = $ffmpegRunner->extractColorMetadata($probeResult);
+
+if ($colorMeta['color_transfer'] === 'smpte2084' || $colorMeta['color_transfer'] === 'arib-std-b67') {
+    $hdr = new HdrMetadata(
+        color_space: $colorMeta['color_space'],
+        color_transfer: $colorMeta['color_transfer'],
+        color_primaries: $colorMeta['color_primaries'],
+        max_luminance: $colorMeta['max_luminance'],
+        avg_luminance: $colorMeta['avg_luminance']
+    );
+
+    // Build HDR transcode command with tone mapping
+    $registry = HwaccelRegistry::getInstance();
+    $capability = $registry->getEncoder('hevc', require_hdr_tone_map: true);
+    $profile = new NvencProfile();
+
+    $cmd = (new HwaccelCommandBuilder($profile, $capability, 'high'))
+        ->setInput('/path/to/hdr/video.mkv')
+        ->setOutput('/path/to/sdr/output.mp4')
+        ->setVideoCodec('hevc')
+        ->setHdrMetadata($hdr)
+        ->build();
+}
+```
+
+### Tone Mapping Classes
+
+| Class | Description |
+|-------|-------------|
+| `HdrMetadata` | Value object for HDR source metadata |
+| `ToneMapFilterChain` | Result container for generated filter chains |
+| `HwaccelToneMapper` | Main orchestrator for tone mapping |
+| `HwaccelToneMapperInterface` | Interface for vendor tone mappers |
+| `ToneMapperFactory` | Factory for creating vendor tone mappers |
+| `NvencToneMapper` | NVIDIA NVENC implementation |
+| `VaapiToneMapper` | VAAPI implementation |
+| `QsvToneMapper` | Intel QSV implementation |
+| `VideoToolboxToneMapper` | Apple VideoToolbox implementation (software fallback) |
+| `AmfToneMapper` | AMD AMF implementation |
+| `V4L2ToneMapper` | V4L2 implementation (software fallback) |
+| `SoftwareToneMapper` | CPU-based zscale implementation |

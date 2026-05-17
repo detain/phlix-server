@@ -385,6 +385,101 @@ class FfmpegRunner
     }
 
     /**
+     * Extracts color metadata from a probe result.
+     *
+     * Parses the ffprobe JSON output to extract HDR-related color
+     * information from the video stream.
+     *
+     * @param array<string, mixed> $probeResult Result from probe()
+     *
+     * @return array{
+     *     color_space: string,
+     *     color_transfer: string,
+     *     color_primaries: string,
+     *     max_luminance: float,
+     *     avg_luminance: float
+     * } Color metadata or defaults if not present
+     *
+     * @since 0.11.0
+     */
+    public function extractColorMetadata(array $probeResult): array
+    {
+        // Find the video stream
+        $videoStream = null;
+        $streams = $probeResult['streams'] ?? [];
+        if (is_array($streams)) {
+            foreach ($streams as $stream) {
+                if (!is_array($stream)) {
+                    continue;
+                }
+                if (($stream['codec_type'] ?? '') === 'video') {
+                    $videoStream = $stream;
+                    break;
+                }
+            }
+        }
+
+        if ($videoStream === null) {
+            return [
+                'color_space' => 'bt2020nc',
+                'color_transfer' => 'bt709',
+                'color_primaries' => 'bt2020',
+                'max_luminance' => 1000.0,
+                'avg_luminance' => 200.0,
+            ];
+        }
+
+        $colorSpace = is_string($videoStream['color_space'] ?? null)
+            ? $videoStream['color_space']
+            : 'bt2020nc';
+        $colorTransfer = is_string($videoStream['color_transfer'] ?? null)
+            ? $videoStream['color_transfer']
+            : 'bt709';
+        $colorPrimaries = is_string($videoStream['color_primaries'] ?? null)
+            ? $videoStream['color_primaries']
+            : 'bt2020';
+
+        // Default luminance values
+        $maxLuminance = 1000.0;
+        $avgLuminance = 200.0;
+
+        // Try to extract luminance from side data or tags
+        $tags = $videoStream['tags'] ?? null;
+        if (is_array($tags)) {
+            $masteringLuminance = $tags['mastering_display_luminance'] ?? null;
+            if (is_string($masteringLuminance)) {
+                if (preg_match('/max:(\d+(\.\d+)?)/', $masteringLuminance, $matches)) {
+                    $maxLuminance = (float) $matches[1];
+                }
+            }
+
+            $ambientLuminance = $tags['ambient_luminance'] ?? null;
+            if (is_string($ambientLuminance)) {
+                if (preg_match('/avg:(\d+(\.\d+)?)/', $ambientLuminance, $matches)) {
+                    $avgLuminance = (float) $matches[1];
+                }
+            }
+        }
+
+        // Also check for max_luminance directly (some FFmpeg versions)
+        if (isset($videoStream['max_luminance']) && is_numeric($videoStream['max_luminance'])) {
+            $maxLuminance = (float) $videoStream['max_luminance'];
+        }
+
+        if (isset($videoStream['avg_luminance']) && is_numeric($videoStream['avg_luminance'])) {
+            $avgLuminance = (float) $videoStream['avg_luminance'];
+        }
+
+        return [
+            'color_space' => $colorSpace,
+            'color_transfer' => $colorTransfer,
+            'color_primaries' => $colorPrimaries,
+            'max_luminance' => $maxLuminance,
+            'avg_luminance' => $avgLuminance,
+        ];
+    }
+
+    /**
      * Builds a transcode command using a hardware encoder profile.
      *
      * This method delegates to HwaccelCommandBuilder to construct a complete

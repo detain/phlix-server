@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Phlex\Media\Transcoding\Hwaccel;
 
 use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
+use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
+use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
 
 /**
  * Fluent builder for FFmpeg hardware-accelerated transcoding commands.
@@ -55,6 +58,15 @@ final class HwaccelCommandBuilder
 
     /** @var string Path to FFmpeg binary */
     private string $ffmpegPath = '/usr/bin/ffmpeg';
+
+    /** @var HdrMetadata|null HDR metadata for tone mapping */
+    private ?HdrMetadata $hdrMetadata = null;
+
+    /** @var ToneMapFilterChain|null Cached tone map filter chain */
+    private ?ToneMapFilterChain $toneMapFilterChain = null;
+
+    /** @var HwaccelToneMapper|null Tone mapper instance */
+    private ?HwaccelToneMapper $toneMapper = null;
 
     /**
      * Creates a new HwaccelCommandBuilder.
@@ -236,6 +248,78 @@ final class HwaccelCommandBuilder
     }
 
     /**
+     * Sets HDR metadata for tone mapping.
+     *
+     * When set, the builder will inject the appropriate HDR to SDR
+     * tone-mapping filter chain for the hardware vendor.
+     *
+     * @param HdrMetadata $hdr HDR source metadata
+     *
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function setHdrMetadata(HdrMetadata $hdr): self
+    {
+        $this->hdrMetadata = $hdr;
+
+        return $this;
+    }
+
+    /**
+     * Sets a custom tone mapper instance.
+     *
+     * @param HwaccelToneMapper $toneMapper Tone mapper instance
+     *
+     * @return self
+     *
+     * @since 0.11.0
+     */
+    public function setToneMapper(HwaccelToneMapper $toneMapper): self
+    {
+        $this->toneMapper = $toneMapper;
+
+        return $this;
+    }
+
+    /**
+     * Gets the tone map filter chain for the current HDR metadata and vendor.
+     *
+     * @return ToneMapFilterChain|null Filter chain or null if no HDR metadata set
+     *
+     * @since 0.11.0
+     */
+    public function getToneMapFilterChain(): ?ToneMapFilterChain
+    {
+        if ($this->toneMapFilterChain === null && $this->hdrMetadata !== null) {
+            $this->toneMapFilterChain = $this->buildToneMapFilterChain();
+        }
+
+        return $this->toneMapFilterChain;
+    }
+
+    /**
+     * Builds the tone map filter chain based on HDR metadata and vendor.
+     *
+     * @return ToneMapFilterChain
+     *
+     * @since 0.11.0
+     */
+    private function buildToneMapFilterChain(): ToneMapFilterChain
+    {
+        if ($this->hdrMetadata === null) {
+            return new ToneMapFilterChain('', '', '');
+        }
+
+        $toneMapper = $this->toneMapper ?? new HwaccelToneMapper(HwaccelRegistry::getInstance());
+
+        return $toneMapper->getFilterChain(
+            $this->capability->vendor,
+            $this->hdrMetadata
+        );
+    }
+
+    /**
      * Builds and returns the complete ffmpeg command string.
      *
      * @return string Complete FFmpeg command
@@ -274,6 +358,17 @@ final class HwaccelCommandBuilder
         $filterArgs = $this->profile->getFilterArgs($this->filters);
         if ($filterArgs !== '') {
             $cmd .= $filterArgs;
+        }
+
+        // Inject HDR tone-mapping filter chain if HDR metadata is set
+        $toneMapChain = $this->getToneMapFilterChain();
+        if ($toneMapChain !== null && !$toneMapChain->isEmpty()) {
+            $cmd .= $toneMapChain->getVfArgument();
+
+            // Add extra FFmpeg args from tone mapping (e.g., -extra_hw_frames)
+            foreach ($toneMapChain->ffmpeg_args as $toneArg) {
+                $cmd .= ' ' . $toneArg;
+            }
         }
 
         if ($this->width > 0 && $this->height > 0) {

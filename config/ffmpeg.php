@@ -19,4 +19,5 @@ return [
             'v4l2' => 5,
         ],
     ],
+    'hwaccel_profiles' => require __DIR__ . '/hwaccel_profiles.php',
 ];

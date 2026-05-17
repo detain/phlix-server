@@ -152,6 +152,88 @@ class NewVendorProbe implements VendorProbeInterface
 }
 ```
 
+## Encoding Profiles
+
+Each hardware vendor has a dedicated encoder profile class implementing `HwaccelEncoderProfileInterface`. These profiles map abstract quality levels to concrete FFmpeg encoder flags.
+
+### Profile Classes
+
+| Vendor | Class | Encoder | Notes |
+|--------|-------|---------|-------|
+| NVIDIA | `NvencProfile` | `h264_nvenc`, `hevc_nvenc` | Preset p1-p7, zerolatency tune |
+| VAAPI | `VaapiProfile` | `h264_vaapi`, `hevc_vaapi` | CQP/VBR rate control |
+| QSV | `QsvProfile` | `h264_qsv`, `hevc_qsv`, `av1_qsv` | Look-ahead support |
+| VideoToolbox | `VideoToolboxProfile` | `h264_videotoolbox`, `hevc_videotoolbox` | macOS only |
+| AMF | `AmfProfile` | `h264_amf`, `hevc_amf` | AMD GPUs |
+| V4L2 | `V4L2Profile` | `h264_v4l2m2m`, `hevc_v4l2m2m` | Linux kernel API |
+| Software | `SoftwareProfile` | `libx264`, `libx265` | CPU fallback |
+
+### Quality Level Mapping
+
+Each profile supports four quality levels with associated bitrate and preset settings:
+
+```php
+// Example: NVENC quality levels
+'ultra'  => ['bitrate' => 8000000, 'preset' => 'p3', 'bframes' => 0],
+'high'    => ['bitrate' => 5000000, 'preset' => 'p4', 'bframes' => 0],
+'medium'  => ['bitrate' => 2500000, 'preset' => 'p5', 'bframes' => 0],
+'low'     => ['bitrate' => 1000000, 'preset' => 'p6', 'bframes' => 0],
+```
+
+### Using the Profile Factory
+
+```php
+use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
+
+// Get the best profile for a vendor+codec combination
+$registry = HwaccelRegistry::getInstance();
+$factory = new HwaccelProfileFactory($registry);
+
+$profile = $factory->getProfile('nvenc', 'h264');
+$builder = $factory->createCommandBuilder('nvenc', 'h264', 'high');
+```
+
+### Using the Command Builder
+
+```php
+use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+
+$capability = new HwaccelCapability(
+    vendor: 'nvenc',
+    encoder: 'h264_nvenc',
+    decoder: 'h264_cuvid',
+    supports_hdr_tone_mapping: true,
+    supported_codecs: ['h264', 'hevc'],
+    supported_profiles: ['baseline', 'main', 'high'],
+    max_resolution_w: 3840,
+    max_resolution_h: 2160,
+    max_bitrate: 50000000,
+);
+
+$cmd = (new HwaccelCommandBuilder(new NvencProfile(), $capability, 'high'))
+    ->setInput('/input.mkv')
+    ->setOutput('/output.mp4')
+    ->setVideoCodec('h264')
+    ->setBitrate(5000000)
+    ->setResolution(1920, 1080)
+    ->build();
+```
+
+### Max Concurrent Encodes
+
+| Vendor | Max Concurrent | Notes |
+|--------|----------------|-------|
+| NVENC | 3 | Per GPU |
+| VAAPI | 4 | Per GPU |
+| QSV | 6 | Per GPU |
+| VideoToolbox | 0 | Unlimited (Apple Silicon) |
+| AMF | 2 | Per GPU |
+| V4L2 | 1 | Limited hardware |
+| Software | 0 | CPU-bound |
+
 ## Configuration
 
 See `config/hwaccel.php` for configuration options:

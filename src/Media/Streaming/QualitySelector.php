@@ -113,7 +113,10 @@ class QualitySelector
      *     format?: array{format_name?: string}
      * } $sourceInfo Source media information from probe
      * @param string $profileName Device profile name (e.g., 'generic', 'mobile-high')
-     * @param array<string, mixed> $options Additional options
+     * @param array<string, mixed> $options Additional options including:
+     *     - 'vendor' (string): Optional hardware vendor hint (e.g., 'nvenc', 'vaapi')
+     *         When set, returns vendor-specific codec name (e.g., 'h264_nvenc') instead of 'libx264'
+     *     - 'allow_hwaccel' (bool): Whether to use hardware acceleration if available
      *
      * @return array{
      *     method: string,
@@ -121,7 +124,8 @@ class QualitySelector
      *     video_codec: string|null,
      *     audio_codec: string|null,
      *     max_resolution: array<int, int>,
-     *     max_bitrate: int
+     *     max_bitrate: int,
+     *     vendor?: string|null
      * } Quality selection result with method and encoding parameters
      *
      * @example
@@ -133,10 +137,14 @@ class QualitySelector
      *     // Transcode with specified parameters
      * }
      * ```
+     *
+     * @since 0.11.0
      */
     public function selectQuality(array $sourceInfo, string $profileName, array $options = []): array
     {
         $profile = $this->deviceProfiles[$profileName] ?? $this->deviceProfiles['generic'];
+        $vendor = $options['vendor'] ?? null;
+        $allowHwaccel = $options['allow_hwaccel'] ?? false;
 
         $videoStream = $this->getVideoStream($sourceInfo);
         $audioStream = $this->getAudioStream($sourceInfo);
@@ -151,17 +159,48 @@ class QualitySelector
                 'audio_codec' => $audioStream['codec'] ?? null,
                 'max_resolution' => $profile['max_resolution'],
                 'max_bitrate' => $profile['max_bitrate'],
+                'vendor' => $vendor,
             ];
         }
+
+        $videoCodec = $this->selectVideoCodec($vendor, $allowHwaccel);
 
         return [
             'method' => 'transcode',
             'container' => 'ts',
-            'video_codec' => 'libx264',
+            'video_codec' => $videoCodec,
             'audio_codec' => 'aac',
             'max_resolution' => $profile['max_resolution'],
             'max_bitrate' => min($profile['max_bitrate'], 8000000),
+            'vendor' => $vendor,
         ];
+    }
+
+    /**
+     * Selects the appropriate video codec based on vendor and hardware availability.
+     *
+     * @param string|null $vendor Hardware vendor hint
+     * @param bool $allowHwaccel Whether to allow hardware acceleration
+     *
+     * @return string Video codec name
+     *
+     * @since 0.11.0
+     */
+    private function selectVideoCodec(?string $vendor, bool $allowHwaccel): string
+    {
+        if ($vendor === null || !$allowHwaccel) {
+            return 'libx264';
+        }
+
+        return match (strtolower($vendor)) {
+            'nvenc' => 'h264_nvenc',
+            'vaapi' => 'h264_vaapi',
+            'qsv' => 'h264_qsv',
+            'videotoolbox' => 'h264_videotoolbox',
+            'amf' => 'h264_amf',
+            'v4l2' => 'h264_v4l2m2m',
+            default => 'libx264',
+        };
     }
 
     /**

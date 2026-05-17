@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Phlex\Media\Transcoding;
 
 use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlex\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -379,6 +382,60 @@ class FfmpegRunner
     public function getHwaccelRegistry(): ?HwaccelRegistry
     {
         return $this->hwaccelRegistry;
+    }
+
+    /**
+     * Builds a transcode command using a hardware encoder profile.
+     *
+     * This method delegates to HwaccelCommandBuilder to construct a complete
+     * FFmpeg command with hardware-specific flags in the correct order.
+     *
+     * @param string $inputPath Source file path
+     * @param string $outputPath Destination file path
+     * @param HwaccelEncoderProfileInterface $profile Encoder profile to use
+     * @param HwaccelCapability $capability Hardware capability
+     * @param string $codec Codec to encode (e.g., 'h264', 'hevc')
+     * @param array<string, mixed> $params Additional encoding parameters
+     * @param string $quality Quality level (e.g., 'ultra', 'high', 'medium', 'low')
+     *
+     * @return string Complete FFmpeg command
+     *
+     * @since 0.11.0
+     */
+    public function buildTranscodeCommandWithProfile(
+        string $inputPath,
+        string $outputPath,
+        HwaccelEncoderProfileInterface $profile,
+        HwaccelCapability $capability,
+        string $codec,
+        array $params = [],
+        string $quality = 'medium'
+    ): string {
+        $builder = (new HwaccelCommandBuilder($profile, $capability, $quality))
+            ->setFfmpegPath($this->ffmpegPath)
+            ->setInput($inputPath)
+            ->setOutput($outputPath)
+            ->setVideoCodec($codec);
+
+        if (isset($params['audio_codec'])) {
+            $builder->setAudioCodec($params['audio_codec']);
+        }
+
+        if (isset($params['bitrate'])) {
+            $builder->setBitrate((int) $params['bitrate']);
+        }
+
+        if (isset($params['width']) && isset($params['height'])) {
+            $builder->setResolution((int) $params['width'], (int) $params['height']);
+        }
+
+        if (isset($params['filters']) && is_array($params['filters'])) {
+            foreach ($params['filters'] as $filter) {
+                $builder->addFilter($filter);
+            }
+        }
+
+        return $builder->build();
     }
 
     /**

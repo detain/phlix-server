@@ -1,0 +1,98 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://phlex.tv/schemas/plugin-manifest.schema.json",
+    "title": "Phlex plugin manifest",
+    "description": "Schema for plugin.json files consumed by the Phlex plugin loader. See docs/plugins/manifest.md for the human-readable spec.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "name",
+        "version",
+        "phlex_min_server_version",
+        "type",
+        "entry"
+    ],
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Globally unique kebab-case identifier; must start with 'phlex-plugin-'.",
+            "pattern": "^phlex-plugin-[a-z0-9][a-z0-9-]*$",
+            "maxLength": 64
+        },
+        "version": {
+            "type": "string",
+            "description": "Semver version of the plugin itself.",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.\\-]+)?$"
+        },
+        "phlex_min_server_version": {
+            "type": "string",
+            "description": "Minimum Phlex server semver the plugin is compatible with.",
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.\\-]+)?$"
+        },
+        "type": {
+            "type": "string",
+            "description": "Plugin category. Matches an entry in src/Plugins/ManifestType.php.",
+            "enum": [
+                "metadata-provider",
+                "subtitle-provider",
+                "auth-provider",
+                "library-type",
+                "notifier",
+                "scrobbler",
+                "tuner",
+                "transcoder-hook",
+                "ui-theme",
+                "arr-integration",
+                "analytics-sink"
+            ]
+        },
+        "entry": {
+            "type": "string",
+            "description": "Fully-qualified class name of the plugin entry point.",
+            "pattern": "^[A-Z][A-Za-z0-9_]*(?:\\\\[A-Z][A-Za-z0-9_]*)+$"
+        },
+        "events": {
+            "type": "array",
+            "description": "Manifest aliases (e.g., 'phlex.playback.started') the plugin subscribes to. The loader (A.4) resolves aliases to event class FQCNs.",
+            "items": {
+                "type": "string",
+                "pattern": "^phlex\\.[a-z]+(?:\\.[a-z]+)*$"
+            },
+            "uniqueItems": true
+        },
+        "settings": {
+            "type": "object",
+            "description": "User-configurable settings exposed by the plugin. Keyed by setting name.",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type"],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": ["string", "int", "bool", "float", "array"]
+                    },
+                    "required": {
+                        "type": "boolean"
+                    },
+                    "secret": {
+                        "type": "boolean"
+                    },
+                    "default": {}
+                }
+            }
+        },
+        "signature": {
+            "description": "Optional sha256 signature of the plugin payload, or null when unsigned. Verification logic lives in A.4.",
+            "oneOf": [
+                {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                {
+                    "type": "null"
+                }
+            ]
+        }
+    }
+}

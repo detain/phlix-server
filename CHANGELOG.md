@@ -9,6 +9,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Plugin manifest specification (`docs/plugins/manifest.md`,
+  `docs/plugins/manifest.schema.json`) and the
+  `Phlex\Plugins\Manifest` value object that parses and validates
+  `plugin.json` files. The eleven plugin types from
+  `PHLEX_EXPANSION_PLAN.md` §5 are codified as the
+  `Phlex\Plugins\ManifestType` enum. No loader yet — see Step A.4.
+  Adds `justinrainbow/json-schema:^5.2` as a runtime dependency.
 - PSR-11 dependency injection container (PHP-DI). Application services are
   now auto-wired; the legacy ConnectionPool / LoggerFactory statics remain
   for backwards compatibility but are wrapped behind container bindings.

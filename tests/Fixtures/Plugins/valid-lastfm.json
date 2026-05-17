@@ -1,0 +1,13 @@
+{
+    "name": "phlex-plugin-lastfm",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.10.0",
+    "type": "scrobbler",
+    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "settings": {
+        "api_key": { "type": "string", "required": true, "secret": true },
+        "api_secret": { "type": "string", "required": true, "secret": true }
+    },
+    "signature": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}

@@ -52,8 +52,8 @@ PHPStan baseline (`phpstan-baseline.neon`) contains entries for pre-existing `sr
 
 | Repo | State | Notes |
 |------|-------|-------|
-| `detain/phlex` | Active master = `(see master)`; all Phase A work landed here | The local working dir at `/home/sites/phlex` still points at this remote. **B.4 will migrate the remote to `detain/phlex-server`** via `git remote set-url`; local dir stays `/home/sites/phlex` for continuity. |
-| `detain/phlex-server` | **Empty, public, pre-created** | Created 2026-05-16. B.4 pushes migrated server code here. Metadata (description + 19 topics) set in B.4a. |
+| `detain/phlex` | **Stale — will be archived in B.4b.** Holds the full history through Phase A and Phase B.1–B.3. B.4 mirrored every branch + master to `detain/phlex-server`; the old remote is one commit behind the new one (the B.4 doc-update PR lands on `phlex-server` only). | Local working dir at `/home/sites/phlex` now points at `detain/phlex-server`. B.4b will replace this repo's README with a redirect and `gh repo archive` it (requires explicit user confirmation). |
+| `detain/phlex-server` | **Active master** — full history mirrored from `detain/phlex` in B.4 on 2026-05-17, plus the B.4 doc-update commit. Default branch `master`. Metadata (description + 19 topics) set in B.4a. | Origin remote for `/home/sites/phlex`. All Phase B+ work lands here. |
 | `detain/phlex-hub` | **Empty, public, pre-created** | Created 2026-05-16. B.5 scaffolds it. Metadata set in B.5a. |
 | `detain/phlex-shared` | **Empty, public, pre-created** | Created 2026-05-17 (user did this between sessions). B.2 scaffolds initial v0.1.0 — **do NOT `gh repo create`**, just clone and push. Metadata set in B.2a. |
 | `detain/phlex-plugin-example` | **Live**, v0.1.0 tagged, public | Created in A.6. Reference plugin. Currently implements only `LifecycleInterface`; a follow-up is filed to implement `MetadataProviderInterface` alongside G.1. |

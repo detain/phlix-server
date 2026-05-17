@@ -2,6 +2,8 @@
 
 A comprehensive media server platform built with PHP 8.3+, featuring real-time WebSocket communication, HTTP REST APIs, and support for multiple client platforms including Roku, Samsung Tizen, and Windows.
 
+> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlex` to [`github.com/detain/phlex-server`](https://github.com/detain/phlex-server) as part of the Phase B repo split (see `PHLEX_EXPANSION_PLAN.md`). Update existing local clones with `git remote set-url origin git@github.com:detain/phlex-server.git`. The old repo is being archived in step B.4b.
+
 ## Overview
 
 Phlex Media Server provides a complete media management and streaming solution:
@@ -137,8 +139,8 @@ public/
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/phlex.git
-cd phlex
+git clone https://github.com/detain/phlex-server.git
+cd phlex-server
 
 # Install dependencies
 composer install

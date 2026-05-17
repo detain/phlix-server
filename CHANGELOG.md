@@ -11,6 +11,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Repository moved from `github.com/detain/phlex` to
+  `github.com/detain/phlex-server`. The local working directory stays
+  `/home/sites/phlex` per the expansion plan; only the `origin` remote
+  URL changes. Update your local clone with
+  `git remote set-url origin git@github.com:detain/phlex-server.git`.
+  The old `detain/phlex` repo is archived (B.4b) with a README pointing
+  at the new home.
 - Refactored to depend on `detain/phlex-shared:^0.2`. The
   `LifecycleInterface`, manifest DTOs, event DTOs, and `EventNameMap`
   now live in the shared package. Old FQCNs

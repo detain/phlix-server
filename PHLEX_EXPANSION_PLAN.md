@@ -178,12 +178,12 @@ Verified via repo survey on 2026-05-16. Do not assume this is the state when you
 └────────────────┴─────────────────┴────────────────────┴──────────────────┴────────────────┘
 ```
 
-**Repo inventory (verified 2026-05-16):**
+**Repo inventory (verified 2026-05-17, post-B.4):**
 
 | Repo | State | Action |
 |------|-------|--------|
-| `detain/phlex` (current) | Has all existing code | **Migrate** code to `detain/phlex-server`, then archive this repo with a README pointing to the new home |
-| `detain/phlex-server` | **Already exists, empty, public** (created 2026-05-16) | Initial push happens in step B.4; metadata (description + 19 topic tags) set in B.4a |
+| `detain/phlex` (stale) | Holds full history through B.3; one commit behind `detain/phlex-server` (the B.4 doc-update lands only on the new remote) | Archived in step B.4b: replace README with redirect, then `gh repo archive` |
+| `detain/phlex-server` | **Active** master with full history mirrored from `detain/phlex` in B.4 on 2026-05-17 | Initial push and metadata (description + 19 topic tags) set in B.4a |
 | `detain/phlex-hub` | **Already exists, empty, public** (created 2026-05-16) | Scaffolded in step B.5; metadata set in B.5a |
 | `detain/phlex-shared` | **Already exists, empty, public** (created 2026-05-17) | Scaffolded in step B.2 — clone the existing empty repo, push initial commit; do NOT `gh repo create`. Metadata set in B.2a |
 | `detain/phlex-docs` | Does not exist yet | Created in step N.0 if the docs site lives in its own repo; otherwise docs stay in `docs/` inside `phlex-server` and `phlex-hub` |

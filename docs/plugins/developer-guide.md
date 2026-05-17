@@ -967,5 +967,5 @@ then, install-from-URL is the supported install path.
 ### Where to file issues
 
 Open a GitHub issue against
-[`detain/phlex`](https://github.com/detain/phlex) with the label
-`area:plugins`.
+[`detain/phlex-server`](https://github.com/detain/phlex-server) with
+the label `area:plugins`.

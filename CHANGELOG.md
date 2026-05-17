@@ -9,6 +9,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Complete plugin developer documentation
+  ([`docs/plugins/developer-guide.md`](docs/plugins/developer-guide.md))
+  covering plugin types, manifest, lifecycle, event subscription,
+  settings, signing, packaging, local testing, and publishing — plus a
+  matching server-internals reference for contributors extending the
+  loader ([`docs/dev/plugin-sdk.md`](docs/dev/plugin-sdk.md)). Phase A
+  is now functionally complete; the plugin system is ready for
+  external authors. `docs/plugins/install-from-catalog.md` rewritten
+  to set expectations about the catalog's Phase L delivery; README
+  promotes the developer guide and the reference plugin.
 - Plugin manifest specification (`docs/plugins/manifest.md`,
   `docs/plugins/manifest.schema.json`) and the
   `Phlex\Plugins\Manifest` value object that parses and validates

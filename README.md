@@ -70,8 +70,11 @@ public/
 - **Plugin system**: install / enable / disable / uninstall lifecycle,
   sandboxed per-plugin `vendor/` directories, signature-checked
   manifests, and PSR-14 event subscription via
-  `Phlex\Plugins\Contract\LifecycleInterface`; see
-  `docs/plugins/developer-guide.md`.
+  `Phlex\Plugins\Contract\LifecycleInterface`. **Plugin developer
+  guide:** [`docs/plugins/developer-guide.md`](docs/plugins/developer-guide.md).
+  Server-internals reference for contributors extending the loader:
+  [`docs/dev/plugin-sdk.md`](docs/dev/plugin-sdk.md). Reference
+  plugin: [`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example).
 
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty

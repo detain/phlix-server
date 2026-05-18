@@ -7,6 +7,7 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
 use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
@@ -199,13 +200,13 @@ class LiveTvManager
      *     echo "Found: {$tuner['name']} ({$tuner['type']})\n";
      * }
      * ```
-     * @return array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice}> Discovered tuners keyed by tuner ID
+     * @return array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice|DvbtDevice}> Discovered tuners keyed by tuner ID
      */
     public function discoverTuners(): array
     {
         $this->logger->info('Starting tuner discovery');
 
-        /** @var array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice}> $tuners */
+        /** @var array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice|DvbtDevice}> $tuners */
         $tuners = [];
 
         // Discover HDHomeRun tuners (primary driver)
@@ -258,6 +259,33 @@ class LiveTvManager
                             'tuner_count' => 1,
                             'has_epg' => $device->hasEpd(),
                             'stream_url_template' => $device->playlistUrl,
+                        ],
+                        'tunerDevice' => $device,
+                    ];
+
+                    $this->registerTuner($tuner);
+                    $tuners[$tunerId] = $tuner;
+                }
+            } elseif ($driver->getName() === 'dvbt') {
+                $devices = $driver->discoverDevices();
+                foreach ($devices as $device) {
+                    if (!$device instanceof DvbtDevice) {
+                        continue;
+                    }
+                    $tunerId = 'dvbt_' . $device->adapterIndex . '_' . $device->frontendIndex;
+                    $tuner = [
+                        'id' => $tunerId,
+                        'name' => "DVB-T Adapter " . $device->adapterIndex . " Frontend " . $device->frontendIndex,
+                        'type' => self::TUNER_TYPE_DVB_T,
+                        'status' => self::TUNER_STATUS_IDLE,
+                        'tuner_index' => $device->frontendIndex,
+                        'tuner_count' => 1,
+                        'capabilities' => [
+                            'dvbt' => true,
+                            'tuner_count' => 1,
+                            'modulation' => $device->modulation,
+                            'frequency_min' => $device->frequencyMin,
+                            'frequency_max' => $device->frequencyMax,
                         ],
                         'tunerDevice' => $device,
                     ];
@@ -623,6 +651,18 @@ class LiveTvManager
             // Find the IPTV driver for this tuner
             foreach ($this->additionalDrivers as $driver) {
                 if ($driver->getName() === 'iptv') {
+                    return $driver->getStreamUrl($device, $channelNumber);
+                }
+            }
+        }
+
+        if ($tuner['type'] === self::TUNER_TYPE_DVB_T && isset($tuner['tunerDevice'])) {
+            /** @var DvbtDevice $device */
+            $device = $tuner['tunerDevice'];
+
+            // Find the DVB-T driver for this tuner
+            foreach ($this->additionalDrivers as $driver) {
+                if ($driver->getName() === 'dvbt') {
                     return $driver->getStreamUrl($device, $channelNumber);
                 }
             }

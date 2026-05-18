@@ -107,4 +107,55 @@ return [
             // ],
         ],
     ],
+
+    /**
+     * DVB-T (Terrestrial) USB tuner settings.
+     *
+     * Linux DVB-T USB dongles based on chipsets like RTL2832U expose
+     * /dev/dvb/ devices that this driver interfaces with using dvbv5-zap.
+     */
+    'dvbt' => [
+        /**
+         * Enable DVB-T tuner support.
+         *
+         * @default true
+         */
+        'enabled' => true,
+
+        /**
+         * Path to FFmpeg binary.
+         *
+         * Used for repackaging DVB-T transport stream to HLS.
+         *
+         * @default '/usr/bin/ffmpeg'
+         */
+        'ffmpeg_path' => '/usr/bin/ffmpeg',
+
+        /**
+         * Path to dvbv5-zap binary.
+         *
+         * Standard Linux DVB tuning tool for frequency scanning.
+         *
+         * @default '/usr/bin/dvbv5-zap'
+         */
+        'dvbv5_zap_path' => '/usr/bin/dvbv5-zap',
+
+        /**
+         * Default modulation type.
+         *
+         * Options: 'auto', 'QPSK', 'QAM64', 'QAM256', 'DVB-T', 'DVB-T2'
+         *
+         * @default 'auto'
+         */
+        'default_modulation' => 'auto',
+
+        /**
+         * Default bandwidth in MHz.
+         *
+         * Common values: 6, 7, 8 (MHz)
+         *
+         * @default 8
+         */
+        'default_bandwidth_mhz' => 8,
+    ],
 ];

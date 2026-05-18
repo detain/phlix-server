@@ -7,6 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.3)
+
+- Linux DVB-T USB tuner driver. Includes:
+  - `DvbtDevice` — immutable value object for /dev/dvb/ devices
+  - `DvbtDeviceScanner` — scans /dev/dvb/ for adapters, reads capabilities
+  - `DvbtSignalEngine` — dvbv5-zap integration + FFmpeg ingest URL generation
+  - `DvbtTunerDriver` — implements `TunerDriverInterface`
+  - `DvbtTunerDriverFactory` — builds driver from `config/livetv.php`
+  - `config/livetv.php` — added `dvbt` section
+  - `TunerDriverInterface` — updated to accept `DvbtDevice` union type
+  - `LiveTvManager` — integrated DvbtTunerDriver via additionalDrivers
+  - Unit tests for scanner, signal engine, and driver
+  - `docs/developers/dvbt.md` — developer documentation
+
 ### Added (Step I.2)
 
 - M3U/XMLTV IPTV tuner driver. Includes:

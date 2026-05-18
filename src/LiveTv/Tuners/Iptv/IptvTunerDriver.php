@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\LiveTv\Tuners\Iptv;
 
+use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlex\LiveTv\Tuners\TunerDriverInterface;
 use Psr\Log\LoggerInterface;
@@ -80,10 +81,10 @@ class IptvTunerDriver implements TunerDriverInterface
      *
      * Parses the M3U playlist and returns the channel lineup.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to query
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to query
      * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null, program_id:null}> Channel list
      */
-    public function getChannelLineup(HdHomeRunDevice|IptvDevice $device): array
+    public function getChannelLineup(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
         if (!$device instanceof IptvDevice) {
             throw new \InvalidArgumentException('Expected IptvDevice for IPTV tuner');
@@ -119,10 +120,10 @@ class IptvTunerDriver implements TunerDriverInterface
      *
      * Parses the M3U playlist and optionally refreshes EPG data from XMLTV.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to scan
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to scan
      * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:null, program_id:null}> Discovered channels
      */
-    public function scanChannels(HdHomeRunDevice|IptvDevice $device): array
+    public function scanChannels(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
         if (!$device instanceof IptvDevice) {
             throw new \InvalidArgumentException('Expected IptvDevice for IPTV tuner');
@@ -165,11 +166,11 @@ class IptvTunerDriver implements TunerDriverInterface
      *
      * Returns the stream URL for the specified channel number.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to use
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to use
      * @param int $channelNumber The channel number to tune
      * @return string The stream URL
      */
-    public function getStreamUrl(HdHomeRunDevice|IptvDevice $device, int $channelNumber): string
+    public function getStreamUrl(HdHomeRunDevice|IptvDevice|DvbtDevice $device, int $channelNumber): string
     {
         if (!$device instanceof IptvDevice) {
             throw new \InvalidArgumentException('Expected IptvDevice for IPTV tuner');

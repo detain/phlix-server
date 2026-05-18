@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\LiveTv\Tuners\HdHomeRun;
 
+use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
@@ -71,10 +72,10 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
      *
      * Uses HDHomeRun HTTP API to get channel lineup.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to query
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to query
      * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int, program_id:int|null}> Channel list
      */
-    public function getChannelLineup(HdHomeRunDevice|IptvDevice $device): array
+    public function getChannelLineup(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
         if (!$device instanceof HdHomeRunDevice) {
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');
@@ -96,10 +97,10 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
      *
      * Triggers a channel scan on the device via HTTP API.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to scan
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to scan
      * @return array<int, array{channel_number:int, name:string, type:string, transport_stream_id:int, program_id:int|null}> Discovered channels
      */
-    public function scanChannels(HdHomeRunDevice|IptvDevice $device): array
+    public function scanChannels(HdHomeRunDevice|IptvDevice|DvbtDevice $device): array
     {
         if (!$device instanceof HdHomeRunDevice) {
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');
@@ -125,11 +126,11 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
      *
      * Returns the HLS stream URL for the specified channel.
      *
-     * @param HdHomeRunDevice|IptvDevice $device The device to use
+     * @param HdHomeRunDevice|IptvDevice|DvbtDevice $device The device to use
      * @param int $channelNumber The channel number to tune
      * @return string The HLS stream URL
      */
-    public function getStreamUrl(HdHomeRunDevice|IptvDevice $device, int $channelNumber): string
+    public function getStreamUrl(HdHomeRunDevice|IptvDevice|DvbtDevice $device, int $channelNumber): string
     {
         if (!$device instanceof HdHomeRunDevice) {
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Phlex\Plugins\Oidc\Controller;
 
 use Phlex\Plugins\Oidc\OidcProvider;
+use Phlex\Plugins\Oidc\OidcStateStore;
+use Phlex\Plugins\Oidc\SessionOidcStateStore;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Auth\AuthProviderRegistry;
@@ -28,15 +30,18 @@ final class OidcCallbackController
     private AuthProviderRegistry $registry;
     private UserRepository $userRepository;
     private JwtHandler $jwtHandler;
+    private OidcStateStore $stateStore;
 
     public function __construct(
         AuthProviderRegistry $registry,
         UserRepository $userRepository,
         JwtHandler $jwtHandler,
+        ?OidcStateStore $stateStore = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
+        $this->stateStore = $stateStore ?? new SessionOidcStateStore();
     }
 
     /**
@@ -75,17 +80,30 @@ final class OidcCallbackController
             ]);
         }
 
+        // RFC 7636 PKCE — generate a per-request code_verifier (S256).
+        $codeVerifier = OidcProvider::generateCodeVerifier();
+        $codeChallenge = OidcProvider::computeCodeChallenge($codeVerifier);
+
+        // Cryptographically-random CSRF state + ID-token replay nonce.
         $nonce = bin2hex(random_bytes(16));
+        $stateId = bin2hex(random_bytes(16));
+
+        // Bundle the redirect_uri into the state envelope so the
+        // callback knows where to land. The opaque `sid` is the lookup
+        // key for the server-side store that holds the code_verifier.
         $stateData = [
+            'sid' => $stateId,
             'redirect_uri' => $redirectUri,
-            'nonce' => $nonce,
         ];
         $stateValue = base64_encode((string) json_encode($stateData));
+
+        $this->stateStore->put($stateId, $codeVerifier, $nonce);
 
         $authorizationUrl = $provider->buildAuthorizationUrl(
             $this->getCallbackUrl(),
             $stateValue,
             $nonce,
+            $codeChallenge,
         );
 
         return (new Response())
@@ -146,7 +164,31 @@ final class OidcCallbackController
         /** @var array<string, mixed> */
         $stateArray = json_decode($stateDecoded, true);
         $redirectUri = is_string($stateArray['redirect_uri'] ?? null) ? $stateArray['redirect_uri'] : '';
-        $expectedNonce = is_string($stateArray['nonce'] ?? null) ? $stateArray['nonce'] : '';
+        $stateId = is_string($stateArray['sid'] ?? null) ? $stateArray['sid'] : '';
+
+        if ($stateId === '') {
+            return (new Response())->status(403)->json([
+                'error' => 'invalid_state',
+                'message' => 'State parameter is missing the session identifier',
+            ]);
+        }
+
+        // One-shot lookup of the PKCE verifier + nonce that were issued
+        // alongside this state value. A missing or replayed entry is a
+        // CSRF / replay attempt — reject with 403.
+        $stored = $this->stateStore->consume($stateId);
+        if ($stored === null) {
+            LoggerFactory::get(LogChannels::AUTH)->warning('OIDC state mismatch', [
+                'sid' => $stateId,
+            ]);
+            return (new Response())->status(403)->json([
+                'error' => 'invalid_state',
+                'message' => 'State parameter does not match an issued request',
+            ]);
+        }
+
+        $codeVerifier = $stored['code_verifier'];
+        $expectedNonce = $stored['nonce'];
 
         if (!$this->registry->hasProvider('oidc')) {
             return (new Response())->status(503)->json([
@@ -165,6 +207,7 @@ final class OidcCallbackController
                 'code' => $code,
                 'redirect_uri' => $this->getCallbackUrl(),
                 'nonce' => $expectedNonce,
+                'code_verifier' => $codeVerifier,
             ]);
 
             if ($result->isFailure()) {

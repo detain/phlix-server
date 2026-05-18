@@ -21,15 +21,65 @@ use Psr\Log\LoggerInterface;
  */
 class XmlTvParser
 {
+    /**
+     * Default cap on bytes read from a remote XMLTV URL when no explicit
+     * value is provided via configuration. Keeps a single malicious EPG
+     * endpoint from exhausting worker memory.
+     */
+    public const DEFAULT_MAX_BYTES = 64 * 1024 * 1024; // 64 MiB
+
     /** @var LoggerInterface|null Optional logger */
     private ?LoggerInterface $logger;
 
+    /** Maximum number of bytes to read from a remote XMLTV URL. */
+    private int $maxBytes;
+
+    /** Maximum redirects to follow when fetching XMLTV URLs. */
+    private int $maxRedirects;
+
     /**
      * @param LoggerInterface|null $logger Optional logger instance
+     * @param int|null $maxBytes Maximum download size in bytes (null = use config / default)
+     * @param int|null $maxRedirects Maximum HTTP redirects (null = use config / default)
      */
-    public function __construct(?LoggerInterface $logger = null)
-    {
+    public function __construct(
+        ?LoggerInterface $logger = null,
+        ?int $maxBytes = null,
+        ?int $maxRedirects = null,
+    ) {
         $this->logger = $logger;
+        $config = $this->loadXmltvConfig();
+        $this->maxBytes = $maxBytes ?? (is_int($config['max_bytes'] ?? null) ? (int) $config['max_bytes'] : self::DEFAULT_MAX_BYTES);
+        $this->maxRedirects = $maxRedirects ?? (is_int($config['max_redirects'] ?? null) ? (int) $config['max_redirects'] : 3);
+    }
+
+    /**
+     * Return the configured maximum download size in bytes.
+     */
+    public function getMaxBytes(): int
+    {
+        return $this->maxBytes;
+    }
+
+    /**
+     * Load the LiveTV `xmltv` config block, falling back to defaults.
+     *
+     * @return array<string, mixed>
+     */
+    private function loadXmltvConfig(): array
+    {
+        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : __DIR__ . '/../../../../config';
+        $configFile = $configPath . '/livetv.php';
+        if (is_file($configFile)) {
+            /** @var array<string, mixed> $config */
+            $config = include $configFile;
+            $xmltv = $config['xmltv'] ?? null;
+            if (is_array($xmltv)) {
+                /** @var array<string, mixed> $xmltv */
+                return $xmltv;
+            }
+        }
+        return [];
     }
 
     /**
@@ -101,27 +151,51 @@ class XmlTvParser
      */
     public function parseUrl(string $url, int $timeoutSecs = 30): array
     {
-        $this->logger?->info('XmlTvParser: fetching XMLTV', ['url' => $url, 'timeout' => $timeoutSecs]);
+        $this->logger?->info('XmlTvParser: fetching XMLTV', [
+            'url' => $url,
+            'timeout' => $timeoutSecs,
+            'max_bytes' => $this->maxBytes,
+        ]);
 
         $context = stream_context_create([
             'http' => [
                 'method' => 'GET',
                 'timeout' => $timeoutSecs,
-                'follow_location' => true,
-                'max_redirects' => 5,
+                'follow_location' => 1,
+                'max_redirects' => $this->maxRedirects,
                 'user_agent' => 'Phlex/1.0 (XMLTV Parser)',
             ],
             'ssl' => [
                 'verify_peer' => true,
                 'verify_peer_name' => true,
+                'SNI_enabled' => true,
             ],
         ]);
 
-        $content = @file_get_contents($url, false, $context);
+        $handle = @fopen($url, 'r', false, $context);
+        if ($handle === false) {
+            $error = error_get_last();
+            throw new \RuntimeException("Failed to fetch XMLTV from $url: " . ($error['message'] ?? 'Unknown error'));
+        }
+
+        try {
+            // Read at most maxBytes + 1 so that we can distinguish "exactly at
+            // limit" from "exceeded limit" without buffering an unbounded
+            // amount of memory on a malicious endpoint.
+            $content = stream_get_contents($handle, $this->maxBytes + 1);
+        } finally {
+            fclose($handle);
+        }
 
         if ($content === false) {
             $error = error_get_last();
-            throw new \RuntimeException("Failed to fetch XMLTV from $url: " . ($error['message'] ?? 'Unknown error'));
+            throw new \RuntimeException("Failed to read XMLTV from $url: " . ($error['message'] ?? 'Unknown error'));
+        }
+
+        if (strlen($content) > $this->maxBytes) {
+            throw new XmlTvOversizedException(
+                "XMLTV payload from {$url} exceeds maximum allowed size of {$this->maxBytes} bytes"
+            );
         }
 
         return $this->parse($content);

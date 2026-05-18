@@ -101,6 +101,60 @@ abstract class AbstractNotificationPlugin implements WebhookPluginInterface
     }
 
     /**
+     * Default path to the system CA bundle used for outbound TLS
+     * verification when no override is provided in configuration.
+     */
+    public const DEFAULT_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+
+    /**
+     * Build a stream context SSL block with `verify_peer` and
+     * `verify_peer_name` enabled.
+     *
+     * Notification plugins call out to third-party HTTPS endpoints
+     * (Discord, Slack, Telegram, …) and MUST verify the peer certificate
+     * chain. The CA bundle path is overridable via the notifications
+     * config (`<provider>.ca_bundle` or top-level `ca_bundle`) so admins
+     * can point Phlex at a private CA. Defaults to the standard Debian
+     * system bundle.
+     *
+     * @param array<string, mixed> $providerConfig Per-provider config slice
+     *
+     * @return array<string, mixed> ssl context options
+     */
+    protected function buildSslContextOptions(array $providerConfig = []): array
+    {
+        $caBundle = $this->stringFromMixed(
+            $providerConfig['ca_bundle']
+            ?? $this->resolveDefaultCaBundle()
+        );
+
+        return [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'cafile' => $caBundle,
+            'SNI_enabled' => true,
+        ];
+    }
+
+    /**
+     * Resolve the default CA bundle path, preferring an admin override
+     * from the global `notifications.php` config file when present.
+     */
+    private function resolveDefaultCaBundle(): string
+    {
+        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : __DIR__ . '/../../../config';
+        $configFile = $configPath . '/notifications.php';
+        if (file_exists($configFile)) {
+            /** @var array<string, mixed> $config */
+            $config = include $configFile;
+            if (is_string($config['ca_bundle'] ?? null) && $config['ca_bundle'] !== '') {
+                return $config['ca_bundle'];
+            }
+        }
+        return self::DEFAULT_CA_BUNDLE;
+    }
+
+    /**
      * Builds the platform-specific payload for the given event.
      *
      * @return array<string, mixed>

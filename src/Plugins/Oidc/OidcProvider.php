@@ -94,9 +94,10 @@ final class OidcProvider implements ProviderInterface
         $code = is_string($credentials['code'] ?? null) ? $credentials['code'] : '';
         $redirectUri = is_string($credentials['redirect_uri'] ?? null) ? $credentials['redirect_uri'] : '';
         $nonce = is_string($credentials['nonce'] ?? null) ? $credentials['nonce'] : '';
+        $codeVerifier = is_string($credentials['code_verifier'] ?? null) ? $credentials['code_verifier'] : '';
 
         try {
-            $tokenResponse = $this->exchangeCode($code, $redirectUri);
+            $tokenResponse = $this->exchangeCode($code, $redirectUri, $codeVerifier);
 
             if (!isset($tokenResponse['id_token'])) {
                 return new AuthResult(
@@ -225,20 +226,28 @@ final class OidcProvider implements ProviderInterface
      *
      * @param string $code
      * @param string $redirectUri
+     * @param string $codeVerifier RFC 7636 PKCE verifier — sent when the
+     *     authorize step issued a `code_challenge`. Empty string disables
+     *     the PKCE parameter (kept for backwards compatibility with
+     *     providers that do not support PKCE).
      * @return array<string, mixed>
      * @throws RuntimeException
      */
-    private function exchangeCode(string $code, string $redirectUri): array
+    private function exchangeCode(string $code, string $redirectUri, string $codeVerifier = ''): array
     {
         $tokenEndpoint = $this->discovery->tokenEndpoint();
 
-        $postData = http_build_query([
+        $postParams = [
             'grant_type' => 'authorization_code',
             'code' => $code,
             'redirect_uri' => $redirectUri,
             'client_id' => $this->clientId,
             'client_secret' => $this->clientSecret,
-        ]);
+        ];
+        if ($codeVerifier !== '') {
+            $postParams['code_verifier'] = $codeVerifier;
+        }
+        $postData = http_build_query($postParams);
 
         $context = stream_context_create([
             'http' => [
@@ -340,24 +349,65 @@ final class OidcProvider implements ProviderInterface
      * Build the authorization URL.
      *
      * @param string $redirectUri
-     * @param string|null $state
-     * @param string|null $nonce
+     * @param string|null $state CSRF protection state token
+     * @param string|null $nonce ID-token replay protection nonce
+     * @param string|null $codeChallenge RFC 7636 S256 challenge. When
+     *     supplied the URL includes `code_challenge` and
+     *     `code_challenge_method=S256` to enforce PKCE.
      * @return string
      */
-    public function buildAuthorizationUrl(string $redirectUri, ?string $state = null, ?string $nonce = null): string
-    {
+    public function buildAuthorizationUrl(
+        string $redirectUri,
+        ?string $state = null,
+        ?string $nonce = null,
+        ?string $codeChallenge = null,
+    ): string {
         $authEndpoint = $this->discovery->authorizationEndpoint();
         $nonceValue = $nonce ?? bin2hex(random_bytes(16));
 
-        $params = http_build_query([
+        $paramArray = [
             'client_id' => $this->clientId,
             'redirect_uri' => $redirectUri,
             'response_type' => 'code',
             'scope' => $this->scopes,
             'state' => $state,
             'nonce' => $nonceValue,
-        ]);
+        ];
+        if ($codeChallenge !== null && $codeChallenge !== '') {
+            $paramArray['code_challenge'] = $codeChallenge;
+            $paramArray['code_challenge_method'] = 'S256';
+        }
+        $params = http_build_query($paramArray);
 
         return $authEndpoint . '?' . $params;
+    }
+
+    /**
+     * Generate a cryptographically-random RFC 7636 PKCE `code_verifier`.
+     *
+     * Returns a 64-character string drawn from the unreserved-character
+     * set (hex digits), well within the 43–128 char window required by
+     * the spec. Callers should persist this value server-side keyed by
+     * the corresponding `state` and replay it on the token exchange.
+     */
+    public static function generateCodeVerifier(): string
+    {
+        return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Compute the RFC 7636 S256 `code_challenge` for a verifier.
+     */
+    public static function computeCodeChallenge(string $codeVerifier): string
+    {
+        return self::base64UrlEncode(hash('sha256', $codeVerifier, true));
+    }
+
+    /**
+     * URL-safe base64 encoding without padding, per RFC 7636 §4.2.
+     */
+    private static function base64UrlEncode(string $bytes): string
+    {
+        return rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
     }
 }

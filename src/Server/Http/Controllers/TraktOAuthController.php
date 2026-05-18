@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace Phlex\Server\Http\Controllers;
 
 use Phlex\Plugins\Scrobbler\Trakt\HttpClient;
+use Phlex\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
+use Phlex\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlex\Plugins\Scrobbler\Trakt\TraktApi;
+use Phlex\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlex\Plugins\Scrobbler\Trakt\TraktSettings;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
@@ -25,13 +28,20 @@ use Psr\Log\LoggerInterface;
 final class TraktOAuthController
 {
     private ?LoggerInterface $logger;
+    private TraktOAuthStateStore $stateStore;
 
     /**
      * @param LoggerInterface|null $logger Optional PSR-3 logger
+     * @param TraktOAuthStateStore|null $stateStore Server-side store for the
+     *     per-request CSRF `state` + PKCE `code_verifier`. Defaults to a
+     *     `$_SESSION`-backed implementation matching prior behaviour.
      */
-    public function __construct(?LoggerInterface $logger = null)
-    {
+    public function __construct(
+        ?LoggerInterface $logger = null,
+        ?TraktOAuthStateStore $stateStore = null,
+    ) {
         $this->logger = $logger;
+        $this->stateStore = $stateStore ?? new SessionTraktOAuthStateStore();
     }
 
     /**
@@ -64,8 +74,7 @@ final class TraktOAuthController
         $api = new TraktApi(new HttpClient(), $clientId, $clientSecret);
         $authUrl = $api->getAuthUrl($state, $codeVerifier);
 
-        $_SESSION['trakt_oauth_state'] = $state;
-        $_SESSION['trakt_oauth_code_verifier'] = $codeVerifier;
+        $this->stateStore->put($state, $codeVerifier);
 
         return (new Response())
             ->status(302)
@@ -99,17 +108,19 @@ final class TraktOAuthController
             return $this->errorResponse('Missing code or state parameter');
         }
 
-        $savedState = $_SESSION['trakt_oauth_state'] ?? '';
-        if (!hash_equals($savedState, $state)) {
-            return $this->errorResponse('Invalid state parameter - possible CSRF');
+        try {
+            $codeVerifier = $this->consumeState($state);
+        } catch (InvalidOAuthStateException $e) {
+            $this->logger?->warning('Trakt OAuth state validation failed', [
+                'reason' => $e->getMessage(),
+            ]);
+            return (new Response())
+                ->status(403)
+                ->json([
+                    'success' => false,
+                    'error' => 'Invalid state parameter - possible CSRF',
+                ]);
         }
-
-        $codeVerifier = $_SESSION['trakt_oauth_code_verifier'] ?? '';
-        if ($codeVerifier === '') {
-            return $this->errorResponse('Missing code verifier - session expired');
-        }
-
-        unset($_SESSION['trakt_oauth_state'], $_SESSION['trakt_oauth_code_verifier']);
 
         $config = $this->loadConfig();
 
@@ -145,6 +156,23 @@ final class TraktOAuthController
             ]);
             return $this->errorResponse('Token exchange failed: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Consume the saved (state, code_verifier) pair for an inbound callback.
+     *
+     * @throws InvalidOAuthStateException when the state has never been
+     *     issued, was already consumed, or does not match.
+     */
+    private function consumeState(string $state): string
+    {
+        $verifier = $this->stateStore->consume($state);
+        if ($verifier === null) {
+            throw new InvalidOAuthStateException(
+                'state mismatch or already consumed'
+            );
+        }
+        return $verifier;
     }
 
     /**

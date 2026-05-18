@@ -85,6 +85,7 @@ class NtfyPlugin extends AbstractNotificationPlugin
                 'timeout' => 10,
                 'ignore_errors' => true,
             ],
+            'ssl' => $this->buildSslContextOptions($this->loadConfig()),
         ]);
 
         $response = @file_get_contents($url, false, $context);

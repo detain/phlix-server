@@ -186,6 +186,7 @@ class WebhookDispatcher
                 'timeout' => $timeout,
                 'ignore_errors' => true,
             ],
+            'ssl' => $this->buildSslContextOptions($config),
         ]);
 
         $retries = 0;
@@ -291,6 +292,41 @@ class WebhookDispatcher
             'timeout' => 5,
             'max_retries' => 2,
             'parallel_dispatch' => true,
+        ];
+    }
+
+    /**
+     * Default system CA bundle used when no override is configured.
+     */
+    public const DEFAULT_CA_BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+
+    /**
+     * Build a `stream_context_create()` `ssl` block that verifies the
+     * peer certificate and hostname against a configurable CA bundle.
+     *
+     * Webhooks target third-party HTTPS endpoints that MUST be TLS-verified
+     * to prevent MITM tampering of webhook payloads in transit. The CA
+     * bundle path is overridable via `config/webhooks.php` (`ca_bundle`)
+     * so admins can pin a private/internal CA.
+     *
+     * @param array<string, mixed> $config Webhook config array
+     *
+     * @return array<string, mixed>
+     */
+    public function buildSslContextOptions(array $config): array
+    {
+        $caBundle = $this->stringFromMixed(
+            $config['ca_bundle'] ?? self::DEFAULT_CA_BUNDLE
+        );
+        if ($caBundle === '') {
+            $caBundle = self::DEFAULT_CA_BUNDLE;
+        }
+
+        return [
+            'verify_peer' => true,
+            'verify_peer_name' => true,
+            'cafile' => $caBundle,
+            'SNI_enabled' => true,
         ];
     }
 

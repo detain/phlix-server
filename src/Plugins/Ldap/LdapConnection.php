@@ -86,7 +86,7 @@ class LdapConnection
 
     public function findUserDn(string $username): ?string
     {
-        $filter = str_replace('{{username}}', $username, $this->userFilter);
+        $filter = $this->buildUserFilter($username);
 
         try {
             $query = $this->connection->query();
@@ -116,13 +116,31 @@ class LdapConnection
             $query = $this->connection->query();
             $query->setDn($this->baseDn);
 
-            $filter = str_replace('{{username}}', $username, $this->userFilter);
+            $filter = $this->buildUserFilter($username);
             $results = $query->rawFilter($filter)->get();
 
             return $results[0]['dn'] ?? null;
         } catch (LdapRecordException $e) {
             return null;
         }
+    }
+
+    /**
+     * Build the LDAP user search filter with the supplied username safely
+     * substituted.
+     *
+     * The username is escaped using RFC 4515 filter rules via
+     * {@see ldap_escape()} with the LDAP_ESCAPE_FILTER flag. Without this
+     * step a malicious username such as `*)(uid=*` could break out of the
+     * filter and enumerate users or bypass authentication.
+     *
+     * @internal Exposed for unit testing of the escape behaviour.
+     */
+    public function buildUserFilter(string $username): string
+    {
+        $escaped = ldap_escape($username, '', LDAP_ESCAPE_FILTER);
+
+        return str_replace('{{username}}', $escaped, $this->userFilter);
     }
 
     /**

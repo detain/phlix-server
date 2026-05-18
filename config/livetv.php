@@ -109,6 +109,38 @@ return [
     ],
 
     /**
+     * XMLTV guide fetcher settings.
+     *
+     * Used by {@see \Phlex\LiveTv\Tuners\Iptv\XmlTvParser::parseUrl()} when
+     * downloading remote XMLTV guide files. Bounds protect the worker
+     * against malicious endpoints that serve arbitrarily large payloads.
+     */
+    'xmltv' => [
+        /**
+         * Maximum number of bytes to read from a remote XMLTV URL.
+         *
+         * Downloads exceeding this size throw {@see \Phlex\LiveTv\Tuners\Iptv\XmlTvOversizedException}.
+         *
+         * @default 67108864 (64 MiB)
+         */
+        'max_bytes' => 64 * 1024 * 1024,
+
+        /**
+         * HTTP request timeout in seconds for guide downloads.
+         *
+         * @default 30
+         */
+        'timeout_secs' => 30,
+
+        /**
+         * Maximum number of HTTP redirects to follow.
+         *
+         * @default 3
+         */
+        'max_redirects' => 3,
+    ],
+
+    /**
      * DVB-T (Terrestrial) USB tuner settings.
      *
      * Linux DVB-T USB dongles based on chipsets like RTL2832U expose

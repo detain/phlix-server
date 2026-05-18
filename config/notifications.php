@@ -10,6 +10,16 @@
 declare(strict_types=1);
 
 return [
+    /**
+     * Path to the CA bundle used to verify TLS certificates of all
+     * notification provider endpoints (Discord, Slack, Telegram, ntfy,
+     * Pushover, Apprise, MQTT). Each provider can override this with
+     * its own `ca_bundle` key. Defaults to the Debian system bundle.
+     *
+     * @default '/etc/ssl/certs/ca-certificates.crt'
+     */
+    'ca_bundle' => '/etc/ssl/certs/ca-certificates.crt',
+
     'discord' => [
         'webhook_url' => '',
         'enabled' => false,

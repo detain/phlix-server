@@ -188,11 +188,24 @@ final class OidcCallbackControllerTest extends TestCase
         $registry = new AuthProviderRegistry();
         $userRepository = $this->createMock(UserRepository::class);
         $jwtHandler = $this->createMock(JwtHandler::class);
-        $controller = new OidcCallbackController($registry, $userRepository, $jwtHandler);
+
+        // Pre-seed the state store with the sid we'll embed in the
+        // state envelope so the request gets past the PKCE state check
+        // and reaches the provider-registration check (which is what
+        // this test is asserting on).
+        $stateStore = new InMemoryOidcStateStore();
+        $stateStore->put('sid-xyz', 'verifier-abc', 'test-nonce');
+
+        $controller = new OidcCallbackController(
+            $registry,
+            $userRepository,
+            $jwtHandler,
+            $stateStore,
+        );
 
         $stateData = json_encode([
+            'sid' => 'sid-xyz',
             'redirect_uri' => 'http://localhost/callback',
-            'nonce' => 'test-nonce',
         ]);
         $state = base64_encode($stateData);
 
@@ -207,5 +220,35 @@ final class OidcCallbackControllerTest extends TestCase
         $this->assertSame(503, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertSame('provider_not_configured', $body['error']);
+    }
+}
+
+/**
+ * Lightweight in-memory implementation of {@see \Phlex\Plugins\Oidc\OidcStateStore}
+ * used by the OIDC callback tests in this file.
+ *
+ * @internal Test fixture only.
+ */
+final class InMemoryOidcStateStore implements \Phlex\Plugins\Oidc\OidcStateStore
+{
+    /** @var array<string, array{code_verifier: string, nonce: string}> */
+    private array $entries = [];
+
+    public function put(string $state, string $codeVerifier, string $nonce): void
+    {
+        $this->entries[$state] = [
+            'code_verifier' => $codeVerifier,
+            'nonce' => $nonce,
+        ];
+    }
+
+    public function consume(string $state): ?array
+    {
+        if (!isset($this->entries[$state])) {
+            return null;
+        }
+        $entry = $this->entries[$state];
+        unset($this->entries[$state]);
+        return $entry;
     }
 }

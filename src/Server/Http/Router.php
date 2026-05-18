@@ -551,7 +551,7 @@ class Router
     /**
      * Gets all registered routes.
      *
-     * @return array<string, array<string, array{handler: callable|array, middleware: array<callable>, path: string}>> The routes array
+     * @return array<string, array> Registered routes
      *
      * @description Returns the internal routes array for inspection or testing.
      */

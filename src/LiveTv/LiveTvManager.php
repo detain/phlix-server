@@ -156,8 +156,8 @@ class LiveTvManager
      * Scans the system for DVB tuner devices and registers them in the database.
      * On Linux systems, this checks /dev/dvb for available adapters.
      *
-     * @return array<string, array{id:string, name:string, type:string, status:string, adapter:string|int, frontend:string, capabilities:array<string,mixed>}> List of discovered tuners with their capabilities
-     * @throws \RuntimeException If database operations fail during registration
+     * @return array Discovered tuners
+     * @throws \RuntimeException If database operations fail
      *
      * @example
      * ```php
@@ -189,7 +189,7 @@ class LiveTvManager
      * Searches /dev/dvb for DVB adapter devices and returns their information.
      * Each discovered device is checked for a frontend0 device.
      *
-     * @return array<string, array{id:string, name:string, type:string, status:string, adapter:string|int, frontend:string, capabilities:array<string,mixed>}> Discovered tuners
+     * @return array Tuners found
      *
      * @example
      * ```php
@@ -441,7 +441,7 @@ class LiveTvManager
      *
      * @param string $channelId The channel ID to tune to
      * @param string|null $tunerId Optional specific tuner ID (uses any available if null)
-     * @return array{id:string, channel_id:string, tuner_id:string, started_at:int, stream_url:string} Tune result with stream URL
+     * @return array{id:string, channel_id:string, tuner_id:string, started_at:int, stream_url:string} Tune result
      * @throws \InvalidArgumentException If channel not found
      * @throws \RuntimeException If no tuner is available
      *

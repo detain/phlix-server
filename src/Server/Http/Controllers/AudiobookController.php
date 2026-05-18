@@ -264,16 +264,25 @@ class AudiobookController
         $data = is_array($rawData) ? $rawData : [];
 
         $positionMsRaw = $data['position_ms'] ?? 0;
-        $positionMs = max(0, is_int($positionMsRaw) ? $positionMsRaw : (is_numeric($positionMsRaw) ? (int) $positionMsRaw : 0));
+        $positionMs = is_int($positionMsRaw)
+            ? $positionMsRaw
+            : (is_numeric($positionMsRaw) ? (int) $positionMsRaw : 0);
+        $positionMs = max(0, $positionMs);
 
         $currentChapterIndexRaw = $data['current_chapter_index'] ?? 0;
-        $currentChapterIndex = max(0, is_int($currentChapterIndexRaw) ? $currentChapterIndexRaw : (is_numeric($currentChapterIndexRaw) ? (int) $currentChapterIndexRaw : 0));
+        $currentChapterIndex = is_int($currentChapterIndexRaw)
+            ? $currentChapterIndexRaw
+            : (is_numeric($currentChapterIndexRaw) ? (int) $currentChapterIndexRaw : 0);
+        $currentChapterIndex = max(0, $currentChapterIndex);
 
         $completedChaptersRaw = is_array($data['completed_chapters'] ?? null) ? $data['completed_chapters'] : [];
         $completedChapters = array_values(array_filter($completedChaptersRaw, 'is_int'));
 
         $percentCompleteRaw = $data['percent_complete'] ?? 0.0;
-        $percentComplete = min(100.0, max(0.0, is_int($percentCompleteRaw) || is_float($percentCompleteRaw) ? (float) $percentCompleteRaw : (is_numeric($percentCompleteRaw) ? (float) $percentCompleteRaw : 0.0)));
+        $percentComplete = is_int($percentCompleteRaw) || is_float($percentCompleteRaw)
+            ? (float) $percentCompleteRaw
+            : (is_numeric($percentCompleteRaw) ? (float) $percentCompleteRaw : 0.0);
+        $percentComplete = min(100.0, max(0.0, $percentComplete));
 
         $progress = new AudiobookProgress(
             $audiobookId,

@@ -442,10 +442,14 @@ class PhotoController
         $resampleResult = imagecopyresampled(
             $thumb,
             $source,
-            0, 0,
-            $srcX, $srcY,
-            $width, $height,
-            $newWidth, $newHeight
+            0,
+            0,
+            $srcX,
+            $srcY,
+            $width,
+            $height,
+            $newWidth,
+            $newHeight
         );
 
         if ($resampleResult === false) {

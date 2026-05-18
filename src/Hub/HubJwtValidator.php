@@ -31,7 +31,7 @@ final class HubJwtValidator implements HubJwtValidatorInterface
     /**
      * Creates a new HubJwtValidator.
      *
-     * @param string           $hubJwksUrl       The hub's JWKS URL (e.g. `https://hub.example.com/.well-known/jwks.json`).
+     * @param string $hubJwksUrl The hub's JWKS URL (e.g. `https://hub.example.com/.well-known/jwks.json`).
      * @param HttpClientFactoryInterface $httpClientFactory Factory for creating HTTP clients to fetch JWKS.
      * @param LoggerInterface  $logger           Logger instance for diagnostic messages.
      * @param string            $serverId         This server's unique ID (used for audience validation).
@@ -80,7 +80,10 @@ final class HubJwtValidator implements HubJwtValidatorInterface
             $publicKey = $this->jwkToEd25519PublicKey($jwk);
             $signedMessage = $parts[0] . '.' . $parts[1];
 
-            if ($signature === '' || $publicKey === '' || !sodium_crypto_sign_verify_detached($signature, $signedMessage, $publicKey)) {
+            $isValidSignature = $signature !== ''
+                && $publicKey !== ''
+                && sodium_crypto_sign_verify_detached($signature, $signedMessage, $publicKey);
+            if (!$isValidSignature) {
                 $this->logger->debug('Hub JWT validation failed: invalid signature');
                 return null;
             }
@@ -121,8 +124,12 @@ final class HubJwtValidator implements HubJwtValidatorInterface
             /** @var array<string> $scope */
             $scope = is_array($payload['scope'] ?? null) ? array_filter($payload['scope'], 'is_string') : [];
 
+            $hubUserId = is_string($payload['hub_user_id'] ?? null)
+                ? $payload['hub_user_id']
+                : (is_string($payload['sub'] ?? null) ? $payload['sub'] : '');
+
             return new HubUserClaims(
-                userId: is_string($payload['hub_user_id'] ?? null) ? $payload['hub_user_id'] : (is_string($payload['sub'] ?? null) ? $payload['sub'] : ''),
+                userId: $hubUserId,
                 serverId: $payloadServerId,
                 subject: is_string($payload['sub'] ?? null) ? $payload['sub'] : '',
                 issuer: $payloadIss,

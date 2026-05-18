@@ -136,8 +136,13 @@ class Recorder
      * @param int $maxStorageBytes Maximum storage limit in bytes (0 = unlimited)
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
      */
-    public function __construct(Connection $db, string $storagePath = '/var/recordings', int $maxStorageBytes = 0, ?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        Connection $db,
+        string $storagePath = '/var/recordings',
+        int $maxStorageBytes = 0,
+        ?StructuredLogger $logger = null
+    ) {
+        $this->db = $db;
         $this->db = $db;
         $this->storagePath = $storagePath;
         $this->maxStorageBytes = $maxStorageBytes;
@@ -747,7 +752,7 @@ class Recorder
     /**
      * Get comprehensive storage statistics.
      *
-     * @return array{used_bytes:int, available_bytes:int, max_bytes:int, active_recordings:int, active_timeshifts:int, recordings_by_status:array<string,int>} Storage stats
+     * @return array Storage statistics
      */
     public function getStorageStats(): array
     {

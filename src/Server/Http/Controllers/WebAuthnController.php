@@ -10,6 +10,7 @@ use Phlex\Auth\WebAuthn\WebAuthnManager;
 use Phlex\Auth\WebAuthn\WebAuthnSettings;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
+use Phlex\Server\Http\Router;
 use Workerman\MySQL\Connection;
 
 final class WebAuthnController
@@ -25,6 +26,9 @@ final class WebAuthnController
         $this->authManager = $authManager;
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function startRegistration(Request $request, array $params): Response
     {
         $userId = $request->userId ?? null;
@@ -32,22 +36,25 @@ final class WebAuthnController
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        $data = $request->body;
+        $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
 
-        if (!$username) {
+        if (!is_string($username)) {
             $user = $this->authManager->getUser($userId);
-            $username = $user['username'] ?? 'user';
+            $username = is_array($user) ? ($user['username'] ?? 'user') : 'user';
         }
 
         try {
-            $options = $this->webauthnManager->startRegistration($userId, $username);
+            $options = $this->webauthnManager->startRegistration($userId, is_string($username) ? $username : 'user');
             return (new Response())->json($options);
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function finishRegistration(Request $request, array $params): Response
     {
         $userId = $request->userId ?? null;
@@ -55,23 +62,23 @@ final class WebAuthnController
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        $data = $request->body;
+        $data = is_array($request->body) ? $request->body : [];
         $credential = $data['credential'] ?? null;
         $challenge = $data['challenge'] ?? null;
 
-        if (!$credential || !$challenge) {
+        if (!is_array($credential) || !is_string($challenge)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: credential, challenge'
             ]);
         }
 
         $user = $this->authManager->getUser($userId);
-        $username = $user['username'] ?? 'user';
+        $username = is_array($user) ? ($user['username'] ?? 'user') : 'user';
 
         try {
             $credentialId = $this->webauthnManager->finishRegistration(
                 $userId,
-                $username,
+                is_string($username) ? $username : 'user',
                 $credential,
                 $challenge
             );
@@ -85,12 +92,15 @@ final class WebAuthnController
         }
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function startAuthentication(Request $request, array $params): Response
     {
-        $data = $request->body;
+        $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
 
-        if (!$username) {
+        if (!is_string($username)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required field: username'
             ]);
@@ -104,14 +114,17 @@ final class WebAuthnController
         }
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function finishAuthentication(Request $request, array $params): Response
     {
-        $data = $request->body;
+        $data = is_array($request->body) ? $request->body : [];
         $username = $data['username'] ?? null;
         $credential = $data['credential'] ?? null;
         $challenge = $data['challenge'] ?? null;
 
-        if (!$username || !$credential || !$challenge) {
+        if (!is_string($username) || !is_array($credential) || !is_string($challenge)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: username, credential, challenge'
             ]);
@@ -125,7 +138,7 @@ final class WebAuthnController
             );
 
             if (!$result->isFailure()) {
-                $authResponse = $this->authManager->buildAuthResponse($result->userId);
+                $authResponse = $this->authManager->buildAuthResponse($result->userId ?? '');
                 return (new Response())->json($authResponse);
             }
 
@@ -135,6 +148,9 @@ final class WebAuthnController
         }
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function listCredentials(Request $request, array $params): Response
     {
         $userId = $request->userId ?? null;
@@ -158,6 +174,9 @@ final class WebAuthnController
         }
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function deleteCredential(Request $request, array $params): Response
     {
         $userId = $request->userId ?? null;
@@ -166,7 +185,7 @@ final class WebAuthnController
         }
 
         $credentialId = $params['id'] ?? null;
-        if (!$credentialId) {
+        if (!is_string($credentialId)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing credential ID'
             ]);
@@ -189,7 +208,7 @@ final class WebAuthnController
         }
     }
 
-    public static function registerRoutes(array &$router, string $controllerClass): void
+    public static function registerRoutes(Router &$router, string $controllerClass): void
     {
         $router->post('/api/v1/auth/webauthn/register/options', [$controllerClass, 'startRegistration']);
         $router->post('/api/v1/auth/webauthn/register/verify', [$controllerClass, 'finishRegistration']);

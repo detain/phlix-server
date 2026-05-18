@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "phlex.fullname" . }}
+  labels:
+    {{- include "phlex.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "phlex.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "phlex.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "phlex.fullname" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+            - name: websocket
+              containerPort: 3473
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
+          env:
+            - name: PHLEX_DATABASE_HOST
+              value: {{ .Values.config.database_host | quote }}
+            - name: PHLEX_DATABASE_PORT
+              value: {{ .Values.config.database_port | quote }}
+            - name: PHLEX_DATABASE_NAME
+              value: {{ .Values.config.database_name | quote }}
+            - name: PHLEX_DATABASE_USER
+              value: {{ .Values.config.database_user | quote }}
+            - name: PHLEX_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "phlex.fullname" . }}
+                  key: database-password
+            - name: PHLEX_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "phlex.fullname" . }}
+                  key: secret-key
+            - name: PHLEX_LOG_LEVEL
+              value: {{ .Values.config.log_level | quote }}
+            - name: PHLEX_HUB_URL
+              value: {{ .Values.config.hub_url | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /var/phlex/config
+            - name: data
+              mountPath: /var/phlex/data
+            - name: backups
+              mountPath: /var/phlex/backups
+            - name: logs
+              mountPath: /var/phlex/logs
+            - name: media
+              mountPath: /media
+              readOnly: true
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-backups
+        - name: logs
+          emptyDir: {}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-media

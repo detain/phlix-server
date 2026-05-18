@@ -1,0 +1,16 @@
+{{/*
+Thank you for installing Phlex Media Server.
+
+Your release is named {{ .Release.Name }}.
+
+To get the application URL:
+
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- end }}
+
+To learn more about the release, try:
+  $ helm get all {{ .Release.Name }}
+*/}}

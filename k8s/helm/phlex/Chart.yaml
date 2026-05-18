@@ -1,0 +1,16 @@
+apiVersion: v2
+name: phlex
+description: A Helm chart for Phlex Media Server
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - media-server
+  - plex
+  - jellyfin
+  - emby
+maintainers:
+  - name: Phlex Team
+    url: https://github.com/detain
+sources:
+  - https://github.com/detain/phlex-server

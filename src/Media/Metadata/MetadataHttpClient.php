@@ -55,11 +55,12 @@ class MetadataHttpClient
      *
      * @param string $endpoint API endpoint path (e.g., '/search/movie')
      * @param array<string, mixed> $params Query parameters to include in request
+     * @param array<string, string>|null $headers Optional custom headers
      * @return array<string, mixed>|null Decoded JSON response or null on failure
      */
-    public function get(string $endpoint, array $params = []): ?array
+    public function get(string $endpoint, array $params = [], ?array $headers = null): ?array
     {
-        $cacheKey = md5($endpoint . json_encode($params));
+        $cacheKey = md5($endpoint . json_encode($params) . json_encode($headers ?? []));
 
         if (isset($this->cache[$cacheKey])) {
             return $this->cache[$cacheKey];
@@ -68,11 +69,21 @@ class MetadataHttpClient
         $params['api_key'] = $this->apiKey;
         $url = $this->baseUrl . '/' . ltrim($endpoint, '/') . '?' . http_build_query($params);
 
+        $httpOptions = [
+            'timeout' => $this->timeout,
+            'ignore_errors' => true,
+        ];
+
+        if ($headers !== null) {
+            $headerStrings = [];
+            foreach ($headers as $key => $value) {
+                $headerStrings[] = "$key: $value";
+            }
+            $httpOptions['header'] = implode("\r\n", $headerStrings);
+        }
+
         $context = stream_context_create([
-            'http' => [
-                'timeout' => $this->timeout,
-                'ignore_errors' => true,
-            ],
+            'http' => $httpOptions,
         ]);
 
         $response = @file_get_contents($url, false, $context);

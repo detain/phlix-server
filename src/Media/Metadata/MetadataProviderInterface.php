@@ -4,20 +4,12 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Metadata;
 
-/**
- * MetadataProviderInterface defines the contract for metadata providers.
- *
- * Metadata providers fetch media metadata from external services like TMDB, TVDB,
- * Fanart.tv, or local NFO files. Each provider implements search, details retrieval,
- * and image fetching capabilities.
- *
- * @author Phlex Development Team
- * @version 1.0.0
- * @description Contract for metadata providers (TMDB, TVDB, Fanart, local NFO)
- * @see MetadataManager For provider coordination
- */
 interface MetadataProviderInterface
 {
+    public const MEDIA_TYPE_ALBUM = 'album';
+    public const MEDIA_TYPE_ARTIST = 'artist';
+    public const MEDIA_TYPE_TRACK = 'track';
+
     /**
      * Search for media by query string.
      *
@@ -50,4 +42,11 @@ interface MetadataProviderInterface
      * @return array<string> Provider name aliases (e.g., ['tmdb'] or ['tvdb', 'thetvdb'])
      */
     public function getProviders(): array;
+
+    /**
+     * Get the source name of this provider.
+     *
+     * @return string Provider source name (e.g., 'musicbrainz', 'audiodb', 'tmdb')
+     */
+    public function getSourceName(): string;
 }

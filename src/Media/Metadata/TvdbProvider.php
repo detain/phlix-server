@@ -230,6 +230,14 @@ class TvdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function getSourceName(): string
+    {
+        return 'tvdb';
+    }
+
+    /**
      * Get episode details by series ID and season/episode number.
      *
      * @param string $seriesId TVDB series ID

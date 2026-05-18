@@ -7,6 +7,32 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step G.1)
+
+- `MusicBrainzProvider` — MusicBrainz API v2 metadata provider implementing
+  `MetadataProviderInterface`. Supports artist, album, and track search and
+  detail retrieval with MusicBrainz-required User-Agent headers and 1 req/sec
+  rate limiting via `MusicMetadataProviderTrait`.
+- `AudioDbProvider` — AudioDB API v1 metadata provider implementing
+  `MetadataProviderInterface`. Supports artist, album, and track search and
+  detail retrieval. Degrades gracefully when no API key is configured.
+- `MusicMetadataProviderTrait` — shared trait for music providers with
+  `rateLimit()` for enforcing request delays and `mbHeaders()` for
+  MusicBrainz-required headers.
+- `MetadataProviderInterface` — added `MEDIA_TYPE_ALBUM`, `MEDIA_TYPE_ARTIST`,
+  `MEDIA_TYPE_TRACK` constants and `getSourceName()` method.
+- `MetadataHttpClient` — extended `get()` method to accept optional `$headers`
+  parameter for custom request headers.
+- `MetadataManager` — updated provider priority to include `audiodb` as fallback
+  for music types; added `track` media type support.
+- `config/music_providers.php` — new config file with MusicBrainz and AudioDB
+  provider settings (rate limits, user-agent, API key, fallback behavior).
+- `docs/developers/music-providers.md` — developer documentation covering
+  provider architecture, configuration keys, MusicBrainz rate-limit requirements,
+  and guide for adding third-party providers.
+- Unit tests: `MusicBrainzProviderTest` (10 tests), `AudioDbProviderTest`
+  (11 tests) with ≥85% coverage on both providers.
+
 ### Added (Step F.5)
 
 - `ComskipRunner` — detects and runs the comskip binary on Live TV recordings;

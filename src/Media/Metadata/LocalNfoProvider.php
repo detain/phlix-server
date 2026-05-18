@@ -139,6 +139,14 @@ class LocalNfoProvider implements MetadataProviderInterface
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function getSourceName(): string
+    {
+        return 'local';
+    }
+
+    /**
      * Parse a movie NFO file.
      *
      * Supports both XML format and simple ID-per-line format.

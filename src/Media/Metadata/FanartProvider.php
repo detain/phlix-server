@@ -155,6 +155,14 @@ class FanartProvider implements MetadataProviderInterface
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function getSourceName(): string
+    {
+        return 'fanart';
+    }
+
+    /**
      * Get movie artwork from Fanart.tv using IMDB ID.
      *
      * @param string $imdbId IMDB movie ID (e.g., 'tt0133093' for The Matrix)

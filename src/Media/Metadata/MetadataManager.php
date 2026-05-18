@@ -39,8 +39,9 @@ class MetadataManager
         'movie' => ['tmdb', 'local'],
         'series' => ['tvdb', 'fanart', 'local'],
         'episode' => ['tvdb', 'local'],
-        'artist' => ['musicbrainz', 'local'],
-        'album' => ['musicbrainz', 'local'],
+        'artist' => ['musicbrainz', 'audiodb', 'local'],
+        'album' => ['musicbrainz', 'audiodb', 'local'],
+        'track' => ['musicbrainz', 'audiodb', 'local'],
     ];
 
     /** @var array<string, MetadataProviderInterface> Flat provider lookup by name */

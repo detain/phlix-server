@@ -135,6 +135,14 @@ class TmdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * {@inheritdoc}
+     */
+    public function getSourceName(): string
+    {
+        return 'tmdb';
+    }
+
+    /**
      * Format TMDB API response into standard movie details structure.
      *
      * @param array<string, mixed> $data Raw TMDB API response

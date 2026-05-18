@@ -11,4 +11,14 @@ return [
         'api_key' => '',
         'enabled' => false,
     ],
+    'bazarr' => [
+        'url' => 'http://localhost:6767',
+        'api_key' => '',
+        'enabled' => false,
+    ],
+    'prowlarr' => [
+        'url' => 'http://localhost:9696',
+        'api_key' => '',
+        'enabled' => false,
+    ],
 ];

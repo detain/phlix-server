@@ -7,6 +7,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step K.2)
+
+- Bazarr/Prowlarr API clients for subtitle and indexer management:
+  - `BazarrClient` — Bazarr API client with getSubtitles(), getSubtitleLanguages(), downloadSubtitle(), getLanguages(), testConnection()
+  - `ProwlarrClient` — Prowlarr API client with getIndexers(), getIndexerStats(), getHealth(), triggerReindexerCheck(), testConnection()
+  - Extended `config/arr.php` with bazarr and prowlarr sections
+  - Unit tests: `BazarrClientTest` (9 tests), `ProwlarrClientTest` (8 tests)
+
 ### Added (Step K.1)
 
 - Sonarr/Radarr API clients for media server integration:

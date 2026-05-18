@@ -13,7 +13,12 @@ use Phlex\Media\Library\MediaScanner;
 use Phlex\Media\Metadata\MetadataManager;
 use Phlex\Media\Streaming\HlsStreamer;
 use Phlex\Media\Streaming\QualitySelector;
+use Phlex\Playlists\SmartPlaylistController;
+use Phlex\Playlists\SmartPlaylistEngine;
+use Phlex\Playlists\SmartPlaylistRefreshHandler;
+use Phlex\Playlists\SmartPlaylistRepository;
 use Psr\EventDispatcher\EventDispatcherInterface;
+use Workerman\MySQL\Connection;
 
 use function DI\autowire;
 use function DI\factory;
@@ -54,7 +59,8 @@ final class MediaServicesProvider implements ServiceProviderInterface
             ItemRepository::class => autowire(),
 
             FolderWatcher::class => autowire()
-                ->constructorParameter('logger', get('logger.media')),
+                ->constructorParameter('logger', get('logger.media'))
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
 
             MediaScanner::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))
@@ -74,6 +80,22 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $segmentDir,
                     $baseUrl,
                     $container->get(QualitySelector::class)
+                );
+            }),
+
+            // Smart playlist services
+            SmartPlaylistRepository::class => autowire()
+                ->constructorParameter('db', get(Connection::class)),
+
+            SmartPlaylistEngine::class => autowire()
+                ->constructorParameter('itemRepository', get(ItemRepository::class)),
+
+            SmartPlaylistRefreshHandler::class => autowire(),
+
+            SmartPlaylistController::class => factory(static function ($container): SmartPlaylistController {
+                return new SmartPlaylistController(
+                    $container->get(Connection::class),
+                    $container->get(ItemRepository::class)
                 );
             }),
         ]);

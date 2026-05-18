@@ -534,6 +534,33 @@ class Router
     }
 
     /**
+     * Registers the smart playlist API routes.
+     *
+     * GET    /api/v1/smart-playlists           — list all smart playlists
+     * POST   /api/v1/smart-playlists           — create smart playlist
+     * GET    /api/v1/smart-playlists/{id}       — get single smart playlist
+     * PUT    /api/v1/smart-playlists/{id}       — update smart playlist
+     * DELETE /api/v1/smart-playlists/{id}      — delete smart playlist
+     * POST   /api/v1/smart-playlists/{id}/preview — preview rules against library
+     *
+     * @param string $controllerClass The SmartPlaylistController class name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function smartPlaylists(string $controllerClass): self
+    {
+        $this->get('/api/v1/smart-playlists', [$controllerClass, 'index']);
+        $this->post('/api/v1/smart-playlists', [$controllerClass, 'create']);
+        $this->get('/api/v1/smart-playlists/{id}', [$controllerClass, 'show']);
+        $this->put('/api/v1/smart-playlists/{id}', [$controllerClass, 'update']);
+        $this->delete('/api/v1/smart-playlists/{id}', [$controllerClass, 'delete']);
+        $this->post('/api/v1/smart-playlists/{id}/preview', [$controllerClass, 'preview']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

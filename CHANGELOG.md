@@ -7,6 +7,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.1)
+
+- Smart-playlist rule engine with JSON DSL evaluation at scan time and
+  on folder-watch events. Includes:
+  - `RuleNode` — immutable AST node (TYPE_AND/OR/NOT/RULE) for rule trees.
+  - `RuleOperators` — 11 static operator methods (equals, notEquals, contains,
+    notContains, greaterThan, lessThan, between, in, notIn, startsWith, endsWith).
+  - `SmartPlaylistEngine` — buildFromDsl(), evaluate(), evaluateOnScan(), toJson()
+    for parsing JSON DSL and evaluating media items against rules.
+  - `SmartPlaylist` — readonly entity with id, name, libraryId, rulesJson, limit,
+    sortBy, sortDesc, timestamps.
+  - `SmartPlaylistRepository` — full CRUD for smart_playlists table with
+    parameterized Workerman\MySQL\Connection queries.
+  - `SmartPlaylistRefreshHandler` — listens to LibraryUpdated events and
+    re-evaluates all smart playlists for the changed library.
+  - `SmartPlaylistController` — REST API endpoints:
+    GET/POST/PUT/DELETE /api/v1/smart-playlists, POST /api/v1/smart-playlists/{id}/preview.
+  - `LibraryUpdated` event dispatched by FolderWatcher on content changes.
+  - Migration `migrations/004_smart_playlists.sql` — creates smart_playlists table
+    with JSON rules column, limit, sort_by, sort_desc fields.
+  - Unit tests in `tests/unit/Playlists/` (RuleNodeTest, RuleOperatorsTest,
+    SmartPlaylistEngineTest, SmartPlaylistRepositoryTest, SmartPlaylistTest).
+  - Integration test `tests/integration/Playlists/SmartPlaylistRefreshTest.php`.
+  - `docs/developers/smart-playlists.md` — DSL reference, operator list,
+    evaluation algorithm, extension guide.
+  - `Router::smartPlaylists()` — registers smart playlist routes.
+  - `FolderWatcher` now injects EventDispatcherInterface and dispatches
+    LibraryUpdated events when changes are detected.
+  - MediaServicesProvider registers SmartPlaylistEngine, SmartPlaylistRepository,
+    SmartPlaylistRefreshHandler, SmartPlaylistController.
+
 ### Added (Step G.6)
 
 - `AudiobookProgress` — Value object for per-user audiobook progress tracking.

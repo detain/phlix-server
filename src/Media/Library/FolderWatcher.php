@@ -6,24 +6,31 @@ namespace Phlex\Media\Library;
 
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Playlists\LibraryUpdated;
+use Psr\EventDispatcher\EventDispatcherInterface;
 
 /**
  * FolderWatcher monitors filesystem directories for media file changes.
  *
  * This class tracks multiple library paths and detects when files are added,
  * modified, or deleted by calculating directory checksums. It uses mtime-based
- * change detection for efficiency.
+ * change detection for efficiency. When changes are detected, it dispatches
+ * LibraryUpdated events to notify subscribers (such as SmartPlaylistRefreshHandler).
  *
  * @author Phlex Development Team
  * @version 1.0.0
  * @description Filesystem watcher for detecting media library changes
  * @see LibraryManager For library management operations
  * @see MediaScanner For media file scanning
+ * @see SmartPlaylistRefreshHandler For handling library updates
  */
 class FolderWatcher
 {
     /** @var StructuredLogger|null Logger instance for structured logging */
     private ?StructuredLogger $logger = null;
+
+    /** @var EventDispatcherInterface|null PSR-14 event dispatcher for library events */
+    private ?EventDispatcherInterface $eventDispatcher = null;
 
     /** @var array<string, array{library_id: string, paths: array<string>}> Watched path information keyed by path */
     private array $watchedPaths = [];
@@ -41,10 +48,16 @@ class FolderWatcher
      * Constructor for FolderWatcher.
      *
      * @param StructuredLogger|null $logger Optional custom logger, creates default if not provided
+     * @param EventDispatcherInterface|null $eventDispatcher Optional PSR-14 dispatcher for LibraryUpdated events
+     *
+     * @since 0.14.0
      */
-    public function __construct(?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        ?StructuredLogger $logger = null,
+        ?EventDispatcherInterface $eventDispatcher = null
+    ) {
         $this->logger = $logger ?? $this->createDefaultLogger();
+        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -128,6 +141,9 @@ class FolderWatcher
     /**
      * Checks all watched paths for changes since last check.
      *
+     * When changes are detected, dispatches LibraryUpdated events to
+     * notify subscribers such as SmartPlaylistRefreshHandler.
+     *
      * @return array<int, array{library_id: string, path: string, change_detected: bool}> Array of changes detected
      *
      * @example
@@ -137,6 +153,8 @@ class FolderWatcher
      *     echo "Change detected in: {$change['path']}";
      * }
      * ```
+     *
+     * @since 0.14.0
      */
     public function checkForChanges(): array
     {
@@ -146,17 +164,40 @@ class FolderWatcher
             $newChecksum = $this->calculateDirectoryChecksum($path);
 
             if ($newChecksum !== $this->fileChecksums[$path]) {
+                $libraryId = $info['library_id'];
                 $changes[] = [
-                    'library_id' => $info['library_id'],
+                    'library_id' => $libraryId,
                     'path' => $path,
                     'change_detected' => true,
                 ];
 
                 $this->fileChecksums[$path] = $newChecksum;
+
+                // Dispatch LibraryUpdated event for smart playlist refresh
+                $this->dispatchLibraryUpdated($libraryId, $path);
             }
         }
 
         return $changes;
+    }
+
+    /**
+     * Dispatches a LibraryUpdated event to the event dispatcher.
+     *
+     * @param string $libraryId The library that was updated
+     * @param string $path The path that triggered the update
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    private function dispatchLibraryUpdated(string $libraryId, string $path): void
+    {
+        if ($this->eventDispatcher === null) {
+            return;
+        }
+
+        $event = new LibraryUpdated($libraryId, $path);
+        $this->eventDispatcher->dispatch($event);
     }
 
     /**

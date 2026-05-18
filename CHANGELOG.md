@@ -7,6 +7,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step L.1)
+
+- Webhook plugin framework for sending events to HTTP endpoints:
+  - `WebhookEvent` — event class with eventType, payload, occurredAt, toArray(), getSignature() using HMAC-SHA256
+  - `WebhookDispatcher` — registers/unregisters/dispatches webhooks, uses Workerman\MySQL\Connection and Workerman\Timer for async dispatch
+  - `DispatchResult` — result class with successCount, failureCount, failures
+  - `WebhookPluginInterface` — interface with getName(), getSupportedEvents(), send()
+  - `migrations/018_webhooks.sql` — webhooks and webhook_logs tables
+  - `WebhookAdminController` — GET/POST/DELETE /api/v1/admin/webhooks, POST test endpoint
+  - `config/webhooks.php` — configuration with enabled, timeout, max_retries, parallel_dispatch
+  - Unit tests: `WebhookEventTest` (5 tests), `WebhookDispatcherTest` (7 tests)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

@@ -295,6 +295,9 @@ class Application
         // Start discovery server for SSDP/mDNS device discovery
         $this->startDiscoveryIfEnabled();
 
+        // Start newsletter timer if enabled
+        $this->startNewsletterTimerIfEnabled();
+
         $request = Request::fromGlobals();
 
         // Build the final handler that dispatches to the router
@@ -434,6 +437,119 @@ class Application
         } catch (\Throwable) {
             // Discovery not configured — silent ignore
         }
+    }
+
+    /**
+     * Start the newsletter timer for weekly email delivery.
+     *
+     * If newsletter is enabled in config, registers a periodic timer to process
+     * the newsletter queue and send emails to eligible users.
+     *
+     * @return void
+     *
+     * @since 0.19.0
+     */
+    private function startNewsletterTimerIfEnabled(): void
+    {
+        $newsletterConfig = $this->config['newsletter'] ?? [];
+
+        if (empty($newsletterConfig['enabled'])) {
+            return;
+        }
+
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $sendDay = $newsletterConfig['send_day'] ?? 0;
+            $sendHour = $newsletterConfig['send_hour'] ?? 9;
+            $batchSize = $newsletterConfig['batch_size'] ?? 50;
+            $templateDir = $newsletterConfig['template_dir'] ?? 'public/templates';
+
+            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
+
+            $sender = new \Phlex\Admin\NewsletterSender(
+                $db,
+                \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA),
+                array_merge($newsletterConfig, ['template_dir' => $templateDir])
+            );
+
+            $generator = new \Phlex\Admin\NewsletterGenerator(
+                new \Phlex\Stats\StatsCollector($db),
+                new \Phlex\Media\Library\LibraryManager(
+                    $db,
+                    new \Phlex\Media\Library\MediaScanner($db),
+                    new \Phlex\Media\Library\FolderWatcher($db)
+                ),
+                $db,
+                $templateDir,
+                $newsletterConfig
+            );
+
+            $this->registerNewsletterTimer($sender, $generator, $sendDay, $sendHour, $batchSize);
+        } catch (\Throwable $e) {
+            $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA);
+            $logger->error('Failed to start newsletter timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Register the newsletter timer with Workerman.
+     *
+     * @param \Phlex\Admin\NewsletterSender $sender Newsletter sender instance
+     * @param \Phlex\Admin\NewsletterGenerator $generator Newsletter generator instance
+     * @param int $sendDay Day of week to send (0=Sunday)
+     * @param int $sendHour Hour of day to send (0-23)
+     * @param int $batchSize Number of emails per batch
+     *
+     * @return void
+     */
+    private function registerNewsletterTimer(
+        \Phlex\Admin\NewsletterSender $sender,
+        \Phlex\Admin\NewsletterGenerator $generator,
+        int $sendDay,
+        int $sendHour,
+        int $batchSize
+    ): void {
+        $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA);
+
+        \Workerman\Timer::add(1, function () use ($sender, $generator, $sendDay, $sendHour, $batchSize, $logger): void {
+            $now = new \DateTime();
+
+            if ((int) $now->format('w') !== $sendDay) {
+                return;
+            }
+
+            if ((int) $now->format('G') !== $sendHour) {
+                return;
+            }
+
+            $logger->info('Newsletter timer triggered', [
+                'day' => $sendDay,
+                'hour' => $sendHour,
+            ]);
+
+            $weekStart = clone $now;
+            $weekStart->modify('-7 days');
+
+            $userIds = $generator->getRecipientUserIds();
+            $queued = $sender->queueAll($userIds, $weekStart);
+
+            $logger->info('Newsletter queue created', ['count' => $queued]);
+
+            $processed = 0;
+            while ($sender->getPendingCount() > 0) {
+                $processed += $sender->processQueue($batchSize);
+            }
+
+            $logger->info('Newsletter batch processed', ['processed' => $processed]);
+
+            $stats = $sender->getDeliveryStats();
+            $logger->info('Newsletter delivery stats', $stats);
+        });
     }
 
     /**

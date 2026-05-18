@@ -50,6 +50,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `/admin/dashboard` route in `public/index.php`
   - Unit tests: `DashboardServiceTest` (5 tests)
 
+### Added (Step L.5)
+
+- Weekly newsletter email system for user engagement:
+  - `migrations/020_newsletter.sql` — newsletter_queue table with id, user_id, week_start, status, attempts, last_attempt_at, sent_at, error_message
+  - `config/newsletter.php` — configuration with enabled, send_day, send_hour, batch_size, from_email, from_name, subject_template
+  - `NewsletterGenerator` — generates email content with watch time, top media, new items using Smarty template
+  - `NewsletterSender` — queues and processes newsletter delivery with batch processing and retry logic
+  - `public/templates/emails/newsletter.tpl` — responsive HTML email template with watch summary, top 5 media, new items, CTA button, unsubscribe link
+  - `Application::startNewsletterTimerIfEnabled()` — Workerman Timer integration for scheduled newsletter delivery
+  - Unit tests: `NewsletterGeneratorTest` (4 tests), `NewsletterSenderTest` (5 tests)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

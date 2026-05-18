@@ -1,0 +1,714 @@
+/**
+ * Music Player Styles
+ *
+ * Styles for music library browsing views including artist grids,
+ * album grids, track lists, and the embedded music player.
+ *
+ * @author Phlex Development Team
+ * @version 1.0.0
+ * @since 0.14.0
+ */
+
+/* ============================================
+   Music Page Base
+   ============================================ */
+
+.music-page {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.music-page .page-header {
+    margin-bottom: 2rem;
+}
+
+.music-page .page-header h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: #fff;
+}
+
+.music-page .page-description {
+    color: #a0a0a0;
+    font-size: 1.1rem;
+}
+
+/* ============================================
+   Artist Grid
+   ============================================ */
+
+.artists-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.artist-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1.5rem;
+    background: #1a1a2e;
+    border-radius: 12px;
+    text-decoration: none;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.artist-card:hover {
+    transform: translateY(-4px);
+    background: #252540;
+}
+
+.artist-art {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+
+.artist-art svg,
+.artist-icon {
+    width: 100%;
+    height: 100%;
+}
+
+.artist-info {
+    text-align: center;
+}
+
+.artist-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+}
+
+.artist-meta {
+    font-size: 0.85rem;
+    color: #a0a0a0;
+}
+
+/* ============================================
+   Album Grid
+   ============================================ */
+
+.albums-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.album-card {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    background: #1a1a2e;
+    border-radius: 12px;
+    text-decoration: none;
+    transition: transform 0.2s, background 0.2s;
+}
+
+.album-card:hover {
+    transform: translateY(-4px);
+    background: #252540;
+}
+
+.album-art {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 0.75rem;
+}
+
+.album-icon {
+    width: 100%;
+    height: 100%;
+}
+
+.album-info {
+    flex: 1;
+}
+
+.album-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 0.25rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.album-artist {
+    font-size: 0.85rem;
+    color: #a0a0a0;
+    display: block;
+}
+
+.album-year {
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.album-track-count {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 0.5rem;
+}
+
+/* ============================================
+   Track List
+   ============================================ */
+
+.tracks-list {
+    margin-top: 1.5rem;
+}
+
+.tracks-header {
+    display: grid;
+    grid-template-columns: 50px 1fr 200px 200px 80px;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    color: #666;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+.track-row {
+    display: grid;
+    grid-template-columns: 50px 1fr 200px 200px 80px;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    align-items: center;
+    border-radius: 8px;
+    transition: background 0.15s;
+}
+
+.track-row:hover {
+    background: #1a1a2e;
+}
+
+.track-row:hover .play-track-btn {
+    opacity: 1;
+}
+
+.track-number {
+    font-size: 0.9rem;
+    color: #666;
+    text-align: center;
+}
+
+.track-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.track-name {
+    font-size: 0.95rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-album {
+    font-size: 0.8rem;
+    color: #666;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-artist {
+    font-size: 0.9rem;
+    color: #a0a0a0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-duration {
+    font-size: 0.85rem;
+    color: #666;
+    text-align: right;
+}
+
+.play-track-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #6b4d8a;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.play-track-btn:hover {
+    background: #8b6dab;
+}
+
+/* ============================================
+   Artist/Album Detail Pages
+   ============================================ */
+
+.artist-header,
+.album-header {
+    display: flex;
+    gap: 2rem;
+    padding: 2rem;
+    background: linear-gradient(135deg, #1a1a2e 0%, #252540 100%);
+    border-radius: 16px;
+    margin-bottom: 2rem;
+}
+
+.artist-art-large,
+.album-art-large {
+    width: 200px;
+    height: 200px;
+    border-radius: 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.artist-art-large svg,
+.album-art-large svg {
+    width: 100%;
+    height: 100%;
+}
+
+.artist-details,
+.album-details {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.artist-name,
+.album-name {
+    font-size: 2rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.artist-stats,
+.album-artist {
+    font-size: 1.1rem;
+    color: #a0a0a0;
+    margin-bottom: 0.25rem;
+}
+
+.album-year {
+    font-size: 1rem;
+    color: #666;
+    margin-bottom: 0.5rem;
+}
+
+.album-track-count {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+.play-all-btn {
+    margin-top: 1rem;
+    padding: 0.75rem 2rem;
+    background: #6b4d8a;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    width: fit-content;
+    transition: background 0.2s;
+}
+
+.play-all-btn:hover {
+    background: #8b6dab;
+}
+
+/* ============================================
+   Music Player Page
+   ============================================ */
+
+.player-page {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 2rem;
+    height: calc(100vh - 100px);
+}
+
+.player-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    background: #1a1a2e;
+    border-radius: 16px;
+}
+
+.player-artwork {
+    width: 300px;
+    height: 300px;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.player-artwork svg {
+    width: 100%;
+    height: 100%;
+}
+
+.player-info {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.player-track-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 0.25rem;
+}
+
+.player-artist-name {
+    font-size: 1.1rem;
+    color: #a0a0a0;
+}
+
+.player-album-name {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+.player-progress {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    max-width: 500px;
+    margin-bottom: 1.5rem;
+}
+
+.progress-time {
+    font-size: 0.85rem;
+    color: #666;
+    min-width: 40px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 4px;
+    background: #3a3a4a;
+    border-radius: 2px;
+    position: relative;
+    cursor: pointer;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #6b4d8a;
+    border-radius: 2px;
+    width: 0%;
+}
+
+.progress-handle {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.progress-bar:hover .progress-handle {
+    opacity: 1;
+}
+
+.player-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.control-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 1.2rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.control-play {
+    width: 56px;
+    height: 56px;
+    background: #6b4d8a;
+    font-size: 1.5rem;
+}
+
+.control-play:hover {
+    background: #8b6dab;
+}
+
+.player-volume {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.volume-icon {
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+.volume-slider {
+    width: 100px;
+    height: 4px;
+    -webkit-appearance: none;
+    background: #3a3a4a;
+    border-radius: 2px;
+    outline: none;
+}
+
+.volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.player-queue {
+    background: #1a1a2e;
+    border-radius: 16px;
+    padding: 1.5rem;
+    overflow-y: auto;
+}
+
+.player-queue h3 {
+    font-size: 1.1rem;
+    color: #fff;
+    margin-bottom: 1rem;
+}
+
+.queue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.queue-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.queue-item:hover {
+    background: #252540;
+}
+
+.queue-item.active {
+    background: #2a2a4a;
+}
+
+.queue-item-art {
+    width: 40px;
+    height: 40px;
+    background: #333;
+    border-radius: 4px;
+}
+
+.queue-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.queue-item-name {
+    font-size: 0.9rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queue-item-artist {
+    font-size: 0.75rem;
+    color: #666;
+}
+
+/* ============================================
+   Empty States
+   ============================================ */
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 4rem 2rem;
+    text-align: center;
+}
+
+.empty-icon {
+    width: 100px;
+    height: 100px;
+    margin-bottom: 1.5rem;
+    opacity: 0.5;
+}
+
+.empty-state h2 {
+    font-size: 1.5rem;
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.empty-state p {
+    color: #666;
+}
+
+/* ============================================
+   Search Box
+   ============================================ */
+
+.search-box {
+    margin-top: 1rem;
+}
+
+.search-input {
+    width: 100%;
+    max-width: 400px;
+    padding: 0.75rem 1rem;
+    background: #252540;
+    border: 1px solid #3a3a4a;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1rem;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.search-input:focus {
+    border-color: #6b4d8a;
+}
+
+.search-input::placeholder {
+    color: #666;
+}
+
+/* ============================================
+   Pagination
+   ============================================ */
+
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid #2a2a2a;
+}
+
+.pagination a {
+    padding: 0.5rem 1rem;
+    background: #252540;
+    color: #fff;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+
+.pagination a:hover {
+    background: #3a3a5a;
+}
+
+.pagination-info {
+    font-size: 0.9rem;
+    color: #666;
+}
+
+/* ============================================
+   Responsive
+   ============================================ */
+
+@media (max-width: 768px) {
+    .music-page {
+        padding: 1rem;
+    }
+
+    .artists-grid,
+    .albums-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 1rem;
+    }
+
+    .tracks-header {
+        display: none;
+    }
+
+    .track-row {
+        grid-template-columns: 40px 1fr auto;
+    }
+
+    .track-artist,
+    .track-album {
+        display: none;
+    }
+
+    .artist-header,
+    .album-header {
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+    }
+
+    .artist-art-large,
+    .album-art-large {
+        width: 150px;
+        height: 150px;
+    }
+
+    .player-page {
+        grid-template-columns: 1fr;
+    }
+
+    .player-queue {
+        display: none;
+    }
+}

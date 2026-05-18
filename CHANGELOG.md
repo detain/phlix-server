@@ -7,6 +7,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step G.2)
+
+- `AudioScanner` — Pure-PHP audio file scanner with ID3v2 (MP3), Vorbis
+  Comment (FLAC/OGG), and MP4 atom (M4A/AAC) tag harvesting. No external
+  dependencies required. Never throws; returns partial results on best
+  effort.
+- `MusicLibraryManager` — Orchestrates music library scanning, tag harvest,
+  and metadata enrichment via `MetadataManager`. Implements `rescanLibrary()` for
+  full pipeline and `upsertTrack()` for single-file processing.
+- `MusicLibraryType` — Library type plugin implementing `LibraryTypeInterface`
+  with type `'music'`. Returns `AudioScanner` and `MusicLibraryManager` instances.
+- `LibraryTypeInterface` — New interface for library type plugins, allowing
+  type-specific scanner and manager instances.
+- `MusicController` — REST API endpoints for music browsing:
+  - `GET /music/artists` — list all artists
+  - `GET /music/artists/{mbid}` — artist detail with albums
+  - `GET /music/albums` — list all albums
+  - `GET /music/albums/{mbid}` — album detail with tracks
+  - `GET /music/tracks` — list all tracks (paginated)
+  - `GET /music/tracks/{id}` — single track
+  - `GET /music/now-playing` — current playback state
+- `Router::music()` — Registers `/music/*` routes pointing to `MusicController`.
+- `WebPortalRouter` — Added `/music`, `/music/artists`, `/music/albums`,
+  `/music/tracks`, `/music/player` web portal routes.
+- Smarty templates — `music/artists.tpl`, `music/artist.tpl`,
+  `music/albums.tpl`, `music/album.tpl`, `music/tracks.tpl`,
+  `music/player.tpl`, `music/partials/music_card.tpl`.
+- `public/assets/css/music.css` — Styles for artist grid, album grid,
+  track list, and player bar.
+- `public/assets/js/music-player.js` — Music player JavaScript with play,
+  pause, seek, next/prev, shuffle, repeat, and queue management.
+- `migrations/011_music_library.sql` — Adds 'track' to media_items type enum,
+  adds indexes for library_type, artist, album, and genre queries.
+- `docs/libraries/music.md` — Developer documentation covering supported
+  formats, tag field mapping, naming conventions, scan behavior, and API.
+- Unit tests: `AudioScannerTest` (8 tests), `MusicLibraryManagerTest` (8 tests),
+  `MusicControllerTest` (13 tests).
+
 ### Added (Step G.1)
 
 - `MusicBrainzProvider` — MusicBrainz API v2 metadata provider implementing

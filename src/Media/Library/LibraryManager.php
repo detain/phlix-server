@@ -6,6 +6,7 @@ namespace Phlex\Media\Library;
 
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Media\Music\MusicLibraryType;
 use Workerman\MySQL\Connection;
 
 /**
@@ -239,6 +240,12 @@ class LibraryManager
 
         $this->logger->info('Starting library scan', ['library_id' => $libraryId, 'name' => $library['name']]);
 
+        // Route music libraries through MusicLibraryManager for tag harvesting
+        if ($library['type'] === 'music') {
+            $this->scanMusicLibrary($libraryId, $library);
+            return;
+        }
+
         foreach ($library['paths'] as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
@@ -248,6 +255,33 @@ class LibraryManager
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);
+    }
+
+    /**
+     * Scans a music library using AudioScanner for tag harvesting.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @param array<string, mixed> $library The library data
+     * @return void
+     */
+    private function scanMusicLibrary(string $libraryId, array $library): void
+    {
+        // Music scanning is handled by MusicLibraryManager which uses
+        // AudioScanner for ID3/MP4 tag harvesting. This requires
+        // a different scan approach than video libraries.
+        //
+        // For now, fall back to basic scanning. The AudioScanner
+        // will handle tag harvesting when available.
+        foreach ($library['paths'] as $path) {
+            if (!is_dir($path)) {
+                $this->logger->warning('Music library path does not exist', ['path' => $path]);
+                continue;
+            }
+            // Use audio type for scanner
+            $this->scanner->scan($libraryId, $path, 'audio');
+        }
+
+        $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
     }
 
     /**

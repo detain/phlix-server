@@ -403,6 +403,35 @@ class Router
     }
 
     /**
+     * Registers the music library API routes.
+     *
+     * GET /music/artists              — list all artists
+     * GET /music/artists/{mbid}        — get artist detail with albums
+     * GET /music/albums               — list all albums
+     * GET /music/albums/{mbid}        — get album detail with tracks
+     * GET /music/tracks               — list all tracks (paginated)
+     * GET /music/tracks/{id}          — get single track
+     * GET /music/now-playing          — get current playback state
+     *
+     * @param string $controllerClass The MusicController class name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function music(string $controllerClass): self
+    {
+        $this->get('/music/artists', [$controllerClass, 'listArtists']);
+        $this->get('/music/artists/{mbid}', [$controllerClass, 'getArtist']);
+        $this->get('/music/albums', [$controllerClass, 'listAlbums']);
+        $this->get('/music/albums/{mbid}', [$controllerClass, 'getAlbum']);
+        $this->get('/music/tracks', [$controllerClass, 'listTracks']);
+        $this->get('/music/tracks/{id}', [$controllerClass, 'getTrack']);
+        $this->get('/music/now-playing', [$controllerClass, 'nowPlaying']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

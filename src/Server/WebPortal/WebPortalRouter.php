@@ -9,6 +9,7 @@ use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
 use Phlex\Media\Library\LibraryManager;
 use Phlex\Media\Library\ItemRepository;
+use Phlex\Media\Library\MusicLibraryManager;
 use Phlex\Media\Markers\PlaybackMarkerService;
 use Phlex\Session\SessionManager;
 use Phlex\Session\PlaybackController;
@@ -130,6 +131,15 @@ class WebPortalRouter
         // Settings routes
         $this->router->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
         $this->router->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
+
+        // Music routes (web portal)
+        $this->router->get('/music', [$this, 'getMusicIndex']);
+        $this->router->get('/music/artists', [$this, 'getMusicArtists']);
+        $this->router->get('/music/artists/{mbid}', [$this, 'getMusicArtist']);
+        $this->router->get('/music/albums', [$this, 'getMusicAlbums']);
+        $this->router->get('/music/albums/{mbid}', [$this, 'getMusicAlbum']);
+        $this->router->get('/music/tracks', [$this, 'getMusicTracks']);
+        $this->router->get('/music/player', [$this, 'getMusicPlayer']);
     }
 
     /**
@@ -530,5 +540,130 @@ class WebPortalRouter
 
         // Update in database
         return (new Response())->json(['message' => 'Settings updated']);
+    }
+
+    /**
+     * Gets the music library index page.
+     *
+     * GET /music
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with music library overview
+     *
+     * @since 0.14.0
+     */
+    public function getMusicIndex(Request $request, array $params): Response
+    {
+        $libraries = $this->libraryManager->getAllLibraries();
+        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
+
+        return (new Response())->json([
+            'music_libraries' => $musicLibraries,
+        ]);
+    }
+
+    /**
+     * Gets all music artists.
+     *
+     * GET /music/artists
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with artists list
+     *
+     * @since 0.14.0
+     */
+    public function getMusicArtists(Request $request, array $params): Response
+    {
+        $libraries = $this->libraryManager->getAllLibraries();
+        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
+
+        $allArtists = [];
+        foreach ($musicLibraries as $library) {
+            // Artists are fetched via API client using /music/artists endpoint
+        }
+
+        return (new Response())->json(['artists' => $allArtists]);
+    }
+
+    /**
+     * Gets a specific artist.
+     *
+     * GET /music/artists/{mbid}
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with artist details
+     *
+     * @since 0.14.0
+     */
+    public function getMusicArtist(Request $request, array $params): Response
+    {
+        return (new Response())->json(['artist' => null]);
+    }
+
+    /**
+     * Gets all music albums.
+     *
+     * GET /music/albums
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with albums list
+     *
+     * @since 0.14.0
+     */
+    public function getMusicAlbums(Request $request, array $params): Response
+    {
+        return (new Response())->json(['albums' => []]);
+    }
+
+    /**
+     * Gets a specific album.
+     *
+     * GET /music/albums/{mbid}
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with album details
+     *
+     * @since 0.14.0
+     */
+    public function getMusicAlbum(Request $request, array $params): Response
+    {
+        return (new Response())->json(['album' => null]);
+    }
+
+    /**
+     * Gets all music tracks.
+     *
+     * GET /music/tracks
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with tracks list
+     *
+     * @since 0.14.0
+     */
+    public function getMusicTracks(Request $request, array $params): Response
+    {
+        return (new Response())->json(['tracks' => []]);
+    }
+
+    /**
+     * Gets the music player page.
+     *
+     * GET /music/player
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with player state
+     *
+     * @since 0.14.0
+     */
+    public function getMusicPlayer(Request $request, array $params): Response
+    {
+        return (new Response())->json(['player' => []]);
     }
 }

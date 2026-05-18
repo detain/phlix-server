@@ -11,18 +11,6 @@
           }
         ]
       }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/caliber-session-freshness.sh",
-            "description": "Caliber: check config freshness on session start"
-          }
-        ]
-      }
     ]
   },
   "permissions": {

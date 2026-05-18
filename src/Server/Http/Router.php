@@ -357,6 +357,30 @@ class Router
     }
 
     /**
+     * Registers the Trakt.tv OAuth authentication routes.
+     *
+     * GET /api/v1/oauth/trakt           — redirect to Trakt authorization
+     * GET /api/v1/oauth/trakt/callback  — handle Trakt OAuth callback
+     *
+     * @param string $controllerClass The TraktOAuthController class name
+     * @param string $authorizeMethod The authorize method name
+     * @param string $callbackMethod The callback method name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function traktAuth(
+        string $controllerClass,
+        string $authorizeMethod = 'authorize',
+        string $callbackMethod = 'callback'
+    ): self {
+        $this->get('/api/v1/oauth/trakt', [$controllerClass, $authorizeMethod]);
+        $this->get('/api/v1/oauth/trakt/callback', [$controllerClass, $callbackMethod]);
+
+        return $this;
+    }
+
+    /**
      * Registers the trickplay (thumbnail seek) routes.
      *
      * GET /trickplay/{jobId}/thumb-{index}.jpg  — thumbnail grid image

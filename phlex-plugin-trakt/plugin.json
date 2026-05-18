@@ -1,0 +1,54 @@
+{
+    "name": "phlex-plugin-trakt",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.14.0",
+    "type": "scrobbler",
+    "entry": "Phlex\\Plugins\\Scrobbler\\Trakt\\TraktPlugin",
+    "events": [
+        "phlex.playback.started",
+        "phlex.playback.stopped",
+        "phlex.playback.progress"
+    ],
+    "settings": {
+        "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable Trakt scrobbling"
+        },
+        "username": {
+            "type": "string",
+            "default": "",
+            "description": "Trakt username"
+        },
+        "access_token": {
+            "type": "string",
+            "default": null,
+            "description": "OAuth access token (managed automatically)"
+        },
+        "refresh_token": {
+            "type": "string",
+            "default": null,
+            "description": "OAuth refresh token (managed automatically)"
+        },
+        "expires_at": {
+            "type": "integer",
+            "default": null,
+            "description": "Access token expiry timestamp (managed automatically)"
+        },
+        "sync_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable two-way watch history sync"
+        },
+        "sync_interval_minutes": {
+            "type": "integer",
+            "default": 30,
+            "description": "How often to sync Trakt history to Phlex (minutes)"
+        },
+        "scrobble_enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable scrobbling on playback events"
+        }
+    }
+}

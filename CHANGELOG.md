@@ -7,6 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.4)
+
+- Trakt.tv scrobble plugin with two-way history sync. Includes:
+  - `TraktApi` — OAuth2 PKCE client, scrobble start/pause/stop, history sync
+  - `TraktSettings` — per-user settings (tokens, sync prefs, username)
+  - `TraktPlugin` — LifecycleInterface entry, subscribes to PlaybackStarted/Stopped/ProgressUpdated
+  - `TraktHistorySync` — syncTraktToPhlex() (pull on schedule) and syncPhlexToTrakt() (push on ≥90% completion)
+  - `TraktOAuthController` — OAuth callback at GET /api/v1/oauth/trakt/callback
+  - `config/scrobblers/trakt.php` — client_id, client_secret, redirect_uri, sync_interval
+  - `phlex-plugin-trakt/plugin.json` — scrobbler plugin manifest
+  - Unit tests (19 tests across TraktApi, TraktSettings, TraktHistorySync, TraktPlugin)
+  - `docs/developers/scrobbler-plugins.md` — scrobbler plugin author guide
+- New Router method `traktAuth()` for Trakt OAuth routes
+
 ### Added (Step H.3)
 
 - Custom CSS / themes with `ui-theme` plugin type. Includes:

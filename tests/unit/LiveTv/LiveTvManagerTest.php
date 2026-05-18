@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
@@ -7,6 +9,10 @@ use Phlex\LiveTv\ChannelManager;
 use Phlex\LiveTv\GuideManager;
 use Phlex\LiveTv\LiveTvManager;
 use Phlex\LiveTv\Recorder;
+use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
+use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
+use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlex\LiveTv\Tuners\TunerDriverInterface;
 use Phlex\Common\Logger\StructuredLogger;
 
 class LiveTvManagerTest extends TestCase
@@ -17,6 +23,7 @@ class LiveTvManagerTest extends TestCase
     private $mockGuideManager;
     private $mockRecorder;
     private $mockLogger;
+    private TunerDriverInterface $tunerDriver;
 
     protected function setUp(): void
     {
@@ -28,11 +35,17 @@ class LiveTvManagerTest extends TestCase
         $this->mockRecorder = $this->createMock(Recorder::class);
         $this->mockLogger = $this->createMock(StructuredLogger::class);
 
+        // Create real HDHomeRun driver for testing
+        $discovery = new HdHomeRunDiscovery(null, 1);
+        $apiClient = new HdHomeRunApiClient('http://127.0.0.1');
+        $this->tunerDriver = new HdHomeRunTunerDriver($discovery, $apiClient, null);
+
         $this->manager = new LiveTvManager(
             $this->mockDb,
             $this->mockChannelManager,
             $this->mockGuideManager,
             $this->mockRecorder,
+            $this->tunerDriver,
             $this->mockLogger
         );
     }
@@ -128,5 +141,6 @@ class LiveTvManagerTest extends TestCase
         $this->assertEquals('dvb_s', LiveTvManager::TUNER_TYPE_DVB_S);
         $this->assertEquals('dvb_c', LiveTvManager::TUNER_TYPE_DVB_C);
         $this->assertEquals('atsc', LiveTvManager::TUNER_TYPE_ATSC);
+        $this->assertEquals('hdhomerun', LiveTvManager::TUNER_TYPE_HDHOMERUN);
     }
 }

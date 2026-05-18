@@ -7,6 +7,9 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlex\LiveTv\Tuners\TunerDriverInterface;
 use Workerman\MySQL\Connection;
 
 /**
@@ -19,7 +22,8 @@ use Workerman\MySQL\Connection;
  *
  * ## Tuner Types
  *
- * The manager supports multiple DVB tuner types:
+ * The manager supports multiple tuner types:
+ * - HDHomeRun (network-attached TV tuners via SSDP + HTTP API)
  * - DVB-T (Terrestrial)
  * - DVB-S (Satellite)
  * - DVB-C (Cable)
@@ -58,7 +62,10 @@ class LiveTvManager
     /** @var StructuredLogger Structured logger instance */
     private StructuredLogger $logger;
 
-    /** @var array<string, array{id:string,name:string,type:string,status:string,adapter:string|int,frontend:string,capabilities:array}> Discovered tuners */
+    /** @var TunerDriverInterface The tuner driver for device discovery and streaming */
+    private TunerDriverInterface $tunerDriver;
+
+    /** @var array<string, array<string, mixed>> Discovered tuners */
     private array $tuners = [];
 
     /** @var array<string, array{id:string,channel_id:string,tuner_id:string,started_at:int,stream_url:string}> Active tune requests keyed by tune request ID */
@@ -128,12 +135,20 @@ class LiveTvManager
     public const TUNER_TYPE_ATSC = 'atsc';
 
     /**
+     * HDHomeRun tuner type (network-attached).
+     *
+     * @var string
+     */
+    public const TUNER_TYPE_HDHOMERUN = 'hdhomerun';
+
+    /**
      * Creates a new LiveTvManager instance.
      *
      * @param Connection $db Database connection for tuner/channel persistence
      * @param ChannelManager $channelManager Channel management handler
      * @param GuideManager $guideManager Program guide handler
      * @param Recorder $recorder DVR recording handler
+     * @param TunerDriverInterface $tunerDriver Tuner driver for discovery and streaming
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
      */
     public function __construct(
@@ -141,22 +156,24 @@ class LiveTvManager
         ChannelManager $channelManager,
         GuideManager $guideManager,
         Recorder $recorder,
+        TunerDriverInterface $tunerDriver,
         ?StructuredLogger $logger = null
     ) {
         $this->db = $db;
         $this->channelManager = $channelManager;
         $this->guideManager = $guideManager;
         $this->recorder = $recorder;
+        $this->tunerDriver = $tunerDriver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
     }
 
     /**
-     * Discover available tuners on the system.
+     * Discover available tuners on the network/system.
      *
-     * Scans the system for DVB tuner devices and registers them in the database.
-     * On Linux systems, this checks /dev/dvb for available adapters.
+     * Uses the configured tuner driver to discover available tuner devices.
+     * For HDHomeRun, this performs SSDP discovery on the local network.
      *
-     * @return array Discovered tuners
+     * @return array Discovered tuners keyed by tuner ID
      * @throws \RuntimeException If database operations fail
      *
      * @example
@@ -171,93 +188,35 @@ class LiveTvManager
     {
         $this->logger->info('Starting tuner discovery');
 
-        $tuners = $this->scanForTuners();
+        $devices = $this->tunerDriver->discoverDevices();
+        $tuners = [];
 
-        foreach ($tuners as $tuner) {
+        foreach ($devices as $index => $device) {
+            $tunerId = 'hdhr_' . $device->deviceId;
+            $tuner = [
+                'id' => $tunerId,
+                'name' => "HDHomeRun ({$device->deviceId})",
+                'type' => self::TUNER_TYPE_HDHOMERUN,
+                'status' => self::TUNER_STATUS_IDLE,
+                'tuner_index' => $index,
+                'ip_address' => $device->ipAddress,
+                'tuner_count' => $device->tunerCount,
+                'capabilities' => [
+                    'hdhomerun' => true,
+                    'tuner_count' => $device->tunerCount,
+                    'stream_url_template' => $device->getBaseUrl() . '/watch?channel={channel}',
+                ],
+                'tunerDevice' => $device,
+            ];
+
             $this->registerTuner($tuner);
+            $tuners[$tunerId] = $tuner;
         }
 
         $this->tuners = $tuners;
-        $this->logger->info('Tuner discovery complete', ['count' => count($tuners)]);
+        $this->logger->info('Tuner discovery complete', ['count' => count($tuners), 'driver' => $this->tunerDriver->getName()]);
 
         return $tuners;
-    }
-
-    /**
-     * Scan the system for available tuner devices.
-     *
-     * Searches /dev/dvb for DVB adapter devices and returns their information.
-     * Each discovered device is checked for a frontend0 device.
-     *
-     * @return array Tuners found
-     *
-     * @example
-     * ```php
-     * $tuners = $this->scanForTuners();
-     * // Returns: [['id' => 'dvb_0', 'name' => 'DVB Adapter 0', ...], ...]
-     * ```
-     */
-    private function scanForTuners(): array
-    {
-        $tuners = [];
-
-        $dvbBase = '/dev/dvb';
-        if (is_dir($dvbBase)) {
-            $adapters = glob("$dvbBase/adapter*");
-            foreach ($adapters as $adapter) {
-                if (is_dir($adapter)) {
-                    $adapterNum = preg_replace('/[^0-9]/', '', $adapter);
-                    $frontend = "$adapter/frontend0";
-
-                    if (file_exists($frontend)) {
-                        $tuners[] = [
-                            'id' => "dvb_$adapterNum",
-                            'name' => "DVB Adapter $adapterNum",
-                            'type' => $this->detectDvbType($frontend),
-                            'status' => self::TUNER_STATUS_IDLE,
-                            'adapter' => $adapterNum,
-                            'frontend' => $frontend,
-                            'capabilities' => $this->getTunerCapabilities($frontend),
-                        ];
-                    }
-                }
-            }
-        }
-
-        return $tuners;
-    }
-
-    /**
-     * Detect the DVB type (terrestrial, satellite, cable).
-     *
-     * Reads the frontend device capabilities to determine the modulation type.
-     * In production, this would read from /sys/class/dvb/dvbX.frontend0/caps.
-     *
-     * @param string $frontendPath Path to the frontend device
-     * @return string One of TUNER_TYPE_DVB_T, TUNER_TYPE_DVB_S, TUNER_TYPE_DVB_C, or TUNER_TYPE_ATSC
-     */
-    private function detectDvbType(string $frontendPath): string
-    {
-        return self::TUNER_TYPE_DVB_T;
-    }
-
-    /**
-     * Get tuner capabilities from frontend device.
-     *
-     * Returns the frequency range and symbol rate capabilities of the tuner.
-     * In production, these values are read from the kernel DVB driver.
-     *
-     * @param string $frontendPath Path to the frontend device
-     * @return array<string, int> Capabilities including frequency_min, frequency_max, symbol_rate_min, symbol_rate_max
-     */
-    private function getTunerCapabilities(string $frontendPath): array
-    {
-        return [
-            'frequency_min' => 45000000,
-            'frequency_max' => 862000000,
-            'symbol_rate_min' => 1000000,
-            'symbol_rate_max' => 45000000,
-        ];
     }
 
     /**
@@ -288,21 +247,19 @@ class LiveTvManager
     /**
      * Scan for available channels using a specific tuner.
      *
-     * Performs a channel scan by iterating through configured frequencies
-     * and detecting broadcast services on each frequency.
+     * For HDHomeRun tuners, triggers a channel scan via the HTTP API.
+     * For DVB tuners, iterates through configured frequencies.
      *
      * @param string $tunerId The tuner ID to use for scanning
      * @param array<string, mixed> $options Scan options including:
-     *   - frequencies: int[] List of frequencies (Hz) to scan
-     *   - symbol_rate: int Symbol rate for cable/satellite
+     *   - frequencies: int[] List of frequencies (Hz) to scan (DVB only)
+     *   - symbol_rate: int Symbol rate for cable/satellite (DVB only)
      * @return array<int, array<string, mixed>> Scan results with discovered channels
      * @throws \InvalidArgumentException If tuner not found
      *
      * @example
      * ```php
-     * $channels = $manager->scanChannels('dvb_0', [
-     *     'frequencies' => [474000000, 498000000, 522000000]
-     * ]);
+     * $channels = $manager->scanChannels('hdhr_12345678', []);
      * ```
      */
     public function scanChannels(string $tunerId, array $options = []): array
@@ -313,9 +270,15 @@ class LiveTvManager
         }
 
         $this->updateTunerStatus($tunerId, self::TUNER_STATUS_SCANNING);
-        $this->logger->info('Starting channel scan', ['tuner_id' => $tunerId]);
+        $this->logger->info('Starting channel scan', ['tuner_id' => $tunerId, 'type' => $tuner['type']]);
 
-        $channels = $this->performChannelScan($tuner, $options);
+        if ($tuner['type'] === self::TUNER_TYPE_HDHOMERUN && isset($tuner['tunerDevice'])) {
+            // HDHomeRun: use the tuner driver to scan
+            $channels = $this->performHdHomeRunChannelScan($tuner, $options);
+        } else {
+            // DVB: use frequency scanning
+            $channels = $this->performChannelScan($tuner, $options);
+        }
 
         $this->updateTunerStatus($tunerId, self::TUNER_STATUS_IDLE);
         $this->logger->info('Channel scan complete', ['tuner_id' => $tunerId, 'channels_found' => count($channels)]);
@@ -380,12 +343,48 @@ class LiveTvManager
     }
 
     /**
-     * Perform the actual channel scan on a tuner.
+     * Perform HDHomeRun channel scan using the tuner driver.
+     *
+     * Uses the HDHomeRun HTTP API to trigger a scan and retrieve the channel lineup.
+     *
+     * @param array<string, mixed> $tuner The HDHomeRun tuner
+     * @param array<string, mixed> $options Scan options (unused for HDHomeRun)
+     * @return array<int, array<string, mixed>> Discovered channels
+     */
+    private function performHdHomeRunChannelScan(array $tuner, array $options): array
+    {
+        $discoveredChannels = [];
+
+        /** @var HdHomeRunDevice $device */
+        $device = $tuner['tunerDevice'];
+
+        $lineup = $this->tunerDriver->scanChannels($device);
+
+        foreach ($lineup as $channelInfo) {
+            $channel = $this->channelManager->createChannel([
+                'name' => $channelInfo['name'] ?? 'Channel ' . $channelInfo['channel_number'],
+                'number' => $channelInfo['channel_number'],
+                'type' => $channelInfo['type'] ?? 'off',
+                'frequency' => 0,
+                'tuner_id' => $tuner['id'],
+                'service_id' => $channelInfo['program_id'] ?? null,
+            ]);
+
+            if ($channel) {
+                $discoveredChannels[] = $channel;
+            }
+        }
+
+        return $discoveredChannels;
+    }
+
+    /**
+     * Perform the actual channel scan on a DVB tuner.
      *
      * Iterates through frequencies and extracts service information
      * from the broadcast transport stream (PAT/SDT tables).
      *
-     * @param array<string, mixed> $tuner The tuner to use for scanning
+     * @param array<string, mixed> $tuner The DVB tuner to use for scanning
      * @param array<string, mixed> $options Scan options including frequencies
      * @return array<int, array<string, mixed>> Discovered channels
      */
@@ -436,7 +435,7 @@ class LiveTvManager
     /**
      * Tune to a channel and start streaming.
      *
-     * Finds an available tuner, locks onto the channel frequency,
+     * Finds an available tuner, locks onto the channel,
      * and returns a stream URL for playback.
      *
      * @param string $channelId The channel ID to tune to
@@ -469,12 +468,16 @@ class LiveTvManager
         // Generate unique tune request ID
         $tuneRequestId = $this->generateUuid();
 
+        // Build stream URL based on tuner type
+        $channelNumber = is_numeric($channel['number'] ?? null) ? (int) $channel['number'] : 0;
+        $streamUrl = $this->buildStreamUrl($tuner, $channelNumber);
+
         $this->activeTuneRequests[$tuneRequestId] = [
             'id' => $tuneRequestId,
             'channel_id' => $channelId,
             'tuner_id' => $tuner['id'],
             'started_at' => time(),
-            'stream_url' => "/livetv/$tuneRequestId/stream",
+            'stream_url' => $streamUrl,
         ];
 
         $this->updateTunerStatus($tuner['id'], self::TUNER_STATUS_STREAMING);
@@ -483,9 +486,30 @@ class LiveTvManager
             'tune_request_id' => $tuneRequestId,
             'channel_id' => $channelId,
             'tuner_id' => $tuner['id'],
+            'stream_url' => $streamUrl,
         ]);
 
         return $this->activeTuneRequests[$tuneRequestId];
+    }
+
+    /**
+     * Build a stream URL for the given tuner and channel.
+     *
+     * @param array<string, mixed> $tuner The tuner to use
+     * @param int $channelNumber The channel number to tune
+     * @return string The stream URL
+     */
+    private function buildStreamUrl(array $tuner, int $channelNumber): string
+    {
+        if ($tuner['type'] === self::TUNER_TYPE_HDHOMERUN && isset($tuner['tunerDevice'])) {
+            /** @var HdHomeRunDevice $device */
+            $device = $tuner['tunerDevice'];
+            return $this->tunerDriver->getStreamUrl($device, $channelNumber);
+        }
+
+        // DVB/other tuners use internal stream URL
+        $tuneRequestId = $this->generateUuid();
+        return "/livetv/$tuneRequestId/stream";
     }
 
     /**

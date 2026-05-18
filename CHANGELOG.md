@@ -7,6 +7,20 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.1)
+
+- HDHomeRun tuner driver (SSDP discovery + HTTP API). Includes:
+  - `TunerDriverInterface` — shared interface for all tuner drivers
+  - `HdHomeRunDevice` — immutable value object for discovered devices
+  - `HdHomeRunDiscovery` — SSDP M-SEARCH discovery on UDP 1900
+  - `HdHomeRunApiClient` — HTTP API client for HDHomeRun devices
+  - `HdHomeRunTunerDriver` — concrete driver implementing `TunerDriverInterface`
+  - `HdHomeRunTunerDriverFactory` — factory for driver instantiation
+  - `LiveTvManager` refactored to use `TunerDriverInterface` (no more `/dev/dvb` references)
+  - `config/livetv.php` — LiveTV configuration with HDHomeRun settings
+  - Unit tests for `HdHomeRunDiscovery`, `HdHomeRunApiClient`, `HdHomeRunTunerDriver`
+  - `docs/developers/hdhomerun.md` — developer documentation
+
 ### Added (Step H.6)
 
 - Theme music + theme video auto-play on browse. Includes:

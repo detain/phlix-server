@@ -234,6 +234,9 @@ class Application
 
         // Chromecast API endpoints
         $this->loadChromecastRoutes();
+
+        // AirPlay 2 API endpoints
+        $this->loadAirPlayRoutes();
     }
 
     /**
@@ -611,6 +614,49 @@ class Application
             $this->router->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
         } catch (\Throwable $e) {
             // CastManager not configured - silent ignore
+        }
+    }
+
+    /**
+     * Loads AirPlay 2 API routes.
+     *
+     * Registers endpoints for:
+     * - GET /api/v1/airplay/devices — list discovered AirPlay devices
+     * - POST /api/v1/airplay/devices/{id}/stream — start streaming
+     * - POST /api/v1/airplay/devices/{id}/pause — pause playback
+     * - POST /api/v1/airplay/devices/{id}/resume — resume playback
+     * - POST /api/v1/airplay/devices/{id}/stop — stop playback
+     * - GET /api/v1/airplay/devices/{id}/status — get session status
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadAirPlayRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $airPlayManager = $this->container->get(\Phlex\AirPlay\AirPlayManager::class);
+            $controller = new \Phlex\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
+
+            // List discovered devices
+            $this->router->get('/api/v1/airplay/devices', [$controller, 'listDevices']);
+
+            // Start streaming
+            $this->router->post('/api/v1/airplay/devices/{id}/stream', [$controller, 'stream']);
+
+            // Playback controls
+            $this->router->post('/api/v1/airplay/devices/{id}/pause', [$controller, 'pause']);
+            $this->router->post('/api/v1/airplay/devices/{id}/resume', [$controller, 'resume']);
+            $this->router->post('/api/v1/airplay/devices/{id}/stop', [$controller, 'stop']);
+
+            // Get session status
+            $this->router->get('/api/v1/airplay/devices/{id}/status', [$controller, 'getStatus']);
+        } catch (\Throwable $e) {
+            // AirPlayManager not configured - silent ignore
         }
     }
 

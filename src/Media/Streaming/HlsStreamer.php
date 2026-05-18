@@ -265,6 +265,27 @@ class HlsStreamer
     }
 
     /**
+     * Gets an AirPlay-compatible stream URL for audio streaming.
+     *
+     * AirPlay devices natively support HLS audio. This method returns the master
+     * HLS playlist URL that can be streamed directly to an AirPlay device.
+     * For audio-only items, returns the audio HLS URL. For video items,
+     * returns the main track URL suitable for AirPlay 2 video support.
+     *
+     * @param array<string, mixed> $item Media item with at least 'id' key
+     *
+     * @return string Full URL to the HLS playlist for AirPlay streaming
+     *
+     * @since 0.12.0
+     */
+    public function getAirPlayStreamUrl(array $item): string
+    {
+        // AirPlay supports HLS natively, so use the same stream URL as regular HLS
+        // The device will handle variant selection automatically
+        return $this->getStreamUrl($item);
+    }
+
+    /**
      * Gets quality levels appropriate for a device profile.
      *
      * Filters the available quality levels based on the device profile's

@@ -7,6 +7,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.5)
+
+- AirPlay 2 support — stream audio to AirPlay 2 devices (Apple TV, HomePod, AirPlay 2-compatible receivers):
+  - `AirPlayDevice` — AirPlay device descriptor with deviceId, name, host, port, raopPort, model, supportsVideo
+  - `AirPlayDiscovery` — discovers AirPlay devices via mDNS `_airplay._tcp.local.` and `_raop._tcp.local.` using MdnsDiscovery
+  - `RaopClient` — RAOP (Real-Time Audio Protocol) client with buildAnnouncePayload(), flush(), getRtpInfo(), getLatency()
+  - `AirPlaySession` — active AirPlay session with startStream()/pause()/resume()/stop() and state management
+  - `AirPlayManager` — manages AirPlay sessions, discovers devices, creates/retrieves/stops sessions
+  - `RemoteAirPlayClient` — AirPlay via relay tunnel (RelayConsumer) for devices behind NAT
+  - `AirPlayController` — HTTP API endpoints:
+    - GET /api/v1/airplay/devices — list discovered AirPlay devices
+    - POST /api/v1/airplay/devices/{id}/stream — start streaming
+    - POST /api/v1/airplay/devices/{id}/pause — pause playback
+    - POST /api/v1/airplay/devices/{id}/resume — resume playback
+    - POST /api/v1/airplay/devices/{id}/stop — stop playback
+    - GET /api/v1/airplay/devices/{id}/status — get session status
+  - `HlsStreamer` — added `getAirPlayStreamUrl()` for AirPlay-compatible stream URLs
+  - `Application` — registered AirPlay routes in `loadAirPlayRoutes()`
+  - Unit tests: `AirPlayDeviceTest` (5 tests), `AirPlayDiscoveryTest` (3 tests), `RaopClientTest` (5 tests), `AirPlaySessionTest` (5 tests), `AirPlayManagerTest` (5 tests)
+
 ### Added (Step J.4)
 
 - Chromecast support — cast to Chromecast devices via Default Media Receiver:

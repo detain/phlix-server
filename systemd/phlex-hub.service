@@ -1,0 +1,39 @@
+[Unit]
+Description=Phlex Hub Relay Service
+Documentation=https://docs.phlex.media
+After=network.target mysql.service
+Wants=mysql.service
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=phlex
+Group=phlex
+WorkingDirectory=/var/www/phlex-hub
+ExecStart=/usr/bin/php /var/www/phlex-hub/public/index.php start
+ExecReload=/bin/kill -SIGUSR1 $MAINPID
+ExecStop=/bin/kill -SIGTERM $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30
+TimeoutStartSec=30
+
+Environment="PHLEX_ENV=production"
+EnvironmentFile=/etc/phlex/hub-env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=phlex-hub
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/phlex-hub /var/log/phlex-hub /run
+RestrictNamespaces=true
+LockPersonality=true
+RemoveIPC=true
+
+[Install]
+WantedBy=multi-user.target

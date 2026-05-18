@@ -1,0 +1,12 @@
+[Unit]
+Description=Phlex Media Server Backup Timer
+Documentation=https://docs.phlex.media
+After=phlex-backup.service
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

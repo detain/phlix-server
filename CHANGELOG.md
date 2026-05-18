@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.4)
+
+- Schedules Direct EPG integration. Includes:
+  - `SdApiClient` — HTTP JSON client for SD API with token auth
+    (BASE_URL: https://api.schedulesdirect.tmsglobal.com)
+  - `SdLineupHandler` — fetches SD lineups, imports channels via ChannelManager
+  - `SdProgramMapper` — maps SD program/schedule data to GuideManager format
+  - `SdEpgService` — orchestrates full sync: fetch schedules, programs, upsert to guide
+  - `SdEpgServiceFactory` — builds service from config with token caching
+  - `config/livetv.php` — added `schedules_direct` section (username,
+    password, token_cache_path, lineup_id, sync_hours_ahead, timeout_secs)
+  - `LiveTvManager` — wired `SdEpgService` as optional dependency;
+    `getSdEpgService()`, `setSdConfig()`, `syncSdEpG()`
+  - Unit tests in `tests/unit/LiveTv/Epg/SchedulesDirect/` (SdApiClientTest,
+    SdProgramMapperTest, SdEpgServiceTest — 12 tests total)
+  - `docs/developers/schedules-direct.md` — SD API overview, auth, endpoints,
+    data model, and config reference
+
 ### Added (Step I.3)
 
 - Linux DVB-T USB tuner driver. Includes:

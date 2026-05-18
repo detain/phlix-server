@@ -7,6 +7,8 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgService;
+use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
 use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
@@ -76,6 +78,12 @@ class LiveTvManager
 
     /** @var array<string, array{id:string,channel_id:string,tuner_id:string,started_at:int,stream_url:string}> Active tune requests keyed by tune request ID */
     private array $activeTuneRequests = [];
+
+    /** @var SdEpgService|null Optional Schedules Direct EPG service */
+    private ?SdEpgService $sdEpgService = null;
+
+    /** @var array<string, mixed>|null Cached SD config */
+    private ?array $sdConfig = null;
 
     /**
      * Tuner is available and idle.
@@ -164,6 +172,7 @@ class LiveTvManager
      * @param TunerDriverInterface $tunerDriver Tuner driver for discovery and streaming
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
      * @param array<string, TunerDriverInterface> $additionalDrivers Additional tuner drivers
+     * @param SdEpgService|null $sdEpgService Optional Schedules Direct EPG service
      */
     public function __construct(
         Connection $db,
@@ -172,7 +181,8 @@ class LiveTvManager
         Recorder $recorder,
         TunerDriverInterface $tunerDriver,
         ?StructuredLogger $logger = null,
-        array $additionalDrivers = []
+        array $additionalDrivers = [],
+        ?SdEpgService $sdEpgService = null
     ) {
         $this->db = $db;
         $this->channelManager = $channelManager;
@@ -181,6 +191,7 @@ class LiveTvManager
         $this->tunerDriver = $tunerDriver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
         $this->additionalDrivers = $additionalDrivers;
+        $this->sdEpgService = $sdEpgService;
     }
 
     /**
@@ -779,6 +790,77 @@ class LiveTvManager
     public function getRecorder(): Recorder
     {
         return $this->recorder;
+    }
+
+    /**
+     * Get the Schedules Direct EPG service instance.
+     *
+     * @return SdEpgService|null The SD EPG service or null if not configured
+     */
+    public function getSdEpgService(): ?SdEpgService
+    {
+        return $this->sdEpgService;
+    }
+
+    /**
+     * Set the Schedules Direct configuration and optionally initialize the service.
+     *
+     * Call this after construction if SdEpgService was not injected via constructor.
+     *
+     * @param array<string, mixed> $sdConfig The schedules_direct section from config/livetv.php
+     * @return void
+     */
+    public function setSdConfig(array $sdConfig): void
+    {
+        $this->sdConfig = $sdConfig;
+    }
+
+    /**
+     * Sync EPG data from Schedules Direct.
+     *
+     * Uses the configured SdEpgService to fetch and import program data.
+     *
+     * @param int $daysAhead Number of days ahead to fetch (default: 14)
+     * @return array{imported: int, errors: int} Import statistics
+     * @throws \RuntimeException If SD EPG service is not configured
+     */
+    public function syncSdEpG(int $daysAhead = 14): array
+    {
+        if ($this->sdEpgService === null) {
+            // Attempt to build from config if not injected
+            if ($this->sdConfig === null) {
+                throw new \RuntimeException('SD EPG not configured: call setSdConfig() first');
+            }
+
+            $this->sdEpgService = SdEpgServiceFactory::build(
+                $this->sdConfig,
+                $this->channelManager,
+                $this->guideManager,
+                $this->logger
+            );
+        }
+
+        $this->logger->info('Starting SD EPG sync', ['days_ahead' => $daysAhead]);
+
+        // Get all visible channels that have a tuner_id starting with 'sd_'
+        $channels = $this->channelManager->getAllChannels();
+        /** @var array<int, string> $stationIds */
+        $stationIds = [];
+
+        foreach ($channels as $channel) {
+            $tunerIdRaw = $channel['tuner_id'] ?? '';
+            $tunerId = is_string($tunerIdRaw) ? $tunerIdRaw : '';
+            if (str_starts_with($tunerId, 'sd_')) {
+                $stationIds[] = substr($tunerId, 3);
+            }
+        }
+
+        if (empty($stationIds)) {
+            $this->logger->warning('No SD channels found for EPG sync');
+            return ['imported' => 0, 'errors' => 0];
+        }
+
+        return $this->sdEpgService->syncEpg($stationIds, $daysAhead);
     }
 
     /**

@@ -158,4 +158,70 @@ return [
          */
         'default_bandwidth_mhz' => 8,
     ],
+
+    /**
+     * Schedules Direct EPG integration.
+     *
+     * Schedules Direct (https://www.schedulesdirect.org) provides authoritative
+     * TV guide data including program listings, series info, and artwork.
+     * Requires a valid SD account subscription.
+     */
+    'schedules_direct' => [
+        /**
+         * Enable Schedules Direct EPG sync.
+         *
+         * @default true
+         */
+        'enabled' => false,
+
+        /**
+         * Schedules Direct account username.
+         *
+         * @default ''
+         */
+        'username' => '',
+
+        /**
+         * Schedules Direct account password.
+         *
+         * Stored encrypted in production; never plaintext.
+         *
+         * @default ''
+         */
+        'password' => '',
+
+        /**
+         * Filesystem path for caching the SD API token.
+         *
+         * Token is auto-refreshed before expiration (23h TTL, refreshes at 24h).
+         *
+         * @default '/var/phlex/sd_token.json'
+         */
+        'token_cache_path' => '/var/phlex/sd_token.json',
+
+        /**
+         * Specific lineup ID to use (null = auto-detect from account).
+         *
+         * Lineup ID format: "USA-XXX-XXXXX" (e.g., "USA-OTA-00000")
+         *
+         * @default null
+         */
+        'lineup_id' => null,
+
+        /**
+         * How many hours ahead to fetch program guide data.
+         *
+         * Default: 336 hours (14 days). Max recommended: 336 hours (SD limit).
+         *
+         * @default 336
+         */
+        'sync_hours_ahead' => 336,
+
+        /**
+         * HTTP request timeout in seconds for SD API calls.
+         *
+         * @default 30
+         */
+        'timeout_secs' => 30,
+    ],
 ];

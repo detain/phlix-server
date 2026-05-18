@@ -7,6 +7,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step K.1)
+
+- Sonarr/Radarr API clients for media server integration:
+  - `ArrClientInterface` — common interface for *arr clients with getQueue(), getQualityProfiles(), getTagList(), testConnection()
+  - `SonarrClient` — Sonarr v3 API client with getSeries(), getSeriesById(), getEpisodeFile(), getQueue(), getWantedMissing(), getQualityProfiles(), getTagList(), addSeries(), triggerDownload(), testConnection()
+  - `RadarrClient` — Radarr v3 API client with getMovies(), getMovieById(), getQueue(), getQualityProfiles(), getCustomFormats(), getTagList(), addMovie(), triggerDownload(), testConnection()
+  - `ArrClientFactory` — factory for creating Sonarr/Radarr clients from config array
+  - `config/arr.php` — configuration file for Sonarr/Radarr connection settings
+  - Unit tests: `SonarrClientTest` (12 tests), `RadarrClientTest` (11 tests), `ArrClientFactoryTest` (10 tests)
+
 ### Added (Step J.6)
 
 - Roku ECP support — send media to Roku devices:

@@ -92,6 +92,72 @@ class RadarrClient implements ArrClientInterface
     }
 
     /**
+     * Creates a new custom format in Radarr.
+     *
+     * @param array<string, mixed> $payload The custom format payload.
+     * @return int The ID of the created custom format.
+     */
+    public function createCustomFormat(array $payload): int
+    {
+        $response = $this->post('/api/v3/customformat', $payload);
+        $id = $response['id'] ?? null;
+
+        return is_numeric($id) ? (int) $id : 0;
+    }
+
+    /**
+     * Updates an existing custom format in Radarr.
+     *
+     * @param int $id The custom format ID to update.
+     * @param array<string, mixed> $payload The custom format payload.
+     * @return bool True on success.
+     */
+    public function updateCustomFormat(int $id, array $payload): bool
+    {
+        $this->put('/api/v3/customformat/' . $id, $payload);
+        return true;
+    }
+
+    /**
+     * Deletes a custom format from Radarr.
+     *
+     * @param int $id The custom format ID to delete.
+     * @return bool True on success.
+     */
+    public function deleteCustomFormat(int $id): bool
+    {
+        $this->delete('/api/v3/customformat/' . $id);
+        return true;
+    }
+
+    /**
+     * Creates a new quality profile in Radarr.
+     *
+     * @param array<string, mixed> $payload The quality profile payload.
+     * @return int The ID of the created quality profile.
+     */
+    public function createQualityProfile(array $payload): int
+    {
+        $response = $this->post('/api/v3/qualityprofile', $payload);
+        $id = $response['id'] ?? null;
+
+        return is_numeric($id) ? (int) $id : 0;
+    }
+
+    /**
+     * Updates an existing quality profile in Radarr.
+     *
+     * @param int $id The quality profile ID to update.
+     * @param array<string, mixed> $payload The quality profile payload.
+     * @return bool True on success.
+     */
+    public function updateQualityProfile(int $id, array $payload): bool
+    {
+        $this->put('/api/v3/qualityprofile/' . $id, $payload);
+        return true;
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function getTagList(): array
@@ -244,6 +310,135 @@ class RadarrClient implements ArrClientInterface
             CURLOPT_TIMEOUT => $this->timeout,
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $encodedBody,
+            CURLOPT_HTTPHEADER => $this->buildHeaders(),
+        ]);
+
+        /** @var string|false */
+        $responseBody = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($responseBody === false || $curlErrno !== 0) {
+            throw new RuntimeException('cURL error: ' . $curlError, $curlErrno);
+        }
+
+        if ($httpCode === 401) {
+            throw new RuntimeException('Radarr API authentication failed (401)');
+        }
+
+        if ($httpCode === 404) {
+            throw new RuntimeException('Radarr API resource not found (404): ' . $path);
+        }
+
+        if ($httpCode >= 400) {
+            throw new RuntimeException('Radarr API error: HTTP ' . $httpCode);
+        }
+
+        if ($responseBody === '') {
+            return [];
+        }
+
+        /** @var array<mixed, mixed> */
+        $decoded = json_decode($responseBody, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('Invalid JSON response from Radarr');
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Performs a PUT request with a JSON body.
+     *
+     * @param string $path Request path.
+     * @param array<string, mixed> $body JSON-serializable body.
+     * @return array<mixed, mixed> Decoded JSON response.
+     * @throws RuntimeException On network or HTTP errors.
+     */
+    protected function put(string $path, array $body): array
+    {
+        $url = $this->baseUrl . $path;
+        assert($url !== '');
+        $encodedBody = json_encode($body);
+
+        if ($encodedBody === false) {
+            throw new RuntimeException('json_encode failed for Radarr request body');
+        }
+
+        $ch = curl_init();
+        if ($ch === false) {
+            throw new RuntimeException('curl_init() failed');
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $this->timeout,
+            CURLOPT_CUSTOMREQUEST => 'PUT',
+            CURLOPT_POSTFIELDS => $encodedBody,
+            CURLOPT_HTTPHEADER => $this->buildHeaders(),
+        ]);
+
+        /** @var string|false */
+        $responseBody = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($responseBody === false || $curlErrno !== 0) {
+            throw new RuntimeException('cURL error: ' . $curlError, $curlErrno);
+        }
+
+        if ($httpCode === 401) {
+            throw new RuntimeException('Radarr API authentication failed (401)');
+        }
+
+        if ($httpCode === 404) {
+            throw new RuntimeException('Radarr API resource not found (404): ' . $path);
+        }
+
+        if ($httpCode >= 400) {
+            throw new RuntimeException('Radarr API error: HTTP ' . $httpCode);
+        }
+
+        if ($responseBody === '') {
+            return [];
+        }
+
+        /** @var array<mixed, mixed> */
+        $decoded = json_decode($responseBody, true);
+        if (!is_array($decoded)) {
+            throw new RuntimeException('Invalid JSON response from Radarr');
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * Performs a DELETE request.
+     *
+     * @param string $path Request path.
+     * @return array<mixed, mixed> Decoded JSON response.
+     * @throws RuntimeException On network or HTTP errors.
+     */
+    protected function delete(string $path): array
+    {
+        $url = $this->baseUrl . $path;
+        assert($url !== '');
+
+        $ch = curl_init();
+        if ($ch === false) {
+            throw new RuntimeException('curl_init() failed');
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $this->timeout,
+            CURLOPT_CUSTOMREQUEST => 'DELETE',
             CURLOPT_HTTPHEADER => $this->buildHeaders(),
         ]);
 

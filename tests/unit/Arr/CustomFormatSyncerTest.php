@@ -21,7 +21,7 @@ use DateTimeImmutable;
  */
 class CustomFormatSyncerTest extends TestCase
 {
-    private MockableRadarrClient $radarr;
+    private CustomFormatSyncerTestRadarrClient $radarr;
     private MockableTrashGuidesProvider $provider;
     private Connection $db;
     private ?StructuredLogger $logger;
@@ -29,7 +29,7 @@ class CustomFormatSyncerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->radarr = new MockableRadarrClient('http://localhost:7878', 'test-api-key');
+        $this->radarr = new CustomFormatSyncerTestRadarrClient('http://localhost:7878', 'test-api-key');
         $this->provider = new MockableTrashGuidesProvider();
         $this->db = $this->createMock(Connection::class);
         $this->logger = null;
@@ -324,11 +324,11 @@ class MockableTrashGuidesProvider extends TrashGuidesProvider
 }
 
 /**
- * Mockable RadarrClient for testing.
+ * Mockable RadarrClient for testing CustomFormatSyncer.
  *
  * @internal For testing only
  */
-class MockableRadarrClient extends RadarrClient
+class CustomFormatSyncerTestRadarrClient extends RadarrClient
 {
     /** @var array<int, array<string, mixed>> */
     private array $customFormats = [];

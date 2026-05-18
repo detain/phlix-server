@@ -10,6 +10,7 @@ use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Hub\HubClient;
 use Phlex\Hub\HubApplication;
 use Phlex\Hub\RelayApplication;
+use Phlex\Discovery\DiscoveryServer;
 use Phlex\Server\Http\Controllers\HubJwksController;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
@@ -273,6 +274,9 @@ class Application
         // Start relay tunnel if enrolled and relay is enabled
         $this->startRelayIfEnabled();
 
+        // Start discovery server for SSDP/mDNS device discovery
+        $this->startDiscoveryIfEnabled();
+
         $request = Request::fromGlobals();
 
         // Build the final handler that dispatches to the router
@@ -390,6 +394,27 @@ class Application
             }
         } catch (\Throwable) {
             // Hub is not configured or not enrolled — silent ignore
+        }
+    }
+
+    /**
+     * Start the discovery server for SSDP/mDNS device discovery.
+     *
+     * @return void
+     */
+    private function startDiscoveryIfEnabled(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $discoveryServer = $this->container->get(DiscoveryServer::class);
+            if ($discoveryServer instanceof DiscoveryServer) {
+                $discoveryServer->start();
+            }
+        } catch (\Throwable) {
+            // Discovery not configured — silent ignore
         }
     }
 

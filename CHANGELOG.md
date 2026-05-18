@@ -7,6 +7,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.1)
+
+- SSDP (Simple Service Discovery Protocol) and mDNS (multicast DNS) discovery infrastructure:
+  - `SsdpSocket` — raw UDP socket wrapper for SSDP multicast `239.255.255.250:1900`
+  - `SsdpDevice` — discovered SSDP device descriptor with `getDeviceId()` and `getBaseUrl()`
+  - `SsdpDiscovery` — SSDP discovery service with `discoverDevices()` and `announceServer()`
+  - `MdnsSocket` — raw UDP socket wrapper for mDNS multicast `224.0.0.251:5353`
+  - `MdnsService` — resolved mDNS service descriptor with `getAddress()`
+  - `MdnsDiscovery` — mDNS discovery service with `discoverChromecast()`, `discoverAirPlay()`, `discoverRoku()`
+  - `DiscoveryManager` — unified facade combining SSDP and mDNS discovery
+  - `DiscoveryServer` — Workerman Timer integration for background discovery
+  - `config/discovery.php` — configuration with SSDP/mDNS settings
+  - Unit tests: `SsdpSocketTest`, `SsdpDiscoveryTest`, `MdnsSocketTest`, `MdnsDiscoveryTest`, `DiscoveryManagerTest` (12+ tests)
+  - `docs/developers/discovery.md` — protocol documentation
+
 ### Added (Step I.7)
 
 - Hub relay for remote live TV streams (HLS re-streaming via hub WebSocket tunnel):

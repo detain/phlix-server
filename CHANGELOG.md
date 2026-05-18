@@ -7,6 +7,36 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step G.3)
+
+- `Phlex\Plugins\Lastfm\Plugin` — In-core Last.fm scrobbler plugin
+  implementing the `scrobbler` plugin type. Subscribes to
+  `phlex.playback.started` (Now Playing updates) and
+  `phlex.playback.stopped` (scrobble submission). Off by default;
+  configure `config/lastfm.php` with API credentials to enable.
+- `Phlex\Plugins\Lastfm\LastfmApiClient` — Last.fm API v1.2 client
+  with HMAC-MD5 signing. Supports `auth.getMobileSession`,
+  `track.scrobble`, and `track.updateNowPlaying` endpoints.
+- `Phlex\Plugins\Lastfm\ScrobbleData` — Immutable value object for
+  scrobble submission (artist, track, timestamp, album, duration,
+  MusicBrainz ID).
+- `Phlex\Plugins\Lastfm\NowPlayingData` — Immutable value object for
+  Now Playing notifications.
+- `Phlex\Plugins\Lastfm\LastfmPluginNotConfiguredException` — Thrown
+  when API key, secret, or session key is missing.
+- `Phlex\Plugins\Lastfm\LastfmScrobbleFailedException` — Thrown when
+  Last.fm API returns an error on scrobble/Now Playing.
+- `config/lastfm.php` — Default configuration with `enabled` (default
+  false), `api_key`, `api_secret`, `session_key`, `username`,
+  `submit_now_playing` (default true), and `scrobble_threshold`
+  (default 0.5 — scrobble after 50% of track).
+- `docs/plugins/developer-guide.md` — Added §14 documenting the
+  `scrobbler` plugin type with Last.fm as the reference example.
+- `docs/developers/lastfm-plugin.md` — New developer guide covering
+  Last.fm API protocol, HMAC-MD5 signing, mobile auth flow,
+  scrobble threshold semantics, and full configuration reference.
+- Unit tests: `LastfmApiClientTest` (11 tests), `PluginTest` (9 tests).
+
 ### Added (Step G.2)
 
 - `AudioScanner` — Pure-PHP audio file scanner with ID3v2 (MP3), Vorbis

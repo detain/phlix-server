@@ -1123,3 +1123,102 @@ GET    /api/v1/admin/auth-providers/{name}/config-schema
 See [`docs/reference/api/admin-auth-providers.md`](docs/reference/api/admin-auth-providers.md)
 for the full OpenAPI spec.
 
+---
+
+## 14. Scrobbler Plugin Type
+
+A `scrobbler` plugin subscribes to playback events and reports what the
+user is listening to/watching to an external service (Last.fm, Trakt,
+etc.). Phlex ships an in-core reference implementation:
+[`Phlex\Plugins\Lastfm\Plugin`](../../src/Plugins/Lastfm/Plugin.php).
+
+### What gets submitted
+
+| Event                     | Action taken by scrobbler                                                    |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `phlex.playback.started` | (Optional) Submit "Now Playing" — updates the user's profile live         |
+| `phlex.playback.stopped`  | Submit scrobble when the track has been played past the threshold          |
+
+### Core classes
+
+| Class                                       | Role                                                      |
+| ------------------------------------------- | --------------------------------------------------------- |
+| `Plugins\Lastfm\Plugin`                     | Entry class; subscribes to playback events               |
+| `Plugins\Lastfm\LastfmApiClient`             | HTTP client for Last.fm `track.scrobble` / `updateNowPlaying` |
+| `Plugins\Lastfm\ScrobbleData`               | Immutable value object for scrobble submissions          |
+| `Plugins\Lastfm\NowPlayingData`             | Immutable value object for Now Playing updates            |
+| `Plugins\Lastfm\LastfmPluginNotConfiguredException` | Thrown when API key/secret/session key is missing    |
+| `Plugins\Lastfm\LastfmScrobbleFailedException`     | Thrown when the Last.fm API returns an error       |
+
+### Manifest
+
+```json
+{
+    "name": "phlex-plugin-lastfm",
+    "version": "1.0.0",
+    "phlex_min_server_version": "0.15.0",
+    "type": "scrobbler",
+    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "settings": {
+        "api_key":          { "type": "string", "required": true, "secret": true },
+        "api_secret":       { "type": "string", "required": true, "secret": true },
+        "session_key":      { "type": "string", "required": true, "secret": true },
+        "username":         { "type": "string", "required": true },
+        "submit_now_playing": { "type": "bool", "default": true },
+        "scrobble_threshold":  { "type": "float", "default": 0.5 }
+    }
+}
+```
+
+### Plugin lifecycle
+
+```php
+use Phlex\Plugins\Lastfm\Plugin;
+use Phlex\Plugins\Lastfm\LastfmApiClient;
+use Phlex\Session\SessionManager;
+use Psr\Container\ContainerInterface;
+
+final class MyLastfmPlugin implements \Phlex\Plugins\Contract\LifecycleInterface
+{
+    private ?LastfmApiClient $client = null;
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        // Build the API client using config from $container or settings
+        $this->client = new LastfmApiClient(
+            api_key: $config['api_key'],
+            api_secret: $config['api_secret'],
+        );
+    }
+
+    public function onDisable(): void
+    {
+        $this->client = null;
+    }
+
+    public function subscribedEvents(): array
+    {
+        return \Phlex\Plugins\Lastfm\Plugin::getSubscribedEvents();
+    }
+}
+```
+
+### Session key flow
+
+Last.fm requires a authenticated session key before any scrobble/Now Playing
+calls succeed. The reference `LastfmApiClient::getMobileSession($username, $md5Password)` performs the mobile auth flow:
+
+1. Operator calls `getMobileSession('user', md5('password'))` once.
+2. The returned session key is stored in `config/lastfm.php` under `session_key`.
+3. All subsequent scrobble/Now Playing calls use that stored key.
+4. Session keys do not expire unless the user revokes them in Last.fm settings.
+
+### Scrobble threshold
+
+`scrobble_threshold` (default `0.5`) controls what fraction of a track
+must be played before a scrobble is submitted. A value of `0.5` means
+the user must listen to at least 50% of the track before it scrobbles.
+Set to `0.0` to scrobble on every stop, or `1.0` to require full
+completion.
+

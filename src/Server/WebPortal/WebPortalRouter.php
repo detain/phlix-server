@@ -691,9 +691,14 @@ class WebPortalRouter
         // Get book count for each library
         $booksCount = [];
         foreach ($bookLibraries as $library) {
-            $items = $this->itemRepository->getByLibrary((string) $library['id'], 10000, 0);
+            $libraryId = $library['id'] ?? null;
+            if (!is_string($libraryId) && !is_numeric($libraryId)) {
+                continue;
+            }
+            $libraryId = (string) $libraryId;
+            $items = $this->itemRepository->getByLibrary($libraryId, 10000, 0);
             $books = array_filter($items, fn($item) => ($item['type'] ?? '') === 'book');
-            $booksCount[$library['id']] = count($books);
+            $booksCount[$libraryId] = count($books);
         }
 
         return (new Response())->json([

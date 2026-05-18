@@ -192,6 +192,7 @@ class BookScannerTest extends TestCase
     {
         $zip = new \ZipArchive();
         $tempFile = tempnam(sys_get_temp_dir(), 'epub_');
+        unlink($tempFile);
         $zip->open($tempFile, \ZipArchive::CREATE);
 
         // Add container.xml
@@ -233,7 +234,7 @@ class BookScannerTest extends TestCase
 
         $zip->close();
 
-        $content = file_get_contents($tempFile);
+        $content = file_get_contents($tempFile) ?: '';
         unlink($tempFile);
 
         return $content;
@@ -277,6 +278,7 @@ startxref
     {
         $zip = new \ZipArchive();
         $tempFile = tempnam(sys_get_temp_dir(), 'cbz_');
+        unlink($tempFile);
         $zip->open($tempFile, \ZipArchive::CREATE);
 
         // Add ComicInfo.xml
@@ -319,7 +321,7 @@ startxref
 
         $zip->close();
 
-        $content = file_get_contents($tempFile);
+        $content = file_get_contents($tempFile) ?: '';
         unlink($tempFile);
 
         return $content;

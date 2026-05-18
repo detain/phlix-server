@@ -129,6 +129,7 @@ class BookLibraryManagerTest extends TestCase
     {
         $zip = new \ZipArchive();
         $tempFile = tempnam(sys_get_temp_dir(), 'epub_');
+        unlink($tempFile);
         $zip->open($tempFile, \ZipArchive::CREATE);
 
         // Add container.xml
@@ -170,7 +171,7 @@ class BookLibraryManagerTest extends TestCase
 
         $zip->close();
 
-        $content = file_get_contents($tempFile);
+        $content = file_get_contents($tempFile) ?: '';
         unlink($tempFile);
 
         return $content;

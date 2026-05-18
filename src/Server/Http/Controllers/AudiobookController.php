@@ -178,16 +178,20 @@ class AudiobookController
 
         /** @var array<string, mixed> $metadata */
         $metadata = is_array($audiobook['metadata'] ?? null) ? $audiobook['metadata'] : [];
-        $chapters = $metadata['chapters'] ?? [];
+        $chaptersRaw = $metadata['chapters'] ?? [];
+        $chapters = is_array($chaptersRaw) ? $chaptersRaw : [];
 
         $formattedChapters = [];
         foreach ($chapters as $index => $chapter) {
+            if (!is_array($chapter)) {
+                continue;
+            }
             $formattedChapters[] = [
                 'index' => $index,
-                'title' => $chapter['title'] ?? "Chapter " . ($index + 1),
-                'start_ms' => $chapter['start_ms'] ?? 0,
-                'end_ms' => $chapter['end_ms'] ?? 0,
-                'duration_ms' => $chapter['duration_ms'] ?? 0,
+                'title' => is_string($chapter['title'] ?? null) ? $chapter['title'] : "Chapter " . ($index + 1),
+                'start_ms' => is_int($chapter['start_ms'] ?? null) ? $chapter['start_ms'] : 0,
+                'end_ms' => is_int($chapter['end_ms'] ?? null) ? $chapter['end_ms'] : 0,
+                'duration_ms' => is_int($chapter['duration_ms'] ?? null) ? $chapter['duration_ms'] : 0,
             ];
         }
 
@@ -256,16 +260,20 @@ class AudiobookController
         }
 
         $body = $request->query['body'] ?? '{}';
-        if (is_string($body)) {
-            $data = json_decode($body, true) ?? [];
-        } else {
-            $data = is_array($body) ? $body : [];
-        }
+        $rawData = is_string($body) ? json_decode($body, true) : null;
+        $data = is_array($rawData) ? $rawData : [];
 
-        $positionMs = max(0, (int)($data['position_ms'] ?? 0));
-        $currentChapterIndex = max(0, (int)($data['current_chapter_index'] ?? 0));
-        $completedChapters = is_array($data['completed_chapters'] ?? null) ? $data['completed_chapters'] : [];
-        $percentComplete = min(100.0, max(0.0, (float)($data['percent_complete'] ?? 0.0)));
+        $positionMsRaw = $data['position_ms'] ?? 0;
+        $positionMs = max(0, is_int($positionMsRaw) ? $positionMsRaw : (is_numeric($positionMsRaw) ? (int) $positionMsRaw : 0));
+
+        $currentChapterIndexRaw = $data['current_chapter_index'] ?? 0;
+        $currentChapterIndex = max(0, is_int($currentChapterIndexRaw) ? $currentChapterIndexRaw : (is_numeric($currentChapterIndexRaw) ? (int) $currentChapterIndexRaw : 0));
+
+        $completedChaptersRaw = is_array($data['completed_chapters'] ?? null) ? $data['completed_chapters'] : [];
+        $completedChapters = array_values(array_filter($completedChaptersRaw, 'is_int'));
+
+        $percentCompleteRaw = $data['percent_complete'] ?? 0.0;
+        $percentComplete = min(100.0, max(0.0, is_int($percentCompleteRaw) || is_float($percentCompleteRaw) ? (float) $percentCompleteRaw : (is_numeric($percentCompleteRaw) ? (float) $percentCompleteRaw : 0.0)));
 
         $progress = new AudiobookProgress(
             $audiobookId,
@@ -363,19 +371,23 @@ class AudiobookController
         // Get chapters for byte offset calculation
         /** @var array<string, mixed> $metadata */
         $metadata = is_array($audiobook['metadata'] ?? null) ? $audiobook['metadata'] : [];
-        $chapters = $metadata['chapters'] ?? [];
+        $chaptersRaw = $metadata['chapters'] ?? null;
+        $chapters = is_array($chaptersRaw) ? $chaptersRaw : [];
 
         $byteOffset = 0;
-        if (isset($chapters[$chapterIndex]) && $offsetMs > 0) {
+        $currentChapter = $chapters[$chapterIndex] ?? null;
+        if (is_array($currentChapter) && $offsetMs > 0) {
             // For M4B files, we can seek to chapter start + offset
             // This requires an M4B-aware streamer or FFmpeg
             // For now, we serve the file directly and let the client handle chapter boundaries
-            $chapterStartMs = $chapters[$chapterIndex]['start_ms'] ?? 0;
+            $chapterStartMsRaw = $currentChapter['start_ms'] ?? null;
+            $chapterStartMs = is_int($chapterStartMsRaw) || is_float($chapterStartMsRaw) ? $chapterStartMsRaw : 0;
             $seekMs = $chapterStartMs + $offsetMs;
 
             // Calculate approximate byte offset based on duration
             // This is a simplification; real implementation would use FFmpeg for precise seeking
-            $durationMs = $metadata['duration_ms'] ?? 0;
+            $durationMsRaw = $metadata['duration_ms'] ?? null;
+            $durationMs = is_int($durationMsRaw) || is_float($durationMsRaw) ? $durationMsRaw : 0;
             if ($durationMs > 0) {
                 $fileSize = filesize($path) ?: 0;
                 $byteOffset = (int)(($seekMs / $durationMs) * $fileSize);

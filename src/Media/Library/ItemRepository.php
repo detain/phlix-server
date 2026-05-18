@@ -109,6 +109,44 @@ class ItemRepository
     }
 
     /**
+     * Gets all media items of a specific type across all libraries.
+     *
+     * @param string $type The media type filter (e.g., 'movie', 'audio', 'image')
+     * @param int $limit Maximum number of items to return
+     * @param int $offset Number of items to skip for pagination
+     * @return array<int, array<string, mixed>> Array of hydrated media items
+     *
+     * @since 0.12.0
+     */
+    public function getAllByType(string $type, int $limit = 100, int $offset = 0): array
+    {
+        $results = $this->db->query(
+            "SELECT * FROM media_items WHERE type = ? ORDER BY name LIMIT ? OFFSET ?",
+            [$type, $limit, $offset]
+        );
+
+        return array_map(fn($r) => $this->hydrateItem($r), $results);
+    }
+
+    /**
+     * Counts all media items of a specific type across all libraries.
+     *
+     * @param string $type The media type to count
+     * @return int Number of items of the given type
+     *
+     * @since 0.12.0
+     */
+    public function countAllByType(string $type): int
+    {
+        $result = $this->db->query(
+            "SELECT COUNT(*) as count FROM media_items WHERE type = ?",
+            [$type]
+        );
+
+        return (int)($result[0]['count'] ?? 0);
+    }
+
+    /**
      * Gets all media items within a library with pagination.
      *
      * @param string $libraryId The library's unique identifier

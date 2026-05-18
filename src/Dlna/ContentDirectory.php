@@ -670,8 +670,17 @@ class ContentDirectory
             );
         }
 
-        // Resource URL if available
-        if (!empty($item['path'])) {
+        // Resource URL for streaming (HLS URL via LibraryBridge)
+        if ($this->libraryBridge !== null && !empty($item['id'])) {
+            $streamUrl = $this->libraryBridge->getStreamUrl($item);
+            $protocolInfo = $this->getProtocolInfo($item);
+            $metadata .= sprintf(
+                '<upnp:res protocolInfo="%s">%s</upnp:res>',
+                htmlspecialchars($protocolInfo),
+                htmlspecialchars($streamUrl)
+            );
+        } elseif (!empty($item['path'])) {
+            // Fallback to file path if no LibraryBridge
             $protocolInfo = $this->getProtocolInfo($item);
             $metadata .= sprintf(
                 '<upnp:res protocolInfo="%s">%s</upnp:res>',

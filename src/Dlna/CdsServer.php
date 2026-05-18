@@ -120,7 +120,7 @@ class CdsServer
      *
      * @param string $path Request path
      * @param string $method HTTP method (GET, POST, etc.)
-     * @param array $headers HTTP headers
+     * @param array<string, string> $headers HTTP headers
      * @param string $body Request body (for POST requests)
      * @return string|null Response body, or null if path not handled
      *

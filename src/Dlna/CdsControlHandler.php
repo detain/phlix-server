@@ -69,9 +69,12 @@ class CdsControlHandler
             return $this->buildSoapFault('Client', 'Invalid SOAP envelope');
         }
 
+        /** @var string $service */
         $service = $parsed['service'];
+        /** @var string $action */
         $action = $parsed['action'];
-        $params = $parsed['params'];
+        /** @var array<string, string> $params */
+        $params = is_array($parsed['params'] ?? null) ? $parsed['params'] : [];
 
         $this->logger?->debug('CdsControlHandler: Processing action', [
             'service' => $service,
@@ -94,17 +97,21 @@ class CdsControlHandler
         };
 
         // Check for errors
-        if (isset($result['Error'])) {
-            return $this->buildSoapFault('Client', $result['Error']['description']);
+        if (isset($result['Error']) && is_array($result['Error'])) {
+            /** @var string $errorDesc */
+            $errorDesc = $result['Error']['description'] ?? 'Unknown error';
+            return $this->buildSoapFault('Client', $errorDesc);
         }
 
-        return $this->server->buildSoapResponse($action, $result);
+        /** @var array<string, mixed> $resultArray */
+        $resultArray = $result;
+        return $this->server->buildSoapResponse($action, $resultArray);
     }
 
     /**
      * Handle the Browse action.
      *
-     * @param array $params Browse parameters:
+     * @param array<string, string|int> $params Browse parameters:
      *   - ObjectID: string
      *   - BrowseFlag: string (BrowseMetadata or BrowseDirectChildren)
      *   - Filter: string
@@ -112,7 +119,7 @@ class CdsControlHandler
      *   - RequestedCount: int
      *   - SortCriteria: string
      *
-     * @return array Result array with Result, NumberReturned, TotalMatches, UpdateID
+     * @return array<string, mixed> Result array with Result, NumberReturned, TotalMatches, UpdateID
      *
      * @since 0.12.0
      */
@@ -120,14 +127,14 @@ class CdsControlHandler
     {
         $objectId = $params['ObjectID'] ?? '0';
         $browseFlag = $params['BrowseFlag'] ?? 'BrowseDirectChildren';
-        $filter = $params['Filter'] ?? '*';
+        $filter = is_string($params['Filter'] ?? null) ? $params['Filter'] : '*';
         $startingIndex = isset($params['StartingIndex']) ? (int)$params['StartingIndex'] : 0;
         $requestedCount = isset($params['RequestedCount']) ? (int)$params['RequestedCount'] : 0;
-        $sortCriteria = $params['SortCriteria'] ?? '';
+        $sortCriteria = is_string($params['SortCriteria'] ?? null) ? $params['SortCriteria'] : '';
 
         return $this->contentDirectory->browse(
-            $objectId,
-            $browseFlag,
+            (string)$objectId,
+            (string)$browseFlag,
             $filter,
             $startingIndex,
             $requestedCount,
@@ -138,7 +145,7 @@ class CdsControlHandler
     /**
      * Handle the Search action.
      *
-     * @param array $params Search parameters:
+     * @param array<string, string|int> $params Search parameters:
      *   - ContainerID: string
      *   - SearchCriteria: string
      *   - Filter: string
@@ -146,18 +153,18 @@ class CdsControlHandler
      *   - RequestedCount: int
      *   - SortCriteria: string
      *
-     * @return array Search result array
+     * @return array<string, mixed> Search result array
      *
      * @since 0.12.0
      */
     private function handleSearch(array $params): array
     {
-        $containerId = $params['ContainerID'] ?? '0';
-        $searchCriteria = $params['SearchCriteria'] ?? '*';
-        $filter = $params['Filter'] ?? '*';
+        $containerId = is_string($params['ContainerID'] ?? null) ? $params['ContainerID'] : '0';
+        $searchCriteria = is_string($params['SearchCriteria'] ?? null) ? $params['SearchCriteria'] : '*';
+        $filter = is_string($params['Filter'] ?? null) ? $params['Filter'] : '*';
         $startingIndex = isset($params['StartingIndex']) ? (int)$params['StartingIndex'] : 0;
         $requestedCount = isset($params['RequestedCount']) ? (int)$params['RequestedCount'] : 0;
-        $sortCriteria = $params['SortCriteria'] ?? '';
+        $sortCriteria = is_string($params['SortCriteria'] ?? null) ? $params['SortCriteria'] : '';
 
         return $this->contentDirectory->search(
             $containerId,
@@ -172,7 +179,7 @@ class CdsControlHandler
     /**
      * Handle GetSearchCapabilities action.
      *
-     * @return array Search capabilities result
+     * @return array<string, string> Search capabilities result
      *
      * @since 0.12.0
      */
@@ -184,7 +191,7 @@ class CdsControlHandler
     /**
      * Handle GetSortCapabilities action.
      *
-     * @return array Sort capabilities result
+     * @return array<string, string> Sort capabilities result
      *
      * @since 0.12.0
      */
@@ -196,7 +203,7 @@ class CdsControlHandler
     /**
      * Handle GetSystemUpdateID action.
      *
-     * @return array System update ID result
+     * @return array<string, int> System update ID result
      *
      * @since 0.12.0
      */
@@ -212,7 +219,7 @@ class CdsControlHandler
      * and all parameters.
      *
      * @param string $body Raw SOAP XML body
-     * @return array|null Parsed data ['service' => string, 'action' => string, 'params' => array]
+     * @return array<string, mixed>|null Parsed data ['service' => string, 'action' => string, 'params' => array<string, string>]
      *                   or null if parsing fails
      *
      * @since 0.12.0
@@ -246,16 +253,17 @@ class CdsControlHandler
         }
 
         $actionElement = $actionElements[0];
-        $actionName = $actionElement->getName();
+        $actionName = (string)$actionElement->getName();
 
         // Extract namespace from the action element to determine service
         // For now, default to ContentDirectory
         $service = 'ContentDirectory';
 
         // Parse action-specific parameters
+        /** @var array<string, string> $params */
         $params = [];
         foreach ($actionElement->children() as $param) {
-            $paramName = $param->getName();
+            $paramName = (string)$param->getName();
             $paramValue = (string)$param;
             $params[$paramName] = $paramValue;
         }
@@ -291,7 +299,7 @@ class CdsControlHandler
      *
      * @param int $code UPnP error code
      * @param string $description Error description
-     * @return array Error result array
+     * @return array<string, mixed> Error result array
      *
      * @since 0.12.0
      */

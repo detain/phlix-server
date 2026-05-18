@@ -204,16 +204,20 @@ class LibraryBridgeTest extends TestCase
      */
     public function testGetStreamUrlUsesHlsStreamer(): void
     {
-        $itemId = 'media-stream-123';
+        $item = [
+            'id' => 'media-stream-123',
+            'name' => 'Test Stream',
+            'type' => 'movie',
+        ];
         $expectedUrl = 'http://localhost:8096/hls/media-stream-123/playlist.m3u8';
 
         $this->hlsStreamerMock
             ->expects($this->once())
-            ->method('getPlaylistUrl')
-            ->with($itemId)
+            ->method('getStreamUrl')
+            ->with($item)
             ->willReturn($expectedUrl);
 
-        $streamUrl = $this->bridge->getStreamUrl($itemId);
+        $streamUrl = $this->bridge->getStreamUrl($item);
 
         $this->assertEquals($expectedUrl, $streamUrl);
     }

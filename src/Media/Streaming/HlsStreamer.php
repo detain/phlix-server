@@ -213,6 +213,24 @@ class HlsStreamer
     }
 
     /**
+     * Gets the HLS stream URL for a media item.
+     *
+     * Extracts the item ID from the media item array and generates
+     * the full HLS streaming URL.
+     *
+     * @param array<string, mixed> $item Media item with at least 'id' key
+     *
+     * @return string Full URL to the HLS playlist
+     *
+     * @since 0.12.0
+     */
+    public function getStreamUrl(array $item): string
+    {
+        $itemId = $item['id'] ?? '';
+        return $this->getPlaylistUrl($itemId);
+    }
+
+    /**
      * Gets the segment URL path.
      *
      * Note: Returns a path, not a full URL, for internal use.

@@ -44,7 +44,7 @@ class DlnaServer
     private array $scpdUrls = [];
 
     /**
-     * @since 0.12.0 Removed stub createDummyItemRepository(), requires real ItemRepository
+     * @since 0.12.0 Requires real ItemRepository
      */
     public function __construct(
         string $serverId,
@@ -64,8 +64,7 @@ class DlnaServer
         // Require real item repository since 0.12.0
         if ($itemRepository === null) {
             throw new \InvalidArgumentException(
-                'ItemRepository is required since 0.12.0. ' .
-                'Use createDummyItemRepository() only in tests.'
+                'ItemRepository is required since 0.12.0. Provide a valid ItemRepository instance.'
             );
         }
 
@@ -124,81 +123,6 @@ class DlnaServer
         ];
 
         return new StructuredLogger(LogChannels::DLNA, $config);
-    }
-
-    /**
-     * Create a dummy item repository for standalone operation.
-     *
-     * @deprecated 0.12.0 Use only in tests. Production code requires real ItemRepository.
-     * @return object An object implementing item repository methods
-     */
-    private function createDummyItemRepository()
-    {
-        // Return an object that returns empty/null results
-        // The ContentDirectory handles this gracefully
-        return new class {
-            public function findById(string $id): ?array
-            {
-                return null;
-            }
-            public function findByPath(string $path): ?array
-            {
-                return null;
-            }
-            public function findByParent(string $parentId): array
-            {
-                return [];
-            }
-            public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
-            {
-                return [];
-            }
-            public function getByLibrary(string $libraryId, int $limit = 100, int $offset = 0): array
-            {
-                return [];
-            }
-            public function search(string $query, int $limit = 50): array
-            {
-                return [];
-            }
-            public function searchFuzzy(string $query, int $limit = 50): array
-            {
-                return [];
-            }
-            public function create(array $data): string
-            {
-                return '';
-            }
-            public function update(string $id, array $data): void
-            {
-            }
-            public function delete(string $id): void
-            {
-            }
-            public function deleteByLibrary(string $libraryId): void
-            {
-            }
-            public function countByType(string $libraryId, string $type): int
-            {
-                return 0;
-            }
-            public function getRecentlyAdded(string $libraryId, int $limit = 20): array
-            {
-                return [];
-            }
-            public function getItemStreams(string $itemId): array
-            {
-                return [];
-            }
-            public function addStream(string $itemId, array $streamData): string
-            {
-                return '';
-            }
-            public function batchCreate(array $items): array
-            {
-                return [];
-            }
-        };
     }
 
     /**

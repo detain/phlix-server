@@ -5,18 +5,22 @@ namespace Phlex\Tests\Unit\Dlna;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
 use Phlex\Dlna\DlnaServer;
+use Phlex\Media\Library\ItemRepository;
 
 class DlnaServerTest extends TestCase
 {
     private DlnaServer $server;
+    private MockObject $itemRepositoryMock;
 
     protected function setUp(): void
     {
+        $this->itemRepositoryMock = $this->createMock(ItemRepository::class);
         $this->server = new DlnaServer(
             'test-server-001',
             'Phlex Test Server',
             '192.168.1.100',
-            8200
+            8200,
+            $this->itemRepositoryMock
         );
     }
 

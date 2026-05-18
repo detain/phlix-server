@@ -96,8 +96,6 @@ class LibraryBridge
      */
     private function getLibraryChildCount(string $libraryType): int
     {
-        // For now, return a count of items by type
-        // In a real implementation, this would query a libraries table
         $type = match ($libraryType) {
             'video' => 'movie',
             'audio' => 'audio',
@@ -109,9 +107,7 @@ class LibraryBridge
             return 0;
         }
 
-        // We don't have a library_id here, so we return 0
-        // The actual count will come from browse operations
-        return 0;
+        return $this->itemRepository->countAllByType($type);
     }
 
     /**
@@ -120,7 +116,7 @@ class LibraryBridge
      * Uses ItemRepository::findByParent() to get actual media items.
      *
      * @param string $objectId The object ID of the container
-     * @return array<int, array> Array of child items
+     * @return array<int, array<string, mixed>> Array of child items
      *
      * @since 0.12.0
      */
@@ -144,7 +140,7 @@ class LibraryBridge
      * Get media items from a specific library type.
      *
      * @param string $libraryType The library type (video, audio, images)
-     * @return array<int, array> Array of media items converted to CDS objects
+     * @return array<int, array<string, mixed>> Array of media items converted to CDS objects
      *
      * @since 0.12.0
      */
@@ -161,16 +157,16 @@ class LibraryBridge
             return [];
         }
 
-        // In a real implementation, we would get the library_id from somewhere
-        // and use getByType. For now, return empty since we don't have library_id.
-        return [];
+        $items = $this->itemRepository->getAllByType($type);
+
+        return array_map(fn($item) => $this->itemToCdsObject($item), $items);
     }
 
     /**
      * Get a media item as a CDS object by its ID.
      *
      * @param string $objectId The object ID to look up
-     * @return array|null The CDS object or null if not found
+     * @return array<string, mixed>|null The CDS object or null if not found
      *
      * @since 0.12.0
      */
@@ -206,14 +202,35 @@ class LibraryBridge
      * Maps database fields to CDS (Content Directory Service) object format with
      * all necessary metadata for DIDL-Lite generation.
      *
-     * @param array $item Raw media item from ItemRepository
-     * @return array CDS-compatible object array
+     * @param array<string, mixed> $item Raw media item from ItemRepository
+     * @return array<string, mixed> CDS-compatible object array
      *
-     * @since 0.12.0
+      * @since 0.12.0
      */
     public function itemToCdsObject(array $item): array
     {
-        $metadata = $item['metadata'] ?? [];
+        /** @var array<string, mixed> $metadata */
+        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+
+        // Handle genre field - could be string or array
+        $genreValue = $metadata['genre'] ?? '';
+        if (is_string($genreValue)) {
+            $genre = $genreValue;
+        } elseif (is_array($metadata['genres'] ?? null)) {
+            /** @var array<mixed> $genres */
+            $genres = $metadata['genres'];
+            $genreStrings = [];
+            foreach ($genres as $g) {
+                if (is_scalar($g)) {
+                    $genreStrings[] = (string) $g;
+                } elseif ($g === null) {
+                    $genreStrings[] = '';
+                }
+            }
+            $genre = implode(', ', $genreStrings);
+        } else {
+            $genre = '';
+        }
 
         return [
             'id' => $item['id'],
@@ -225,9 +242,7 @@ class LibraryBridge
             // Metadata fields
             'artist' => $metadata['artist'] ?? $item['artist'] ?? '',
             'album' => $metadata['album'] ?? $item['album'] ?? '',
-            'genre' => is_array($metadata['genres'] ?? null)
-                ? implode(', ', array_map('strval', $metadata['genres']))
-                : ($metadata['genre'] ?? ''),
+            'genre' => $genre,
             'duration' => $this->parseDuration($metadata['duration'] ?? null),
             'date' => $metadata['release_date'] ?? $item['created_at'] ?? '',
             'width' => $metadata['width'] ?? $item['width'] ?? 0,
@@ -241,13 +256,14 @@ class LibraryBridge
     /**
      * Determine the UPnP class based on media item type.
      *
-     * @param array $item Media item from repository
+     * @param array<string, mixed> $item Media item from repository
      * @return string UPnP class string
      *
      * @since 0.12.0
      */
     private function determineUpnpClass(array $item): string
     {
+        /** @var string $type */
         $type = $item['type'] ?? 'unknown';
 
         return match ($type) {
@@ -292,25 +308,29 @@ class LibraryBridge
     /**
      * Build a thumbnail URL for a media item.
      *
-     * @param array $item Media item
+     * @param array<string, mixed> $item Media item
      * @return string Thumbnail URL or empty string
      *
      * @since 0.12.0
      */
     private function buildThumbnailUrl(array $item): string
     {
-        $metadata = $item['metadata'] ?? [];
+        /** @var array<string, mixed> $metadata */
+        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
 
-        if (!empty($metadata['thumbnail'])) {
-            return $metadata['thumbnail'];
+        $thumbnail = $metadata['thumbnail'] ?? null;
+        if (is_string($thumbnail) && $thumbnail !== '') {
+            return $thumbnail;
         }
 
-        if (!empty($metadata['poster'])) {
-            return $metadata['poster'];
+        $poster = $metadata['poster'] ?? null;
+        if (is_string($poster) && $poster !== '') {
+            return $poster;
         }
 
-        if (!empty($item['thumbnail'])) {
-            return $item['thumbnail'];
+        $itemThumb = $item['thumbnail'] ?? null;
+        if (is_string($itemThumb) && $itemThumb !== '') {
+            return $itemThumb;
         }
 
         return '';
@@ -319,7 +339,7 @@ class LibraryBridge
     /**
      * Determine MIME type based on item type and path.
      *
-     * @param array $item Media item
+     * @param array<string, mixed> $item Media item
      * @return string MIME type
      *
      * @since 0.12.0
@@ -327,13 +347,15 @@ class LibraryBridge
     private function determineMimeType(array $item): string
     {
         // First check if we have an explicit mime type
-        if (!empty($item['mime_type'])) {
-            return $item['mime_type'];
+        $mimeType = $item['mime_type'] ?? null;
+        if (is_string($mimeType) && $mimeType !== '') {
+            return $mimeType;
         }
 
         // Fall back to extension-based detection
-        $extension = pathinfo($item['path'] ?? '', PATHINFO_EXTENSION);
-        $type = $item['type'] ?? '';
+        $path = $item['path'] ?? '';
+        $extension = is_string($path) ? pathinfo($path, PATHINFO_EXTENSION) : '';
+        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
 
         return match (strtolower($extension)) {
             'mp4', 'm4v' => 'video/mp4',
@@ -362,18 +384,17 @@ class LibraryBridge
      *
      * Uses HlsStreamer to generate a proper HLS streaming URL for the media item.
      *
-     * @param string $itemId The media item ID
+     * @param array<string, mixed> $item The media item array
      * @return string HLS stream URL
      *
      * @since 0.12.0
      */
-    public function getStreamUrl(string $itemId): string
+    public function getStreamUrl(array $item): string
     {
+        $itemId = $item['id'] ?? '';
         $this->logger?->debug('LibraryBridge: Getting stream URL', ['item_id' => $itemId]);
 
-        // The HLS streamer generates URLs based on job IDs
-        // For direct streaming, we use the item ID as the job ID
-        return $this->hlsStreamer->getPlaylistUrl($itemId);
+        return $this->hlsStreamer->getStreamUrl($item);
     }
 
     /**

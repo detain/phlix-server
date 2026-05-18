@@ -74,9 +74,74 @@ class AvTransport
     /** @var int Counter for next available instance ID */
     private int $nextInstanceId = 0;
 
+    /** @var array<int, array<callable>> State change callbacks keyed by instance ID */
+    private array $stateChangeCallbacks = [];
+
     public function __construct(?StructuredLogger $logger = null)
     {
         $this->logger = $logger ?? $this->createDefaultLogger();
+    }
+
+    /**
+     * Register a state change callback for an instance.
+     *
+     * The callback receives (instanceId, newState, oldState) when the
+     * transport state changes.
+     *
+     * @param int $instanceId Transport instance ID
+     * @param callable $callback Callback function(int $instanceId, string $newState, string $oldState): void
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function onStateChange(int $instanceId, callable $callback): void
+    {
+        if (!isset($this->stateChangeCallbacks[$instanceId])) {
+            $this->stateChangeCallbacks[$instanceId] = [];
+        }
+        $this->stateChangeCallbacks[$instanceId][] = $callback;
+    }
+
+    /**
+     * Remove all state change callbacks for an instance.
+     *
+     * @param int $instanceId Transport instance ID
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function clearStateChangeCallbacks(int $instanceId): void
+    {
+        unset($this->stateChangeCallbacks[$instanceId]);
+    }
+
+    /**
+     * Notify state change callbacks.
+     *
+     * @param int $instanceId Transport instance ID
+     * @param string $newState New transport state
+     * @param string $oldState Previous transport state
+     *
+     * @return void
+     */
+    private function notifyStateChange(int $instanceId, string $newState, string $oldState): void
+    {
+        if (!isset($this->stateChangeCallbacks[$instanceId])) {
+            return;
+        }
+
+        foreach ($this->stateChangeCallbacks[$instanceId] as $callback) {
+            try {
+                $callback($instanceId, $newState, $oldState);
+            } catch (\Throwable $e) {
+                $this->logger->warning('State change callback error', [
+                    'instance_id' => $instanceId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
     }
 
     /**
@@ -170,9 +235,12 @@ class AvTransport
             return $this->createErrorResult(702, 'Transport is not set up');
         }
 
+        $oldState = $instance->getTransportState();
         $instance->setTransportState(self::TRANSPORT_STATE_PLAYING);
         $instance->setPlaybackSpeed($speed);
         $instance->setLastChange(time());
+
+        $this->notifyStateChange($instanceId, self::TRANSPORT_STATE_PLAYING, $oldState);
 
         return [
             'CurrentState' => self::TRANSPORT_STATE_PLAYING,
@@ -197,8 +265,11 @@ class AvTransport
             return $this->createErrorResult(702, 'Transport is not set up');
         }
 
+        $oldState = $instance->getTransportState();
         $instance->setTransportState(self::TRANSPORT_STATE_PAUSED);
         $instance->setLastChange(time());
+
+        $this->notifyStateChange($instanceId, self::TRANSPORT_STATE_PAUSED, $oldState);
 
         return [
             'CurrentState' => self::TRANSPORT_STATE_PAUSED,
@@ -219,9 +290,12 @@ class AvTransport
 
         $instance = $this->getInstance($instanceId);
 
+        $oldState = $instance->getTransportState();
         $instance->setTransportState(self::TRANSPORT_STATE_STOPPED);
         $instance->setPosition(0);
         $instance->setLastChange(time());
+
+        $this->notifyStateChange($instanceId, self::TRANSPORT_STATE_STOPPED, $oldState);
 
         return [
             'CurrentState' => self::TRANSPORT_STATE_STOPPED,

@@ -602,4 +602,66 @@ class PlaybackController
             reachedEnd: $reachedEnd,
         ));
     }
+
+    /**
+     * Start a "play to" DLNA session alongside the local session.
+     *
+     * Creates a PlayToSession that sends media to a DLNA renderer while
+     * also tracking position in the local PlaybackController. Both local
+     * and remote positions are kept in sync.
+     *
+     * @param string $sessionId Local session ID for position tracking
+     * @param string $mediaItemId Media item UUID being played
+     * @param string $rendererId DLNA renderer UDN
+     * @param string $streamUrl HLS stream URL for the renderer
+     * @param string $metadata DIDL-Lite metadata (optional)
+     *
+     * @return \Phlex\Dlna\PlayToSession|null New play-to session or null on failure
+     *
+     * @since 0.12.0
+     */
+    public function startPlayToSession(
+        string $sessionId,
+        string $mediaItemId,
+        string $rendererId,
+        string $streamUrl,
+        string $metadata = ''
+    ): ?\Phlex\Dlna\PlayToSession {
+        try {
+            // Get the PlayToManager from container if available
+            $container = \Phlex\Common\Container\ContainerFactory::getInstance();
+            if ($container === null || !$container->has(\Phlex\Dlna\PlayToManager::class)) {
+                $this->logger->warning('PlayToManager not available in container');
+                return null;
+            }
+
+            /** @var \Phlex\Dlna\PlayToManager */
+            $playToManager = $container->get(\Phlex\Dlna\PlayToManager::class);
+
+            $session = $playToManager->startSession($rendererId, $mediaItemId, $streamUrl, $metadata);
+
+            if ($session === null) {
+                $this->logger->error('Failed to start play-to session', [
+                    'renderer_id' => $rendererId,
+                    'media_item_id' => $mediaItemId,
+                ]);
+                return null;
+            }
+
+            $this->logger->info('Play-to session started', [
+                'session_id' => $session->getSessionId(),
+                'renderer_id' => $rendererId,
+                'media_item_id' => $mediaItemId,
+            ]);
+
+            return $session;
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to start play-to session', [
+                'error' => $e->getMessage(),
+                'renderer_id' => $rendererId,
+                'media_item_id' => $mediaItemId,
+            ]);
+            return null;
+        }
+    }
 }

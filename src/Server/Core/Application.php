@@ -228,6 +228,9 @@ class Application
 
         // DLNA Content Directory Service (CDS) HTTP endpoints
         $this->loadCdsRoutes();
+
+        // DLNA renderer control API endpoints
+        $this->loadDlnaRendererRoutes();
     }
 
     /**
@@ -513,6 +516,53 @@ class Application
             });
         } catch (\Throwable $e) {
             // CDS not configured - silent ignore
+        }
+    }
+
+    /**
+     * Loads DLNA renderer control API routes.
+     *
+     * Registers endpoints for:
+     * - GET /api/v1/dlna/renderers — list discovered renderers
+     * - POST /api/v1/dlna/renderers/{id}/play — start "play to" session
+     * - POST /api/v1/dlna/renderers/{id}/pause — pause playback
+     * - POST /api/v1/dlna/renderers/{id}/stop — stop playback
+     * - POST /api/v1/dlna/renderers/{id}/seek — seek to position
+     * - GET /api/v1/dlna/renderers/{id}/status — get renderer state
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadDlnaRendererRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $playToManager = $this->container->get(\Phlex\Dlna\PlayToManager::class);
+            $controller = new \Phlex\Server\Http\Controllers\Dlna\RendererListController($playToManager);
+
+            // List renderers
+            $this->router->get('/api/v1/dlna/renderers', [$controller, 'listRenderers']);
+
+            // Get renderer status
+            $this->router->get('/api/v1/dlna/renderers/{id}/status', [$controller, 'getStatus']);
+
+            // Start play-to session
+            $this->router->post('/api/v1/dlna/renderers/{id}/play', [$controller, 'playTo']);
+
+            // Pause playback
+            $this->router->post('/api/v1/dlna/renderers/{id}/pause', [$controller, 'pause']);
+
+            // Stop playback
+            $this->router->post('/api/v1/dlna/renderers/{id}/stop', [$controller, 'stop']);
+
+            // Seek to position
+            $this->router->post('/api/v1/dlna/renderers/{id}/seek', [$controller, 'seek']);
+        } catch (\Throwable $e) {
+            // PlayToManager not configured - silent ignore
         }
     }
 

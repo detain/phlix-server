@@ -7,6 +7,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.3)
+
+- DLNA AVTransport "play to" — send media to DLNA renderers:
+  - `RendererDiscovery` — discovers DLNA MediaRenderers via SSDP with `urn:schemas-upnp-org:device:MediaRenderer:1`
+  - `RendererControlClient` — HTTP SOAP client for AVTransport control (SetAVTransportURI, Play, Pause, Stop, Seek, GetPositionInfo, GetTransportInfo)
+  - `PlayToSession` — active "play to" session with position polling every 5 seconds via Workerman Timer
+  - `PlayToManager` — manages multiple play-to sessions, creates RendererControlClient, maps renderer IDs to sessions
+  - `RemoteRendererClient` — "play to" via relay tunnel (RelayConsumer) for renderers behind NAT
+  - `RendererListController` — HTTP API endpoints:
+    - GET /api/v1/dlna/renderers — list discovered renderers
+    - POST /api/v1/dlna/renderers/{id}/play — start "play to" session
+    - POST /api/v1/dlna/renderers/{id}/pause — pause playback
+    - POST /api/v1/dlna/renderers/{id}/stop — stop playback
+    - POST /api/v1/dlna/renderers/{id}/seek — seek to position (ticks)
+    - GET /api/v1/dlna/renderers/{id}/status — get renderer state
+  - `AvTransport` — added `onStateChange()` callbacks and `notifyStateChange()` for observable state changes
+  - `PlaybackController` — added `startPlayToSession()` for integrated local + remote playback
+  - `Application` — registered DLNA renderer control routes in `loadDlnaRendererRoutes()`
+  - Unit tests: `RendererDiscoveryTest` (5 tests), `RendererControlClientTest` (9 tests), `PlayToSessionTest` (11 tests), `PlayToManagerTest` (8 tests)
+
 ### Added (Step J.2)
 
 - DLNA ContentDirectory full — browse and search real media library:

@@ -1202,7 +1202,8 @@ class AudioScanner extends MediaScanner
                     if ($fmtData !== false && strlen($fmtData) >= 16) {
                         $tags['sample_rate'] = unpack('v', substr($fmtData, 24, 2))[1] ?? 44100;
                         $tags['channels'] = unpack('v', substr($fmtData, 22, 2))[1] ?? 2;
-                        $tags['bitrate'] = ((unpack('v', substr($fmtData, 34, 2))[1] ?? 0) / 8) * $tags['sample_rate'] * $tags['channels'];
+                        $bitrateVal = unpack('v', substr($fmtData, 34, 2))[1] ?? 0;
+                        $tags['bitrate'] = ($bitrateVal / 8) * $tags['sample_rate'] * $tags['channels'];
                     }
                 } elseif ($chunkType === 'data') {
                     // Calculate approximate duration

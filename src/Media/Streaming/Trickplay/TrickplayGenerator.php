@@ -261,7 +261,8 @@ class TrickplayGenerator
 
         foreach ($timestamps as $index => $timestamp) {
             $frameIndex = $startIndex + $index;
-            $framePath = $outputDir . '/frame_' . str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT) . $config->getFileExtension();
+            $paddedIndex = str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT);
+            $framePath = $outputDir . '/frame_' . $paddedIndex . $config->getFileExtension();
             $cmd .= sprintf(
                 ' -ss %d -vframes 1 %s',
                 escapeshellarg((string) $timestamp),
@@ -297,7 +298,8 @@ class TrickplayGenerator
         $inputs = '';
         for ($i = 0; $i < $count; $i++) {
             $frameIndex = $startIndex + $i;
-            $framePath = $outputDir . '/frame_' . str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT) . $config->getFileExtension();
+            $paddedIndex = str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT);
+            $framePath = $outputDir . '/frame_' . $paddedIndex . $config->getFileExtension();
             if (file_exists($framePath)) {
                 $inputs .= ' -i ' . escapeshellarg($framePath);
             }
@@ -325,7 +327,8 @@ class TrickplayGenerator
 
         for ($i = 0; $i < $count; $i++) {
             $frameIndex = $startIndex + $i;
-            $framePath = $outputDir . '/frame_' . str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT) . $config->getFileExtension();
+            $paddedIndex = str_pad((string) $frameIndex, 5, '0', STR_PAD_LEFT);
+            $framePath = $outputDir . '/frame_' . $paddedIndex . $config->getFileExtension();
             if (file_exists($framePath)) {
                 unlink($framePath);
             }

@@ -196,19 +196,31 @@ class TvdbProvider implements MetadataProviderInterface
         $params = ['keyType' => 'poster'];
 
         // Get posters
-        $posterResponse = $this->http->get("/series/{$externalId}/images/query", array_merge($params, ['keyType' => 'poster']));
+        $posterResponse = $this->http->get(
+            "/series/{$externalId}/images/query",
+            array_merge($params, ['keyType' => 'poster'])
+        );
         $posters = $this->formatImages($posterResponse['data'] ?? [], 'poster');
 
         // Get banners
-        $bannerResponse = $this->http->get("/series/{$externalId}/images/query", array_merge($params, ['keyType' => 'series']));
+        $bannerResponse = $this->http->get(
+            "/series/{$externalId}/images/query",
+            array_merge($params, ['keyType' => 'series'])
+        );
         $banners = $this->formatImages($bannerResponse['data'] ?? [], 'banner');
 
         // Get season posters
-        $seasonPosterResponse = $this->http->get("/series/{$externalId}/images/query", array_merge($params, ['keyType' => 'season']));
+        $seasonPosterResponse = $this->http->get(
+            "/series/{$externalId}/images/query",
+            array_merge($params, ['keyType' => 'season'])
+        );
         $seasonPosters = $this->formatImages($seasonPosterResponse['data'] ?? [], 'season_poster');
 
         // Get season thumbs
-        $seasonThumbResponse = $this->http->get("/series/{$externalId}/images/query", array_merge($params, ['keyType' => 'seasonwide']));
+        $seasonThumbResponse = $this->http->get(
+            "/series/{$externalId}/images/query",
+            array_merge($params, ['keyType' => 'seasonwide'])
+        );
         $seasonThumbs = $this->formatImages($seasonThumbResponse['data'] ?? [], 'season_thumb');
 
         return [

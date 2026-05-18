@@ -81,11 +81,11 @@ class LocalNfoProvider implements MetadataProviderInterface
      * @param string $externalId File path to NFO file OR directory containing NFO files
      * @param array<string, mixed> $options Ignored
      * @return array<string, mixed> Parsed metadata including:
-     *                           - For movie.nfo: type, name, overview, year, rating, genres, studios, actors, external_ids
-     *                           - For tvshow.nfo: type, name, overview, year, status, genres, studios, actors, external_ids
-     *                           - For episode.nfo: type, name, overview, season_number, episode_number, aired, rating
-     *                           - For directory: ['type' => 'movie'|'tvshow'|'generic', 'metadata' => [...]]
-     *                           - Empty array if file/directory not found or parsing fails
+     *     - For movie.nfo: type, name, overview, year, rating, genres, studios, actors, external_ids
+     *     - For tvshow.nfo: type, name, overview, year, status, genres, studios, actors, external_ids
+     *     - For episode.nfo: type, name, overview, season_number, episode_number, aired, rating
+     *     - For directory: ['type' => 'movie'|'tvshow'|'generic', 'metadata' => [...]]
+     *     - Empty array if file/directory not found or parsing fails
      */
     public function getDetails(string $externalId, array $options = []): array
     {

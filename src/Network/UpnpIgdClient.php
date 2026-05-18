@@ -20,7 +20,8 @@ class UpnpIgdClient
 {
     private const SSDP_MULTICAST_ADDR = '239.255.255.250';
     private const SSDP_PORT = 1900;
-    private const SSDP_SEARCH_TARGET = 'urn:schemas-upnp-org:device:InternetGatewayDevice:1';
+    private const SSDP_SEARCH_TARGET = 
+        'urn:schemas-upnp-org:device:InternetGatewayDevice:1';
     private const SSDP_MSEARCH = "M-SEARCH * HTTP/1.1\r\nHOST: %s:%d\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: %s\r\n\r\n";
 
     private LoggerInterface $logger;
@@ -307,7 +308,12 @@ class UpnpIgdClient
             return null;
         }
 
-        $request = "GET {$path} HTTP/1.1\r\nHost: {$parsed['host']}:{$port}\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+        $request = sprintf(
+            "GET %s HTTP/1.1\r\nHost: %s:%d\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+            $path,
+            $parsed['host'],
+            $port
+        );
         @fwrite($sock, $request);
 
         $response = '';
@@ -326,10 +332,17 @@ class UpnpIgdClient
         if (preg_match('/<URLBase>(.+?)<\/URLBase>/i', $body, $matches)) {
             $urlBase = trim($matches[1]);
             if (preg_match('/<deviceList>.*?<\/deviceList>/is', $body, $deviceListMatch)) {
-                if (preg_match('/<device>.*?<deviceType>.*?InternetGatewayDevice.*?<\/deviceType>.*?<deviceList>(.*?)<\/deviceList>.*?<\/device>/is', $deviceListMatch[0], $igDeviceMatch)) {
-                    if (preg_match('/<device>.*?<deviceType>.*?WANDevice.*?<\/deviceType>.*?<deviceList>(.*?)<\/deviceList>.*?<\/device>/is', $igDeviceMatch[0], $wanDeviceMatch)) {
-                        if (preg_match('/<device>.*?<serviceList>(.*?)<\/serviceList>.*?<\/device>/is', $wanDeviceMatch[0], $serviceListMatch)) {
-                            if (preg_match('/<controlURL>(.+?)<\/controlURL>/is', $serviceListMatch[0], $controlMatch)) {
+                $igDevicePattern = '/<device>.*?<deviceType>.*?InternetGatewayDevice'
+                    . '.*?<\/deviceType>.*?<deviceList>(.*?)<\/deviceList>.*?<\/device>/is';
+                if (preg_match($igDevicePattern, $deviceListMatch[0], $igDeviceMatch)) {
+                    $wanDevicePattern = '/<device>.*?<deviceType>.*?WANDevice'
+                        . '.*?<\/deviceType>.*?<deviceList>(.*?)<\/deviceList>.*?<\/device>/is';
+                    if (preg_match($wanDevicePattern, $igDeviceMatch[0], $wanDeviceMatch)) {
+                        $serviceListPattern = '/<device>.*?<serviceList>(.*?)<\/serviceList>'
+                            . '.*?<\/device>/is';
+                        if (preg_match($serviceListPattern, $wanDeviceMatch[0], $serviceListMatch)) {
+                            $controlUrlPattern = '/<controlURL>(.+?)<\/controlURL>/is';
+                            if (preg_match($controlUrlPattern, $serviceListMatch[0], $controlMatch)) {
                                 return $this->resolveUrl($locationUrl, trim($controlMatch[1]));
                             }
                         }
@@ -390,7 +403,10 @@ class UpnpIgdClient
             return null;
         }
 
-        if (preg_match_all('/<service>.*?<serviceType>urn:schemas-upnp-org:service:WANIPConnection:1<\/serviceType>.*?<controlURL>(.+?)<\/controlURL>.*?<\/service>/is', $content, $matches)) {
+        $wanIpServicePattern = '/<service>.*?<serviceType>'
+            . 'urn:schemas-upnp-org:service:WANIPConnection:1'
+            . '<\/serviceType>.*?<controlURL>(.+?)<\/controlURL>.*?<\/service>/is';
+        if (preg_match_all($wanIpServicePattern, $content, $matches)) {
             return $this->resolveUrl($descUrl, trim(end($matches[1])));
         }
 
@@ -415,7 +431,10 @@ class UpnpIgdClient
             return null;
         }
 
-        if (preg_match_all('/<device>.*?<deviceType>urn:schemas-upnp-org:device:WANConnectionDevice:1<\/deviceType>.*?<serviceList>(.*?)<\/serviceList>.*?<\/device>/is', $content, $matches)) {
+        $wanConnDevicePattern = '/<device>.*?<deviceType>'
+            . 'urn:schemas-upnp-org:device:WANConnectionDevice:1'
+            . '<\/deviceType>.*?<serviceList>(.*?)<\/serviceList>.*?<\/device>/is';
+        if (preg_match_all($wanConnDevicePattern, $content, $matches)) {
             foreach ($matches[1] as $serviceList) {
                 if (preg_match('/<controlURL>(.+?)<\/controlURL>/is', $serviceList, $ctrlMatch)) {
                     return $this->resolveUrl($descUrl, trim($ctrlMatch[1]));
@@ -526,7 +545,8 @@ class UpnpIgdClient
      */
     private function extractExternalIp(string $responseBody): ?string
     {
-        if (preg_match('/<NewExternalIPAddress>(\d+\.\d+\.\d+\.\d+)<\/NewExternalIPAddress>/i', $responseBody, $matches)) {
+        $ipPattern = '/<NewExternalIPAddress>(\d+\.\d+\.\d+\.\d+)<\/NewExternalIPAddress>/i';
+        if (preg_match($ipPattern, $responseBody, $matches)) {
             return $matches[1];
         }
         return null;

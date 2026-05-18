@@ -46,7 +46,17 @@ class TmdbProvider implements MetadataProviderInterface
      *
      * @param string $query Movie title search query
      * @param array<string, mixed> $options Search options (language, include_adult)
-     * @return array<int, array{id: int, title: string, original_title: string, overview: string, poster_path: string|null, backdrop_path: string|null, release_date: string, vote_average: float, vote_count: int}> Search results
+     * @return array<int, array{
+     *     id: int,
+     *     title: string,
+     *     original_title: string,
+     *     overview: string,
+     *     poster_path: string|null,
+     *     backdrop_path: string|null,
+     *     release_date: string,
+     *     vote_average: float,
+     *     vote_count: int
+     * }> Search results
      */
     public function search(string $query, array $options = []): array
     {
@@ -107,7 +117,13 @@ class TmdbProvider implements MetadataProviderInterface
      * Get movie images (posters, backdrops, logos) from TMDB.
      *
      * @param string $externalId TMDB movie ID
-     * @return array<string, array<int, array{url: string, url_original: string, width: int, height: int, language: string|null}>> Images by type
+     * @return array<string, array<int, array{
+     *     url: string,
+     *     url_original: string,
+     *     width: int,
+     *     height: int,
+     *     language: string|null
+     * }>> Images by type
      */
     public function getImages(string $externalId): array
     {
@@ -195,7 +211,13 @@ class TmdbProvider implements MetadataProviderInterface
      * Format image list with full URLs.
      *
      * @param array<int, array<string, mixed>> $images Raw image data from TMDB
-     * @return array<int, array{url: string, url_original: string, width: int, height: int, language: string|null}> Formatted images
+     * @return array<int, array{
+     *     url: string,
+     *     url_original: string,
+     *     width: int,
+     *     height: int,
+     *     language: string|null
+     * }> Formatted images
      */
     private function formatImages(array $images): array
     {

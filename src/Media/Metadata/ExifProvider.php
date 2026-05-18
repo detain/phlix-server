@@ -136,7 +136,8 @@ class ExifProvider implements MetadataProviderInterface
         }
 
         // Add display-ready GPS coordinates
-        if (isset($metadata['gps_lat']) && isset($metadata['gps_lng'])
+        if (
+            isset($metadata['gps_lat']) && isset($metadata['gps_lng'])
             && is_numeric($metadata['gps_lat']) && is_numeric($metadata['gps_lng'])
         ) {
             $lat = (float)$metadata['gps_lat'];

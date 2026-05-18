@@ -126,7 +126,8 @@ class LibraryManager
      * Retrieves a library by its unique identifier.
      *
      * @param string $id The library's unique identifier
-     * @return array<string, mixed>|null Library data array with 'paths' and 'options' decoded, or null if not found
+     * @return array<string, mixed>|null Library data array with 'paths' and 'options'
+     *     decoded, or null if not found
      *
      * @example
      * ```php

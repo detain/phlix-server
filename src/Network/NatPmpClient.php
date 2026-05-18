@@ -230,9 +230,15 @@ class NatPmpClient
     /**
      * Builds a NAT-PMP map request.
      */
-    private function buildMapRequest(int $opCode, int $externalPort, int $internalPort, int $leaseDuration): string
-    {
-        return chr(self::VERSION) . chr($opCode) . pack('n', 0) . pack('n', $externalPort) . pack('n', $internalPort) . pack('N', $leaseDuration);
+    private function buildMapRequest(
+        int $opCode,
+        int $externalPort,
+        int $internalPort,
+        int $leaseDuration
+    ): string {
+        return chr(self::VERSION) . chr($opCode)
+            . pack('n', 0) . pack('n', $externalPort)
+            . pack('n', $internalPort) . pack('N', $leaseDuration);
     }
 
     /**
@@ -240,7 +246,9 @@ class NatPmpClient
      */
     private function buildUnmapRequest(int $opCode, int $externalPort): string
     {
-        return chr(self::VERSION) . chr($opCode) . pack('n', 0) . pack('n', $externalPort) . pack('n', 0) . pack('N', 0);
+        return chr(self::VERSION) . chr($opCode)
+            . pack('n', 0) . pack('n', $externalPort)
+            . pack('n', 0) . pack('N', 0);
     }
 
     /**

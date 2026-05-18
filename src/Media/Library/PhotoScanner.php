@@ -272,7 +272,10 @@ class PhotoScanner extends MediaScanner
     {
         $result = ['lat' => null, 'lng' => null];
 
-        if (!is_array($lat) || count($lat) < 3 || !is_numeric($lat[0]) || !is_numeric($lat[1]) || !is_numeric($lat[2])) {
+        if (
+            !is_array($lat) || count($lat) < 3
+            || !is_numeric($lat[0]) || !is_numeric($lat[1]) || !is_numeric($lat[2])
+        ) {
             // Try to get from GPS section directly if available
             if (isset($gps['GPSLatitude']) && is_array($gps['GPSLatitude'])) {
                 $lat = $gps['GPSLatitude'];

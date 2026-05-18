@@ -82,7 +82,12 @@ class PortForwardService
                         'local_ip' => $localIp,
                         'port' => $this->port,
                     ]);
-                    $this->persistConfig(['method' => 'upnp', 'external_ip' => $externalIp, 'port' => $this->port, 'enabled' => true]);
+                    $this->persistConfig([
+                        'method' => 'upnp',
+                        'external_ip' => $externalIp,
+                        'port' => $this->port,
+                        'enabled' => true,
+                    ]);
                     return $this->result(true, $endpoint, 'upnp', $externalIp);
                 }
             }
@@ -102,7 +107,12 @@ class PortForwardService
                         'local_ip' => $localIp,
                         'port' => $assignedPort,
                     ]);
-                    $this->persistConfig(['method' => 'natpmp', 'external_ip' => $externalIp, 'port' => $assignedPort, 'enabled' => true]);
+                    $this->persistConfig([
+                        'method' => 'natpmp',
+                        'external_ip' => $externalIp,
+                        'port' => $assignedPort,
+                        'enabled' => true,
+                    ]);
                     return $this->result(true, $endpoint, 'natpmp', $externalIp);
                 }
             }
@@ -117,7 +127,12 @@ class PortForwardService
                     'public_ip' => $publicIp,
                     'port' => $this->port,
                 ]);
-                $this->persistConfig(['method' => 'stun-already-open', 'external_ip' => $publicIp, 'port' => $this->port, 'enabled' => true]);
+                $this->persistConfig([
+                    'method' => 'stun-already-open',
+                    'external_ip' => $publicIp,
+                    'port' => $this->port,
+                    'enabled' => true,
+                ]);
                 return $this->result(true, $endpoint, 'stun-open', $publicIp);
             }
         }

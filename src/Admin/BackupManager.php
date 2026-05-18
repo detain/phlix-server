@@ -58,18 +58,24 @@ class BackupManager
 
     /**
      * Get a string config value with default.
+     *
+     * @param mixed $value
      */
     private function getConfigString(string $key, string $default = ''): string
     {
-        return (string) ($this->config[$key] ?? $default);
+        $value = $this->config[$key] ?? $default;
+        return is_string($value) ? $value : (string) $value;
     }
 
     /**
      * Get an int config value with default.
+     *
+     * @param mixed $value
      */
     private function getConfigInt(string $key, int $default = 0): int
     {
-        return (int) ($this->config[$key] ?? $default);
+        $value = $this->config[$key] ?? $default;
+        return is_int($value) ? $value : (int) $value;
     }
 
     /**

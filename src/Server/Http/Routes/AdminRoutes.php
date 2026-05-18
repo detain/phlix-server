@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Routes;
 
+use Phlex\Server\Http\Controllers\Admin\BackupController;
 use Phlex\Server\Http\Controllers\Admin\DashboardController;
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
@@ -115,6 +116,17 @@ final class AdminRoutes
                 $r->get('/dashboard/top-media', [$dashboardController, 'topMedia']);
                 $r->get('/dashboard/storage', [$dashboardController, 'storage']);
                 $r->get('/dashboard/activity', [$dashboardController, 'activity']);
+
+                /** @var BackupController $backupController */
+                $backupController = $container->get(BackupController::class);
+
+                $r->post('/backup/create', [$backupController, 'create']);
+                $r->get('/backup/list', [$backupController, 'list']);
+                $r->delete('/backup/{id}', [$backupController, 'delete']);
+                $r->post('/backup/{id}/restore', [$backupController, 'restore']);
+                $r->post('/backup/{id}/upload-s3', [$backupController, 'uploadS3']);
+                $r->get('/backup/schedule', [$backupController, 'getSchedule']);
+                $r->put('/backup/schedule', [$backupController, 'updateSchedule']);
             },
             [$adminMiddleware],
         );

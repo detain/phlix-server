@@ -61,6 +61,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `Application::startNewsletterTimerIfEnabled()` — Workerman Timer integration for scheduled newsletter delivery
   - Unit tests: `NewsletterGeneratorTest` (4 tests), `NewsletterSenderTest` (5 tests)
 
+### Added (Step L.6)
+
+- Server backup and restore system with local storage, S3-compatible cloud backup, and automatic scheduling:
+  - `migrations/021_backups.sql` — backups table with id, label, file_path, size_bytes, checksum_sha256, is_s3, created_at, expires_at
+  - `config/backup.php` — configuration with enabled, local_path, retention_count, auto_backup_interval_days, s3 settings
+  - `RestoreResult` — result class with success, message, error properties
+  - `S3Client` — minimal S3-compatible client using AWS Signature V4 for upload, download, listObjects, deleteObject
+  - `BackupManager` — backup creation with mysqldump + tar.gz, restore with checksum verification, S3 upload/download, retention management
+  - `BackupController` — 7 admin API endpoints: POST create, GET list, DELETE delete, POST restore, POST upload-s3, GET/PUT schedule
+  - `Application::startBackupTimerIfEnabled()` — Workerman Timer integration for scheduled backups
+  - Unit tests: `BackupManagerTest` (11 tests), `S3ClientTest` (10 tests)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

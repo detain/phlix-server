@@ -298,6 +298,9 @@ class Application
         // Start newsletter timer if enabled
         $this->startNewsletterTimerIfEnabled();
 
+        // Start backup timer if enabled
+        $this->startBackupTimerIfEnabled();
+
         $request = Request::fromGlobals();
 
         // Build the final handler that dispatches to the router
@@ -549,6 +552,97 @@ class Application
 
             $stats = $sender->getDeliveryStats();
             $logger->info('Newsletter delivery stats', $stats);
+        });
+    }
+
+    /**
+     * Start the backup timer for automatic scheduled backups.
+     *
+     * If backup is enabled in config, registers a periodic timer to create
+     * automatic backups at the configured interval.
+     *
+     * @return void
+     *
+     * @since 0.19.0
+     */
+    private function startBackupTimerIfEnabled(): void
+    {
+        $backupConfigPath = $this->config['_config_dir'] ?? 'config';
+        $backupConfigFile = $backupConfigPath . '/backup.php';
+
+        if (!file_exists($backupConfigFile)) {
+            return;
+        }
+
+        $backupConfig = include $backupConfigFile;
+
+        if (empty($backupConfig['enabled'])) {
+            return;
+        }
+
+        $intervalDays = $backupConfig['auto_backup_interval_days'] ?? 7;
+
+        if ($intervalDays <= 0) {
+            return;
+        }
+
+        try {
+            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
+            $backupManager = new \Phlex\Admin\BackupManager(
+                $db,
+                \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION)
+            );
+
+            $this->registerBackupTimer($backupManager, $intervalDays);
+        } catch (\Throwable $e) {
+            $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION);
+            $logger->error('Failed to start backup timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Register the backup timer with Workerman.
+     *
+     * @param \Phlex\Admin\BackupManager $backupManager Backup manager instance
+     * @param int $intervalDays Backup interval in days
+     *
+     * @return void
+     */
+    private function registerBackupTimer(\Phlex\Admin\BackupManager $backupManager, int $intervalDays): void
+    {
+        $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION);
+        $intervalSeconds = $intervalDays * 86400;
+
+        // Run daily to check if it's time for a backup
+        \Workerman\Timer::add(86400, function () use ($backupManager, $intervalSeconds, $logger): void {
+            $nextBackup = $backupManager->getNextScheduledBackup();
+
+            if ($nextBackup === null) {
+                return;
+            }
+
+            $now = time();
+
+            // If we're past the scheduled time, create a backup
+            if ($now >= $nextBackup) {
+                $logger->info('Scheduled backup timer triggered', [
+                    'interval_days' => $intervalDays,
+                ]);
+
+                try {
+                    $result = $backupManager->createBackup('auto');
+                    $logger->info('Scheduled backup created', [
+                        'backup_id' => $result['backup_id'],
+                        'size_bytes' => $result['size_bytes'],
+                    ]);
+                } catch (\Throwable $e) {
+                    $logger->error('Scheduled backup failed', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
         });
     }
 

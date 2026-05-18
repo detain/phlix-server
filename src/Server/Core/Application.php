@@ -237,6 +237,9 @@ class Application
 
         // AirPlay 2 API endpoints
         $this->loadAirPlayRoutes();
+
+        // Roku API endpoints
+        $this->loadRokuRoutes();
     }
 
     /**
@@ -614,6 +617,49 @@ class Application
             $this->router->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
         } catch (\Throwable $e) {
             // CastManager not configured - silent ignore
+        }
+    }
+
+    /**
+     * Loads Roku API routes.
+     *
+     * Registers endpoints for:
+     * - GET /api/v1/roku/devices — list discovered Roku devices
+     * - POST /api/v1/roku/devices/{id}/send — send media to Roku
+     * - POST /api/v1/roku/devices/{id}/launch/{channelId} — launch a channel
+     * - POST /api/v1/roku/devices/{id}/key/{keyName} — send keypress
+     * - GET /api/v1/roku/devices/{id}/status — get session status
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadRokuRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $rokuManager = $this->container->get(\Phlex\Roku\RokuManager::class);
+            $controller = new \Phlex\Server\Http\Controllers\Roku\RokuController($rokuManager);
+
+            // List discovered devices
+            $this->router->get('/api/v1/roku/devices', [$controller, 'listDevices']);
+
+            // Send media to device
+            $this->router->post('/api/v1/roku/devices/{id}/send', [$controller, 'sendMedia']);
+
+            // Launch channel
+            $this->router->post('/api/v1/roku/devices/{id}/launch/{channelId}', [$controller, 'launchChannel']);
+
+            // Send keypress
+            $this->router->post('/api/v1/roku/devices/{id}/key/{keyName}', [$controller, 'sendKey']);
+
+            // Get session status
+            $this->router->get('/api/v1/roku/devices/{id}/status', [$controller, 'getStatus']);
+        } catch (\Throwable $e) {
+            // RokuManager not configured - silent ignore
         }
     }
 

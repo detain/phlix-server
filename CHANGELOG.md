@@ -7,6 +7,24 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.6)
+
+- Roku ECP support — send media to Roku devices:
+  - `RokuDevice` — Roku device descriptor with deviceId, name, host, port, model, softwareVersion
+  - `RokuDiscovery` — discovers Roku devices via mDNS `_ roku-ecnp._tcp.local.` using MdnsDiscovery
+  - `RokuEcpClient` — HTTP ECP client with launchChannel(), playMedia(), sendKeypress(), getDeviceInfo(), getPlayerState()
+  - `RokuSession` — active Roku session with playMedia()/pause()/play()/stop(), player state polling every 5 seconds via Workerman Timer
+  - `RokuManager` — manages Roku sessions, discovers devices, creates sessions, launches media
+  - `RemoteRokuClient` — Roku control via relay tunnel (RelayConsumer) for devices behind NAT
+  - `RokuController` — HTTP API endpoints:
+    - GET /api/v1/roku/devices — list discovered Roku devices
+    - POST /api/v1/roku/devices/{id}/send — send media to Roku
+    - POST /api/v1/roku/devices/{id}/launch/{channelId} — launch a channel
+    - POST /api/v1/roku/devices/{id}/key/{keyName} — send keypress
+    - GET /api/v1/roku/devices/{id}/status — get session status
+  - `Application` — registered Roku routes in `loadRokuRoutes()`
+  - Unit tests: `RokuDeviceTest` (4 tests), `RokuDiscoveryTest` (3 tests), `RokuEcpClientTest` (8 tests), `RokuSessionTest` (7 tests), `RokuManagerTest` (6 tests)
+
 ### Added (Step J.5)
 
 - AirPlay 2 support — stream audio to AirPlay 2 devices (Apple TV, HomePod, AirPlay 2-compatible receivers):

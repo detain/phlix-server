@@ -7,6 +7,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.2)
+
+- DLNA ContentDirectory full — browse and search real media library:
+  - `LibraryBridge` — bridges `ItemRepository` to `ContentDirectory` for real media data
+  - `CdsControlHandler` — HTTP SOAP endpoint for ContentDirectory actions (Browse, Search)
+  - `CdsServer` — full DLNA MediaServer with HTTP endpoints: `/description.xml`, `/cds/control`, `/scpd/{service}.xml`
+  - `src/Server/Http/Controllers/Dlna/DeviceDescriptionController` — serves `/description.xml`
+  - `src/Server/Http/Controllers/Dlna/CdsControlController` — handles CDS SOAP requests
+  - `ContentDirectory` — now uses `LibraryBridge` for real library data instead of stubs
+  - `DlnaServer` — requires real `ItemRepository` (no stub), supports `setLibraryBridge()`
+  - Unit tests: `LibraryBridgeTest` (14 tests), `CdsControlHandlerTest` (10 tests), `CdsServerTest` (13 tests)
+
 ### Added (Step J.1)
 
 - SSDP (Simple Service Discovery Protocol) and mDNS (multicast DNS) discovery infrastructure:

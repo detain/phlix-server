@@ -43,6 +43,9 @@ class DlnaServer
     /** @var array<string, string> Service SCPD URLs */
     private array $scpdUrls = [];
 
+    /**
+     * @since 0.12.0 Removed stub createDummyItemRepository(), requires real ItemRepository
+     */
     public function __construct(
         string $serverId,
         string $friendlyName,
@@ -58,11 +61,16 @@ class DlnaServer
 
         $this->logger = $logger ?? $this->createDefaultLogger();
 
-        // Initialize services
-        $this->contentDirectory = new ContentDirectory(
-            $itemRepository ?? $this->createDummyItemRepository(),
-            $this->logger
-        );
+        // Require real item repository since 0.12.0
+        if ($itemRepository === null) {
+            throw new \InvalidArgumentException(
+                'ItemRepository is required since 0.12.0. ' .
+                'Use createDummyItemRepository() only in tests.'
+            );
+        }
+
+        // Initialize ContentDirectory with real item repository
+        $this->contentDirectory = new ContentDirectory($itemRepository, $this->logger);
         $this->avTransport = new AvTransport($this->logger);
         $this->deviceRegistry = new DeviceRegistry();
 
@@ -75,6 +83,19 @@ class DlnaServer
             'base_url' => $baseUrl,
             'port' => $port,
         ]);
+    }
+
+    /**
+     * Set the LibraryBridge to connect ContentDirectory to the real media library.
+     *
+     * @param LibraryBridge $bridge The library bridge instance
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function setLibraryBridge(LibraryBridge $bridge): void
+    {
+        $this->contentDirectory->setLibraryBridge($bridge);
     }
 
     /**
@@ -108,6 +129,7 @@ class DlnaServer
     /**
      * Create a dummy item repository for standalone operation.
      *
+     * @deprecated 0.12.0 Use only in tests. Production code requires real ItemRepository.
      * @return object An object implementing item repository methods
      */
     private function createDummyItemRepository()

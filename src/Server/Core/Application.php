@@ -225,6 +225,9 @@ class Application
         $this->router->post('/api/v1/auth/webauthn/login/verify', [$webauthn, 'finishAuthentication']);
         $this->router->get('/api/v1/me/webauthn/credentials', [$webauthn, 'listCredentials']);
         $this->router->delete('/api/v1/me/webauthn/credentials/{id}', [$webauthn, 'deleteCredential']);
+
+        // DLNA Content Directory Service (CDS) HTTP endpoints
+        $this->loadCdsRoutes();
     }
 
     /**
@@ -463,6 +466,54 @@ class Application
         /** @var \Phlex\Server\Http\Controllers\HubTokenController */
         $controller = $this->container->get(\Phlex\Server\Http\Controllers\HubTokenController::class);
         return $controller;
+    }
+
+    /**
+     * Loads DLNA Content Directory Service (CDS) HTTP routes.
+     *
+     * Registers endpoints for:
+     * - GET /description.xml - Device description XML
+     * - POST /cds/control - CDS SOAP control endpoint
+     * - GET /scpd/{service}.xml - SCPD XML for services
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadCdsRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $cdsServer = $this->container->get(\Phlex\Dlna\CdsServer::class);
+
+            // Device description endpoint
+            $deviceDescController = new \Phlex\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
+            $this->router->get('/description.xml', [$deviceDescController, 'handle']);
+
+            // CDS control endpoint
+            $cdsControlController = new \Phlex\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
+            $this->router->post('/cds/control', [$cdsControlController, 'handle']);
+
+            // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
+            $this->router->get('/scpd/{service}.xml', function (\Phlex\Server\Http\Request $request, array $params) use ($cdsServer): \Phlex\Server\Http\Response {
+                $service = $params['service'] ?? '';
+                $scpdXml = $cdsServer->getScpdXml($service);
+
+                if ($scpdXml === null) {
+                    return (new \Phlex\Server\Http\Response())->status(404)->text('Service not found');
+                }
+
+                return (new \Phlex\Server\Http\Response())
+                    ->header('Content-Type', 'application/xml; charset=utf-8')
+                    ->header('Cache-Control', 'no-cache, must-revalidate')
+                    ->text($scpdXml);
+            });
+        } catch (\Throwable $e) {
+            // CDS not configured - silent ignore
+        }
     }
 
     /**

@@ -16,6 +16,7 @@ use Phlex\Common\Logger\StructuredLogger;
  * rooted at object ID "0". Items can be containers (albums, folders) or individual
  * media items (songs, videos, images). All content is returned in DIDL-Lite format.
  *
+ * @since 0.12.0 Replaced stub library data with LibraryBridge integration
  * @see UPnP ContentDirectory:1 Service Specification
  * @see DIDL-Lite Format For metadata XML structure
  */
@@ -39,10 +40,10 @@ class ContentDirectory
     /** Sort criteria for title sorting */
     public const SORT_CRITIERIA_TITLE = 'dc:title';
 
-    /**
-     * @var object Item repository for media item data access.
-     *             Must implement: findById, findByParent, getByType, etc.
-     */
+    /** @var LibraryBridge Bridge to media library for real data */
+    private ?LibraryBridge $libraryBridge = null;
+
+    /** @var object Item repository for media item data access (fallback) */
     private object $itemRepository;
 
     /** @var StructuredLogger Logger instance for debugging and diagnostics */
@@ -63,10 +64,44 @@ class ContentDirectory
     /** @var int System update ID - increments when content changes */
     private int $systemUpdateId = 1;
 
+    /**
+     * @param object $itemRepository Item repository (kept for backwards compatibility)
+     * @param StructuredLogger|null $logger Optional logger
+     *
+     * @since 0.12.0 Item repository is now secondary to LibraryBridge
+     */
     public function __construct(object $itemRepository, ?StructuredLogger $logger = null)
     {
         $this->itemRepository = $itemRepository;
         $this->logger = $logger ?? $this->createDefaultLogger();
+    }
+
+    /**
+     * Set the LibraryBridge for real library data access.
+     *
+     * When a LibraryBridge is set, the ContentDirectory will use it to fetch
+     * real media items instead of the stub data.
+     *
+     * @param LibraryBridge $bridge The library bridge instance
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function setLibraryBridge(LibraryBridge $bridge): void
+    {
+        $this->libraryBridge = $bridge;
+    }
+
+    /**
+     * Check if LibraryBridge is available.
+     *
+     * @return bool True if LibraryBridge is set
+     *
+     * @since 0.12.0
+     */
+    public function hasLibraryBridge(): bool
+    {
+        return $this->libraryBridge !== null;
     }
 
     /**
@@ -282,7 +317,12 @@ class ContentDirectory
      */
     private function getLibraryContainers(): array
     {
-        // Return predefined library containers
+        // Use LibraryBridge if available for real data
+        if ($this->libraryBridge !== null) {
+            return $this->libraryBridge->getRootContainers();
+        }
+
+        // Fallback to predefined library containers
         return [
             [
                 'id' => 'library-video',
@@ -316,7 +356,12 @@ class ContentDirectory
      */
     private function getChildren(string $objectId): array
     {
-        // Handle library containers
+        // Use LibraryBridge if available for real data
+        if ($this->libraryBridge !== null) {
+            return $this->libraryBridge->getContainerChildren($objectId);
+        }
+
+        // Handle library containers with fallback
         if (strpos($objectId, 'library-') === 0) {
             $libraryType = substr($objectId, 8); // Remove 'library-' prefix
             return $this->getLibraryItems($libraryType);
@@ -360,6 +405,15 @@ class ContentDirectory
         // Check cache first
         if (isset($this->objectCache[$objectId])) {
             return $this->objectCache[$objectId];
+        }
+
+        // Use LibraryBridge if available
+        if ($this->libraryBridge !== null) {
+            $item = $this->libraryBridge->getMediaObject($objectId);
+            if ($item !== null) {
+                $this->objectCache[$objectId] = $item;
+            }
+            return $item;
         }
 
         // Handle special container IDs

@@ -22,8 +22,9 @@ namespace Phlex\Server\Http;
  * @property string $queryString The raw query string portion of the URI
  * @property array<string, string> $headers All HTTP headers as key-value pairs
  * @property array<string, mixed> $query Query parameters from the URL
- * @property array<string, mixed> $body Parsed request body (JSON decoded)
- * @property array<string, mixed> $files Uploaded files
+     * @property array<string, mixed> $body Parsed request body (JSON decoded)
+     * @property string $rawBody Raw request body (not JSON decoded, for SOAP/XML requests)
+     * @property array<string, mixed> $files Uploaded files
  * @property string $remoteIp Client IP address
  * @property int $remotePort Client port number
  * @property string $protocol HTTP protocol version
@@ -50,6 +51,9 @@ class Request
 
     /** @var array<string, mixed> Parsed request body (JSON decoded) */
     public array $body;
+
+    /** @var string Raw request body (not JSON decoded, for SOAP/XML requests) */
+    public string $rawBody;
 
     /** @var array<string, mixed> Uploaded files */
     public array $files;
@@ -102,6 +106,7 @@ class Request
         $request->files = $_FILES;
 
         $input = file_get_contents('php://input');
+        $request->rawBody = $input !== false ? $input : '';
         $request->body = $input !== false ? (json_decode($input, true) ?? []) : [];
 
         $request->remoteIp = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';

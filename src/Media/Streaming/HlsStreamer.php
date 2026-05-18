@@ -231,6 +231,24 @@ class HlsStreamer
     }
 
     /**
+     * Gets a direct stream URL suitable for Chromecast.
+     *
+     * Chromecast requires direct URLs to media content. For HLS content,
+     * this returns the master playlist URL directly. The Chromecast
+     * device will handle variant selection.
+     *
+     * @param array<string, mixed> $item Media item with at least 'id' key
+     *
+     * @return string Full URL to the HLS playlist suitable for casting
+     *
+     * @since 0.12.0
+     */
+    public function getCastStreamUrl(array $item): string
+    {
+        return $this->getStreamUrl($item);
+    }
+
+    /**
      * Gets the segment URL path.
      *
      * Note: Returns a path, not a full URL, for internal use.

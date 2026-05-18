@@ -231,6 +231,9 @@ class Application
 
         // DLNA renderer control API endpoints
         $this->loadDlnaRendererRoutes();
+
+        // Chromecast API endpoints
+        $this->loadChromecastRoutes();
     }
 
     /**
@@ -563,6 +566,51 @@ class Application
             $this->router->post('/api/v1/dlna/renderers/{id}/seek', [$controller, 'seek']);
         } catch (\Throwable $e) {
             // PlayToManager not configured - silent ignore
+        }
+    }
+
+    /**
+     * Loads Chromecast API routes.
+     *
+     * Registers endpoints for:
+     * - GET /api/v1/cast/devices — list discovered Chromecast devices
+     * - POST /api/v1/cast/devices/{id}/cast — start casting
+     * - POST /api/v1/cast/devices/{id}/play — resume playback
+     * - POST /api/v1/cast/devices/{id}/pause — pause playback
+     * - POST /api/v1/cast/devices/{id}/stop — stop casting
+     * - POST /api/v1/cast/devices/{id}/seek — seek to position
+     * - GET /api/v1/cast/devices/{id}/status — get session status
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadChromecastRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $castManager = $this->container->get(\Phlex\Chromecast\CastManager::class);
+            $controller = new \Phlex\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
+
+            // List discovered devices
+            $this->router->get('/api/v1/cast/devices', [$controller, 'listDevices']);
+
+            // Start casting
+            $this->router->post('/api/v1/cast/devices/{id}/cast', [$controller, 'cast']);
+
+            // Playback controls
+            $this->router->post('/api/v1/cast/devices/{id}/play', [$controller, 'play']);
+            $this->router->post('/api/v1/cast/devices/{id}/pause', [$controller, 'pause']);
+            $this->router->post('/api/v1/cast/devices/{id}/stop', [$controller, 'stop']);
+            $this->router->post('/api/v1/cast/devices/{id}/seek', [$controller, 'seek']);
+
+            // Get session status
+            $this->router->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
+        } catch (\Throwable $e) {
+            // CastManager not configured - silent ignore
         }
     }
 

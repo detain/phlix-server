@@ -7,6 +7,28 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step J.4)
+
+- Chromecast support — cast to Chromecast devices via Default Media Receiver:
+  - `CastDevice` — Chromecast device descriptor with device ID, name, host, port, model, UUID
+  - `CastDiscovery` — discovers Chromecast devices via mDNS `_googlecast._tcp.local.` using MdnsDiscovery
+  - `CastApiClient` — HTTP/JSON Cast protocol client with connect(), launchApp(), loadMedia(), sendMediaCommand(), getMediaStatus()
+  - `CastSession` — active Chromecast session with play/pause/stop/seek, position polling every 5 seconds via Workerman Timer
+  - `CastManager` — manages multiple cast sessions, creates sessions, launches app, loads media
+  - `RemoteCastClient` — cast via relay tunnel (RelayConsumer) for Chromecast behind NAT
+  - `ChromecastController` — HTTP API endpoints:
+    - GET /api/v1/cast/devices — list discovered Chromecast devices
+    - POST /api/v1/cast/devices/{id}/cast — start casting
+    - POST /api/v1/cast/devices/{id}/play — resume playback
+    - POST /api/v1/cast/devices/{id}/pause — pause playback
+    - POST /api/v1/cast/devices/{id}/stop — stop casting
+    - POST /api/v1/cast/devices/{id}/seek — seek to position (ms)
+    - GET /api/v1/cast/devices/{id}/status — get session status
+  - `HlsStreamer` — added `getCastStreamUrl()` for Chromecast-compatible stream URLs
+  - `Application` — registered Chromecast routes in `loadChromecastRoutes()`
+  - Default Media Receiver app ID: `CC1AD845`
+  - Unit tests: `CastDeviceTest` (4 tests), `CastDiscoveryTest` (4 tests), `CastApiClientTest` (8 tests), `CastSessionTest` (8 tests), `CastManagerTest` (8 tests)
+
 ### Added (Step J.3)
 
 - DLNA AVTransport "play to" — send media to DLNA renderers:

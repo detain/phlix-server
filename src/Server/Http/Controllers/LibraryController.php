@@ -40,7 +40,7 @@ class LibraryController
             ]);
         }
 
-        $validTypes = ['movie', 'series', 'music', 'photo', 'video'];
+        $validTypes = ['movie', 'series', 'music', 'photo', 'book', 'video'];
         if (!in_array($data['type'], $validTypes)) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid library type',

@@ -354,10 +354,6 @@ class Router
         $this->get('/auth/oidc/callback', [$controllerClass, $callbackMethod]);
 
         return $this;
-        $this->get('/auth/oidc/authorize', [$controllerClass, $authorizeMethod]);
-        $this->get('/auth/oidc/callback', [$controllerClass, $callbackMethod]);
-
-        return $this;
     }
 
     /**
@@ -427,6 +423,112 @@ class Router
         $this->get('/music/tracks', [$controllerClass, 'listTracks']);
         $this->get('/music/tracks/{id}', [$controllerClass, 'getTrack']);
         $this->get('/music/now-playing', [$controllerClass, 'nowPlaying']);
+
+        return $this;
+    }
+
+    /**
+     * Registers the photo library API routes.
+     *
+     * GET /photo/albums              — list all albums (grouped by date)
+     * GET /photo/albums/{id}        — get specific album with photos
+     * GET /photo/photos              — list all photos
+     * GET /photo/photos/{id}        — get photo with full EXIF data
+     * GET /photo/photos/{id}/thumbnail — get resized thumbnail
+     * GET /photo/photos/{id}/full   — get full-resolution photo
+     * GET /photo/slideshow          — get slideshow data
+     *
+     * @param string $controllerClass The PhotoController class name
+     * @return self
+     *
+     * @since 0.16.0
+     */
+    public function photo(string $controllerClass): self
+    {
+        $this->get('/photo/albums', [$controllerClass, 'listAlbums']);
+        $this->get('/photo/albums/{id}', [$controllerClass, 'getAlbum']);
+        $this->get('/photo/photos', [$controllerClass, 'listPhotos']);
+        $this->get('/photo/photos/{id}', [$controllerClass, 'getPhoto']);
+        $this->get('/photo/photos/{id}/thumbnail', [$controllerClass, 'getThumbnail']);
+        $this->get('/photo/photos/{id}/full', [$controllerClass, 'getFull']);
+        $this->get('/photo/slideshow', [$controllerClass, 'slideshow']);
+
+        return $this;
+    }
+
+    /**
+     * Registers the book library API routes.
+     *
+     * GET /books                  — list all books
+     * GET /books/{id}            — get single book
+     * GET /books/{id}/cover      — cover image
+     * GET /books/{id}/read        — reader stub
+     * GET /books/{id}/download   — download book file
+     *
+     * @param string $controllerClass The BookController class name
+     * @return self
+     *
+     * @since 0.17.0
+     */
+    public function books(string $controllerClass): self
+    {
+        $this->get('/books', [$controllerClass, 'listBooks']);
+        $this->get('/books/{id}', [$controllerClass, 'getBook']);
+        $this->get('/books/{id}/cover', [$controllerClass, 'getCover']);
+        $this->get('/books/{id}/read', [$controllerClass, 'readBook']);
+        $this->get('/books/{id}/download', [$controllerClass, 'downloadBook']);
+
+        return $this;
+    }
+
+    /**
+     * Registers the audiobook library API routes.
+     *
+     * GET /audiobooks                      — list all audiobooks
+     * GET /audiobooks/{id}                 — get single audiobook with chapters
+     * GET /audiobooks/{id}/chapters        — chapter list
+     * GET /audiobooks/{id}/progress        — user's progress
+     * POST /audiobooks/{id}/progress       — save progress
+     * GET /audiobooks/{id}/read            — HTML player stub
+     * GET /audiobooks/{id}/stream          — stream with chapter resume
+     *
+     * @param string $controllerClass The AudiobookController class name
+     * @return self
+     *
+     * @since 0.18.0
+     */
+    public function audiobooks(string $controllerClass): self
+    {
+        $this->get('/audiobooks', [$controllerClass, 'listAudiobooks']);
+        $this->get('/audiobooks/{id}', [$controllerClass, 'getAudiobook']);
+        $this->get('/audiobooks/{id}/chapters', [$controllerClass, 'getChapters']);
+        $this->get('/audiobooks/{id}/progress', [$controllerClass, 'getProgress']);
+        $this->post('/audiobooks/{id}/progress', [$controllerClass, 'saveProgress']);
+        $this->get('/audiobooks/{id}/read', [$controllerClass, 'readAudiobook']);
+        $this->get('/audiobooks/{id}/stream', [$controllerClass, 'streamAudiobook']);
+
+        return $this;
+    }
+
+    /**
+     * Registers the OPDS 1.2 feed routes.
+     *
+     * GET /opds/v1.2                 — root OPDS feed
+     * GET /opds/v1.2/libraries       — navigation: list book libraries
+     * GET /opds/v1.2/libraries/{id}   — acquisition: list books in library
+     * GET /opds/v1.2/books/{id}/cover — cover image
+     *
+     * @param string $controllerClass The BookController class name
+     * @return self
+     *
+     * @since 0.17.0
+     */
+    public function opds(string $controllerClass): self
+    {
+        $this->get('/opds/v1.2', [$controllerClass, 'opdsRoot']);
+        $this->get('/opds/v1.2/libraries', [$controllerClass, 'opdsLibraries']);
+        $this->get('/opds/v1.2/libraries/{id}', [$controllerClass, 'opdsLibraryBooks']);
+        $this->get('/opds/v1.2/books/{id}/cover', [$controllerClass, 'opdsBookCover']);
 
         return $this;
     }

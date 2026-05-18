@@ -140,6 +140,11 @@ class WebPortalRouter
         $this->router->get('/music/albums/{mbid}', [$this, 'getMusicAlbum']);
         $this->router->get('/music/tracks', [$this, 'getMusicTracks']);
         $this->router->get('/music/player', [$this, 'getMusicPlayer']);
+
+        // Books routes (web portal)
+        $this->router->get('/books', [$this, 'getBooksIndex']);
+        $this->router->get('/books/{id}', [$this, 'getBook']);
+        $this->router->get('/books/{id}/read', [$this, 'getBookReader']);
     }
 
     /**
@@ -665,5 +670,97 @@ class WebPortalRouter
     public function getMusicPlayer(Request $request, array $params): Response
     {
         return (new Response())->json(['player' => []]);
+    }
+
+    /**
+     * Gets the books library index page.
+     *
+     * GET /books
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters
+     * @return Response JSON response with books library overview
+     *
+     * @since 0.17.0
+     */
+    public function getBooksIndex(Request $request, array $params): Response
+    {
+        $libraries = $this->libraryManager->getAllLibraries();
+        $bookLibraries = array_filter($libraries, fn($lib) => ($lib['type'] ?? '') === 'book');
+
+        // Get book count for each library
+        $booksCount = [];
+        foreach ($bookLibraries as $library) {
+            $items = $this->itemRepository->getByLibrary((string) $library['id'], 10000, 0);
+            $books = array_filter($items, fn($item) => ($item['type'] ?? '') === 'book');
+            $booksCount[$library['id']] = count($books);
+        }
+
+        return (new Response())->json([
+            'book_libraries' => array_values($bookLibraries),
+            'books_count' => $booksCount,
+        ]);
+    }
+
+    /**
+     * Gets a specific book.
+     *
+     * GET /books/{id}
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters including 'id'
+     * @return Response JSON response with book details
+     *
+     * @since 0.17.0
+     */
+    public function getBook(Request $request, array $params): Response
+    {
+        $bookId = $params['id'] ?? null;
+
+        if ($bookId === null) {
+            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+        }
+
+        $book = $this->itemRepository->findById($bookId);
+
+        if ($book === null || ($book['type'] ?? '') !== 'book') {
+            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        }
+
+        return (new Response())->json(['book' => $book]);
+    }
+
+    /**
+     * Gets the book reader page.
+     *
+     * GET /books/{id}/read
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters including 'id'
+     * @return Response JSON response with reader info
+     *
+     * @since 0.17.0
+     */
+    public function getBookReader(Request $request, array $params): Response
+    {
+        $bookId = $params['id'] ?? null;
+
+        if ($bookId === null) {
+            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+        }
+
+        $book = $this->itemRepository->findById($bookId);
+
+        if ($book === null || ($book['type'] ?? '') !== 'book') {
+            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        }
+
+        return (new Response())->json([
+            'reader' => [
+                'book_id' => $bookId,
+                'name' => $book['name'],
+                'type' => $book['type'],
+            ],
+        ]);
     }
 }

@@ -1,0 +1,515 @@
+/**
+ * Audiobooks CSS
+ *
+ * Styles for audiobook grid, chapter list, and player layout
+ *
+ * @since 0.18.0
+ */
+
+/* Audiobooks Grid */
+.audiobooks-page {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.audiobooks-header {
+    margin-bottom: 2rem;
+}
+
+.audiobooks-header h1 {
+    font-size: 2rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.audiobooks-subtitle {
+    color: #666;
+    margin: 0;
+}
+
+.audiobooks-empty {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: #666;
+}
+
+.audiobooks-empty p {
+    margin: 0.5rem 0;
+}
+
+.audiobooks-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+}
+
+/* Audiobook Card */
+.audiobook-card {
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.audiobook-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.audiobook-card-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.audiobook-card-cover {
+    aspect-ratio: 1 / 1;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.audiobook-card-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.audiobook-card-placeholder {
+    font-size: 4rem;
+    opacity: 0.3;
+}
+
+.audiobook-card-info {
+    padding: 1rem;
+}
+
+.audiobook-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.25rem 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.audiobook-card-author {
+    font-size: 0.875rem;
+    color: #666;
+    margin: 0 0 0.25rem 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.audiobook-card-duration {
+    font-size: 0.75rem;
+    color: #999;
+    margin: 0;
+}
+
+/* Audiobook Detail */
+.audiobook-detail {
+    padding: 2rem;
+    max-width: 1000px;
+    margin: 0 auto;
+}
+
+.audiobook-detail-container {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    gap: 2rem;
+    margin-bottom: 2rem;
+}
+
+@media (max-width: 768px) {
+    .audiobook-detail-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.audiobook-cover-section {
+    display: flex;
+    justify-content: center;
+}
+
+.audiobook-cover-large {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.audiobook-cover-placeholder {
+    width: 200px;
+    height: 200px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 6rem;
+    opacity: 0.3;
+}
+
+.audiobook-info-section {
+    display: flex;
+    flex-direction: column;
+}
+
+.audiobook-title {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.audiobook-author {
+    font-size: 1.125rem;
+    color: #666;
+    margin: 0 0 0.25rem 0;
+}
+
+.audiobook-narrator {
+    font-size: 1rem;
+    color: #888;
+    margin: 0 0 0.5rem 0;
+}
+
+.audiobook-series {
+    font-size: 0.875rem;
+    color: #6b4d8a;
+    margin: 0 0 1rem 0;
+}
+
+.audiobook-metadata {
+    margin-bottom: 1rem;
+}
+
+.metadata-item {
+    display: flex;
+    margin-bottom: 0.5rem;
+}
+
+.metadata-label {
+    font-weight: 600;
+    width: 100px;
+    flex-shrink: 0;
+}
+
+.metadata-value {
+    color: #333;
+}
+
+.audiobook-description {
+    margin-bottom: 1.5rem;
+}
+
+.audiobook-description h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.audiobook-description p {
+    margin: 0;
+    line-height: 1.6;
+    color: #444;
+}
+
+.audiobook-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: auto;
+}
+
+/* Chapters Section */
+.audiobook-chapters-section {
+    margin-top: 2rem;
+    border-top: 1px solid #e0e0e0;
+    padding-top: 2rem;
+}
+
+.audiobook-chapters-section h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+}
+
+.chapter-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.chapter-row {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    background: #f8f8f8;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.chapter-row:hover {
+    background: #f0f0f0;
+}
+
+.chapter-row.active {
+    background: #e8f4e8;
+}
+
+.chapter-number {
+    width: 40px;
+    font-weight: 600;
+    color: #666;
+}
+
+.chapter-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-duration {
+    margin-left: 1rem;
+    color: #999;
+    font-size: 0.875rem;
+}
+
+/* Audiobook Player */
+.audiobook-player {
+    min-height: 100vh;
+    background: #1a1a1a;
+    color: #e0e0e0;
+    padding: 2rem;
+}
+
+.player-layout {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+    .player-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.player-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.player-info {
+    text-align: center;
+}
+
+.player-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.player-author {
+    font-size: 1rem;
+    color: #aaa;
+    margin: 0;
+}
+
+.player-progress-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.player-progress-bar {
+    height: 8px;
+    background: #333;
+    border-radius: 4px;
+    position: relative;
+    cursor: pointer;
+}
+
+.player-progress-fill {
+    height: 100%;
+    background: #6b4d8a;
+    border-radius: 4px;
+    width: 0%;
+    transition: width 0.1s linear;
+}
+
+.player-chapter-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: rgba(107, 77, 138, 0.3);
+    border-radius: 4px;
+    width: 0%;
+}
+
+.player-time {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.875rem;
+    color: #999;
+}
+
+.player-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.btn-play {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: #6b4d8a;
+    border: none;
+    color: #fff;
+    font-size: 1.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, transform 0.15s;
+}
+
+.btn-play:hover {
+    background: #8b6daa;
+    transform: scale(1.05);
+}
+
+.btn-skip {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #333;
+    border: none;
+    color: #e0e0e0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.btn-skip:hover {
+    background: #444;
+}
+
+.player-chapter-info {
+    text-align: center;
+}
+
+.current-chapter {
+    color: #6b4d8a;
+    font-weight: 500;
+}
+
+/* Player Chapters Sidebar */
+.player-chapters {
+    background: #222;
+    border-radius: 8px;
+    padding: 1rem;
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+}
+
+.player-chapters h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+    color: #999;
+}
+
+.player-chapters .chapter-list {
+    gap: 0.25rem;
+}
+
+.chapter-item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.chapter-item:hover {
+    background: #333;
+}
+
+.chapter-item.active {
+    background: #6b4d8a;
+}
+
+.chapter-item .chapter-index {
+    width: 30px;
+    font-weight: 600;
+    color: #666;
+    font-size: 0.875rem;
+}
+
+.chapter-item.active .chapter-index {
+    color: #e0e0e0;
+}
+
+.chapter-item .chapter-title {
+    flex: 1;
+    font-size: 0.875rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-item .chapter-duration {
+    font-size: 0.75rem;
+    color: #666;
+    margin-left: 0.5rem;
+}
+
+.chapter-item.active .chapter-duration {
+    color: #ccc;
+}
+
+/* Buttons (shared) */
+.btn {
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 500;
+    text-align: center;
+    cursor: pointer;
+    border: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: #6b4d8a;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #8b6daa;
+}
+
+.btn-secondary {
+    background: #f0f0f0;
+    color: #333;
+}
+
+.btn-secondary:hover {
+    background: #e0e0e0;
+}

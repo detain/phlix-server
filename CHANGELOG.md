@@ -7,6 +7,136 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step G.6)
+
+- `AudiobookProgress` — Value object for per-user audiobook progress tracking.
+  Immutable with position_ms, current_chapter_index, completed_chapters array,
+  percent_complete, and last_position_ms for chapter-resume support.
+- `AudiobookProgressStore` — Persistence layer using Workerman MySQL for
+  audiobook_progress table. Supports getProgress(), saveProgress(), and
+  markChapterComplete() operations with composite PK (user_id, audiobook_id).
+- `AudiobookScanner` — Extends BookScanner for audiobook-specific scanning.
+  - `harvestChapters()` — Pure-PHP M4B chapter extraction via MP4 chpl atom
+    parsing (binary string scanning, no external dependencies). Handles 64-bit
+    duration values.
+  - Returns chapters as metadata_json array with title, start_ms, end_ms,
+    and duration_ms fields.
+- `AudiobookLibraryManager` — Extends BookLibraryManager for audiobook
+  libraries. Orchestrates scanning and progress management. Methods:
+  getProgress(), saveProgress(), markChapterComplete(), chapterDuration().
+- `AudiobookController` — REST API endpoints for audiobooks:
+  - `GET /api/v1/audiobooks` — List audiobooks with pagination
+  - `GET /api/v1/audiobooks/{id}` — Get audiobook details with chapters
+  - `GET /api/v1/audiobooks/{id}/chapters` — List chapters for an audiobook
+  - `GET /api/v1/audiobooks/{id}/progress` — Get user's progress for an audiobook
+  - `POST /api/v1/audiobooks/{id}/progress` — Save progress (position, chapter)
+  - `GET /api/v1/audiobooks/{id}/stream` — Stream audiobook (chapter + offset)
+- `AudiobookLibraryType` — Library type plugin with type `'audiobook'`.
+  Returns AudiobookScanner and AudiobookLibraryManager instances.
+- Migration `012_audiobook_progress.sql` — Creates audiobook_progress table
+  with user_id, audiobook_id, position_ms, current_chapter_index,
+  completed_chapters (JSON), percent_complete, last_position_ms, created_at,
+  updated_at.
+- Smarty templates: `audiobooks/audiobooks.tpl`, `audiobooks/audiobook.tpl`,
+  `player/player.tpl`, `audiobooks/partials/audiobook_card.tpl`,
+  `audiobooks/partials/chapter_row.tpl` — Audiobook grid view, detail with
+  chapter navigation, audio player UI, and chapter list component.
+- `public/assets/css/audiobooks.css` — Player styles (play/pause, seek bar,
+  volume, chapter list) and grid layout with cover cards.
+- `public/assets/js/audiobook-player.js` — Chapter navigation, progress
+  persistence every 10 seconds, chapter completion tracking, play/pause controls.
+- `docs/libraries/audiobooks.md` — Documentation for supported formats (M4B,
+  M4A, MP3), chapter navigation, progress persistence, and streaming.
+- Unit tests: AudiobookScannerTest (8 tests), AudiobookProgressStoreTest
+  (4 tests), AudiobookLibraryManagerTest (4 tests), AudiobookControllerTest
+  (9 tests).
+- Router now registers `/api/v1/audiobooks/*` routes.
+- LibraryManager routes `'audiobook'` type libraries through AudiobookScanner.
+
+### Added (Step G.5)
+
+- `BookScanner` — Pure-PHP book file scanner for EPUB, PDF, and CBZ formats.
+  - `harvestEpub()` — parses EPUB container.xml and content.opf for Dublin Core
+    metadata (title, author, publisher, ISBN, language, pub_date, description) and
+    extracts cover images.
+  - `harvestPdf()` — uses `exif_read_data()` for XMP/EXIF metadata and pure-PHP
+    page count extraction.
+  - `harvestCbz()` — parses ComicInfo.xml for extended metadata (series, volume,
+    authors, page_count) and extracts cover images from ZIP archive.
+  - `scanBookLibrary()` — generator that yields book item arrays with metadata.
+- `BookLibraryManager` — orchestrates book library scanning, metadata extraction,
+  and upsert. Implements `rescanLibrary()` for full pipeline and `upsertBook()`
+  for single-file processing.
+- `BookLibraryType` — Library type plugin implementing `LibraryTypeInterface`
+  with type `'book'`. Returns `BookScanner` and `BookLibraryManager` instances.
+- `OpdsFeedBuilder` — builds OPDS 1.2 compliant XML feeds using `DOMDocument`.
+  - `buildRootFeed()` — root catalog with links to libraries.
+  - `buildNavigationFeed()` — navigation feed listing book libraries.
+  - `buildAcquisitionFeed()` — acquisition feed with pagination (?offset=N&limit=N).
+  - `buildEntry()` — individual book entries with dc:title, dc:creator,
+    opds:link rel=acquisition.
+- `BookController` — REST API endpoints for books and OPDS:
+  - OPDS: `GET /opds/v1.2`, `GET /opds/v1.2/libraries`, `GET /opds/v1.2/libraries/{id}`
+  - Web portal: `GET /books`, `GET /books/{id}`, `GET /books/{id}/cover`,
+    `GET /books/{id}/read`, `GET /books/{id}/download`
+- Smarty templates: `books/books.tpl`, `books/book.tpl`, `books/reader.tpl`,
+  `books/partials/book_card.tpl` — book grid view, book detail with cover
+  and metadata, minimal reader stub, book card component.
+- `public/assets/css/books.css` — styles for book grid, cover cards,
+  reader layout, and theme support (light/sepia/dark).
+- `public/assets/js/reader.js` — reader controller with font size controls,
+  theme switching, keyboard navigation (←/→).
+- `docs/libraries/books.md` — documentation for supported formats, OPDS feed URL,
+  third-party client setup (Uboiquity, Komga, Kore, Moon+ Reader), naming
+  conventions, metadata fields, reader stub limitations.
+- `docs/reference/api.md` — updated with OPDS endpoints and Books API.
+- Unit tests: `BookScannerTest` (8 tests), `BookLibraryManagerTest` (2 tests),
+  `OpdsFeedBuilderTest` (5 tests), `BookControllerTest` (7 tests).
+- Router now registers `/opds/*` and `/books/*` routes.
+- LibraryManager routes `'book'` type libraries through BookScanner.
+- WebPortalRouter now registers `/books` and `/books/{id}` routes.
+- `public/templates/partials/header.tpl` — Added Books nav link.
+- LibraryController accepts `'book'` as a valid library type.
+
+### Added (Step G.4)
+
+- `PhotoScanner` — Pure-PHP photo file scanner with EXIF metadata extraction.
+  Uses PHP's built-in `exif_read_data()` for JPEG files; graceful fallback
+  for PNG/TIFF/WebP/HEIC. Extracts camera_make, camera_model, lens,
+  aperture, iso, shutter_speed, focal_length, width, height, orientation,
+  date_taken_unix, gps_lat, gps_lng, gps_alt.
+- `PhotoLibraryManager` — Orchestrates photo library scanning, EXIF extraction,
+  and metadata upsert. Implements `rescanLibrary()` for full pipeline and
+  `upsertPhoto()` for single-file processing.
+- `PhotoLibraryType` — Library type plugin implementing `LibraryTypeInterface`
+  with type `'photo'`. Returns `PhotoScanner` and `PhotoLibraryManager` instances.
+- `ExifProvider` — Local EXIF metadata provider that reads from `metadata_json`
+  stored on media items. Implements `MetadataProviderInterface`.
+- `PhotoController` — REST API endpoints for photo browsing and slideshow:
+  - `GET /photo/albums` — list all albums (grouped by date)
+  - `GET /photo/albums/{id}` — get specific album with photos
+  - `GET /photo/photos` — list all photos
+  - `GET /photo/photos/{id}` — photo with full EXIF data
+  - `GET /photo/photos/{id}/thumbnail?w=300&h=300&fit=cover` — resized thumbnail
+  - `GET /photo/photos/{id}/full` — full-resolution photo
+  - `GET /photo/slideshow?album_id=xxx&interval=5` — slideshow data
+- Smarty templates: `photo/albums.tpl`, `photo/album.tpl`, `photo/photo.tpl`,
+  `photo/slideshow.tpl`, `photo/partials/exif_panel.tpl`,
+  `photo/partials/photo_card.tpl` — album grid, photo grid, lightbox view,
+  fullscreen slideshow player, EXIF data sidebar.
+- `public/assets/css/photo.css` — Styles for album grid, photo grid,
+  lightbox, EXIF sidebar, slideshow player.
+- `public/assets/js/slideshow.js` — Slideshow controller with auto-advance
+  interval, keyboard nav (←/→/Space/Escape), touch/swipe support.
+- `docs/libraries/photos.md` — Documentation for supported formats, EXIF
+  fields, album organization, API endpoints, thumbnail generation,
+  slideshow features, and deferred geotag clustering note.
+- Unit tests: `PhotoScannerTest` (12 tests), `PhotoLibraryManagerTest`
+  (6 tests), `PhotoControllerTest` (11 tests).
+- Router now registers `/photo/*` routes pointing to `PhotoController`.
+- LibraryManager routes `'photo'` type libraries through `PhotoLibraryManager`.
+- `public/templates/layouts/main.tpl` — Added Photos nav link.
+
 ### Added (Step G.3)
 
 - `Phlex\Plugins\Lastfm\Plugin` — In-core Last.fm scrobbler plugin

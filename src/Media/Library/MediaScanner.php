@@ -39,7 +39,7 @@ class MediaScanner
     private array $namingOptions;
 
     /** @var ItemRepository Repository for media item persistence */
-    private ItemRepository $itemRepository;
+    protected ItemRepository $itemRepository;
 
     /** @var EventDispatcherInterface|null PSR-14 dispatcher for library lifecycle events. */
     private ?EventDispatcherInterface $eventDispatcher;
@@ -111,6 +111,7 @@ class MediaScanner
             'video' => ['mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'mpg', 'mpeg', 'ts'],
             'audio' => ['mp3', 'flac', 'aac', 'ogg', 'wav', 'm4a', 'wma', 'alac', 'opus'],
             'image' => ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tiff', 'tif'],
+            'book' => ['epub', 'pdf', 'cbz'],
         ];
     }
 
@@ -124,6 +125,34 @@ class MediaScanner
     {
         $audioExtensions = $this->namingOptions['audio'] ?? [];
         return in_array(strtolower($extension), $audioExtensions, true);
+    }
+
+    /**
+     * Checks if an extension represents an image/photo file.
+     *
+     * @param string $extension File extension (without dot)
+     * @return bool True if the extension is a supported image format
+     *
+     * @since 0.16.0
+     */
+    public function isImageExtension(string $extension): bool
+    {
+        $imageExtensions = $this->namingOptions['image'] ?? [];
+        return in_array(strtolower($extension), $imageExtensions, true);
+    }
+
+    /**
+     * Checks if an extension represents a book file.
+     *
+     * @param string $extension File extension (without dot)
+     * @return bool True if the extension is a supported book format
+     *
+     * @since 0.17.0
+     */
+    public function isBookExtension(string $extension): bool
+    {
+        $bookExtensions = $this->namingOptions['book'] ?? [];
+        return in_array(strtolower($extension), $bookExtensions, true);
     }
 
     /**

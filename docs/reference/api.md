@@ -191,3 +191,116 @@ Before formal column population, markers are cached in `metadata_json` as:
 - `outro_candidate` — `{ start_seconds, end_seconds, fingerprint, confidence }`
 
 Use `MarkerService.promoteCandidates()` to migrate candidates to formal columns.
+
+---
+
+## OPDS Feed Endpoints (Book Library)
+
+OPDS 1.2 compliant feeds for third-party OPDS client integration.
+
+### GET /opds/v1.2
+
+Returns the root OPDS catalog feed.
+
+**Response 200:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
+  <title>Phlex Library</title>
+  <updated>2024-01-15T10:30:00Z</updated>
+  <id>urn:phlex:library:root</id>
+  <link rel="self" href="http://localhost:8080/opds/v1.2" type="application/atom+xml;profile=opds-catalog"/>
+  <link rel="alternate" href="http://localhost:8080/opds/v1.2/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+</feed>
+```
+
+### GET /opds/v1.2/libraries
+
+Returns a navigation feed listing all book libraries.
+
+**Response 200:** OPDS Atom XML with navigation links to library acquisition feeds.
+
+### GET /opds/v1.2/libraries/{id}
+
+Returns an acquisition feed listing all books in a library.
+
+**Parameters:**
+- `id` (path) — Library ID
+- `offset` (query) — Pagination offset (default: 0)
+- `limit` (query) — Maximum items per page (default: 50, max: 100)
+
+**Response 200:** OPDS Atom XML with book entries, pagination links (previous/next).
+
+---
+
+## Book Endpoints
+
+### GET /books
+
+Returns a list of all books.
+
+**Query parameters:**
+- `library_id` (optional) — Filter by library
+- `limit` (optional) — Maximum items (default: 50)
+- `offset` (optional) — Pagination offset (default: 0)
+
+**Response 200:**
+```json
+{
+  "books": [
+    {
+      "id": "book-123",
+      "name": "Book Title",
+      "type": "book",
+      "path": "/path/to/book.epub",
+      "metadata": {
+        "title": "Book Title",
+        "author": "Author Name"
+      }
+    }
+  ],
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### GET /books/{id}
+
+Returns a single book by ID.
+
+**Parameters:**
+- `id` (path) — Book ID
+
+**Response 200:**
+```json
+{
+  "book": {
+    "id": "book-123",
+    "name": "Book Title",
+    "type": "book",
+    "path": "/path/to/book.epub",
+    "metadata": {}
+  }
+}
+```
+
+**Response 404:** Book not found
+
+### GET /books/{id}/cover
+
+Returns the book's cover image.
+
+**Response 200:** JPEG/PNG image with appropriate Content-Type header.
+
+**Response 404:** Cover not found or book not found
+
+### GET /books/{id}/download
+
+Returns the book file for download.
+
+**Response 200:** Book file with Content-Disposition: attachment header.
+- EPUB: `application/epub+zip`
+- PDF: `application/pdf`
+- CBZ: `application/vnd.comicbook+zip`
+
+**Response 404:** File not found

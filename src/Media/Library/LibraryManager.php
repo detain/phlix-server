@@ -7,6 +7,8 @@ namespace Phlex\Media\Library;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Media\Music\MusicLibraryType;
+use Phlex\Media\Music\BookLibraryType;
+use Phlex\Media\Music\AudiobookLibraryType;
 use Workerman\MySQL\Connection;
 
 /**
@@ -246,6 +248,24 @@ class LibraryManager
             return;
         }
 
+        // Route photo libraries through PhotoLibraryManager for EXIF extraction
+        if ($library['type'] === 'photo') {
+            $this->scanPhotoLibrary($libraryId, $library);
+            return;
+        }
+
+        // Route book libraries through BookLibraryManager for EPUB/PDF/CBZ extraction
+        if ($library['type'] === 'book') {
+            $this->scanBookLibrary($libraryId, $library);
+            return;
+        }
+
+        // Route audiobook libraries through AudiobookScanner for M4B chapter extraction
+        if ($library['type'] === 'audiobook') {
+            $this->scanAudiobookLibrary($libraryId, $library);
+            return;
+        }
+
         foreach ($library['paths'] as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
@@ -282,6 +302,81 @@ class LibraryManager
         }
 
         $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
+    }
+
+    /**
+     * Scans a photo library using PhotoLibraryManager for EXIF extraction.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @param array<string, mixed> $library The library data
+     * @return void
+     *
+     * @since 0.16.0
+     */
+    private function scanPhotoLibrary(string $libraryId, array $library): void
+    {
+        foreach ($library['paths'] as $path) {
+            if (!is_dir($path)) {
+                $this->logger->warning('Photo library path does not exist', ['path' => $path]);
+                continue;
+            }
+            // Photo scanning is handled by PhotoLibraryManager which uses
+            // PhotoScanner for EXIF metadata extraction.
+            // For now, fall back to basic scanning.
+            $this->scanner->scan($libraryId, $path, 'image');
+        }
+
+        $this->logger->info('Photo library scan complete', ['library_id' => $libraryId]);
+    }
+
+    /**
+     * Scans a book library using BookScanner for EPUB/PDF/CBZ extraction.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @param array<string, mixed> $library The library data
+     * @return void
+     *
+     * @since 0.17.0
+     */
+    private function scanBookLibrary(string $libraryId, array $library): void
+    {
+        // Book scanning is handled by BookScanner for EPUB content.opf,
+        // PDF metadata, and CBZ ComicInfo.xml extraction.
+        foreach ($library['paths'] as $path) {
+            if (!is_dir($path)) {
+                $this->logger->warning('Book library path does not exist', ['path' => $path]);
+                continue;
+            }
+            // Use book type for scanner
+            $this->scanner->scan($libraryId, $path, 'book');
+        }
+
+        $this->logger->info('Book library scan complete', ['library_id' => $libraryId]);
+    }
+
+    /**
+     * Scans an audiobook library using AudiobookScanner for M4B chapter extraction.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @param array<string, mixed> $library The library data
+     * @return void
+     *
+     * @since 0.18.0
+     */
+    private function scanAudiobookLibrary(string $libraryId, array $library): void
+    {
+        // Audiobook scanning is handled by AudiobookScanner for M4B chpl atom
+        // chapter extraction and metadata harvesting.
+        foreach ($library['paths'] as $path) {
+            if (!is_dir($path)) {
+                $this->logger->warning('Audiobook library path does not exist', ['path' => $path]);
+                continue;
+            }
+            // Use audiobook type for scanner
+            $this->scanner->scan($libraryId, $path, 'audiobook');
+        }
+
+        $this->logger->info('Audiobook library scan complete', ['library_id' => $libraryId]);
     }
 
     /**

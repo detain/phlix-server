@@ -1,0 +1,392 @@
+/**
+ * Books CSS
+ *
+ * Styles for book grid, cover cards, and reader layout
+ *
+ * @since 0.17.0
+ */
+
+/* Books Grid */
+.books-page {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.books-header {
+    margin-bottom: 2rem;
+}
+
+.books-header h1 {
+    font-size: 2rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.books-subtitle {
+    color: #666;
+    margin: 0;
+}
+
+.books-empty {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: #666;
+}
+
+.books-empty p {
+    margin: 0.5rem 0;
+}
+
+.books-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+}
+
+/* Book Card */
+.book-card {
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.book-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.book-card-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+}
+
+.book-card-cover {
+    aspect-ratio: 2 / 3;
+    background: #f5f5f5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.book-card-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.book-card-placeholder {
+    font-size: 4rem;
+    opacity: 0.3;
+}
+
+.book-card-info {
+    padding: 1rem;
+}
+
+.book-card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.25rem 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.book-card-author {
+    font-size: 0.875rem;
+    color: #666;
+    margin: 0 0 0.25rem 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.book-card-pages {
+    font-size: 0.75rem;
+    color: #999;
+    margin: 0;
+}
+
+/* Book Detail */
+.book-detail {
+    padding: 2rem;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.book-detail-container {
+    display: grid;
+    grid-template-columns: 250px 1fr;
+    gap: 2rem;
+}
+
+@media (max-width: 768px) {
+    .book-detail-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.book-cover-section {
+    display: flex;
+    justify-content: center;
+}
+
+.book-cover-large {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.book-cover-placeholder {
+    width: 200px;
+    height: 300px;
+    background: #f5f5f5;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 6rem;
+    opacity: 0.3;
+}
+
+.book-info-section {
+    display: flex;
+    flex-direction: column;
+}
+
+.book-title {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.book-author {
+    font-size: 1.125rem;
+    color: #666;
+    margin: 0 0 1.5rem 0;
+}
+
+.book-metadata {
+    margin-bottom: 1.5rem;
+}
+
+.metadata-item {
+    display: flex;
+    margin-bottom: 0.5rem;
+}
+
+.metadata-label {
+    font-weight: 600;
+    width: 100px;
+    flex-shrink: 0;
+}
+
+.metadata-value {
+    color: #333;
+}
+
+.book-description {
+    margin-bottom: 1.5rem;
+}
+
+.book-description h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+}
+
+.book-description p {
+    margin: 0;
+    line-height: 1.6;
+    color: #444;
+}
+
+.book-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: auto;
+}
+
+.btn {
+    padding: 0.75rem 1.5rem;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 500;
+    text-align: center;
+    cursor: pointer;
+    border: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: #0066cc;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #0052a3;
+}
+
+.btn-secondary {
+    background: #f0f0f0;
+    color: #333;
+}
+
+.btn-secondary:hover {
+    background: #e0e0e0;
+}
+
+/* Reader */
+.reader-page {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background: #f5f5f5;
+}
+
+.reader-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem;
+    background: #fff;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.reader-back {
+    color: #0066cc;
+    text-decoration: none;
+}
+
+.reader-back:hover {
+    text-decoration: underline;
+}
+
+.reader-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 400px;
+}
+
+.reader-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.btn-font-size,
+.btn-theme {
+    padding: 0.5rem 0.75rem;
+    background: #f0f0f0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+}
+
+.btn-font-size:hover,
+.btn-theme:hover {
+    background: #e0e0e0;
+}
+
+.reader-content {
+    flex: 1;
+    padding: 2rem;
+    overflow-y: auto;
+}
+
+.reader-page-content {
+    max-width: 700px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.reader-page-content h2 {
+    font-size: 1.5rem;
+    margin-top: 0;
+}
+
+.reader-page-content h3 {
+    font-size: 1.25rem;
+    margin-top: 1.5rem;
+}
+
+.reader-book-info {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 1rem;
+}
+
+.reader-book-info dt {
+    font-weight: 600;
+}
+
+.reader-book-info dd {
+    margin: 0;
+}
+
+.reader-notice {
+    margin-top: 2rem;
+    padding: 1rem;
+    background: #f8f8f8;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    color: #666;
+}
+
+.reader-notice p {
+    margin: 0.5rem 0;
+}
+
+.reader-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: #fff;
+    border-top: 1px solid #e0e0e0;
+}
+
+.page-indicator {
+    font-weight: 500;
+}
+
+/* Reader Themes */
+.reader-theme-light {
+    background: #ffffff;
+    color: #333;
+}
+
+.reader-theme-sepia {
+    background: #f4ecd8;
+    color: #5b4636;
+}
+
+.reader-theme-sepia .reader-page-content {
+    background: #fbf0d9;
+}
+
+.reader-theme-dark {
+    background: #1a1a1a;
+    color: #e0e0e0;
+}
+
+.reader-theme-dark .reader-page-content {
+    background: #2a2a2a;
+}
+
+.reader-theme-dark .reader-notice {
+    background: #333;
+    color: #aaa;
+}

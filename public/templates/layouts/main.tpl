@@ -18,6 +18,10 @@
                 <span class="icon">📚</span>
                 <span>Library</span>
             </a>
+            <a href="/photo/albums" class="nav-item {if $current_page == 'photos'}active{/if}">
+                <span class="icon">📷</span>
+                <span>Photos</span>
+            </a>
             <a href="/search" class="nav-item {if $current_page == 'search'}active{/if}">
                 <span class="icon">🔍</span>
                 <span>Search</span>

@@ -1,0 +1,392 @@
+/* Photo Library Styles */
+
+.photo-page {
+    padding: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.page-header {
+    margin-bottom: 2rem;
+}
+
+.page-header h1 {
+    font-size: 2rem;
+    font-weight: 600;
+    color: #fff;
+    margin: 0 0 0.5rem 0;
+}
+
+.page-header .subtitle {
+    color: #888;
+    font-size: 1rem;
+}
+
+.back-link {
+    color: #888;
+    text-decoration: none;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    display: inline-block;
+}
+
+.back-link:hover {
+    color: #fff;
+}
+
+/* Albums Grid */
+.albums-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.5rem;
+}
+
+.album-card {
+    background: #1a1a2e;
+    border-radius: 12px;
+    overflow: hidden;
+    text-decoration: none;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.album-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.album-cover {
+    aspect-ratio: 4/3;
+    overflow: hidden;
+    background: #0f0f1a;
+}
+
+.album-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.album-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 3rem;
+    color: #333;
+}
+
+.album-info {
+    padding: 1rem;
+}
+
+.album-date {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #fff;
+    margin: 0 0 0.25rem 0;
+}
+
+.album-count {
+    font-size: 0.85rem;
+    color: #888;
+}
+
+/* Photo Grid */
+.photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.photo-card {
+    background: #1a1a2e;
+    border-radius: 8px;
+    overflow: hidden;
+    text-decoration: none;
+    transition: transform 0.2s ease;
+}
+
+.photo-card:hover {
+    transform: scale(1.02);
+}
+
+.photo-card img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+}
+
+.photo-overlay {
+    padding: 0.75rem;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+}
+
+.photo-name {
+    font-size: 0.85rem;
+    color: #fff;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Photo View */
+.photo-view {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 2rem;
+}
+
+.photo-main {
+    min-width: 0;
+}
+
+.photo-container {
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.photo-full {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* EXIF Sidebar */
+.exif-sidebar {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    height: fit-content;
+    position: sticky;
+    top: 1rem;
+}
+
+.exif-sidebar h2 {
+    font-size: 1.25rem;
+    color: #fff;
+    margin: 0 0 1.5rem 0;
+    word-break: break-word;
+}
+
+.exif-panel {
+    margin-bottom: 1.5rem;
+}
+
+.exif-panel h3 {
+    font-size: 0.9rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 1rem 0;
+}
+
+.exif-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #2a2a3e;
+}
+
+.exif-row:last-child {
+    border-bottom: none;
+}
+
+.exif-label {
+    color: #888;
+    font-size: 0.9rem;
+}
+
+.exif-value {
+    color: #fff;
+    font-size: 0.9rem;
+    text-align: right;
+}
+
+.photo-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 0.75rem 1.25rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: center;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.btn-primary {
+    background: #4f46e5;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #4338ca;
+}
+
+.btn-secondary {
+    background: #2a2a3e;
+    color: #fff;
+}
+
+.btn-secondary:hover {
+    background: #3a3a4e;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+
+.empty-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.empty-state h2 {
+    font-size: 1.5rem;
+    color: #fff;
+    margin: 0 0 0.5rem 0;
+}
+
+.empty-state p {
+    color: #888;
+    margin: 0 0 1.5rem 0;
+}
+
+/* Slideshow Page */
+.slideshow-page {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    display: flex;
+    flex-direction: column;
+}
+
+.slideshow-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+}
+
+.slideshow-container img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.slideshow-controls {
+    position: absolute;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 1rem 1.5rem;
+    border-radius: 50px;
+}
+
+.slideshow-btn {
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    transition: color 0.2s ease;
+}
+
+.slideshow-btn:hover {
+    color: #4f46e5;
+}
+
+.slideshow-counter {
+    color: #fff;
+    font-size: 0.9rem;
+    min-width: 60px;
+    text-align: center;
+}
+
+.slideshow-caption {
+    position: absolute;
+    bottom: 6rem;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    font-size: 1rem;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.slideshow-thumbnails {
+    display: flex;
+    gap: 0.5rem;
+    padding: 1rem;
+    background: #0a0a0f;
+    overflow-x: auto;
+    justify-content: center;
+}
+
+.thumbnail-btn {
+    background: none;
+    border: 2px solid transparent;
+    padding: 0;
+    cursor: pointer;
+    border-radius: 4px;
+    overflow: hidden;
+    opacity: 0.6;
+    transition: opacity 0.2s ease, border-color 0.2s ease;
+}
+
+.thumbnail-btn:hover,
+.thumbnail-btn.active {
+    opacity: 1;
+    border-color: #4f46e5;
+}
+
+.thumbnail-btn img {
+    display: block;
+    width: 60px;
+    height: 45px;
+    object-fit: cover;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+    .photo-view {
+        grid-template-columns: 1fr;
+    }
+
+    .exif-sidebar {
+        position: static;
+    }
+}
+
+@media (max-width: 600px) {
+    .photo-page {
+        padding: 1rem;
+    }
+
+    .albums-grid,
+    .photo-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    }
+}

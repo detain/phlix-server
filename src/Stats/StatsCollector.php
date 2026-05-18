@@ -112,13 +112,18 @@ class StatsCollector
      * $eventId = $collector->recordPlaybackStart('user-123', 'media-456', 'movie', 'device-789');
      * ```
      */
-    public function recordPlaybackStart(string $userId, string $mediaItemId, string $mediaType, ?string $deviceId = null): string
-    {
+    public function recordPlaybackStart(
+        string $userId,
+        string $mediaItemId,
+        string $mediaType,
+        ?string $deviceId = null
+    ): string {
         $eventId = $this->generateUuid();
         $clientIp = null;
 
         $this->db->query(
-            "INSERT INTO stats_playback_events (id, user_id, media_item_id, media_type, started_at, device_id, client_ip)
+            "INSERT INTO stats_playback_events
+             (id, user_id, media_item_id, media_type, started_at, device_id, client_ip)
              VALUES (?, ?, ?, ?, NOW(), ?, ?)",
             [$eventId, $userId, $mediaItemId, $mediaType, $deviceId, $clientIp]
         );
@@ -163,16 +168,22 @@ class StatsCollector
      *
      * @example
      * ```php
-     * $collector->recordLibraryChange('item_added', 'media-456', 'lib-123', 'user-789', ['path' => '/movies/test.mkv']);
+     * $collector->recordLibraryChange('item_added', 'media-456', null, null, ['path' => 'movie.mkv']);
      * ```
      */
-    public function recordLibraryChange(string $changeType, ?string $mediaItemId = null, ?string $libraryId = null, ?string $userId = null, array $details = []): void
-    {
+    public function recordLibraryChange(
+        string $changeType,
+        ?string $mediaItemId = null,
+        ?string $libraryId = null,
+        ?string $userId = null,
+        array $details = []
+    ): void {
         $id = $this->generateUuid();
         $detailsJson = $details !== [] ? json_encode($details) : null;
 
         $this->db->query(
-            "INSERT INTO stats_library_changes (id, change_type, media_item_id, library_id, user_id, changed_at, details_json)
+            "INSERT INTO stats_library_changes
+             (id, change_type, media_item_id, library_id, user_id, changed_at, details_json)
              VALUES (?, ?, ?, ?, ?, NOW(), ?)",
             [$id, $changeType, $mediaItemId, $libraryId, $userId, $detailsJson]
         );
@@ -193,14 +204,19 @@ class StatsCollector
      * $collector->recordUserActivity('user-123', 'login', '192.168.1.1', ['device' => 'Chrome']);
      * ```
      */
-    public function recordUserActivity(string $userId, string $activityType, ?string $ipAddress = null, array $details = []): void
-    {
+    public function recordUserActivity(
+        string $userId,
+        string $activityType,
+        ?string $ipAddress = null,
+        array $details = []
+    ): void {
         $id = $this->generateUuid();
         $userAgent = null;
         $detailsJson = $details !== [] ? json_encode($details) : null;
 
         $this->db->query(
-            "INSERT INTO stats_user_activity (id, user_id, activity_type, occurred_at, ip_address, user_agent, details_json)
+            "INSERT INTO stats_user_activity
+             (id, user_id, activity_type, occurred_at, ip_address, user_agent, details_json)
              VALUES (?, ?, ?, NOW(), ?, ?, ?)",
             [$id, $userId, $activityType, $ipAddress, $userAgent, $detailsJson]
         );
@@ -222,12 +238,18 @@ class StatsCollector
      * $collector->recordStorageSnapshot('movie', 150, 50000000000, 2000000000, 'lib-123');
      * ```
      */
-    public function recordStorageSnapshot(string $mediaType, int $itemCount, int $totalBytes, int $transcodeCacheBytes = 0, ?string $libraryId = null): void
-    {
+    public function recordStorageSnapshot(
+        string $mediaType,
+        int $itemCount,
+        int $totalBytes,
+        int $transcodeCacheBytes = 0,
+        ?string $libraryId = null
+    ): void {
         $id = $this->generateUuid();
 
         $this->db->query(
-            "INSERT INTO stats_storage (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
+            "INSERT INTO stats_storage
+             (id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes)
              VALUES (?, NOW(), ?, ?, ?, ?, ?)",
             [$id, $libraryId, $mediaType, $itemCount, $totalBytes, $transcodeCacheBytes]
         );

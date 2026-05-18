@@ -251,4 +251,39 @@ class FolderWatcher
     {
         $this->checkInterval = $seconds;
     }
+
+    /**
+     * Check if a path change should trigger an extras rescan.
+     *
+     * Detects changes in Trailers/ folders or trailer files.
+     *
+     * @param string $changedPath The path that changed
+     *
+     * @return bool True if extras should be rescanned
+     *
+     * @since 0.14.0
+     */
+    public function shouldRescanExtras(string $changedPath): bool
+    {
+        $path = rtrim($changedPath, '/');
+
+        // Check if path is inside a Trailers/ folder
+        if (str_contains($path, '/Trailers/') || str_ends_with($path, '/Trailers')) {
+            return true;
+        }
+
+        // Check if filename has trailer suffix
+        $filename = basename($path);
+        $baseName = pathinfo($filename, PATHINFO_FILENAME);
+        $lowerName = strtolower($baseName);
+
+        $trailerSuffixes = ['-trailer', '-teaser', '-clip', '-featurette', '-behind-the-scenes'];
+        foreach ($trailerSuffixes as $suffix) {
+            if (str_ends_with($lowerName, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

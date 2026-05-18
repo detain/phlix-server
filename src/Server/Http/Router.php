@@ -620,6 +620,27 @@ class Router
     }
 
     /**
+     * Registers the extras (trailers) API routes.
+     *
+     * GET /api/v1/media/{id}/extras      — full merged list (trailers + extras)
+     * GET /api/v1/media/{id}/trailers      — trailers only
+     * GET /api/v1/media/{id}/extras/other  — non-trailer extras only
+     *
+     * @param string $controllerClass The ExtrasController class name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function extras(string $controllerClass): self
+    {
+        $this->get('/api/v1/media/{id}/extras', [$controllerClass, 'getExtras']);
+        $this->get('/api/v1/media/{id}/trailers', [$controllerClass, 'getTrailers']);
+        $this->get('/api/v1/media/{id}/extras/other', [$controllerClass, 'getOtherExtras']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

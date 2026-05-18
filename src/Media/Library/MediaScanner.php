@@ -9,6 +9,7 @@ use Phlex\Shared\Events\Library\LibraryScanStarted;
 use Phlex\Shared\Events\Library\MediaItemAdded;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Media\Extras\TrailerFinder;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
@@ -44,6 +45,9 @@ class MediaScanner
     /** @var EventDispatcherInterface|null PSR-14 dispatcher for library lifecycle events. */
     private ?EventDispatcherInterface $eventDispatcher;
 
+    /** @var TrailerFinder|null Finder for local trailers */
+    private ?TrailerFinder $trailerFinder = null;
+
     /**
      * Constructor for MediaScanner.
      *
@@ -58,18 +62,23 @@ class MediaScanner
      *                                       during scans. Defaults to null so
      *                                       legacy callers and tests not exercising
      *                                       events do not need to wire one up.
+     * @param TrailerFinder|null $trailerFinder Optional trailer finder for extras detection
+     *
+     * @since 0.14.0 TrailerFinder parameter added for extras detection
      */
     public function __construct(
         Connection $db,
         ItemRepository $itemRepository,
         ?StructuredLogger $logger = null,
-        ?EventDispatcherInterface $eventDispatcher = null
+        ?EventDispatcherInterface $eventDispatcher = null,
+        ?TrailerFinder $trailerFinder = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->namingOptions = $this->loadNamingOptions();
         $this->eventDispatcher = $eventDispatcher;
+        $this->trailerFinder = $trailerFinder;
     }
 
     /**
@@ -481,5 +490,83 @@ class MediaScanner
             path: $path,
             type: $type,
         ));
+    }
+
+    /**
+     * Check if a directory contains a Trailers/ subfolder or trailer files.
+     *
+     * Detects both:
+     * - <mediaDir>/Trailers/ subfolder
+     * - <mediaDir>/<name>-trailer.mkv files at same level
+     *
+     * @param string $mediaDir The media directory path
+     * @param string $mediaFilename The main media filename
+     *
+     * @return bool True if trailers are detected
+     *
+     * @since 0.14.0
+     */
+    public function hasTrailers(string $mediaDir, string $mediaFilename): bool
+    {
+        // Use trailerFinder if available for better detection
+        if ($this->trailerFinder !== null) {
+            $trailers = $this->trailerFinder->findLocalTrailers($mediaDir, $mediaFilename);
+            return count($trailers) > 0;
+        }
+
+        // Fallback: check for Trailers/ subfolder
+        $trailersFolder = rtrim($mediaDir, '/') . '/Trailers';
+        if (is_dir($trailersFolder)) {
+            return $this->hasTrailerFiles($trailersFolder);
+        }
+
+        // Check for same-level trailer files
+        $baseName = pathinfo($mediaFilename, PATHINFO_FILENAME);
+        $extensions = $this->namingOptions['video'] ?? [];
+        foreach ($extensions as $ext) {
+            $trailerFile = $mediaDir . '/' . $baseName . '-trailer.' . $ext;
+            if (file_exists($trailerFile)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a directory contains trailer video files.
+     *
+     * @param string $dir The directory to check
+     *
+     * @return bool True if trailer files are found
+     */
+    private function hasTrailerFiles(string $dir): bool
+    {
+        $extensions = $this->namingOptions['video'] ?? [];
+        $iterator = new \DirectoryIterator($dir);
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+
+            $extension = strtolower($file->getExtension());
+            if (in_array($extension, $extensions, true)) {
+                // Check if filename contains trailer-like suffix
+                $baseName = pathinfo($file->getFilename(), PATHINFO_FILENAME);
+                $lowerName = strtolower($baseName);
+                if (
+                    str_contains($lowerName, 'trailer')
+                    || str_contains($lowerName, 'teaser')
+                    || str_contains($lowerName, 'clip')
+                    || str_contains($lowerName, 'featurette')
+                    || str_contains($lowerName, 'behind')
+                ) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 }

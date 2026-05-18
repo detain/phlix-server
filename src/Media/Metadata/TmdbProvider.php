@@ -231,4 +231,69 @@ class TmdbProvider implements MetadataProviderInterface
             ];
         }, $images);
     }
+
+    /**
+     * Get trailers for a movie from TMDB.
+     *
+     * Fetches the /movie/{id}/videos endpoint to retrieve trailer URLs.
+     *
+     * @param string $externalId TMDB movie ID
+     * @return array<int, array{
+     *     title: string,
+     *     url: string,
+     *     duration: int,
+     *     quality: int
+     * }> Array of trailer data
+     *
+     * @since 0.14.0
+     */
+    public function getTrailers(string $externalId): array
+    {
+        $response = $this->http->get("/movie/{$externalId}/videos");
+
+        if (!is_array($response) || !isset($response['results']) || !is_array($response['results'])) {
+            return [];
+        }
+
+        $trailers = [];
+        foreach ($response['results'] as $video) {
+            if (!is_array($video)) {
+                continue;
+            }
+
+            // Only include trailers (type=Trailer) and teasers (type=Teaser)
+            $typeRaw = $video['type'] ?? '';
+            if (!is_string($typeRaw)) {
+                continue;
+            }
+            $type = strtolower($typeRaw);
+            if ($type !== 'trailer' && $type !== 'teaser') {
+                continue;
+            }
+
+            // Build YouTube URL from site and key
+            $siteRaw = $video['site'] ?? '';
+            $site = is_string($siteRaw) ? strtolower($siteRaw) : '';
+            $videoKeyRaw = $video['key'] ?? '';
+            $videoKey = is_string($videoKeyRaw) ? $videoKeyRaw : '';
+
+            if ($site !== 'youtube' || $videoKey === '') {
+                continue; // Skip non-YouTube trailers
+            }
+
+            $url = 'https://www.youtube.com/watch?v=' . $videoKey;
+
+            $nameRaw = $video['name'] ?? $type;
+            $name = is_string($nameRaw) ? $nameRaw : $type;
+
+            $trailers[] = [
+                'title' => ucfirst($type) . ' (' . $name . ')',
+                'url' => $url,
+                'duration' => 0, // TMDB doesn't provide duration
+                'quality' => 0, // Unknown until played
+            ];
+        }
+
+        return $trailers;
+    }
 }

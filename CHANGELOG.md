@@ -7,6 +7,27 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.5)
+
+- Trailers and extras with local `Trailers/` folder support. Includes:
+  - `Trailer` — readonly DTO (id, mediaItemId, title, source, url, duration, quality, isLocal, filePath)
+  - `Extra` — readonly DTO for non-trailer extras (featurette|behind_the_scenes|interview|clip|deleted_scene|trailer)
+  - `TrailerFinder` — filesystem scanner for local trailers (same-level and Trailers/ subfolder)
+  - `TrailerResolver` — merges local + TMDB trailers, caches in media_extras with 24h TTL
+  - `ExtrasRepository` — data access for media_extras table
+  - `ExtrasController` — 3 REST endpoints:
+    - `GET /api/v1/media/{id}/extras` — full merged list
+    - `GET /api/v1/media/{id}/trailers` — trailers only
+    - `GET /api/v1/media/{id}/extras/other` — non-trailer extras
+  - `Migration 007_media_extras.sql` — creates media_extras table
+  - `TmdbProvider::getTrailers()` — fetches trailers from TMDB API
+  - `Router::extras()` — registers ExtrasController routes
+  - `MediaScanner::hasTrailers()` — detects Trailers/ folders at scan time
+  - `FolderWatcher::shouldRescanExtras()` — triggers extras rescan on change
+  - Unit tests in `tests/unit/Media/Extras/` (15 tests)
+  - Integration test `tests/integration/Media/Extras/TrailerScannerTest.php`
+  - `docs/developers/trailers-and-extras.md` — naming conventions, API reference, architecture
+
 ### Added (Step H.4)
 
 - Trakt.tv scrobble plugin with two-way history sync. Includes:

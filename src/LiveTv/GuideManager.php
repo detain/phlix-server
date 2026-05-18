@@ -387,6 +387,7 @@ class GuideManager
      *   - series_episode: string|null
      *   - is_repeat: bool (default: false)
      *   - is_film: bool (default: false)
+     *   - xmltv_id: string|null (EPG/xmltv channel ID for IPTV matching)
      * @return array<string, mixed>|null The upserted program or null on failure
      */
     public function upsertProgram(array $data): array

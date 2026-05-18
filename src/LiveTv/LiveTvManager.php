@@ -9,6 +9,8 @@ use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
+use Phlex\LiveTv\Tuners\Iptv\IptvTunerDriver;
 use Phlex\LiveTv\Tuners\TunerDriverInterface;
 use Workerman\MySQL\Connection;
 
@@ -62,8 +64,11 @@ class LiveTvManager
     /** @var StructuredLogger Structured logger instance */
     private StructuredLogger $logger;
 
-    /** @var TunerDriverInterface The tuner driver for device discovery and streaming */
+    /** @var TunerDriverInterface The primary tuner driver for device discovery and streaming */
     private TunerDriverInterface $tunerDriver;
+
+    /** @var array<string, TunerDriverInterface> Additional tuner drivers (e.g., IPTV) */
+    private array $additionalDrivers = [];
 
     /** @var array<string, array<string, mixed>> Discovered tuners */
     private array $tuners = [];
@@ -142,6 +147,13 @@ class LiveTvManager
     public const TUNER_TYPE_HDHOMERUN = 'hdhomerun';
 
     /**
+     * IPTV tuner type (M3U playlist + XMLTV).
+     *
+     * @var string
+     */
+    public const TUNER_TYPE_IPTV = 'iptv';
+
+    /**
      * Creates a new LiveTvManager instance.
      *
      * @param Connection $db Database connection for tuner/channel persistence
@@ -150,6 +162,7 @@ class LiveTvManager
      * @param Recorder $recorder DVR recording handler
      * @param TunerDriverInterface $tunerDriver Tuner driver for discovery and streaming
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
+     * @param array<string, TunerDriverInterface> $additionalDrivers Additional tuner drivers
      */
     public function __construct(
         Connection $db,
@@ -157,7 +170,8 @@ class LiveTvManager
         GuideManager $guideManager,
         Recorder $recorder,
         TunerDriverInterface $tunerDriver,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        array $additionalDrivers = []
     ) {
         $this->db = $db;
         $this->channelManager = $channelManager;
@@ -165,6 +179,7 @@ class LiveTvManager
         $this->recorder = $recorder;
         $this->tunerDriver = $tunerDriver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
+        $this->additionalDrivers = $additionalDrivers;
     }
 
     /**
@@ -172,6 +187,7 @@ class LiveTvManager
      *
      * Uses the configured tuner driver to discover available tuner devices.
      * For HDHomeRun, this performs SSDP discovery on the local network.
+     * For IPTV, discovers configured M3U playlist sources.
      *
      * @return array Discovered tuners keyed by tuner ID
      * @throws \RuntimeException If database operations fail
@@ -183,38 +199,77 @@ class LiveTvManager
      *     echo "Found: {$tuner['name']} ({$tuner['type']})\n";
      * }
      * ```
+     * @return array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice}> Discovered tuners keyed by tuner ID
      */
     public function discoverTuners(): array
     {
         $this->logger->info('Starting tuner discovery');
 
-        $devices = $this->tunerDriver->discoverDevices();
+        /** @var array<string, array{id:string, name:string, type:string, status:string, tuner_index:int, ip_address?:string, tuner_count:int, capabilities:array<string, mixed>, tunerDevice:HdHomeRunDevice|IptvDevice}> $tuners */
         $tuners = [];
 
-        foreach ($devices as $index => $device) {
-            $tunerId = 'hdhr_' . $device->deviceId;
-            $tuner = [
-                'id' => $tunerId,
-                'name' => "HDHomeRun ({$device->deviceId})",
-                'type' => self::TUNER_TYPE_HDHOMERUN,
-                'status' => self::TUNER_STATUS_IDLE,
-                'tuner_index' => $index,
-                'ip_address' => $device->ipAddress,
-                'tuner_count' => $device->tunerCount,
-                'capabilities' => [
-                    'hdhomerun' => true,
+        // Discover HDHomeRun tuners (primary driver)
+        if ($this->tunerDriver->getName() === 'hdhomerun') {
+            $devices = $this->tunerDriver->discoverDevices();
+            foreach ($devices as $index => $device) {
+                if (!$device instanceof HdHomeRunDevice) {
+                    continue;
+                }
+                $tunerId = 'hdhr_' . $device->deviceId;
+                $tuner = [
+                    'id' => $tunerId,
+                    'name' => "HDHomeRun ({$device->deviceId})",
+                    'type' => self::TUNER_TYPE_HDHOMERUN,
+                    'status' => self::TUNER_STATUS_IDLE,
+                    'tuner_index' => $index,
+                    'ip_address' => $device->ipAddress,
                     'tuner_count' => $device->tunerCount,
-                    'stream_url_template' => $device->getBaseUrl() . '/watch?channel={channel}',
-                ],
-                'tunerDevice' => $device,
-            ];
+                    'capabilities' => [
+                        'hdhomerun' => true,
+                        'tuner_count' => $device->tunerCount,
+                        'stream_url_template' => $device->getBaseUrl() . '/watch?channel={channel}',
+                    ],
+                    'tunerDevice' => $device,
+                ];
 
-            $this->registerTuner($tuner);
-            $tuners[$tunerId] = $tuner;
+                $this->registerTuner($tuner);
+                $tuners[$tunerId] = $tuner;
+            }
+        }
+
+        // Discover additional tuner types (e.g., IPTV)
+        foreach ($this->additionalDrivers as $driver) {
+            if ($driver->getName() === 'iptv') {
+                $devices = $driver->discoverDevices();
+                foreach ($devices as $device) {
+                    if (!$device instanceof IptvDevice) {
+                        continue;
+                    }
+                    $tunerId = 'iptv_' . $device->sourceId;
+                    $tuner = [
+                        'id' => $tunerId,
+                        'name' => $device->name,
+                        'type' => self::TUNER_TYPE_IPTV,
+                        'status' => self::TUNER_STATUS_IDLE,
+                        'tuner_index' => 0,
+                        'tuner_count' => 1,
+                        'capabilities' => [
+                            'iptv' => true,
+                            'tuner_count' => 1,
+                            'has_epg' => $device->hasEpd(),
+                            'stream_url_template' => $device->playlistUrl,
+                        ],
+                        'tunerDevice' => $device,
+                    ];
+
+                    $this->registerTuner($tuner);
+                    $tuners[$tunerId] = $tuner;
+                }
+            }
         }
 
         $this->tuners = $tuners;
-        $this->logger->info('Tuner discovery complete', ['count' => count($tuners), 'driver' => $this->tunerDriver->getName()]);
+        $this->logger->info('Tuner discovery complete', ['count' => count($tuners)]);
 
         return $tuners;
     }
@@ -275,6 +330,9 @@ class LiveTvManager
         if ($tuner['type'] === self::TUNER_TYPE_HDHOMERUN && isset($tuner['tunerDevice'])) {
             // HDHomeRun: use the tuner driver to scan
             $channels = $this->performHdHomeRunChannelScan($tuner, $options);
+        } elseif ($tuner['type'] === self::TUNER_TYPE_IPTV && isset($tuner['tunerDevice'])) {
+            // IPTV: use the IPTV driver to scan
+            $channels = $this->performIptvChannelScan($tuner, $options);
         } else {
             // DVB: use frequency scanning
             $channels = $this->performChannelScan($tuner, $options);
@@ -368,6 +426,57 @@ class LiveTvManager
                 'frequency' => 0,
                 'tuner_id' => $tuner['id'],
                 'service_id' => $channelInfo['program_id'] ?? null,
+            ]);
+
+            if ($channel) {
+                $discoveredChannels[] = $channel;
+            }
+        }
+
+        return $discoveredChannels;
+    }
+
+    /**
+     * Perform IPTV channel scan using the tuner driver.
+     *
+     * Uses the M3U parser to get channel lineup and optionally
+     * fetches XMLTV data for programme information.
+     *
+     * @param array<string, mixed> $tuner The IPTV tuner
+     * @param array<string, mixed> $options Scan options (unused for IPTV)
+     * @return array<int, array<string, mixed>> Discovered channels
+     */
+    private function performIptvChannelScan(array $tuner, array $options): array
+    {
+        $discoveredChannels = [];
+
+        /** @var IptvDevice $device */
+        $device = $tuner['tunerDevice'];
+
+        // Find the IPTV driver for this tuner
+        $iptvDriver = null;
+        foreach ($this->additionalDrivers as $driver) {
+            if ($driver->getName() === 'iptv') {
+                $iptvDriver = $driver;
+                break;
+            }
+        }
+
+        if ($iptvDriver === null) {
+            $this->logger->warning('IptvTunerDriver not found for scan');
+            return $discoveredChannels;
+        }
+
+        $lineup = $iptvDriver->scanChannels($device);
+
+        foreach ($lineup as $channelInfo) {
+            $channel = $this->channelManager->createChannel([
+                'name' => $channelInfo['name'] ?? 'Channel ' . $channelInfo['channel_number'],
+                'number' => $channelInfo['channel_number'],
+                'type' => $channelInfo['type'] ?? 'off',
+                'frequency' => 0,
+                'tuner_id' => $tuner['id'],
+                'service_id' => null,
             ]);
 
             if ($channel) {
@@ -505,6 +614,18 @@ class LiveTvManager
             /** @var HdHomeRunDevice $device */
             $device = $tuner['tunerDevice'];
             return $this->tunerDriver->getStreamUrl($device, $channelNumber);
+        }
+
+        if ($tuner['type'] === self::TUNER_TYPE_IPTV && isset($tuner['tunerDevice'])) {
+            /** @var IptvDevice $device */
+            $device = $tuner['tunerDevice'];
+
+            // Find the IPTV driver for this tuner
+            foreach ($this->additionalDrivers as $driver) {
+                if ($driver->getName() === 'iptv') {
+                    return $driver->getStreamUrl($device, $channelNumber);
+                }
+            }
         }
 
         // DVB/other tuners use internal stream URL

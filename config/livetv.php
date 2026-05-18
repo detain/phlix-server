@@ -77,4 +77,34 @@ return [
      * @default true
      */
     'allow_direct_stream' => true,
+
+    /**
+     * IPTV tuner settings.
+     */
+    'iptv' => [
+        /**
+         * Enable IPTV tuner support.
+         *
+         * @default true
+         */
+        'enabled' => false,
+
+        /**
+         * IPTV source definitions.
+         *
+         * Each source requires a name and playlist_url. The epg_url is optional
+         * and points to an XMLTV guide file for programme data.
+         *
+         * @default []
+         */
+        'sources' => [
+            // Example source:
+            // [
+            //     'name' => 'My IPTV',
+            //     'playlist_url' => 'https://example.com/playlist.m3u8',
+            //     'epg_url' => 'https://example.com/epg.xml',
+            //     'enabled' => true,
+            // ],
+        ],
+    ],
 ];

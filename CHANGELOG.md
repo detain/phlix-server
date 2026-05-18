@@ -7,6 +7,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.2)
+
+- M3U/XMLTV IPTV tuner driver. Includes:
+  - `M3UEntry` — immutable value object for M3U playlist entries
+  - `M3UParser` — parses M3U/M3U8 playlists, fetches remote via `parseUrl()`
+  - `XmlTvProgramme` — immutable value object for XMLTV programme entries
+  - `XmlTvParser` — parses XMLTV format, handles YYYYMMDDHHMMSS times
+  - `IptvDevice` — immutable descriptor for IPTV sources
+  - `IptvTunerDriver` — implements `TunerDriverInterface` for IPTV
+  - `IptvTunerDriverFactory` — builds driver from `config/livetv.php`
+  - `config/livetv.php` — added `iptv` section with `sources` array
+  - `LiveTvManager` — integrated IPTV alongside HDHomeRun tuners
+  - `GuideManager::upsertProgram()` — added `xmltv_id` parameter for IPTV matching
+  - Unit tests for `M3UParser`, `XmlTvParser`, `IptvTunerDriver`
+  - `docs/developers/iptv.md` — developer documentation
+
 ### Added (Step I.1)
 
 - HDHomeRun tuner driver (SSDP discovery + HTTP API). Includes:

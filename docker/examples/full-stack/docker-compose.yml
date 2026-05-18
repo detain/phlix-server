@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    ports:
+      - "80:80"
+      - "443:443"
+      - "3473:3473"
+    environment:
+      - TZ=UTC
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik_certs:/etc/traefik/certs
+    networks:
+      - phlex_network
+    restart: unless-stopped
+
+  phlex-hub:
+    image: ghcr.io/detain/phlex-hub:latest
+    container_name: phlex-hub
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phlex-hub.rule=Host(`hub.example.com`)"
+      - "traefik.http.routers.phlex-hub.tls=true"
+      - "traefik.http.services.phlex-hub.loadbalancer.server.port=443"
+      - "traefik.tcp.routers.phlex-relay.rule=Host(`hub.example.com`)"
+      - "traefik.tcp.routers.phlex-relay.entrypoints=relay"
+      - "traefik.tcp.services.phlex-relay.loadbalancer.server.port=3473"
+    environment:
+      - HUB_DATABASE_HOST=mysql-hub
+      - HUB_DATABASE_PORT=3306
+      - HUB_DATABASE_NAME=phlex_hub
+      - HUB_DATABASE_USER=phlex_hub
+      - HUB_DATABASE_PASSWORD=${HUB_DB_PASSWORD}
+      - HUB_SECRET_KEY=${HUB_SECRET_KEY}
+      - HUB_RELAY_ENABLED=true
+      - HUB_RELAY_PORT=3473
+    volumes:
+      - hub_config:/var/phlex-hub/config
+      - hub_logs:/var/phlex-hub/logs
+    depends_on:
+      mysql-hub:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - phlex_network
+
+  phlex-server:
+    image: ghcr.io/detain/phlex-server:latest
+    container_name: phlex-server
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phlex-server.rule=Host(`server.example.com`)"
+      - "traefik.http.routers.phlex-server.tls=true"
+      - "traefik.http.services.phlex-server.loadbalancer.server.port=80"
+    environment:
+      - PHLEX_DATABASE_HOST=mysql-server
+      - PHLEX_DATABASE_PORT=3306
+      - PHLEX_DATABASE_NAME=phlex
+      - PHLEX_DATABASE_USER=phlex
+      - PHLEX_DATABASE_PASSWORD=${PHLEX_DB_PASSWORD}
+      - PHLEX_SECRET_KEY=${PHLEX_SECRET_KEY}
+      - PHLEX_HUB_URL=https://hub.example.com
+      - PHLEX_LOG_LEVEL=info
+    volumes:
+      - phlex_config:/var/phlex/config
+      - phlex_data:/var/phlex/data
+      - phlex_backups:/var/phlex/backups
+      - phlex_logs:/var/phlex/logs
+      - media_library:/media:ro
+    depends_on:
+      mysql-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - phlex_network
+
+  mysql-hub:
+    image: mysql:8.0
+    container_name: phlex-hub-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: phlex_hub
+      MYSQL_USER: phlex_hub
+      MYSQL_PASSWORD: ${HUB_DB_PASSWORD}
+    volumes:
+      - mysql_hub_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - phlex_network
+
+  mysql-server:
+    image: mysql:8.0
+    container_name: phlex-server-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: phlex
+      MYSQL_USER: phlex
+      MYSQL_PASSWORD: ${PHLEX_DB_PASSWORD}
+    volumes:
+      - mysql_server_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - phlex_network
+
+volumes:
+  phlex_config:
+  phlex_data:
+  phlex_backups:
+  phlex_logs:
+  media_library:
+  hub_config:
+  hub_logs:
+  mysql_hub_data:
+  mysql_server_data:
+  traefik_certs:
+
+networks:
+  phlex_network:
+    driver: bridge

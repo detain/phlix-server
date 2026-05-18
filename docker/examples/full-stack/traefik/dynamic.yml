@@ -1,0 +1,12 @@
+tcp:
+  routers:
+    phlex-relay:
+      rule: "HostSNI(`*`)"
+      service: phlex-relay-service
+      passthrough: true
+
+  services:
+    phlex-relay-service:
+      loadBalancer:
+        servers:
+          - address: "phlex-hub:3473"

@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  phlex:
+    image: ghcr.io/detain/phlex-server:latest
+    container_name: phlex-server
+    ports:
+      - "32400:80"
+    environment:
+      - PHLEX_DATABASE_HOST=mysql
+      - PHLEX_DATABASE_PORT=3306
+      - PHLEX_DATABASE_NAME=phlex
+      - PHLEX_DATABASE_USER=phlex
+      - PHLEX_DATABASE_PASSWORD=${PHLEX_DB_PASSWORD}
+      - PHLEX_SECRET_KEY=${PHLEX_SECRET_KEY}
+      - PHLEX_LOG_LEVEL=info
+    volumes:
+      - phlex_config:/var/phlex/config
+      - phlex_data:/var/phlex/data
+      - phlex_backups:/var/phlex/backups
+      - phlex_logs:/var/phlex/logs
+      - media_library:/media:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - phlex_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mysql:
+    image: mysql:8.0
+    container_name: phlex-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: phlex
+      MYSQL_USER: phlex
+      MYSQL_PASSWORD: ${PHLEX_DB_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - phlex_network
+
+volumes:
+  phlex_config:
+  phlex_data:
+  phlex_backups:
+  phlex_logs:
+  media_library:
+  mysql_data:
+
+networks:
+  phlex_network:
+    driver: bridge

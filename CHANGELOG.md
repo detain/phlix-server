@@ -7,6 +7,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.7)
+
+- Hub relay for remote live TV streams (HLS re-streaming via hub WebSocket tunnel):
+  - `HlsRelaySession` — value object for relay session with `sessionId`, `channelId`, `tuneRequestId`, `getMountUrl()`, `getVariantPlaylistUrl()`
+  - `HlsRelayManager` — orchestrates relay sessions: `startRelaySession()`, `stopRelaySession()`, `getActiveSessions()`, `getUserSession()`
+  - `HlsSegmentPrefetcher` — LRU cache for HLS segments with Workerman Timer-based prefetching (`startPrefetch()`, `stopPrefetch()`, `getSegment()`)
+  - `HlsRelaySessionFactory` — factory for building `HlsRelayManager` from config
+  - `RelayConsumer` — added `registerMount()` and `unregisterMount()` methods for dynamic path handlers; `dispatchViaMount()` routes `/relay/live/{sessionId}/*` to registered handlers
+  - `migrations/015_livetv_relay_sessions.sql` — creates `livetv_relay_sessions` table
+  - `config/livetv.php` — added `relay` section with `enabled`, `prefetch_segments`, `max_concurrent_sessions`, `segment_cache_ttl_seconds`, `relay_path_prefix`
+  - Unit tests in `tests/unit/LiveTv/Relay/` (HlsRelaySessionTest, HlsRelayManagerTest, HlsSegmentPrefetcherTest — 26+ tests)
+  - `docs/developers/live-relay.md` — architecture docs, session lifecycle, configuration
+
 ### Added (Step I.6)
 
 - Comskip commercial detection for live TV recordings with chapter markers:

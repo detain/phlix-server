@@ -64,6 +64,9 @@ final class RelayConsumer
     /** @var string Buffered incoming data. */
     private string $recvBuffer = '';
 
+    /** @var array<string, callable> Registered mount handlers keyed by path prefix. */
+    private array $mounts = [];
+
     /**
      * @param RelayConfig       $config   Relay configuration.
      * @param HubClient         $hubClient Hub client (for enrollment info).
@@ -403,6 +406,8 @@ final class RelayConsumer
     /**
      * Dispatch a request to the local router and return the response.
      *
+     * First checks if a mount handler is registered for the path.
+     *
      * @param Request $request
      *
      * @return Response
@@ -411,7 +416,8 @@ final class RelayConsumer
      */
     private function dispatchLocally(Request $request): Response
     {
-        return $this->router->dispatch($request);
+        // Check for mount handlers first (HLS relay, etc.)
+        return $this->dispatchViaMount($request);
     }
 
     /**
@@ -527,5 +533,119 @@ final class RelayConsumer
     {
         $this->seq = ($this->seq + 1) & 0xFFFFFFFF;
         return $this->seq;
+    }
+
+    /**
+     * Register a mount handler for a specific path prefix.
+     *
+     * When a relay request arrives for a path matching the prefix,
+     * the handler is called instead of the local router.
+     *
+     * @param string   $pathPrefix Path prefix to handle (e.g., '/relay/live/{sessionId}').
+     * @param callable $handler    Handler function that receives the full path and returns response content.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function registerMount(string $pathPrefix, callable $handler): void
+    {
+        $this->mounts[$pathPrefix] = $handler;
+        $this->logger->info('RelayConsumer: registered mount', [
+            'path_prefix' => $pathPrefix,
+        ]);
+    }
+
+    /**
+     * Unregister a mount handler.
+     *
+     * @param string $pathPrefix Path prefix to unregister.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function unregisterMount(string $pathPrefix): void
+    {
+        unset($this->mounts[$pathPrefix]);
+        $this->logger->info('RelayConsumer: unregistered mount', [
+            'path_prefix' => $pathPrefix,
+        ]);
+    }
+
+    /**
+     * Check if a path matches any registered mount.
+     *
+     * @param string $path Request path.
+     *
+     * @return string|null Matching path prefix or null.
+     *
+     * @since 0.12.0
+     */
+    private function findMount(string $path): ?string
+    {
+        foreach ($this->mounts as $prefix => $handler) {
+            if (str_starts_with($path, $prefix)) {
+                return $prefix;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Dispatch a request via registered mount if available, otherwise use local router.
+     *
+     * @param Request $request The request to dispatch.
+     *
+     * @return Response The dispatch result.
+     *
+     * @since 0.12.0
+     */
+    private function dispatchViaMount(Request $request): Response
+    {
+        $path = $request->path;
+        $mountPrefix = $this->findMount($path);
+
+        if ($mountPrefix !== null) {
+            $handler = $this->mounts[$mountPrefix];
+
+            try {
+                $content = $handler($path);
+
+                if ($content === null) {
+                    return (new Response())
+                        ->status(404)
+                        ->text('Not Found');
+                }
+
+                // Determine content type based on path extension
+                $contentType = 'application/octet-stream';
+                if (str_ends_with($path, '.m3u8')) {
+                    $contentType = 'application/vnd.apple.mpegurl';
+                } elseif (str_ends_with($path, '.ts')) {
+                    $contentType = 'video/MP2T';
+                } elseif (str_ends_with($path, '.json')) {
+                    $contentType = 'application/json';
+                }
+
+                return (new Response())
+                    ->status(200)
+                    ->header('Content-Type', $contentType)
+                    ->header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                    ->header('Access-Control-Allow-Origin', '*')
+                    ->text($content);
+            } catch (Throwable $e) {
+                $this->logger->error('RelayConsumer: mount handler error', [
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+                return (new Response())
+                    ->status(500)
+                    ->json(['error' => 'Internal Server Error']);
+            }
+        }
+
+        // No mount matched, dispatch to local router
+        return $this->router->dispatch($request);
     }
 }

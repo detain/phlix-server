@@ -339,4 +339,55 @@ return [
          */
         'auto_resolution' => true,
     ],
+
+    /**
+     * HLS Relay settings for remote live TV streaming.
+     *
+     * Enables remote clients to watch Live TV by relaying HLS streams
+     * through the hub's RelayConsumer (WebSocket tunnel).
+     */
+    'relay' => [
+        /**
+         * Enable HLS relay functionality.
+         *
+         * @default true
+         */
+        'enabled' => true,
+
+        /**
+         * Number of segments to prefetch ahead during playback.
+         *
+         * Higher values improve playback smoothness but increase memory usage.
+         *
+         * @default 3
+         */
+        'prefetch_segments' => 3,
+
+        /**
+         * Maximum concurrent relay sessions allowed.
+         *
+         * Each session consumes a tuner and memory for segment caching.
+         *
+         * @default 10
+         */
+        'max_concurrent_sessions' => 10,
+
+        /**
+         * TTL for cached HLS segments in seconds.
+         *
+         * Segments older than this are evicted from the LRU cache.
+         *
+         * @default 30
+         */
+        'segment_cache_ttl_seconds' => 30,
+
+        /**
+         * URL prefix for relay mount paths.
+         *
+         * Remote clients access streams via /relay/live/{sessionId}/playlist.m3u8
+         *
+         * @default '/relay/live'
+         */
+        'relay_path_prefix' => '/relay/live',
+    ],
 ];

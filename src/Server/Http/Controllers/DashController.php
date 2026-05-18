@@ -144,7 +144,7 @@ class DashController
         return (new Response())
             ->header('Content-Type', 'video/mp4')
             ->header('Cache-Control', 'public, max-age=31536000')
-            ->header('Content-Length', strlen($content))
+            ->header('Content-Length', (string) strlen($content))
             ->header('Accept-Ranges', 'bytes')
             ->body($content);
     }

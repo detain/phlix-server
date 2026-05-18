@@ -143,8 +143,8 @@ class QualitySelector
     public function selectQuality(array $sourceInfo, string $profileName, array $options = []): array
     {
         $profile = $this->deviceProfiles[$profileName] ?? $this->deviceProfiles['generic'];
-        $vendor = $options['vendor'] ?? null;
-        $allowHwaccel = $options['allow_hwaccel'] ?? false;
+        $vendor = is_string($options['vendor'] ?? null) ? $options['vendor'] : null;
+        $allowHwaccel = (bool)($options['allow_hwaccel'] ?? false);
 
         $videoStream = $this->getVideoStream($sourceInfo);
         $audioStream = $this->getAudioStream($sourceInfo);
@@ -155,8 +155,8 @@ class QualitySelector
             return [
                 'method' => 'direct',
                 'container' => $this->detectContainer($sourceInfo),
-                'video_codec' => $videoStream['codec'] ?? null,
-                'audio_codec' => $audioStream['codec'] ?? null,
+                'video_codec' => is_string($videoStream['codec'] ?? null) ? $videoStream['codec'] : null,
+                'audio_codec' => is_string($audioStream['codec'] ?? null) ? $audioStream['codec'] : null,
                 'max_resolution' => $profile['max_resolution'],
                 'max_bitrate' => $profile['max_bitrate'],
                 'vendor' => $vendor,

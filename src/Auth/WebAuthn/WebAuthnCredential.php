@@ -18,23 +18,26 @@ final class WebAuthnCredential
     ) {
     }
 
+    /**
+     * @param array<string, mixed> $row Database row
+     */
     public static function fromDbRow(array $row): self
     {
         return new self(
-            credentialId: is_resource($row['credential_id'])
+            credentialId: is_resource($row['credential_id'] ?? null)
                 ? stream_get_contents($row['credential_id'])
-                : $row['credential_id'],
-            userId: (string) $row['user_id'],
-            publicKey: is_resource($row['public_key'])
+                : (string)($row['credential_id'] ?? ''),
+            userId: (string)($row['user_id'] ?? ''),
+            publicKey: is_resource($row['public_key'] ?? null)
                 ? stream_get_contents($row['public_key'])
-                : $row['public_key'],
-            counter: (string) $row['counter'],
-            type: (string) ($row['type'] ?? 'public-key'),
-            deviceType: $row['device_type'] ?? null,
-            aaguid: $row['aaguid'] !== null && $row['aaguid'] !== ''
-                ? (is_resource($row['aaguid']) ? stream_get_contents($row['aaguid']) : $row['aaguid'])
+                : (string)($row['public_key'] ?? ''),
+            counter: (string)($row['counter'] ?? '0'),
+            type: (string)($row['type'] ?? 'public-key'),
+            deviceType: is_string($row['device_type'] ?? null) ? $row['device_type'] : null,
+            aaguid: ($row['aaguid'] ?? null) !== null && $row['aaguid'] !== ''
+                ? (is_resource($row['aaguid']) ? stream_get_contents($row['aaguid']) : (string)$row['aaguid'])
                 : null,
-            registeredAt: (int) ($row['registered_at'] ?? time()),
+            registeredAt: (int)($row['registered_at'] ?? time()),
         );
     }
 

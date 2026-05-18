@@ -14,16 +14,22 @@ final class WebAuthnSettings
     ) {
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     public static function fromConfig(array $config): self
     {
         return new self(
-            rpId: $config['rp_id'] ?? 'localhost',
-            rpName: $config['rp_name'] ?? 'Phlex Media Server',
-            rpOrigin: $config['rp_origin'] ?? 'https://localhost',
+            rpId: is_string($config['rp_id'] ?? null) ? $config['rp_id'] : 'localhost',
+            rpName: is_string($config['rp_name'] ?? null) ? $config['rp_name'] : 'Phlex Media Server',
+            rpOrigin: is_string($config['rp_origin'] ?? null) ? $config['rp_origin'] : 'https://localhost',
             attestationRequired: (bool) ($config['attestation_required'] ?? false),
         );
     }
 
+    /**
+     * @return array<string, string|bool>
+     */
     public function toArray(): array
     {
         return [

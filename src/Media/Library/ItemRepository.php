@@ -339,20 +339,23 @@ class ItemRepository
             [$itemId]
         );
 
-        if (empty($result)) {
+        if (!is_array($result) || count($result) === 0) {
             return null;
         }
 
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return null;
+        }
+
+        $introStart = $firstRow['intro_start_seconds'] ?? null;
+        $introEnd = $firstRow['intro_end_seconds'] ?? null;
+        $introConf = $firstRow['intro_confidence'] ?? null;
+
         return [
-            'start_seconds' => $result[0]['intro_start_seconds'] !== null
-                ? (int) $result[0]['intro_start_seconds']
-                : null,
-            'end_seconds' => $result[0]['intro_end_seconds'] !== null
-                ? (int) $result[0]['intro_end_seconds']
-                : null,
-            'confidence' => $result[0]['intro_confidence'] !== null
-                ? (int) $result[0]['intro_confidence']
-                : null,
+            'start_seconds' => is_int($introStart) || is_float($introStart) ? (int) $introStart : null,
+            'end_seconds' => is_int($introEnd) || is_float($introEnd) ? (int) $introEnd : null,
+            'confidence' => is_int($introConf) || is_float($introConf) ? (int) $introConf : null,
         ];
     }
 
@@ -371,20 +374,23 @@ class ItemRepository
             [$itemId]
         );
 
-        if (empty($result)) {
+        if (!is_array($result) || count($result) === 0) {
             return null;
         }
 
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return null;
+        }
+
+        $outroStart = $firstRow['outro_start_seconds'] ?? null;
+        $outroEnd = $firstRow['outro_end_seconds'] ?? null;
+        $outroConf = $firstRow['outro_confidence'] ?? null;
+
         return [
-            'start_seconds' => $result[0]['outro_start_seconds'] !== null
-                ? (int) $result[0]['outro_start_seconds']
-                : null,
-            'end_seconds' => $result[0]['outro_end_seconds'] !== null
-                ? (int) $result[0]['outro_end_seconds']
-                : null,
-            'confidence' => $result[0]['outro_confidence'] !== null
-                ? (int) $result[0]['outro_confidence']
-                : null,
+            'start_seconds' => is_int($outroStart) || is_float($outroStart) ? (int) $outroStart : null,
+            'end_seconds' => is_int($outroEnd) || is_float($outroEnd) ? (int) $outroEnd : null,
+            'confidence' => is_int($outroConf) || is_float($outroConf) ? (int) $outroConf : null,
         ];
     }
 
@@ -392,7 +398,7 @@ class ItemRepository
      * Gets the chapters JSON for a media item.
      *
      * @param string $itemId The media item's unique identifier
-     * @return array<int, array{start: int, end: int, title?: string|null}>|null
+     * @return array<mixed, mixed>|null
      *
      * @since 0.12.0
      */
@@ -403,13 +409,24 @@ class ItemRepository
             [$itemId]
         );
 
-        if (empty($result) || $result[0]['chapters_json'] === null) {
+        if (!is_array($result) || count($result) === 0) {
             return null;
         }
 
-        $chapters = $result[0]['chapters_json'];
-        if (is_string($chapters)) {
-            $chapters = json_decode($chapters, true);
+        $firstRow = $result[0];
+        if (!is_array($firstRow)) {
+            return null;
+        }
+
+        $chaptersJson = $firstRow['chapters_json'] ?? null;
+        if ($chaptersJson === null) {
+            return null;
+        }
+
+        if (is_string($chaptersJson)) {
+            $chapters = json_decode($chaptersJson, true);
+        } else {
+            $chapters = $chaptersJson;
         }
 
         return is_array($chapters) ? $chapters : null;

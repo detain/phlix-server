@@ -78,21 +78,31 @@ class MusicController
     public function listArtists(Request $request, array $params): Response
     {
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
         $allArtists = [];
-        foreach ($musicLibraries as $library) {
-            $artists = $this->musicManager->getArtists($library['id']);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
+            }
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $artists = $this->musicManager->getArtists($libraryId);
             foreach ($artists as $artist) {
-                $key = $artist['name'];
+                if (!is_array($artist)) {
+                    continue;
+                }
+                $artistName = $artist['name'] ?? null;
+                $key = is_string($artistName) ? $artistName : (string)($artistName ?? '');
                 if (!isset($allArtists[$key])) {
                     $allArtists[$key] = $artist;
                 } else {
-                    $allArtists[$key]['track_count'] += $artist['track_count'];
-                    foreach ($artist['albums'] as $album) {
-                        if (!in_array($album, $allArtists[$key]['albums'], true)) {
+                    $allArtists[$key]['track_count'] = (int)(($allArtists[$key]['track_count'] ?? 0)) + (int)($artist['track_count'] ?? 0);
+                    foreach (is_array($artist['albums'] ?? null) ? $artist['albums'] : [] as $album) {
+                        if (!in_array($album, (array)($allArtists[$key]['albums'] ?? []), true)) {
                             $allArtists[$key]['albums'][] = $album;
-                            $allArtists[$key]['album_count']++;
+                            $allArtists[$key]['album_count'] = (int)($allArtists[$key]['album_count'] ?? 0) + 1;
                         }
                     }
                 }
@@ -134,12 +144,18 @@ class MusicController
         }
 
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
-        foreach ($musicLibraries as $library) {
-            $artists = $this->musicManager->getArtists($library['id']);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
+            }
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $artists = $this->musicManager->getArtists($libraryId);
             foreach ($artists as $artist) {
-                if (strcasecmp($artist['name'], $artistName) === 0) {
+                if (is_array($artist) && strcasecmp((string)($artist['name'] ?? ''), $artistName) === 0) {
                     return (new Response())->json(['artist' => $artist]);
                 }
             }
@@ -177,13 +193,24 @@ class MusicController
     public function listAlbums(Request $request, array $params): Response
     {
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
         $allAlbums = [];
-        foreach ($musicLibraries as $library) {
-            $albums = $this->musicManager->getAlbums($library['id']);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
+            }
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $albums = $this->musicManager->getAlbums($libraryId);
             foreach ($albums as $album) {
-                $key = $album['name'] . ' - ' . $album['artist'];
+                if (!is_array($album)) {
+                    continue;
+                }
+                $albumName = is_string($album['name'] ?? null) ? $album['name'] : '';
+                $albumArtist = is_string($album['artist'] ?? null) ? $album['artist'] : '';
+                $key = $albumName . ' - ' . $albumArtist;
                 $allAlbums[$key] = $album;
             }
         }
@@ -226,12 +253,18 @@ class MusicController
         }
 
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
-        foreach ($musicLibraries as $library) {
-            $albums = $this->musicManager->getAlbums($library['id']);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
+            }
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $albums = $this->musicManager->getAlbums($libraryId);
             foreach ($albums as $album) {
-                if (strcasecmp($album['name'], $albumName) === 0) {
+                if (is_array($album) && strcasecmp((string)($album['name'] ?? ''), $albumName) === 0) {
                     return (new Response())->json(['album' => $album]);
                 }
             }
@@ -277,17 +310,26 @@ class MusicController
         $offset = (int)($request->query['offset'] ?? 0);
 
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
         $allTracks = [];
         $totalCount = 0;
 
-        foreach ($musicLibraries as $library) {
-            $tracks = $this->musicManager->getTracks($library['id'], $limit, $offset);
-            foreach ($tracks as $track) {
-                $allTracks[] = $this->formatTrack($track);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
             }
-            $totalCount += $this->libraryManager->getLibrary($library['id'])['item_count'] ?? 0;
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $tracks = $this->musicManager->getTracks($libraryId, $limit, $offset);
+            foreach ($tracks as $track) {
+                if (is_array($track)) {
+                    $allTracks[] = $this->formatTrack($track);
+                }
+            }
+            $libraryInfo = $this->libraryManager->getLibrary($libraryId);
+            $totalCount += is_array($libraryInfo) ? (int)($libraryInfo['item_count'] ?? 0) : 0;
         }
 
         return (new Response())->json([
@@ -362,7 +404,7 @@ class MusicController
 
         // Get sessions for user and pick the most recent one
         $sessions = $this->sessionManager->getUserSessions($userId);
-        $session = $sessions[0] ?? null;
+        $session = is_array($sessions[0] ?? null) ? $sessions[0] : null;
         if (!$session) {
             return (new Response())->json([
                 'now_playing' => null,
@@ -370,7 +412,7 @@ class MusicController
         }
 
         // Get currently playing item from session
-        $currentItemId = $session['current_media_id'] ?? null;
+        $currentItemId = is_string($session['current_media_id'] ?? null) ? $session['current_media_id'] : null;
         if (!$currentItemId) {
             return (new Response())->json([
                 'now_playing' => null,
@@ -387,9 +429,9 @@ class MusicController
         return (new Response())->json([
             'now_playing' => [
                 'track' => $this->formatTrack($track),
-                'position' => $session['position_ticks'] ?? 0,
-                'state' => $session['playback_state'] ?? 'stopped',
-                'session_id' => $session['id'] ?? null,
+                'position' => is_int($session['position_ticks'] ?? null) ? $session['position_ticks'] : 0,
+                'state' => is_string($session['playback_state'] ?? null) ? $session['playback_state'] : 'stopped',
+                'session_id' => is_string($session['id'] ?? null) ? $session['id'] : null,
             ],
         ]);
     }
@@ -403,12 +445,18 @@ class MusicController
     private function getTrackById(string $trackId): ?array
     {
         $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
 
-        foreach ($musicLibraries as $library) {
-            $tracks = $this->musicManager->getTracks($library['id'], 1000, 0);
+        foreach ($libraries as $library) {
+            if (!is_array($library) || ($library['type'] ?? null) !== 'music') {
+                continue;
+            }
+            $libraryId = is_string($library['id'] ?? null) ? $library['id'] : null;
+            if ($libraryId === null) {
+                continue;
+            }
+            $tracks = $this->musicManager->getTracks($libraryId, 1000, 0);
             foreach ($tracks as $track) {
-                if ($track['id'] === $trackId) {
+                if (is_array($track) && ($track['id'] ?? null) === $trackId) {
                     return $track;
                 }
             }
@@ -425,11 +473,11 @@ class MusicController
      */
     private function formatTrack(array $track): array
     {
-        $metadata = $track['metadata'] ?? [];
+        $metadata = is_array($track['metadata'] ?? null) ? $track['metadata'] : [];
 
         return [
-            'id' => $track['id'],
-            'name' => $metadata['title'] ?? $track['name'],
+            'id' => $track['id'] ?? null,
+            'name' => $metadata['title'] ?? ($track['name'] ?? null),
             'artist' => $metadata['artist'] ?? null,
             'album' => $metadata['album'] ?? null,
             'album_artist' => $metadata['album_artist'] ?? null,
@@ -439,7 +487,7 @@ class MusicController
             'disc_number' => $metadata['disc_number'] ?? null,
             'duration_secs' => $metadata['duration_secs'] ?? null,
             'composer' => $metadata['composer'] ?? null,
-            'path' => $track['path'],
+            'path' => $track['path'] ?? null,
         ];
     }
 }

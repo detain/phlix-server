@@ -46,34 +46,45 @@ final class StoredMarkers
      */
     public static function fromMetadata(array $metadata): ?self
     {
-        $introCandidate = $metadata['intro_candidate'] ?? null;
-        $outroCandidate = $metadata['outro_candidate'] ?? null;
+        $introCandidate = is_array($metadata['intro_candidate'] ?? null) ? $metadata['intro_candidate'] : null;
+        $outroCandidate = is_array($metadata['outro_candidate'] ?? null) ? $metadata['outro_candidate'] : null;
 
         if ($introCandidate === null && $outroCandidate === null) {
             return null;
         }
 
+        $introStartSeconds = null;
+        $introEndSeconds = null;
+        $introFingerprint = null;
+        $introConfidence = null;
+        $outroStartSeconds = null;
+        $outroEndSeconds = null;
+        $outroFingerprint = null;
+        $outroConfidence = null;
+
+        if ($introCandidate !== null) {
+            $introStartSeconds = is_string($introCandidate['start_seconds'] ?? null) ? $introCandidate['start_seconds'] : null;
+            $introEndSeconds = is_string($introCandidate['end_seconds'] ?? null) ? $introCandidate['end_seconds'] : null;
+            $introFingerprint = is_string($introCandidate['fingerprint'] ?? null) ? $introCandidate['fingerprint'] : null;
+            $introConfidence = is_int($introCandidate['confidence'] ?? null) ? $introCandidate['confidence'] : null;
+        }
+
+        if ($outroCandidate !== null) {
+            $outroStartSeconds = is_string($outroCandidate['start_seconds'] ?? null) ? $outroCandidate['start_seconds'] : null;
+            $outroEndSeconds = is_string($outroCandidate['end_seconds'] ?? null) ? $outroCandidate['end_seconds'] : null;
+            $outroFingerprint = is_string($outroCandidate['fingerprint'] ?? null) ? $outroCandidate['fingerprint'] : null;
+            $outroConfidence = is_int($outroCandidate['confidence'] ?? null) ? $outroCandidate['confidence'] : null;
+        }
+
         return new self(
-            intro_start_seconds: isset($introCandidate['start_seconds'])
-                ? (string) $introCandidate['start_seconds']
-                : null,
-            intro_end_seconds: isset($introCandidate['end_seconds'])
-                ? (string) $introCandidate['end_seconds']
-                : null,
-            intro_fingerprint: $introCandidate['fingerprint'] ?? null,
-            intro_confidence: isset($introCandidate['confidence'])
-                ? (int) $introCandidate['confidence']
-                : null,
-            outro_start_seconds: isset($outroCandidate['start_seconds'])
-                ? (string) $outroCandidate['start_seconds']
-                : null,
-            outro_end_seconds: isset($outroCandidate['end_seconds'])
-                ? (string) $outroCandidate['end_seconds']
-                : null,
-            outro_fingerprint: $outroCandidate['fingerprint'] ?? null,
-            outro_confidence: isset($outroCandidate['confidence'])
-                ? (int) $outroCandidate['confidence']
-                : null,
+            intro_start_seconds: $introStartSeconds,
+            intro_end_seconds: $introEndSeconds,
+            intro_fingerprint: $introFingerprint,
+            intro_confidence: $introConfidence,
+            outro_start_seconds: $outroStartSeconds,
+            outro_end_seconds: $outroEndSeconds,
+            outro_fingerprint: $outroFingerprint,
+            outro_confidence: $outroConfidence,
         );
     }
 

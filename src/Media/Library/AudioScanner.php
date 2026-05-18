@@ -108,6 +108,9 @@ class AudioScanner extends MediaScanner
         );
 
         foreach ($iterator as $file) {
+            if (!($file instanceof \SplFileInfo)) {
+                continue;
+            }
             if ($file->isDir()) {
                 continue;
             }

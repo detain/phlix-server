@@ -26,7 +26,7 @@ final class WebAuthnCredentialRepository
             [$credentialId]
         );
 
-        if (empty($result)) {
+        if (empty($result) || !is_array($result[0] ?? null)) {
             return null;
         }
 
@@ -45,12 +45,17 @@ final class WebAuthnCredentialRepository
 
         $credentials = [];
         foreach ($result as $row) {
-            $credentials[] = WebAuthnCredential::fromDbRow($row);
+            if (is_array($row)) {
+                $credentials[] = WebAuthnCredential::fromDbRow($row);
+            }
         }
 
         return $credentials;
     }
 
+    /**
+     * @return array<WebAuthnCredential>|null
+     */
     public function findByUsername(string $username): ?array
     {
         $result = $this->db->query(
@@ -64,7 +69,9 @@ final class WebAuthnCredentialRepository
 
         $credentials = [];
         foreach ($result as $row) {
-            $credentials[] = WebAuthnCredential::fromDbRow($row);
+            if (is_array($row)) {
+                $credentials[] = WebAuthnCredential::fromDbRow($row);
+            }
         }
 
         return $credentials;
@@ -113,10 +120,12 @@ final class WebAuthnCredentialRepository
 
     public function deleteAllForUser(string $userId): int
     {
-        return $this->db->query(
+        $result = $this->db->query(
             "DELETE FROM webauthn_credentials WHERE user_id = ?",
             [$userId]
         );
+
+        return is_int($result) ? $result : 0;
     }
 
     public function countForUser(string $userId): int
@@ -126,6 +135,6 @@ final class WebAuthnCredentialRepository
             [$userId]
         );
 
-        return (int) ($result[0]['c'] ?? 0);
+        return is_array($result[0] ?? null) ? (int)(($result[0]['c'] ?? 0)) : 0;
     }
 }

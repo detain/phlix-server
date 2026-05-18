@@ -752,7 +752,7 @@ class Recorder
     /**
      * Get comprehensive storage statistics.
      *
-     * @return array Storage statistics
+     * @return array{used_bytes: int, available_bytes: int, max_bytes: int, active_recordings: int, active_timeshifts: int, recordings_by_status: array<string, int>}
      */
     public function getStorageStats(): array
     {

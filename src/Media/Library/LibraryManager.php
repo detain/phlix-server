@@ -9,6 +9,8 @@ use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Media\Music\MusicLibraryType;
 use Phlex\Media\Music\BookLibraryType;
 use Phlex\Media\Music\AudiobookLibraryType;
+use Phlex\Theming\ThemeMediaFinder;
+use Phlex\Theming\ThemeMediaRepository;
 use Workerman\MySQL\Connection;
 
 /**
@@ -38,6 +40,12 @@ class LibraryManager
 
     /** @var FolderWatcher Watcher for detecting filesystem changes */
     private FolderWatcher $watcher;
+
+    /** @var ThemeMediaFinder|null Finder for theme media files */
+    private ?ThemeMediaFinder $themeMediaFinder = null;
+
+    /** @var ThemeMediaRepository|null Repository for theme media caching */
+    private ?ThemeMediaRepository $themeMediaRepository = null;
 
     /**
      * Constructor for LibraryManager.
@@ -276,6 +284,9 @@ class LibraryManager
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);
+
+        // Scan for theme media after library content scan
+        $this->scanThemeMedia($libraryId);
     }
 
     /**
@@ -393,6 +404,59 @@ class LibraryManager
 
         // Rescan
         $this->scanLibrary($libraryId);
+    }
+
+    /**
+     * Sets the theme media finder and repository for theme scanning.
+     *
+     * @param ThemeMediaFinder $finder Theme media finder instance
+     * @param ThemeMediaRepository $repository Theme media repository instance
+     *
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    public function setThemeMediaComponents(
+        ThemeMediaFinder $finder,
+        ThemeMediaRepository $repository
+    ): void {
+        $this->themeMediaFinder = $finder;
+        $this->themeMediaRepository = $repository;
+    }
+
+    /**
+     * Scans for and caches theme media for a library.
+     *
+     * @param string $libraryId The library identifier
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    public function scanThemeMedia(string $libraryId): void
+    {
+        if ($this->themeMediaFinder === null || $this->themeMediaRepository === null) {
+            return;
+        }
+
+        $library = $this->getLibrary($libraryId);
+        if ($library === null) {
+            return;
+        }
+
+        /** @var mixed $paths */
+        $paths = $library['paths'];
+        if (is_array($paths)) {
+            foreach ($paths as $path) {
+                if (!is_string($path) || !is_dir($path)) {
+                    continue;
+                }
+
+                $themeMedia = $this->themeMediaFinder->findForLibrary($libraryId, $path);
+                if ($themeMedia !== null) {
+                    $this->themeMediaRepository->upsert($themeMedia);
+                }
+            }
+        }
     }
 
     /**

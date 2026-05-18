@@ -641,6 +641,35 @@ class Router
     }
 
     /**
+     * Registers the theme media API and streaming routes.
+     *
+     * GET    /api/v1/libraries/{id}/theme-media         — get theme media for a library
+     * POST   /api/v1/libraries/{id}/theme-media/scan    — trigger rescan
+     * DELETE /api/v1/libraries/{id}/theme-media         — clear cached entry
+     * GET    /stream/theme-media/{libraryId}/audio      — stream theme audio file
+     * GET    /stream/theme-media/{libraryId}/video      — stream theme video file
+     *
+     * @param string $controllerClass The ThemeMediaController class name
+     * @param string $streamControllerClass The ThemeMediaStreamController class name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function themeMedia(string $controllerClass, string $streamControllerClass): self
+    {
+        // API endpoints
+        $this->get('/api/v1/libraries/{id}/theme-media', [$controllerClass, 'getThemeMedia']);
+        $this->post('/api/v1/libraries/{id}/theme-media/scan', [$controllerClass, 'scanThemeMedia']);
+        $this->delete('/api/v1/libraries/{id}/theme-media', [$controllerClass, 'deleteThemeMedia']);
+
+        // Streaming endpoints
+        $this->get('/stream/theme-media/{libraryId}/audio', [$streamControllerClass, 'streamAudio']);
+        $this->get('/stream/theme-media/{libraryId}/video', [$streamControllerClass, 'streamVideo']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

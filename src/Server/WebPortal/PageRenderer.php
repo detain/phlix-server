@@ -9,6 +9,7 @@ use Phlex\Server\Http\Response;
 use Phlex\Media\Library\LibraryManager;
 use Phlex\Media\Library\ItemRepository;
 use Phlex\Session\PlaybackController;
+use Phlex\Theming\ThemeMediaRepository;
 
 /**
  * PageRenderer handles HTML page generation for the web portal.
@@ -39,6 +40,9 @@ class PageRenderer
     /** @var PlaybackController Handles playback state and progress */
     private PlaybackController $playbackController;
 
+    /** @var ThemeMediaRepository|null Repository for theme media */
+    private ?ThemeMediaRepository $themeMediaRepository = null;
+
     /**
      * Constructs a new PageRenderer instance.
      *
@@ -67,6 +71,20 @@ class PageRenderer
         $this->libraryManager = $libraryManager;
         $this->itemRepository = $itemRepository;
         $this->playbackController = $playbackController;
+    }
+
+    /**
+     * Sets the theme media repository for theme media lookup.
+     *
+     * @param ThemeMediaRepository $repository Theme media repository
+     *
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    public function setThemeMediaRepository(ThemeMediaRepository $repository): void
+    {
+        $this->themeMediaRepository = $repository;
     }
 
     /**
@@ -156,11 +174,18 @@ class PageRenderer
 
         $items = $this->itemRepository->getByLibrary($libraryId, 100, 0);
 
+        // Fetch theme media for this library
+        $themeMedia = null;
+        if ($this->themeMediaRepository !== null) {
+            $themeMedia = $this->themeMediaRepository->findByLibraryId($libraryId);
+        }
+
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'library');
         $template->assign('library', $library);
         $template->assign('items', $items);
+        $template->assign('themeMedia', $themeMedia);
 
         $html = $template->fetch('library/index.tpl');
 

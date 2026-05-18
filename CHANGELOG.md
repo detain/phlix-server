@@ -7,6 +7,31 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.6)
+
+- Theme music + theme video auto-play on browse. Includes:
+  - `ThemeAudio` — readonly DTO (path, url, duration, format) for audio themes
+  - `ThemeVideo` — readonly DTO (path, url, duration, width, height, format) for video backdrops
+  - `ThemeMedia` — readonly DTO containing libraryId, audio, video, scannedAt
+  - `ThemeMediaFinder` — filesystem scanner for theme.mp3/theme.ogg and backdrop.mp4/backdrop.webm
+  - `ThemeMediaRepository` — cache operations (upsert, findByLibraryId, delete)
+  - `ThemeMediaController` — 3 REST endpoints:
+    - `GET /api/v1/libraries/{id}/theme-media` — get theme media
+    - `POST /api/v1/libraries/{id}/theme-media/scan` — trigger rescan
+    - `DELETE /api/v1/libraries/{id}/theme-media` — clear cached entry
+  - `ThemeMediaStreamController` — 2 streaming endpoints:
+    - `GET /stream/theme-media/{libraryId}/audio` — stream theme audio
+    - `GET /stream/theme-media/{libraryId}/video` — stream theme video
+  - `Migration 008_theme_media.sql` — creates theme_media table
+  - `Router::themeMedia()` — registers all theme media routes
+  - `library-header.tpl` — theme media player partial with toggle button
+  - `theme-media.js` — autoplay handling with browser policy fallback
+  - `LibraryManager::scanThemeMedia()` — scans and caches after library scan
+  - `PageRenderer::setThemeMediaRepository()` + `renderLibrary()` passes themeMedia to template
+  - Unit tests in `tests/unit/Theming/` (10+ tests)
+  - Integration test `tests/integration/Theming/ThemeMediaScanTest.php`
+  - `docs/developers/theme-media.md` — file naming, scanning, streaming, autoplay policy
+
 ### Added (Step H.5)
 
 - Trailers and extras with local `Trailers/` folder support. Includes:

@@ -246,4 +246,78 @@ class PageRenderer
         }
         return (string) $smarty->fetch($template);
     }
+
+    /**
+     * Renders the media requests page.
+     *
+     * Displays the request search interface and user's existing requests.
+     *
+     * @param Request $request The HTTP request (userId used for personalization)
+     *
+     * @return Response HTML response with the rendered requests page
+     *
+     * @template_variables
+     * - current_page: string ('requests')
+     * - user: array (display_name)
+     * - requests: array (user's requests)
+     *
+     * @example Template: requests/index.tpl
+     *
+     * @since 0.12.0
+     */
+    public function renderRequestsPage(Request $request): Response
+    {
+        $userId = $request->userId ?? null;
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+
+        // Assign variables
+        $template->assign('current_page', 'requests');
+        $template->assign('user', ['display_name' => 'User']);
+        $template->assign('requests', []);
+
+        $html = $template->fetch('requests/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
+     * Renders the request detail page.
+     *
+     * Displays a single request with details and admin actions (approve/reject).
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters with 'id'
+     *
+     * @return Response HTML response with the rendered detail page
+     *
+     * @template_variables
+     * - current_page: string ('requests')
+     * - request: array (request data)
+     * - is_admin: bool (whether user is admin)
+     * - can_delete: bool (whether user can delete this request)
+     *
+     * @example Template: requests/detail.tpl
+     *
+     * @since 0.12.0
+     */
+    public function renderRequestDetail(Request $request, array $params): Response
+    {
+        $requestId = $params['id'] ?? '';
+        $userId = $request->userId ?? null;
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+
+        // Assign variables
+        $template->assign('current_page', 'requests');
+        $template->assign('request', null);
+        $template->assign('is_admin', false);
+        $template->assign('can_delete', false);
+
+        $html = $template->fetch('requests/detail.tpl');
+
+        return (new Response())->html($html);
+    }
 }

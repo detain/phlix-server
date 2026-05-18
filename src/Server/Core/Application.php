@@ -240,6 +240,9 @@ class Application
 
         // Roku API endpoints
         $this->loadRokuRoutes();
+
+        // Requests API endpoints
+        $this->loadRequestsRoutes();
     }
 
     /**
@@ -703,6 +706,63 @@ class Application
             $this->router->get('/api/v1/airplay/devices/{id}/status', [$controller, 'getStatus']);
         } catch (\Throwable $e) {
             // AirPlayManager not configured - silent ignore
+        }
+    }
+
+    /**
+     * Loads Requests API routes.
+     *
+     * Registers endpoints for:
+     * - GET /api/v1/requests — list user's requests
+     * - POST /api/v1/requests — create a new request
+     * - GET /api/v1/requests/{id} — get a single request
+     * - PUT /api/v1/requests/{id}/approve — admin approve
+     * - PUT /api/v1/requests/{id}/reject — admin reject
+     * - DELETE /api/v1/requests/{id} — delete a request
+     * - GET /api/v1/requests/pending — list all pending requests (admin)
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function loadRequestsRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
+            $arrClientFactory = new \Phlex\Arr\ArrClientFactory([]);
+            $requestManager = new \Phlex\Requests\RequestManager($db, $arrClientFactory);
+            $notification = new \Phlex\Requests\RequestNotification();
+            $controller = new \Phlex\Server\Http\Controllers\Requests\RequestController(
+                $requestManager,
+                $notification
+            );
+
+            // List user's requests
+            $this->router->get('/api/v1/requests', [$controller, 'listRequests']);
+
+            // Create a new request
+            $this->router->post('/api/v1/requests', [$controller, 'createRequest']);
+
+            // Get a single request
+            $this->router->get('/api/v1/requests/{id}', [$controller, 'getRequest']);
+
+            // Admin approve request
+            $this->router->put('/api/v1/requests/{id}/approve', [$controller, 'approveRequest']);
+
+            // Admin reject request
+            $this->router->put('/api/v1/requests/{id}/reject', [$controller, 'rejectRequest']);
+
+            // Delete request
+            $this->router->delete('/api/v1/requests/{id}', [$controller, 'deleteRequest']);
+
+            // List all pending requests (admin)
+            $this->router->get('/api/v1/requests/pending', [$controller, 'listPendingRequests']);
+        } catch (\Throwable $e) {
+            // Requests not configured - silent ignore
         }
     }
 

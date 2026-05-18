@@ -29,6 +29,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `config/notifications.php` — all 7 provider configurations
   - Unit tests: DiscordPluginTest (7), SlackPluginTest (6), TelegramPluginTest (6), NtfyPluginTest (7)
 
+### Added (Step L.3)
+
+- Stats collection system for tracking playback, library changes, user activity, and storage:
+  - `migrations/019_stats_schema.sql` — 4 tables: stats_playback_events, stats_library_changes, stats_user_activity, stats_storage
+  - `StatsCollector` — service with recordPlaybackStart/End, recordLibraryChange, recordUserActivity, recordStorageSnapshot, getPlaybackStats, getTopUsers, getTopMedia
+  - `StatsController` — admin API: GET /api/v1/admin/stats/playback, top-users, top-media, storage
+  - `PlaybackController` integration — calls StatsCollector on play start/end
+  - Unit tests: `StatsCollectorTest` (7 tests)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

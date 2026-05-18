@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Session;
 
+use Phlex\Stats\StatsCollector;
 use Phlex\Shared\Events\Playback\PlaybackPaused;
 use Phlex\Shared\Events\Playback\PlaybackResumed;
 use Phlex\Shared\Events\Playback\PlaybackStarted;
@@ -45,6 +46,12 @@ class PlaybackController
     /** @var EventDispatcherInterface|null PSR-14 dispatcher for playback lifecycle events. */
     private ?EventDispatcherInterface $eventDispatcher;
 
+    /** @var StatsCollector|null Stats collector for recording playback events */
+    private ?StatsCollector $statsCollector;
+
+    /** @var array<string, string> Map of sessionId:mediaItemId -> eventId for playback tracking */
+    private array $playbackEventIds = [];
+
     /**
      * Create a new PlaybackController instance.
      *
@@ -57,6 +64,10 @@ class PlaybackController
      *                                       are dispatched as they occur. Defaults
      *                                       to null so unit tests not exercising
      *                                       events do not need to wire one up.
+     * @param StatsCollector|null $statsCollector Optional stats collector for
+     *                                       recording playback metrics. Defaults
+     *                                       to null so unit tests not exercising
+     *                                       stats do not need to wire one up.
      *
      * @example
      * ```php
@@ -67,12 +78,14 @@ class PlaybackController
         Connection $db,
         SessionManager $sessionManager,
         ?StructuredLogger $logger = null,
-        ?EventDispatcherInterface $eventDispatcher = null
+        ?EventDispatcherInterface $eventDispatcher = null,
+        ?StatsCollector $statsCollector = null
     ) {
         $this->db = $db;
         $this->sessionManager = $sessionManager;
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->eventDispatcher = $eventDispatcher;
+        $this->statsCollector = $statsCollector;
     }
 
     /**
@@ -509,10 +522,24 @@ class PlaybackController
      */
     private function dispatchPlaybackStarted(string $sessionId, string $mediaItemId, int $positionTicks): void
     {
+        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+
+        // Record stats if collector is available
+        if ($this->statsCollector !== null && $userId !== '') {
+            $eventId = $this->statsCollector->recordPlaybackStart(
+                $userId,
+                $mediaItemId,
+                'movie', // Default type; actual type lookup would require DB query
+                $deviceId
+            );
+            $key = $sessionId . ':' . $mediaItemId;
+            $this->playbackEventIds[$key] = $eventId;
+        }
+
         if ($this->eventDispatcher === null) {
             return;
         }
-        [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
+
         $this->eventDispatcher->dispatch(new PlaybackStarted(
             sessionId: $sessionId,
             userId: $userId,
@@ -589,9 +616,22 @@ class PlaybackController
         int $finalPositionTicks,
         bool $reachedEnd
     ): void {
+        // Record stats if collector is available
+        if ($this->statsCollector !== null) {
+            $key = $sessionId . ':' . $mediaItemId;
+            $eventId = $this->playbackEventIds[$key] ?? null;
+            if ($eventId !== null) {
+                // Convert ticks to seconds (ticks are in 100-nanosecond intervals)
+                $durationSeconds = (int) ($finalPositionTicks / 10_000_000);
+                $this->statsCollector->recordPlaybackEnd($eventId, $durationSeconds, $reachedEnd);
+                unset($this->playbackEventIds[$key]);
+            }
+        }
+
         if ($this->eventDispatcher === null) {
             return;
         }
+
         [$userId, $deviceId] = $this->resolveSessionContext($sessionId);
         $this->eventDispatcher->dispatch(new PlaybackStopped(
             sessionId: $sessionId,

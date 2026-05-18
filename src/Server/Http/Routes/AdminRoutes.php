@@ -6,6 +6,7 @@ namespace Phlex\Server\Http\Routes;
 
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
+use Phlex\Server\Http\Controllers\Stats\StatsController;
 use Phlex\Plugins\Ldap\Controller\LdapAdminController;
 use Phlex\Plugins\Oidc\Controller\OidcAdminController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
@@ -96,6 +97,14 @@ final class AdminRoutes
                 $r->post('/auth-providers/ldap/config', [$ldapAdminController, 'saveSettings']);
                 $r->post('/auth-providers/ldap/test', [$ldapAdminController, 'testConnection']);
                 $r->get('/auth-providers/ldap/schema', [$ldapAdminController, 'getSchema']);
+
+                /** @var StatsController $statsController */
+                $statsController = $container->get(StatsController::class);
+
+                $r->get('/stats/playback', [$statsController, 'playback']);
+                $r->get('/stats/top-users', [$statsController, 'topUsers']);
+                $r->get('/stats/top-media', [$statsController, 'topMedia']);
+                $r->get('/stats/storage', [$statsController, 'storage']);
             },
             [$adminMiddleware],
         );

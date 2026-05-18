@@ -25,6 +25,9 @@ class MessageHandler
     /** @var ConnectionPool The connection pool for routing messages */
     private ConnectionPool $connections;
 
+    /** @var callable|null Callback to get current now-playing data */
+    private $nowPlayingProvider = null;
+
     /**
      * Creates a new MessageHandler instance.
      *
@@ -33,6 +36,19 @@ class MessageHandler
     public function __construct(ConnectionPool $connections)
     {
         $this->connections = $connections;
+    }
+
+    /**
+     * Sets the provider callback for dashboard now-playing data.
+     *
+     * The callback should return an array of now-playing session data.
+     *
+     * @param callable $provider Callback that returns now-playing array
+     * @return void
+     */
+    public function setNowPlayingProvider(callable $provider): void
+    {
+        $this->nowPlayingProvider = $provider;
     }
 
     /**
@@ -110,6 +126,11 @@ class MessageHandler
         } elseif (isset($this->callbacks['*'])) {
             // Wildcard handler
             ($this->callbacks['*'])($connection, $event, $payload);
+        }
+
+        // Handle subscribe_dashboard event
+        if ($event === 'subscribe_dashboard') {
+            $this->handleSubscribeDashboard($connection, $payload);
         }
     }
 
@@ -213,5 +234,46 @@ class MessageHandler
             }
         }
         return $count;
+    }
+
+    /**
+     * Handles the subscribe_dashboard WebSocket event.
+     *
+     * When a client subscribes to dashboard updates, this sends the current
+     * now-playing state immediately, and the client will receive live updates
+     * when playback starts/stops.
+     *
+     * @param Connection $connection The connection that sent the message
+     * @param array<string, mixed> $payload Event payload (unused for now)
+     * @return void
+     */
+    private function handleSubscribeDashboard(Connection $connection, array $payload): void
+    {
+        $nowPlaying = [];
+
+        if ($this->nowPlayingProvider !== null) {
+            $nowPlaying = ($this->nowPlayingProvider)();
+        }
+
+        $connection->sendMessage(WebSocketEvents::DASHBOARD_NOW_PLAYING, [
+            'now_playing' => $nowPlaying,
+            'subscribed' => true,
+        ]);
+    }
+
+    /**
+     * Broadcasts current now-playing state to all subscribed dashboard clients.
+     *
+     * Call this method when playback state changes to notify all
+     * subscribed dashboard views of the update.
+     *
+     * @param array<int, array<string, mixed>> $nowPlaying Current now-playing data
+     * @return void
+     */
+    public function broadcastNowPlaying(array $nowPlaying): void
+    {
+        $this->broadcast(WebSocketEvents::DASHBOARD_NOW_PLAYING, [
+            'now_playing' => $nowPlaying,
+        ]);
     }
 }

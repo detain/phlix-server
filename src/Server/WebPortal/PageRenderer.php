@@ -320,4 +320,37 @@ class PageRenderer
 
         return (new Response())->html($html);
     }
+
+    /**
+     * Renders the admin dashboard page.
+     *
+     * Displays the admin dashboard with now playing, top users/media,
+     * storage usage, and recent activity. The dashboard auto-refreshes
+     * via JavaScript fetch() every 30 seconds.
+     *
+     * @param Request $request The HTTP request
+     *
+     * @return Response HTML response with the rendered dashboard page
+     *
+     * @template_variables
+     * - current_page: string ('dashboard')
+     * - user: array (display_name)
+     *
+     * @example Template: admin/dashboard.tpl
+     *
+     * @since 0.14.0 (Step L.4)
+     */
+    public function renderDashboard(Request $request): Response
+    {
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+
+        // Assign variables
+        $template->assign('current_page', 'dashboard');
+        $template->assign('user', ['display_name' => 'Admin']);
+
+        $html = $template->fetch('admin/dashboard.tpl');
+
+        return (new Response())->html($html);
+    }
 }

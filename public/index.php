@@ -177,6 +177,21 @@ if (str_starts_with($path, '/api/v1/admin/')) {
                 exit;
             }
         }
+    } elseif ($path === '/admin/dashboard') {
+        /** @var AdminMiddleware $adminMiddleware */
+        $adminMiddleware = $container->get(AdminMiddleware::class);
+        $gateStatus = $adminMiddleware->checkAccess($request);
+        if ($gateStatus === 401) {
+            $response = (new Response())
+                ->status(401)
+                ->html('<h1>401 — admin authentication required</h1>');
+        } elseif ($gateStatus === 403) {
+            $response = (new Response())
+                ->status(403)
+                ->html('<h1>403 — administrator privileges required</h1>');
+        } else {
+            $response = $renderer->renderDashboard($request);
+        }
     } elseif ($path === '/requests') {
         $response = $renderer->renderRequestsPage($request);
     } elseif (str_starts_with($path, '/requests/')) {

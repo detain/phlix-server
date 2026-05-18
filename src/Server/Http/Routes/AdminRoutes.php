@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Routes;
 
+use Phlex\Server\Http\Controllers\Admin\DashboardController;
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
 use Phlex\Server\Http\Controllers\Stats\StatsController;
@@ -105,6 +106,15 @@ final class AdminRoutes
                 $r->get('/stats/top-users', [$statsController, 'topUsers']);
                 $r->get('/stats/top-media', [$statsController, 'topMedia']);
                 $r->get('/stats/storage', [$statsController, 'storage']);
+
+                /** @var DashboardController $dashboardController */
+                $dashboardController = $container->get(DashboardController::class);
+
+                $r->get('/dashboard/now-playing', [$dashboardController, 'nowPlaying']);
+                $r->get('/dashboard/top-users', [$dashboardController, 'topUsers']);
+                $r->get('/dashboard/top-media', [$dashboardController, 'topMedia']);
+                $r->get('/dashboard/storage', [$dashboardController, 'storage']);
+                $r->get('/dashboard/activity', [$dashboardController, 'activity']);
             },
             [$adminMiddleware],
         );

@@ -38,6 +38,18 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `PlaybackController` integration — calls StatsCollector on play start/end
   - Unit tests: `StatsCollectorTest` (7 tests)
 
+### Added (Step L.4)
+
+- Admin dashboard with real-time now playing, top users/media leaderboards, storage summary, and recent activity feed:
+  - `DashboardService` — aggregation service with getNowPlaying(), getTopUsers(), getTopMedia(), getStorageSummary(), getRecentActivity()
+  - `DashboardController` — admin API: GET /api/v1/admin/dashboard/now-playing, top-users, top-media, storage, activity
+  - `DASHBOARD_NOW_PLAYING` WebSocket event for live updates
+  - `subscribe_dashboard` WebSocket handler to send current now-playing state
+  - `public/templates/admin/dashboard.tpl` — Smarty template with Now Playing grid, Top Users/Media tables, Storage usage, Activity feed
+  - `PageRenderer::renderDashboard()` — renders dashboard page
+  - `/admin/dashboard` route in `public/index.php`
+  - Unit tests: `DashboardServiceTest` (5 tests)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

@@ -130,6 +130,15 @@ final class WebSocketEvents
     /** @var string Library content has been updated */
     public const LIBRARY_UPDATED = 'library_updated';
 
+    /*
+    |--------------------------------------------------------------------------
+    | Dashboard Events
+    |--------------------------------------------------------------------------
+    */
+
+    /** @var string Dashboard now playing update broadcast */
+    public const DASHBOARD_NOW_PLAYING = 'dashboard_now_playing';
+
     /**
      * Private constructor to prevent instantiation.
      *

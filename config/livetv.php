@@ -226,6 +226,64 @@ return [
     ],
 
     /**
+     * Comskip commercial detection settings.
+     *
+     * Comskip is a third-party application for detecting commercial
+     * breaks in video recordings. When enabled, recordings are
+     * automatically processed after completion to detect and store
+     * commercial segments as chapter markers.
+     */
+    'comskip' => [
+        /**
+         * Enable Comskip commercial detection.
+         *
+         * When enabled, completed recordings are automatically
+         * queued for Comskip processing.
+         *
+         * @default true
+         */
+        'enabled' => true,
+
+        /**
+         * Path to the Comskip binary.
+         *
+         * @default '/usr/bin/comskip'
+         */
+        'binary_path' => '/usr/bin/comskip',
+
+        /**
+         * Path to the Comskip configuration INI file.
+         *
+         * @default '/etc/comskip/comskip.ini'
+         */
+        'ini_path' => '/etc/comskip/comskip.ini',
+
+        /**
+         * Directory for storing generated EDL files.
+         *
+         * @default '/var/recordings/edl'
+         */
+        'output_dir' => '/var/recordings/edl',
+
+        /**
+         * Enable queue-based async processing.
+         *
+         * When true, recordings are enqueued and processed
+         * asynchronously. When false, processing runs synchronously.
+         *
+         * @default true
+         */
+        'queue_processing' => true,
+
+        /**
+         * Maximum number of concurrent Comskip processes.
+         *
+         * @default 2
+         */
+        'max_concurrent' => 2,
+    ],
+
+    /**
      * DVR (Digital Video Recorder) settings.
      *
      * Controls scheduled and series recording behavior including

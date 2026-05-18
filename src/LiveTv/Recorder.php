@@ -7,6 +7,7 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Recording\ComskipLifecycleManager;
 use Workerman\MySQL\Connection;
 
 /**
@@ -140,13 +141,20 @@ class Recorder
         Connection $db,
         string $storagePath = '/var/recordings',
         int $maxStorageBytes = 0,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?ComskipLifecycleManager $comskipManager = null
     ) {
-        $this->db = $db;
         $this->db = $db;
         $this->storagePath = $storagePath;
         $this->maxStorageBytes = $maxStorageBytes;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
+
+        // Register ComskipLifecycleManager::enqueue as an onComplete callback
+        if ($comskipManager !== null) {
+            $this->onCompleteCallbacks[] = function (string $recordingId, string $filePath) use ($comskipManager): void {
+                $comskipManager->enqueue($recordingId, $filePath);
+            };
+        }
     }
 
     /**

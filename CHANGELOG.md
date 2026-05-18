@@ -7,6 +7,26 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.6)
+
+- Comskip commercial detection for live TV recordings with chapter markers:
+  - `ComskipIntegration` — wires `ComskipRunner` into recording lifecycle:
+    `processRecording()`, `getEdlSegments()`, `markProcessed()`
+  - `ComskipLifecycleManager` — queue management with `max_concurrent` enforcement:
+    `enqueue()`, `processNext()`, `getPendingCount()`
+  - `ChapterMarkerService` — EDL to HLS chapter conversion:
+    `toHlsChapters()`, `persistChapters()`, `getChapters()`
+  - `migrations/014_livetv_commercials.sql` — adds `commercial_processed_at`,
+    `commercial_edl_path`, `commercial_frame_count`, `commercial_duration_seconds`
+    to `livetv_recordings`
+  - `config/livetv.php` — added `comskip` section with `enabled`, `binary_path`,
+    `ini_path`, `output_dir`, `queue_processing`, `max_concurrent`
+  - `Recorder` — registers `ComskipLifecycleManager::enqueue()` via `onComplete()`
+    callback at construction time
+  - Unit tests in `tests/unit/LiveTv/Recording/` (ComskipIntegrationTest,
+    ComskipLifecycleManagerTest, ChapterMarkerServiceTest — 12+ tests)
+  - `docs/developers/comskip-live.md` — integration docs, EDL format, config
+
 ### Added (Step I.5)
 
 - Scheduled + series DVR recordings. Includes:

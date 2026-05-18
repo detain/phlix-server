@@ -834,6 +834,60 @@ class UserProfileManager
     }
 
     /**
+     * Gets the active theme ID for a user.
+     *
+     * Returns the theme ID set for the user's active profile, or null if
+     * no theme preference has been set.
+     *
+     * @param string $userId The unique user identifier (UUID format)
+     *
+     * @return string|null The active theme ID, or null if not set
+     *
+     * @since 0.14.0
+     *
+     * @see setActiveThemeId() To set a user's active theme
+     */
+    public function getActiveThemeId(string $userId): ?string
+    {
+        /** @var array<array<string, mixed>> $result */
+        $result = $this->db->query(
+            "SELECT active_theme_id FROM user_profiles WHERE user_id = ? AND is_active = TRUE LIMIT 1",
+            [$userId]
+        );
+
+        if (count($result) === 0) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $result[0];
+
+        return is_string($row['active_theme_id'] ?? null) ? $row['active_theme_id'] : null;
+    }
+
+    /**
+     * Sets the active theme for a user.
+     *
+     * Updates the active_theme_id for all active profiles of the user.
+     *
+     * @param string $userId The unique user identifier (UUID format)
+     * @param string $themeId The theme identifier to set as active
+     *
+     * @return void
+     *
+     * @since 0.14.0
+     *
+     * @see getActiveThemeId() To retrieve a user's active theme
+     */
+    public function setActiveThemeId(string $userId, string $themeId): void
+    {
+        $this->db->query(
+            "UPDATE user_profiles SET active_theme_id = ? WHERE user_id = ? AND is_active = TRUE",
+            [$themeId, $userId]
+        );
+    }
+
+    /**
      * Generate a UUID v4 string.
      *
      * Creates a random UUID suitable for use as a unique identifier.

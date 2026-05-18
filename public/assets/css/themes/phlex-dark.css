@@ -1,0 +1,306 @@
+/**
+ * Phlex Dark Theme
+ *
+ * A dark theme with rich shadows, subtle gradients, and a cinematic feel.
+ * Optimized for extended viewing sessions with reduced eye strain.
+ *
+ * @package Phlex\Theming
+ * @since 0.14.0
+ * @author Phlex Design Team
+ */
+
+/* CSS Custom Properties */
+:root {
+    /* Color Palette */
+    --bg-primary: #121212;
+    --bg-secondary: #1e1e1e;
+    --bg-tertiary: #2d2d2d;
+    --bg-elevated: #333333;
+
+    --text-primary: #e8e8e8;
+    --text-secondary: #a0a0a0;
+    --text-muted: #6b6b6b;
+
+    --accent-primary: #6366f1;
+    --accent-secondary: #818cf8;
+    --accent-hover: #4f46e5;
+
+    --border-color: #3d3d3d;
+    --border-light: #4a4a4a;
+
+    /* Button Styles */
+    --btn-primary-bg: #6366f1;
+    --btn-primary-color: #ffffff;
+    --btn-primary-hover: #4f46e5;
+
+    --btn-secondary-bg: #3d3d3d;
+    --btn-secondary-color: #e8e8e8;
+    --btn-secondary-hover: #4a4a4a;
+
+    --btn-danger-bg: #dc2626;
+    --btn-danger-color: #ffffff;
+
+    /* Input Styles */
+    --input-bg: #1e1e1e;
+    --input-border: #3d3d3d;
+    --input-focus: #6366f1;
+    --input-placeholder: #6b6b6b;
+
+    /* Card Styles */
+    --card-bg: #1e1e1e;
+    --card-border: #3d3d3d;
+    --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.3);
+
+    /* Progress Bar */
+    --progress-bg: #2d2d2d;
+    --progress-fill: #6366f1;
+
+    /* Scrollbar */
+    --scrollbar-track: #1e1e1e;
+    --scrollbar-thumb: #4a4a4a;
+    --scrollbar-thumb-hover: #5a5a5a;
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+    --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.3);
+
+    /* Spacing */
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+
+    /* Transitions */
+    --transition-fast: 150ms ease;
+    --transition-normal: 250ms ease;
+    --transition-slow: 350ms ease;
+}
+
+/* Base Styles */
+* {
+    box-sizing: border-box;
+}
+
+html {
+    color-scheme: dark;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.25;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+
+/* Links */
+a {
+    color: var(--accent-secondary);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+}
+
+a:hover {
+    color: var(--accent-primary);
+}
+
+/* Buttons */
+.btn,
+button,
+input[type="submit"],
+input[type="button"] {
+    background: var(--btn-secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--btn-secondary-color);
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    transition: all var(--transition-fast);
+}
+
+.btn:hover,
+button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover {
+    background: var(--btn-secondary-hover);
+    border-color: var(--border-light);
+}
+
+.btn-primary,
+input[type="submit"] {
+    background: var(--btn-primary-bg);
+    border-color: var(--btn-primary-bg);
+    color: var(--btn-primary-color);
+}
+
+.btn-primary:hover,
+input[type="submit"]:hover {
+    background: var(--btn-primary-hover);
+    border-color: var(--btn-primary-hover);
+}
+
+.btn:disabled,
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Form Elements */
+input,
+select,
+textarea {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--input-placeholder);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--input-focus);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    outline: none;
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--card-shadow);
+    padding: 1rem;
+}
+
+.card-elevated {
+    background: var(--bg-elevated);
+}
+
+/* Progress Bar */
+.progress-bar {
+    background: var(--progress-bg);
+    border-radius: var(--radius-sm);
+    height: 4px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    background: var(--progress-fill);
+    height: 100%;
+    transition: width var(--transition-normal);
+}
+
+/* Media Cards */
+.media-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.media-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg), var(--shadow-glow);
+}
+
+.media-card .thumbnail {
+    aspect-ratio: 2/3;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.media-card .info {
+    padding: 0.75rem;
+}
+
+.media-card .title {
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-card .meta {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+/* App Container */
+.app-container {
+    background: var(--bg-primary);
+    min-height: 100vh;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* Utility Classes */
+.text-muted {
+    color: var(--text-muted);
+}
+
+.text-accent {
+    color: var(--accent-primary);
+}
+
+.bg-secondary {
+    background: var(--bg-secondary);
+}
+
+.border {
+    border: 1px solid var(--border-color);
+}
+
+.rounded {
+    border-radius: var(--radius-md);
+}
+
+.shadow {
+    box-shadow: var(--shadow-md);
+}

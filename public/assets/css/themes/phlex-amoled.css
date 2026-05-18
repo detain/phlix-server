@@ -1,0 +1,307 @@
+/**
+ * Phlex AMOLED Theme
+ *
+ * A pure black theme optimized for AMOLED/OLED displays.
+ * Uses true black (#000000) for maximum power savings and contrast.
+ *
+ * @package Phlex\Theming
+ * @since 0.14.0
+ * @author Phlex Design Team
+ */
+
+/* CSS Custom Properties */
+:root {
+    /* Color Palette - Pure Black AMOLED */
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #141414;
+    --bg-elevated: #1a1a1a;
+
+    --text-primary: #ffffff;
+    --text-secondary: #a0a0a0;
+    --text-muted: #606060;
+
+    --accent-primary: #818cf8;
+    --accent-secondary: #a5b4fc;
+    --accent-hover: #6366f1;
+
+    --border-color: #262626;
+    --border-light: #333333;
+
+    /* Button Styles */
+    --btn-primary-bg: #6366f1;
+    --btn-primary-color: #ffffff;
+    --btn-primary-hover: #818cf8;
+
+    --btn-secondary-bg: #1a1a1a;
+    --btn-secondary-color: #e8e8e8;
+    --btn-secondary-hover: #262626;
+
+    --btn-danger-bg: #ef4444;
+    --btn-danger-color: #ffffff;
+
+    /* Input Styles */
+    --input-bg: #0a0a0a;
+    --input-border: #262626;
+    --input-focus: #6366f1;
+    --input-placeholder: #505050;
+
+    /* Card Styles */
+    --card-bg: #0a0a0a;
+    --card-border: #1a1a1a;
+    --card-shadow: none;
+
+    /* Progress Bar */
+    --progress-bg: #1a1a1a;
+    --progress-fill: #818cf8;
+
+    /* Scrollbar */
+    --scrollbar-track: #000000;
+    --scrollbar-thumb: #262626;
+    --scrollbar-thumb-hover: #333333;
+
+    /* Shadows - Minimal for AMOLED */
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
+    --shadow-glow: 0 0 30px rgba(99, 102, 241, 0.4);
+
+    /* Spacing */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+
+    /* Transitions */
+    --transition-fast: 100ms ease;
+    --transition-normal: 200ms ease;
+    --transition-slow: 300ms ease;
+}
+
+/* Base Styles */
+* {
+    box-sizing: border-box;
+}
+
+html {
+    color-scheme: dark;
+}
+
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.25;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+
+/* Links */
+a {
+    color: var(--accent-secondary);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+}
+
+a:hover {
+    color: var(--accent-primary);
+}
+
+/* Buttons */
+.btn,
+button,
+input[type="submit"],
+input[type="button"] {
+    background: var(--btn-secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--btn-secondary-color);
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    padding: 0.5rem 1rem;
+    transition: all var(--transition-fast);
+}
+
+.btn:hover,
+button:hover,
+input[type="submit"]:hover,
+input[type="button"]:hover {
+    background: var(--btn-secondary-hover);
+    border-color: var(--border-light);
+}
+
+.btn-primary,
+input[type="submit"] {
+    background: var(--btn-primary-bg);
+    border-color: var(--btn-primary-bg);
+    color: var(--btn-primary-color);
+}
+
+.btn-primary:hover,
+input[type="submit"]:hover {
+    background: var(--btn-primary-hover);
+    border-color: var(--btn-primary-hover);
+    box-shadow: var(--shadow-glow);
+}
+
+.btn:disabled,
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Form Elements */
+input,
+select,
+textarea {
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--input-placeholder);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--input-focus);
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
+    outline: none;
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+}
+
+.card-elevated {
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+}
+
+/* Progress Bar */
+.progress-bar {
+    background: var(--progress-bg);
+    border-radius: var(--radius-sm);
+    height: 3px;
+    overflow: hidden;
+}
+
+.progress-bar-fill {
+    background: var(--progress-fill);
+    height: 100%;
+    transition: width var(--transition-normal);
+}
+
+/* Media Cards */
+.media-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    transition: transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.media-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-primary);
+}
+
+.media-card .thumbnail {
+    aspect-ratio: 2/3;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.media-card .info {
+    padding: 0.75rem;
+}
+
+.media-card .title {
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.media-card .meta {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+}
+
+/* App Container */
+.app-container {
+    background: var(--bg-primary);
+    min-height: 100vh;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* Utility Classes */
+.text-muted {
+    color: var(--text-muted);
+}
+
+.text-accent {
+    color: var(--accent-primary);
+}
+
+.bg-secondary {
+    background: var(--bg-secondary);
+}
+
+.border {
+    border: 1px solid var(--border-color);
+}
+
+.rounded {
+    border-radius: var(--radius-md);
+}
+
+.shadow {
+    box-shadow: var(--shadow-md);
+}

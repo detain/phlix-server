@@ -14,6 +14,7 @@ use Phlex\Server\Http\Controllers\HubJwksController;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
+use Phlex\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -69,6 +70,16 @@ class Application
         $this->config = $config;
         $this->router = new Router();
         $this->loadRoutes();
+
+        // Register ThemeMiddleware from container if available
+        if ($container->has(ThemeMiddleware::class)) {
+            /** @var ThemeMiddleware */
+            $themeMiddleware = $container->get(ThemeMiddleware::class);
+            $this->middleware(function (Request $request, callable $next) use ($themeMiddleware): Response {
+                return $themeMiddleware->onHttpRequest($request, $next);
+            });
+        }
+
         self::$instance = $this;
     }
 
@@ -264,18 +275,24 @@ class Application
 
         $request = Request::fromGlobals();
 
-        // Apply global middleware
-        foreach ($this->middleware as $handler) {
-            $result = $handler($request);
-            if ($result instanceof Response) {
-                $result->send();
-                return;
-            }
+        // Build the final handler that dispatches to the router
+        $finalHandler = function (Request $request): Response {
+            return $this->router->dispatch($request);
+        };
+
+        // Apply global middleware in reverse order (so first registered runs first)
+        $handler = $finalHandler;
+        for (end($this->middleware); key($this->middleware) !== null; prev($this->middleware)) {
+            $currentHandler = $this->middleware[current($this->middleware)];
+            $nextHandler = $handler;
+            $handler = function (Request $request) use ($currentHandler, $nextHandler) {
+                return $currentHandler($request, $nextHandler);
+            };
         }
 
-        // Dispatch request
+        // Execute the middleware chain
         try {
-            $response = $this->router->dispatch($request);
+            $response = $handler($request);
             $response->send();
         } catch (Throwable $e) {
             $this->handleException($e);

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{block name="title"}Phlex{/block} - Media Server</title>
     <link rel="stylesheet" href="/assets/css/main.css">
+    {$theme_css|raw}
     {block name="styles"}{/block}
 </head>
 <body>
@@ -15,6 +16,7 @@
     {/block}
 
     <script src="/assets/js/app.js"></script>
+    {$theme_js|raw}
     {block name="scripts"}{/block}
 </body>
 </html>

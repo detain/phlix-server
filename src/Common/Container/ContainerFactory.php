@@ -13,6 +13,7 @@ use Phlex\Common\Container\Providers\MediaServicesProvider;
 use Phlex\Common\Container\Providers\NetworkServicesProvider;
 use Phlex\Common\Container\Providers\PluginsProvider;
 use Phlex\Common\Container\Providers\SessionServicesProvider;
+use Phlex\Common\Container\Providers\ThemingServicesProvider;
 use Phlex\Common\Container\Providers\WebPortalServicesProvider;
 use Psr\Container\ContainerInterface;
 
@@ -116,6 +117,7 @@ final class ContainerFactory
             new SessionServicesProvider(),
             new WebPortalServicesProvider(),
             new PluginsProvider(),
+            new ThemingServicesProvider(),
         ];
     }
 

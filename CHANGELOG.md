@@ -7,6 +7,29 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.3)
+
+- Custom CSS / themes with `ui-theme` plugin type. Includes:
+  - `Theme` — readonly theme descriptor (id, name, type, cssUrl, jsUrl,
+    thumbnailUrl, version, pluginName, dark).
+  - `ThemeRegistry` — central registry with registerBuiltIn(), registerFromPlugin(),
+    getTheme(), getAllThemes(), getActiveThemeForUser(), setActiveThemeForUser().
+  - `ThemeMiddleware` — HTTP middleware that injects theme CSS/JS into WebPortal
+    responses via str_replace on Smarty placeholders.
+  - `ThemePluginInterface` — marker interface for ui-theme plugin entry classes.
+  - `ThemePreviewController` — renders live theme preview in iframe sandbox at
+    GET /portal/theme-preview?id={themeId}.
+  - `config/themes.php` — 4 built-in themes (phlex-dark, phlex-light,
+    phlex-amoled, phlex-contrast) with CSS and thumbnail assets.
+  - Migration `migrations/006_user_theme_settings.sql` — adds active_theme_id
+    to user_profiles.
+  - UserProfileManager::getActiveThemeId() / setActiveThemeId() for per-profile
+    theme preferences.
+  - `{$theme_css|raw}` and `{$theme_js|raw}` Smarty placeholders in base.tpl.
+  - `var/themes/` runtime directory for extracted plugin themes (gitignored).
+  - Unit tests in `tests/unit/Theming/` (ThemeRegistryTest, ThemeMiddlewareTest — 11 tests).
+  - `docs/developers/ui-themes.md` — plugin author guide with CSS variable reference.
+
 ### Added (Step H.2)
 
 - Collections — named groups of media items for manual curation

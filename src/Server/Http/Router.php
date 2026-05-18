@@ -561,6 +561,41 @@ class Router
     }
 
     /**
+     * Registers the collection API routes.
+     *
+     * GET    /api/v1/collections                           — list all collections
+     * POST   /api/v1/collections                           — create collection
+     * GET    /api/v1/collections/{id}                     — get one with items
+     * PUT    /api/v1/collections/{id}                     — update collection
+     * DELETE /api/v1/collections/{id}                    — delete collection
+     * POST   /api/v1/collections/{id}/items/{mediaItemId}  — add item to collection
+     * DELETE /api/v1/collections/{id}/items/{mediaItemId}  — remove item from collection
+     * POST   /api/v1/collections/{id}/bulk-add            — bulk-add from search
+     * POST   /api/v1/collections/{id}/refresh             — re-evaluate smart collection
+     * GET    /api/v1/libraries/{libraryId}/collections     — collections for library
+     *
+     * @param string $controllerClass The CollectionController class name
+     * @return self
+     *
+     * @since 0.14.0
+     */
+    public function collections(string $controllerClass): self
+    {
+        $this->get('/api/v1/collections', [$controllerClass, 'index']);
+        $this->post('/api/v1/collections', [$controllerClass, 'create']);
+        $this->get('/api/v1/collections/{id}', [$controllerClass, 'show']);
+        $this->put('/api/v1/collections/{id}', [$controllerClass, 'update']);
+        $this->delete('/api/v1/collections/{id}', [$controllerClass, 'delete']);
+        $this->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controllerClass, 'addItem']);
+        $this->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controllerClass, 'removeItem']);
+        $this->post('/api/v1/collections/{id}/bulk-add', [$controllerClass, 'bulkAdd']);
+        $this->post('/api/v1/collections/{id}/refresh', [$controllerClass, 'refresh']);
+        $this->get('/api/v1/libraries/{libraryId}/collections', [$controllerClass, 'forLibrary']);
+
+        return $this;
+    }
+
+    /**
      * Creates a 404 Not Found response.
      *
      * @return Response The 404 response

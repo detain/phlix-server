@@ -7,6 +7,37 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step H.2)
+
+- Collections — named groups of media items for manual curation
+  (bulk-add from search) and rule-based auto-population via smart playlists.
+  Includes:
+  - `Collection` — readonly entity with id, name, libraryId, smartPlaylistId,
+    parentId, sortOrder, timestamps.
+  - `CollectionWithItems` — hydrated DTO with collection + hydrated media items.
+  - `CollectionRepository` — full CRUD for collections table with parameterized
+    Workerman\MySQL\Connection queries.
+  - `CollectionItemRepository` — membership CRUD for collection_items with
+    sort order support.
+  - `CollectionManager` — orchestrator with addItem(), removeItem(),
+    bulkAddFromSearch(), getCollectionWithItems(), refreshSmartCollection().
+  - `CollectionController` — 9 REST API endpoints:
+    GET/POST /api/v1/collections, GET/PUT/DELETE /api/v1/collections/{id},
+    POST/DELETE /api/v1/collections/{id}/items/{mediaItemId},
+    POST /api/v1/collections/{id}/bulk-add,
+    POST /api/v1/collections/{id}/refresh,
+    GET /api/v1/libraries/{libraryId}/collections.
+  - Migration `migrations/005_collections.sql` — creates collections and
+    collection_items tables with proper indexes.
+  - Unit tests in `tests/unit/Collections/` (CollectionRepositoryTest,
+    CollectionItemRepositoryTest, CollectionManagerTest — 14 tests).
+  - Integration test `tests/integration/Collections/CollectionCrudTest.php`.
+  - `docs/developers/collections.md` — model, API reference, smart sync
+    algorithm, integration guide.
+  - `Router::collections()` — registers collection routes.
+  - `SmartPlaylistRefreshHandler` now calls CollectionManager::refreshSmartCollection()
+    for any collection linked to a changed smart playlist.
+
 ### Added (Step H.1)
 
 - Smart-playlist rule engine with JSON DSL evaluation at scan time and

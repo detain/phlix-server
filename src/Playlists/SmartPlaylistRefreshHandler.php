@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Playlists;
 
+use Phlex\Collections\CollectionManager;
+use Phlex\Collections\CollectionRepository;
 use Phlex\Common\Events\ListenerRegistry;
 
 /**
@@ -11,7 +13,8 @@ use Phlex\Common\Events\ListenerRegistry;
  *
  * Listens to LibraryUpdated events and re-evaluates all smart playlists
  * for the affected library. This keeps smart playlists in sync with
- * the media library.
+ * the media library. Also refreshes any collections linked to the
+ * affected smart playlists.
  *
  * @since 0.14.0
  */
@@ -21,6 +24,8 @@ final class SmartPlaylistRefreshHandler
         private readonly SmartPlaylistEngine $engine,
         private readonly SmartPlaylistRepository $repo,
         private readonly ListenerRegistry $listeners,
+        private readonly ?CollectionManager $collectionManager = null,
+        private readonly ?CollectionRepository $collectionRepo = null,
     ) {
     }
 
@@ -38,14 +43,38 @@ final class SmartPlaylistRefreshHandler
 
         foreach ($playlists as $playlist) {
             // Re-evaluate the playlist to update any cached results
-            // In a future phase (H.2), this could emit SmartPlaylistChanged events
+            /** @var array<array<string, mixed>|RuleNode> $rules */
+            $rules = $playlist->getRules();
             $this->engine->evaluateOnScan(
-                $playlist->getRules(),
+                $rules,
                 $playlist->libraryId,
                 $playlist->limit,
                 $playlist->sortBy,
                 $playlist->sortDesc
             );
+
+            // Refresh any collections linked to this smart playlist (H.2)
+            $this->refreshCollectionsForPlaylist($playlist->id);
+        }
+    }
+
+    /**
+     * Refresh all collections that reference a smart playlist.
+     *
+     * @param string $smartPlaylistId Smart playlist UUID
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    private function refreshCollectionsForPlaylist(string $smartPlaylistId): void
+    {
+        if ($this->collectionManager === null || $this->collectionRepo === null) {
+            return;
+        }
+
+        $collections = $this->collectionRepo->findBySmartPlaylistId($smartPlaylistId);
+        foreach ($collections as $collection) {
+            $this->collectionManager->refreshSmartCollection($collection->id);
         }
     }
 

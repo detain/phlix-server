@@ -178,6 +178,9 @@ class Recorder
      *   - end_time: int Required - end timestamp
      *   - priority: int Recording priority (default: PRIORITY_NORMAL)
      *   - quality: string Recording quality (default: 'default')
+     *   - series_rule_id: string|null Optional - series rule that created this
+     *   - pre_padding_seconds: int Pre-recording padding (default: 60)
+     *   - post_padding_seconds: int Post-recording padding (default: 60)
      * @return array<string, mixed>|null The scheduled recording or null on failure
      *
      * @example
@@ -189,6 +192,8 @@ class Recorder
      *     'end_time' => strtotime('today 9pm'),
      * ]);
      * ```
+     *
+     * @since 0.12.0 Added series_rule_id, pre_padding_seconds, post_padding_seconds
      */
     public function scheduleRecording(array $data): array
     {
@@ -197,8 +202,9 @@ class Recorder
         $this->db->query(
             "INSERT INTO livetv_recordings
              (recording_id, channel_id, program_id, title, description, start_time, end_time,
-              priority, quality, storage_path, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+              priority, quality, storage_path, status, series_rule_id,
+              pre_padding_seconds, post_padding_seconds, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
             [
                 $recordingId,
                 $data['channel_id'],
@@ -211,6 +217,9 @@ class Recorder
                 $data['quality'] ?? 'default',
                 $this->getRecordingPath($recordingId),
                 self::STATUS_SCHEDULED,
+                $data['series_rule_id'] ?? null,
+                $data['pre_padding_seconds'] ?? 60,
+                $data['post_padding_seconds'] ?? 60,
             ]
         );
 
@@ -218,6 +227,8 @@ class Recorder
             'recording_id' => $recordingId,
             'title' => $data['title'],
             'start_time' => date('Y-m-d H:i', $data['start_time']),
+            'pre_padding' => $data['pre_padding_seconds'] ?? 60,
+            'post_padding' => $data['post_padding_seconds'] ?? 60,
         ]);
 
         return $this->getRecording($recordingId);
@@ -343,9 +354,12 @@ class Recorder
      *
      * Checks for available storage before starting.
      * Updates status to RECORDING and creates stream URL.
+     * Applies pre-padding by adjusting the effective start time.
      *
      * @param string $recordingId The recording to start
      * @return bool True if started successfully, false otherwise
+     *
+     * @since 0.12.0 Pre-padding is now applied - recording starts pre_padding_seconds early
      */
     public function startRecording(string $recordingId): bool
     {
@@ -354,8 +368,13 @@ class Recorder
             return false;
         }
 
+        // Calculate effective start time with pre-padding
+        $prePadding = $recording['pre_padding_seconds'] ?? 60;
+        $effectiveStart = $recording['start_time'] - $prePadding;
+
         // Check available storage
-        if (!$this->hasStorageSpace($recording['start_time'], $recording['end_time'])) {
+        $estimatedDuration = ($recording['end_time'] + $prePadding) - $effectiveStart;
+        if (!$this->hasStorageSpace($effectiveStart, $recording['end_time'] + $prePadding)) {
             $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Insufficient storage space');
             return false;
         }
@@ -365,11 +384,16 @@ class Recorder
         $this->activeRecordings[$recordingId] = [
             'id' => $recordingId,
             'started_at' => time(),
+            'effective_start' => $effectiveStart,
             'channel_id' => $recording['channel_id'],
             'stream_url' => "/livetv/recording/$recordingId/stream",
         ];
 
-        $this->logger->info('Recording started', ['recording_id' => $recordingId]);
+        $this->logger->info('Recording started', [
+            'recording_id' => $recordingId,
+            'pre_padding' => $prePadding,
+            'effective_start' => date('Y-m-d H:i:s', $effectiveStart),
+        ]);
 
         return true;
     }
@@ -418,6 +442,39 @@ class Recorder
         $this->fireOnCompleteCallbacks($recordingId, $filePath);
 
         return true;
+    }
+
+    /**
+     * Check if a program is already scheduled for recording.
+     *
+     * Delegates to RecordingDeduplicator to check for existing
+     * recordings within a 2-hour time window.
+     *
+     * @param string $programId The program identifier
+     * @param string $channelId The channel identifier
+     * @param int $startTime Proposed start time
+     * @return bool True if a duplicate recording exists
+     *
+     * @since 0.12.0
+     */
+    public function isDuplicate(string $programId, string $channelId, int $startTime): bool
+    {
+        $windowSeconds = 7200; // 2 hours
+        $windowStart = $startTime - $windowSeconds;
+        $windowEnd = $startTime + $windowSeconds;
+
+        $result = $this->db->query(
+            "SELECT recording_id FROM livetv_recordings
+             WHERE program_id = ?
+               AND channel_id = ?
+               AND status IN ('scheduled', 'recording', 'completed')
+               AND start_time >= ?
+               AND start_time <= ?
+             LIMIT 1",
+            [$programId, $channelId, $windowStart, $windowEnd]
+        );
+
+        return $result->num_rows > 0;
     }
 
     /**
@@ -771,6 +828,8 @@ class Recorder
      *
      * @param array<string, mixed> $row Raw database row
      * @return array<string, mixed> Normalized recording data
+     *
+     * @since 0.12.0 Added series_rule_id, duplicate_group, pre_padding_seconds, post_padding_seconds
      */
     private function mapRecording(array $row): array
     {
@@ -791,6 +850,10 @@ class Recorder
             'storage_size' => (int) ($row['storage_size'] ?? 0),
             'status' => $row['status'],
             'error_message' => $row['error_message'],
+            'series_rule_id' => $row['series_rule_id'],
+            'duplicate_group' => $row['duplicate_group'],
+            'pre_padding_seconds' => (int) ($row['pre_padding_seconds'] ?? 60),
+            'post_padding_seconds' => (int) ($row['post_padding_seconds'] ?? 60),
             'created_at' => $row['created_at'],
             'updated_at' => $row['updated_at'],
         ];

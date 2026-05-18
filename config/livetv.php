@@ -224,4 +224,61 @@ return [
          */
         'timeout_secs' => 30,
     ],
+
+    /**
+     * DVR (Digital Video Recorder) settings.
+     *
+     * Controls scheduled and series recording behavior including
+     * storage limits, pre/post-padding defaults, and auto-recording.
+     */
+    'dvr' => [
+        /**
+         * Enable DVR functionality.
+         *
+         * @default true
+         */
+        'enabled' => true,
+
+        /**
+         * Storage path for DVR recordings.
+         *
+         * @default '/var/recordings'
+         */
+        'storage_path' => '/var/recordings',
+
+        /**
+         * Maximum storage bytes for recordings (0 = unlimited).
+         *
+         * @default 0
+         */
+        'max_storage_bytes' => 0,
+
+        /**
+         * Default pre-recording padding in seconds.
+         *
+         * How many seconds before the scheduled start time to begin recording.
+         *
+         * @default 60
+         */
+        'default_pre_padding_seconds' => 60,
+
+        /**
+         * Default post-recording padding in seconds.
+         *
+         * How many seconds after the scheduled end time to continue recording.
+         *
+         * @default 60
+         */
+        'default_post_padding_seconds' => 60,
+
+        /**
+         * Auto-resolution of recording conflicts.
+         *
+         * When true, automatically starts scheduled recordings when
+         * tuners become available. When false, requires manual intervention.
+         *
+         * @default true
+         */
+        'auto_resolution' => true,
+    ],
 ];

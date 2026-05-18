@@ -7,6 +7,30 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (Step I.5)
+
+- Scheduled + series DVR recordings. Includes:
+  - `SeriesRuleManager` — CRUD for series recording rules; `matchAndSchedule()`
+    queries `GuideManager::getUpcomingBySeries()` and schedules unmatched episodes
+  - `RecordingDeduplicator` — prevents duplicate recordings via 2-hour window;
+    `isDuplicate()`, `getCanonical()`, `resolveDuplicates()`
+  - `RecordingScheduler` — priority-based conflict resolution; `processDueRecordings()`
+    runs via Workerman timer; `getNextRecording()` for display
+  - `RecordingHooksRunner` — async post-recording hook enqueueing
+  - `migrations/013_livetv_dvr.sql` — adds `series_rule_id`, `duplicate_group`,
+    `pre/post_padding_seconds` to `livetv_recordings`; creates `livetv_series_rules` table
+  - `Recorder` — updated `scheduleRecording()` accepts `pre_padding_seconds`,
+    `post_padding_seconds`, `series_rule_id`; added `isDuplicate()` method;
+    `startRecording()` applies pre-padding (starts recording early)
+  - `config/livetv.php` — added `dvr` section with `default_pre_padding_seconds`,
+    `default_post_padding_seconds`, `auto_resolution`, `storage_path`,
+    `max_storage_bytes`
+  - `RecordingHooks` — already wires `ComskipPostProcessor` via `onComplete()` callback
+  - Unit tests in `tests/unit/LiveTv/Recording/` (SeriesRuleManagerTest,
+    RecordingDeduplicatorTest, RecordingSchedulerTest — 12+ tests)
+  - `docs/developers/dvr.md` — series rules, deduplication, padding,
+    conflict resolution, scheduler integration
+
 ### Added (Step I.4)
 
 - Schedules Direct EPG integration. Includes:

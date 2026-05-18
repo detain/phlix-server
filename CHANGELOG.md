@@ -19,6 +19,16 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `config/webhooks.php` — configuration with enabled, timeout, max_retries, parallel_dispatch
   - Unit tests: `WebhookEventTest` (5 tests), `WebhookDispatcherTest` (7 tests)
 
+### Added (Step L.2)
+
+- Notification provider plugins for webhook events:
+  - 7 plugins: Discord, Slack, Telegram, Ntfy, Pushover, Apprise, MQTT
+  - `AbstractNotificationPlugin` — base class with formatMessage(), getEmbedColor()
+  - `WebhookPluginInterface` — getName(), getSupportedEvents(), send()
+  - `PluginRegistry` — plugin management with get(), listAll(), register()
+  - `config/notifications.php` — all 7 provider configurations
+  - Unit tests: DiscordPluginTest (7), SlackPluginTest (6), TelegramPluginTest (6), NtfyPluginTest (7)
+
 ### Added (Step K.2)
 
 - Bazarr/Prowlarr API clients for subtitle and indexer management:

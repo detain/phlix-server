@@ -53,6 +53,23 @@ jobs:
       - name: Run PHPUnit tests
         run: ./vendor/bin/phpunit --testsuite Unit --coverage-clover coverage.xml --coverage-html coverage-report
 
+      - name: Check minimum coverage threshold
+        run: |
+          # Re-enabled coverage check from 01fa91b
+          LINE_COVERAGE=$(xmllint --xpath "string(/coverage/project/metrics/@line-rate)" coverage.xml 2>/dev/null || echo "0")
+          LINE_COVERAGE=$(echo "$LINE_COVERAGE * 100" | bc | cut -d. -f1)
+          MIN_COVERAGE=80
+
+          echo "Line coverage: $LINE_COVERAGE%"
+          echo "Minimum required: $MIN_COVERAGE%"
+
+          if (( $(echo "$LINE_COVERAGE < $MIN_COVERAGE" | bc -l) )); then
+            echo "ERROR: Coverage $LINE_COVERAGE% is below minimum $MIN_COVERAGE%"
+            exit 1
+          fi
+
+          echo "Coverage check passed!"
+
       - name: Upload coverage to Codecov
         if: secrets.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v4

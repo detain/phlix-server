@@ -13,6 +13,7 @@ use Phlex\Media\Streaming\Trickplay\TrickplayConfig;
 use Phlex\Media\Streaming\Trickplay\TrickplayController;
 use Phlex\Media\Streaming\Trickplay\TrickplayGenerator;
 use Phlex\Media\Streaming\Trickplay\TrickplayResult;
+use Phlex\Server\WebSocket\MessageHandler;
 use Workerman\MySQL\Connection;
 
 /**
@@ -60,6 +61,27 @@ class StreamManager
     /** @var string Base URL for streaming endpoints */
     private string $baseUrl;
 
+    /** @var callable|null Callback invoked when active streams change (added/removed) */
+    private $onStreamsChange = null;
+
+    /** @var callable|null Static callback to broadcast now-playing state */
+    private static $staticBroadcastHandler = null;
+
+    /**
+     * Sets a static callback to broadcast now-playing state changes.
+     *
+     * This is called when streams are added or removed, passing the
+     * current active streams for broadcast to dashboard subscribers.
+     *
+     * @param callable $handler Callback that receives active streams array
+     *
+     * @return void
+     */
+    public static function setStaticBroadcastHandler(callable $handler): void
+    {
+        self::$staticBroadcastHandler = $handler;
+    }
+
     /**
      * Creates a new StreamManager instance.
      *
@@ -87,6 +109,20 @@ class StreamManager
         $this->hlsStreamer = $hlsStreamer;
         $this->baseUrl = $baseUrl;
         $this->logger = LoggerFactory::get(LogChannels::STREAMING);
+    }
+
+    /**
+     * Sets a callback to invoke when active streams change.
+     *
+     * The callback receives (array $activeStreams) as its argument.
+     *
+     * @param callable $callback Callback function
+     *
+     * @return void
+     */
+    public function setStreamsChangeCallback(callable $callback): void
+    {
+        $this->onStreamsChange = $callback;
     }
 
     /**
@@ -133,8 +169,11 @@ class StreamManager
      *
      * @since 0.11.0
      */
-    public function generateTrickplay(string $jobId, string $inputPath, ?TrickplayConfig $config = null): TrickplayResult
-    {
+    public function generateTrickplay(
+        string $jobId,
+        string $inputPath,
+        ?TrickplayConfig $config = null
+    ): TrickplayResult {
         if ($this->trickplayGenerator === null) {
             throw new \RuntimeException('TrickplayGenerator is not configured. Call setTrickplay() first.');
         }
@@ -219,6 +258,14 @@ class StreamManager
             'media_item_id' => $mediaItemId,
             'method' => $quality['method'],
         ]);
+
+        if ($this->onStreamsChange !== null) {
+            ($this->onStreamsChange)($this->getActiveStreams());
+        }
+
+        if (self::$staticBroadcastHandler !== null) {
+            (self::$staticBroadcastHandler)();
+        }
 
         return $state;
     }
@@ -319,6 +366,14 @@ class StreamManager
         unset($this->activeStreams[$streamId]);
 
         $this->logger->info('Stream stopped', ['stream_id' => $streamId]);
+
+        if ($this->onStreamsChange !== null) {
+            ($this->onStreamsChange)($this->getActiveStreams());
+        }
+
+        if (self::$staticBroadcastHandler !== null) {
+            (self::$staticBroadcastHandler)();
+        }
     }
 
     /**
@@ -370,7 +425,8 @@ class StreamManager
      * @param string $path Path to the media file
      *
      * @return array{
-     *     streams: array<int, array{codec_type: string, codec: string, width?: int, height?: int, bitrate?: int, channels?: int}>,
+     *     streams: array<int, array{codec_type: string, codec: string,
+     *         width?: int, height?: int, bitrate?: int, channels?: int}>,
      *     format: array{format_name: string}
      * } Media file stream information
      */
@@ -405,10 +461,20 @@ class StreamManager
     private function persistStreamState(StreamState $state): void
     {
         $this->db->query(
-            "INSERT INTO playback_state (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
+            "INSERT INTO playback_state
+             (id, session_id, media_item_id, position_ticks, duration_ticks, playback_status)
              VALUES (?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE position_ticks = VALUES(position_ticks), playback_status = VALUES(playback_status)",
-            [$state->id, $state->sessionId, $state->mediaItemId, $state->positionTicks, $state->durationTicks, $state->status]
+             ON DUPLICATE KEY UPDATE
+             position_ticks = VALUES(position_ticks),
+             playback_status = VALUES(playback_status)",
+            [
+                $state->id,
+                $state->sessionId,
+                $state->mediaItemId,
+                $state->positionTicks,
+                $state->durationTicks,
+                $state->status,
+            ]
         );
     }
 

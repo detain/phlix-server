@@ -235,18 +235,28 @@ class DashboardServiceTest extends TestCase
         $result = $service->getStorageSummary();
 
         $this->assertIsArray($result);
-        $this->assertCount(2, $result);
+        $this->assertArrayHasKey('movie_bytes', $result);
+        $this->assertArrayHasKey('series_bytes', $result);
+        $this->assertArrayHasKey('music_bytes', $result);
+        $this->assertArrayHasKey('photo_bytes', $result);
+        $this->assertArrayHasKey('transcode_cache_bytes', $result);
+        $this->assertArrayHasKey('items', $result);
+        $this->assertArrayHasKey('formatted_transcode_cache', $result);
 
-        $this->assertEquals('movie', $result[0]['media_type']);
-        $this->assertEquals(150, $result[0]['item_count']);
-        $this->assertEquals(50000000000, $result[0]['total_bytes']);
-        $this->assertEquals(2000000000, $result[0]['transcode_cache_bytes']);
-        $this->assertEquals('46.57 GB', $result[0]['formatted_total']);
-        $this->assertEquals('1.86 GB', $result[0]['formatted_cache']);
+        $this->assertEquals(50000000000, $result['movie_bytes']);
+        $this->assertEquals(120000000000, $result['series_bytes']);
+        $this->assertEquals(7000000000, $result['transcode_cache_bytes']);
 
-        $this->assertEquals('series', $result[1]['media_type']);
-        $this->assertEquals(300, $result[1]['item_count']);
-        $this->assertEquals('111.76 GB', $result[1]['formatted_total']);
+        $this->assertCount(2, $result['items']);
+        $this->assertEquals('movie', $result['items'][0]['media_type']);
+        $this->assertEquals(150, $result['items'][0]['item_count']);
+        $this->assertEquals(50000000000, $result['items'][0]['total_bytes']);
+        $this->assertEquals(2000000000, $result['items'][0]['transcode_cache_bytes']);
+        $this->assertEquals('46.57 GB', $result['items'][0]['formatted_total']);
+        $this->assertEquals('1.86 GB', $result['items'][0]['formatted_cache']);
+
+        $this->assertEquals('series', $result['items'][1]['media_type']);
+        $this->assertEquals(300, $result['items'][1]['item_count']);
     }
 
     public function test_get_recent_activity_returns_feed(): void

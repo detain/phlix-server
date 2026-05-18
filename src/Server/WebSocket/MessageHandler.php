@@ -19,6 +19,9 @@ namespace Phlex\Server\WebSocket;
  */
 class MessageHandler
 {
+    /** @var MessageHandler|null Singleton instance */
+    private static ?MessageHandler $instance = null;
+
     /** @var array<string, callable> Registered event callbacks */
     private array $callbacks = [];
 
@@ -36,6 +39,17 @@ class MessageHandler
     public function __construct(ConnectionPool $connections)
     {
         $this->connections = $connections;
+        self::$instance = $this;
+    }
+
+    /**
+     * Gets the singleton MessageHandler instance.
+     *
+     * @return MessageHandler|null The instance or null if not yet created
+     */
+    public static function getInstance(): ?MessageHandler
+    {
+        return self::$instance;
     }
 
     /**
@@ -275,5 +289,23 @@ class MessageHandler
         $this->broadcast(WebSocketEvents::DASHBOARD_NOW_PLAYING, [
             'now_playing' => $nowPlaying,
         ]);
+    }
+
+    /**
+     * Re-broadcasts current now-playing state to all dashboard subscribers.
+     *
+     * Calls the nowPlayingProvider (if set) to get fresh data, then broadcasts
+     * to all connected dashboard clients. Use this when playback state changes.
+     *
+     * @return void
+     */
+    public function rebroadcastNowPlaying(): void
+    {
+        $nowPlaying = [];
+        if ($this->nowPlayingProvider !== null) {
+            $nowPlaying = ($this->nowPlayingProvider)();
+        }
+
+        $this->broadcastNowPlaying($nowPlaying);
     }
 }

@@ -218,14 +218,22 @@ class DashboardService
      * Returns the most recent storage snapshot for each media type,
      * including item count, total bytes, and transcode cache usage.
      *
-     * @return array<int, array{
-     *     media_type: string,
-     *     item_count: int,
-     *     total_bytes: int,
+     * @return array{
+     *     movie_bytes: int,
+     *     series_bytes: int,
+     *     music_bytes: int,
+     *     photo_bytes: int,
      *     transcode_cache_bytes: int,
-     *     formatted_total: string,
-     *     formatted_cache: string
-     * }> Storage summary by media type
+     *     items: array<int, array{
+     *         media_type: string,
+     *         item_count: int,
+     *         total_bytes: int,
+     *         transcode_cache_bytes: int,
+     *         formatted_total: string,
+     *         formatted_cache: string
+     *     }>,
+     *     formatted_transcode_cache: string
+     * } Storage summary
      */
     public function getStorageSummary(): array
     {
@@ -246,10 +254,19 @@ class DashboardService
                  GROUP BY media_type
              ) latest ON ss.media_type = latest.media_type
                  AND ss.recorded_at = latest.max_recorded_at
-             ORDER BY ss.total_bytes DESC"
+              ORDER BY ss.total_bytes DESC"
         );
 
-        $result = [];
+        /** @var array{movie_bytes: int, series_bytes: int, music_bytes: int, photo_bytes: int, transcode_cache_bytes: int, items: array<int, array{media_type: string, item_count: int, total_bytes: int, transcode_cache_bytes: int, formatted_total: string, formatted_cache: string}>, formatted_transcode_cache: string} $result */
+        $result = [
+            'movie_bytes' => 0,
+            'series_bytes' => 0,
+            'music_bytes' => 0,
+            'photo_bytes' => 0,
+            'transcode_cache_bytes' => 0,
+            'items' => [],
+        ];
+
         foreach ($rows as $row) {
             $totalBytes = isset($row['total_bytes'])
                 && is_numeric($row['total_bytes']) ? (int)$row['total_bytes'] : 0;
@@ -257,16 +274,31 @@ class DashboardService
                 && is_numeric($row['transcode_cache_bytes']) ? (int)$row['transcode_cache_bytes'] : 0;
             $itemCount = isset($row['item_count'])
                 && is_numeric($row['item_count']) ? (int)$row['item_count'] : 0;
+            $mediaType = $this->toString($row['media_type']);
 
-            $result[] = [
-                'media_type' => $this->toString($row['media_type']),
+            match ($mediaType) {
+                'movie' => $result['movie_bytes'] = $totalBytes,
+                'series' => $result['series_bytes'] = $totalBytes,
+                'music' => $result['music_bytes'] = $totalBytes,
+                'photo' => $result['photo_bytes'] = $totalBytes,
+                default => null,
+            };
+
+            $result['transcode_cache_bytes'] += $cacheBytes;
+
+            /** @var array{media_type: string, item_count: int, total_bytes: int, transcode_cache_bytes: int, formatted_total: string, formatted_cache: string} $item */
+            $item = [
+                'media_type' => $mediaType,
                 'item_count' => $itemCount,
                 'total_bytes' => $totalBytes,
                 'transcode_cache_bytes' => $cacheBytes,
                 'formatted_total' => $this->formatBytes($totalBytes),
                 'formatted_cache' => $this->formatBytes($cacheBytes),
             ];
+            $result['items'][] = $item;
         }
+
+        $result['formatted_transcode_cache'] = $this->formatBytes($result['transcode_cache_bytes']);
 
         return $result;
     }

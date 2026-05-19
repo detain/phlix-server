@@ -1,0 +1,127 @@
+# Annotated example values for a production phlex-server deployment.
+# Copy to values-prod.yaml and customize, then:
+#   helm install phlex k8s/helm/phlex -f values-prod.yaml -n phlex --create-namespace
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/detain/phlex-server
+  # Pin to an immutable tag in production rather than `latest`
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+# Use TLS via cert-manager + Let's Encrypt
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-body-size: "200m"
+  hosts:
+    - host: media.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: phlex-tls
+      hosts:
+        - media.example.com
+
+# Production resources — bump CPU when transcoding
+resources:
+  limits:
+    cpu: "4000m"
+    memory: "4Gi"
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+
+# Use cluster-local fast storage for hot data, slower NFS for media
+persistence:
+  enabled: true
+  config:
+    storageClass: "fast-ssd"
+    size: 2Gi
+  data:
+    storageClass: "fast-ssd"
+    size: 20Gi
+  backups:
+    storageClass: "standard"
+    size: 50Gi
+  logs:
+    enabled: true
+    storageClass: "standard"
+    size: 5Gi
+  recordings:
+    enabled: true
+    storageClass: "standard"
+    size: 500Gi
+  media:
+    enabled: true
+    storageClass: "nfs-media"
+    size: 5Ti
+    mountPath: /media
+    readOnly: true
+
+# Bundle MySQL or point at an external DB by disabling and setting config.database_host
+mysql:
+  enabled: true
+  auth:
+    database: phlex
+    username: phlex
+    # Always set a strong password — see https://github.com/bitnami/charts
+    rootPassword: "CHANGE_ME"
+    password: "CHANGE_ME"
+  primary:
+    persistence:
+      storageClass: "fast-ssd"
+      size: 50Gi
+
+config:
+  database_host: "{{ .Release.Name }}-mysql"
+  database_port: 3306
+  database_name: phlex
+  database_user: phlex
+  database_password: "CHANGE_ME"
+  secret_key: "openssl rand -hex 64"
+  log_level: info
+  hub_url: "https://hub.example.com"
+
+# Connect to phlex-hub
+hub:
+  enabled: true
+  enrollmentJwt: "eyJ...replace.with.jwt.from.hub.ui..."
+  url: "https://hub.example.com"
+
+# NVIDIA HW transcoding (requires NVIDIA Container Runtime installed cluster-wide)
+hwAccel:
+  enabled: true
+  runtimeClassName: nvidia
+  mountDri: false
+  env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: all
+    - name: NVIDIA_DRIVER_CAPABILITIES
+      value: compute,video,utility
+  resources:
+    limits:
+      nvidia.com/gpu: 1
+
+# Scale up under load
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Schedule onto GPU-tagged nodes
+nodeSelector:
+  hardware: gpu
+
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"

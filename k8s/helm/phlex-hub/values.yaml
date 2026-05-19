@@ -1,0 +1,133 @@
+# Default values for phlex-hub.
+
+# Number of phlex-hub pods to run (stateless, scale horizontally behind a shared DB)
+replicaCount: 2
+
+image:
+  # Container image repository for phlex-hub
+  repository: ghcr.io/detain/phlex-hub
+  pullPolicy: IfNotPresent
+  # Image tag — defaults to .Chart.AppVersion if empty
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  # ClusterIP works well behind a Kubernetes Ingress
+  type: ClusterIP
+  http:
+    # HTTP/API port
+    port: 80
+  relay:
+    # WebSocket relay port (server-to-hub long-lived connections)
+    port: 9443
+
+# Ingress for hub-specific endpoints (relay WS + server-claims API)
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Long timeouts required for relay WebSocket connections from servers
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+  hosts:
+    - host: hub.phlex.local
+      paths:
+        # Relay endpoint: phlex-server connects here to register & receive claims
+        - path: /relay
+          pathType: Prefix
+        # Server-claims API: hub UI / API consumers
+        - path: /api
+          pathType: Prefix
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: phlex-hub-tls
+      hosts:
+        - hub.phlex.local
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    # Hub is mostly I/O-bound; modest defaults
+    cpu: 250m
+    memory: 512Mi
+
+persistence:
+  # Hub is largely stateless (relies on the database), but provides a small PVC for logs
+  enabled: true
+  logs:
+    enabled: false
+    storageClass: ""
+    size: 2Gi
+
+mysql:
+  # Disabled by default — hub usually points at a shared / external MySQL
+  enabled: false
+  auth:
+    database: phlex_hub
+    username: phlex_hub
+  primary:
+    persistence:
+      size: 10Gi
+
+config:
+  # MySQL host for hub data (server claims, enrollment tokens, audit log)
+  database_host: ""
+  database_port: 3306
+  database_name: phlex_hub
+  database_user: phlex_hub
+  # Database password — required
+  database_password: ""
+  # JWT signing secret used to mint server enrollment tokens — required
+  secret_key: ""
+  # Logger verbosity
+  log_level: info
+  # Public-facing URL of this hub (used in enrollment QR codes etc.)
+  public_url: ""
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+env: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 30

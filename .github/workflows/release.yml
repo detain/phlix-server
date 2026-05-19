@@ -10,9 +10,85 @@ env:
   IMAGE_NAME: ghcr.io/detain/phlex-server
 
 jobs:
+  verify-chart-version:
+    name: Verify Helm Chart appVersion matches tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Assert Chart.yaml appVersion matches tag
+        run: |
+          set -e
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          for chart in k8s/helm/phlex/Chart.yaml k8s/helm/phlex-hub/Chart.yaml; do
+            APP_VERSION=$(awk '/^appVersion:/ {gsub(/"/,"",$2); print $2; exit}' "$chart")
+            if [ -z "$APP_VERSION" ]; then
+              echo "::error file=$chart::appVersion not found"
+              exit 1
+            fi
+            if [ "$APP_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error file=$chart::appVersion ($APP_VERSION) does not match release tag ($TAG_VERSION)"
+              exit 1
+            fi
+            echo "OK: $chart appVersion=$APP_VERSION matches tag $TAG_VERSION"
+          done
+
+      - name: Assert composer.json version matches tag
+        run: |
+          set -e
+          TAG_VERSION="${{ steps.version.outputs.VERSION }}"
+          COMPOSER_VERSION=$(python3 -c "import json; print(json.load(open('composer.json')).get('version',''))")
+          if [ "$COMPOSER_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error file=composer.json::version ($COMPOSER_VERSION) does not match release tag ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "OK: composer.json version=$COMPOSER_VERSION matches tag $TAG_VERSION"
+
+  package-charts:
+    name: Package Helm charts
+    runs-on: ubuntu-latest
+    needs: verify-chart-version
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.14.0
+
+      - name: Lint charts
+        run: |
+          helm lint k8s/helm/phlex
+          helm lint k8s/helm/phlex-hub
+
+      - name: Package charts
+        run: |
+          mkdir -p dist/charts
+          helm package k8s/helm/phlex -d dist/charts
+          helm package k8s/helm/phlex-hub -d dist/charts
+          ls -la dist/charts/
+
+      - name: Upload chart artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-charts
+          path: dist/charts/*.tgz
+          retention-days: 30
+
   release:
     name: Create Release
     runs-on: ubuntu-latest
+    needs: [verify-chart-version, package-charts]
 
     permissions:
       contents: write
@@ -26,6 +102,12 @@ jobs:
       - name: Get version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Download chart artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-charts
+          path: dist/charts
 
       - name: Generate changelog
         id: changelog
@@ -49,3 +131,4 @@ jobs:
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
           files: |
             coverage-report.tar.gz
+            dist/charts/*.tgz

@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "phlex-hub.fullname" . }}
+  labels:
+    {{- include "phlex-hub.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.http.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+    - port: {{ .Values.service.relay.port }}
+      targetPort: relay
+      protocol: TCP
+      name: relay
+  selector:
+    {{- include "phlex-hub.selectorLabels" . | nindent 4 }}

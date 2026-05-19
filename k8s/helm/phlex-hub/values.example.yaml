@@ -1,0 +1,67 @@
+# Annotated example values for a production phlex-hub deployment.
+# Copy to values-prod.yaml and customize, then:
+#   helm install phlex-hub k8s/helm/phlex-hub -f values-prod.yaml -n phlex-hub --create-namespace
+
+replicaCount: 3
+
+image:
+  repository: ghcr.io/detain/phlex-hub
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: hub.example.com
+      paths:
+        - path: /relay
+          pathType: Prefix
+        - path: /api
+          pathType: Prefix
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: phlex-hub-tls
+      hosts:
+        - hub.example.com
+
+resources:
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+
+persistence:
+  enabled: true
+  logs:
+    enabled: true
+    storageClass: standard
+    size: 10Gi
+
+# External managed MySQL
+mysql:
+  enabled: false
+
+config:
+  database_host: "phlex-hub-mysql.db.svc.cluster.local"
+  database_port: 3306
+  database_name: phlex_hub
+  database_user: phlex_hub
+  database_password: "CHANGE_ME"
+  secret_key: "openssl rand -hex 64"
+  log_level: info
+  public_url: "https://hub.example.com"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70

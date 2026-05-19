@@ -7,6 +7,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed (post-O.7 wave 3)
+
+- Helm chart fleshed out for both `phlex-server` and `phlex-hub` (values + templates: deployment, service, ingress, pvc, configmap, secret, serviceaccount, hpa, NOTES).
+- Caddyfile WebSocket headers fixed (`Connection: upgrade` / `Upgrade: websocket` — previously inverted).
+- nginx `/media/` location now uses `proxy_request_buffering off` so large client uploads stream through; sensitive-path deny rule tightened to `^/+(...)(/|$)` to defeat double-slash bypass.
+- Dockerfile `composer install` no longer suffixed with `|| true` — composer failures now fail the build (default Alpine variant + NVIDIA/Intel HW-accel variants). Path-layout rationale documented in `docker/README.md`.
+- CI: added `phlex-hub` build/push job in `.github/workflows/docker.yml`.
+- CI: `.github/workflows/release.yml` now verifies `Chart.yaml` `appVersion` and `composer.json` `version` match the release tag, lints + packages charts, and uploads them with the release.
+
+### Removed
+
+- `SESSION_HANDOFF.md` (commit 9758a1b, message "upate"): obsolete handoff scratchpad no longer referenced anywhere. No functional change.
+
 ### Added (Step L.1)
 
 - Webhook plugin framework for sending events to HTTP endpoints:

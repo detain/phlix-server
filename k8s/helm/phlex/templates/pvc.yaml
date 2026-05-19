@@ -1,6 +1,10 @@
-{{- if .Values.persistence.enabled }}
-{{- range $name, $persistence := dict "config" .Values.persistence.config "data" .Values.persistence.data "backups" .Values.persistence.backups }}
-{{- if $persistence.enabled }}
+{{- if .Values.persistence.enabled -}}
+{{- $persistentBlocks := dict
+  "config" .Values.persistence.config
+  "data" .Values.persistence.data
+  "backups" .Values.persistence.backups
+-}}
+{{- range $name, $p := $persistentBlocks }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -13,14 +17,49 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: {{ $persistence.size }}
-  {{- if $persistence.storageClass }}
-  storageClassName: {{ $persistence.storageClass }}
+      storage: {{ $p.size }}
+  {{- if $p.storageClass }}
+  storageClassName: {{ $p.storageClass }}
   {{- end }}
 {{- end }}
-{{- end }}
+{{- if .Values.persistence.logs.enabled }}
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "phlex.fullname" . }}-logs
+  labels:
+    {{- include "phlex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.logs.size }}
+  {{- if .Values.persistence.logs.storageClass }}
+  storageClassName: {{ .Values.persistence.logs.storageClass }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.recordings.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "phlex.fullname" . }}-recordings
+  labels:
+    {{- include "phlex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.recordings.size }}
+  {{- if .Values.persistence.recordings.storageClass }}
+  storageClassName: {{ .Values.persistence.recordings.storageClass }}
+  {{- end }}
+{{- end }}
 {{- if .Values.persistence.media.enabled }}
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -37,4 +76,4 @@ spec:
   storageClassName: {{ .Values.persistence.media.storageClass }}
   {{- end }}
 {{- end }}
-{{- end }}
+{{- end -}}

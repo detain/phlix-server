@@ -25,10 +25,29 @@ phlex.example.com {
         }
     }
 
+    # WebSocket upgrade. Caddy 2.7+ auto-detects WS upgrades and forwards the
+    # Connection/Upgrade headers; the @websocket matcher here documents intent
+    # and applies long timeouts required for long-lived sockets.
+    @websocket {
+        path /ws*
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    handle @websocket {
+        reverse_proxy localhost:8080 {
+            header_up Connection "upgrade"
+            header_up Upgrade "websocket"
+            transport http {
+                read_timeout 24h
+                write_timeout 24h
+            }
+        }
+    }
+
     handle /ws* {
         reverse_proxy localhost:8080 {
-            header_up Connection {header.Upgrade}
-            header_up Upgrade {header.Connection}
+            header_up Connection "upgrade"
+            header_up Upgrade "websocket"
         }
     }
 

@@ -2,7 +2,9 @@ apiVersion: v2
 name: phlex
 description: A Helm chart for Phlex Media Server
 type: application
+# Chart version (Helm artifact version) — bump independently of appVersion
 version: 0.1.0
+# appVersion mirrors composer.json version of phlex-server
 appVersion: "1.0.0"
 keywords:
   - media-server

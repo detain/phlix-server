@@ -1,3 +1,19 @@
+# ============================================================================
+# Phlex Server — NVIDIA (CUDA) hardware acceleration build
+# ----------------------------------------------------------------------------
+# Path layout note: this variant inherits from `nvidia/cuda:*` (Ubuntu 22.04)
+# instead of the Alpine-based `php:8.3-fpm-alpine`. NVIDIA's CUDA runtime
+# requires a glibc-based distribution, so the official php:* image cannot be
+# used as the base. As a consequence:
+#
+#   * PHP config lives under `/etc/php/8.3/fpm/` (Debian/Ubuntu layout),
+#     not `/usr/local/etc/php/conf.d/` (Alpine layout used by `Dockerfile`).
+#   * To keep operator-facing paths identical to the Alpine image, we symlink
+#     the Alpine-style path to the Ubuntu-style file so that documentation and
+#     entrypoint scripts can target a single canonical location.
+#
+# Rationale recorded in: docker/README.md
+# ============================================================================
 FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -23,18 +39,25 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-RUN mkdir -p /var/www/html /var/phlex/{config,data,logs,backups} \
+RUN mkdir -p /var/www/html /var/phlex/config /var/phlex/data /var/phlex/logs /var/phlex/backups \
     && chown -R nobody:nogroup /var/www/html /var/phlex
 
-COPY docker/php.ini /etc/php/8.3/fpm/php.ini
-COPY docker/nginx.conf /etc/nginx/http.d/default.conf
+# Ubuntu PHP layout. Symlink to the Alpine canonical path so downstream tooling
+# can rely on a single location.
+COPY docker/php.ini /etc/php/8.3/fpm/conf.d/99-phlex.ini
+RUN mkdir -p /usr/local/etc/php/conf.d \
+    && ln -sf /etc/php/8.3/fpm/conf.d/99-phlex.ini /usr/local/etc/php/conf.d/zz-phlex.ini
+
+COPY docker/nginx.conf /etc/nginx/sites-available/default
+RUN ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 WORKDIR /var/www/html
 
 COPY . /var/www/html/
 
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs || true
+# Composer install — fail the build on error.
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
 
 EXPOSE 80 443
 

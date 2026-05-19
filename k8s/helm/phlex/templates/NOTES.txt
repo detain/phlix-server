@@ -1,16 +1,34 @@
-{{/*
-Thank you for installing Phlex Media Server.
+Phlex Media Server has been installed.
 
-Your release is named {{ .Release.Name }}.
-
-To get the application URL:
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart: {{ .Chart.Name }}-{{ .Chart.Version }} (app {{ .Chart.AppVersion }})
 
 {{- if .Values.ingress.enabled }}
-{{- range $host := .Values.ingress.hosts }}
-  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+
+Access the application at:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
 {{- end }}
+{{- else }}
+
+To access the application:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlex.fullname" . }} 8080:{{ .Values.service.http.port }}
+  Then open http://localhost:8080
+
 {{- end }}
 
-To learn more about the release, try:
-  $ helm get all {{ .Release.Name }}
-*/}}
+Useful commands:
+  helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+  helm get all {{ .Release.Name }} -n {{ .Release.Namespace }}
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+{{- if .Values.hub.enabled }}
+
+Hub integration is ENABLED — this server will register with: {{ default .Values.config.hub_url .Values.hub.url }}
+{{- end }}
+{{- if .Values.hwAccel.enabled }}
+
+Hardware acceleration is ENABLED (runtimeClassName={{ .Values.hwAccel.runtimeClassName | default "<unset>" }}).
+Ensure the cluster has the matching runtime / device plugin installed.
+{{- end }}

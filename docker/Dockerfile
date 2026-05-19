@@ -25,6 +25,7 @@ RUN apk add --no-cache \
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
+# PHP overrides (Alpine layout — official php:* image uses /usr/local/etc/php/conf.d/)
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-phlex.ini
 
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
@@ -38,7 +39,9 @@ WORKDIR /var/www/html
 
 COPY . /var/www/html/
 
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs || true
+# Composer install — DO NOT silence with `|| true`; a failure here means a
+# broken image and we want CI to surface it.
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
 
 EXPOSE 80 443
 

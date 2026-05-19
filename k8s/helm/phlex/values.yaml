@@ -1,28 +1,50 @@
+# Default values for phlex.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Number of phlex-server pods to run
 replicaCount: 1
 
 image:
+  # Container image repository for phlex-server
   repository: ghcr.io/detain/phlex-server
+  # Pull policy: Always | IfNotPresent | Never
   pullPolicy: IfNotPresent
+  # Image tag — defaults to .Chart.AppVersion if empty
   tag: "latest"
 
+# imagePullSecrets used when pulling from a private registry
 imagePullSecrets: []
+# Override the chart name (default: phlex)
 nameOverride: ""
+# Override the generated fully-qualified app name
 fullnameOverride: ""
 
+# Kubernetes Service configuration
 service:
+  # Service type: ClusterIP | NodePort | LoadBalancer
   type: ClusterIP
   http:
+    # HTTP port exposed by the Service
     port: 80
   websocket:
+    # WebSocket port (Workerman WS server)
     port: 3473
 
+# Ingress for HTTP + WebSocket traffic with TLS
 ingress:
+  # Enable Ingress resource
   enabled: true
+  # Ingress controller class (nginx, traefik, contour, ...)
   className: "nginx"
   annotations:
+    # cert-manager will mint a TLS cert via Let's Encrypt
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Long timeouts required for WebSocket connections
     nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+    # Allow large uploads for backup imports
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
     - host: phlex.local
       paths:
@@ -33,17 +55,22 @@ ingress:
       hosts:
         - phlex.local
 
+# Container resource requests/limits
 resources:
   limits:
     cpu: 2000m
     memory: 2Gi
   requests:
-    cpu: 500m
+    # Modest defaults — phlex-server is small until transcoding starts
+    cpu: 250m
     memory: 512Mi
 
+# Persistent volume configuration
 persistence:
+  # Master switch for all PVCs
   enabled: true
   config:
+    # StorageClass for config (leave empty to use cluster default)
     storageClass: ""
     size: 1Gi
   data:
@@ -52,13 +79,25 @@ persistence:
   backups:
     storageClass: ""
     size: 5Gi
+  logs:
+    # Logs to .logs/ — set enabled=false to use an emptyDir instead
+    enabled: false
+    storageClass: ""
+    size: 2Gi
+  recordings:
+    # Live TV DVR recordings
+    enabled: false
+    storageClass: ""
+    size: 50Gi
   media:
     enabled: true
     storageClass: ""
     size: 100Gi
     mountPath: /media
+    # Mount media as read-only by default for safety
     readOnly: true
 
+# Optional bundled MySQL subchart (bitnami)
 mysql:
   enabled: true
   auth:
@@ -68,23 +107,75 @@ mysql:
     persistence:
       size: 10Gi
 
+# Application configuration — surfaces in env vars / ConfigMap
 config:
+  # MySQL host (defaults to the bundled subchart service)
   database_host: "{{ .Release.Name }}-mysql"
   database_port: 3306
   database_name: phlex
   database_user: phlex
+  # Database password — set via --set or values file (required)
   database_password: ""
+  # JWT signing secret — set via --set or values file (required)
   secret_key: ""
+  # Logger verbosity: debug | info | warning | error
   log_level: info
+  # Phlex Hub URL (e.g. https://hub.phlex.tv) — leave empty to disable
   hub_url: ""
+  # One-time pairing code from the hub UI
   hub_pairing_code: ""
 
+# Hub enrollment / pairing — populated into the Secret
+hub:
+  # Enable hub integration
+  enabled: false
+  # JWT bearer issued by phlex-hub during enrollment
+  enrollmentJwt: ""
+  # Override the hub URL set in `config.hub_url` (optional)
+  url: ""
+
+# Hardware acceleration runtime configuration
+hwAccel:
+  # Enable HW transcoding (NVIDIA / Intel QuickSync / VAAPI)
+  enabled: false
+  # RuntimeClassName for the pod (e.g. "nvidia" for NVIDIA Container Runtime)
+  runtimeClassName: ""
+  # Mount /dev/dri (Intel/AMD) into the container
+  mountDri: false
+  # Extra env vars (e.g. NVIDIA_VISIBLE_DEVICES)
+  env: []
+  # GPU resource requests (e.g. nvidia.com/gpu: 1)
+  resources: {}
+
+# Extra environment variables for the container
+env: []
+# - name: PHLEX_FEATURE_FLAG
+#   value: "1"
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  # Enable HPA — also requires metrics-server in the cluster
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# ServiceAccount for the pod
+serviceAccount:
+  # Create the ServiceAccount
+  create: true
+  # Annotations to add to the ServiceAccount
+  annotations: {}
+  # Override the ServiceAccount name (default: fullname)
+  name: ""
+
+# Pod-level scheduling
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
 
+# Probes — all hit the bundled /health endpoint
 livenessProbe:
   httpGet:
     path: /health

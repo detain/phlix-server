@@ -13,12 +13,17 @@ spec:
     metadata:
       labels:
         {{- include "phlex.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "phlex.fullname" . }}
+      serviceAccountName: {{ include "phlex.serviceAccountName" . }}
+      {{- if and .Values.hwAccel.enabled .Values.hwAccel.runtimeClassName }}
+      runtimeClassName: {{ .Values.hwAccel.runtimeClassName }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -47,7 +52,7 @@ spec:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           env:
             - name: PHLEX_DATABASE_HOST
-              value: {{ .Values.config.database_host | quote }}
+              value: {{ tpl (.Values.config.database_host | toString) . | quote }}
             - name: PHLEX_DATABASE_PORT
               value: {{ .Values.config.database_port | quote }}
             - name: PHLEX_DATABASE_NAME
@@ -67,9 +72,31 @@ spec:
             - name: PHLEX_LOG_LEVEL
               value: {{ .Values.config.log_level | quote }}
             - name: PHLEX_HUB_URL
-              value: {{ .Values.config.hub_url | quote }}
+              value: {{ default .Values.config.hub_url .Values.hub.url | quote }}
+            {{- if .Values.hub.enabled }}
+            - name: PHLEX_HUB_ENROLLMENT_JWT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "phlex.fullname" . }}
+                  key: hub-enrollment-jwt
+            {{- end }}
+            {{- with .Values.hwAccel.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "phlex.fullname" . }}
           resources:
+            {{- if .Values.hwAccel.enabled }}
+            {{- $base := .Values.resources -}}
+            {{- $hw := .Values.hwAccel.resources -}}
+            {{- toYaml (merge (deepCopy $hw) $base) | nindent 12 }}
+            {{- else }}
             {{- toYaml .Values.resources | nindent 12 }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /var/phlex/config
@@ -79,9 +106,19 @@ spec:
               mountPath: /var/phlex/backups
             - name: logs
               mountPath: /var/phlex/logs
+            {{- if .Values.persistence.recordings.enabled }}
+            - name: recordings
+              mountPath: /var/phlex/recordings
+            {{- end }}
+            {{- if .Values.persistence.media.enabled }}
             - name: media
-              mountPath: /media
-              readOnly: true
+              mountPath: {{ .Values.persistence.media.mountPath }}
+              readOnly: {{ .Values.persistence.media.readOnly }}
+            {{- end }}
+            {{- if and .Values.hwAccel.enabled .Values.hwAccel.mountDri }}
+            - name: dri
+              mountPath: /dev/dri
+            {{- end }}
       volumes:
         - name: config
           persistentVolumeClaim:
@@ -93,7 +130,37 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "phlex.fullname" . }}-backups
         - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-logs
+          {{- else }}
           emptyDir: {}
+          {{- end }}
+        {{- if .Values.persistence.recordings.enabled }}
+        - name: recordings
+          persistentVolumeClaim:
+            claimName: {{ include "phlex.fullname" . }}-recordings
+        {{- end }}
+        {{- if .Values.persistence.media.enabled }}
         - name: media
           persistentVolumeClaim:
             claimName: {{ include "phlex.fullname" . }}-media
+        {{- end }}
+        {{- if and .Values.hwAccel.enabled .Values.hwAccel.mountDri }}
+        - name: dri
+          hostPath:
+            path: /dev/dri
+            type: Directory
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

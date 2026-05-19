@@ -5,21 +5,24 @@ phlex.example.com {
         }
     }
 
-    handle_path *.m3u8* {
+    @hls_playlist path *.m3u8
+    handle @hls_playlist {
         reverse_proxy localhost:8080 {
             header_down Cache-Control "no-cache, no-store, must-revalidate"
             header_down Access-Control-Allow-Origin "*"
         }
     }
 
-    handle_path *.ts* {
+    @hls_segment path *.ts
+    handle @hls_segment {
         reverse_proxy localhost:8080 {
             header_down Cache-Control "public, max-age=31536000"
             header_down Access-Control-Allow-Origin "*"
         }
     }
 
-    handle_path *.mpd* {
+    @dash_manifest path *.mpd
+    handle @dash_manifest {
         reverse_proxy localhost:8080 {
             header_down Cache-Control "no-cache"
         }
@@ -59,9 +62,9 @@ phlex.example.com {
 
     handle /api/* {
         reverse_proxy localhost:8080 {
-            header Access-Control-Allow-Origin "*"
-            header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
-            header Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
+            header_down Access-Control-Allow-Origin "*"
+            header_down Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+            header_down Access-Control-Allow-Headers "Authorization, Content-Type, X-Requested-With"
         }
     }
 

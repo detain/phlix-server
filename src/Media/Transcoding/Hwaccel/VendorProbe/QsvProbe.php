@@ -18,8 +18,6 @@ use Psr\Log\LoggerInterface;
 class QsvProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'qsv';
-    private const ENCODER_PREFIX = 'h264_qsv';
-    private const DECODER_PREFIX = 'hevc_qsv';
 
     public function getVendorName(): string
     {

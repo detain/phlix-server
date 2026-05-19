@@ -20,7 +20,6 @@ class NvencProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'nvenc';
     private const ENCODER_PREFIX = 'h264_nvenc';
-    private const DECODER_PREFIX = 'hevc_cuvid';
 
     public function getVendorName(): string
     {
@@ -35,7 +34,7 @@ class NvencProbe implements VendorProbeInterface
 
         $output = shell_exec('nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null');
 
-        return $output !== false && trim($output) !== '';
+        return is_string($output) && trim($output) !== '';
     }
 
     public function probe(string $ffmpeg_path, ?LoggerInterface $logger = null): ?HwaccelCapability

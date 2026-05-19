@@ -92,6 +92,10 @@ final class MarkerCandidateStore
 
         $oldestFile = $files[0];
         $content = file_get_contents($oldestFile);
+        if ($content === false) {
+            $this->removeLockFile($oldestFile);
+            return null;
+        }
         $lines = explode("\n", trim($content));
         $showId = $lines[0] ?? '';
 
@@ -140,6 +144,9 @@ final class MarkerCandidateStore
 
         foreach ($files as $file) {
             $content = file_get_contents($file);
+            if ($content === false) {
+                continue;
+            }
             $lines = explode("\n", trim($content));
             $showId = $lines[0] ?? '';
             if ($showId !== '') {
@@ -228,7 +235,7 @@ final class MarkerCandidateStore
 
         sort($files);
 
-        return array_values($files);
+        return $files;
     }
 
     /**
@@ -251,8 +258,8 @@ final class MarkerCandidateStore
             $contentA = file_get_contents($a);
             $contentB = file_get_contents($b);
 
-            $linesA = explode("\n", trim($contentA));
-            $linesB = explode("\n", trim($contentB));
+            $linesA = is_string($contentA) ? explode("\n", trim($contentA)) : [];
+            $linesB = is_string($contentB) ? explode("\n", trim($contentB)) : [];
 
             $timestampA = (float)($linesA[1] ?? 0);
             $timestampB = (float)($linesB[1] ?? 0);

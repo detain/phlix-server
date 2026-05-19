@@ -70,7 +70,7 @@ class DashboardController
         $days = $this->getIntQueryParam($request, 'days', 30);
 
         $limit = max(1, min($limit, 100));
-        $days = $days !== null ? max(1, min($days, 365)) : null;
+        $days = max(1, min($days, 365));
 
         $data = $this->dashboardService->getTopUsers($limit, $days);
 
@@ -96,7 +96,7 @@ class DashboardController
         $days = $this->getIntQueryParam($request, 'days', 30);
 
         $limit = max(1, min($limit, 100));
-        $days = $days !== null ? max(1, min($days, 365)) : null;
+        $days = max(1, min($days, 365));
 
         $data = $this->dashboardService->getTopMedia($limit, $days);
 
@@ -155,10 +155,11 @@ class DashboardController
      *
      * @param Request $request The HTTP request
      * @param string $name Parameter name
-     * @param int $default Default value
-     * @return int|null Integer value or null if not set
+     * @param int $default Default value returned when the parameter is
+     *                     absent or not numeric.
+     * @return int Integer value, falling back to the supplied default.
      */
-    private function getIntQueryParam(Request $request, string $name, int $default): ?int
+    private function getIntQueryParam(Request $request, string $name, int $default): int
     {
         $query = $request->query;
         $value = $query[$name] ?? null;

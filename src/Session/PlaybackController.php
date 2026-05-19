@@ -49,6 +49,9 @@ class PlaybackController
     /** @var StatsCollector|null Stats collector for recording playback events */
     private ?StatsCollector $statsCollector;
 
+    /** @var \Phlex\Dlna\PlayToManager|null DLNA play-to manager for renderer sessions */
+    private ?\Phlex\Dlna\PlayToManager $playToManager;
+
     /** @var array<string, string> Map of sessionId:mediaItemId -> eventId for playback tracking */
     private array $playbackEventIds = [];
 
@@ -79,13 +82,15 @@ class PlaybackController
         SessionManager $sessionManager,
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
-        ?StatsCollector $statsCollector = null
+        ?StatsCollector $statsCollector = null,
+        ?\Phlex\Dlna\PlayToManager $playToManager = null
     ) {
         $this->db = $db;
         $this->sessionManager = $sessionManager;
         $this->logger = $logger ?? $this->createDefaultLogger();
         $this->eventDispatcher = $eventDispatcher;
         $this->statsCollector = $statsCollector;
+        $this->playToManager = $playToManager;
     }
 
     /**
@@ -668,17 +673,12 @@ class PlaybackController
         string $metadata = ''
     ): ?\Phlex\Dlna\PlayToSession {
         try {
-            // Get the PlayToManager from container if available
-            $container = \Phlex\Common\Container\ContainerFactory::getInstance();
-            if ($container === null || !$container->has(\Phlex\Dlna\PlayToManager::class)) {
-                $this->logger->warning('PlayToManager not available in container');
+            if ($this->playToManager === null) {
+                $this->logger->warning('PlayToManager not available — inject it via constructor');
                 return null;
             }
 
-            /** @var \Phlex\Dlna\PlayToManager */
-            $playToManager = $container->get(\Phlex\Dlna\PlayToManager::class);
-
-            $session = $playToManager->startSession($rendererId, $mediaItemId, $streamUrl, $metadata);
+            $session = $this->playToManager->startSession($rendererId, $mediaItemId, $streamUrl, $metadata);
 
             if ($session === null) {
                 $this->logger->error('Failed to start play-to session', [

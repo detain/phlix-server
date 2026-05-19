@@ -18,8 +18,6 @@ use Psr\Log\LoggerInterface;
 class AmfProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'amf';
-    private const ENCODER_PREFIX = 'h264_amf';
-    private const DECODER_PREFIX = 'hevc_amf';
 
     public function getVendorName(): string
     {

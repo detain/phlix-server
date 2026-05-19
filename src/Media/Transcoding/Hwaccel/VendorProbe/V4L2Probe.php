@@ -18,8 +18,6 @@ use Psr\Log\LoggerInterface;
 class V4L2Probe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'v4l2';
-    private const ENCODER_PREFIX = 'h264_v4l2m2m';
-    private const DECODER_PREFIX = 'hevc_v4l2m2m';
 
     public function getVendorName(): string
     {

@@ -1027,20 +1027,8 @@ parameters:
 			path: src/LiveTv/GuideManager.php
 
 		-
-			message: '#^Argument of an invalid type list\<string\>\|false supplied for foreach, only iterables are supported\.$#'
-			identifier: foreach.nonIterable
-			count: 1
-			path: src/LiveTv/LiveTvManager.php
-
-		-
 			message: '#^Argument of an invalid type mixed supplied for foreach, only iterables are supported\.$#'
 			identifier: foreach.nonIterable
-			count: 1
-			path: src/LiveTv/LiveTvManager.php
-
-		-
-			message: '#^Method Phlex\\LiveTv\\LiveTvManager\:\:scanForTuners\(\) should return array\<string, array\{id\: string, name\: string, type\: string, status\: string, adapter\: int\|string, frontend\: string, capabilities\: array\<string, mixed\>\}\> but returns list\<array\{id\: non\-falsy\-string, name\: non\-falsy\-string, type\: string, status\: ''idle'', adapter\: string\|null, frontend\: non\-falsy\-string, capabilities\: array\<string, int\>\}\>\.$#'
-			identifier: return.type
 			count: 1
 			path: src/LiveTv/LiveTvManager.php
 
@@ -1059,12 +1047,6 @@ parameters:
 		-
 			message: '#^Property Phlex\\LiveTv\\LiveTvManager\:\:\$activeTuneRequests \(array\<string, array\{id\: string, channel_id\: string, tuner_id\: string, started_at\: int, stream_url\: string\}\>\) does not accept non\-empty\-array\<string, array\{id\: string, channel_id\: string, tuner_id\: mixed, started_at\: int, stream_url\: string\}\>\.$#'
 			identifier: assign.propertyType
-			count: 1
-			path: src/LiveTv/LiveTvManager.php
-
-		-
-			message: '#^Property Phlex\\LiveTv\\LiveTvManager\:\:\$tuners type has no value type specified in iterable type array\.$#'
-			identifier: missingType.iterableValue
 			count: 1
 			path: src/LiveTv/LiveTvManager.php
 
@@ -2677,12 +2659,6 @@ parameters:
 			path: src/Session/PlaybackController.php
 
 		-
-			message: '#^Property Phlex\\Session\\PlaybackController\:\:\$logger is never read, only written\.$#'
-			identifier: property.onlyWritten
-			count: 1
-			path: src/Session/PlaybackController.php
-
-		-
 			message: '#^Cannot access offset 0 on mixed\.$#'
 			identifier: offsetAccess.nonOffsetAccessible
 			count: 2
@@ -2990,12 +2966,6 @@ parameters:
 
 		-
 			message: '#^Parameter \#1 \$groupId of method Phlex\\Session\\SyncPlay\\SyncPlayManager\:\:joinGroup\(\) expects string, mixed given\.$#'
-			identifier: argument.type
-			count: 1
-			path: src/Session/SyncPlay/SyncPlayManager.php
-
-		-
-			message: '#^Parameter \#1 \$level of method Phlex\\Common\\Logger\\StructuredLogger\:\:log\(\) expects Monolog\\Level, string given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/Session/SyncPlay/SyncPlayManager.php

@@ -37,7 +37,7 @@ class CdsControlController
      * Processes the SOAP request and returns a SOAP response.
      *
      * @param Request $request The HTTP request containing SOAP body
-     * @param array $params Route parameters (unused)
+     * @param array<string, string> $params Route parameters (unused)
      * @return Response SOAP XML response
      *
      * @since 0.12.0

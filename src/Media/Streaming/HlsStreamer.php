@@ -227,7 +227,7 @@ class HlsStreamer
     public function getStreamUrl(array $item): string
     {
         $itemId = $item['id'] ?? '';
-        return $this->getPlaylistUrl($itemId);
+        return $this->getPlaylistUrl(is_string($itemId) ? $itemId : '');
     }
 
     /**

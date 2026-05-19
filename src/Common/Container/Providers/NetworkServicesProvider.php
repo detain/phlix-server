@@ -40,11 +40,13 @@ final class NetworkServicesProvider implements ServiceProviderInterface
     {
         $pfConfig = is_array($appConfig['port_forwarding'] ?? null) ? $appConfig['port_forwarding'] : [];
         $autoEnabled = (bool) ($pfConfig['auto'] ?? true);
-        $port = (int) ($pfConfig['port'] ?? 32400);
+        $portValue = $pfConfig['port'] ?? 32400;
+        $port = is_numeric($portValue) ? (int) $portValue : 32400;
         $stunServer = is_string($pfConfig['stun_server'] ?? null)
             ? $pfConfig['stun_server']
             : StunClient::DEFAULT_STUN_SERVER;
-        $stunPort = (int) ($pfConfig['stun_port'] ?? StunClient::DEFAULT_STUN_PORT);
+        $stunPortValue = $pfConfig['stun_port'] ?? StunClient::DEFAULT_STUN_PORT;
+        $stunPort = is_numeric($stunPortValue) ? (int) $stunPortValue : StunClient::DEFAULT_STUN_PORT;
         $upnpEnabled = (bool) ($pfConfig['upnp_enabled'] ?? true);
 
         $builder->addDefinitions([

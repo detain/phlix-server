@@ -339,6 +339,9 @@ class BackupController
 
     /**
      * Write backup configuration file.
+     *
+     * @param string $path Destination filesystem path.
+     * @param array<string, mixed> $config Decoded backup configuration.
      */
     private function writeBackupConfig(string $path, array $config): void
     {

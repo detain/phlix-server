@@ -85,17 +85,18 @@ class ChromecastController
     public function cast(Request $request, array $params): Response
     {
         $deviceId = $params['id'] ?? null;
-        if ($deviceId === null) {
+        if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
         $body = $request->body;
-        $mediaUrl = $body['media_url'] ?? null;
-        $mimeType = $body['mime_type'] ?? 'application/x-mpegurl';
-        $title = $body['title'] ?? '';
-        $duration = (int)($body['duration'] ?? 0);
+        $mediaUrl = is_string($body['media_url'] ?? null) ? $body['media_url'] : '';
+        $mimeType = is_string($body['mime_type'] ?? null) ? $body['mime_type'] : 'application/x-mpegurl';
+        $title = is_string($body['title'] ?? null) ? $body['title'] : '';
+        $durationRaw = $body['duration'] ?? 0;
+        $duration = is_numeric($durationRaw) ? (int) $durationRaw : 0;
 
-        if ($mediaUrl === null || $mediaUrl === '') {
+        if ($mediaUrl === '') {
             return (new Response())->status(400)->json(['error' => 'media_url is required']);
         }
 
@@ -161,7 +162,7 @@ class ChromecastController
     public function stop(Request $request, array $params): Response
     {
         $deviceId = $params['id'] ?? null;
-        if ($deviceId === null) {
+        if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
@@ -191,7 +192,7 @@ class ChromecastController
     public function seek(Request $request, array $params): Response
     {
         $deviceId = $params['id'] ?? null;
-        if ($deviceId === null) {
+        if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
@@ -201,7 +202,8 @@ class ChromecastController
         }
 
         $body = $request->body;
-        $positionMs = (int)($body['position_ms'] ?? 0);
+        $positionRaw = $body['position_ms'] ?? 0;
+        $positionMs = is_numeric($positionRaw) ? (int) $positionRaw : 0;
 
         try {
             $session->seek($positionMs);
@@ -229,7 +231,7 @@ class ChromecastController
     public function getStatus(Request $request, array $params): Response
     {
         $deviceId = $params['id'] ?? null;
-        if ($deviceId === null) {
+        if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 

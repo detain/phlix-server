@@ -60,9 +60,11 @@ final class TraktOAuthController
     {
         $config = $this->loadConfig();
 
-        $clientId = $config['client_id'] ?? '';
-        $clientSecret = $config['client_secret'] ?? '';
-        $redirectUri = $config['redirect_uri'] ?? 'https://localhost/api/v1/oauth/trakt/callback';
+        $clientId = is_string($config['client_id'] ?? null) ? $config['client_id'] : '';
+        $clientSecret = is_string($config['client_secret'] ?? null) ? $config['client_secret'] : '';
+        $redirectUri = is_string($config['redirect_uri'] ?? null)
+            ? $config['redirect_uri']
+            : 'https://localhost/api/v1/oauth/trakt/callback';
 
         if ($clientId === '') {
             return $this->errorResponse('Trakt plugin not configured: missing client_id');
@@ -124,8 +126,8 @@ final class TraktOAuthController
 
         $config = $this->loadConfig();
 
-        $clientId = $config['client_id'] ?? '';
-        $clientSecret = $config['client_secret'] ?? '';
+        $clientId = is_string($config['client_id'] ?? null) ? $config['client_id'] : '';
+        $clientSecret = is_string($config['client_secret'] ?? null) ? $config['client_secret'] : '';
 
         if ($clientId === '' || $clientSecret === '') {
             return $this->errorResponse('Trakt plugin not configured');
@@ -135,7 +137,9 @@ final class TraktOAuthController
             $api = new TraktApi(new HttpClient(), $clientId, $clientSecret);
             $tokens = $api->exchangeCode($code, $codeVerifier);
 
-            $expiresAt = time() + $tokens['expires_in'];
+            $expiresInRaw = $tokens['expires_in'] ?? 0;
+            $expiresIn = is_numeric($expiresInRaw) ? (int) $expiresInRaw : 0;
+            $expiresAt = time() + $expiresIn;
 
             $this->logger?->info('Trakt OAuth success', [
                 'username' => $params['username'] ?? 'unknown',

@@ -15,6 +15,9 @@ namespace Phlex\Media\Library;
  */
 final class MediaItem
 {
+    /**
+     * @param array<string, mixed> $metadata Metadata decoded from `metadata_json`.
+     */
     public function __construct(
         public readonly string $id,
         public readonly string $name,
@@ -33,18 +36,28 @@ final class MediaItem
     public static function fromRow(array $row): self
     {
         $metadata = [];
-        if (isset($row['metadata_json'])) {
-            $decoded = json_decode($row['metadata_json'], true);
+        $rawJson = $row['metadata_json'] ?? null;
+        if (is_string($rawJson)) {
+            $decoded = json_decode($rawJson, true);
             if (is_array($decoded)) {
-                $metadata = $decoded;
+                foreach ($decoded as $key => $value) {
+                    if (is_string($key)) {
+                        $metadata[$key] = $value;
+                    }
+                }
             }
         }
 
+        $id = is_string($row['id'] ?? null) ? $row['id'] : '';
+        $name = is_string($row['name'] ?? null) ? $row['name'] : '';
+        $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+        $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+
         return new self(
-            id: $row['id'],
-            name: $row['name'],
-            type: $row['type'],
-            path: $row['path'],
+            id: $id,
+            name: $name,
+            type: $type,
+            path: $path,
             metadata: $metadata
         );
     }

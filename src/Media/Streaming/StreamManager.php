@@ -112,6 +112,19 @@ class StreamManager
     }
 
     /**
+     * Returns the configured base URL used when constructing absolute
+     * streaming endpoint links.
+     *
+     * @return string Base URL or empty string when relative paths are used.
+     *
+     * @since 0.12.0
+     */
+    public function getBaseUrl(): string
+    {
+        return $this->baseUrl;
+    }
+
+    /**
      * Sets a callback to invoke when active streams change.
      *
      * The callback receives (array $activeStreams) as its argument.

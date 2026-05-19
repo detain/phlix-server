@@ -106,6 +106,19 @@ class RecordingHooksRunner
     }
 
     /**
+     * Get the configured base path for recording storage.
+     *
+     * @return string Base path used when post-processing hooks need to
+     *                resolve file locations relative to the storage root.
+     *
+     * @since 0.12.0
+     */
+    public function getStoragePath(): string
+    {
+        return $this->storagePath;
+    }
+
+    /**
      * Get the number of pending hooks.
      *
      * @return int Number of hooks waiting to be processed

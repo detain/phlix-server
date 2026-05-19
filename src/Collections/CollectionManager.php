@@ -215,10 +215,18 @@ final class CollectionManager
         $newIds = array_column($matchedItems, 'id');
 
         // Compute diff: items to add (in new but not in current)
-        /** @var list<string> $newIdsStrings */
-        $newIdsStrings = array_map(fn($id): string => strval($id), $newIds);
-        /** @var list<string> $currentIdsStrings */
-        $currentIdsStrings = array_map(fn($id): string => strval($id), $currentIds);
+        $newIdsStrings = [];
+        foreach ($newIds as $idValue) {
+            if (is_string($idValue)) {
+                $newIdsStrings[] = $idValue;
+            } elseif (is_int($idValue) || is_float($idValue)) {
+                $newIdsStrings[] = (string) $idValue;
+            }
+        }
+        $currentIdsStrings = [];
+        foreach ($currentIds as $idValue) {
+            $currentIdsStrings[] = (string) $idValue;
+        }
         $toAdd = array_diff($newIdsStrings, $currentIdsStrings);
 
         // Compute diff: items to remove (in current but not in new)

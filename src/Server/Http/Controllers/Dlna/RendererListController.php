@@ -53,7 +53,7 @@ class RendererListController
         // Add active session info to each renderer
         $result = [];
         foreach ($renderers as $renderer) {
-            $rendererId = $renderer['udn'] ?? '';
+            $rendererId = is_string($renderer['udn'] ?? null) ? $renderer['udn'] : '';
             $session = $rendererId !== '' ? $this->playToManager->getSession($rendererId) : null;
 
             $renderer['has_active_session'] = $session !== null;
@@ -93,9 +93,10 @@ class RendererListController
 
         // Get media item info from request body
         $body = $request->body;
-        $mediaItemId = $body['media_item_id'] ?? $body['item_id'] ?? '';
-        $uri = $body['uri'] ?? '';
-        $metadata = $body['metadata'] ?? '';
+        $mediaItemIdRaw = $body['media_item_id'] ?? $body['item_id'] ?? '';
+        $mediaItemId = is_string($mediaItemIdRaw) ? $mediaItemIdRaw : '';
+        $uri = is_string($body['uri'] ?? null) ? $body['uri'] : '';
+        $metadata = is_string($body['metadata'] ?? null) ? $body['metadata'] : '';
 
         if ($mediaItemId === '' || $uri === '') {
             return (new Response())->status(400)->json([
@@ -220,7 +221,8 @@ class RendererListController
         }
 
         $body = $request->body;
-        $positionTicks = isset($body['position_ticks']) ? (int)$body['position_ticks'] : 0;
+        $positionRaw = $body['position_ticks'] ?? null;
+        $positionTicks = is_numeric($positionRaw) ? (int) $positionRaw : 0;
 
         if ($positionTicks <= 0) {
             return (new Response())->status(400)->json([

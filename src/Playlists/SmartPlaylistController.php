@@ -278,12 +278,19 @@ final class SmartPlaylistController
             return (new Response())->status(400)->json(['error' => 'Invalid rules']);
         }
 
+        $rulesMap = [];
+        foreach ($rules as $rKey => $rValue) {
+            if (is_string($rKey)) {
+                $rulesMap[$rKey] = $rValue;
+            }
+        }
+
         $limit = isset($data['limit']) ? (is_int($data['limit']) ? $data['limit'] : (is_numeric($data['limit']) ? (int)$data['limit'] : $playlist->limit)) : $playlist->limit;
         $sortBy = is_string($data['sort_by'] ?? null) ? $data['sort_by'] : $playlist->sortBy;
         $sortDesc = isset($data['sort_desc']) ? (bool)$data['sort_desc'] : $playlist->sortDesc;
 
         $matchedItems = $this->engine->evaluateOnScan(
-            $rules,
+            $rulesMap,
             $playlist->libraryId,
             $limit,
             $sortBy,

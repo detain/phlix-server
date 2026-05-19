@@ -43,9 +43,39 @@ final class SmartPlaylistEngine
     public function buildFromDsl(array $dsl): RuleNode
     {
         $logic = is_string($dsl['logic'] ?? null) ? $dsl['logic'] : 'and';
-        $rules = is_array($dsl['rules'] ?? null) ? $dsl['rules'] : [];
+        $rules = self::normaliseRuleList($dsl['rules'] ?? null);
 
         return $this->buildNodeFromDsl($logic, $rules);
+    }
+
+    /**
+     * Normalise an opaque DSL `rules` value into a list of rule maps.
+     *
+     * The DSL is decoded JSON, so each entry could be anything; we only
+     * keep entries that are themselves string-keyed arrays.
+     *
+     * @param mixed $rules Raw `rules` value from the DSL.
+     * @return list<array<string, mixed>>
+     */
+    private static function normaliseRuleList(mixed $rules): array
+    {
+        if (!is_array($rules)) {
+            return [];
+        }
+        $out = [];
+        foreach ($rules as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $normalized = [];
+            foreach ($entry as $key => $value) {
+                if (is_string($key)) {
+                    $normalized[$key] = $value;
+                }
+            }
+            $out[] = $normalized;
+        }
+        return $out;
     }
 
     /**
@@ -60,7 +90,9 @@ final class SmartPlaylistEngine
         if ($logic === 'not') {
             $firstRule = $rules[0] ?? [];
             $childLogic = is_string($firstRule['logic'] ?? null) ? $firstRule['logic'] : 'and';
-            $childRules = is_array($firstRule['rules'] ?? null) ? $firstRule['rules'] : [$firstRule];
+            $childRules = isset($firstRule['rules'])
+                ? self::normaliseRuleList($firstRule['rules'])
+                : [$firstRule];
             $child = $this->buildNodeFromDsl($childLogic, $childRules);
             return new RuleNode(
                 type: RuleNode::TYPE_NOT,
@@ -70,14 +102,11 @@ final class SmartPlaylistEngine
 
         $children = [];
         foreach ($rules as $rule) {
-            if (!is_array($rule)) {
-                continue;
-            }
             if (isset($rule['logic']) && is_string($rule['logic'])) {
                 // Nested group
                 $children[] = $this->buildNodeFromDsl(
                     $rule['logic'],
-                    is_array($rule['rules'] ?? null) ? $rule['rules'] : []
+                    self::normaliseRuleList($rule['rules'] ?? null)
                 );
             } else {
                 // Leaf rule
@@ -104,7 +133,9 @@ final class SmartPlaylistEngine
     /**
      * Evaluates rules against a set of media items.
      *
-     * @param array<RuleNode|array<string, mixed>> $rules Decoded JSON DSL or RuleNode tree
+     * @param array<string, mixed> $rules Decoded JSON DSL (a root group with
+     *                                    `logic` and `rules`). Empty array
+     *                                    means "match everything".
      * @param array<int, array<string, mixed>> $mediaItems Hydrated media items with metadata_json decoded
      * @param int $limit Maximum items to return (0 = unlimited)
      * @param string $sortBy Sort field ('addedAt', 'random', etc.)
@@ -123,7 +154,7 @@ final class SmartPlaylistEngine
         if (empty($rules)) {
             $result = $mediaItems;
         } else {
-            $root = is_array($rules) ? $this->buildFromDsl($rules) : $rules;
+            $root = $this->buildFromDsl($rules);
             $result = array_filter($mediaItems, function (array $item) use ($root): bool {
                 return $this->evaluateNode($root, $item);
             });
@@ -161,6 +192,8 @@ final class SmartPlaylistEngine
 
     /**
      * Evaluates AND node - all children must match.
+     *
+     * @param array<string, mixed> $item Media item being tested.
      */
     private function evaluateAnd(RuleNode $node, array $item): bool
     {
@@ -174,6 +207,8 @@ final class SmartPlaylistEngine
 
     /**
      * Evaluates OR node - at least one child must match.
+     *
+     * @param array<string, mixed> $item Media item being tested.
      */
     private function evaluateOr(RuleNode $node, array $item): bool
     {
@@ -187,6 +222,8 @@ final class SmartPlaylistEngine
 
     /**
      * Evaluates NOT node - inverts child result.
+     *
+     * @param array<string, mixed> $item Media item being tested.
      */
     private function evaluateNot(RuleNode $node, array $item): bool
     {
@@ -271,8 +308,8 @@ final class SmartPlaylistEngine
         }
 
         usort($items, function (array $a, array $b) use ($sortBy, $sortDesc): int {
-            $metadataA = $a['metadata'] ?? [];
-            $metadataB = $b['metadata'] ?? [];
+            $metadataA = is_array($a['metadata'] ?? null) ? $a['metadata'] : [];
+            $metadataB = is_array($b['metadata'] ?? null) ? $b['metadata'] : [];
 
             $valueA = $metadataA[$sortBy] ?? $a[$sortBy] ?? null;
             $valueB = $metadataB[$sortBy] ?? $b[$sortBy] ?? null;
@@ -290,7 +327,7 @@ final class SmartPlaylistEngine
 
             $cmp = is_numeric($valueA) && is_numeric($valueB)
                 ? $valueA <=> $valueB
-                : strcasecmp((string)$valueA, (string)$valueB);
+                : strcasecmp($this->mixedToString($valueA), $this->mixedToString($valueB));
 
             return $sortDesc ? -$cmp : $cmp;
         });
@@ -321,7 +358,7 @@ final class SmartPlaylistEngine
     /**
      * Fetches all items for a library and evaluates rules against them.
      *
-     * @param array<RuleNode|array<string, mixed>> $rules Decoded JSON DSL or RuleNode tree
+     * @param array<string, mixed> $rules Decoded JSON DSL (root group)
      * @param string $libraryId Library to fetch items from
      * @param int $limit Maximum items to return (0 = unlimited)
      * @param string $sortBy Sort field ('addedAt', 'random', etc.)

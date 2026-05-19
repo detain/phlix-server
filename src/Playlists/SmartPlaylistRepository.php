@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Playlists;
 
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -112,7 +113,7 @@ final class SmartPlaylistRepository
             return null;
         }
 
-        return SmartPlaylist::fromRow($firstRow);
+        return SmartPlaylist::fromRow(RowMap::fromMixed($firstRow));
     }
 
     /**
@@ -137,7 +138,7 @@ final class SmartPlaylistRepository
         $playlists = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $playlists[] = SmartPlaylist::fromRow($row);
+                $playlists[] = SmartPlaylist::fromRow(RowMap::fromMixed($row));
             }
         }
 
@@ -162,7 +163,7 @@ final class SmartPlaylistRepository
         $playlists = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $playlists[] = SmartPlaylist::fromRow($row);
+                $playlists[] = SmartPlaylist::fromRow(RowMap::fromMixed($row));
             }
         }
 

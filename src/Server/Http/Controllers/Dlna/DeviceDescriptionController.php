@@ -37,7 +37,7 @@ class DeviceDescriptionController
      * Returns the UPnP device description XML document.
      *
      * @param Request $request The HTTP request
-     * @param array $params Route parameters (unused)
+     * @param array<string, string> $params Route parameters (unused)
      * @return Response XML response with device description
      *
      * @since 0.12.0

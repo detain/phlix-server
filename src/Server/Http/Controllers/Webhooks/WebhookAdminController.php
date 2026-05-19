@@ -19,6 +19,9 @@ class WebhookAdminController
     ) {
     }
 
+    /**
+     * @param array<string, string> $params Path parameters (unused).
+     */
     public function index(Request $request, array $params): Response
     {
         $webhooks = $this->dispatcher->listWebhooks();
@@ -26,42 +29,61 @@ class WebhookAdminController
         return (new Response())->json(['webhooks' => $webhooks]);
     }
 
+    /**
+     * @param array<string, string> $params Path parameters (unused).
+     */
     public function create(Request $request, array $params): Response
     {
         $data = $request->body;
 
-        if (empty($data['name']) || empty($data['url']) || empty($data['secret'])) {
+        $nameRaw = $data['name'] ?? null;
+        $urlRaw = $data['url'] ?? null;
+        $secretRaw = $data['secret'] ?? null;
+
+        if (
+            !is_string($nameRaw) || $nameRaw === ''
+            || !is_string($urlRaw) || $urlRaw === ''
+            || !is_string($secretRaw) || $secretRaw === ''
+        ) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: name, url, secret',
             ]);
         }
 
-        $url = trim((string) $data['url']);
+        $url = trim($urlRaw);
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid URL format',
             ]);
         }
 
-        $events = $data['events'] ?? [];
-        if (!is_array($events)) {
+        $eventsRaw = $data['events'] ?? [];
+        if (!is_array($eventsRaw)) {
             return (new Response())->status(400)->json([
                 'error' => 'events must be an array',
             ]);
         }
+        $events = [];
+        foreach ($eventsRaw as $event) {
+            if (is_string($event)) {
+                $events[] = $event;
+            }
+        }
+
+        $name = trim($nameRaw);
 
         try {
             $id = $this->dispatcher->register(
-                trim((string) $data['name']),
+                $name,
                 $url,
-                trim((string) $data['secret']),
+                trim($secretRaw),
                 $events
             );
 
             return (new Response())->status(201)->json([
                 'webhook' => [
                     'id' => $id,
-                    'name' => trim((string) $data['name']),
+                    'name' => $name,
                     'url' => $url,
                     'events' => $events,
                 ],
@@ -71,11 +93,14 @@ class WebhookAdminController
         }
     }
 
+    /**
+     * @param array<string, string> $params Path parameters (id).
+     */
     public function delete(Request $request, array $params): Response
     {
         $id = $params['id'] ?? null;
 
-        if (empty($id)) {
+        if (!is_string($id) || $id === '') {
             return (new Response())->status(400)->json([
                 'error' => 'Missing webhook ID',
             ]);
@@ -86,11 +111,14 @@ class WebhookAdminController
         return (new Response())->status(204)->json([]);
     }
 
+    /**
+     * @param array<string, string> $params Path parameters (id).
+     */
     public function test(Request $request, array $params): Response
     {
         $id = $params['id'] ?? null;
 
-        if (empty($id)) {
+        if (!is_string($id) || $id === '') {
             return (new Response())->status(400)->json([
                 'error' => 'Missing webhook ID',
             ]);
@@ -99,7 +127,7 @@ class WebhookAdminController
         $webhooks = $this->dispatcher->listWebhooks();
         $webhook = null;
         foreach ($webhooks as $w) {
-            if ($w['id'] === $id) {
+            if (isset($w['id']) && $w['id'] === $id) {
                 $webhook = $w;
                 break;
             }

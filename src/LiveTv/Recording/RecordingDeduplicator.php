@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\LiveTv\Recording;
 
+use Phlex\LiveTv\Dto\RowAccess;
+use Phlex\LiveTv\Dto\RowQuery;
 use Workerman\MySQL\Connection;
 
 /**
@@ -68,7 +70,7 @@ class RecordingDeduplicator
             [$programId, $channelId, $windowStart, $windowEnd]
         );
 
-        return $result->num_rows > 0;
+        return RowQuery::hasRows($result);
     }
 
     /**
@@ -92,11 +94,12 @@ class RecordingDeduplicator
             [$programId]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapRecording($result->fetch());
+        return $this->mapRecording($row);
     }
 
     /**
@@ -117,7 +120,7 @@ class RecordingDeduplicator
         );
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -136,7 +139,7 @@ class RecordingDeduplicator
      *
      * @since 0.12.0
      */
-    public function resolveDuplicates(string $preferRuleId = null): int
+    public function resolveDuplicates(?string $preferRuleId = null): int
     {
         // Find all non-cancelled scheduled/recording duplicates
         $result = $this->db->query(
@@ -148,9 +151,13 @@ class RecordingDeduplicator
              ORDER BY effective_priority DESC, r.start_time ASC"
         );
 
+        /** @var array<string, list<array<string, mixed>>> $grouped */
         $grouped = [];
-        while ($row = $result->fetch()) {
-            $group = $row['duplicate_group'];
+        foreach (RowQuery::rows($result) as $row) {
+            $group = RowAccess::string($row, 'duplicate_group');
+            if ($group === '') {
+                continue;
+            }
             if (!isset($grouped[$group])) {
                 $grouped[$group] = [];
             }
@@ -165,7 +172,7 @@ class RecordingDeduplicator
                 $this->db->query(
                     "UPDATE livetv_recordings SET status = 'cancelled', updated_at = NOW()
                      WHERE recording_id = ?",
-                    [$rec['recording_id']]
+                    [RowAccess::string($rec, 'recording_id')]
                 );
                 $cancelled++;
             }
@@ -220,17 +227,17 @@ class RecordingDeduplicator
     private function mapRecording(array $row): array
     {
         return [
-            'recording_id' => $row['recording_id'],
-            'channel_id' => $row['channel_id'],
-            'program_id' => $row['program_id'],
-            'title' => $row['title'],
-            'start_time' => (int) $row['start_time'],
-            'end_time' => (int) $row['end_time'],
-            'status' => $row['status'],
-            'priority' => (int) $row['priority'],
-            'series_rule_id' => $row['series_rule_id'],
-            'duplicate_group' => $row['duplicate_group'],
-            'created_at' => $row['created_at'],
+            'recording_id' => RowAccess::string($row, 'recording_id'),
+            'channel_id' => RowAccess::string($row, 'channel_id'),
+            'program_id' => RowAccess::string($row, 'program_id'),
+            'title' => RowAccess::string($row, 'title'),
+            'start_time' => RowAccess::int($row, 'start_time'),
+            'end_time' => RowAccess::int($row, 'end_time'),
+            'status' => RowAccess::string($row, 'status'),
+            'priority' => RowAccess::int($row, 'priority'),
+            'series_rule_id' => RowAccess::stringOrNull($row, 'series_rule_id'),
+            'duplicate_group' => RowAccess::stringOrNull($row, 'duplicate_group'),
+            'created_at' => RowAccess::stringOrNull($row, 'created_at'),
         ];
     }
 }

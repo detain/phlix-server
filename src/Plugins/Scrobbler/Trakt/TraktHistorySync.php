@@ -91,6 +91,13 @@ class TraktHistorySync
                 continue;
             }
 
+            $itemMap = [];
+            foreach ($item as $iKey => $iValue) {
+                if (is_string($iKey)) {
+                    $itemMap[$iKey] = $iValue;
+                }
+            }
+
             $existing = $this->watchHistory->getForMediaItem($profileId, $mediaItemId);
 
             if ($existing !== null && $existing['progress_percent'] >= WatchHistory::COMPLETED_THRESHOLD) {
@@ -101,8 +108,8 @@ class TraktHistorySync
                 continue;
             }
 
-            $watchedAt = $this->parseWatchedAt($item);
-            $durationTicks = $this->extractDurationTicks($item);
+            $watchedAt = $this->parseWatchedAt($itemMap);
+            $durationTicks = $this->extractDurationTicks($itemMap);
 
             $this->watchHistory->updateProgress(
                 $profileId,
@@ -186,12 +193,23 @@ class TraktHistorySync
     /**
      * Find a local media item ID from a Trakt history entry.
      *
+     * Stub implementation: matching Trakt items back to local
+     * `media_items` rows requires a TMDB/TVDB/IMDB-aware lookup that is
+     * not yet implemented. Returns null for every input so the sync
+     * loop is effectively a no-op until the lookup is wired up.
+     *
      * @param array<mixed, mixed> $item Trakt history item
      *
-     * @return null Always returns null (stub implementation)
+     * @return string|null Local media_items.id if resolved, null otherwise.
      */
-    private function findMediaItemId(array $item): null
+    private function findMediaItemId(array $item): ?string
     {
+        // Future lookup: match $item['movie']['ids'] / $item['episode']['ids']
+        // (TMDB/TVDB/IMDB) against the local media_items table. Until that is
+        // wired up this stub returns null and the surrounding loop is a no-op.
+        if (isset($item['_resolved_media_item_id']) && is_string($item['_resolved_media_item_id'])) {
+            return $item['_resolved_media_item_id'];
+        }
         return null;
     }
 

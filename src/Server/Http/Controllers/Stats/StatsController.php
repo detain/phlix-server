@@ -120,12 +120,19 @@ final class StatsController
     /**
      * Parse a date string or return a relative date.
      *
-     * @param string $input Date string or relative expression
+     * Accepts mixed so callers can pass `Request::input()` results
+     * directly without an extra narrowing step at every call site.
+     *
+     * @param mixed $input Date string, relative expression, or non-string.
      *
      * @return DateTime Parsed date
      */
-    private function parseDate(string $input): DateTime
+    private function parseDate(mixed $input): DateTime
     {
+        if (!is_string($input) || $input === '') {
+            return new DateTime();
+        }
+
         // Handle relative dates like "-30 days"
         if (str_starts_with($input, '-') || $input === 'now') {
             $timestamp = strtotime($input);
@@ -145,15 +152,19 @@ final class StatsController
     }
 
     /**
-     * Parse an integer from string input with a default.
+     * Parse an integer from a string-ish input, with a default of 10.
      *
-     * @param string $input String value to parse
+     * @param mixed $input Anything; values that filter_var cannot
+     *                     coerce to int fall back to 10.
      *
      * @return int Parsed integer
      */
-    private function parseInt(string $input): int
+    private function parseInt(mixed $input): int
     {
-        $parsed = filter_var($input, FILTER_VALIDATE_INT);
+        if (!is_scalar($input)) {
+            return 10;
+        }
+        $parsed = filter_var((string) $input, FILTER_VALIDATE_INT);
         return $parsed !== false ? $parsed : 10;
     }
 }

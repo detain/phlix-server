@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Collections;
 
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -111,7 +112,7 @@ class CollectionRepository
             return null;
         }
 
-        return Collection::fromRow($firstRow);
+        return Collection::fromRow(RowMap::fromMixed($firstRow));
     }
 
     /**
@@ -136,7 +137,7 @@ class CollectionRepository
         $collections = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $collections[] = Collection::fromRow($row);
+                $collections[] = Collection::fromRow(RowMap::fromMixed($row));
             }
         }
 
@@ -161,7 +162,7 @@ class CollectionRepository
         $collections = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $collections[] = Collection::fromRow($row);
+                $collections[] = Collection::fromRow(RowMap::fromMixed($row));
             }
         }
 
@@ -196,7 +197,7 @@ class CollectionRepository
         $collections = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $collections[] = Collection::fromRow($row);
+                $collections[] = Collection::fromRow(RowMap::fromMixed($row));
             }
         }
 
@@ -225,7 +226,7 @@ class CollectionRepository
         $collections = [];
         foreach ($results as $row) {
             if (is_array($row)) {
-                $collections[] = Collection::fromRow($row);
+                $collections[] = Collection::fromRow(RowMap::fromMixed($row));
             }
         }
 

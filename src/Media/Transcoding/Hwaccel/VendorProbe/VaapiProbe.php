@@ -18,8 +18,6 @@ use Psr\Log\LoggerInterface;
 class VaapiProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'vaapi';
-    private const ENCODER_PREFIX = 'hevc_vaapi';
-    private const DECODER_PREFIX = 'hevc_vaapi';
 
     public function getVendorName(): string
     {

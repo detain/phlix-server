@@ -8,7 +8,6 @@ use Phlex\Media\Library\AudioScanner;
 use Phlex\Media\Library\LibraryManager;
 use Phlex\Media\Library\ItemRepository;
 use Phlex\Media\Metadata\MetadataManager;
-use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
@@ -66,7 +65,8 @@ final class MusicLibraryType implements \Phlex\Media\Library\LibraryTypeInterfac
         ItemRepository $itemRepo,
         ?LoggerInterface $logger = null
     ): AudioScanner {
-        return new AudioScanner($db, $itemRepo, $logger);
+        $structured = $logger instanceof StructuredLogger ? $logger : null;
+        return new AudioScanner($db, $itemRepo, $structured);
     }
 
     /**
@@ -89,12 +89,13 @@ final class MusicLibraryType implements \Phlex\Media\Library\LibraryTypeInterfac
         ItemRepository $itemRepo,
         ?LoggerInterface $logger = null
     ): \Phlex\Media\Library\MusicLibraryManager {
+        $structured = $logger instanceof StructuredLogger ? $logger : null;
         return new \Phlex\Media\Library\MusicLibraryManager(
             $scanner,
             $metadataManager,
             $itemRepo,
             $db,
-            $logger
+            $structured
         );
     }
 }

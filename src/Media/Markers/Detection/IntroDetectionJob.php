@@ -157,6 +157,23 @@ class IntroDetectionJob
     }
 
     /**
+     * Access the ChromaPrint implementation injected at construction.
+     *
+     * Exposed primarily so callers (e.g. the
+     * {@see BackgroundDetectorWorker}) can reuse the same configured
+     * implementation when fingerprinting episodes that don't yet have
+     * stored fingerprints.
+     *
+     * @return ChromaPrintInterface
+     *
+     * @since 0.12.0
+     */
+    public function getChromaPrint(): ChromaPrintInterface
+    {
+        return $this->chromaPrint;
+    }
+
+    /**
      * Get all episodes for a show.
      *
      * @param string $showId The show/series media item ID
@@ -171,16 +188,23 @@ class IntroDetectionJob
 
         $episodes = [];
         foreach ($items as $item) {
-            if ($item['type'] === 'episode' || $item['type'] === '_episode') {
-                $fingerprint = $this->fingerprintRepo->getFingerprint($item['id']);
-                $duration = $this->extractDuration($item);
-
-                $episodes[] = [
-                    'media_item_id' => $item['id'],
-                    'fingerprint' => $fingerprint,
-                    'duration' => $duration,
-                ];
+            $type = $item['type'] ?? null;
+            if ($type !== 'episode' && $type !== '_episode') {
+                continue;
             }
+            $mediaItemId = $item['id'] ?? null;
+            if (!is_string($mediaItemId) || $mediaItemId === '') {
+                continue;
+            }
+
+            $fingerprint = $this->fingerprintRepo->getFingerprint($mediaItemId);
+            $duration = $this->extractDuration($item);
+
+            $episodes[] = [
+                'media_item_id' => $mediaItemId,
+                'fingerprint' => $fingerprint,
+                'duration' => $duration,
+            ];
         }
 
         return $episodes;
@@ -227,6 +251,10 @@ class IntroDetectionJob
     private function extractDuration(array $item): int
     {
         $metadata = $item['metadata'] ?? [];
-        return (int)($metadata['duration'] ?? 0);
+        if (!is_array($metadata)) {
+            return 0;
+        }
+        $duration = $metadata['duration'] ?? 0;
+        return is_numeric($duration) ? (int) $duration : 0;
     }
 }

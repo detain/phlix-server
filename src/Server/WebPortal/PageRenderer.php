@@ -258,7 +258,7 @@ class PageRenderer
      *
      * @return Response HTML response with the rendered dashboard page
      *
-     * @template_variables
+     * Template variables assigned for admin/dashboard.tpl:
      * - current_page: string ('dashboard')
      * - user: array (display_name)
      *

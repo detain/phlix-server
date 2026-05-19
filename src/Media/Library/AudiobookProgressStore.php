@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Library;
 
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -47,24 +48,37 @@ class AudiobookProgressStore
             [$user_id, $audiobook_id]
         );
 
-        if (empty($result) || !isset($result[0])) {
+        if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
             return null;
         }
 
-        /** @var array<string, mixed> $row */
-        $row = $result[0];
-        $completedChapters = $row['completed_chapters'] ?? '[]';
-        if (is_string($completedChapters)) {
-            $decoded = json_decode($completedChapters, true);
-            $completedChapters = is_array($decoded) ? $decoded : [];
-        } elseif (!is_array($completedChapters)) {
-            $completedChapters = [];
+        $row = RowMap::fromMixed($result[0]);
+
+        $rawCompleted = $row['completed_chapters'] ?? '[]';
+        if (is_string($rawCompleted)) {
+            $decoded = json_decode($rawCompleted, true);
+            $rawCompleted = is_array($decoded) ? $decoded : [];
+        } elseif (!is_array($rawCompleted)) {
+            $rawCompleted = [];
         }
 
-        $positionMs = isset($row['position_ms']) ? (int) $row['position_ms'] : 0;
-        $chapterIndex = isset($row['current_chapter_index']) ? (int) $row['current_chapter_index'] : 0;
-        $percentComplete = isset($row['percent_complete']) ? (float) $row['percent_complete'] : 0.0;
-        $lastPlayedAt = isset($row['last_played_at']) ? (int) $row['last_played_at'] : null;
+        $completedChapters = [];
+        foreach ($rawCompleted as $chapterKey => $position) {
+            if (is_int($chapterKey) && is_numeric($position)) {
+                $completedChapters[$chapterKey] = (int) $position;
+            } elseif (is_string($chapterKey) && is_numeric($chapterKey) && is_numeric($position)) {
+                $completedChapters[(int) $chapterKey] = (int) $position;
+            }
+        }
+
+        $positionRaw = $row['position_ms'] ?? null;
+        $positionMs = is_numeric($positionRaw) ? (int) $positionRaw : 0;
+        $chapterRaw = $row['current_chapter_index'] ?? null;
+        $chapterIndex = is_numeric($chapterRaw) ? (int) $chapterRaw : 0;
+        $percentRaw = $row['percent_complete'] ?? null;
+        $percentComplete = is_numeric($percentRaw) ? (float) $percentRaw : 0.0;
+        $lastPlayedRaw = $row['last_played_at'] ?? null;
+        $lastPlayedAt = is_numeric($lastPlayedRaw) ? (int) $lastPlayedRaw : null;
 
         return new AudiobookProgress(
             $audiobook_id,

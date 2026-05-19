@@ -37,7 +37,11 @@ final class WebAuthnProvider implements ProviderInterface
             $challenge = $credentials['challenge'] ?? null;
             $credential = $credentials['credential'] ?? null;
 
-            if (!$username || !$challenge || !$credential) {
+            if (
+                !is_string($username) || $username === ''
+                || !is_string($challenge) || $challenge === ''
+                || !is_array($credential)
+            ) {
                 return new AuthResult(
                     success: false,
                     error: 'missing_required_fields'

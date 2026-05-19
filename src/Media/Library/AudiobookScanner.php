@@ -323,20 +323,19 @@ class AudiobookScanner extends BookScanner
         // Calculate duration_ms between chapters
         $count = count($chapters);
         for ($i = 0; $i < $count - 1; $i++) {
-            /** @var array<string, mixed> $currentChapter */
             $currentChapter = $chapters[$i];
-            /** @var array<string, mixed> $nextChapter */
             $nextChapter = $chapters[$i + 1];
 
-            $currentChapter['end_ms'] = $nextChapter['start_ms'] ?? $currentChapter['end_ms'];
-            $currentChapter['duration_ms'] = ($currentChapter['end_ms'] ?? 0) - ($currentChapter['start_ms'] ?? 0);
+            $currentChapter['end_ms'] = $nextChapter['start_ms'];
+            $currentChapter['duration_ms'] = $currentChapter['end_ms'] - $currentChapter['start_ms'];
+            $chapters[$i] = $currentChapter;
         }
 
         if ($count > 0) {
             // Last chapter has no known end, set a placeholder
-            /** @var array<string, mixed> $lastChapter */
             $lastChapter = $chapters[$count - 1];
             $lastChapter['duration_ms'] = 0;
+            $chapters[$count - 1] = $lastChapter;
         }
 
         return $chapters;
@@ -613,10 +612,8 @@ class AudiobookScanner extends BookScanner
                     }
                 } elseif ($key !== null) {
                     $value = $this->parseIlstDataAtom($atomData);
-                    if ($value !== null && $value !== '') {
-                        if (!isset($metadata[$key]) || $metadata[$key] === '') {
-                            $metadata[$key] = $value;
-                        }
+                    if ($value !== null && $value !== '' && !isset($metadata[$key])) {
+                        $metadata[$key] = $value;
                     }
                 }
             }
@@ -792,24 +789,52 @@ class AudiobookScanner extends BookScanner
     {
         $metadata = [];
 
+        // getID3 is an optional dependency (james-heinrich/getid3). When
+        // it is not installed we silently return no MP3-specific
+        // metadata; callers should not depend on the result being
+        // populated. The optional james-heinrich/getid3 package provides a
+        // `getID3` class with an `analyze()` method; older / different
+        // distributions expose a top-level `getID3` function. We probe
+        // for the class first, fall back to the function.
+        $tag = null;
+        if (class_exists('getID3', false)) {
+            try {
+                $instance = new \getID3();
+                if (method_exists($instance, 'analyze')) {
+                    $tag = $instance->analyze($path);
+                }
+            } catch (\Throwable $e) {
+                $this->logger?->warning('Failed to parse MP3 metadata via getID3 class', [
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+                return [];
+            }
+        }
+
+        if ($tag === null) {
+            return [];
+        }
+
         try {
-            $tag = \getID3($path);
-            if ($tag === false) {
+            if (!is_array($tag)) {
                 return [];
             }
 
-            if (isset($tag['tags']['id3v2'])) {
-                $tags = $tag['tags']['id3v2'];
+            $tagsContainer = $tag['tags'] ?? null;
+            if (is_array($tagsContainer) && isset($tagsContainer['id3v2']) && is_array($tagsContainer['id3v2'])) {
+                $tags = $tagsContainer['id3v2'];
 
-                $metadata['title'] = $tags['title'][0] ?? null;
-                $metadata['author'] = $tags['artist'][0] ?? null;
-                $metadata['narrator'] = $tags['composer'][0] ?? null; // composer as fallback narrator
-                $metadata['description'] = $tags['comment'][0] ?? null;
-                $metadata['series'] = $tags['band'][0] ?? null; // band as fallback series
-                $metadata['language'] = $tags['language'][0] ?? null;
+                $metadata['title'] = is_array($tags['title'] ?? null) ? ($tags['title'][0] ?? null) : null;
+                $metadata['author'] = is_array($tags['artist'] ?? null) ? ($tags['artist'][0] ?? null) : null;
+                $metadata['narrator'] = is_array($tags['composer'] ?? null) ? ($tags['composer'][0] ?? null) : null;
+                $metadata['description'] = is_array($tags['comment'] ?? null) ? ($tags['comment'][0] ?? null) : null;
+                $metadata['series'] = is_array($tags['band'] ?? null) ? ($tags['band'][0] ?? null) : null;
+                $metadata['language'] = is_array($tags['language'] ?? null) ? ($tags['language'][0] ?? null) : null;
 
-                if (isset($tag['playtime_seconds'])) {
-                    $metadata['duration_ms'] = (int)($tag['playtime_seconds'] * 1000);
+                $playtime = $tag['playtime_seconds'] ?? null;
+                if (is_numeric($playtime)) {
+                    $metadata['duration_ms'] = (int) ((float) $playtime * 1000);
                 }
             }
         } catch (\Throwable $e) {

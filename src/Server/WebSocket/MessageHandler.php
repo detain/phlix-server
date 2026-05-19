@@ -144,7 +144,15 @@ class MessageHandler
 
         // Handle subscribe_dashboard event
         if ($event === 'subscribe_dashboard') {
-            $this->handleSubscribeDashboard($connection, $payload);
+            $payloadMap = [];
+            if (is_array($payload)) {
+                foreach ($payload as $pKey => $pValue) {
+                    if (is_string($pKey)) {
+                        $payloadMap[$pKey] = $pValue;
+                    }
+                }
+            }
+            $this->handleSubscribeDashboard($connection, $payloadMap);
         }
     }
 

@@ -29,6 +29,9 @@ class BackgroundDetectorWorker
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
 
+    /** @var bool When false, {@see self::runLoop()} returns at the next iteration. */
+    private bool $running = true;
+
     /**
      * @param IntroDetectionJob           $job           Detection job
      * @param MarkerCandidateStore        $store         Job store
@@ -116,13 +119,26 @@ class BackgroundDetectorWorker
             'sleep_interval' => $sleepSeconds,
         ]);
 
-        while (true) {
+        while ($this->running) {
             $processed = $this->runOnce();
 
             if (!$processed) {
                 sleep($sleepSeconds);
             }
         }
+    }
+
+    /**
+     * Request the {@see self::runLoop()} loop to exit at the start of
+     * the next iteration. Useful for tests and signal handlers.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function stop(): void
+    {
+        $this->running = false;
     }
 
     /**

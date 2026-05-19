@@ -57,9 +57,10 @@ final class HlsRelaySessionFactory
         $segmentCacheTtlSeconds = self::toInt($relayConfig['segment_cache_ttl_seconds'] ?? 30);
         $relayPathPrefix = self::toString($relayConfig['relay_path_prefix'] ?? '/relay/live');
 
-        // Build segment prefetcher with config
+        // Build segment prefetcher with config; StructuredLogger
+        // implements LoggerInterface so it is passed directly.
         $segmentPrefetcher = new HlsSegmentPrefetcher(
-            $relayLogger instanceof LoggerInterface ? $relayLogger : null,
+            $relayLogger,
             $prefetchSegments,
             10 * 1024 * 1024, // 10 MB max cache size
             $segmentCacheTtlSeconds,
@@ -72,7 +73,7 @@ final class HlsRelaySessionFactory
             $relayConsumer,
             $db,
             $segmentPrefetcher,
-            $relayLogger instanceof LoggerInterface ? $relayLogger : null,
+            $relayLogger,
             $relayPathPrefix,
             $maxConcurrentSessions,
         );

@@ -10,6 +10,7 @@ use Phlex\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LogLevel;
 use ReflectionClass;
+use Stringable;
 
 /**
  * @covers \Phlex\Common\Events\StructuredLoggerPsrAdapter
@@ -26,9 +27,17 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
             /** @var array<int, array{level: Level, message: string, context: array<string, mixed>}> */
             public array $records = [];
 
-            public function log(Level $level, string $message, array $context = []): void
+            /**
+             * @param mixed              $level
+             * @param string|Stringable  $message
+             * @param array<string,mixed> $context
+             */
+            public function log($level, string|Stringable $message, array $context = []): void
             {
-                $this->records[] = ['level' => $level, 'message' => $message, 'context' => $context];
+                if (!$level instanceof Level) {
+                    throw new \LogicException('Spy expected a Monolog Level from the adapter.');
+                }
+                $this->records[] = ['level' => $level, 'message' => (string) $message, 'context' => $context];
             }
         };
 
@@ -57,8 +66,17 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
         ]) extends StructuredLogger {
             /** @var array<int, Level> */
             public array $levels = [];
-            public function log(Level $level, string $message, array $context = []): void
+
+            /**
+             * @param mixed              $level
+             * @param string|Stringable  $message
+             * @param array<string,mixed> $context
+             */
+            public function log($level, string|Stringable $message, array $context = []): void
             {
+                if (!$level instanceof Level) {
+                    throw new \LogicException('Spy expected a Monolog Level from the adapter.');
+                }
                 $this->levels[] = $level;
             }
         };
@@ -78,8 +96,17 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
         ]) extends StructuredLogger {
             /** @var array<int, Level> */
             public array $levels = [];
-            public function log(Level $level, string $message, array $context = []): void
+
+            /**
+             * @param mixed              $level
+             * @param string|Stringable  $message
+             * @param array<string,mixed> $context
+             */
+            public function log($level, string|Stringable $message, array $context = []): void
             {
+                if (!$level instanceof Level) {
+                    throw new \LogicException('Spy expected a Monolog Level from the adapter.');
+                }
                 $this->levels[] = $level;
             }
         };
@@ -99,8 +126,17 @@ final class StructuredLoggerPsrAdapterTest extends TestCase
         ]) extends StructuredLogger {
             /** @var array<int, Level> */
             public array $levels = [];
-            public function log(Level $level, string $message, array $context = []): void
+
+            /**
+             * @param mixed              $level
+             * @param string|Stringable  $message
+             * @param array<string,mixed> $context
+             */
+            public function log($level, string|Stringable $message, array $context = []): void
             {
+                if (!$level instanceof Level) {
+                    throw new \LogicException('Spy expected a Monolog Level from the adapter.');
+                }
                 $this->levels[] = $level;
             }
         };

@@ -86,17 +86,17 @@ class RokuController
     public function sendMedia(Request $request, array $params): Response
     {
         $deviceId = $params['id'] ?? null;
-        if ($deviceId === null) {
+        if (!is_string($deviceId) || $deviceId === '') {
             return (new Response())->status(400)->json(['error' => 'Device ID is required']);
         }
 
         $body = $request->body;
-        $mediaUrl = $body['media_url'] ?? null;
-        $mimeType = $body['mime_type'] ?? 'application/x-mpegurl';
-        $title = $body['title'] ?? '';
-        $thumbnail = $body['thumbnail'] ?? '';
+        $mediaUrl = is_string($body['media_url'] ?? null) ? $body['media_url'] : '';
+        $mimeType = is_string($body['mime_type'] ?? null) ? $body['mime_type'] : 'application/x-mpegurl';
+        $title = is_string($body['title'] ?? null) ? $body['title'] : '';
+        $thumbnail = is_string($body['thumbnail'] ?? null) ? $body['thumbnail'] : '';
 
-        if ($mediaUrl === null || $mediaUrl === '') {
+        if ($mediaUrl === '') {
             return (new Response())->status(400)->json(['error' => 'media_url is required']);
         }
 

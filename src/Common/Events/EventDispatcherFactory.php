@@ -9,7 +9,6 @@ use Crell\Tukio\Dispatcher;
 use Crell\Tukio\OrderedListenerProvider;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
@@ -159,17 +158,12 @@ final class EventDispatcherFactory
             if ($candidate instanceof LoggerInterface) {
                 return $candidate;
             }
-            if ($candidate instanceof StructuredLogger) {
-                return new StructuredLoggerPsrAdapter($candidate);
-            }
         }
 
         try {
-            $factoryLogger = LoggerFactory::get(LogChannels::EVENTS);
-            if ($factoryLogger instanceof LoggerInterface) {
-                return $factoryLogger;
-            }
-            return new StructuredLoggerPsrAdapter($factoryLogger);
+            // LoggerFactory::get() returns StructuredLogger, which implements
+            // LoggerInterface, so it is returned as-is.
+            return LoggerFactory::get(LogChannels::EVENTS);
         } catch (\Throwable) {
             return null;
         }

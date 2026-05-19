@@ -18,8 +18,6 @@ use Psr\Log\LoggerInterface;
 class VideoToolboxProbe implements VendorProbeInterface
 {
     private const VENDOR_NAME = 'videotoolbox';
-    private const ENCODER_PREFIX = 'h264_videotoolbox';
-    private const DECODER_PREFIX = 'hevc_videotoolbox';
 
     public function getVendorName(): string
     {

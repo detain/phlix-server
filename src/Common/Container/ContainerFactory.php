@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Common\Container;
 
 use DI\ContainerBuilder;
+use Phlex\Common\Container\Providers\AdminServicesProvider;
 use Phlex\Common\Container\Providers\AuthServicesProvider;
 use Phlex\Common\Container\Providers\CoreServicesProvider;
 use Phlex\Common\Container\Providers\EventServicesProvider;
@@ -116,6 +117,7 @@ final class ContainerFactory
             new NetworkServicesProvider(),
             new SessionServicesProvider(),
             new WebPortalServicesProvider(),
+            new AdminServicesProvider(),
             new PluginsProvider(),
             new ThemingServicesProvider(),
         ];

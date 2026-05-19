@@ -16,12 +16,18 @@ use Phlex\Plugins\Manifest;
 use Phlex\Plugins\Oidc\Controller\OidcAdminController;
 use Phlex\Plugins\Oidc\Plugin;
 use Phlex\Plugins\PluginLoader;
+use Phlex\Admin\BackupManager;
+use Phlex\Admin\DashboardService;
+use Phlex\Server\Http\Controllers\Admin\BackupController;
+use Phlex\Server\Http\Controllers\Admin\DashboardController;
 use Phlex\Server\Http\Controllers\AuthProviderController;
 use Phlex\Server\Http\Controllers\PluginAdminController;
+use Phlex\Server\Http\Controllers\Stats\StatsController;
 use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Router;
 use Phlex\Server\Http\Routes\AdminRoutes;
+use Phlex\Stats\StatsCollector;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
@@ -53,9 +59,24 @@ final class AdminRoutesTest extends TestCase
         $this->audit  = new FakeAuditLogger();
 
         // Hand-rolled PSR-11 to avoid wiring the full DI tree just to
-        // run the router. Only the two services AdminRoutes::register
-        // resolves from the container are needed.
-        $container = new class ($this->loader, $this->users, $this->audit) implements ContainerInterface {
+        // run the router. Plugin-related collaborators are real
+        // fakes (FakePluginLoader, FakeUserRepository, FakeAuditLogger);
+        // the Stats/Dashboard/Backup controllers are stubbed because
+        // AdminRoutes::register() eagerly resolves them at bind time
+        // but the plugin-only tests below never actually dispatch
+        // requests to those routes.
+        $statsController     = new StatsController(new FakeStatsCollector());
+        $dashboardController = new DashboardController(FakeDashboardService::make());
+        $backupController    = new BackupController(FakeBackupManager::make());
+
+        $container = new class (
+            $this->loader,
+            $this->users,
+            $this->audit,
+            $statsController,
+            $dashboardController,
+            $backupController,
+        ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
 
@@ -63,6 +84,9 @@ final class AdminRoutesTest extends TestCase
                 private readonly FakePluginLoader $loader,
                 private readonly FakeUserRepository $users,
                 private readonly FakeAuditLogger $audit,
+                private readonly StatsController $statsController,
+                private readonly DashboardController $dashboardController,
+                private readonly BackupController $backupController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlex_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -95,6 +119,9 @@ final class AdminRoutesTest extends TestCase
                     LdapAdminController::class => new LdapAdminController(
                         $this->ldapPlugin,
                     ),
+                    StatsController::class     => $this->statsController,
+                    DashboardController::class => $this->dashboardController,
+                    BackupController::class    => $this->backupController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -107,6 +134,9 @@ final class AdminRoutesTest extends TestCase
                     AuthProviderController::class,
                     OidcAdminController::class,
                     LdapAdminController::class,
+                    StatsController::class,
+                    DashboardController::class,
+                    BackupController::class,
                 ], true);
             }
         };
@@ -396,6 +426,63 @@ final class FakeUserRepository extends UserRepository
             return null;
         }
         return ['id' => $id, 'is_admin' => 1];
+    }
+}
+
+/**
+ * Stats collector test double for AdminRoutes register-time wiring.
+ *
+ * AdminRoutes::register() eagerly resolves StatsController, which
+ * requires a StatsCollector; the plugin-focused tests in this file
+ * never dispatch requests to /api/v1/admin/stats/*, so the
+ * collector itself is never exercised — it just needs to be the
+ * right type.
+ *
+ * @internal
+ */
+final class FakeStatsCollector extends StatsCollector
+{
+    public function __construct()
+    {
+        // Skip parent constructor; no DB connection needed.
+    }
+}
+
+/**
+ * Dashboard service test double. Same rationale as
+ * {@see FakeStatsCollector}.
+ *
+ * @internal
+ */
+final class FakeDashboardService extends DashboardService
+{
+    public function __construct()
+    {
+        // Skip parent constructor.
+    }
+
+    public static function make(): self
+    {
+        return new self();
+    }
+}
+
+/**
+ * Backup manager test double. Same rationale as
+ * {@see FakeStatsCollector}.
+ *
+ * @internal
+ */
+final class FakeBackupManager extends BackupManager
+{
+    public function __construct()
+    {
+        // Skip parent constructor.
+    }
+
+    public static function make(): self
+    {
+        return new self();
     }
 }
 

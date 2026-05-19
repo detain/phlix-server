@@ -321,4 +321,69 @@ class HlsRelayManagerTest extends TestCase
 
         $this->assertSame($this->segmentPrefetcher, $prefetcher);
     }
+
+    /**
+     * Session teardown must drop the per-session SegmentCache so the
+     * buffered bytes are released back to PHP's memory pool.
+     *
+     * @group workerman
+     * @since Wave 2 (post-O.7)
+     */
+    public function testStopRelaySessionDropsPerSessionSegmentCache(): void
+    {
+        if (!$this->isTimerAvailable()) {
+            $this->markTestSkipped('Workerman Timer not available in this environment');
+        }
+
+        $channelId = 'channel-cache-teardown';
+        $userId = 'user-cache-teardown';
+        $tuneResult = [
+            'id' => 'tune-cache-1',
+            'channel_id' => $channelId,
+            'tuner_id' => 'tuner-1',
+            'started_at' => time(),
+            'stream_url' => '/livetv/tune-cache-1/stream',
+        ];
+
+        $this->mockDb->method('query')->willReturnCallback(
+            function ($sql) {
+                // getActiveSessions returns empty; SELECT * FROM ... returns a row when called for stop
+                if (
+                    str_contains($sql, 'SELECT * FROM livetv_relay_sessions WHERE session_id')
+                ) {
+                    return [[
+                        'session_id'      => 'will-be-overwritten',
+                        'user_id'         => 'user-cache-teardown',
+                        'channel_id'      => 'channel-cache-teardown',
+                        'tune_request_id' => 'tune-cache-1',
+                        'mount_url'       => '/relay/live/x/playlist.m3u8',
+                        'started_at'      => date('Y-m-d H:i:s'),
+                        'last_activity_at' => date('Y-m-d H:i:s'),
+                        'bytes_relayed'   => 0,
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        $this->mockLiveTvManager->method('tuneToChannel')->willReturn($tuneResult);
+        $this->mockHlsStreamer->method('getVariantPlaylistUrl')
+            ->willReturn('/hls/test/stream_0.m3u8');
+
+        $session = $this->manager->startRelaySession($channelId, $userId);
+
+        // Cache exists immediately after starting the session.
+        $cache = $this->manager->getSegmentCache($session->getSessionId());
+        $this->assertNotNull($cache, 'session must own a SegmentCache after startRelaySession');
+        $cache->push('seg-1', 'aaa', 2.0);
+        $this->assertSame(1, $cache->size());
+
+        $this->manager->stopRelaySession($session->getSessionId());
+
+        // Cache must be gone after teardown.
+        $this->assertNull(
+            $this->manager->getSegmentCache($session->getSessionId()),
+            'SegmentCache must be removed when the session ends',
+        );
+    }
 }

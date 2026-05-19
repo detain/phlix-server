@@ -57,7 +57,7 @@ class Recorder
     /** @var int Maximum storage in bytes (0 = unlimited) */
     private int $maxStorageBytes;
 
-    /** @var array<string, array{id:string, started_at:int, channel_id:string, stream_url:string}> Currently active recordings */
+    /** @var array<string, array{id:string, started_at:int, channel_id:string, stream_url:string, effective_start?:int, pid?:int|null}> Currently active recordings */
     private array $activeRecordings = [];
 
     /** @var array<string, array{id:string, session_id:string, channel_id:string, started_at:int, buffer_start:int, buffer_end:int, current_position?:int}> Active time-shift sessions */
@@ -364,12 +364,18 @@ class Recorder
      * Updates status to RECORDING and creates stream URL.
      * Applies pre-padding by adjusting the effective start time.
      *
+     * Persists the worker/ffmpeg PID into the `pid` column so that
+     * {@see resumeActiveRecordings()} can disambiguate "process
+     * restart, child died" from "ffmpeg still running" on bootstrap.
+     *
      * @param string $recordingId The recording to start
+     * @param int|null $pid Optional ffmpeg child PID (defaults to current PHP pid)
      * @return bool True if started successfully, false otherwise
      *
      * @since 0.12.0 Pre-padding is now applied - recording starts pre_padding_seconds early
+     * @since Wave 2 Persists pid for process-restart recovery.
      */
-    public function startRecording(string $recordingId): bool
+    public function startRecording(string $recordingId, ?int $pid = null): bool
     {
         $recording = $this->getRecording($recordingId);
         if (!$recording || $recording['status'] !== self::STATUS_SCHEDULED) {
@@ -387,7 +393,17 @@ class Recorder
             return false;
         }
 
-        $this->updateRecordingStatus($recordingId, self::STATUS_RECORDING);
+        $effectivePid = $pid ?? getmypid();
+        if ($effectivePid === false) {
+            $effectivePid = null;
+        }
+
+        $this->db->query(
+            "UPDATE livetv_recordings
+             SET status = ?, pid = ?, error_message = NULL, updated_at = NOW()
+             WHERE recording_id = ?",
+            [self::STATUS_RECORDING, $effectivePid, $recordingId]
+        );
 
         $this->activeRecordings[$recordingId] = [
             'id' => $recordingId,
@@ -395,15 +411,170 @@ class Recorder
             'effective_start' => $effectiveStart,
             'channel_id' => $recording['channel_id'],
             'stream_url' => "/livetv/recording/$recordingId/stream",
+            'pid' => $effectivePid,
         ];
 
         $this->logger->info('Recording started', [
             'recording_id' => $recordingId,
             'pre_padding' => $prePadding,
             'effective_start' => date('Y-m-d H:i:s', $effectiveStart),
+            'pid' => $effectivePid,
         ]);
 
         return true;
+    }
+
+    /**
+     * Recover recording state after a worker process restart.
+     *
+     * Live-TV recording state lives partly in the database (status,
+     * pid) and partly in {@see self::$activeRecordings} (process
+     * handles). When the workerman master is restarted everything in
+     * memory is lost; rows in `livetv_recordings` with
+     * `status='recording'` are now orphaned because the ffmpeg child
+     * was killed alongside its parent.
+     *
+     * This method runs at bootstrap (call from
+     * {@see \Phlex\LiveTv\LiveTvManager} or the Application boot path)
+     * and reconciles DB state with reality:
+     *
+     *   1. Recordings whose stored `pid` is still alive
+     *      (`posix_kill($pid, 0)` returns true) are re-attached to
+     *      {@see self::$activeRecordings}.
+     *   2. Recordings whose stored `pid` is dead (or null) are
+     *      marked `failed` with `error_message = 'process restart'`
+     *      and onComplete callbacks fire so housekeeping (DVR
+     *      conflict reset, comskip-skip, etc.) still runs.
+     *   3. Rows still in `status='scheduled'` whose `start_time` is
+     *      already in the past are re-armed by calling
+     *      {@see self::startRecording()}.
+     *
+     * Returns a stats array for the caller (typically logged or
+     * exposed via the admin dashboard).
+     *
+     * @return array{
+     *     resumed: int,
+     *     failed: int,
+     *     rearmed: int,
+     *     scheduled_skipped: int
+     * } Recovery statistics
+     *
+     * @since Wave 2 (post-O.7)
+     */
+    public function resumeActiveRecordings(): array
+    {
+        $stats = [
+            'resumed' => 0,
+            'failed' => 0,
+            'rearmed' => 0,
+            'scheduled_skipped' => 0,
+        ];
+
+        // 1+2: reconcile interrupted recordings.
+        $result = $this->db->query(
+            "SELECT * FROM livetv_recordings WHERE status = ?",
+            [self::STATUS_RECORDING]
+        );
+
+        while ($row = $result->fetch()) {
+            /** @var array<string, mixed> $row */
+            $recording = $this->mapRecording($row);
+            $recordingId = self::asString($recording['recording_id'] ?? '');
+            $channelId = self::asString($recording['channel_id'] ?? '');
+            $startTime = self::asInt($recording['start_time'] ?? 0);
+            $pid = self::asPid($row['pid'] ?? null);
+
+            if ($pid !== null && $pid > 0 && $this->isPidAlive($pid)) {
+                // ffmpeg child still alive after restart - re-attach in memory.
+                $this->activeRecordings[$recordingId] = [
+                    'id' => $recordingId,
+                    'started_at' => time(),
+                    'effective_start' => $startTime,
+                    'channel_id' => $channelId,
+                    'stream_url' => "/livetv/recording/{$recordingId}/stream",
+                    'pid' => $pid,
+                ];
+                $stats['resumed']++;
+
+                $this->logger->info('Recording recovered (pid alive)', [
+                    'recording_id' => $recordingId,
+                    'pid' => $pid,
+                ]);
+
+                continue;
+            }
+
+            // pid dead or never recorded - the ffmpeg child is gone.
+            $this->updateRecordingStatus(
+                $recordingId,
+                self::STATUS_FAILED,
+                'process restart'
+            );
+            $this->fireOnCompleteCallbacks(
+                $recordingId,
+                $this->getRecordingPath($recordingId)
+            );
+            $stats['failed']++;
+
+            $this->logger->warning('Recording marked failed after restart', [
+                'recording_id' => $recordingId,
+                'stored_pid' => $pid,
+                'reason' => 'process restart',
+            ]);
+        }
+
+        // 3: re-arm scheduled-and-due recordings.
+        $now = time();
+        $result = $this->db->query(
+            "SELECT * FROM livetv_recordings WHERE status = ? AND start_time <= ?",
+            [self::STATUS_SCHEDULED, $now]
+        );
+
+        $dueIds = [];
+        while ($row = $result->fetch()) {
+            /** @var array<string, mixed> $row */
+            $dueIds[] = self::asString($row['recording_id'] ?? '');
+        }
+
+        foreach ($dueIds as $recordingId) {
+            if ($this->startRecording($recordingId)) {
+                $stats['rearmed']++;
+            } else {
+                $stats['scheduled_skipped']++;
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Check whether a PID refers to a still-living process.
+     *
+     * Uses `posix_kill($pid, 0)` when the POSIX extension is loaded;
+     * falls back to a `/proc/<pid>` filesystem check for environments
+     * (e.g. some hardened containers) where posix is unavailable.
+     *
+     * @param int $pid Process identifier to probe.
+     * @return bool True if the OS reports the pid is alive.
+     *
+     * @since Wave 2 (post-O.7)
+     */
+    private function isPidAlive(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+
+        if (function_exists('posix_kill')) {
+            return @posix_kill($pid, 0);
+        }
+
+        // posix-less fallback: /proc is present on Linux runtimes.
+        if (is_dir('/proc/' . $pid)) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -857,6 +1028,7 @@ class Recorder
             'storage_path' => $row['storage_path'],
             'storage_size' => (int) ($row['storage_size'] ?? 0),
             'status' => $row['status'],
+            'pid' => self::asPid($row['pid'] ?? null),
             'error_message' => $row['error_message'],
             'series_rule_id' => $row['series_rule_id'],
             'duplicate_group' => $row['duplicate_group'],
@@ -865,6 +1037,65 @@ class Recorder
             'created_at' => $row['created_at'],
             'updated_at' => $row['updated_at'],
         ];
+    }
+
+    /**
+     * Coerce a mixed value to a string (helper used by recovery).
+     *
+     * @param mixed $value Value originating from a `$row` returned by
+     *        Workerman\MySQL\Connection::query()->fetch().
+     */
+    private static function asString(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return '';
+    }
+
+    /**
+     * Coerce a mixed value to an int (helper used by recovery).
+     *
+     * @param mixed $value Raw row value.
+     */
+    private static function asInt(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        return 0;
+    }
+
+    /**
+     * Coerce a mixed value to a nullable positive int pid.
+     *
+     * Returns null when the value is null/empty/non-numeric so the
+     * caller can cleanly distinguish "no pid recorded" from "pid 0".
+     *
+     * @param mixed $value Raw row value.
+     */
+    private static function asPid(mixed $value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            $int = (int) $value;
+            return $int > 0 ? $int : null;
+        }
+        return null;
     }
 
     /**

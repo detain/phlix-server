@@ -793,6 +793,31 @@ class LiveTvManager
     }
 
     /**
+     * Bootstrap LiveTV runtime state.
+     *
+     * Called once when the worker process starts. Currently delegates to
+     * {@see Recorder::resumeActiveRecordings()} to reconcile DVR state
+     * after a process restart (mark stale `recording` rows failed,
+     * re-arm due `scheduled` rows). Returns the recorder's recovery
+     * statistics so callers can log or surface them.
+     *
+     * @return array{
+     *     resumed: int,
+     *     failed: int,
+     *     rearmed: int,
+     *     scheduled_skipped: int
+     * } Recovery stats from the Recorder.
+     *
+     * @since Wave 2 (post-O.7)
+     */
+    public function bootstrap(): array
+    {
+        $stats = $this->recorder->resumeActiveRecordings();
+        $this->logger->info('LiveTvManager bootstrap: recorder recovery complete', $stats);
+        return $stats;
+    }
+
+    /**
      * Get the Schedules Direct EPG service instance.
      *
      * @return SdEpgService|null The SD EPG service or null if not configured

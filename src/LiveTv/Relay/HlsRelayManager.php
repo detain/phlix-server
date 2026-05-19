@@ -44,6 +44,15 @@ class HlsRelayManager
     /** @var int Maximum concurrent relay sessions. */
     private int $maxConcurrentSessions;
 
+    /** @var int Per-session SegmentCache maximum segment count. */
+    private int $segmentCacheMaxSegments;
+
+    /** @var float Per-session SegmentCache maximum buffered duration in seconds. */
+    private float $segmentCacheMaxBufferSeconds;
+
+    /** @var array<string, SegmentCache> Per-session bounded segment caches keyed by session id. */
+    private array $segmentCaches = [];
+
     /**
      * @param LiveTvManager       $liveTvManager    Live TV manager for tuner access.
      * @param HlsStreamer         $hlsStreamer      HLS streamer for variant playlists.
@@ -66,6 +75,8 @@ class HlsRelayManager
         ?LoggerInterface $logger = null,
         string $relayPathPrefix = '/relay/live',
         int $maxConcurrentSessions = 10,
+        int $segmentCacheMaxSegments = 6,
+        float $segmentCacheMaxBufferSeconds = 30.0,
     ) {
         $this->liveTvManager = $liveTvManager;
         $this->hlsStreamer = $hlsStreamer;
@@ -75,6 +86,8 @@ class HlsRelayManager
         $this->logger = $logger;
         $this->relayPathPrefix = $relayPathPrefix;
         $this->maxConcurrentSessions = $maxConcurrentSessions;
+        $this->segmentCacheMaxSegments = max(1, $segmentCacheMaxSegments);
+        $this->segmentCacheMaxBufferSeconds = max(1.0, $segmentCacheMaxBufferSeconds);
     }
 
     /**
@@ -132,6 +145,13 @@ class HlsRelayManager
              (session_id, user_id, channel_id, tune_request_id, mount_url, started_at, last_activity_at, bytes_relayed)
              VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 0)",
             [$sessionId, $userId, $channelId, $tuneRequestId, $mountUrl]
+        );
+
+        // Allocate the bounded per-session segment buffer.
+        $this->segmentCaches[$sessionId] = new SegmentCache(
+            $this->segmentCacheMaxSegments,
+            $this->segmentCacheMaxBufferSeconds,
+            $this->logger,
         );
 
         // Get variant playlist URL and start prefetching
@@ -292,6 +312,13 @@ class HlsRelayManager
         // Stop prefetching
         $this->segmentPrefetcher->stopPrefetch($sessionId);
 
+        // Drop the per-session segment cache. Safe: the session is ending,
+        // no downstream client can be reading from it anymore.
+        if (isset($this->segmentCaches[$sessionId])) {
+            $this->segmentCaches[$sessionId]->clear();
+            unset($this->segmentCaches[$sessionId]);
+        }
+
         // Release the tuner
         /** @var string $tuneRequestId */
         $tuneRequestId = $sessionRow['tune_request_id'];
@@ -380,6 +407,23 @@ class HlsRelayManager
     public function getSegmentPrefetcher(): HlsSegmentPrefetcher
     {
         return $this->segmentPrefetcher;
+    }
+
+    /**
+     * Get the per-session bounded segment cache, or null when the
+     * session is not active.
+     *
+     * Public so tests and the prefetcher can interact with the
+     * session-scoped buffer without leaking the internal map.
+     *
+     * @param string $sessionId Active relay session identifier.
+     * @return SegmentCache|null The per-session cache or null if absent.
+     *
+     * @since Wave 2 (post-O.7)
+     */
+    public function getSegmentCache(string $sessionId): ?SegmentCache
+    {
+        return $this->segmentCaches[$sessionId] ?? null;
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Phlex\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Socket;
 
 /**
  * NAT-PMP client (RFC 6886) for Apple NAT-PMP compatible routers.
@@ -22,8 +23,7 @@ class NatPmpClient
     private const VERSION = 0;
     private const OP_CODE_MAP_TCP = 1;
     private const OP_CODE_MAP_UDP = 2;
-    private const OP_CODE_UNMAP = 3;
-    private const RESPONSE_OP_CODE_MAP_ACK = 128;
+    private const RESPONSE_FLAG = 0x80;
 
     private LoggerInterface $logger;
     private int $timeout;
@@ -50,6 +50,7 @@ class NatPmpClient
     {
         $socket = $this->createUdpSocket();
         if ($socket === null) {
+            $this->logger->debug('NAT-PMP: failed to create UDP socket');
             return null;
         }
 
@@ -60,9 +61,9 @@ class NatPmpClient
             return null;
         }
 
-        $response = null;
-        $fromAddr = null;
-        $fromPort = null;
+        $response = '';
+        $fromAddr = '';
+        $fromPort = 0;
 
         $startTime = microtime(true);
 
@@ -135,9 +136,9 @@ class NatPmpClient
             return false;
         }
 
-        $response = null;
-        $fromAddr = null;
-        $fromPort = null;
+        $response = '';
+        $fromAddr = '';
+        $fromPort = 0;
 
         $startTime = microtime(true);
         while ((microtime(true) - $startTime) * 1000 < $this->timeout) {
@@ -153,9 +154,9 @@ class NatPmpClient
             $recvLen = @socket_recvfrom($socket, $response, 1024, 0, $fromAddr, $fromPort);
             socket_close($socket);
 
-            if ($recvLen !== false && $recvLen >= 12) {
-                $opcode = ord($response[0]) & 0x7F;
-                if ($opcode === ($opCode | 0x80)) {
+            if ($recvLen !== false && $recvLen >= 12 && strlen($response) >= 2) {
+                $responseOpCode = ord($response[1]);
+                if ($responseOpCode === ($opCode | self::RESPONSE_FLAG)) {
                     return true;
                 }
             }
@@ -188,9 +189,9 @@ class NatPmpClient
             return null;
         }
 
-        $response = null;
-        $fromAddr = null;
-        $fromPort = null;
+        $response = '';
+        $fromAddr = '';
+        $fromPort = 0;
 
         $startTime = microtime(true);
         while ((microtime(true) - $startTime) * 1000 < $this->timeout) {
@@ -206,10 +207,13 @@ class NatPmpClient
             $recvLen = @socket_recvfrom($socket, $response, 1024, 0, $fromAddr, $fromPort);
             socket_close($socket);
 
-            if ($recvLen !== false && $recvLen >= 16) {
-                $resOpCode = ord($response[0]) & 0x7F;
-                if ($resOpCode === ($opCode | 0x80)) {
-                    return unpack('n', substr($response, 10, 2))[1];
+            if ($recvLen !== false && $recvLen >= 16 && strlen($response) >= 12) {
+                $responseOpCode = ord($response[1]);
+                if ($responseOpCode === ($opCode | self::RESPONSE_FLAG)) {
+                    $parts = unpack('n', substr($response, 10, 2));
+                    if (is_array($parts) && isset($parts[1]) && is_int($parts[1])) {
+                        return $parts[1];
+                    }
                 }
             }
             return null;
@@ -271,7 +275,7 @@ class NatPmpClient
     /**
      * Creates a UDP socket for NAT-PMP communication.
      */
-    private function createUdpSocket(): mixed
+    private function createUdpSocket(): ?Socket
     {
         $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
         if ($socket === false) {
@@ -306,11 +310,11 @@ class NatPmpClient
         }
 
         foreach ($connections as $info) {
-            if (!is_array($info) || !isset($info['unicast'])) {
+            if (!is_array($info) || !isset($info['unicast']) || !is_array($info['unicast'])) {
                 continue;
             }
             foreach ($info['unicast'] as $addr) {
-                if (!is_array($addr) || !isset($addr['address'])) {
+                if (!is_array($addr) || !isset($addr['address']) || !is_string($addr['address'])) {
                     continue;
                 }
                 $ip = $addr['address'];
@@ -322,11 +326,14 @@ class NatPmpClient
 
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
-            $localAddr = null;
-            socket_getsockname($sock, $localAddr);
+            $localAddr = stream_socket_get_name($sock, false);
             fclose($sock);
-            if ($localAddr !== false && is_string($localAddr)) {
-                return $localAddr;
+            if ($localAddr !== false && $localAddr !== '') {
+                $colonPos = strrpos($localAddr, ':');
+                $host = $colonPos !== false ? substr($localAddr, 0, $colonPos) : $localAddr;
+                if ($host !== '') {
+                    return $host;
+                }
             }
         }
 

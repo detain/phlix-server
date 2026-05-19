@@ -6,6 +6,7 @@ namespace Phlex\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Socket;
 
 /**
  * UPnP Internet Gateway Device client using raw sockets.
@@ -49,6 +50,7 @@ class UpnpIgdClient
     {
         $socket = $this->createUdpSocket();
         if ($socket === null) {
+            $this->logger->debug('UPnP: failed to create UDP socket');
             return null;
         }
 
@@ -67,8 +69,6 @@ class UpnpIgdClient
 
         $gatewayUrl = null;
         $startTime = microtime(true);
-        $timeoutSec = (int) floor($this->timeout / 1000);
-        $timeoutUsec = ($this->timeout % 1000) * 1000;
 
         while ($gatewayUrl === null) {
             $elapsed = (microtime(true) - $startTime) * 1000;
@@ -80,7 +80,6 @@ class UpnpIgdClient
             $sec = (int) floor($remaining / 1000);
             $usec = ($remaining % 1000) * 1000;
 
-            $read = null;
             $write = null;
             $except = null;
             $r = [$socket];
@@ -90,9 +89,9 @@ class UpnpIgdClient
                 continue;
             }
 
-            $resp = null;
-            $fromAddr = null;
-            $fromPort = null;
+            $resp = '';
+            $fromAddr = '';
+            $fromPort = 0;
 
             $recvLen = @socket_recvfrom($socket, $resp, 65536, 0, $fromAddr, $fromPort);
             if ($recvLen === false || $recvLen === 0) {
@@ -241,10 +240,8 @@ class UpnpIgdClient
 
     /**
      * Creates a UDP socket for SSDP communication.
-     *
-     * @return resource|Socket|null
      */
-    private function createUdpSocket(): mixed
+    private function createUdpSocket(): ?Socket
     {
         $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
         if ($socket === false) {
@@ -296,14 +293,15 @@ class UpnpIgdClient
     private function fetchDeviceDescription(string $locationUrl): ?string
     {
         $parsed = @parse_url($locationUrl);
-        if (!is_array($parsed) || !isset($parsed['host'])) {
+        if (!is_array($parsed) || !isset($parsed['host']) || !is_string($parsed['host'])) {
             return null;
         }
 
-        $port = $parsed['port'] ?? 80;
-        $path = $parsed['path'] ?? '/';
+        $host = $parsed['host'];
+        $port = isset($parsed['port']) && is_int($parsed['port']) ? $parsed['port'] : 80;
+        $path = isset($parsed['path']) && is_string($parsed['path']) ? $parsed['path'] : '/';
 
-        $sock = @fsockopen($parsed['host'], $port, $errno, $errstr, 5);
+        $sock = @fsockopen($host, $port, $errno, $errstr, 5);
         if ($sock === false) {
             return null;
         }
@@ -311,26 +309,35 @@ class UpnpIgdClient
         $request = sprintf(
             "GET %s HTTP/1.1\r\nHost: %s:%d\r\nAccept: */*\r\nConnection: close\r\n\r\n",
             $path,
-            $parsed['host'],
+            $host,
             $port
         );
         @fwrite($sock, $request);
 
         $response = '';
         while (!feof($sock)) {
-            $response .= @fgets($sock, 4096);
+            $chunk = @fgets($sock, 4096);
+            if ($chunk === false) {
+                break;
+            }
+            $response .= $chunk;
         }
         @fclose($sock);
 
-        $body = preg_replace('/^[^\r\n]*\r\n/', '', $response, 1);
-        $body = preg_replace('/\r\n[^\r\n]+\r\n\r\n/', "\r\n\r\n", $body);
+        $bodyAfterStatus = preg_replace('/^[^\r\n]*\r\n/', '', $response, 1);
+        if ($bodyAfterStatus === null) {
+            return $locationUrl;
+        }
+        $body = preg_replace('/\r\n[^\r\n]+\r\n\r\n/', "\r\n\r\n", $bodyAfterStatus);
+        if ($body === null) {
+            $body = $bodyAfterStatus;
+        }
 
         if (preg_match('/<deviceDescriptionURL>(.+?)<\/deviceDescriptionURL>/i', $body, $matches)) {
             return $this->resolveUrl($locationUrl, $matches[1]);
         }
 
         if (preg_match('/<URLBase>(.+?)<\/URLBase>/i', $body, $matches)) {
-            $urlBase = trim($matches[1]);
             if (preg_match('/<deviceList>.*?<\/deviceList>/is', $body, $deviceListMatch)) {
                 $igDevicePattern = '/<device>.*?<deviceType>.*?InternetGatewayDevice'
                     . '.*?<\/deviceType>.*?<deviceList>(.*?)<\/deviceList>.*?<\/device>/is';
@@ -391,12 +398,12 @@ class UpnpIgdClient
     private function findWanIpConnectionService(string $descUrl): ?string
     {
         $parsed = @parse_url($descUrl);
-        if (!is_array($parsed) || !isset($parsed['host'])) {
+        if (!is_array($parsed) || !isset($parsed['host']) || !is_string($parsed['host'])) {
             return null;
         }
 
-        $port = $parsed['port'] ?? 80;
-        $path = $parsed['path'] ?? '/';
+        $port = isset($parsed['port']) && is_int($parsed['port']) ? $parsed['port'] : 80;
+        $path = isset($parsed['path']) && is_string($parsed['path']) ? $parsed['path'] : '/';
 
         $content = $this->httpGet($parsed['host'], $port, $path);
         if ($content === null) {
@@ -406,8 +413,16 @@ class UpnpIgdClient
         $wanIpServicePattern = '/<service>.*?<serviceType>'
             . 'urn:schemas-upnp-org:service:WANIPConnection:1'
             . '<\/serviceType>.*?<controlURL>(.+?)<\/controlURL>.*?<\/service>/is';
-        if (preg_match_all($wanIpServicePattern, $content, $matches)) {
-            return $this->resolveUrl($descUrl, trim(end($matches[1])));
+        if (preg_match_all($wanIpServicePattern, $content, $matches) > 0) {
+            $controlUrls = $matches[1];
+            if ($controlUrls === []) {
+                return null;
+            }
+            $last = end($controlUrls);
+            if (!is_string($last)) {
+                return null;
+            }
+            return $this->resolveUrl($descUrl, trim($last));
         }
 
         return null;
@@ -419,12 +434,12 @@ class UpnpIgdClient
     private function findWanConnectionDevice(string $descUrl): ?string
     {
         $parsed = @parse_url($descUrl);
-        if (!is_array($parsed) || !isset($parsed['host'])) {
+        if (!is_array($parsed) || !isset($parsed['host']) || !is_string($parsed['host'])) {
             return null;
         }
 
-        $port = $parsed['port'] ?? 80;
-        $path = $parsed['path'] ?? '/';
+        $port = isset($parsed['port']) && is_int($parsed['port']) ? $parsed['port'] : 80;
+        $path = isset($parsed['path']) && is_string($parsed['path']) ? $parsed['path'] : '/';
 
         $content = $this->httpGet($parsed['host'], $port, $path);
         if ($content === null) {
@@ -562,12 +577,12 @@ class UpnpIgdClient
             return null;
         }
 
-        foreach ($connections as $name => $info) {
-            if (!is_array($info) || !isset($info['unicast'])) {
+        foreach ($connections as $info) {
+            if (!is_array($info) || !isset($info['unicast']) || !is_array($info['unicast'])) {
                 continue;
             }
             foreach ($info['unicast'] as $addr) {
-                if (!is_array($addr) || !isset($addr['address'])) {
+                if (!is_array($addr) || !isset($addr['address']) || !is_string($addr['address'])) {
                     continue;
                 }
                 $ip = $addr['address'];
@@ -579,11 +594,14 @@ class UpnpIgdClient
 
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
-            $localAddr = null;
-            socket_getsockname($sock, $localAddr);
+            $localAddr = stream_socket_get_name($sock, false);
             fclose($sock);
-            if ($localAddr !== false && is_string($localAddr)) {
-                return $localAddr;
+            if ($localAddr !== false && $localAddr !== '') {
+                $colonPos = strrpos($localAddr, ':');
+                $host = $colonPos !== false ? substr($localAddr, 0, $colonPos) : $localAddr;
+                if ($host !== '') {
+                    return $host;
+                }
             }
         }
 

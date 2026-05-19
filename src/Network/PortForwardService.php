@@ -54,7 +54,7 @@ class PortForwardService
      * If successful, returns the public IP:port string and stores result
      * in config/port-forward.json.
      *
-     * @return array{success: bool, public_endpoint: ?string, method: ?string, external_ip: ?string}
+     * @return array{success: bool, public_endpoint: string|null, method: string|null, external_ip: string|null}
      */
     public function autoConfigure(): array
     {
@@ -221,10 +221,13 @@ TEXT;
         }
 
         $savedConfig = $this->loadConfig();
-        if ($savedConfig !== null && ($savedConfig['enabled'] ?? false)) {
+        if ($savedConfig !== null && (bool)($savedConfig['enabled'] ?? false)) {
             $externalIp = $savedConfig['external_ip'] ?? null;
-            if ($externalIp !== null) {
+            if (is_string($externalIp) && $externalIp !== '') {
                 $savedPort = $savedConfig['port'] ?? $this->port;
+                if (!is_int($savedPort)) {
+                    $savedPort = $this->port;
+                }
                 $candidates[] = [
                     'type' => 'upnp-mapped',
                     'url' => 'http://' . $externalIp . ':' . $savedPort,
@@ -238,7 +241,7 @@ TEXT;
     /**
      * Returns the current port forwarding status.
      *
-     * @return array{enabled: bool, method: ?string, external_ip: ?string, port: int, endpoint: ?string}
+     * @return array{enabled: bool, method: string|null, external_ip: string|null, port: int, endpoint: string|null}
      */
     public function getStatus(): array
     {
@@ -253,13 +256,17 @@ TEXT;
             ];
         }
 
-        $enabled = $config['enabled'] ?? false;
-        $externalIp = $config['external_ip'] ?? null;
-        $port = $config['port'] ?? $this->port;
+        $enabled = (bool)($config['enabled'] ?? false);
+        $externalIpRaw = $config['external_ip'] ?? null;
+        $externalIp = is_string($externalIpRaw) ? $externalIpRaw : null;
+        $portRaw = $config['port'] ?? $this->port;
+        $port = is_int($portRaw) ? $portRaw : $this->port;
+        $methodRaw = $config['method'] ?? null;
+        $method = is_string($methodRaw) ? $methodRaw : null;
 
         return [
             'enabled' => $enabled,
-            'method' => $config['method'] ?? null,
+            'method' => $method,
             'external_ip' => $externalIp,
             'port' => $port,
             'endpoint' => $enabled && $externalIp !== null ? $externalIp . ':' . $port : null,
@@ -298,11 +305,11 @@ TEXT;
         }
 
         foreach ($connections as $info) {
-            if (!is_array($info) || !isset($info['unicast'])) {
+            if (!is_array($info) || !isset($info['unicast']) || !is_array($info['unicast'])) {
                 continue;
             }
             foreach ($info['unicast'] as $addr) {
-                if (!is_array($addr) || !isset($addr['address'])) {
+                if (!is_array($addr) || !isset($addr['address']) || !is_string($addr['address'])) {
                     continue;
                 }
                 $ip = $addr['address'];
@@ -314,11 +321,14 @@ TEXT;
 
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
-            $localAddr = null;
-            socket_getsockname($sock, $localAddr);
+            $localAddr = stream_socket_get_name($sock, false);
             fclose($sock);
-            if ($localAddr !== false && is_string($localAddr)) {
-                return $localAddr;
+            if ($localAddr !== false && $localAddr !== '') {
+                $colonPos = strrpos($localAddr, ':');
+                $host = $colonPos !== false ? substr($localAddr, 0, $colonPos) : $localAddr;
+                if ($host !== '') {
+                    return $host;
+                }
             }
         }
 
@@ -336,11 +346,11 @@ TEXT;
         }
 
         foreach ($connections as $info) {
-            if (!is_array($info) || !isset($info['unicast'])) {
+            if (!is_array($info) || !isset($info['unicast']) || !is_array($info['unicast'])) {
                 continue;
             }
             foreach ($info['unicast'] as $addr) {
-                if (!is_array($addr) || !isset($addr['address'])) {
+                if (!is_array($addr) || !isset($addr['address']) || !is_string($addr['address'])) {
                     continue;
                 }
                 $ip = $addr['address'];
@@ -378,6 +388,8 @@ TEXT;
 
     /**
      * Persists the port-forward configuration to disk.
+     *
+     * @param array<string, mixed> $config
      */
     private function persistConfig(array $config): void
     {
@@ -395,6 +407,8 @@ TEXT;
 
     /**
      * Loads the port-forward configuration from disk.
+     *
+     * @return array<string, mixed>|null
      */
     private function loadConfig(): ?array
     {
@@ -413,7 +427,14 @@ TEXT;
             return null;
         }
 
-        return $data;
+        $normalized = [];
+        foreach ($data as $key => $value) {
+            if (is_string($key)) {
+                $normalized[$key] = $value;
+            }
+        }
+
+        return $normalized;
     }
 
     /**
@@ -429,6 +450,8 @@ TEXT;
 
     /**
      * Builds a standardized result array.
+     *
+     * @return array{success: bool, public_endpoint: string|null, method: string|null, external_ip: string|null}
      */
     private function result(bool $success, ?string $endpoint, ?string $method, ?string $externalIp): array
     {

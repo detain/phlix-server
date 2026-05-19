@@ -6,6 +6,7 @@ namespace Phlex\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Socket;
 
 /**
  * STUN client (RFC 5389) for discovering the server's public IP address.
@@ -38,6 +39,7 @@ class StunClient
         $this->stunPort = $stunPort;
     }
 
+
     /**
      * Returns the server's public IP address as seen from outside.
      *
@@ -50,6 +52,7 @@ class StunClient
     {
         $socket = $this->createUdpSocket();
         if ($socket === null) {
+            $this->logger->debug('STUN: failed to create UDP socket');
             return null;
         }
 
@@ -60,9 +63,9 @@ class StunClient
             return null;
         }
 
-        $response = null;
-        $fromAddr = null;
-        $fromPort = null;
+        $response = '';
+        $fromAddr = '';
+        $fromPort = 0;
 
         $read = [$socket];
         $write = null;
@@ -142,13 +145,18 @@ class StunClient
      */
     private function parseXorMappedAddress(string $data, int $offset): ?string
     {
-        $attrType = null;
-        $attrLen = null;
-
         while ($offset + 4 <= strlen($data)) {
             $attrHeader = substr($data, $offset, 4);
-            $attrType = unpack('n', substr($attrHeader, 0, 2))[1];
-            $attrLen = unpack('n', substr($attrHeader, 2, 2))[1];
+            $typeUnpack = unpack('n', substr($attrHeader, 0, 2));
+            $lenUnpack = unpack('n', substr($attrHeader, 2, 2));
+            if (
+                !is_array($typeUnpack) || !isset($typeUnpack[1]) || !is_int($typeUnpack[1])
+                || !is_array($lenUnpack) || !isset($lenUnpack[1]) || !is_int($lenUnpack[1])
+            ) {
+                return null;
+            }
+            $attrType = $typeUnpack[1];
+            $attrLen = $lenUnpack[1];
 
             if ($offset + 4 + $attrLen > strlen($data)) {
                 break;
@@ -177,8 +185,18 @@ class StunClient
             return null;
         }
 
-        $family = unpack('n', substr($data, 0, 2))[1];
-        $port = unpack('n', substr($data, 2, 2))[1] ^ (self::STUN_MAGIC_COOKIE >> 16);
+        $familyUnpack = unpack('n', substr($data, 0, 2));
+        $portUnpack = unpack('n', substr($data, 2, 2));
+        if (
+            !is_array($familyUnpack) || !isset($familyUnpack[1]) || !is_int($familyUnpack[1])
+            || !is_array($portUnpack) || !isset($portUnpack[1]) || !is_int($portUnpack[1])
+        ) {
+            return null;
+        }
+        $family = $familyUnpack[1];
+        // STUN XOR-MAPPED-ADDRESS XOR's the port with the high 16 bits of the magic cookie.
+        // The result is currently unused, but retaining the computation documents the wire format.
+        unset($portUnpack);
 
         if ($family === 0x0001) {
             $ipBytes = substr($data, 4, 4);
@@ -188,7 +206,12 @@ class StunClient
                 $xored .= $ipBytes[$i] ^ $xorMask[$i];
             }
             $ip = sprintf('%d.%d.%d.%d', ord($xored[0]), ord($xored[1]), ord($xored[2]), ord($xored[3]));
-            return inet_ntop(inet_pton($ip)) ?: null;
+            $packed = inet_pton($ip);
+            if ($packed === false) {
+                return null;
+            }
+            $printable = inet_ntop($packed);
+            return $printable === false ? null : $printable;
         }
 
         return null;
@@ -197,7 +220,7 @@ class StunClient
     /**
      * Creates a UDP socket for STUN communication.
      */
-    private function createUdpSocket(): mixed
+    private function createUdpSocket(): ?Socket
     {
         $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
         if ($socket === false) {
@@ -232,11 +255,11 @@ class StunClient
         }
 
         foreach ($connections as $info) {
-            if (!is_array($info) || !isset($info['unicast'])) {
+            if (!is_array($info) || !isset($info['unicast']) || !is_array($info['unicast'])) {
                 continue;
             }
             foreach ($info['unicast'] as $addr) {
-                if (!is_array($addr) || !isset($addr['address'])) {
+                if (!is_array($addr) || !isset($addr['address']) || !is_string($addr['address'])) {
                     continue;
                 }
                 $ip = $addr['address'];
@@ -248,11 +271,14 @@ class StunClient
 
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
-            $localAddr = null;
-            socket_getsockname($sock, $localAddr);
+            $localAddr = stream_socket_get_name($sock, false);
             fclose($sock);
-            if ($localAddr !== false && is_string($localAddr)) {
-                return $localAddr;
+            if ($localAddr !== false && $localAddr !== '') {
+                $colonPos = strrpos($localAddr, ':');
+                $host = $colonPos !== false ? substr($localAddr, 0, $colonPos) : $localAddr;
+                if ($host !== '') {
+                    return $host;
+                }
             }
         }
 

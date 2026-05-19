@@ -58,8 +58,10 @@ class WebSocketServer
 
         $host = $config['host'] ?? '0.0.0.0';
         $port = $config['port'] ?? 8097;
+        $hostStr = is_string($host) ? $host : '0.0.0.0';
+        $portStr = is_numeric($port) ? (string)(int)$port : '8097';
 
-        $this->worker = new Worker("websocket://{$host}:{$port}");
+        $this->worker = new Worker("websocket://{$hostStr}:{$portStr}");
         $this->worker->onWorkerStart = [$this, 'onStart'];
         $this->worker->onConnect = [$this, 'onConnect'];
         $this->worker->onMessage = [$this, 'onMessage'];
@@ -76,10 +78,12 @@ class WebSocketServer
      */
     public function onStart(): void
     {
+        $host = $this->config['host'] ?? '0.0.0.0';
+        $port = $this->config['port'] ?? 8097;
         $logger = LoggerFactory::get(LogChannels::WEBSOCKET);
         $logger->info('WebSocket server started', [
-            'host' => $this->config['host'] ?? '0.0.0.0',
-            'port' => $this->config['port'] ?? 8097,
+            'host' => is_string($host) ? $host : '0.0.0.0',
+            'port' => is_numeric($port) ? (int)$port : 8097,
         ]);
 
         // Start cleanup timer for stale connections (every 60 seconds)
@@ -194,6 +198,9 @@ class WebSocketServer
     {
         $objectId = spl_object_id($connection);
         foreach ($this->connections->all() as $wsConnection) {
+            if (!$wsConnection instanceof Connection) {
+                continue;
+            }
             if (spl_object_id($wsConnection->getConnection()) === $objectId) {
                 return $wsConnection;
             }

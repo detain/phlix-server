@@ -107,18 +107,23 @@ class SessionController
         $sessionId = $params['id'] ?? '';
         $data = $request->body;
 
-        if (empty($data['media_item_id']) || !isset($data['position_ticks'])) {
+        $mediaItemId = $data['media_item_id'] ?? null;
+        $positionTicks = $data['position_ticks'] ?? null;
+        if (!is_string($mediaItemId) || $mediaItemId === '' || !is_numeric($positionTicks)) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: media_item_id, position_ticks',
             ]);
         }
 
+        $durationTicks = $data['duration_ticks'] ?? 0;
+        $isPaused = $data['is_paused'] ?? false;
+
         $this->playbackController->reportProgress(
             $sessionId,
-            $data['media_item_id'],
-            (int)$data['position_ticks'],
-            (int)($data['duration_ticks'] ?? 0),
-            (bool)($data['is_paused'] ?? false)
+            $mediaItemId,
+            (int)$positionTicks,
+            is_numeric($durationTicks) ? (int)$durationTicks : 0,
+            (bool)$isPaused
         );
 
         return (new Response())->json(['message' => 'Progress updated']);

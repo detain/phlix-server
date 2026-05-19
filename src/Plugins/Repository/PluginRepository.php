@@ -99,7 +99,12 @@ class PluginRepository
             throw new PluginNotFoundException(sprintf('No installed plugin named "%s".', $name));
         }
 
-        return $this->hydrate($rows[0]);
+        $row = $rows[0];
+        if (!is_array($row)) {
+            throw new PluginNotFoundException(sprintf('No installed plugin named "%s".', $name));
+        }
+
+        return $this->hydrate(\Phlex\Common\Util\RowMap::fromMixed($row));
     }
 
     /**
@@ -173,14 +178,7 @@ class PluginRepository
             . 'FROM plugins ORDER BY name ASC',
         );
 
-        if (!is_array($rows)) {
-            return [];
-        }
-
-        return array_values(array_map(
-            fn (array $row): InstalledPlugin => $this->hydrate($row),
-            $rows,
-        ));
+        return $this->mapToPlugins($rows);
     }
 
     /**
@@ -197,14 +195,22 @@ class PluginRepository
             . 'FROM plugins WHERE enabled = 1 ORDER BY name ASC',
         );
 
-        if (!is_array($rows)) {
-            return [];
-        }
+        return $this->mapToPlugins($rows);
+    }
 
-        return array_values(array_map(
-            fn (array $row): InstalledPlugin => $this->hydrate($row),
-            $rows,
-        ));
+    /**
+     * Hydrate a mixed result-set into a list of InstalledPlugin objects.
+     *
+     * @param mixed $rows Raw `$db->query()` result.
+     * @return list<InstalledPlugin>
+     */
+    private function mapToPlugins(mixed $rows): array
+    {
+        $out = [];
+        foreach (\Phlex\Common\Util\RowMap::listFromMixed($rows) as $row) {
+            $out[] = $this->hydrate($row);
+        }
+        return $out;
     }
 
     /**

@@ -23,19 +23,21 @@ namespace Phlex\Server\Http;
  * $router->post('/users', [UserController::class, 'create']);
  * $response = $router->dispatch($request);
  * ```
+ *
+ * @phpstan-type RouteHandlerArray array{0: string|object, 1: string}
+ * @phpstan-type RouteHandler callable|RouteHandlerArray
+ * @phpstan-type RouteEntry array{handler: RouteHandler, middleware: list<callable>, path: string}
  */
 class Router
 {
-    /** @var array<string, array<string, array{handler: callable|array, middleware: array<callable>, path: string}>> Registered routes by method and pattern */
+    /**
+     * Registered routes by method and pattern.
+     *
+     * @var array<string, array<string, RouteEntry>>
+     */
     private array $routes = [];
 
-    /** @var array<string, string> Named routes mapping name to path */
-    private array $namedRoutes = [];
-
-    /** @var array<callable> Stack of global middleware */
-    private array $middleware = [];
-
-    /** @var array<callable> Middleware for the current route group */
+    /** @var list<callable> Middleware for the current route group */
     private array $groupMiddleware = [];
 
     /** @var string|null Current route group prefix */
@@ -45,7 +47,7 @@ class Router
      * Registers a GET route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      *
      * @example
@@ -62,7 +64,7 @@ class Router
      * Registers a POST route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function post(string $path, callable|array $handler): self
@@ -74,7 +76,7 @@ class Router
      * Registers a PUT route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function put(string $path, callable|array $handler): self
@@ -86,7 +88,7 @@ class Router
      * Registers a PATCH route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function patch(string $path, callable|array $handler): self
@@ -98,7 +100,7 @@ class Router
      * Registers a DELETE route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function delete(string $path, callable|array $handler): self
@@ -110,7 +112,7 @@ class Router
      * Registers an OPTIONS route.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function options(string $path, callable|array $handler): self
@@ -122,7 +124,7 @@ class Router
      * Registers a route for all common HTTP methods.
      *
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      */
     public function any(string $path, callable|array $handler): self
@@ -136,9 +138,9 @@ class Router
     /**
      * Registers a route for specific HTTP methods.
      *
-     * @param array<string> $methods Array of HTTP method names
+     * @param list<string> $methods Array of HTTP method names
      * @param string $path The route path (supports {param} placeholders)
-     * @param callable|array $handler The handler callback or [Controller::class, 'method']
+     * @param RouteHandler $handler The handler callback or [Controller::class, 'method']
      * @return self For method chaining
      *
      * @example
@@ -159,7 +161,7 @@ class Router
      *
      * @param string $method The HTTP method
      * @param string $path The route path
-     * @param callable|array $handler The handler
+     * @param RouteHandler $handler The handler
      * @return self For method chaining
      */
     private function addRoute(string $method, string $path, callable|array $handler): self
@@ -196,7 +198,7 @@ class Router
      *
      * @param string $prefix Common path prefix for all routes in the group
      * @param callable $callback Callback that registers routes in the group
-     * @param array<callable> $middleware Optional middleware for all routes in the group
+     * @param list<callable> $middleware Optional middleware for all routes in the group
      * @return self For method chaining
      *
      * @example
@@ -267,7 +269,7 @@ class Router
     /**
      * Runs middleware stack and returns early if a response is produced.
      *
-     * @param array<callable> $middlewareStack Array of middleware to run
+     * @param list<callable> $middlewareStack Array of middleware to run
      * @param Request $request The current request
      * @return Response|null The middleware response, or null to continue
      */
@@ -285,7 +287,7 @@ class Router
     /**
      * Calls the appropriate handler for a matched route.
      *
-     * @param callable|array $handler The handler callback or [Controller, method]
+     * @param RouteHandler $handler The handler callback or [Controller, method]
      * @param Request $request The current request
      * @param array<string, string> $params Extracted path parameters
      * @return Response The handler's response
@@ -297,10 +299,15 @@ class Router
         if (is_array($handler)) {
             [$class, $method] = $handler;
             $instance = is_string($class) ? new $class() : $class;
-            return $instance->$method($request, $params);
+            $result = $instance->$method($request, $params);
+        } else {
+            $result = $handler($request, $params);
         }
 
-        return $handler($request, $params);
+        if (!$result instanceof Response) {
+            throw new \BadMethodCallException('Route handler must return a Response');
+        }
+        return $result;
     }
 
     /**
@@ -687,7 +694,7 @@ class Router
     /**
      * Gets all registered routes.
      *
-     * @return array<string, array> Registered routes
+     * @return array<string, array<string, RouteEntry>> Registered routes
      *
      * @description Returns the internal routes array for inspection or testing.
      */

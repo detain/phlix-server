@@ -52,8 +52,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
     public function register(ContainerBuilder $builder, array $appConfig): void
     {
         $hlsConfig = is_array($appConfig['hls'] ?? null) ? $appConfig['hls'] : [];
-        $segmentDir = (string)($hlsConfig['segment_dir'] ?? sys_get_temp_dir() . '/phlex_hls');
-        $baseUrl = (string)($hlsConfig['base_url'] ?? 'http://localhost:8096');
+        $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
+        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlex_hls';
+        $baseUrlRaw = $hlsConfig['base_url'] ?? null;
+        $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
 
         $builder->addDefinitions([
             ItemRepository::class => autowire(),

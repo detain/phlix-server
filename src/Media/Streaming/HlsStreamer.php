@@ -27,9 +27,6 @@ class HlsStreamer
     /** @var QualitySelector Quality selection engine */
     private QualitySelector $qualitySelector;
 
-    /** @var array<string, array{url: string, bandwidth: int, resolution: string}> Variant playlist cache */
-    private array $variantPlaylists = [];
-
     /**
      * Creates a new HLS streamer instance.
      *
@@ -47,6 +44,14 @@ class HlsStreamer
         $this->segmentDir = $segmentDir;
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->qualitySelector = $qualitySelector;
+    }
+
+    /**
+     * Get the underlying QualitySelector for callers needing access to quality logic.
+     */
+    public function getQualitySelector(): QualitySelector
+    {
+        return $this->qualitySelector;
     }
 
     /**
@@ -364,9 +369,11 @@ class HlsStreamer
         }
 
         $files = glob("{$dir}/*");
-        foreach ($files as $file) {
-            if (is_file($file)) {
-                unlink($file);
+        if ($files !== false) {
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    unlink($file);
+                }
             }
         }
         rmdir($dir);
@@ -415,6 +422,6 @@ class HlsStreamer
         $dir = "{$this->segmentDir}/{$jobId}";
         $pattern = "{$dir}/segment_{$variantIndex}_*.ts";
         $files = glob($pattern);
-        return count($files);
+        return $files === false ? 0 : count($files);
     }
 }

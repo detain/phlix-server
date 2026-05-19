@@ -203,18 +203,27 @@ class Response
             return $this->status(404)->json(['error' => 'File not found']);
         }
 
+        $contents = file_get_contents($path);
+        if ($contents === false) {
+            return $this->status(500)->json(['error' => 'Failed to read file']);
+        }
+
         $this->statusCode = 200;
-        $this->body = file_get_contents($path);
+        $this->body = $contents;
 
         if ($contentType) {
             $this->headers['Content-Type'] = $contentType;
         } else {
             $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            $this->headers['Content-Type'] = finfo_file($finfo, $path);
-            finfo_close($finfo);
+            $mime = false;
+            if ($finfo !== false) {
+                $mime = finfo_file($finfo, $path);
+                finfo_close($finfo);
+            }
+            $this->headers['Content-Type'] = is_string($mime) ? $mime : 'application/octet-stream';
         }
 
-        $this->headers['Content-Length'] = strlen($this->body);
+        $this->headers['Content-Length'] = (string)strlen($this->body);
 
         if ($downloadName) {
             $this->headers['Content-Disposition'] = 'attachment; filename="' . $downloadName . '"';
@@ -331,9 +340,8 @@ class Response
     }
 
     /**
-     * Gets the status text for a given status code.
+     * Gets the status text for the current status code.
      *
-     * @param int $code The HTTP status code
      * @return string The status text (e.g., "OK", "Not Found")
      */
     private function getStatusText(): string

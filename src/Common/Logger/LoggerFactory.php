@@ -1,9 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Common\Logger;
 
 class LoggerFactory
 {
+    /** @var array<string, StructuredLogger> */
     private static array $loggers = [];
     private static string $configPath = '';
 
@@ -16,6 +19,9 @@ class LoggerFactory
     {
         if (!isset(self::$loggers[$channel])) {
             $config = include self::$configPath;
+            if (!is_array($config)) {
+                $config = [];
+            }
             self::$loggers[$channel] = new StructuredLogger($channel, $config);
         }
         return self::$loggers[$channel];

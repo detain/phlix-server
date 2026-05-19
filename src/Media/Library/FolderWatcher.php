@@ -26,8 +26,8 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  */
 class FolderWatcher
 {
-    /** @var StructuredLogger|null Logger instance for structured logging */
-    private ?StructuredLogger $logger = null;
+    /** @var StructuredLogger Logger instance for structured logging */
+    private StructuredLogger $logger;
 
     /** @var EventDispatcherInterface|null PSR-14 event dispatcher for library events */
     private ?EventDispatcherInterface $eventDispatcher = null;
@@ -40,9 +40,6 @@ class FolderWatcher
 
     /** @var int Interval in seconds between change checks */
     private int $checkInterval = 30;
-
-    /** @var bool Whether the watcher is actively running */
-    private bool $running = false;
 
     /**
      * Constructor for FolderWatcher.
@@ -218,6 +215,9 @@ class FolderWatcher
 
         $files = [];
         foreach ($iterator as $file) {
+            if (!$file instanceof \SplFileInfo) {
+                continue;
+            }
             if ($file->isFile()) {
                 $files[] = $file->getPathname() . ':' . $file->getMTime();
             }
@@ -250,6 +250,16 @@ class FolderWatcher
     public function setCheckInterval(int $seconds): void
     {
         $this->checkInterval = $seconds;
+    }
+
+    /**
+     * Gets the configured interval between change detection checks.
+     *
+     * @return int Interval in seconds
+     */
+    public function getCheckInterval(): int
+    {
+        return $this->checkInterval;
     }
 
     /**

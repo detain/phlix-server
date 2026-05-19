@@ -30,8 +30,8 @@ use SplFileInfo;
  */
 class MediaScanner
 {
-    /** @var StructuredLogger|null Logger instance for structured logging */
-    private ?StructuredLogger $logger = null;
+    /** @var StructuredLogger Logger instance for structured logging */
+    private StructuredLogger $logger;
 
     /** @var Connection Database connection */
     private Connection $db;
@@ -227,6 +227,9 @@ class MediaScanner
         $added = 0;
 
         foreach ($iterator as $file) {
+            if (!$file instanceof SplFileInfo) {
+                continue;
+            }
             if ($file->isDir()) {
                 continue;
             }
@@ -366,11 +369,11 @@ class MediaScanner
         // Remove extension
         $name = pathinfo($filename, PATHINFO_FILENAME);
 
-        // Movie pattern: Movie Name (Year) or Movie Name.Year
+        // Movie pattern: Movie Name (Year) or Movie Name [Year]
         if ($type === 'movie') {
-            if (preg_match('/(.+?)\s*[\(\[(\s*(\d{4})\s*\)\]\)]/', $name, $matches)) {
+            if (preg_match('/(.+?)\s*[\(\[]\s*(\d{4})\s*[\)\]]/', $name, $matches)) {
                 $metadata['name'] = trim($matches[1]);
-                $metadata['year'] = $matches[3] ?? null;
+                $metadata['year'] = $matches[2];
             } else {
                 $metadata['name'] = $name;
             }
@@ -413,7 +416,11 @@ class MediaScanner
         if (!is_array($rows) || $rows === []) {
             return '';
         }
-        $name = $rows[0]['name'] ?? '';
+        $first = $rows[0] ?? null;
+        if (!is_array($first)) {
+            return '';
+        }
+        $name = $first['name'] ?? '';
         return is_string($name) ? $name : '';
     }
 

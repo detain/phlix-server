@@ -27,7 +27,7 @@ interface ConnectionInterface
     /**
      * Sends data to the connected client.
      *
-     * @param string|array $data Data to send
+     * @param string|array<string, mixed> $data Data to send
      * @return void
      */
     public function send(string|array $data): void;

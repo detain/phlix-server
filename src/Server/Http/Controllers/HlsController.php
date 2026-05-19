@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Server\Http\Controllers;
 
 use Phlex\Server\Http\Request;
@@ -15,6 +17,9 @@ class HlsController
         $this->hlsStreamer = $hlsStreamer;
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function getMasterPlaylist(Request $request, array $params): Response
     {
         $jobId = $params['job_id'] ?? '';
@@ -35,6 +40,9 @@ class HlsController
             ->text($playlist);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function getVariantPlaylist(Request $request, array $params): Response
     {
         $jobId = $params['job_id'] ?? '';
@@ -54,6 +62,9 @@ class HlsController
             ->text($playlist);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function getSegment(Request $request, array $params): Response
     {
         $jobId = $params['job_id'] ?? '';
@@ -69,11 +80,14 @@ class HlsController
         return (new Response())
             ->header('Content-Type', 'video/mp2t')
             ->header('Cache-Control', 'public, max-age=31536000')
-            ->header('Content-Length', strlen($content))
+            ->header('Content-Length', (string)strlen($content))
             ->header('Accept-Ranges', 'bytes')
             ->body($content);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function getPlaylist(Request $request, array $params): Response
     {
         $jobId = $params['job_id'] ?? '';

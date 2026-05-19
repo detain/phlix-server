@@ -1,15 +1,21 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Common\Database;
 
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 class QueryBuilder
 {
     private Connection $connection;
     private string $table = '';
+    /** @var list<string> */
     private array $columns = ['*'];
+    /** @var list<string> */
     private array $where = [];
+    /** @var list<mixed> */
     private array $bindings = [];
     private ?int $limit = null;
     private ?int $offset = null;
@@ -28,9 +34,12 @@ class QueryBuilder
         return $builder;
     }
 
+    /**
+     * @param list<string>|string $columns
+     */
     public function select(array|string $columns = ['*']): self
     {
-        $this->columns = is_array($columns) ? $columns : [$columns];
+        $this->columns = is_array($columns) ? array_values($columns) : [$columns];
         return $this;
     }
 
@@ -39,6 +48,10 @@ class QueryBuilder
         if ($value === null) {
             $value = $operator;
             $operator = '=';
+        }
+
+        if (!is_string($operator)) {
+            throw new \InvalidArgumentException('Operator must be a string when a value is provided');
         }
 
         $this->where[] = "$column $operator ?";
@@ -60,12 +73,18 @@ class QueryBuilder
         return $this;
     }
 
+    /**
+     * @return list<array<string, mixed>>
+     */
     public function get(): array
     {
         $sql = $this->buildSelect();
-        return $this->connection->query($sql, $this->bindings);
+        return RowMap::listFromMixed($this->connection->query($sql, $this->bindings));
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     public function first(): ?array
     {
         $this->limit(1);
@@ -73,6 +92,9 @@ class QueryBuilder
         return $results[0] ?? null;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public function insert(array $data): mixed
     {
         $columns = array_keys($data);
@@ -86,9 +108,12 @@ class QueryBuilder
         );
 
         $this->connection->query($sql, array_values($data));
-        return $this->connection->getLastInsertId();
+        return $this->connection->lastInsertId();
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public function update(array $data): int
     {
         $sets = [];
@@ -104,7 +129,8 @@ class QueryBuilder
             $this->buildWhere()
         );
 
-        return $this->connection->query($sql, $this->bindings);
+        $rows = $this->connection->query($sql, $this->bindings);
+        return is_int($rows) ? $rows : 0;
     }
 
     public function delete(): int
@@ -115,7 +141,8 @@ class QueryBuilder
             $this->buildWhere()
         );
 
-        return $this->connection->query($sql, $this->bindings);
+        $rows = $this->connection->query($sql, $this->bindings);
+        return is_int($rows) ? $rows : 0;
     }
 
     public function count(): int
@@ -127,7 +154,8 @@ class QueryBuilder
 
         $this->columns = $originalColumns;
 
-        return (int)($result['count'] ?? 0);
+        $count = $result['count'] ?? 0;
+        return is_numeric($count) ? (int)$count : 0;
     }
 
     private function buildSelect(): string

@@ -35,6 +35,9 @@ class AuditLogger
         ]);
     }
 
+    /**
+     * @param array<string, mixed> $context
+     */
     public function logFailedAuth(string $reason, array $context = []): void
     {
         $this->logger->warning('Authentication failure', array_merge([

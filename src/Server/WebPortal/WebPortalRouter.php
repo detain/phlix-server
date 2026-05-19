@@ -9,7 +9,6 @@ use Phlex\Server\Http\Response;
 use Phlex\Server\Http\Router;
 use Phlex\Media\Library\LibraryManager;
 use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\MusicLibraryManager;
 use Phlex\Media\Markers\PlaybackMarkerService;
 use Phlex\Session\SessionManager;
 use Phlex\Session\PlaybackController;
@@ -42,14 +41,8 @@ class WebPortalRouter
     /** @var ItemRepository Provides access to media items */
     private ItemRepository $itemRepository;
 
-    /** @var SessionManager Manages user sessions */
-    private SessionManager $sessionManager;
-
     /** @var PlaybackController Handles playback state and progress */
     private PlaybackController $playbackController;
-
-    /** @var AuthManager Handles authentication operations */
-    private AuthManager $authManager;
 
     /** @var PlaybackMarkerService Provides skip-button specs for playback */
     private PlaybackMarkerService $playbackMarkerService;
@@ -87,11 +80,13 @@ class WebPortalRouter
         AuthManager $authManager,
         PlaybackMarkerService $playbackMarkerService
     ) {
+        // SessionManager and AuthManager are accepted for future middleware wiring
+        // but not stored — see WebPortalRouter routes for authenticated endpoints.
+        unset($sessionManager, $authManager);
+
         $this->libraryManager = $libraryManager;
         $this->itemRepository = $itemRepository;
-        $this->sessionManager = $sessionManager;
         $this->playbackController = $playbackController;
-        $this->authManager = $authManager;
         $this->playbackMarkerService = $playbackMarkerService;
         $this->router = new Router();
         $this->registerRoutes();
@@ -194,8 +189,11 @@ class WebPortalRouter
 
         // Load item counts
         foreach ($libraries as &$lib) {
-            $lib['item_count'] = $this->itemRepository->countByType($lib['id'], $lib['type']);
+            $libId = is_string($lib['id'] ?? null) ? $lib['id'] : '';
+            $libType = is_string($lib['type'] ?? null) ? $lib['type'] : '';
+            $lib['item_count'] = $this->itemRepository->countByType($libId, $libType);
         }
+        unset($lib);
 
         return (new Response())->json(['libraries' => $libraries]);
     }
@@ -265,11 +263,11 @@ class WebPortalRouter
     public function getLibraryItems(Request $request, array $params): Response
     {
         $libraryId = $params['id'];
-        $type = $request->query['type'] ?? null;
-        $limit = (int)($request->query['limit'] ?? 50);
-        $offset = (int)($request->query['offset'] ?? 0);
+        $type = $request->queryString('type');
+        $limit = $request->queryInt('limit', 50);
+        $offset = $request->queryInt('offset', 0);
 
-        if ($type) {
+        if ($type !== null && $type !== '') {
             $items = $this->itemRepository->getByType($libraryId, $type, $limit, $offset);
         } else {
             $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
@@ -320,7 +318,8 @@ class WebPortalRouter
         }
 
         // Get streams
-        $item['streams'] = $this->itemRepository->getItemStreams($item['id']);
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $item['streams'] = $this->itemRepository->getItemStreams($itemId);
 
         return (new Response())->json(['item' => $item]);
     }

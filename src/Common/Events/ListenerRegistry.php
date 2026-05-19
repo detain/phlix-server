@@ -251,7 +251,7 @@ final class ListenerRegistry
         }
         if (is_array($listener)) {
             $target = $listener[0];
-            $method = (string)($listener[1] ?? '');
+            $method = (string)$listener[1];
             if (is_object($target)) {
                 return 'om:' . spl_object_hash($target) . '::' . $method;
             }

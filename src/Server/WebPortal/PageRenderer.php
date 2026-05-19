@@ -99,7 +99,7 @@ class PageRenderer
      *
      * @return Response HTML response with the rendered home page
      *
-     * @template_variables
+     * Template variables:
      * - current_page: string ('home')
      * - user: array (display_name)
      * - libraries: array (library data with items sub-array)
@@ -120,12 +120,17 @@ class PageRenderer
         $librariesWithItems = [];
 
         foreach (array_slice($libraries, 0, 3) as $library) {
-            $items = $this->itemRepository->getByLibrary($library['id'], 10, 0);
+            $libId = is_string($library['id'] ?? null) ? $library['id'] : '';
+            $items = $this->itemRepository->getByLibrary($libId, 10, 0);
             $library['items'] = $items;
             $librariesWithItems[] = $library;
         }
 
-        $recentlyAdded = $this->itemRepository->getRecentlyAdded($libraries[0]['id'] ?? '', 20);
+        $firstLibraryId = $libraries[0]['id'] ?? '';
+        $recentlyAdded = $this->itemRepository->getRecentlyAdded(
+            is_string($firstLibraryId) ? $firstLibraryId : '',
+            20
+        );
 
         $continueWatching = [];
         if ($userId) {
@@ -156,7 +161,7 @@ class PageRenderer
      *
      * @return Response HTML response with the rendered library page or 404
      *
-     * @template_variables
+     * Template variables:
      * - current_page: string ('library')
      * - library: array (library data)
      * - items: array (media items in library)
@@ -201,7 +206,7 @@ class PageRenderer
      *
      * @return Response HTML response with the rendered login page
      *
-     * @template_variables
+     * Template variables:
      * - (Smarty default variables)
      *
      * @example Template: auth/login.tpl

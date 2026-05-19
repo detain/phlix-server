@@ -98,23 +98,66 @@ class Request
     public static function fromGlobals(): self
     {
         $request = new self();
-        $request->method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $request->path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?? '/';
-        $request->queryString = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_QUERY) ?? '';
+        $request->method = self::serverString('REQUEST_METHOD', 'GET');
+        $uri = self::serverString('REQUEST_URI', '/');
+        $request->path = self::stringOr(parse_url($uri, PHP_URL_PATH), '/');
+        $request->queryString = self::stringOr(parse_url($uri, PHP_URL_QUERY), '');
         $request->headers = self::parseHeaders();
-        $request->query = $_GET;
-        $request->files = $_FILES;
+        $request->query = self::stringKeyedArray($_GET);
+        $request->files = self::stringKeyedArray($_FILES);
 
         $input = file_get_contents('php://input');
         $request->rawBody = $input !== false ? $input : '';
-        $request->body = $input !== false ? (json_decode($input, true) ?? []) : [];
+        if ($input !== false) {
+            $decoded = json_decode($input, true);
+            $request->body = is_array($decoded) ? self::stringKeyedArray($decoded) : [];
+        } else {
+            $request->body = [];
+        }
 
-        $request->remoteIp = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-        $request->remotePort = (int)($_SERVER['REMOTE_PORT'] ?? 0);
-        $request->protocol = $_SERVER['SERVER_PROTOCOL'] ?? 'HTTP/1.1';
+        $request->remoteIp = self::serverString('REMOTE_ADDR', '0.0.0.0');
+        $remotePort = $_SERVER['REMOTE_PORT'] ?? 0;
+        $request->remotePort = is_numeric($remotePort) ? (int)$remotePort : 0;
+        $request->protocol = self::serverString('SERVER_PROTOCOL', 'HTTP/1.1');
         $request->bearerToken = $request->getBearerToken();
 
         return $request;
+    }
+
+    /**
+     * Read a string-valued entry from $_SERVER with a default fallback.
+     */
+    private static function serverString(string $key, string $default): string
+    {
+        $value = $_SERVER[$key] ?? null;
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Coerce a possibly mixed value to a non-empty string or fall back to a default.
+     *
+     * @param mixed $value
+     */
+    private static function stringOr(mixed $value, string $default): string
+    {
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Narrow a mixed iterable (superglobal) into a string-keyed array.
+     *
+     * @param array<array-key, mixed> $input
+     * @return array<string, mixed>
+     */
+    private static function stringKeyedArray(array $input): array
+    {
+        $out = [];
+        foreach ($input as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
     }
 
     /**
@@ -129,16 +172,16 @@ class Request
     {
         $headers = [];
         foreach ($_SERVER as $key => $value) {
-            if (str_starts_with($key, 'HTTP_')) {
+            if (is_string($key) && str_starts_with($key, 'HTTP_') && is_string($value)) {
                 $header = str_replace('_', '-', substr($key, 5));
                 $headers[$header] = $value;
             }
         }
         // Also check for headers set via FastCGI
-        if (isset($_SERVER['CONTENT_TYPE'])) {
+        if (isset($_SERVER['CONTENT_TYPE']) && is_string($_SERVER['CONTENT_TYPE'])) {
             $headers['CONTENT-TYPE'] = $_SERVER['CONTENT_TYPE'];
         }
-        if (isset($_SERVER['CONTENT_LENGTH'])) {
+        if (isset($_SERVER['CONTENT_LENGTH']) && is_string($_SERVER['CONTENT_LENGTH'])) {
             $headers['CONTENT-LENGTH'] = $_SERVER['CONTENT_LENGTH'];
         }
         return $headers;
@@ -164,7 +207,8 @@ class Request
         // Fall back to server array
         $normalized = strtoupper(str_replace('-', '_', $name));
         $key = 'HTTP_' . $normalized;
-        return $_SERVER[$key] ?? null;
+        $value = $_SERVER[$key] ?? null;
+        return is_string($value) ? $value : null;
     }
 
     /**
@@ -273,5 +317,44 @@ class Request
     public function has(string $key): bool
     {
         return isset($this->body[$key]);
+    }
+
+    /**
+     * Gets a query parameter coerced to a string (or default if missing/non-scalar).
+     *
+     * @param string $key The query parameter name
+     * @param string|null $default The fallback when the parameter is absent or non-scalar
+     * @return string|null
+     */
+    public function queryString(string $key, ?string $default = null): ?string
+    {
+        $value = $this->query[$key] ?? null;
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_scalar($value)) {
+            return (string)$value;
+        }
+        return $default;
+    }
+
+    /**
+     * Gets a query parameter coerced to an int (or default if missing/non-numeric).
+     *
+     * @param string $key The query parameter name
+     * @param int $default The fallback when the parameter is absent or non-numeric
+     */
+    public function queryInt(string $key, int $default = 0): int
+    {
+        $value = $this->query[$key] ?? null;
+        return is_numeric($value) ? (int)$value : $default;
+    }
+
+    /**
+     * Gets a path parameter as a string (returns default if missing).
+     */
+    public function pathParam(string $key, string $default = ''): string
+    {
+        return $this->pathParams[$key] ?? $default;
     }
 }

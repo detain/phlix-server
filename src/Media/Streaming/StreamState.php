@@ -102,8 +102,8 @@ class StreamState
      *     duration_ticks: int,
      *     status: string,
      *     play_method: string,
-     *     requested_streams: array,
-     *     actual_streams: array,
+     *     requested_streams: array<int, array{stream_index: int, stream_type: string, codec: string}>,
+     *     actual_streams: array<int, array{stream_index: int, stream_type: string, codec: string}>,
      *     transcode_job_id: string|null
      * } Array representation of stream state
      */

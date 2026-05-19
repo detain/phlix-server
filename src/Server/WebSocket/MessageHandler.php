@@ -118,7 +118,7 @@ class MessageHandler
     {
         $message = json_decode($data, true);
 
-        if (!$message || !isset($message['type'])) {
+        if (!is_array($message) || !isset($message['type']) || !is_string($message['type'])) {
             $connection->sendMessage('error', ['message' => 'Invalid message format']);
             return;
         }
@@ -175,7 +175,7 @@ class MessageHandler
             'type' => $event,
             'data' => $data,
             'timestamp' => time(),
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         foreach ($this->connections->all() as $connection) {
             if (!in_array($connection->getId(), $excludeIds, true)) {
@@ -200,7 +200,7 @@ class MessageHandler
             'type' => $event,
             'data' => $data,
             'timestamp' => time(),
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         foreach ($this->connections->all() as $connection) {
             if ($connection->getUserId() === $userId) {
@@ -223,7 +223,7 @@ class MessageHandler
             'type' => $event,
             'data' => $data,
             'timestamp' => time(),
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         foreach ($this->connections->all() as $connection) {
             if ($connection->getSessionId() === $sessionId) {

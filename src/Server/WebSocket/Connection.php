@@ -66,7 +66,7 @@ class Connection implements ConnectionInterface
     /**
      * Sends data to the connected client.
      *
-     * @param string|array $data Data to send (arrays are JSON encoded)
+     * @param string|array<string, mixed> $data Data to send (arrays are JSON encoded)
      * @return void
      *
      * @throws \JsonException If array data cannot be encoded

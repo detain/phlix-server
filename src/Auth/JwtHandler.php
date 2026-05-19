@@ -201,7 +201,8 @@ class JwtHandler
     public function getUserIdFromToken(string $token): ?string
     {
         $payload = $this->validateToken($token);
-        return $payload['sub'] ?? null;
+        $sub = $payload['sub'] ?? null;
+        return is_string($sub) ? $sub : null;
     }
 
     /**
@@ -263,8 +264,8 @@ class JwtHandler
     private function encode(array $payload): string
     {
         $header = ['alg' => $this->algorithm, 'typ' => 'JWT'];
-        $headerEncoded = $this->base64UrlEncode(json_encode($header));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload));
+        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
 
         $signature = hash_hmac(
             'sha256',
@@ -315,8 +316,19 @@ class JwtHandler
 
         $header = json_decode($this->base64UrlDecode($headerEncoded), true);
         $payload = json_decode($this->base64UrlDecode($payloadEncoded), true);
+        unset($header);
 
-        return $payload;
+        if (!is_array($payload)) {
+            throw new \InvalidArgumentException('Invalid token payload');
+        }
+
+        $out = [];
+        foreach ($payload as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
     }
 
     /**

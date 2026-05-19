@@ -58,9 +58,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
     {
         $jwtSecret = (string)(getenv('JWT_SECRET') ?: self::DEFAULT_JWT_SECRET);
         $jwtConfig = is_array($appConfig['jwt'] ?? null) ? $appConfig['jwt'] : [];
-        $jwtTtl = isset($jwtConfig['ttl']) ? (int)$jwtConfig['ttl'] : 3600;
-        $jwtRefreshTtl = isset($jwtConfig['refresh_ttl']) ? (int)$jwtConfig['refresh_ttl'] : 604800;
-        $jwtAlgorithm = isset($jwtConfig['algorithm']) ? (string)$jwtConfig['algorithm'] : 'HS256';
+        $jwtTtl = is_numeric($jwtConfig['ttl'] ?? null) ? (int)$jwtConfig['ttl'] : 3600;
+        $jwtRefreshTtl = is_numeric($jwtConfig['refresh_ttl'] ?? null)
+            ? (int)$jwtConfig['refresh_ttl']
+            : 604800;
+        $jwtAlgorithm = is_string($jwtConfig['algorithm'] ?? null) ? $jwtConfig['algorithm'] : 'HS256';
 
         $builder->addDefinitions([
             JwtHandler::class => factory(

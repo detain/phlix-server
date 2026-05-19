@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Server\Http\Controllers;
 
 use Phlex\Server\Http\Request;
@@ -15,26 +17,32 @@ class MediaItemController
         $this->itemRepository = $itemRepository;
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function index(Request $request, array $params): Response
     {
         $libraryId = $params['library_id'] ?? null;
-        $type = $request->query['type'] ?? null;
-        $limit = (int)($request->query['limit'] ?? 100);
-        $offset = (int)($request->query['offset'] ?? 0);
+        $type = $request->queryString('type');
+        $limit = $request->queryInt('limit', 100);
+        $offset = $request->queryInt('offset', 0);
 
         if ($libraryId) {
-            if ($type) {
+            if ($type !== null) {
                 $items = $this->itemRepository->getByType($libraryId, $type, $limit, $offset);
             } else {
                 $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
             }
         } else {
-            $items = $this->itemRepository->searchFuzzy($request->query['q'] ?? '', $limit);
+            $items = $this->itemRepository->searchFuzzy($request->queryString('q', '') ?? '', $limit);
         }
 
         return (new Response())->json(['items' => $items]);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function show(Request $request, array $params): Response
     {
         $item = $this->itemRepository->findById($params['id']);
@@ -44,22 +52,29 @@ class MediaItemController
         }
 
         // Also get streams
-        $item['streams'] = $this->itemRepository->getItemStreams($item['id']);
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $item['streams'] = $this->itemRepository->getItemStreams($itemId);
 
         return (new Response())->json(['item' => $item]);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function children(Request $request, array $params): Response
     {
         $children = $this->itemRepository->findByParent($params['id']);
         return (new Response())->json(['items' => $children]);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function search(Request $request, array $params): Response
     {
-        $query = $request->query['q'] ?? '';
+        $query = $request->queryString('q', '') ?? '';
 
-        if (empty($query)) {
+        if ($query === '') {
             return (new Response())->status(400)->json(['error' => 'Query parameter "q" is required']);
         }
 
@@ -67,10 +82,13 @@ class MediaItemController
         return (new Response())->json(['items' => $items]);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function recentlyAdded(Request $request, array $params): Response
     {
         $libraryId = $params['library_id'] ?? null;
-        $limit = (int)($request->query['limit'] ?? 20);
+        $limit = $request->queryInt('limit', 20);
 
         if (!$libraryId) {
             return (new Response())->status(400)->json(['error' => 'library_id is required']);
@@ -80,6 +98,9 @@ class MediaItemController
         return (new Response())->json(['items' => $items]);
     }
 
+    /**
+     * @param array<string, string> $params
+     */
     public function delete(Request $request, array $params): Response
     {
         $item = $this->itemRepository->findById($params['id']);

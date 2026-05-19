@@ -49,19 +49,18 @@ class AuthController
     public function register(Request $request, array $params): Response
     {
         $data = $request->body;
+        $username = $data['username'] ?? null;
+        $email = $data['email'] ?? null;
+        $password = $data['password'] ?? null;
 
-        if (empty($data['username']) || empty($data['email']) || empty($data['password'])) {
+        if (!is_string($username) || $username === '' || !is_string($email) || $email === '' || !is_string($password) || $password === '') {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: username, email, password',
             ]);
         }
 
         try {
-            $result = $this->authManager->register(
-                $data['username'],
-                $data['email'],
-                $data['password']
-            );
+            $result = $this->authManager->register($username, $email, $password);
             return (new Response())->status(201)->json($result);
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
@@ -81,8 +80,10 @@ class AuthController
     public function login(Request $request, array $params): Response
     {
         $data = $request->body;
+        $username = $data['username'] ?? null;
+        $password = $data['password'] ?? null;
 
-        if (empty($data['username']) || empty($data['password'])) {
+        if (!is_string($username) || $username === '' || !is_string($password) || $password === '') {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: username, password',
             ]);
@@ -91,11 +92,7 @@ class AuthController
         $deviceId = $request->getHeader('X-Device-Id') ?? 'unknown';
 
         try {
-            $result = $this->authManager->login(
-                $data['username'],
-                $data['password'],
-                $deviceId
-            );
+            $result = $this->authManager->login($username, $password, $deviceId);
             return (new Response())->json($result);
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
@@ -114,15 +111,16 @@ class AuthController
     public function refresh(Request $request, array $params): Response
     {
         $data = $request->body;
+        $refreshToken = $data['refresh_token'] ?? null;
 
-        if (empty($data['refresh_token'])) {
+        if (!is_string($refreshToken) || $refreshToken === '') {
             return (new Response())->status(400)->json([
                 'error' => 'refresh_token is required',
             ]);
         }
 
         try {
-            $result = $this->authManager->refreshToken($data['refresh_token']);
+            $result = $this->authManager->refreshToken($refreshToken);
             return (new Response())->json($result);
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);

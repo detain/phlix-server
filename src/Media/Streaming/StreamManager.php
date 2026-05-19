@@ -247,11 +247,14 @@ class StreamManager
         $state->mediaItemId = $mediaItemId;
         $state->sessionId = $sessionId;
         $state->userId = $userId;
-        $state->durationTicks = $item['metadata']['runtime_ticks'] ?? 0;
+        $metadata = $item['metadata'] ?? [];
+        $runtimeTicks = is_array($metadata) ? ($metadata['runtime_ticks'] ?? 0) : 0;
+        $state->durationTicks = is_numeric($runtimeTicks) ? (int)$runtimeTicks : 0;
 
         $profileName = $options['device_profile'] ?? 'generic';
 
-        $sourceInfo = $this->probeMedia($item['path']);
+        $itemPath = $item['path'] ?? '';
+        $sourceInfo = $this->probeMedia(is_string($itemPath) ? $itemPath : '');
 
         $quality = $this->qualitySelector->selectQuality($sourceInfo, $profileName, $options);
         $state->playMethod = $quality['method'];

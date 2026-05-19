@@ -357,7 +357,8 @@ final class TraktPlugin implements LifecycleInterface
         }
 
         $entry = $this->watchHistory->getForMediaItem('default', $mediaItemId);
-        if ($entry === null || $entry['progress_percent'] < 90.0) {
+        $progress = $entry['progress_percent'] ?? 0;
+        if ($entry === null || !is_numeric($progress) || (float) $progress < 90.0) {
             return;
         }
 
@@ -368,11 +369,14 @@ final class TraktPlugin implements LifecycleInterface
             $this->logger
         );
 
+        $lastWatchedAt = $entry['last_watched_at'] ?? 'now';
+        $durationTicks = $entry['duration_ticks'] ?? null;
+
         $sync->syncPhlexToTrakt(
             $mediaItemId,
-            $entry['last_watched_at'] ?? 'now',
+            is_string($lastWatchedAt) ? $lastWatchedAt : 'now',
             $positionTicks,
-            $entry['duration_ticks'] ?? null
+            is_numeric($durationTicks) ? (int) $durationTicks : null
         );
     }
 

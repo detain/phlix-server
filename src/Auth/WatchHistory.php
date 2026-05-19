@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
+use Phlex\Auth\Dto\UserRow;
+use Phlex\Auth\Dto\WatchHistoryRow;
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -149,22 +152,11 @@ class WatchHistory
      * @param int $limit Maximum number of entries to return (default: 50)
      * @param int $offset Number of entries to skip for pagination (default: 0)
      *
-     * @return array<int, array{
-     *     id: string,
-     *     profile_id: string,
-     *     media_item_id: string,
-     *     position_ticks: int,
-     *     duration_ticks: int|null,
-     *     playback_status: string,
-     *     progress_percent: float,
-     *     last_watched_at: string,
-     *     created_at: string|null,
-     *     completed_at: string|null,
-     *     media_name?: string,
-     *     media_type?: string,
-     *     poster_url?: string,
-     *     thumbnail_url?: string
-     * }> Array of watch history entries with media info
+     * @return list<array<string, mixed>> Array of watch history entries with media info.
+     *         Each entry contains: id, profile_id, media_item_id, position_ticks,
+     *         duration_ticks, playback_status, progress_percent, last_watched_at,
+     *         created_at, completed_at, and optionally media_name, media_type,
+     *         metadata, poster_url, thumbnail_url when JOINed.
      *
      * @throws void
      *
@@ -183,7 +175,8 @@ class WatchHistory
             [$profileId, $limit, $offset]
         );
 
-        return array_map(fn($r) => $this->hydrateEntry($r), $results);
+        $rows = RowMap::listFromMixed($results);
+        return array_map(fn(array $r): array => $this->hydrateEntry($r), $rows);
     }
 
     /**
@@ -195,7 +188,7 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      * @param int $limit Maximum number of items to return (default: 10)
      *
-     * @return array<int, array> Array of in-progress watch entries with media info.
+     * @return list<array<string, mixed>> Array of in-progress watch entries with media info.
      *                          See getHistory() return format for structure.
      *
      * @throws void
@@ -218,7 +211,8 @@ class WatchHistory
             [$profileId, self::COMPLETED_THRESHOLD, $limit]
         );
 
-        return array_map(fn($r) => $this->hydrateEntry($r), $results);
+        $rows = RowMap::listFromMixed($results);
+        return array_map(fn(array $r): array => $this->hydrateEntry($r), $rows);
     }
 
     /**
@@ -230,7 +224,7 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      * @param int $limit Maximum number of items to return (default: 20)
      *
-     * @return array<int, array> Array of completed watch entries with media info.
+     * @return list<array<string, mixed>> Array of completed watch entries with media info.
      *                          See getHistory() return format for structure.
      *
      * @throws void
@@ -251,7 +245,8 @@ class WatchHistory
             [$profileId, $limit]
         );
 
-        return array_map(fn($r) => $this->hydrateEntry($r), $results);
+        $rows = RowMap::listFromMixed($results);
+        return array_map(fn(array $r): array => $this->hydrateEntry($r), $rows);
     }
 
     /**
@@ -263,7 +258,7 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      * @param string $mediaItemId The unique media item identifier (UUID format)
      *
-     * @return array|null Watch history entry array (see getHistory() format)
+     * @return array<string, mixed>|null Watch history entry array (see getHistory() format)
      *                    or null if no entry exists
      *
      * @throws void
@@ -277,11 +272,12 @@ class WatchHistory
             [$profileId, $mediaItemId]
         );
 
-        if (empty($result)) {
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrateEntry($result[0]);
+        return $this->hydrateEntry($row);
     }
 
     /**
@@ -299,9 +295,9 @@ class WatchHistory
      *                                existing value if not provided)
      * @param string $status Playback status constant (STATUS_PLAYING, STATUS_PAUSED, etc.)
      *
-     * @return array Updated watch history entry with media info
+     * @return array<string, mixed> Updated watch history entry with media info
      *
-     * @throws void
+     * @throws \RuntimeException If the persisted entry can not be re-read after upsert.
      *
      * @example
      * // Report 30 minutes progress on a 2-hour movie
@@ -381,7 +377,13 @@ class WatchHistory
             );
         }
 
-        return $this->getForMediaItem($profileId, $mediaItemId);
+        $entry = $this->getForMediaItem($profileId, $mediaItemId);
+        if ($entry === null) {
+            throw new \RuntimeException(
+                'Failed to read back watch_history entry after upsert'
+            );
+        }
+        return $entry;
     }
 
     /**
@@ -394,9 +396,9 @@ class WatchHistory
      * @param string $profileId The unique profile identifier (UUID format)
      * @param string $mediaItemId The unique media item identifier (UUID format)
      *
-     * @return array Updated watch history entry with status=completed
+     * @return array<string, mixed> Updated watch history entry with status=completed
      *
-     * @throws void
+     * @throws \RuntimeException If the persisted entry can not be re-read after upsert.
      *
      * @see updateProgress() For progress-based completion
      */
@@ -473,14 +475,14 @@ class WatchHistory
      */
     public function getTotalWatchTime(string $profileId): int
     {
-        $result = $this->db->query(
+        $row = UserRow::firstFromMixed($this->db->query(
             "SELECT SUM(duration_ticks) as total
              FROM watch_history
              WHERE profile_id = ? AND playback_status = 'completed'",
             [$profileId]
-        );
+        ));
 
-        $totalTicks = (int)($result[0]['total'] ?? 0);
+        $totalTicks = UserRow::int($row, 'total', 0);
 
         // Convert ticks to seconds (ticks / TICKS_PER_SECOND)
         return (int)($totalTicks / self::TICKS_PER_SECOND);
@@ -503,16 +505,16 @@ class WatchHistory
      */
     public function getTodayWatchTime(string $profileId): int
     {
-        $result = $this->db->query(
+        $row = UserRow::firstFromMixed($this->db->query(
             "SELECT SUM(duration_ticks) as total
              FROM watch_history
              WHERE profile_id = ?
                AND playback_status = 'completed'
                AND DATE(last_watched_at) = CURDATE()",
             [$profileId]
-        );
+        ));
 
-        $totalTicks = (int)($result[0]['total'] ?? 0);
+        $totalTicks = UserRow::int($row, 'total', 0);
 
         return (int)($totalTicks / self::TICKS_PER_SECOND);
     }
@@ -550,8 +552,13 @@ class WatchHistory
         );
 
         $data = [];
-        foreach ($results as $row) {
-            $data[$row['watch_date']] = (int)($row['total_ticks'] / self::TICKS_PER_SECOND);
+        foreach (RowMap::listFromMixed($results) as $row) {
+            $date = UserRow::string($row, 'watch_date');
+            if ($date === null) {
+                continue;
+            }
+            $totalTicks = UserRow::int($row, 'total_ticks', 0);
+            $data[$date] = (int)($totalTicks / self::TICKS_PER_SECOND);
         }
 
         return $data;
@@ -611,11 +618,12 @@ class WatchHistory
     {
         $entry = $this->getForMediaItem($profileId, $mediaItemId);
 
-        if (!$entry || $entry['playback_status'] === self::STATUS_COMPLETED) {
+        if ($entry === null || ($entry['playback_status'] ?? null) === self::STATUS_COMPLETED) {
             return null;
         }
 
-        return (int)$entry['position_ticks'];
+        $position = $entry['position_ticks'] ?? 0;
+        return is_numeric($position) ? (int) $position : 0;
     }
 
     /**
@@ -634,12 +642,12 @@ class WatchHistory
      */
     public function getCount(string $profileId): int
     {
-        $result = $this->db->query(
+        $row = UserRow::firstFromMixed($this->db->query(
             "SELECT COUNT(*) as count FROM watch_history WHERE profile_id = ?",
             [$profileId]
-        );
+        ));
 
-        return (int)($result[0]['count'] ?? 0);
+        return UserRow::int($row, 'count', 0);
     }
 
     /**
@@ -648,49 +656,15 @@ class WatchHistory
      * Transforms raw database records (including JOINed media info) into
      * structured arrays with properly typed values and extracted metadata.
      *
-     * @param array $row Raw database row from watch_history JOIN media_items
+     * @param array<string, mixed> $row Raw database row from watch_history JOIN media_items
      *
-     * @return array Hydrated watch history entry with media metadata when available
+     * @return array<string, mixed> Hydrated watch history entry with media metadata when available
      *
      * @internal
      */
     private function hydrateEntry(array $row): array
     {
-        $entry = [
-            'id' => $row['id'],
-            'profile_id' => $row['profile_id'],
-            'media_item_id' => $row['media_item_id'],
-            'position_ticks' => (int)($row['position_ticks'] ?? 0),
-            'duration_ticks' => $row['duration_ticks'] ? (int)$row['duration_ticks'] : null,
-            'playback_status' => $row['playback_status'],
-            'progress_percent' => (float)($row['progress_percent'] ?? 0),
-            'last_watched_at' => $row['last_watched_at'],
-            'created_at' => $row['created_at'] ?? null,
-            'completed_at' => $row['completed_at'] ?? null,
-        ];
-
-        // Include media info if joined
-        if (isset($row['media_name'])) {
-            $entry['media_name'] = $row['media_name'];
-            $entry['media_type'] = $row['media_type'];
-
-            if (isset($row['metadata_json'])) {
-                $metadata = is_string($row['metadata_json'])
-                    ? json_decode($row['metadata_json'], true) ?? []
-                    : $row['metadata_json'];
-                $entry['metadata'] = $metadata;
-
-                // Add poster/thumbnail if available
-                if (isset($metadata['poster_url'])) {
-                    $entry['poster_url'] = $metadata['poster_url'];
-                }
-                if (isset($metadata['thumbnail_url'])) {
-                    $entry['thumbnail_url'] = $metadata['thumbnail_url'];
-                }
-            }
-        }
-
-        return $entry;
+        return WatchHistoryRow::fromRow($row)->toArray();
     }
 
     /**

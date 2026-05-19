@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
+use Phlex\Auth\Dto\UserRow;
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -125,7 +127,7 @@ class UserProfileManager
      *
      * @param string $profileId The unique profile identifier (UUID format)
      *
-     * @return array|null Profile data array with keys: id, user_id, name, avatar_url,
+     * @return array<string, mixed>|null Profile data array with keys: id, user_id, name, avatar_url,
      *                   is_active, is_admin, created_at, updated_at. Returns null
      *                   if profile not found.
      *
@@ -143,7 +145,7 @@ class UserProfileManager
             "SELECT * FROM user_profiles WHERE id = ?",
             [$profileId]
         );
-        return $result[0] ?? null;
+        return UserRow::firstFromMixed($result);
     }
 
     /**
@@ -155,7 +157,7 @@ class UserProfileManager
      *
      * @param string $profileId The unique profile identifier (UUID format)
      *
-     * @return array|null Profile data with nested 'settings' key containing:
+     * @return array<string, mixed>|null Profile data with nested 'settings' key containing:
      *                    - content_rating: string (G, PG, PG-13, R, NC-17, X, UNRATED)
      *                    - pin_required_for_admin: bool
      *                    - max_daily_watch_time: int (seconds, 0 = unlimited)
@@ -179,11 +181,12 @@ class UserProfileManager
             [$profileId]
         );
 
-        if (empty($result)) {
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrateProfile($result[0]);
+        return $this->hydrateProfile($row);
     }
 
     /**
@@ -194,7 +197,7 @@ class UserProfileManager
      *
      * @param string $userId The unique user identifier (UUID format)
      *
-     * @return array<int, array> Array of profile arrays, each containing:
+     * @return list<array<string, mixed>> Array of profile arrays, each containing:
      *                           - id: string
      *                           - user_id: string
      *                           - name: string
@@ -221,7 +224,8 @@ class UserProfileManager
             [$userId]
         );
 
-        return array_map(fn($r) => $this->hydrateProfile($r), $results);
+        $rows = RowMap::listFromMixed($results);
+        return array_map(fn(array $r): array => $this->hydrateProfile($r), $rows);
     }
 
     /**
@@ -232,7 +236,7 @@ class UserProfileManager
      *
      * @param string $userId The unique user identifier (UUID format)
      *
-     * @return array|null Profile array with settings, or null if no active
+     * @return array<string, mixed>|null Profile array with settings, or null if no active
      *                   profile exists. See findByIdWithSettings() return format.
      *
      * @throws void
@@ -250,11 +254,12 @@ class UserProfileManager
             [$userId]
         );
 
-        if (empty($result)) {
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrateProfile($result[0]);
+        return $this->hydrateProfile($row);
     }
 
     /**
@@ -305,12 +310,12 @@ class UserProfileManager
     public function create(string $userId, array $data): string
     {
         // Check max profiles limit
-        $existingCount = $this->db->query(
+        $countRow = UserRow::firstFromMixed($this->db->query(
             "SELECT COUNT(*) as count FROM user_profiles WHERE user_id = ?",
             [$userId]
-        );
+        ));
 
-        if (($existingCount[0]['count'] ?? 0) >= self::MAX_PROFILES_PER_USER) {
+        if (UserRow::int($countRow, 'count', 0) >= self::MAX_PROFILES_PER_USER) {
             throw new \InvalidArgumentException(
                 'Maximum number of profiles (' . self::MAX_PROFILES_PER_USER . ') reached'
             );
@@ -510,16 +515,17 @@ class UserProfileManager
      */
     public function verifyPin(string $profileId, string $pin): bool
     {
-        $result = $this->db->query(
+        $row = UserRow::firstFromMixed($this->db->query(
             "SELECT pin_hash FROM profile_settings WHERE profile_id = ?",
             [$profileId]
-        );
+        ));
 
-        if (empty($result) || empty($result[0]['pin_hash'])) {
+        $pinHash = UserRow::string($row, 'pin_hash');
+        if ($pinHash === null || $pinHash === '') {
             return true; // No PIN set, allow access
         }
 
-        return password_verify($pin, $result[0]['pin_hash']);
+        return password_verify($pin, $pinHash);
     }
 
     /**
@@ -603,24 +609,22 @@ class UserProfileManager
      */
     public function isContentRatingAllowed(string $profileId, string $contentRating): bool
     {
-        $result = $this->db->query(
+        $settings = UserRow::firstFromMixed($this->db->query(
             "SELECT content_rating, allow_unrated FROM profile_settings WHERE profile_id = ?",
             [$profileId]
-        );
+        ));
 
-        if (empty($result)) {
+        if ($settings === null) {
             return true; // No settings, allow all
         }
 
-        $settings = $result[0];
-
         // Unrated content check
         if ($contentRating === 'UNRATED') {
-            return (bool)$settings['allow_unrated'];
+            return (bool)($settings['allow_unrated'] ?? false);
         }
 
         // Check rating order
-        $profileRating = $settings['content_rating'] ?? self::DEFAULT_CONTENT_RATING;
+        $profileRating = UserRow::string($settings, 'content_rating') ?? self::DEFAULT_CONTENT_RATING;
         $profileRatingLevel = self::RATING_ORDER[$profileRating] ?? 4;
         $contentRatingLevel = self::RATING_ORDER[$contentRating] ?? 4;
 
@@ -645,17 +649,16 @@ class UserProfileManager
      */
     public function getAllowedRatings(string $profileId): array
     {
-        $result = $this->db->query(
+        $settings = UserRow::firstFromMixed($this->db->query(
             "SELECT content_rating, allow_unrated FROM profile_settings WHERE profile_id = ?",
             [$profileId]
-        );
+        ));
 
-        if (empty($result)) {
+        if ($settings === null) {
             return ['G', 'PG', 'PG-13', 'R', 'NC-17', 'X', 'UNRATED'];
         }
 
-        $settings = $result[0];
-        $maxRating = $settings['content_rating'] ?? self::DEFAULT_CONTENT_RATING;
+        $maxRating = UserRow::string($settings, 'content_rating') ?? self::DEFAULT_CONTENT_RATING;
         $maxLevel = self::RATING_ORDER[$maxRating] ?? 4;
 
         $allowed = [];
@@ -665,7 +668,7 @@ class UserProfileManager
             }
         }
 
-        if ($settings['allow_unrated']) {
+        if (!empty($settings['allow_unrated'])) {
             $allowed[] = 'UNRATED';
         }
 
@@ -793,41 +796,46 @@ class UserProfileManager
      * Transforms raw database records (including JOINed settings) into
      * structured arrays with properly typed and parsed values.
      *
-     * @param array $row Raw database row from user_profiles LEFT JOIN profile_settings
+     * @param array<string, mixed> $row Raw database row from user_profiles LEFT JOIN profile_settings
      *
-     * @return array Hydrated profile array with settings sub-array when applicable
+     * @return array<string, mixed> Hydrated profile array with settings sub-array when applicable
      *
      * @internal
      */
     private function hydrateProfile(array $row): array
     {
         $profile = [
-            'id' => $row['id'],
-            'user_id' => $row['user_id'],
-            'name' => $row['name'],
-            'avatar_url' => $row['avatar_url'],
-            'is_active' => (bool)$row['is_active'],
-            'is_admin' => (bool)$row['is_admin'],
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'id' => $row['id'] ?? null,
+            'user_id' => $row['user_id'] ?? null,
+            'name' => $row['name'] ?? null,
+            'avatar_url' => $row['avatar_url'] ?? null,
+            'is_active' => (bool)($row['is_active'] ?? false),
+            'is_admin' => (bool)($row['is_admin'] ?? false),
+            'created_at' => $row['created_at'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
         ];
 
         // Settings
         if (isset($row['content_rating'])) {
-            $profile['settings'] = [
+            $maxDaily = $row['max_daily_watch_time'] ?? 0;
+            $settings = [
                 'content_rating' => $row['content_rating'],
                 'pin_required_for_admin' => (bool)($row['pin_required_for_admin'] ?? false),
-                'max_daily_watch_time' => (int)($row['max_daily_watch_time'] ?? 0),
+                'max_daily_watch_time' => is_numeric($maxDaily) ? (int) $maxDaily : 0,
                 'allow_unrated' => (bool)($row['allow_unrated'] ?? true),
             ];
 
-            if (isset($row['allowed_genres']) && $row['allowed_genres']) {
-                $profile['settings']['allowed_genres'] = json_decode($row['allowed_genres'], true);
+            $allowedGenres = $row['allowed_genres'] ?? null;
+            if (is_string($allowedGenres) && $allowedGenres !== '') {
+                $settings['allowed_genres'] = json_decode($allowedGenres, true);
             }
 
-            if (isset($row['blocked_genres']) && $row['blocked_genres']) {
-                $profile['settings']['blocked_genres'] = json_decode($row['blocked_genres'], true);
+            $blockedGenres = $row['blocked_genres'] ?? null;
+            if (is_string($blockedGenres) && $blockedGenres !== '') {
+                $settings['blocked_genres'] = json_decode($blockedGenres, true);
             }
+
+            $profile['settings'] = $settings;
         }
 
         return $profile;

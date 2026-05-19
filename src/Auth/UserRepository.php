@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
+use Phlex\Auth\Dto\UserRow;
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -58,7 +60,7 @@ class UserRepository
     public function findById(string $id): ?array
     {
         $result = $this->db->query("SELECT * FROM users WHERE id = ?", [$id]);
-        return $result[0] ?? null;
+        return UserRow::firstFromMixed($result);
     }
 
     /**
@@ -79,7 +81,7 @@ class UserRepository
             "SELECT * FROM users WHERE username = ?",
             [$username]
         );
-        return $result[0] ?? null;
+        return UserRow::firstFromMixed($result);
     }
 
     /**
@@ -127,12 +129,8 @@ class UserRepository
      */
     public function countUsers(): int
     {
-        $rows = $this->db->query("SELECT COUNT(*) AS c FROM users");
-        if (!is_array($rows) || count($rows) === 0) {
-            return 0;
-        }
-        $raw = $rows[0]['c'] ?? 0;
-        return is_numeric($raw) ? (int) $raw : 0;
+        $row = UserRow::firstFromMixed($this->db->query("SELECT COUNT(*) AS c FROM users"));
+        return UserRow::int($row, 'c', 0);
     }
 
     /**
@@ -169,7 +167,7 @@ class UserRepository
             "SELECT * FROM users WHERE email = ?",
             [$email]
         );
-        return $result[0] ?? null;
+        return UserRow::firstFromMixed($result);
     }
 
     /**
@@ -201,7 +199,11 @@ class UserRepository
     public function create(array $data): string
     {
         $id = $this->generateUuid();
-        $passwordHash = password_hash($data['password'], PASSWORD_ARGON2ID);
+        $passwordRaw = $data['password'] ?? '';
+        if (!is_string($passwordRaw)) {
+            throw new \InvalidArgumentException('password must be a string');
+        }
+        $passwordHash = password_hash($passwordRaw, PASSWORD_ARGON2ID);
 
         $this->db->query(
             "INSERT INTO users (id, username, email, password_hash, display_name) VALUES (?, ?, ?, ?, ?)",
@@ -261,8 +263,12 @@ class UserRepository
         }
 
         if (isset($data['password'])) {
+            $passwordRaw = $data['password'];
+            if (!is_string($passwordRaw)) {
+                throw new \InvalidArgumentException('password must be a string');
+            }
             $sets[] = 'password_hash = ?';
-            $values[] = password_hash($data['password'], PASSWORD_ARGON2ID);
+            $values[] = password_hash($passwordRaw, PASSWORD_ARGON2ID);
         }
 
         if (empty($sets)) {
@@ -318,18 +324,17 @@ class UserRepository
             [$userId]
         );
 
-        if (empty($result)) {
+        $settings = UserRow::firstFromMixed($result);
+        if ($settings === null) {
             return null;
         }
 
-        $settings = $result[0];
-
         // Parse JSON fields if present
-        if (isset($settings['transcoding_preferences'])) {
-            $settings['transcoding_preferences'] = json_decode(
-                $settings['transcoding_preferences'],
-                true
-            ) ?? [];
+        if (isset($settings['transcoding_preferences']) && is_string($settings['transcoding_preferences'])) {
+            $decoded = json_decode($settings['transcoding_preferences'], true);
+            $settings['transcoding_preferences'] = is_array($decoded)
+                ? RowMap::fromMixed($decoded)
+                : [];
         }
 
         return $settings;
@@ -453,7 +458,7 @@ class UserRepository
             [$userId]
         );
 
-        return $result[0]['avatar_url'] ?? null;
+        return UserRow::string(UserRow::firstFromMixed($result), 'avatar_url');
     }
 
     /**
@@ -481,7 +486,12 @@ class UserRepository
             return false;
         }
 
-        return password_verify($password, $user['password_hash']);
+        $hash = UserRow::string($user, 'password_hash');
+        if ($hash === null) {
+            return false;
+        }
+
+        return password_verify($password, $hash);
     }
 
     /**
@@ -596,16 +606,18 @@ class UserRepository
     ): string {
         $provider = 'external';
 
-        $existing = $this->db->query(
-            "SELECT * FROM users WHERE external_id = ?",
-            [$externalId]
+        $existingRow = UserRow::firstFromMixed(
+            $this->db->query(
+                "SELECT * FROM users WHERE external_id = ?",
+                [$externalId]
+            )
         );
 
-        if (is_array($existing) && isset($existing[0]) && is_array($existing[0])) {
-            /** @var string $userId */
-            $userId = $existing[0]['id'];
-
-            return $userId;
+        if ($existingRow !== null) {
+            $userId = UserRow::string($existingRow, 'id');
+            if ($userId !== null) {
+                return $userId;
+            }
         }
 
         $id = $this->generateUuid();

@@ -130,7 +130,11 @@ class ThemeMiddleware
     {
         $profile = $this->profiles->getActiveProfile($userId);
 
-        if ($profile !== null && isset($profile['active_theme_id'])) {
+        if (
+            $profile !== null
+            && isset($profile['active_theme_id'])
+            && is_string($profile['active_theme_id'])
+        ) {
             $theme = $this->registry->getTheme($profile['active_theme_id']);
             if ($theme !== null) {
                 return $theme;

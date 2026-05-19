@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Auth;
 
+use Phlex\Auth\Dto\UserRow;
 use Phlex\Shared\Events\Auth\UserCreated;
 use Phlex\Shared\Events\Auth\UserLoggedIn;
 use Phlex\Shared\Events\Auth\UserLoggedOut;
@@ -274,8 +275,9 @@ class AuthManager
     public function login(string $username, string $password, string $deviceId): array
     {
         $user = $this->userRepository->findByUsername($username);
+        $userId = UserRow::string($user, 'id');
 
-        if (!$user || !$this->userRepository->verifyPassword($user['id'], $password)) {
+        if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {
             $this->auditLogger->logFailedAuth('invalid_credentials', [
                 'username' => $username,
                 'device_id' => $deviceId,
@@ -284,16 +286,15 @@ class AuthManager
         }
 
         // Update last login
-        $this->userRepository->updateLastLogin($user['id']);
+        $this->userRepository->updateLastLogin($userId);
 
-        $this->auditLogger->logLogin($user['id'], $deviceId, true);
+        $this->auditLogger->logLogin($userId, $deviceId, true);
 
-        $this->logger->info('User logged in', ['user_id' => $user['id'], 'device_id' => $deviceId]);
+        $this->logger->info('User logged in', ['user_id' => $userId, 'device_id' => $deviceId]);
 
-        $userId = self::asString($user['id'] ?? null);
         $this->dispatchUserLoggedIn($userId, $deviceId);
 
-        return $this->createAuthResponse($user['id']);
+        return $this->createAuthResponse($userId);
     }
 
     /**
@@ -396,7 +397,10 @@ class AuthManager
             throw new \InvalidArgumentException('Expired refresh token');
         }
 
-        $userId = $payload['sub'];
+        $userId = self::asString($payload['sub'] ?? null);
+        if ($userId === '') {
+            throw new \InvalidArgumentException('Refresh token missing subject');
+        }
 
         return $this->createAuthResponse($userId);
     }

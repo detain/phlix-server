@@ -6,6 +6,7 @@ namespace Phlex\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Dto\ResultSet;
 use Phlex\LiveTv\Recorder;
 use Workerman\MySQL\Connection;
 
@@ -32,13 +33,11 @@ final class RecorderRecoveryTest extends TestCase
      *        fake should hand out via fetch(). Callers can pre-load a
      *        recording row and then an empty row to terminate the loop.
      */
-    private function fakeResult(array $rows): object
+    private function fakeResult(array $rows): ResultSet
     {
-        return new class ($rows) {
+        return new class ($rows) extends ResultSet {
             /** @var array<int, array<string, mixed>> */
             private array $rows;
-
-            public int $num_rows;
 
             /**
              * @param array<int, array<string, mixed>> $rows

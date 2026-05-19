@@ -17,7 +17,7 @@ use Psr\Log\LoggerInterface;
  * HDHomeRun tuner driver implementing TunerDriverInterface.
  *
  * This driver uses SSDP discovery to find HDHomeRun devices on the local network,
- * and uses the HDHomeRun HTTP API for channel listing and streaming.
+ * and uses an injected {@see HdHomeRunApiClient} for channel listing and streaming.
  *
  * @since 0.12.0
  */
@@ -26,18 +26,24 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
     /** @var HdHomeRunDiscovery SSDP discovery service */
     private HdHomeRunDiscovery $discovery;
 
+    /** @var HdHomeRunApiClient HTTP API client used for lineup, scan, and stream URLs */
+    private HdHomeRunApiClient $apiClient;
+
     /** @var StructuredLogger|LoggerInterface|null Optional logger */
     private StructuredLogger|LoggerInterface|null $logger;
 
     /**
      * @param HdHomeRunDiscovery $discovery SSDP discovery service
+     * @param HdHomeRunApiClient $apiClient HTTP API client used to talk to HDHomeRun devices
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger instance
      */
     public function __construct(
         HdHomeRunDiscovery $discovery,
+        HdHomeRunApiClient $apiClient,
         StructuredLogger|LoggerInterface|null $logger = null
     ) {
         $this->discovery = $discovery;
+        $this->apiClient = $apiClient;
         $this->logger = $logger;
     }
 
@@ -81,8 +87,7 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');
         }
 
-        $client = $this->createApiClient($device);
-        $lineup = $client->getChannelLineup();
+        $lineup = $this->apiClient->getChannelLineup();
 
         $this->logger?->info('HDHomeRunTunerDriver: got channel lineup', [
             'device_id' => $device->deviceId,
@@ -106,19 +111,17 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');
         }
 
-        $client = $this->createApiClient($device);
-
         $this->logger?->info('HDHomeRunTunerDriver: triggering channel scan', [
             'device_id' => $device->deviceId,
         ]);
 
-        $client->triggerScan();
+        $this->apiClient->triggerScan();
 
         // After triggering scan, get updated lineup
         // Small delay to allow scan to start
         usleep(500000); // 500ms
 
-        return $client->getChannelLineup();
+        return $this->apiClient->getChannelLineup();
     }
 
     /**
@@ -136,9 +139,7 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
             throw new \InvalidArgumentException('Expected HdHomeRunDevice for HDHomeRun tuner');
         }
 
-        $client = $this->createApiClient($device);
-
-        $streamUrl = $client->getStreamUrl($channelNumber);
+        $streamUrl = $this->apiClient->getStreamUrl($channelNumber);
 
         $this->logger?->info('HDHomeRunTunerDriver: got stream URL', [
             'device_id' => $device->deviceId,
@@ -147,16 +148,5 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
         ]);
 
         return $streamUrl;
-    }
-
-    /**
-     * Create an API client for a specific device.
-     *
-     * @param HdHomeRunDevice $device The device to create a client for
-     * @return HdHomeRunApiClient Configured API client for the device
-     */
-    private function createApiClient(HdHomeRunDevice $device): HdHomeRunApiClient
-    {
-        return new HdHomeRunApiClient($device->getBaseUrl(), $this->logger);
     }
 }

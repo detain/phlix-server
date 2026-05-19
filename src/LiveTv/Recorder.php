@@ -7,6 +7,8 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Dto\RowAccess;
+use Phlex\LiveTv\Dto\RowQuery;
 use Phlex\LiveTv\Recording\ComskipLifecycleManager;
 use Workerman\MySQL\Connection;
 
@@ -189,7 +191,9 @@ class Recorder
      *   - series_rule_id: string|null Optional - series rule that created this
      *   - pre_padding_seconds: int Pre-recording padding (default: 60)
      *   - post_padding_seconds: int Post-recording padding (default: 60)
-     * @return array<string, mixed>|null The scheduled recording or null on failure
+     * @return array<string, mixed> The scheduled recording
+     *
+     * @throws \RuntimeException When the inserted row cannot be re-read
      *
      * @example
      * ```php
@@ -206,6 +210,9 @@ class Recorder
     public function scheduleRecording(array $data): array
     {
         $recordingId = $this->generateUuid();
+
+        $startTime = RowAccess::int($data, 'start_time');
+        $title = RowAccess::string($data, 'title', 'Untitled Recording');
 
         $this->db->query(
             "INSERT INTO livetv_recordings
@@ -233,13 +240,20 @@ class Recorder
 
         $this->logger->info('Recording scheduled', [
             'recording_id' => $recordingId,
-            'title' => $data['title'],
-            'start_time' => date('Y-m-d H:i', $data['start_time']),
+            'title' => $title,
+            'start_time' => date('Y-m-d H:i', $startTime),
             'pre_padding' => $data['pre_padding_seconds'] ?? 60,
             'post_padding' => $data['post_padding_seconds'] ?? 60,
         ]);
 
-        return $this->getRecording($recordingId);
+        $recording = $this->getRecording($recordingId);
+        if ($recording === null) {
+            throw new \RuntimeException(
+                "Recording {$recordingId} was inserted but could not be re-read"
+            );
+        }
+
+        return $recording;
     }
 
     /**
@@ -255,11 +269,12 @@ class Recorder
             [$recordingId]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapRecording($result->fetch());
+        return $this->mapRecording($row);
     }
 
     /**
@@ -282,7 +297,7 @@ class Recorder
         }
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -308,7 +323,7 @@ class Recorder
         );
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -329,7 +344,7 @@ class Recorder
         );
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -350,7 +365,7 @@ class Recorder
         );
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -382,13 +397,18 @@ class Recorder
             return false;
         }
 
-        // Calculate effective start time with pre-padding
-        $prePadding = $recording['pre_padding_seconds'] ?? 60;
-        $effectiveStart = $recording['start_time'] - $prePadding;
+        // Calculate effective start time with pre-padding.
+        // mapRecording() returns ints for start_time/end_time/pre_padding_seconds,
+        // but the array<string, mixed> shape of $recording loses that — re-narrow.
+        $prePadding = is_int($recording['pre_padding_seconds'] ?? null) ? $recording['pre_padding_seconds'] : 60;
+        $startTime = is_int($recording['start_time'] ?? null) ? $recording['start_time'] : 0;
+        $endTime = is_int($recording['end_time'] ?? null) ? $recording['end_time'] : 0;
+        $channelId = is_string($recording['channel_id'] ?? null) ? $recording['channel_id'] : '';
+
+        $effectiveStart = $startTime - $prePadding;
 
         // Check available storage
-        $estimatedDuration = ($recording['end_time'] + $prePadding) - $effectiveStart;
-        if (!$this->hasStorageSpace($effectiveStart, $recording['end_time'] + $prePadding)) {
+        if (!$this->hasStorageSpace($effectiveStart, $endTime + $prePadding)) {
             $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Insufficient storage space');
             return false;
         }
@@ -409,7 +429,7 @@ class Recorder
             'id' => $recordingId,
             'started_at' => time(),
             'effective_start' => $effectiveStart,
-            'channel_id' => $recording['channel_id'],
+            'channel_id' => $channelId,
             'stream_url' => "/livetv/recording/$recordingId/stream",
             'pid' => $effectivePid,
         ];
@@ -476,8 +496,7 @@ class Recorder
             [self::STATUS_RECORDING]
         );
 
-        while ($row = $result->fetch()) {
-            /** @var array<string, mixed> $row */
+        foreach (RowQuery::rows($result) as $row) {
             $recording = $this->mapRecording($row);
             $recordingId = self::asString($recording['recording_id'] ?? '');
             $channelId = self::asString($recording['channel_id'] ?? '');
@@ -531,8 +550,7 @@ class Recorder
         );
 
         $dueIds = [];
-        while ($row = $result->fetch()) {
-            /** @var array<string, mixed> $row */
+        foreach (RowQuery::rows($result) as $row) {
             $dueIds[] = self::asString($row['recording_id'] ?? '');
         }
 
@@ -653,7 +671,7 @@ class Recorder
             [$programId, $channelId, $windowStart, $windowEnd]
         );
 
-        return $result->num_rows > 0;
+        return RowQuery::hasRows($result);
     }
 
     /**
@@ -792,8 +810,12 @@ class Recorder
             [self::STATUS_COMPLETED]
         );
 
-        $row = $result->fetch();
-        return (int) ($row['total'] ?? 0);
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
+            return 0;
+        }
+
+        return RowAccess::int($row, 'total');
     }
 
     /**
@@ -961,8 +983,9 @@ class Recorder
         );
 
         $counts = [];
-        while ($row = $result->fetch()) {
-            $counts[$row['status']] = (int) $row['cnt'];
+        foreach (RowQuery::rows($result) as $row) {
+            $status = RowAccess::string($row, 'status');
+            $counts[$status] = RowAccess::int($row, 'cnt');
         }
 
         return $counts;
@@ -1012,30 +1035,34 @@ class Recorder
      */
     private function mapRecording(array $row): array
     {
+        $recordingId = RowAccess::string($row, 'recording_id');
+        $startTime = RowAccess::int($row, 'start_time');
+        $endTime = RowAccess::int($row, 'end_time');
+
         return [
-            'id' => $row['recording_id'],
-            'recording_id' => $row['recording_id'],
-            'channel_id' => $row['channel_id'],
-            'program_id' => $row['program_id'],
-            'user_id' => $row['user_id'],
-            'title' => $row['title'],
-            'description' => $row['description'],
-            'start_time' => (int) $row['start_time'],
-            'end_time' => (int) $row['end_time'],
-            'duration' => (int) $row['end_time'] - (int) $row['start_time'],
-            'priority' => (int) $row['priority'],
-            'quality' => $row['quality'],
-            'storage_path' => $row['storage_path'],
-            'storage_size' => (int) ($row['storage_size'] ?? 0),
-            'status' => $row['status'],
+            'id' => $recordingId,
+            'recording_id' => $recordingId,
+            'channel_id' => RowAccess::string($row, 'channel_id'),
+            'program_id' => RowAccess::stringOrNull($row, 'program_id'),
+            'user_id' => RowAccess::stringOrNull($row, 'user_id'),
+            'title' => RowAccess::string($row, 'title'),
+            'description' => RowAccess::stringOrNull($row, 'description'),
+            'start_time' => $startTime,
+            'end_time' => $endTime,
+            'duration' => $endTime - $startTime,
+            'priority' => RowAccess::int($row, 'priority'),
+            'quality' => RowAccess::stringOrNull($row, 'quality'),
+            'storage_path' => RowAccess::stringOrNull($row, 'storage_path'),
+            'storage_size' => RowAccess::int($row, 'storage_size'),
+            'status' => RowAccess::string($row, 'status'),
             'pid' => self::asPid($row['pid'] ?? null),
-            'error_message' => $row['error_message'],
-            'series_rule_id' => $row['series_rule_id'],
-            'duplicate_group' => $row['duplicate_group'],
-            'pre_padding_seconds' => (int) ($row['pre_padding_seconds'] ?? 60),
-            'post_padding_seconds' => (int) ($row['post_padding_seconds'] ?? 60),
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'error_message' => RowAccess::stringOrNull($row, 'error_message'),
+            'series_rule_id' => RowAccess::stringOrNull($row, 'series_rule_id'),
+            'duplicate_group' => RowAccess::stringOrNull($row, 'duplicate_group'),
+            'pre_padding_seconds' => RowAccess::int($row, 'pre_padding_seconds', 60),
+            'post_padding_seconds' => RowAccess::int($row, 'post_padding_seconds', 60),
+            'created_at' => RowAccess::stringOrNull($row, 'created_at'),
+            'updated_at' => RowAccess::stringOrNull($row, 'updated_at'),
         ];
     }
 

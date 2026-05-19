@@ -7,6 +7,8 @@ namespace Phlex\LiveTv\Recording;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Dto\RowAccess;
+use Phlex\LiveTv\Dto\RowQuery;
 use Phlex\LiveTv\LiveTvManager;
 use Phlex\LiveTv\Recorder;
 use Workerman\MySQL\Connection;
@@ -90,9 +92,9 @@ class RecordingScheduler
 
         $stats = ['started' => 0, 'skipped' => 0, 'errors' => 0];
 
-        while ($row = $result->fetch()) {
-            $recordingId = $row['recording_id'];
-            $channelId = $row['channel_id'];
+        foreach (RowQuery::rows($result) as $row) {
+            $recordingId = RowAccess::string($row, 'recording_id');
+            $channelId = RowAccess::string($row, 'channel_id');
 
             try {
                 // Check if a tuner is available
@@ -150,11 +152,12 @@ class RecordingScheduler
             [$now]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapRecording($result->fetch());
+        return $this->mapRecording($row);
     }
 
     /**
@@ -178,7 +181,7 @@ class RecordingScheduler
         );
 
         $recordings = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $recordings[] = $this->mapRecording($row);
         }
 
@@ -240,21 +243,24 @@ class RecordingScheduler
      */
     private function mapRecording(array $row): array
     {
+        $startTime = RowAccess::int($row, 'start_time');
+        $endTime = RowAccess::int($row, 'end_time');
+
         return [
-            'recording_id' => $row['recording_id'],
-            'channel_id' => $row['channel_id'],
-            'program_id' => $row['program_id'],
-            'title' => $row['title'],
-            'description' => $row['description'],
-            'start_time' => (int) $row['start_time'],
-            'end_time' => (int) $row['end_time'],
-            'duration' => (int) $row['end_time'] - (int) $row['start_time'],
-            'priority' => (int) $row['priority'],
-            'status' => $row['status'],
-            'series_rule_id' => $row['series_rule_id'],
-            'pre_padding_seconds' => (int) ($row['pre_padding_seconds'] ?? 60),
-            'post_padding_seconds' => (int) ($row['post_padding_seconds'] ?? 60),
-            'created_at' => $row['created_at'],
+            'recording_id' => RowAccess::string($row, 'recording_id'),
+            'channel_id' => RowAccess::string($row, 'channel_id'),
+            'program_id' => RowAccess::stringOrNull($row, 'program_id'),
+            'title' => RowAccess::string($row, 'title'),
+            'description' => RowAccess::stringOrNull($row, 'description'),
+            'start_time' => $startTime,
+            'end_time' => $endTime,
+            'duration' => $endTime - $startTime,
+            'priority' => RowAccess::int($row, 'priority'),
+            'status' => RowAccess::string($row, 'status'),
+            'series_rule_id' => RowAccess::stringOrNull($row, 'series_rule_id'),
+            'pre_padding_seconds' => RowAccess::int($row, 'pre_padding_seconds', 60),
+            'post_padding_seconds' => RowAccess::int($row, 'post_padding_seconds', 60),
+            'created_at' => RowAccess::stringOrNull($row, 'created_at'),
         ];
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
+use Phlex\LiveTv\Dto\ResultSet;
 use Phlex\LiveTv\LiveTvManager;
 use Phlex\LiveTv\Recorder;
 use Phlex\LiveTv\Recording\RecordingScheduler;
@@ -43,9 +44,12 @@ class RecordingSchedulerTest extends TestCase
 
     public function testProcessDueRecordingsWithNoRecordings(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -61,9 +65,12 @@ class RecordingSchedulerTest extends TestCase
 
     public function testGetNextRecordingReturnsNullWhenEmpty(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -77,9 +84,12 @@ class RecordingSchedulerTest extends TestCase
 
     public function testGetUpcomingRecordingsReturnsEmptyWhenNone(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())

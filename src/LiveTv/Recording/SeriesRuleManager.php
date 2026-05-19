@@ -7,6 +7,8 @@ namespace Phlex\LiveTv\Recording;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Dto\RowAccess;
+use Phlex\LiveTv\Dto\RowQuery;
 use Phlex\LiveTv\GuideManager;
 use Phlex\LiveTv\Recorder;
 use Workerman\MySQL\Connection;
@@ -64,6 +66,8 @@ class SeriesRuleManager
      *   - days_ahead: int Days ahead to schedule (default: 14)
      * @return array<string, mixed> The created rule
      *
+     * @throws \RuntimeException When the rule row cannot be retrieved after insert
+     *
      * @since 0.12.0
      */
     public function createRule(string $seriesId, string $channelId, array $options = []): array
@@ -94,7 +98,14 @@ class SeriesRuleManager
             'channel_id' => $channelId,
         ]);
 
-        return $this->getRule($ruleId);
+        $rule = $this->getRule($ruleId);
+        if ($rule === null) {
+            throw new \RuntimeException(
+                "Series rule {$ruleId} was inserted but could not be re-read"
+            );
+        }
+
+        return $rule;
     }
 
     /**
@@ -111,7 +122,7 @@ class SeriesRuleManager
         );
 
         $rules = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $rules[] = $this->mapRule($row);
         }
 
@@ -133,11 +144,12 @@ class SeriesRuleManager
             [$seriesId]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapRule($result->fetch());
+        return $this->mapRule($row);
     }
 
     /**
@@ -155,11 +167,12 @@ class SeriesRuleManager
             [$ruleId]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapRule($result->fetch());
+        return $this->mapRule($row);
     }
 
     /**
@@ -250,33 +263,56 @@ class SeriesRuleManager
         $stats = ['scheduled' => 0, 'skipped' => 0, 'errors' => 0];
 
         foreach ($rules as $rule) {
-            $upcoming = $guideManager->getUpcomingBySeries($rule['series_id'], 50);
+            $seriesId = is_string($rule['series_id'] ?? null) ? $rule['series_id'] : '';
+            $ruleChannelId = is_string($rule['channel_id'] ?? null) ? $rule['channel_id'] : null;
+            $ruleTitle = is_string($rule['title'] ?? null) ? $rule['title'] : '';
+            $rulePriority = is_int($rule['priority'] ?? null) ? $rule['priority'] : Recorder::PRIORITY_NORMAL;
+            $rulePrePadding = is_int($rule['pre_padding_seconds'] ?? null) ? $rule['pre_padding_seconds'] : 60;
+            $rulePostPadding = is_int($rule['post_padding_seconds'] ?? null) ? $rule['post_padding_seconds'] : 60;
+            $ruleDaysAhead = is_int($rule['days_ahead'] ?? null) ? $rule['days_ahead'] : 14;
+            $ruleId = is_string($rule['rule_id'] ?? null) ? $rule['rule_id'] : '';
+            $ruleMaxRecordings = $rule['max_recordings'] ?? null;
+            if ($ruleMaxRecordings !== null && !is_int($ruleMaxRecordings)) {
+                $ruleMaxRecordings = null;
+            }
+
+            $upcoming = $guideManager->getUpcomingBySeries($seriesId, 50);
 
             foreach ($upcoming as $program) {
+                $programChannelId = is_string($program['channel_id'] ?? null) ? $program['channel_id'] : '';
+                $programId = is_string($program['program_id'] ?? null) ? $program['program_id'] : '';
+                $programTitle = is_string($program['title'] ?? null) ? $program['title'] : '';
+                $programStart = is_int($program['start_time'] ?? null) ? $program['start_time'] : 0;
+                $programEnd = is_int($program['end_time'] ?? null) ? $program['end_time'] : 0;
+                $programDescription = $program['description'] ?? null;
+                if ($programDescription !== null && !is_string($programDescription)) {
+                    $programDescription = null;
+                }
+
                 // Skip if channel doesn't match (if channel-specific rule)
-                if ($rule['channel_id'] !== null && $program['channel_id'] !== $rule['channel_id']) {
+                if ($ruleChannelId !== null && $programChannelId !== $ruleChannelId) {
                     $stats['skipped']++;
                     continue;
                 }
 
                 // Skip if already outside days_ahead window
-                $maxTime = time() + ($rule['days_ahead'] * 86400);
-                if ($program['end_time'] > $maxTime) {
+                $maxTime = time() + ($ruleDaysAhead * 86400);
+                if ($programEnd > $maxTime) {
                     $stats['skipped']++;
                     continue;
                 }
 
                 try {
                     // Check if already scheduled
-                    if ($this->isProgramScheduled($program['program_id'], $program['channel_id'])) {
+                    if ($this->isProgramScheduled($programId, $programChannelId)) {
                         $stats['skipped']++;
                         continue;
                     }
 
                     // Check max recordings limit
-                    if ($rule['max_recordings'] !== null) {
-                        $currentCount = $this->getScheduledCountForRule($rule['rule_id']);
-                        if ($currentCount >= $rule['max_recordings']) {
+                    if ($ruleMaxRecordings !== null) {
+                        $currentCount = $this->getScheduledCountForRule($ruleId);
+                        if ($currentCount >= $ruleMaxRecordings) {
                             $stats['skipped']++;
                             continue;
                         }
@@ -284,23 +320,23 @@ class SeriesRuleManager
 
                     // Schedule the recording
                     $this->recorder->scheduleRecording([
-                        'channel_id' => $program['channel_id'],
-                        'program_id' => $program['program_id'],
-                        'title' => $rule['title'] . ' - ' . $program['title'],
-                        'description' => $program['description'] ?? null,
-                        'start_time' => $program['start_time'],
-                        'end_time' => $program['end_time'],
-                        'priority' => $rule['priority'],
-                        'series_rule_id' => $rule['rule_id'],
-                        'pre_padding_seconds' => $rule['pre_padding_seconds'],
-                        'post_padding_seconds' => $rule['post_padding_seconds'],
+                        'channel_id' => $programChannelId,
+                        'program_id' => $programId,
+                        'title' => $ruleTitle . ' - ' . $programTitle,
+                        'description' => $programDescription,
+                        'start_time' => $programStart,
+                        'end_time' => $programEnd,
+                        'priority' => $rulePriority,
+                        'series_rule_id' => $ruleId,
+                        'pre_padding_seconds' => $rulePrePadding,
+                        'post_padding_seconds' => $rulePostPadding,
                     ]);
 
                     $stats['scheduled']++;
                 } catch (\Throwable $e) {
                     $this->logger->error('Failed to schedule recording for rule', [
-                        'rule_id' => $rule['rule_id'],
-                        'program_id' => $program['program_id'],
+                        'rule_id' => $ruleId,
+                        'program_id' => $programId,
                         'error' => $e->getMessage(),
                     ]);
                     $stats['errors']++;
@@ -331,7 +367,7 @@ class SeriesRuleManager
             [$programId, $channelId]
         );
 
-        return $result->num_rows > 0;
+        return RowQuery::hasRows($result);
     }
 
     /**
@@ -350,8 +386,12 @@ class SeriesRuleManager
             [$ruleId]
         );
 
-        $row = $result->fetch();
-        return (int) ($row['cnt'] ?? 0);
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
+            return 0;
+        }
+
+        return RowAccess::int($row, 'cnt');
     }
 
     /**
@@ -365,18 +405,18 @@ class SeriesRuleManager
     private function mapRule(array $row): array
     {
         return [
-            'rule_id' => $row['rule_id'],
-            'series_id' => $row['series_id'],
-            'channel_id' => $row['channel_id'],
-            'title' => $row['title'],
-            'priority' => (int) $row['priority'],
-            'pre_padding_seconds' => (int) $row['pre_padding_seconds'],
-            'post_padding_seconds' => (int) $row['post_padding_seconds'],
-            'max_recordings' => $row['max_recordings'] !== null ? (int) $row['max_recordings'] : null,
-            'days_ahead' => (int) $row['days_ahead'],
-            'is_active' => (bool) $row['is_active'],
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'rule_id' => RowAccess::string($row, 'rule_id'),
+            'series_id' => RowAccess::string($row, 'series_id'),
+            'channel_id' => RowAccess::stringOrNull($row, 'channel_id'),
+            'title' => RowAccess::string($row, 'title'),
+            'priority' => RowAccess::int($row, 'priority'),
+            'pre_padding_seconds' => RowAccess::int($row, 'pre_padding_seconds', 60),
+            'post_padding_seconds' => RowAccess::int($row, 'post_padding_seconds', 60),
+            'max_recordings' => RowAccess::intOrNull($row, 'max_recordings'),
+            'days_ahead' => RowAccess::int($row, 'days_ahead', 14),
+            'is_active' => RowAccess::bool($row, 'is_active'),
+            'created_at' => RowAccess::stringOrNull($row, 'created_at'),
+            'updated_at' => RowAccess::stringOrNull($row, 'updated_at'),
         ];
     }
 

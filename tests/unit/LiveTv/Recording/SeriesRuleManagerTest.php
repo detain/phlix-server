@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
+use Phlex\LiveTv\Dto\ResultSet;
 use Phlex\LiveTv\Recording\SeriesRuleManager;
 use Phlex\LiveTv\Recorder;
 use Phlex\Common\Logger\StructuredLogger;
@@ -40,9 +41,10 @@ class SeriesRuleManagerTest extends TestCase
     public function testCreateRuleCallsDbInsert(): void
     {
         $queryCount = 0;
-        $mockResult = new class {
-            public $num_rows = 1;
-            public function fetch() {
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 1;
+            public function fetch(): array|false
+            {
                 return [
                     'rule_id' => 'newly-created-rule',
                     'series_id' => 'series_123',
@@ -73,9 +75,12 @@ class SeriesRuleManagerTest extends TestCase
     public function testGetRulesReturnsActiveRules(): void
     {
         // Mock empty result
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -91,9 +96,12 @@ class SeriesRuleManagerTest extends TestCase
 
     public function testGetRuleBySeriesReturnsNullWhenNotFound(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -107,9 +115,12 @@ class SeriesRuleManagerTest extends TestCase
 
     public function testDeleteRuleReturnsFalseWhenNotFound(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())
@@ -123,9 +134,10 @@ class SeriesRuleManagerTest extends TestCase
 
     public function testDeleteRuleCallsDbDelete(): void
     {
-        $mockResultGet = new class {
-            public $num_rows = 1;
-            public function fetch() {
+        $mockResultGet = new class extends ResultSet {
+            public int $num_rows = 1;
+            public function fetch(): array|false
+            {
                 return [
                     'rule_id' => 'rule_1',
                     'series_id' => 'series_123',
@@ -154,9 +166,12 @@ class SeriesRuleManagerTest extends TestCase
 
     public function testUpdateRuleReturnsNullWhenNotFound(): void
     {
-        $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 0;
+            public function fetch(): array|false
+            {
+                return false;
+            }
         };
 
         $this->mockDb->expects($this->once())

@@ -192,11 +192,6 @@ if (str_starts_with($path, '/api/v1/admin/')) {
         } else {
             $response = $renderer->renderDashboard($request);
         }
-    } elseif ($path === '/requests') {
-        $response = $renderer->renderRequestsPage($request);
-    } elseif (str_starts_with($path, '/requests/')) {
-        $id = substr($path, strlen('/requests/'));
-        $response = $renderer->renderRequestDetail($request, ['id' => $id]);
     } else {
         http_response_code(404);
         echo '<h1>404 - Page not found</h1>';

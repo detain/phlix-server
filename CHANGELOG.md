@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Moved (post-O.7 wave 4)
+
+- K.3 request UI: moved to phlex-hub (now lives at `/api/v1/me/requests` on the hub, with the admin queue at `/api/v1/admin/requests`). Server no longer exposes `/api/v1/requests`, `/requests` (SSR), `/requests/{id}`, or the `requests` table — those were dropped along with `migrations/016_media_requests.sql`. The hub stores requests against its own `users` table (hub migration `011_media_requests.sql`) and dispatches approvals through Sonarr/Radarr via `Phlex\Shared\Arr` v0.4.0.
+
 ### Changed (post-O.7 wave 3)
 
 - Helm chart fleshed out for both `phlex-server` and `phlex-hub` (values + templates: deployment, service, ingress, pvc, configmap, secret, serviceaccount, hpa, NOTES).

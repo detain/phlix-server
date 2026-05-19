@@ -146,8 +146,8 @@ class DeviceRegistry
             return;
         }
 
-        // Set socket timeout
-        stream_set_timeout($socket, $timeout);
+        // Set receive timeout
+        socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $timeout, 'usec' => 0]);
 
         // Build SSDP M-SEARCH request
         $searchRequest = implode("\r\n", [
@@ -162,35 +162,57 @@ class DeviceRegistry
         ]);
 
         // Send multicast request
-        $sent = @fwrite($socket, $searchRequest);
+        $sent = @socket_sendto(
+            $socket,
+            $searchRequest,
+            strlen($searchRequest),
+            0,
+            self::SSDP_MULTICAST_ADDRESS,
+            self::SSDP_PORT
+        );
         if ($sent === false) {
             $this->logger->error('Failed to send SSDP search request');
-            fclose($socket);
+            socket_close($socket);
             return;
         }
 
         // Receive responses
         $this->receiveSsdpResponses($socket);
 
-        fclose($socket);
+        socket_close($socket);
     }
 
     /**
      * Create UDP socket for SSDP communication.
+     *
+     * Uses the `socket_*` API. The IP_MULTICAST_TTL / IP_MULTICAST_LOOP
+     * constants are part of the `ext-sockets` extension; PHPStan's symbol
+     * discovery cannot always see them on environments that build without
+     * sockets, so we resolve them via `defined()` guards and the
+     * `getprotobyname('ip')` protocol level for portability.
      */
-    private function createSsdpSocket(): mixed
+    private function createSsdpSocket(): ?\Socket
     {
+        $protoIp = getprotobyname('ip');
+        if ($protoIp === false) {
+            $protoIp = 0;
+        }
+
         // Try each local address
         foreach ($this->localAddresses as $address) {
             $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-            if ($socket === false) {
+            if (!($socket instanceof \Socket)) {
                 continue;
             }
 
             // Set socket options
             socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
-            socket_set_option($socket, SOL_IP, IP_MULTICAST_TTL, 4);
-            socket_set_option($socket, SOL_IP, IP_MULTICAST_LOOP, 0);
+            if (defined('IP_MULTICAST_TTL')) {
+                @socket_set_option($socket, $protoIp, IP_MULTICAST_TTL, 4);
+            }
+            if (defined('IP_MULTICAST_LOOP')) {
+                @socket_set_option($socket, $protoIp, IP_MULTICAST_LOOP, 0);
+            }
 
             // Bind to local address
             if (@socket_bind($socket, $address, 0)) {
@@ -205,18 +227,21 @@ class DeviceRegistry
 
         // Fallback: create unbound socket
         $socket = @socket_create(AF_INET, SOCK_DGRAM, SOL_UDP);
-        if ($socket !== false) {
+        if ($socket instanceof \Socket) {
             socket_set_option($socket, SOL_SOCKET, SO_REUSEADDR, 1);
-            socket_set_option($socket, SOL_IP, IP_MULTICAST_TTL, 4);
+            if (defined('IP_MULTICAST_TTL')) {
+                @socket_set_option($socket, $protoIp, IP_MULTICAST_TTL, 4);
+            }
+            return $socket;
         }
 
-        return $socket;
+        return null;
     }
 
     /**
      * Receive SSDP responses from the socket.
      */
-    private function receiveSsdpResponses($socket): void
+    private function receiveSsdpResponses(\Socket $socket): void
     {
         $buffer = '';
         $from = '';
@@ -418,12 +443,12 @@ class DeviceRegistry
         $device->setModelNumber($modelNumber);
 
         if (!empty($presentationUrl)) {
-            $device->presentationUrl = $presentationUrl;
+            $device->setPresentationUrl($presentationUrl);
         }
 
         // Add icons if present
         $iconList = $deviceXml->iconList ?? null;
-        if ($iconList) {
+        if ($iconList instanceof \SimpleXMLElement) {
             foreach ($iconList->icon ?? [] as $icon) {
                 $device->addIcon([
                     'mimetype' => (string)($icon->mimetype ?? 'image/png'),
@@ -440,6 +465,8 @@ class DeviceRegistry
 
     /**
      * Get all discovered devices.
+     *
+     * @return array<string, DlnaDevice>
      */
     public function getDevices(): array
     {
@@ -448,6 +475,8 @@ class DeviceRegistry
 
     /**
      * Get all devices of a specific type.
+     *
+     * @return array<string, DlnaDevice>
      */
     public function getDevicesByType(string $type): array
     {
@@ -459,6 +488,8 @@ class DeviceRegistry
 
     /**
      * Get all media servers.
+     *
+     * @return array<string, DlnaDevice>
      */
     public function getServers(): array
     {
@@ -467,6 +498,8 @@ class DeviceRegistry
 
     /**
      * Get all media renderers.
+     *
+     * @return array<string, DlnaDevice>
      */
     public function getRenderers(): array
     {
@@ -580,11 +613,18 @@ class DeviceRegistry
         // Fallback: get from hostname
         if (empty($this->localAddresses)) {
             $hostname = gethostname();
-            $addresses = gethostbynamel($hostname);
-            if (is_array($addresses)) {
-                $this->localAddresses = array_filter($addresses, function ($addr) {
-                    return filter_var($addr, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
-                });
+            if (is_string($hostname)) {
+                $addresses = gethostbynamel($hostname);
+                if (is_array($addresses)) {
+                    $this->localAddresses = array_values(array_filter(
+                        $addresses,
+                        static fn(string $addr): bool => filter_var(
+                            $addr,
+                            FILTER_VALIDATE_IP,
+                            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+                        ) !== false
+                    ));
+                }
             }
         }
 
@@ -632,6 +672,8 @@ class DeviceRegistry
 
     /**
      * Get devices as array.
+     *
+     * @return array<string, array<string, mixed>>
      */
     public function toArray(): array
     {

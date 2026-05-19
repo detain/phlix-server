@@ -279,6 +279,14 @@ class DlnaDevice
     }
 
     /**
+     * Set the presentation URL.
+     */
+    public function setPresentationUrl(string $url): void
+    {
+        $this->presentationUrl = $url;
+    }
+
+    /**
      * Get the base URL for the device.
      */
     public function getBaseUrl(): string
@@ -305,6 +313,8 @@ class DlnaDevice
 
     /**
      * Get all device icons.
+     *
+     * @return array<int, array{mimetype: string, width: int, height: int, depth: int, url: string}>
      */
     public function getIcons(): array
     {
@@ -313,16 +323,24 @@ class DlnaDevice
 
     /**
      * Add an icon to the device.
+     *
+     * @param array<string, mixed> $icon Icon attributes (mimetype, width, height, depth, url)
      */
     public function addIcon(array $icon): void
     {
-        $this->icons[] = array_merge([
-            'mimetype' => 'image/png',
-            'width' => 48,
-            'height' => 48,
-            'depth' => 32,
-            'url' => '/icons/small.png',
-        ], $icon);
+        $mimetype = $icon['mimetype'] ?? 'image/png';
+        $width = $icon['width'] ?? 48;
+        $height = $icon['height'] ?? 48;
+        $depth = $icon['depth'] ?? 32;
+        $url = $icon['url'] ?? '/icons/small.png';
+
+        $this->icons[] = [
+            'mimetype' => is_string($mimetype) ? $mimetype : 'image/png',
+            'width' => is_numeric($width) ? (int) $width : 48,
+            'height' => is_numeric($height) ? (int) $height : 48,
+            'depth' => is_numeric($depth) ? (int) $depth : 32,
+            'url' => is_string($url) ? $url : '/icons/small.png',
+        ];
     }
 
     /**
@@ -351,6 +369,8 @@ class DlnaDevice
 
     /**
      * Get all services.
+     *
+     * @return array<string, array<string, string>>
      */
     public function getServices(): array
     {
@@ -359,6 +379,8 @@ class DlnaDevice
 
     /**
      * Get a specific service by name.
+     *
+     * @return array<string, string>|null
      */
     public function getService(string $name): ?array
     {
@@ -375,6 +397,8 @@ class DlnaDevice
 
     /**
      * Get all device capabilities.
+     *
+     * @return array<string, bool>
      */
     public function getCapabilities(): array
     {
@@ -553,6 +577,8 @@ class DlnaDevice
 
     /**
      * Convert device to array representation.
+     *
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {
@@ -579,27 +605,33 @@ class DlnaDevice
 
     /**
      * Create device from array.
+     *
+     * @param array<string, mixed> $data
      */
     public static function fromArray(array $data): self
     {
-        $device = new self(
-            $data['udn'],
-            $data['device_type'],
-            $data['friendly_name'],
-            $data['base_url'],
-            $data['port'] ?? 80
-        );
+        $udn = isset($data['udn']) && is_string($data['udn']) ? $data['udn'] : '';
+        $deviceType = isset($data['device_type']) && is_string($data['device_type'])
+            ? $data['device_type']
+            : self::TYPE_SERVER;
+        $friendlyName = isset($data['friendly_name']) && is_string($data['friendly_name'])
+            ? $data['friendly_name']
+            : '';
+        $baseUrl = isset($data['base_url']) && is_string($data['base_url']) ? $data['base_url'] : '';
+        $port = isset($data['port']) && is_int($data['port']) ? $data['port'] : 80;
 
-        if (isset($data['manufacturer'])) {
+        $device = new self($udn, $deviceType, $friendlyName, $baseUrl, $port);
+
+        if (isset($data['manufacturer']) && is_string($data['manufacturer'])) {
             $device->setManufacturer($data['manufacturer']);
         }
-        if (isset($data['model_description'])) {
+        if (isset($data['model_description']) && is_string($data['model_description'])) {
             $device->setModelDescription($data['model_description']);
         }
-        if (isset($data['model_name'])) {
+        if (isset($data['model_name']) && is_string($data['model_name'])) {
             $device->setModelName($data['model_name']);
         }
-        if (isset($data['model_number'])) {
+        if (isset($data['model_number']) && is_string($data['model_number'])) {
             $device->setModelNumber($data['model_number']);
         }
 

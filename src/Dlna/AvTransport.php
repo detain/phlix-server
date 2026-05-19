@@ -71,9 +71,6 @@ class AvTransport
     /** @var StructuredLogger Logger instance for debugging and diagnostics */
     private StructuredLogger $logger;
 
-    /** @var int Counter for next available instance ID */
-    private int $nextInstanceId = 0;
-
     /** @var array<int, array<callable>> State change callbacks keyed by instance ID */
     private array $stateChangeCallbacks = [];
 
@@ -190,7 +187,7 @@ class AvTransport
      * @param int $instanceId The transport instance ID
      * @param string $currentUri The URI to set
      * @param string $currentUriMetadata DIDL-Lite metadata for the URI
-     * @return array Result with CurrentState
+     * @return array<string, mixed> Result with CurrentState
      */
     public function setAvTransportUri(int $instanceId, string $currentUri, string $currentUriMetadata = ''): array
     {
@@ -220,7 +217,7 @@ class AvTransport
      *
      * @param int $instanceId The transport instance ID
      * @param string $speed Playback speed (e.g., "1")
-     * @return array Result with CurrentState
+     * @return array<string, mixed> Result with CurrentState
      */
     public function play(int $instanceId, string $speed = self::PLAY_SPEED_1): array
     {
@@ -251,7 +248,7 @@ class AvTransport
      * Pause playback.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Result with CurrentState
+     * @return array<string, mixed> Result with CurrentState
      */
     public function pause(int $instanceId): array
     {
@@ -280,7 +277,7 @@ class AvTransport
      * Stop playback.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Result with CurrentState
+     * @return array<string, mixed> Result with CurrentState
      */
     public function stop(int $instanceId): array
     {
@@ -308,7 +305,7 @@ class AvTransport
      * @param int $instanceId The transport instance ID
      * @param string $seekMode The seek mode (e.g., REL_TIME, ABS_TIME)
      * @param string $seekTarget The seek target (e.g., "00:05:30" for time)
-     * @return array Result with CurrentState
+     * @return array<string, mixed> Result with CurrentState
      */
     public function seek(int $instanceId, string $seekMode, string $seekTarget): array
     {
@@ -347,7 +344,7 @@ class AvTransport
      * Get current transport info.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Transport information
+     * @return array<string, mixed> Transport information
      */
     public function getTransportInfo(int $instanceId): array
     {
@@ -364,7 +361,7 @@ class AvTransport
      * Get current position info.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Position information
+     * @return array<string, mixed> Position information
      */
     public function getPositionInfo(int $instanceId): array
     {
@@ -391,7 +388,7 @@ class AvTransport
      * Get media info.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Media information
+     * @return array<string, mixed> Media information
      */
     public function getMediaInfo(int $instanceId): array
     {
@@ -413,7 +410,7 @@ class AvTransport
      * Get device capabilities.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Capabilities
+     * @return array<string, mixed> Capabilities
      */
     public function getDeviceCapabilities(int $instanceId): array
     {
@@ -428,7 +425,7 @@ class AvTransport
      * Get transport settings.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Transport settings
+     * @return array<string, mixed> Transport settings
      */
     public function getTransportSettings(int $instanceId): array
     {
@@ -445,7 +442,7 @@ class AvTransport
      *
      * @param int $instanceId The transport instance ID
      * @param string $newPlayMode The new play mode
-     * @return array Result
+     * @return array<string, mixed> Result
      */
     public function setPlayMode(int $instanceId, string $newPlayMode): array
     {
@@ -466,7 +463,7 @@ class AvTransport
      * Get current transport actions.
      *
      * @param int $instanceId The transport instance ID
-     * @return array Available actions
+     * @return array<string, mixed> Available actions
      */
     public function getCurrentTransportActions(int $instanceId): array
     {
@@ -490,6 +487,8 @@ class AvTransport
 
     /**
      * Parse DIDL-Lite metadata to extract media info.
+     *
+     * @return array<string, mixed>
      */
     private function parseUriMetadata(string $metadata): array
     {
@@ -565,6 +564,8 @@ class AvTransport
 
     /**
      * Create an error result.
+     *
+     * @return array<string, mixed>
      */
     private function createErrorResult(int $code, string $description): array
     {

@@ -37,7 +37,7 @@ class DlnaServer
     private StructuredLogger $logger;
     private bool $isRunning = false;
 
-    /** @var array<string, callable> SOAP action handlers */
+    /** @var array<string, array<string, callable>> SOAP action handlers, indexed by service then action */
     private array $soapHandlers = [];
 
     /** @var array<string, string> Service SCPD URLs */
@@ -324,7 +324,7 @@ class DlnaServer
      * @param string $service The service name (e.g., 'ContentDirectory')
      * @param string $action The action name (e.g., 'Browse')
      * @param string $body The SOAP body XML
-     * @return array The result data
+     * @return array<string, mixed> The result data
      */
     public function processSoapRequest(string $service, string $action, string $body): array
     {
@@ -355,7 +355,7 @@ class DlnaServer
                 'result' => $result,
             ]);
 
-            return $result;
+            return is_array($result) ? $result : ['Result' => $result];
         } catch (\Throwable $e) {
             $this->logger->error('SOAP Error', [
                 'service' => $service,
@@ -369,6 +369,8 @@ class DlnaServer
 
     /**
      * Parse SOAP body to extract action parameters.
+     *
+     * @return list<mixed>
      */
     private function parseSoapBody(string $body, string $action): array
     {
@@ -440,19 +442,23 @@ class DlnaServer
         }
 
         // Use XPath for better namespace handling
-        $xpath = new \SimpleXMLElement($doc->asXML());
+        $serialized = $doc->asXML();
+        if ($serialized === false) {
+            return null;
+        }
+        $xpath = new \SimpleXMLElement($serialized);
         $xpath->registerXPathNamespace('s', 'http://schemas.xmlsoap.org/soap/envelope/');
 
         // Try to find the element in Body/ActionName/parameterName pattern
         // This handles both namespaced and non-namespaced elements
         $result = $xpath->xpath("//s:Body/*/*[local-name()='{$name}']");
-        if (!empty($result)) {
+        if ($result !== false && $result !== null && count($result) > 0) {
             return (string)$result[0];
         }
 
         // Also try direct path without namespace
         $result2 = $xpath->xpath("//Body/*[local-name()='{$name}']");
-        if (!empty($result2)) {
+        if ($result2 !== false && $result2 !== null && count($result2) > 0) {
             return (string)$result2[0];
         }
 
@@ -461,11 +467,11 @@ class DlnaServer
 
     /**
      * Build SOAP response XML.
+     *
+     * @param array<string, mixed> $result
      */
     public function buildSoapResponse(string $action, array $result): string
     {
-        $actionLower = strtolower($action);
-
         $responseXml = match ($action) {
             'Browse', 'Search' => $this->buildBrowseResponse($result),
             default => $this->buildGenericResponse($action, $result),
@@ -476,13 +482,16 @@ class DlnaServer
 
     /**
      * Build browse/search response.
+     *
+     * @param array<string, mixed> $result
      */
     private function buildBrowseResponse(array $result): string
     {
-        $resultXml = $result['Result'] ?? '';
-        $numberReturned = $result['NumberReturned'] ?? 0;
-        $totalMatches = $result['TotalMatches'] ?? 0;
-        $updateId = $result['UpdateID'] ?? 1;
+        $resultXmlRaw = $result['Result'] ?? '';
+        $resultXml = is_string($resultXmlRaw) ? $resultXmlRaw : '';
+        $numberReturned = is_numeric($result['NumberReturned'] ?? null) ? (int) $result['NumberReturned'] : 0;
+        $totalMatches = is_numeric($result['TotalMatches'] ?? null) ? (int) $result['TotalMatches'] : 0;
+        $updateId = is_numeric($result['UpdateID'] ?? null) ? (int) $result['UpdateID'] : 1;
 
         return '<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -499,6 +508,8 @@ class DlnaServer
 
     /**
      * Build generic SOAP response.
+     *
+     * @param array<string, mixed> $result
      */
     private function buildGenericResponse(string $action, array $result): string
     {
@@ -507,7 +518,8 @@ class DlnaServer
             if ($key === 'Error') {
                 continue;
             }
-            $resultTags .= sprintf('<%s>%s</%s>', $key, htmlspecialchars((string)$value), $key);
+            $valueStr = is_scalar($value) ? (string) $value : '';
+            $resultTags .= sprintf('<%s>%s</%s>', $key, htmlspecialchars($valueStr), $key);
         }
 
         $responseAction = $action . 'Response';
@@ -596,6 +608,8 @@ class DlnaServer
 
     /**
      * Get content as array for serialization.
+     *
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {

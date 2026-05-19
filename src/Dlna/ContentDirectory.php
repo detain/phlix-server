@@ -4,6 +4,7 @@ namespace Phlex\Dlna;
 
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Media\Library\ItemRepository;
 
 /**
  * Content Directory Service for DLNA/UPnP Media Servers.
@@ -43,20 +44,17 @@ class ContentDirectory
     /** @var LibraryBridge Bridge to media library for real data */
     private ?LibraryBridge $libraryBridge = null;
 
-    /** @var object Item repository for media item data access (fallback) */
-    private object $itemRepository;
+    /** @var ItemRepository Item repository for media item data access (fallback) */
+    private ItemRepository $itemRepository;
 
     /** @var StructuredLogger Logger instance for debugging and diagnostics */
     private StructuredLogger $logger;
 
-    /** @var array<string, array> Cache of resolved object IDs to items */
+    /** @var array<string, array<string, mixed>> Cache of resolved object IDs to items */
     private array $objectCache = [];
 
     /** @var int Current browse flag (0=BrowseMetadata, 1=BrowseDirectChildren) */
     private int $browseFlag = 1;
-
-    /** @var string|null The current object ID being browsed */
-    private ?string $currentObjectId = null;
 
     /** @var int Total number of matching items for current browse/search */
     private int $totalMatches = 0;
@@ -65,12 +63,12 @@ class ContentDirectory
     private int $systemUpdateId = 1;
 
     /**
-     * @param object $itemRepository Item repository (kept for backwards compatibility)
+     * @param ItemRepository $itemRepository Item repository for fallback access
      * @param StructuredLogger|null $logger Optional logger
      *
      * @since 0.12.0 Item repository is now secondary to LibraryBridge
      */
-    public function __construct(object $itemRepository, ?StructuredLogger $logger = null)
+    public function __construct(ItemRepository $itemRepository, ?StructuredLogger $logger = null)
     {
         $this->itemRepository = $itemRepository;
         $this->logger = $logger ?? $this->createDefaultLogger();
@@ -141,7 +139,7 @@ class ContentDirectory
      * @param int $startingIndex Starting index for results
      * @param int $requestedCount Number of results to return (0 = all)
      * @param string $sortCriteria Sort order
-     * @return array Result containing Result, NumberReturned, TotalMatches, UpdateID
+     * @return array<string, mixed> Result containing Result, NumberReturned, TotalMatches, UpdateID
      */
     public function browse(
         string $objectId,
@@ -158,7 +156,6 @@ class ContentDirectory
             'requested_count' => $requestedCount,
         ]);
 
-        $this->currentObjectId = $objectId;
         $this->browseFlag = $browseFlag === 'BrowseMetadata' ? 0 : 1;
 
         if ($objectId === self::OBJECT_ID_ROOT || $objectId === '') {
@@ -191,7 +188,7 @@ class ContentDirectory
      * @param int $startingIndex Starting index
      * @param int $requestedCount Number of results
      * @param string $sortCriteria Sort order
-     * @return array Search result
+     * @return array<string, mixed> Search result
      */
     public function search(
         string $containerId,
@@ -243,6 +240,8 @@ class ContentDirectory
 
     /**
      * Browse the root container.
+     *
+     * @return array<string, mixed>
      */
     private function browseRoot(string $filter, int $startingIndex, int $requestedCount, string $sortCriteria): array
     {
@@ -266,6 +265,9 @@ class ContentDirectory
 
     /**
      * Browse metadata for a specific object.
+     *
+     * @param array<string, mixed> $item
+     * @return array<string, mixed>
      */
     private function browseMetadata(string $objectId, array $item, string $filter): array
     {
@@ -281,6 +283,8 @@ class ContentDirectory
 
     /**
      * Browse direct children of a container.
+     *
+     * @return array<string, mixed>
      */
     private function browseChildren(
         string $objectId,
@@ -314,6 +318,8 @@ class ContentDirectory
 
     /**
      * Get library containers for root.
+     *
+     * @return array<int, array<string, mixed>>
      */
     private function getLibraryContainers(): array
     {
@@ -353,6 +359,8 @@ class ContentDirectory
 
     /**
      * Get children of a container.
+     *
+     * @return array<int, array<string, mixed>>
      */
     private function getChildren(string $objectId): array
     {
@@ -369,8 +377,9 @@ class ContentDirectory
 
         // Handle item-based containers
         $item = $this->resolveObjectId($objectId);
-        if ($item && ($item['type'] ?? '') === 'container') {
-            return $this->itemRepository->findByParent($item['id'] ?? '');
+        if ($item !== null && ($item['type'] ?? '') === 'container') {
+            $parentId = $item['id'] ?? '';
+            return $this->itemRepository->findByParent(is_string($parentId) ? $parentId : '');
         }
 
         return [];
@@ -378,6 +387,8 @@ class ContentDirectory
 
     /**
      * Get items from a specific library.
+     *
+     * @return array<int, array<string, mixed>>
      */
     private function getLibraryItems(string $libraryType): array
     {
@@ -399,6 +410,8 @@ class ContentDirectory
 
     /**
      * Resolve object ID to an item.
+     *
+     * @return array<string, mixed>|null
      */
     private function resolveObjectId(string $objectId): ?array
     {
@@ -440,6 +453,8 @@ class ContentDirectory
     /**
      * Parse UPnP Search criteria.
      * Simplified implementation for common cases.
+     *
+     * @return array{property: string, op: string, value: mixed}|null
      */
     private function parseSearchCriteria(string $criteria): ?array
     {
@@ -469,6 +484,9 @@ class ContentDirectory
 
     /**
      * Perform search based on parsed criteria.
+     *
+     * @param array<string, mixed> $criteria
+     * @return array<int, array<string, mixed>>
      */
     private function performSearch(string $containerId, array $criteria): array
     {
@@ -486,32 +504,40 @@ class ContentDirectory
 
     /**
      * Check if an item matches search criteria.
+     *
+     * @param array<string, mixed> $item
+     * @param array<string, mixed> $criteria
      */
     private function itemMatchesCriteria(array $item, array $criteria): bool
     {
-        $property = $criteria['property'] ?? '';
-        $op = $criteria['op'] ?? '';
+        $property = is_string($criteria['property'] ?? null) ? $criteria['property'] : '';
+        $op = is_string($criteria['op'] ?? null) ? $criteria['op'] : '';
         $value = $criteria['value'] ?? '';
 
-        $itemValue = match ($property) {
+        $rawValue = match ($property) {
             'dc:title' => $item['name'] ?? '',
             'dc:creator' => $item['creator'] ?? '',
             'upnp:artist' => $item['artist'] ?? '',
             'upnp:album' => $item['album'] ?? '',
             default => '',
         };
+        $itemValue = is_scalar($rawValue) ? (string) $rawValue : '';
+        $valueStr = is_scalar($value) ? (string) $value : '';
 
         return match ($op) {
-            'contains' => stripos($itemValue, $value) !== false,
-            'exists' => !empty($itemValue) === $value,
-            '=' => strcasecmp($itemValue, $value) === 0,
-            '!=' => strcasecmp($itemValue, $value) !== 0,
+            'contains' => stripos($itemValue, $valueStr) !== false,
+            'exists' => !empty($itemValue) === (bool) $value,
+            '=' => strcasecmp($itemValue, $valueStr) === 0,
+            '!=' => strcasecmp($itemValue, $valueStr) !== 0,
             default => true,
         };
     }
 
     /**
      * Sort items by sort criteria.
+     *
+     * @param array<int, array<string, mixed>> $items
+     * @return array<int, array<string, mixed>>
      */
     private function sortItems(array $items, string $sortCriteria): array
     {
@@ -524,13 +550,15 @@ class ContentDirectory
 
         $descending = strpos($sortCriteria, '-') === 0;
 
-        usort($items, function ($a, $b) use ($sortField, $descending) {
-            $aVal = $a[$sortField] ?? '';
-            $bVal = $b[$sortField] ?? '';
+        usort($items, function (array $a, array $b) use ($sortField, $descending): int {
+            $aRaw = $a[$sortField] ?? '';
+            $bRaw = $b[$sortField] ?? '';
+            $aVal = is_scalar($aRaw) ? $aRaw : '';
+            $bVal = is_scalar($bRaw) ? $bRaw : '';
 
             $result = is_numeric($aVal) && is_numeric($bVal)
                 ? $aVal <=> $bVal
-                : strcasecmp($aVal, $bVal);
+                : strcasecmp((string) $aVal, (string) $bVal);
 
             return $descending ? -$result : $result;
         });
@@ -541,7 +569,7 @@ class ContentDirectory
     /**
      * Generate DIDL-Lite XML for items.
      *
-     * @param array $items Items to include in DIDL
+     * @param array<int, array<string, mixed>> $items Items to include in DIDL
      * @param bool $includeMeta Whether to include full metadata
      * @return string DIDL-Lite XML string
      */
@@ -562,13 +590,18 @@ class ContentDirectory
 
     /**
      * Convert a single item to DIDL-Lite XML.
+     *
+     * @param array<string, mixed> $item
      */
     private function itemToDidl(array $item, bool $includeMeta): string
     {
-        $id = htmlspecialchars($item['id'] ?? $this->generateObjectId());
-        $parentId = htmlspecialchars($item['parent_id'] ?? '0');
-        $name = htmlspecialchars($item['name'] ?? 'Unknown');
-        $type = $item['type'] ?? 'item';
+        $idRaw = $item['id'] ?? $this->generateObjectId();
+        $id = htmlspecialchars(is_scalar($idRaw) ? (string) $idRaw : $this->generateObjectId());
+        $parentIdRaw = $item['parent_id'] ?? '0';
+        $parentId = htmlspecialchars(is_scalar($parentIdRaw) ? (string) $parentIdRaw : '0');
+        $nameRaw = $item['name'] ?? 'Unknown';
+        $name = htmlspecialchars(is_scalar($nameRaw) ? (string) $nameRaw : 'Unknown');
+        $type = is_string($item['type'] ?? null) ? $item['type'] : 'item';
 
         // Determine UPnP class
         $upnpClass = $this->getUpnpClass($item);
@@ -584,7 +617,8 @@ class ContentDirectory
 
         if ($type === 'container') {
             $didl = str_replace('<item ', '<container ', $didl);
-            $childCount = $item['child_count'] ?? 0;
+            $childCountRaw = $item['child_count'] ?? 0;
+            $childCount = is_numeric($childCountRaw) ? (int) $childCountRaw : 0;
             $didl .= sprintf('<upnp:childCount>%d</upnp:childCount>', $childCount);
         }
 
@@ -604,69 +638,79 @@ class ContentDirectory
 
     /**
      * Get the UPnP class for an item.
+     *
+     * @param array<string, mixed> $item
      */
     private function getUpnpClass(array $item): string
     {
-        $type = $item['type'] ?? 'unknown';
-        $mediaType = $item['media_type'] ?? '';
+        $type = is_string($item['type'] ?? null) ? $item['type'] : 'unknown';
+        $mediaTypeRaw = $item['media_type'] ?? '';
+        $mediaType = is_string($mediaTypeRaw) ? $mediaTypeRaw : '';
+        $classRaw = $item['class'] ?? '';
+        $classStr = is_string($classRaw) ? $classRaw : '';
 
         return match ($type) {
             'container', 'folder' => 'object.container',
-            'movie', 'video' => 'object.item.videoItem.' . ($item['class'] ?? 'movie'),
-            'audio', 'music' => 'object.item.audioItem.' . ($item['class'] ?? 'musicTrack'),
+            'movie', 'video' => 'object.item.videoItem.' . ($classStr !== '' ? $classStr : 'movie'),
+            'audio', 'music' => 'object.item.audioItem.' . ($classStr !== '' ? $classStr : 'musicTrack'),
             'image', 'photo' => 'object.item.imageItem.photo',
             'series', 'tvshow' => 'object.item.videoItem.videoBroadcast',
-            default => 'object.item.' . ($mediaType ?: 'unknown'),
+            default => 'object.item.' . ($mediaType !== '' ? $mediaType : 'unknown'),
         };
     }
 
     /**
      * Add item-specific metadata to DIDL.
+     *
+     * @param array<string, mixed> $item
      */
     private function addItemMetadata(array $item): string
     {
         $metadata = '';
 
         // Artist
-        if (!empty($item['artist'])) {
-            $metadata .= sprintf('<upnp:artist>%s</upnp:artist>', htmlspecialchars($item['artist']));
+        if (!empty($item['artist']) && is_scalar($item['artist'])) {
+            $metadata .= sprintf('<upnp:artist>%s</upnp:artist>', htmlspecialchars((string) $item['artist']));
         }
 
         // Album
-        if (!empty($item['album'])) {
-            $metadata .= sprintf('<upnp:album>%s</upnp:album>', htmlspecialchars($item['album']));
+        if (!empty($item['album']) && is_scalar($item['album'])) {
+            $metadata .= sprintf('<upnp:album>%s</upnp:album>', htmlspecialchars((string) $item['album']));
         }
 
         // Genre
-        if (!empty($item['genre'])) {
-            $metadata .= sprintf('<upnp:genre>%s</upnp:genre>', htmlspecialchars($item['genre']));
+        if (!empty($item['genre']) && is_scalar($item['genre'])) {
+            $metadata .= sprintf('<upnp:genre>%s</upnp:genre>', htmlspecialchars((string) $item['genre']));
         }
 
         // Duration (in seconds, but DIDL uses mm:ss or hh:mm:ss)
-        if (!empty($item['duration'])) {
-            $duration = $this->formatDuration($item['duration']);
+        if (!empty($item['duration']) && is_numeric($item['duration'])) {
+            $duration = $this->formatDuration((int) $item['duration']);
             $metadata .= sprintf('<upnp:duration>%s</upnp:duration>', $duration);
         }
 
         // Date
-        if (!empty($item['date'])) {
-            $metadata .= sprintf('<dc:date>%s</dc:date>', htmlspecialchars($item['date']));
+        if (!empty($item['date']) && is_scalar($item['date'])) {
+            $metadata .= sprintf('<dc:date>%s</dc:date>', htmlspecialchars((string) $item['date']));
         }
 
         // Resolution
-        if (!empty($item['width']) && !empty($item['height'])) {
+        if (
+            !empty($item['width']) && !empty($item['height'])
+            && is_numeric($item['width']) && is_numeric($item['height'])
+        ) {
             $metadata .= sprintf(
                 '<upnp:resolution>%dx%d</upnp:resolution>',
-                $item['width'],
-                $item['height']
+                (int) $item['width'],
+                (int) $item['height']
             );
         }
 
         // Thumbnail/icon
-        if (!empty($item['thumbnail'])) {
+        if (!empty($item['thumbnail']) && is_scalar($item['thumbnail'])) {
             $metadata .= sprintf(
                 '<upnp:albumArtURI xmlns:dlna="urn:schemas-dlna-org:metadata-1-0">%s</upnp:albumArtURI>',
-                htmlspecialchars($item['thumbnail'])
+                htmlspecialchars((string) $item['thumbnail'])
             );
         }
 
@@ -679,13 +723,13 @@ class ContentDirectory
                 htmlspecialchars($protocolInfo),
                 htmlspecialchars($streamUrl)
             );
-        } elseif (!empty($item['path'])) {
+        } elseif (!empty($item['path']) && is_scalar($item['path'])) {
             // Fallback to file path if no LibraryBridge
             $protocolInfo = $this->getProtocolInfo($item);
             $metadata .= sprintf(
                 '<upnp:res protocolInfo="%s">%s</upnp:res>',
                 htmlspecialchars($protocolInfo),
-                htmlspecialchars($item['path'])
+                htmlspecialchars((string) $item['path'])
             );
         }
 
@@ -706,11 +750,14 @@ class ContentDirectory
 
     /**
      * Get DLNA protocol info for an item.
+     *
+     * @param array<string, mixed> $item
      */
     private function getProtocolInfo(array $item): string
     {
-        $mimeType = $item['mime_type'] ?? $this->getMimeType($item);
-        $type = $item['type'] ?? 'video';
+        $mimeTypeRaw = $item['mime_type'] ?? $this->getMimeType($item);
+        $mimeType = is_string($mimeTypeRaw) ? $mimeTypeRaw : $this->getMimeType($item);
+        $type = is_string($item['type'] ?? null) ? $item['type'] : 'video';
 
         $dlnaProfile = match ($type) {
             'video', 'movie' => 'DLNA.ORG_PN=AVC_MP4_MP_HD',
@@ -722,17 +769,23 @@ class ContentDirectory
         return sprintf(
             'http-get:*:%s:%s',
             $mimeType,
-            $dlnaProfile ?: '*'
+            $dlnaProfile !== '' ? $dlnaProfile : '*'
         );
     }
 
     /**
      * Get MIME type based on item type.
+     *
+     * @param array<string, mixed> $item
      */
     private function getMimeType(array $item): string
     {
-        $type = $item['type'] ?? '';
-        $extension = pathinfo($item['path'] ?? '', PATHINFO_EXTENSION);
+        $pathRaw = $item['path'] ?? '';
+        $path = is_string($pathRaw) ? $pathRaw : '';
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        if (!is_string($extension)) {
+            $extension = '';
+        }
 
         return match (strtolower($extension)) {
             'mp4', 'm4v' => 'video/mp4',
@@ -764,6 +817,8 @@ class ContentDirectory
 
     /**
      * Create an error result.
+     *
+     * @return array<string, mixed>
      */
     private function createErrorResult(int $code, string $description): array
     {

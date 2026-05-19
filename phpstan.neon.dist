@@ -8,6 +8,3 @@ parameters:
         - vendor/autoload.php
     treatPhpDocTypesAsCertain: false
     ignoreErrors: []
-
-includes:
-    - phpstan-baseline.neon

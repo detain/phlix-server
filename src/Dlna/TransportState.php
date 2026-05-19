@@ -149,7 +149,8 @@ class TransportState
     public function setMediaMetadata(array $metadata): void
     {
         $this->mediaMetadata = $metadata;
-        $this->mediaDuration = $metadata['duration'] ?? 0;
+        $duration = $metadata['duration'] ?? 0;
+        $this->mediaDuration = is_numeric($duration) ? (int) $duration : 0;
     }
 
     /**

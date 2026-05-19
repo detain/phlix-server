@@ -106,8 +106,23 @@ class MetadataHttpClient
             return null;
         }
 
-        $this->cache[$cacheKey] = $data;
-        return $data;
+        if (!is_array($data)) {
+            $this->logger->error('Metadata API returned non-object JSON', [
+                'url' => $url,
+                'type' => get_debug_type($data),
+            ]);
+            return null;
+        }
+
+        // Metadata APIs return JSON objects (string-keyed). Normalize numeric
+        // keys to strings so the documented array<string, mixed> contract holds.
+        $normalized = [];
+        foreach ($data as $k => $v) {
+            $normalized[(string) $k] = $v;
+        }
+
+        $this->cache[$cacheKey] = $normalized;
+        return $normalized;
     }
 
     /**

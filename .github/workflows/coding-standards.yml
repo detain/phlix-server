@@ -48,6 +48,13 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Assert no phpstan baseline file
+        run: |
+          if [ -f phpstan-baseline.neon ]; then
+            echo "::error::phpstan-baseline.neon has been re-introduced. Wave 5 deleted it permanently — fix errors at their source, do not regenerate a baseline."
+            exit 1
+          fi
+
       - name: Run PHPStan
         if: always()
         run: |

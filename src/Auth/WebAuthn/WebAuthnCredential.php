@@ -24,23 +24,27 @@ final class WebAuthnCredential
     public static function fromDbRow(array $row): self
     {
         return new self(
-            credentialId: is_resource($row['credential_id'] ?? null)
-                ? stream_get_contents($row['credential_id'])
-                : (string)($row['credential_id'] ?? ''),
-            userId: (string)($row['user_id'] ?? ''),
-            publicKey: is_resource($row['public_key'] ?? null)
-                ? stream_get_contents($row['public_key'])
-                : (string)($row['public_key'] ?? ''),
-            counter: (string)($row['counter'] ?? '0'),
-            type: (string)($row['type'] ?? 'public-key'),
+            credentialId: self::readBinaryField($row, 'credential_id'),
+            userId: self::readStringField($row, 'user_id'),
+            publicKey: self::readBinaryField($row, 'public_key'),
+            counter: self::readStringField($row, 'counter', '0'),
+            type: self::readStringField($row, 'type', 'public-key'),
             deviceType: is_string($row['device_type'] ?? null) ? $row['device_type'] : null,
-            aaguid: ($row['aaguid'] ?? null) !== null && $row['aaguid'] !== ''
-                ? (is_resource($row['aaguid']) ? stream_get_contents($row['aaguid']) : (string)$row['aaguid'])
-                : null,
-            registeredAt: (int)($row['registered_at'] ?? time()),
+            aaguid: self::readOptionalBinaryField($row, 'aaguid'),
+            registeredAt: self::readIntField($row, 'registered_at', time()),
         );
     }
 
+    /**
+     * @return array{
+     *     credential_id: string,
+     *     user_id: string,
+     *     type: string,
+     *     device_type: string|null,
+     *     aaguid: string|null,
+     *     registered_at: int
+     * }
+     */
     public function toArray(): array
     {
         return [
@@ -51,5 +55,73 @@ final class WebAuthnCredential
             'aaguid' => $this->aaguid !== null ? bin2hex($this->aaguid) : null,
             'registered_at' => $this->registeredAt,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private static function readBinaryField(array $row, string $key): string
+    {
+        $value = $row[$key] ?? null;
+        if (is_resource($value)) {
+            $contents = stream_get_contents($value);
+            return $contents === false ? '' : $contents;
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+        return '';
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private static function readOptionalBinaryField(array $row, string $key): ?string
+    {
+        $value = $row[$key] ?? null;
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (is_resource($value)) {
+            $contents = stream_get_contents($value);
+            return $contents === false ? null : $contents;
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private static function readStringField(array $row, string $key, string $default = ''): string
+    {
+        $value = $row[$key] ?? null;
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return $default;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private static function readIntField(array $row, string $key, int $default): int
+    {
+        $value = $row[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        return $default;
     }
 }

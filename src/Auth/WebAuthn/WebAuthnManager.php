@@ -7,34 +7,14 @@ namespace Phlex\Auth\WebAuthn;
 use Phlex\Auth\UserRepository;
 use Phlex\Common\Logger\StructuredLogger;
 use Phlex\Shared\Auth\AuthResult;
-use Webauthn\AuthenticatorAssertionResponse;
-use Webauthn\AuthenticatorAttestationResponse;
-use Webauthn\AuthenticatorAttachment;
-use Webauthn\PublicKeyCredentialCreationOptions;
 use Webauthn\PublicKeyCredentialDescriptor;
-use Webauthn\PublicKeyCredentialLoader;
-use Webauthn\PublicKeyCredentialRequestOptions;
-use Webauthn\Server;
-use Webauthn\TokenBinding\HashAlgorithm;
-use Webauthn\AttestationStatement\AttestationObject;
-use Webauthn\AttestationStatement\AttestationStatementSupportManager;
-use Webauthn\Cbor\Codecer;
-use Webauthn\CollectedClientData;
-use Webauthn\CredentialPublicKey;
-use Webauthn\Exception\InvalidDataException;
-use Webauthn\Exception\WebauthnException;
-use Webauthn\MetadataService\MetadataService;
 use Webauthn\PublicKeyCredentialParameters;
 use Webauthn\PublicKeyCredentialUserEntity;
-use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
 class WebAuthnManager
 {
     private UserRepository $userRepo;
-    /** @var Connection */
-    private Connection $db;
-    /** @var StructuredLogger|null */
     private ?StructuredLogger $logger;
     private WebAuthnSettings $settings;
     private WebAuthnCredentialRepository $credentialRepo;
@@ -45,6 +25,12 @@ class WebAuthnManager
     /** @var array<string, string> challenge => username mapping for authentication */
     private array $authenticationChallenges = [];
 
+    /**
+     * @param Connection $db Currently unused — retained in the signature for
+     *                       forward compatibility with direct DB-bound flows
+     *                       (challenge persistence, audit tables). Persistence
+     *                       today goes through {@see $credentialRepo}.
+     */
     public function __construct(
         UserRepository $userRepo,
         Connection $db,
@@ -52,13 +38,25 @@ class WebAuthnManager
         WebAuthnSettings $settings,
         ?StructuredLogger $logger = null
     ) {
+        unset($db); // intentionally unused; see param docblock
         $this->userRepo = $userRepo;
-        $this->db = $db;
         $this->credentialRepo = $credentialRepo;
         $this->settings = $settings;
         $this->logger = $logger;
     }
 
+    /**
+     * @return array{
+     *     challenge: string,
+     *     rp: array{id: string, name: string},
+     *     user: array{id: string, name: string, displayName: string},
+     *     pubKeyCredParams: list<PublicKeyCredentialParameters>,
+     *     timeout: int,
+     *     excludeCredentials: list<PublicKeyCredentialDescriptor>,
+     *     authenticatorSelection: array{authenticatorAttachment: string|null, residentKey: bool, userVerification: string},
+     *     attestation: string
+     * }
+     */
     public function startRegistration(string $userId, string $username): array
     {
         $user = $this->userRepo->findById($userId);
@@ -102,20 +100,6 @@ class WebAuthnManager
 
         $timeout = 60000;
 
-        $publicKey = [
-            'rp' => [
-                'id' => $rpId,
-                'name' => $this->settings->rpName,
-            ],
-            'user' => $userEntity,
-            'pubKeyCredParams' => $publicKeyCredentialParams,
-            'timeout' => $timeout,
-            'challenge' => $challenge,
-            'excludeCredentials' => $excludeCredentials,
-            'authenticatorSelection' => $authenticatorSelection,
-            'attestation' => $attestation,
-        ];
-
         $this->log('debug', 'Started WebAuthn registration', [
             'user_id' => $userId,
             'username' => $username,
@@ -141,6 +125,10 @@ class WebAuthnManager
         ];
     }
 
+    /**
+     * @param array<array-key, mixed> $credential Decoded JSON body from the browser
+     *                                            (`attestationObject`, `clientDataJSON`, etc.)
+     */
     public function finishRegistration(
         string $userId,
         string $username,
@@ -159,39 +147,40 @@ class WebAuthnManager
 
         $attestationObject = $credential['attestationObject'] ?? null;
         $clientDataJSON = $credential['clientDataJSON'] ?? null;
-        $transports = $credential['transports'] ?? [];
 
-        if (!$attestationObject || !$clientDataJSON) {
+        if (!is_string($attestationObject) || $attestationObject === '') {
+            throw new \InvalidArgumentException('Missing attestation data');
+        }
+        if (!is_string($clientDataJSON) || $clientDataJSON === '') {
             throw new \InvalidArgumentException('Missing attestation data');
         }
 
         $clientData = json_decode($clientDataJSON, true);
-        if (!$clientData) {
+        if (!is_array($clientData)) {
             throw new \InvalidArgumentException('Invalid client data JSON');
         }
 
-        if (($clientData['challenge'] ?? '') !== base64_encode($expectedChallenge)) {
+        $clientChallenge = $clientData['challenge'] ?? '';
+        if (!is_string($clientChallenge) || $clientChallenge !== base64_encode($expectedChallenge)) {
             throw new \InvalidArgumentException('Challenge mismatch');
         }
 
-        if (($clientData['type'] ?? '') !== 'webauthn.create') {
+        $clientType = $clientData['type'] ?? '';
+        if (!is_string($clientType) || $clientType !== 'webauthn.create') {
             throw new \InvalidArgumentException('Invalid ceremony type');
         }
-
-        $rpIdHash = hash('sha256', $this->settings->rpId, true);
-        $origin = $this->settings->rpOrigin;
 
         $parsedAttestation = $this->parseAttestationObject($attestationObject);
         $credentialId = $parsedAttestation['credentialId'];
         $publicKeyCose = $parsedAttestation['publicKey'];
         $counter = $parsedAttestation['counter'];
-        $attestedCredentialData = $parsedAttestation['attestedCredentialData'] ?? null;
+        $attestedCredentialData = $parsedAttestation['attestedCredentialData'];
         $deviceType = null;
         $aaguid = null;
 
-        if ($attestedCredentialData) {
+        if (is_array($attestedCredentialData)) {
             $deviceType = $attestedCredentialData['deviceType'] ?? null;
-            $aaguid = $attestedCredentialData['aaguid'] ?? null;
+            $aaguid = $attestedCredentialData['aaguid'];
         }
 
         $type = 'public-key';
@@ -219,6 +208,15 @@ class WebAuthnManager
         return base64_encode($credentialId);
     }
 
+    /**
+     * @return array{
+     *     challenge: string,
+     *     rpId: string,
+     *     allowCredentials: list<PublicKeyCredentialDescriptor>,
+     *     timeout: int,
+     *     userVerification: string
+     * }
+     */
     public function startAuthentication(string $username): array
     {
         $user = $this->userRepo->findByUsername($username);
@@ -226,10 +224,15 @@ class WebAuthnManager
             throw new \InvalidArgumentException('User not found');
         }
 
+        $userId = $user['id'] ?? null;
+        if (!is_string($userId) || $userId === '') {
+            throw new \InvalidArgumentException('User not found');
+        }
+
         $challenge = $this->generateChallenge();
         $this->authenticationChallenges[$challenge] = $username;
 
-        $credentials = $this->credentialRepo->findByUserId($user['id']);
+        $credentials = $this->credentialRepo->findByUserId($userId);
         $allowCredentials = [];
 
         foreach ($credentials as $cred) {
@@ -262,6 +265,10 @@ class WebAuthnManager
         ];
     }
 
+    /**
+     * @param array<array-key, mixed> $credential Decoded JSON body from the browser
+     *                                            (`id`, `clientDataJSON`, `authenticatorData`, `signature`)
+     */
     public function finishAuthentication(
         string $username,
         array $credential,
@@ -282,7 +289,12 @@ class WebAuthnManager
         $authenticatorData = $credential['authenticatorData'] ?? null;
         $signature = $credential['signature'] ?? null;
 
-        if (!$credentialId || !$clientDataJSON || !$authenticatorData || !$signature) {
+        if (
+            !is_string($credentialId) || $credentialId === ''
+            || !is_string($clientDataJSON) || $clientDataJSON === ''
+            || !is_string($authenticatorData) || $authenticatorData === ''
+            || !is_string($signature) || $signature === ''
+        ) {
             throw new \InvalidArgumentException('Missing credential data');
         }
 
@@ -292,15 +304,17 @@ class WebAuthnManager
         }
 
         $clientData = json_decode($clientDataJSON, true);
-        if (!$clientData) {
+        if (!is_array($clientData)) {
             throw new \InvalidArgumentException('Invalid client data JSON');
         }
 
-        if (($clientData['challenge'] ?? '') !== base64_encode($expectedChallenge)) {
+        $clientChallenge = $clientData['challenge'] ?? '';
+        if (!is_string($clientChallenge) || $clientChallenge !== base64_encode($expectedChallenge)) {
             throw new \InvalidArgumentException('Challenge mismatch');
         }
 
-        if (($clientData['type'] ?? '') !== 'webauthn.get') {
+        $clientType = $clientData['type'] ?? '';
+        if (!is_string($clientType) || $clientType !== 'webauthn.get') {
             throw new \InvalidArgumentException('Invalid ceremony type');
         }
 
@@ -316,11 +330,8 @@ class WebAuthnManager
             throw new \InvalidArgumentException('Potential replay attack detected');
         }
 
-        $publicKey = $storedCredential->publicKey;
-        $clientDataHash = hash('sha256', $clientDataJSON, true);
         $authenticatorDataBytes = base64_decode($authenticatorData, true);
-
-        if (!$authenticatorDataBytes) {
+        if ($authenticatorDataBytes === false || $authenticatorDataBytes === '') {
             throw new \InvalidArgumentException('Invalid authenticator data');
         }
 
@@ -331,14 +342,19 @@ class WebAuthnManager
             throw new \InvalidArgumentException('User not found');
         }
 
+        $userId = $user['id'] ?? null;
+        if (!is_string($userId) || $userId === '') {
+            throw new \InvalidArgumentException('User not found');
+        }
+
         $this->log('info', 'WebAuthn authentication successful', [
             'username' => $username,
-            'user_id' => $user['id'],
+            'user_id' => $userId,
         ]);
 
         return new AuthResult(
             success: true,
-            userId: $user['id'],
+            userId: $userId,
             externalId: 'webauthn:' . $credentialId,
             error: null,
             attributes: [
@@ -347,6 +363,9 @@ class WebAuthnManager
         );
     }
 
+    /**
+     * @return array<WebAuthnCredential>
+     */
     public function listCredentials(string $userId): array
     {
         return $this->credentialRepo->findByUserId($userId);
@@ -391,16 +410,21 @@ class WebAuthnManager
         );
     }
 
+    /**
+     * @return array{
+     *     credentialId: string,
+     *     publicKey: string,
+     *     counter: int,
+     *     attestedCredentialData: array{aaguid: string|null, credentialIdLength: int, deviceType?: string|null}|null,
+     *     aaguid: string|null
+     * }
+     */
     private function parseAttestationObject(string $attestationObject): array
     {
         $decoded = base64_decode($attestationObject, true);
         if ($decoded === false) {
             $decoded = $attestationObject;
         }
-
-        $attestationObjectBytes = hex2bin(bin2hex($decoded));
-
-        $offset = 0;
 
         $attestedCredentialData = null;
         $aaguid = null;
@@ -417,11 +441,13 @@ class WebAuthnManager
         }
 
         if (strlen($authData) >= 19) {
-            $credentialIdLength = unpack('n', substr($authData, 16, 2))[1];
+            $unpacked = unpack('n', substr($authData, 16, 2));
+            if (is_array($unpacked) && isset($unpacked[1]) && is_int($unpacked[1])) {
+                $credentialIdLength = $unpacked[1];
+            }
         }
 
         if (strlen($authData) >= 19 + $credentialIdLength) {
-            $credentialPublicKeyBytes = substr($authData, 19 + $credentialIdLength);
             $attestedCredentialData = [
                 'aaguid' => $aaguid,
                 'credentialIdLength' => $credentialIdLength,
@@ -440,7 +466,10 @@ class WebAuthnManager
         $counter = 0;
         if (strlen($decoded) >= $counterStart + 4) {
             $counterBytes = substr($decoded, $counterStart, 4);
-            $counter = unpack('N', $counterBytes)[1];
+            $unpackedCounter = unpack('N', $counterBytes);
+            if (is_array($unpackedCounter) && isset($unpackedCounter[1]) && is_int($unpackedCounter[1])) {
+                $counter = $unpackedCounter[1];
+            }
         }
 
         $credentialId = '';
@@ -471,12 +500,18 @@ class WebAuthnManager
         $counterStart = 37;
         if (strlen($decoded) >= $counterStart + 4) {
             $counterBytes = substr($decoded, $counterStart, 4);
-            return unpack('N', $counterBytes)[1];
+            $unpacked = unpack('N', $counterBytes);
+            if (is_array($unpacked) && isset($unpacked[1]) && is_int($unpacked[1])) {
+                return $unpacked[1];
+            }
         }
 
         return 0;
     }
 
+    /**
+     * @param array<string, mixed> $context
+     */
     private function log(string $level, string $message, array $context = []): void
     {
         if ($this->logger) {

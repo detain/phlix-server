@@ -10,8 +10,7 @@ use Workerman\MySQL\Connection;
 final class WebAuthnCredentialRepository
 {
     private Connection $db;
-    /** @var LoggerInterface|null */
-    private ?LoggerInterface $logger = null;
+    private ?LoggerInterface $logger;
 
     public function __construct(Connection $db, ?LoggerInterface $logger = null)
     {
@@ -26,11 +25,16 @@ final class WebAuthnCredentialRepository
             [$credentialId]
         );
 
-        if (empty($result) || !is_array($result[0] ?? null)) {
+        if (!is_array($result) || $result === []) {
             return null;
         }
 
-        return WebAuthnCredential::fromDbRow($result[0]);
+        $row = $result[0] ?? null;
+        if (!is_array($row)) {
+            return null;
+        }
+
+        return WebAuthnCredential::fromDbRow(self::normalizeRow($row));
     }
 
     /**
@@ -43,10 +47,14 @@ final class WebAuthnCredentialRepository
             [$userId]
         );
 
+        if (!is_array($result)) {
+            return [];
+        }
+
         $credentials = [];
         foreach ($result as $row) {
             if (is_array($row)) {
-                $credentials[] = WebAuthnCredential::fromDbRow($row);
+                $credentials[] = WebAuthnCredential::fromDbRow(self::normalizeRow($row));
             }
         }
 
@@ -63,14 +71,14 @@ final class WebAuthnCredentialRepository
             [$username]
         );
 
-        if (empty($result)) {
+        if (!is_array($result) || $result === []) {
             return null;
         }
 
         $credentials = [];
         foreach ($result as $row) {
             if (is_array($row)) {
-                $credentials[] = WebAuthnCredential::fromDbRow($row);
+                $credentials[] = WebAuthnCredential::fromDbRow(self::normalizeRow($row));
             }
         }
 
@@ -98,6 +106,11 @@ final class WebAuthnCredentialRepository
                 $credential->registeredAt,
             ]
         );
+
+        $this->logger?->info('webauthn.credential.saved', [
+            'user_id' => $credential->userId,
+            'credential_id' => base64_encode($credential->credentialId),
+        ]);
     }
 
     public function updateCounter(string $credentialId, int $newCounter): void
@@ -115,7 +128,7 @@ final class WebAuthnCredentialRepository
             [$credentialId, $userId]
         );
 
-        return $affected > 0;
+        return is_int($affected) && $affected > 0;
     }
 
     public function deleteAllForUser(string $userId): int
@@ -135,6 +148,43 @@ final class WebAuthnCredentialRepository
             [$userId]
         );
 
-        return is_array($result[0] ?? null) ? (int)(($result[0]['c'] ?? 0)) : 0;
+        if (!is_array($result)) {
+            return 0;
+        }
+
+        $row = $result[0] ?? null;
+        if (!is_array($row)) {
+            return 0;
+        }
+
+        $count = $row['c'] ?? 0;
+        if (is_int($count)) {
+            return $count;
+        }
+        if (is_string($count) && is_numeric($count)) {
+            return (int) $count;
+        }
+        return 0;
+    }
+
+    /**
+     * Ensures the row is keyed by string and types are predictable for
+     * {@see WebAuthnCredential::fromDbRow()} (which expects
+     * `array<string, mixed>`). Workerman's MySQL connection returns
+     * `array<mixed, mixed>` in its declared return type.
+     *
+     * @param array<mixed, mixed> $row
+     *
+     * @return array<string, mixed>
+     */
+    private static function normalizeRow(array $row): array
+    {
+        $normalized = [];
+        foreach ($row as $key => $value) {
+            if (is_string($key)) {
+                $normalized[$key] = $value;
+            }
+        }
+        return $normalized;
     }
 }

@@ -110,14 +110,24 @@ class Application
             throw new \RuntimeException("Configuration file not found: {$configPath}");
         }
 
+        /** @var mixed $config */
         $config = include $configPath;
 
         if (!is_array($config)) {
             throw new \RuntimeException('Configuration file must return an array');
         }
 
-        $container = ContainerFactory::create($config);
-        return new self($container, $config);
+        $normalized = [];
+        /** @var mixed $value */
+        foreach ($config as $key => $value) {
+            if (!is_string($key)) {
+                throw new \RuntimeException('Configuration file must return a string-keyed array');
+            }
+            $normalized[$key] = $value;
+        }
+
+        $container = ContainerFactory::create($normalized);
+        return new self($container, $normalized);
     }
 
     /**
@@ -174,11 +184,16 @@ class Application
 
         // System info endpoint - returns server metadata
         $this->router->get('/system/info', function (Request $request): Response {
+            $serverConfig = $this->config['server'] ?? [];
+            $serverName = is_array($serverConfig) && isset($serverConfig['name']) && is_string($serverConfig['name'])
+                ? $serverConfig['name']
+                : 'Phlex Media Server';
+
             return (new Response())->json([
-                'server' => $this->config['server']['name'] ?? 'Phlex Media Server',
+                'server' => $serverName,
                 'version' => '1.0.0',
                 'php_version' => PHP_VERSION,
-                'workerman_version' => Workerman\Worker::VERSION,
+                'workerman_version' => \Workerman\Worker::VERSION,
             ]);
         });
 
@@ -348,10 +363,9 @@ class Application
 
         // Apply global middleware in reverse order (so first registered runs first)
         $handler = $finalHandler;
-        for (end($this->middleware); key($this->middleware) !== null; prev($this->middleware)) {
-            $currentHandler = $this->middleware[current($this->middleware)];
+        foreach (array_reverse($this->middleware) as $currentHandler) {
             $nextHandler = $handler;
-            $handler = function (Request $request) use ($currentHandler, $nextHandler) {
+            $handler = static function (Request $request) use ($currentHandler, $nextHandler) {
                 return $currentHandler($request, $nextHandler);
             };
         }
@@ -492,7 +506,12 @@ class Application
      */
     private function startNewsletterTimerIfEnabled(): void
     {
-        $newsletterConfig = $this->config['newsletter'] ?? [];
+        $newsletterRaw = $this->config['newsletter'] ?? [];
+        if (!is_array($newsletterRaw)) {
+            return;
+        }
+        /** @var array<string, mixed> $newsletterConfig */
+        $newsletterConfig = $newsletterRaw;
 
         if (empty($newsletterConfig['enabled'])) {
             return;
@@ -503,10 +522,10 @@ class Application
         }
 
         try {
-            $sendDay = $newsletterConfig['send_day'] ?? 0;
-            $sendHour = $newsletterConfig['send_hour'] ?? 9;
-            $batchSize = $newsletterConfig['batch_size'] ?? 50;
-            $templateDir = $newsletterConfig['template_dir'] ?? 'public/templates';
+            $sendDay = self::intConfig($newsletterConfig, 'send_day', 0);
+            $sendHour = self::intConfig($newsletterConfig, 'send_hour', 9);
+            $batchSize = self::intConfig($newsletterConfig, 'batch_size', 50);
+            $templateDir = self::stringConfig($newsletterConfig, 'template_dir', 'public/templates');
 
             $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
 
@@ -520,8 +539,11 @@ class Application
                 new \Phlex\Stats\StatsCollector($db),
                 new \Phlex\Media\Library\LibraryManager(
                     $db,
-                    new \Phlex\Media\Library\MediaScanner($db),
-                    new \Phlex\Media\Library\FolderWatcher($db)
+                    new \Phlex\Media\Library\MediaScanner(
+                        $db,
+                        new \Phlex\Media\Library\ItemRepository($db),
+                    ),
+                    new \Phlex\Media\Library\FolderWatcher()
                 ),
                 $db,
                 $templateDir,
@@ -535,6 +557,36 @@ class Application
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Read a string value out of an untyped config sub-array, with a
+     * fallback when the key is missing or the value is the wrong type.
+     *
+     * @param array<string, mixed> $config
+     */
+    private static function stringConfig(array $config, string $key, string $default): string
+    {
+        $value = $config[$key] ?? $default;
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Read an int value out of an untyped config sub-array, with a
+     * fallback when the key is missing or the value is the wrong type.
+     *
+     * @param array<string, mixed> $config
+     */
+    private static function intConfig(array $config, string $key, int $default): int
+    {
+        $value = $config[$key] ?? $default;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        return $default;
     }
 
     /**
@@ -605,20 +657,28 @@ class Application
      */
     private function startBackupTimerIfEnabled(): void
     {
-        $backupConfigPath = $this->config['_config_dir'] ?? 'config';
+        $configDirRaw = $this->config['_config_dir'] ?? 'config';
+        $backupConfigPath = is_string($configDirRaw) ? $configDirRaw : 'config';
         $backupConfigFile = $backupConfigPath . '/backup.php';
 
         if (!file_exists($backupConfigFile)) {
             return;
         }
 
+        /** @var mixed $backupConfig */
         $backupConfig = include $backupConfigFile;
+        if (!is_array($backupConfig)) {
+            return;
+        }
 
         if (empty($backupConfig['enabled'])) {
             return;
         }
 
-        $intervalDays = $backupConfig['auto_backup_interval_days'] ?? 7;
+        $intervalDaysRaw = $backupConfig['auto_backup_interval_days'] ?? 7;
+        $intervalDays = is_int($intervalDaysRaw)
+            ? $intervalDaysRaw
+            : (is_string($intervalDaysRaw) && is_numeric($intervalDaysRaw) ? (int) $intervalDaysRaw : 0);
 
         if ($intervalDays <= 0) {
             return;
@@ -651,10 +711,9 @@ class Application
     private function registerBackupTimer(\Phlex\Admin\BackupManager $backupManager, int $intervalDays): void
     {
         $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION);
-        $intervalSeconds = $intervalDays * 86400;
 
         // Run daily to check if it's time for a backup
-        \Workerman\Timer::add(86400, function () use ($backupManager, $intervalSeconds, $logger): void {
+        \Workerman\Timer::add(86400, function () use ($backupManager, $intervalDays, $logger): void {
             $nextBackup = $backupManager->getNextScheduledBackup();
 
             if ($nextBackup === null) {
@@ -751,6 +810,9 @@ class Application
 
         try {
             $cdsServer = $this->container->get(\Phlex\Dlna\CdsServer::class);
+            if (!$cdsServer instanceof \Phlex\Dlna\CdsServer) {
+                return;
+            }
 
             // Device description endpoint
             $deviceDescController = new \Phlex\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
@@ -762,7 +824,8 @@ class Application
 
             // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
             $this->router->get('/scpd/{service}.xml', function (\Phlex\Server\Http\Request $request, array $params) use ($cdsServer): \Phlex\Server\Http\Response {
-                $service = $params['service'] ?? '';
+                $serviceRaw = $params['service'] ?? '';
+                $service = is_string($serviceRaw) ? $serviceRaw : '';
                 $scpdXml = $cdsServer->getScpdXml($service);
 
                 if ($scpdXml === null) {
@@ -802,6 +865,9 @@ class Application
 
         try {
             $playToManager = $this->container->get(\Phlex\Dlna\PlayToManager::class);
+            if (!$playToManager instanceof \Phlex\Dlna\PlayToManager) {
+                return;
+            }
             $controller = new \Phlex\Server\Http\Controllers\Dlna\RendererListController($playToManager);
 
             // List renderers
@@ -850,6 +916,9 @@ class Application
 
         try {
             $castManager = $this->container->get(\Phlex\Chromecast\CastManager::class);
+            if (!$castManager instanceof \Phlex\Chromecast\CastManager) {
+                return;
+            }
             $controller = new \Phlex\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
 
             // List discovered devices
@@ -893,6 +962,9 @@ class Application
 
         try {
             $rokuManager = $this->container->get(\Phlex\Roku\RokuManager::class);
+            if (!$rokuManager instanceof \Phlex\Roku\RokuManager) {
+                return;
+            }
             $controller = new \Phlex\Server\Http\Controllers\Roku\RokuController($rokuManager);
 
             // List discovered devices
@@ -937,6 +1009,9 @@ class Application
 
         try {
             $airPlayManager = $this->container->get(\Phlex\AirPlay\AirPlayManager::class);
+            if (!$airPlayManager instanceof \Phlex\AirPlay\AirPlayManager) {
+                return;
+            }
             $controller = new \Phlex\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
 
             // List discovered devices
@@ -985,7 +1060,14 @@ class Application
                 $credentialRepo,
                 $settings
             );
-            $authManager = new \Phlex\Auth\AuthManager($userRepo, new \Phlex\Auth\JwtHandler('test-secret'));
+            $auditLogger = new \Phlex\Common\Logger\AuditLogger(
+                new \Phlex\Common\Logger\StructuredLogger('audit', [])
+            );
+            $authManager = new \Phlex\Auth\AuthManager(
+                $userRepo,
+                new \Phlex\Auth\JwtHandler('test-secret'),
+                $auditLogger
+            );
             return new \Phlex\Server\Http\Controllers\WebAuthnController($webauthnManager, $authManager);
         }
 

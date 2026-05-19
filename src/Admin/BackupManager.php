@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Phlex\Admin;
 
+use Phlex\Admin\Dto\BackupConfig;
+use Phlex\Admin\Dto\DbConnectionConfig;
+use Phlex\Admin\Dto\S3Config;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
@@ -23,14 +26,11 @@ use Workerman\MySQL\Connection;
  */
 class BackupManager
 {
-    /** @var Connection */
-    private $db;
+    private Connection $db;
 
-    /** @var StructuredLogger|null */
-    private $logger;
+    private ?StructuredLogger $logger;
 
-    /** @var array<string, mixed> */
-    private array $config;
+    private BackupConfig $config;
 
     /**
      * @param Connection $db Database connection
@@ -40,74 +40,28 @@ class BackupManager
     {
         $this->db = $db;
         $this->logger = $logger;
-        /** @var array<string, mixed> */
         $this->config = $this->loadConfig();
     }
 
     /**
-     * Get S3 configuration.
-     *
-     * @return array<string, mixed>
+     * Load backup configuration into a strongly-typed value object.
      */
-    private function getS3Config(): array
-    {
-        /** @var array<string, mixed> $s3Config */
-        $s3Config = $this->config['s3'] ?? [];
-        return $s3Config;
-    }
-
-    /**
-     * Get a string config value with default.
-     *
-     * @param mixed $value
-     */
-    private function getConfigString(string $key, string $default = ''): string
-    {
-        $value = $this->config[$key] ?? $default;
-        return is_string($value) ? $value : (string) $value;
-    }
-
-    /**
-     * Get an int config value with default.
-     *
-     * @param mixed $value
-     */
-    private function getConfigInt(string $key, int $default = 0): int
-    {
-        $value = $this->config[$key] ?? $default;
-        return is_int($value) ? $value : (int) $value;
-    }
-
-    /**
-     * Load backup configuration.
-     *
-     * @return array<string, mixed>
-     */
-    private function loadConfig(): array
+    private function loadConfig(): BackupConfig
     {
         $configPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
         $path = $configPath . '/backup.php';
 
         if (!file_exists($path)) {
-            return [
-                'enabled' => true,
-                'local_path' => '/var/phlex/backups',
-                'retention_count' => 5,
-                'auto_backup_interval_days' => 7,
-                's3' => [
-                    'enabled' => false,
-                    'bucket' => '',
-                    'region' => 'us-east-1',
-                    'access_key' => '',
-                    'secret_key' => '',
-                    'endpoint' => '',
-                    'prefix' => 'backups/',
-                ],
-            ];
+            return BackupConfig::defaults();
         }
 
-        /** @var array<string, mixed> */
-        return include $path;
+        /** @var mixed $raw */
+        $raw = include $path;
+        if (!is_array($raw)) {
+            return BackupConfig::defaults();
+        }
+        /** @var array<string, mixed> $raw */
+        return BackupConfig::fromArray($raw);
     }
 
     /**
@@ -123,10 +77,9 @@ class BackupManager
 
         $backupId = $this->generateUuid();
         $timestamp = gmdate('Y-m-d_H-i-s');
-        $labelPrefix = $label ? "{$label}_" : '';
+        $labelPrefix = $label !== null && $label !== '' ? "{$label}_" : '';
         $filename = "{$labelPrefix}backup_{$timestamp}.tar.gz";
-        /** @var string $localPath */
-        $localPath = (string) ($this->config['local_path'] ?? '/var/phlex/backups');
+        $localPath = $this->config->localPath;
 
         if (!is_dir($localPath)) {
             mkdir($localPath, 0755, true);
@@ -137,7 +90,6 @@ class BackupManager
 
         try {
             // 1. Dump database
-            /** @var string $dumpPath */
             $dumpPath = $tempDir . '/database.sql';
             $this->createDatabaseDump($dumpPath);
 
@@ -195,11 +147,6 @@ class BackupManager
      *
      * @return array<array{id:string, label:string, file_path:string, size_bytes:int, checksum_sha256:string, is_s3:bool, created_at:string, expires_at:?string}>
      */
-    /**
-     * List all backups sorted by creation date descending.
-     *
-     * @return array<array{id:string, label:string, file_path:string, size_bytes:int, checksum_sha256:string, is_s3:bool, created_at:string, expires_at:?string}>
-     */
     public function listBackups(): array
     {
         /** @var array<array<string, mixed>> $rows */
@@ -211,14 +158,16 @@ class BackupManager
 
         return array_map(function (array $row): array {
             return [
-                'id' => (string) $row['id'],
-                'label' => (string) ($row['label'] ?? ''),
-                'file_path' => (string) $row['file_path'],
-                'size_bytes' => (int) ($row['size_bytes'] ?? 0),
-                'checksum_sha256' => (string) $row['checksum_sha256'],
-                'is_s3' => (bool) ($row['is_s3'] ?? false),
-                'created_at' => (string) ($row['created_at'] ?? ''),
-                'expires_at' => $row['expires_at'] !== null ? (string) $row['expires_at'] : null,
+                'id' => $this->rowString($row, 'id'),
+                'label' => $this->rowString($row, 'label'),
+                'file_path' => $this->rowString($row, 'file_path'),
+                'size_bytes' => $this->rowInt($row, 'size_bytes'),
+                'checksum_sha256' => $this->rowString($row, 'checksum_sha256'),
+                'is_s3' => $this->rowBool($row, 'is_s3'),
+                'created_at' => $this->rowString($row, 'created_at'),
+                'expires_at' => isset($row['expires_at'])
+                    ? $this->rowString($row, 'expires_at')
+                    : null,
             ];
         }, $rows);
     }
@@ -244,21 +193,18 @@ class BackupManager
             return false;
         }
 
-        /** @var array<string, mixed> $backup */
         $backup = $rows[0];
 
         // If S3 backup, delete from S3 first
-        if ((bool) ($backup['is_s3'] ?? false)) {
+        if ($this->rowBool($backup, 'is_s3')) {
             $s3Client = $this->createS3Client();
             if ($s3Client !== null) {
-                $s3Key = $this->getS3KeyFromPath((string) ($backup['file_path'] ?? ''));
-                $s3Cfg = $this->getS3Config();
-                $bucket = (string) ($s3Cfg['bucket'] ?? '');
-                $s3Client->deleteObject($bucket, $s3Key);
+                $s3Key = $this->getS3KeyFromPath($this->rowString($backup, 'file_path'));
+                $s3Client->deleteObject($this->config->s3->bucket, $s3Key);
             }
         } else {
             // Delete local file
-            $filePath = (string) ($backup['file_path'] ?? '');
+            $filePath = $this->rowString($backup, 'file_path');
             if ($filePath !== '' && file_exists($filePath)) {
                 unlink($filePath);
             }
@@ -293,24 +239,21 @@ class BackupManager
             return RestoreResult::failure('Backup not found', "No backup found with ID: {$backupId}");
         }
 
-        /** @var array<string, mixed> $backup */
         $backup = $rows[0];
 
         try {
             // If S3 backup, download first
-            $localPath = (string) ($backup['file_path'] ?? '');
-            if ((bool) ($backup['is_s3'] ?? false)) {
+            $localPath = $this->rowString($backup, 'file_path');
+            if ($this->rowBool($backup, 'is_s3')) {
                 $s3Client = $this->createS3Client();
                 if ($s3Client === null) {
                     return RestoreResult::failure('S3 not configured', 'Cannot download S3 backup - S3 not configured');
                 }
 
-                $s3Cfg = $this->getS3Config();
-                $bucket = (string) ($s3Cfg['bucket'] ?? '');
                 $s3Key = $this->getS3KeyFromPath($localPath);
                 $tempPath = sys_get_temp_dir() . '/phlex_restore_' . $backupId . '.tar.gz';
 
-                if (!$s3Client->download($bucket, $s3Key, $tempPath)) {
+                if (!$s3Client->download($this->config->s3->bucket, $s3Key, $tempPath)) {
                     return RestoreResult::failure('S3 download failed', "Failed to download backup from S3: {$s3Key}");
                 }
 
@@ -322,7 +265,7 @@ class BackupManager
             if ($actualChecksum === false) {
                 return RestoreResult::failure('Checksum computation failed', 'Could not compute checksum');
             }
-            $expectedChecksum = (string) ($backup['checksum_sha256'] ?? '');
+            $expectedChecksum = $this->rowString($backup, 'checksum_sha256');
             if (strtolower($actualChecksum) !== strtolower($expectedChecksum)) {
                 return RestoreResult::failure(
                     'Checksum mismatch',
@@ -345,7 +288,7 @@ class BackupManager
 
             // Cleanup
             $this->cleanupTempDir($extractDir);
-            $originalPath = (string) ($backup['file_path'] ?? '');
+            $originalPath = $this->rowString($backup, 'file_path');
             if ($localPath !== $originalPath && str_contains($localPath, 'phlex_restore_')) {
                 @unlink($localPath);
             }
@@ -389,21 +332,18 @@ class BackupManager
             return false;
         }
 
-        /** @var array<string, mixed> $backup */
         $backup = $rows[0];
-        $localPath = (string) ($backup['file_path'] ?? '');
-        $checksum = (string) ($backup['checksum_sha256'] ?? '');
+        $localPath = $this->rowString($backup, 'file_path');
+        $checksum = $this->rowString($backup, 'checksum_sha256');
 
         // Verify local file exists
         if (!file_exists($localPath)) {
             return false;
         }
 
-        $s3Cfg = $this->getS3Config();
-        $bucket = (string) ($s3Cfg['bucket'] ?? '');
-        $prefix = (string) ($s3Cfg['prefix'] ?? 'backups/');
+        $bucket = $this->config->s3->bucket;
         $filename = basename($localPath);
-        $s3Key = $prefix . $filename;
+        $s3Key = $this->config->s3->prefix . $filename;
 
         if (!$s3Client->upload($bucket, $s3Key, $localPath, $checksum)) {
             return false;
@@ -450,17 +390,15 @@ class BackupManager
             return false;
         }
 
-        /** @var array<string, mixed> $backup */
         $backup = $rows[0];
 
-        if (!(bool) ($backup['is_s3'] ?? false)) {
+        if (!$this->rowBool($backup, 'is_s3')) {
             return true; // Already local
         }
 
-        $s3Cfg = $this->getS3Config();
-        $bucket = (string) ($s3Cfg['bucket'] ?? '');
-        $s3Key = $this->getS3KeyFromPath((string) ($backup['file_path'] ?? ''));
-        $localPath = $this->getConfigString('local_path', '/var/phlex/backups') . '/' . basename($s3Key);
+        $bucket = $this->config->s3->bucket;
+        $s3Key = $this->getS3KeyFromPath($this->rowString($backup, 'file_path'));
+        $localPath = $this->config->localPath . '/' . basename($s3Key);
 
         if (!$s3Client->download($bucket, $s3Key, $localPath)) {
             return false;
@@ -487,7 +425,7 @@ class BackupManager
      */
     public function getNextScheduledBackup(): ?int
     {
-        $intervalDays = (int) ($this->config['auto_backup_interval_days'] ?? 7);
+        $intervalDays = $this->config->autoBackupIntervalDays;
 
         if ($intervalDays <= 0) {
             return null;
@@ -504,8 +442,11 @@ class BackupManager
             return time();
         }
 
-        $createdAt = (string) ($rows[0]['created_at'] ?? '');
+        $createdAt = $this->rowString($rows[0], 'created_at');
         $lastBackup = strtotime($createdAt);
+        if ($lastBackup === false) {
+            return time();
+        }
         $intervalSeconds = $intervalDays * 86400;
 
         return $lastBackup + $intervalSeconds;
@@ -517,7 +458,7 @@ class BackupManager
     public function cleanupOldBackups(): void
     {
         $logger = $this->getLogger();
-        $retentionCount = (int) ($this->config['retention_count'] ?? 5);
+        $retentionCount = $this->config->retentionCount;
 
         // Get backups beyond retention count
         /** @var array<array<string, mixed>> $rows */
@@ -527,7 +468,7 @@ class BackupManager
         );
 
         foreach ($rows as $row) {
-            $backupId = (string) ($row['id'] ?? '');
+            $backupId = $this->rowString($row, 'id');
             if ($backupId !== '') {
                 $this->deleteBackup($backupId);
             }
@@ -547,11 +488,11 @@ class BackupManager
 
         $cmd = sprintf(
             'mysqldump --single-transaction --quick --lock-tables=false -h %s -P %s -u %s %s --password=%s > %s 2>/dev/null',
-            escapeshellarg($dbConfig['host']),
-            escapeshellarg((string) $dbConfig['port']),
-            escapeshellarg($dbConfig['username']),
-            escapeshellarg($dbConfig['database']),
-            escapeshellarg($dbConfig['password']),
+            escapeshellarg($dbConfig->host),
+            escapeshellarg((string) $dbConfig->port),
+            escapeshellarg($dbConfig->username),
+            escapeshellarg($dbConfig->database),
+            escapeshellarg($dbConfig->password),
             escapeshellarg($outputPath)
         );
 
@@ -571,11 +512,11 @@ class BackupManager
 
         $cmd = sprintf(
             'mysql -h %s -P %s -u %s --password=%s %s < %s 2>/dev/null',
-            escapeshellarg($dbConfig['host']),
-            escapeshellarg((string) $dbConfig['port']),
-            escapeshellarg($dbConfig['username']),
-            escapeshellarg($dbConfig['password']),
-            escapeshellarg($dbConfig['database']),
+            escapeshellarg($dbConfig->host),
+            escapeshellarg((string) $dbConfig->port),
+            escapeshellarg($dbConfig->username),
+            escapeshellarg($dbConfig->password),
+            escapeshellarg($dbConfig->database),
             escapeshellarg($dumpPath)
         );
 
@@ -793,10 +734,8 @@ class BackupManager
 
     /**
      * Get database configuration.
-     *
-     * @return array{host:string, port:int, username:string, password:string, database:string}
      */
-    private function getDbConfig(): array
+    private function getDbConfig(): DbConnectionConfig
     {
         $dbConfigPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR . '/database.php' : 'config/database.php';
 
@@ -804,18 +743,23 @@ class BackupManager
             throw new \RuntimeException('Database config not found: ' . $dbConfigPath);
         }
 
-        /** @var array<string, mixed> $config */
-        $config = include $dbConfigPath;
-        /** @var array<string, mixed> $conn */
-        $conn = $config['connections']['mysql'] ?? $config['default'] ?? [];
+        /** @var mixed $rawConfig */
+        $rawConfig = include $dbConfigPath;
+        if (!is_array($rawConfig)) {
+            throw new \RuntimeException('Database config must return an array: ' . $dbConfigPath);
+        }
+        /** @var array<string, mixed> $rawConfig */
 
-        return [
-            'host' => (string) ($conn['host'] ?? '127.0.0.1'),
-            'port' => (int) ($conn['port'] ?? 3306),
-            'username' => (string) ($conn['username'] ?? 'root'),
-            'password' => (string) ($conn['password'] ?? ''),
-            'database' => (string) ($conn['database'] ?? 'phlex'),
-        ];
+        $connections = $rawConfig['connections'] ?? null;
+        $conn = is_array($connections) && isset($connections['mysql']) && is_array($connections['mysql'])
+            ? $connections['mysql']
+            : ($rawConfig['default'] ?? []);
+        if (!is_array($conn)) {
+            $conn = [];
+        }
+        /** @var array<string, mixed> $conn */
+
+        return DbConnectionConfig::fromArray($conn);
     }
 
     /**
@@ -823,24 +767,17 @@ class BackupManager
      */
     private function createS3Client(): ?S3Client
     {
-        $s3Cfg = $this->getS3Config();
+        $s3 = $this->config->s3;
 
-        if (empty($s3Cfg['enabled'])) {
-            return null;
-        }
-
-        $accessKey = (string) ($s3Cfg['access_key'] ?? '');
-        $secretKey = (string) ($s3Cfg['secret_key'] ?? '');
-
-        if ($accessKey === '' || $secretKey === '') {
+        if (!$s3->hasCredentials()) {
             return null;
         }
 
         return new S3Client(
-            (string) ($s3Cfg['region'] ?? 'us-east-1'),
-            $accessKey,
-            $secretKey,
-            (string) ($s3Cfg['endpoint'] ?? '')
+            $s3->region,
+            $s3->accessKey,
+            $s3->secretKey,
+            $s3->endpoint,
         );
     }
 
@@ -873,6 +810,66 @@ class BackupManager
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Extract a string column from a hydrated DB row.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function rowString(array $row, string $key): string
+    {
+        $value = $row[$key] ?? '';
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+        return '';
+    }
+
+    /**
+     * Extract an int column from a hydrated DB row.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function rowInt(array $row, string $key): int
+    {
+        $value = $row[$key] ?? 0;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        return 0;
+    }
+
+    /**
+     * Extract a bool column from a hydrated DB row.
+     *
+     * @param array<string, mixed> $row
+     */
+    private function rowBool(array $row, string $key): bool
+    {
+        $value = $row[$key] ?? false;
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value !== 0;
+        }
+        if (is_string($value)) {
+            return $value !== '' && $value !== '0' && strtolower($value) !== 'false';
+        }
+        return false;
     }
 
     /**

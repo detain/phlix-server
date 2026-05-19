@@ -1,21 +1,54 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Phlex\Common\Logger;
 
+use Monolog\Handler\HandlerInterface;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Level;
 use Monolog\Logger;
+use Monolog\LogRecord;
 use Monolog\Processor\PsrLogMessageProcessor;
 use Psr\Log\LoggerInterface;
 use Stringable;
 
+/**
+ * Phlex wrapper around Monolog 3 that exposes a PSR-3 surface while
+ * also accepting Monolog {@see Level} objects directly.
+ *
+ * Config shape (`array<string, mixed>`):
+ * ```
+ * [
+ *     'handlers' => [
+ *         '<name>' => [
+ *             'type' => 'rotating_file'|'stream'|'error'|'audit',
+ *             'path' => string,
+ *             'level' => string, // optional, defaults to 'debug'
+ *             'max_files' => int, // optional
+ *         ],
+ *         ...
+ *     ],
+ *     'processors' => [
+ *         'request_id' => bool,
+ *         'user_id'    => bool,
+ *     ],
+ * ]
+ * ```
+ *
+ * @package Phlex\Common\Logger
+ */
 class StructuredLogger implements LoggerInterface
 {
     private Logger $logger;
     private string $channel;
+    /** @var array<string, mixed> */
     private array $config;
 
+    /**
+     * @param array<string, mixed> $config Logger config — see class docblock for shape.
+     */
     public function __construct(string $channel, array $config)
     {
         $this->channel = $channel;
@@ -28,43 +61,58 @@ class StructuredLogger implements LoggerInterface
 
     private function setupHandlers(): void
     {
-        foreach ($this->config['handlers'] ?? [] as $name => $handlerConfig) {
+        $handlers = $this->config['handlers'] ?? [];
+        if (!is_array($handlers)) {
+            return;
+        }
+
+        foreach ($handlers as $handlerConfig) {
+            if (!is_array($handlerConfig)) {
+                continue;
+            }
+            /** @var array<string, mixed> $handlerConfig */
             $handler = $this->createHandler($handlerConfig);
-            $level = $this->mapLevel($handlerConfig['level'] ?? 'debug');
-            $handler->setLevel($level);
+            // The handler's level is already set via its constructor by
+            // createHandler(); Monolog's HandlerInterface does not expose
+            // setLevel() so we cannot adjust it here generically.
             $this->logger->pushHandler($handler);
         }
     }
 
-    private function createHandler(array $config): \Monolog\Handler\HandlerInterface
+    /**
+     * @param array<string, mixed> $config
+     */
+    private function createHandler(array $config): HandlerInterface
     {
-        $type = $config['type'] ?? 'rotating_file';
+        $type = self::stringOption($config, 'type', 'rotating_file');
+        $path = self::stringOption($config, 'path', 'php://stdout');
+        $level = $this->mapLevel(self::stringOption($config, 'level', 'debug'));
 
         switch ($type) {
             case 'rotating_file':
                 return new RotatingFileHandler(
-                    $config['path'],
-                    $config['max_files'] ?? 30,
-                    $this->mapLevel($config['level'] ?? 'debug')
+                    $path,
+                    self::intOption($config, 'max_files', 30),
+                    $level
                 );
 
             case 'stream':
                 return new StreamHandler(
-                    $config['path'],
-                    $this->mapLevel($config['level'] ?? 'debug')
+                    $path,
+                    $level
                 );
 
             case 'error':
                 return new RotatingFileHandler(
-                    $config['path'],
-                    $config['max_files'] ?? 30,
+                    $path,
+                    self::intOption($config, 'max_files', 30),
                     Level::Error
                 );
 
             case 'audit':
                 return new RotatingFileHandler(
-                    $config['path'],
-                    $config['max_files'] ?? 90,
+                    $path,
+                    self::intOption($config, 'max_files', 90),
                     Level::Info
                 );
 
@@ -81,35 +129,50 @@ class StructuredLogger implements LoggerInterface
         // and the Logger's log() method. The 'context' processor config is kept for
         // backwards compatibility but no longer adds a separate processor.
 
-        if ($this->config['processors']['request_id'] ?? false) {
-            $this->logger->pushProcessor(new class {
-                public function __invoke(array $record): array
-                {
-                    $record['extra']['request_id'] = $this->getRequestId();
-                    return $record;
-                }
+        $processors = $this->config['processors'] ?? [];
+        if (!is_array($processors)) {
+            return;
+        }
 
-                private function getRequestId(): string
-                {
-                    return $_SERVER['HTTP_X_REQUEST_ID'] ?? uniqid('req-');
-                }
+        if (!empty($processors['request_id'])) {
+            $this->logger->pushProcessor(static function (LogRecord $record): LogRecord {
+                $extra = $record->extra;
+                $extra['request_id'] = self::resolveRequestId();
+                return $record->with(extra: $extra);
             });
         }
 
-        if ($this->config['processors']['user_id'] ?? false) {
-            $this->logger->pushProcessor(new class {
-                public function __invoke(array $record): array
-                {
-                    $record['extra']['user_id'] = $this->getUserId();
-                    return $record;
-                }
-
-                private function getUserId(): ?string
-                {
-                    return $_SESSION['user_id'] ?? null;
-                }
+        if (!empty($processors['user_id'])) {
+            $this->logger->pushProcessor(static function (LogRecord $record): LogRecord {
+                $extra = $record->extra;
+                $extra['user_id'] = self::resolveUserId();
+                return $record->with(extra: $extra);
             });
         }
+    }
+
+    private static function resolveRequestId(): string
+    {
+        $headerValue = $_SERVER['HTTP_X_REQUEST_ID'] ?? null;
+        if (is_string($headerValue) && $headerValue !== '') {
+            return $headerValue;
+        }
+        return uniqid('req-');
+    }
+
+    private static function resolveUserId(): ?string
+    {
+        if (!isset($_SESSION['user_id'])) {
+            return null;
+        }
+        $value = $_SESSION['user_id'];
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return null;
     }
 
     private function mapLevel(string $level): Level
@@ -179,14 +242,72 @@ class StructuredLogger implements LoggerInterface
     public function log($level, string|Stringable $message, array $context = []): void
     {
         $context['channel'] = $this->channel;
-        $resolvedLevel = $level instanceof Level
-            ? $level
-            : $this->mapLevel(is_string($level) ? $level : (string) $level);
+        $resolvedLevel = $this->resolveLevel($level);
         $this->logger->log($resolvedLevel, (string) $message, $context);
     }
 
-    public function withContext(array $context): Logger
+    /**
+     * Normalize a mixed level argument into a Monolog {@see Level}.
+     */
+    private function resolveLevel(mixed $level): Level
     {
-        return $this->logger->withContext($context);
+        if ($level instanceof Level) {
+            return $level;
+        }
+        if (is_string($level)) {
+            return $this->mapLevel($level);
+        }
+        if (is_int($level)) {
+            return $this->mapLevel(self::levelNameFromInt($level));
+        }
+        if ($level instanceof Stringable) {
+            return $this->mapLevel((string) $level);
+        }
+        return Level::Info;
+    }
+
+    private static function levelNameFromInt(int $level): string
+    {
+        return match ($level) {
+            Level::Emergency->value => 'emergency',
+            Level::Alert->value     => 'alert',
+            Level::Critical->value  => 'critical',
+            Level::Error->value     => 'error',
+            Level::Warning->value   => 'warning',
+            Level::Notice->value    => 'notice',
+            Level::Info->value      => 'info',
+            Level::Debug->value     => 'debug',
+            default                 => 'info',
+        };
+    }
+
+    /**
+     * Read a string option from an untyped config sub-array, falling back
+     * to a default when missing or of the wrong type.
+     *
+     * @param array<string, mixed> $config
+     */
+    private static function stringOption(array $config, string $key, string $default): string
+    {
+        $value = $config[$key] ?? $default;
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Read an int option from an untyped config sub-array, falling back to
+     * a default when missing or of the wrong type.
+     *
+     * @param array<string, mixed> $config
+     */
+    private static function intOption(array $config, string $key, int $default): int
+    {
+        $value = $config[$key] ?? $default;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        return $default;
     }
 }

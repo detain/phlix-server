@@ -32,7 +32,7 @@ class MetadataHttpClient
     /** @var \Phlex\Common\Logger\StructuredLogger Structured logger instance */
     private \Phlex\Common\Logger\StructuredLogger $logger;
 
-    /** @var array<string, mixed> Response cache keyed by endpoint and parameters */
+    /** @var array<string, array<string, mixed>> Response cache keyed by endpoint and parameters */
     private array $cache = [];
 
     /**

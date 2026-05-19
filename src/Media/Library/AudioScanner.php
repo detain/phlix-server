@@ -177,28 +177,28 @@ class AudioScanner extends MediaScanner
             $metadata['album_artist'] = $tags['album_artist'];
         }
         if (isset($tags['year'])) {
-            $metadata['year'] = (int)$tags['year'];
+            $metadata['year'] = $this->toInt($tags['year']);
         }
         if (isset($tags['genre'])) {
             $metadata['genre'] = is_array($tags['genre']) ? $tags['genre'] : [$tags['genre']];
         }
         if (isset($tags['track_number'])) {
-            $metadata['track_number'] = (int)$tags['track_number'];
+            $metadata['track_number'] = $this->toInt($tags['track_number']);
         }
         if (isset($tags['disc_number'])) {
-            $metadata['disc_number'] = (int)$tags['disc_number'];
+            $metadata['disc_number'] = $this->toInt($tags['disc_number']);
         }
         if (isset($tags['duration_secs'])) {
-            $metadata['duration_secs'] = (float)$tags['duration_secs'];
+            $metadata['duration_secs'] = $this->toFloat($tags['duration_secs']);
         }
         if (isset($tags['bitrate'])) {
-            $metadata['bitrate'] = (int)$tags['bitrate'];
+            $metadata['bitrate'] = $this->toInt($tags['bitrate']);
         }
         if (isset($tags['sample_rate'])) {
-            $metadata['sample_rate'] = (int)$tags['sample_rate'];
+            $metadata['sample_rate'] = $this->toInt($tags['sample_rate']);
         }
         if (isset($tags['channels'])) {
-            $metadata['channels'] = (int)$tags['channels'];
+            $metadata['channels'] = $this->toInt($tags['channels']);
         }
         if (isset($tags['composer'])) {
             $metadata['composer'] = $tags['composer'];
@@ -212,6 +212,68 @@ class AudioScanner extends MediaScanner
         $metadata['file_mtime'] = $file->getMTime();
 
         return $metadata;
+    }
+
+    /**
+     * Narrows a mixed tag value to int, returning 0 if the value cannot be
+     * meaningfully coerced. Numeric strings (including ID3 year tags such as
+     * "2020") are accepted.
+     *
+     * @param mixed $value Raw tag value.
+     */
+    private function toInt(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        return 0;
+    }
+
+    /**
+     * Narrows a mixed tag value to float.
+     *
+     * @param mixed $value Raw tag value.
+     */
+    private function toFloat(mixed $value): float
+    {
+        if (is_float($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return (float) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (float) $value;
+        }
+        return 0.0;
+    }
+
+    /**
+     * Reads a 32-bit big-endian unsigned integer from a binary string.
+     *
+     * Returns 0 if the substring is shorter than 4 bytes or unpack fails.
+     *
+     * @param string $data Binary buffer.
+     * @param int $offset Byte offset within $data.
+     */
+    private function unpackUint32(string $data, int $offset): int
+    {
+        $slice = substr($data, $offset, 4);
+        if (strlen($slice) < 4) {
+            return 0;
+        }
+        $unpacked = unpack('N', $slice);
+        if ($unpacked === false) {
+            return 0;
+        }
+        $value = $unpacked[1] ?? 0;
+        return is_int($value) ? $value : 0;
     }
 
     /**
@@ -342,7 +404,10 @@ class AudioScanner extends MediaScanner
     {
         // Text information frames ( начинаются с T)
         if (str_starts_with($frameId, 'T') && $frameId !== 'TXX') {
-            $encoding = ord($frameData[0]) ?? 0;
+            if ($frameData === '') {
+                return $tags;
+            }
+            $encoding = ord($frameData[0]);
             $text = $this->decodeId3String(substr($frameData, 1), $encoding);
 
             switch ($frameId) {
@@ -413,19 +478,22 @@ class AudioScanner extends MediaScanner
      * Parses a genre string that may contain numeric genre references.
      *
      * @param string $genre Raw genre string
-     * @return string|array<string> Parsed genre
+     * @return list<string> Parsed genre tokens (empty when no genre detected)
      */
-    private function parseGenre(string $genre): array|string
+    private function parseGenre(string $genre): array
     {
         // Remove parentheses and brackets (e.g., "(17)" or "((comment))")
-        $genre = preg_replace('/[\(\[\(].*?[\)\]\)]/', '', $genre);
-        $genre = trim($genre);
+        $cleaned = preg_replace('/[\(\[\(].*?[\)\]\)]/', '', $genre);
+        if (!is_string($cleaned)) {
+            return [];
+        }
+        $cleaned = trim($cleaned);
 
-        if (empty($genre)) {
+        if ($cleaned === '') {
             return [];
         }
 
-        return [$genre];
+        return [$cleaned];
     }
 
     /**
@@ -534,7 +602,11 @@ class AudioScanner extends MediaScanner
                 }
 
                 // Sample rate index
-                $sampleRateIndex = ($byte2 & 0x03) << 1 | (ord(fread($handle, 1)) >> 7);
+                $sampleByte = fread($handle, 1);
+                if ($sampleByte === false || $sampleByte === '') {
+                    break;
+                }
+                $sampleRateIndex = ($byte2 & 0x03) << 1 | (ord($sampleByte) >> 7);
                 $sampleRate = $this->mpegSampleRate($sampleRateIndex);
                 if ($sampleRate === null) {
                     continue;
@@ -641,6 +713,9 @@ class AudioScanner extends MediaScanner
 
                 if ($blockType === 4) {
                     // Vorbis comment block
+                    if ($blockLength <= 0) {
+                        break;
+                    }
                     $blockData = fread($handle, $blockLength);
                     if ($blockData !== false) {
                         $tags = $this->parseVorbisComments($blockData);
@@ -658,11 +733,10 @@ class AudioScanner extends MediaScanner
             fclose($handle);
         }
 
-        // Get audio properties from streaminfo block
-        $duration = $this->getFlacDuration($path);
-        if ($duration !== null) {
-            $tags['duration_secs'] = $duration;
-        }
+        // Duration extraction from FLAC streaminfo requires a seektable read
+        // or full decode; {@see getFlacDuration()} is currently a stub kept
+        // for symmetry with the MP3 path.
+        $this->getFlacDuration($path);
 
         return $tags;
     }
@@ -769,10 +843,15 @@ class AudioScanner extends MediaScanner
     /**
      * Gets duration of a FLAC file by reading the streaminfo block.
      *
+     * Current implementation only validates that the streaminfo header is
+     * present; computing duration requires reading the seektable or doing a
+     * full decode, neither of which is implemented yet. The method therefore
+     * always returns null and is kept for parity with {@see getMp3Duration()}.
+     *
      * @param string $path Path to the FLAC file
-     * @return float|null Duration in seconds, or null if unknown
+     * @return null Duration could not be determined.
      */
-    private function getFlacDuration(string $path): ?float
+    private function getFlacDuration(string $path): null
     {
         $handle = fopen($path, 'rb');
         if ($handle === false) {
@@ -786,50 +865,20 @@ class AudioScanner extends MediaScanner
                 return null;
             }
 
-            // Read first metadata block (streaminfo)
+            // Read first metadata block (streaminfo) to ensure file is parseable.
             $headerByte = fread($handle, 1);
-            if ($headerByte === false) {
+            if ($headerByte === false || $headerByte === '') {
                 return null;
             }
 
-            $isLast = (ord($headerByte) & 0x80) !== 0;
             $blockType = ord($headerByte) & 0x7F;
-
             if ($blockType !== 0) {
                 return null; // First block should be streaminfo
             }
 
-            // Read block length (24 bits)
-            $lenBytes = fread($handle, 3);
-            if ($lenBytes === false) {
-                return null;
-            }
-            $blockLength = (ord($lenBytes[0]) << 16) | (ord($lenBytes[1]) << 8) | ord($lenBytes[2]);
-
-            $streamInfo = fread($handle, $blockLength);
-            if ($streamInfo === false || strlen($streamInfo) < 18) {
-                return null;
-            }
-
-            // Parse streaminfo
-            // Sample rate is at offset 10, 20 bits
-            $sampleRate = (unpack('N', "\x00" . substr($streamInfo, 10, 3))[1] ?? 0) >> 12;
-            if ($sampleRate === 0) {
-                return null;
-            }
-
-            // Total samples is at offset 13, 4 bits (actually 36 bits but we only handle first 32)
-            // For simplicity, we'll estimate from file size
-            // This is an approximation - proper implementation would need to read the seektable
-
-            $fileSize = filesize($path);
-            if ($fileSize === false) {
-                return null;
-            }
-
-            // Estimate duration based on average bitrate
-            // This is a rough approximation
-            return null; // Duration requires seektable or full decode
+            // Duration computation requires reading the seektable or doing a
+            // full decode; both are out of scope here.
+            return null;
         } finally {
             fclose($handle);
         }
@@ -860,7 +909,10 @@ class AudioScanner extends MediaScanner
                 fseek($handle, $atomMap['moov']);
 
                 // Parse moov atom
-                $tags = $this->parseMoovAtom($handle, filesize($path));
+                $fileSize = filesize($path);
+                if ($fileSize !== false) {
+                    $tags = $this->parseMoovAtom($handle, $fileSize);
+                }
             }
         } finally {
             fclose($handle);
@@ -884,7 +936,15 @@ class AudioScanner extends MediaScanner
     private function findMp4Atoms($handle): array
     {
         $atoms = [];
-        $fileSize = filesize(stream_get_meta_data($handle)['uri']);
+        $meta = stream_get_meta_data($handle);
+        $uri = $meta['uri'] ?? null;
+        if (!is_string($uri) || $uri === '') {
+            return $atoms;
+        }
+        $fileSize = filesize($uri);
+        if ($fileSize === false) {
+            return $atoms;
+        }
 
         fseek($handle, 0);
 
@@ -1049,12 +1109,15 @@ class AudioScanner extends MediaScanner
             return;
         }
 
-        $dataSize = unpack('N', substr($dataHeader, 0, 4))[1] ?? 0;
-        $dataType = substr($dataHeader, 4, 4);
+        $dataSize = $this->unpackUint32($dataHeader, 0);
 
         // Skip locale (4 bytes) at start of data
         fread($handle, 4);
         $dataSize -= 8;
+
+        if ($dataSize <= 0) {
+            return;
+        }
 
         $value = fread($handle, $dataSize);
         if ($value === false) {

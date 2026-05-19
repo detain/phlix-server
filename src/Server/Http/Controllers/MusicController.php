@@ -94,15 +94,23 @@ class MusicController
                     continue;
                 }
                 $artistName = $artist['name'] ?? null;
-                $key = is_string($artistName) ? $artistName : (string)($artistName ?? '');
+                $key = is_string($artistName) ? $artistName : '';
                 if (!isset($allArtists[$key])) {
                     $allArtists[$key] = $artist;
                 } else {
-                    $allArtists[$key]['track_count'] = (int)(($allArtists[$key]['track_count'] ?? 0)) + (int)($artist['track_count'] ?? 0);
-                    foreach (is_array($artist['albums'] ?? null) ? $artist['albums'] : [] as $album) {
-                        if (!in_array($album, (array)($allArtists[$key]['albums'] ?? []), true)) {
-                            $allArtists[$key]['albums'][] = $album;
-                            $allArtists[$key]['album_count'] = (int)($allArtists[$key]['album_count'] ?? 0) + 1;
+                    $existingTrackCount = $this->toInt($allArtists[$key]['track_count'] ?? 0);
+                    $artistTrackCount = $this->toInt($artist['track_count'] ?? 0);
+                    $allArtists[$key]['track_count'] = $existingTrackCount + $artistTrackCount;
+                    $existingAlbums = is_array($allArtists[$key]['albums'] ?? null)
+                        ? $allArtists[$key]['albums']
+                        : [];
+                    $newAlbums = is_array($artist['albums'] ?? null) ? $artist['albums'] : [];
+                    foreach ($newAlbums as $album) {
+                        if (!in_array($album, $existingAlbums, true)) {
+                            $existingAlbums[] = $album;
+                            $allArtists[$key]['albums'] = $existingAlbums;
+                            $existingAlbumCount = $this->toInt($allArtists[$key]['album_count'] ?? 0);
+                            $allArtists[$key]['album_count'] = $existingAlbumCount + 1;
                         }
                     }
                 }
@@ -155,7 +163,7 @@ class MusicController
             }
             $artists = $this->musicManager->getArtists($libraryId);
             foreach ($artists as $artist) {
-                if (is_array($artist) && strcasecmp((string)($artist['name'] ?? ''), $artistName) === 0) {
+                if (is_array($artist) && strcasecmp($this->toString($artist['name'] ?? ''), $artistName) === 0) {
                     return (new Response())->json(['artist' => $artist]);
                 }
             }
@@ -264,7 +272,7 @@ class MusicController
             }
             $albums = $this->musicManager->getAlbums($libraryId);
             foreach ($albums as $album) {
-                if (is_array($album) && strcasecmp((string)($album['name'] ?? ''), $albumName) === 0) {
+                if (is_array($album) && strcasecmp($this->toString($album['name'] ?? ''), $albumName) === 0) {
                     return (new Response())->json(['album' => $album]);
                 }
             }
@@ -306,8 +314,11 @@ class MusicController
      */
     public function listTracks(Request $request, array $params): Response
     {
-        $limit = (int)($request->query['limit'] ?? 100);
-        $offset = (int)($request->query['offset'] ?? 0);
+        $limit = $this->toInt($request->query['limit'] ?? 100);
+        $offset = $this->toInt($request->query['offset'] ?? 0);
+        if ($limit <= 0) {
+            $limit = 100;
+        }
 
         $libraries = $this->libraryManager->getAllLibraries();
 
@@ -329,7 +340,7 @@ class MusicController
                 }
             }
             $libraryInfo = $this->libraryManager->getLibrary($libraryId);
-            $totalCount += is_array($libraryInfo) ? (int)($libraryInfo['item_count'] ?? 0) : 0;
+            $totalCount += is_array($libraryInfo) ? $this->toInt($libraryInfo['item_count'] ?? 0) : 0;
         }
 
         return (new Response())->json([
@@ -463,6 +474,41 @@ class MusicController
         }
 
         return null;
+    }
+
+    /**
+     * Narrows a mixed value to int, falling back to 0 for non-numeric input.
+     *
+     * @param mixed $value Untrusted scalar value (often from JSON / DB rows).
+     */
+    private function toInt(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        return 0;
+    }
+
+    /**
+     * Narrows a mixed value to string, falling back to '' for non-stringable input.
+     *
+     * @param mixed $value Untrusted scalar value.
+     */
+    private function toString(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return '';
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Phlex\Media\Library;
 
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Media\Library\Dto\LibraryRow;
 use Phlex\Media\Music\MusicLibraryType;
 use Phlex\Media\Music\BookLibraryType;
 use Phlex\Media\Music\AudiobookLibraryType;
@@ -29,8 +30,8 @@ use Workerman\MySQL\Connection;
  */
 class LibraryManager
 {
-    /** @var StructuredLogger|null Logger instance for structured logging */
-    private ?StructuredLogger $logger = null;
+    /** @var StructuredLogger Logger instance for structured logging */
+    private StructuredLogger $logger;
 
     /** @var Connection Database connection for persistence */
     private Connection $db;
@@ -145,14 +146,32 @@ class LibraryManager
      */
     public function getLibrary(string $id): ?array
     {
+        $row = $this->fetchLibraryRow($id);
+        return $row?->toArray();
+    }
+
+    /**
+     * Fetches a library and returns a typed DTO.
+     *
+     * @param string $id The library's unique identifier.
+     */
+    private function fetchLibraryRow(string $id): ?LibraryRow
+    {
         $result = $this->db->query("SELECT * FROM libraries WHERE id = ?", [$id]);
-        if (empty($result)) {
+        if (!is_array($result) || count($result) === 0) {
             return null;
         }
-        $library = $result[0];
-        $library['paths'] = json_decode($library['paths'], true);
-        $library['options'] = json_decode($library['options'] ?? '{}', true);
-        return $library;
+        $first = $result[0] ?? null;
+        if (!is_array($first)) {
+            return null;
+        }
+        $row = [];
+        foreach ($first as $key => $value) {
+            if (is_string($key)) {
+                $row[$key] = $value;
+            }
+        }
+        return LibraryRow::fromRow($row);
     }
 
     /**
@@ -168,11 +187,24 @@ class LibraryManager
     public function getAllLibraries(): array
     {
         $results = $this->db->query("SELECT * FROM libraries ORDER BY display_order, name");
-        return array_map(function ($lib) {
-            $lib['paths'] = json_decode($lib['paths'], true);
-            $lib['options'] = json_decode($lib['options'] ?? '{}', true);
-            return $lib;
-        }, $results);
+        if (!is_array($results)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($results as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $normalized = [];
+            foreach ($row as $key => $value) {
+                if (is_string($key)) {
+                    $normalized[$key] = $value;
+                }
+            }
+            $out[] = LibraryRow::fromRow($normalized)->toArray();
+        }
+        return $out;
     }
 
     /**
@@ -244,43 +276,43 @@ class LibraryManager
      */
     public function scanLibrary(string $libraryId): void
     {
-        $library = $this->getLibrary($libraryId);
-        if (!$library) {
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
             throw new \InvalidArgumentException("Library not found: $libraryId");
         }
 
-        $this->logger->info('Starting library scan', ['library_id' => $libraryId, 'name' => $library['name']]);
+        $this->logger->info('Starting library scan', ['library_id' => $libraryId, 'name' => $library->name]);
 
         // Route music libraries through MusicLibraryManager for tag harvesting
-        if ($library['type'] === 'music') {
+        if ($library->type === 'music') {
             $this->scanMusicLibrary($libraryId, $library);
             return;
         }
 
         // Route photo libraries through PhotoLibraryManager for EXIF extraction
-        if ($library['type'] === 'photo') {
+        if ($library->type === 'photo') {
             $this->scanPhotoLibrary($libraryId, $library);
             return;
         }
 
         // Route book libraries through BookLibraryManager for EPUB/PDF/CBZ extraction
-        if ($library['type'] === 'book') {
+        if ($library->type === 'book') {
             $this->scanBookLibrary($libraryId, $library);
             return;
         }
 
         // Route audiobook libraries through AudiobookScanner for M4B chapter extraction
-        if ($library['type'] === 'audiobook') {
+        if ($library->type === 'audiobook') {
             $this->scanAudiobookLibrary($libraryId, $library);
             return;
         }
 
-        foreach ($library['paths'] as $path) {
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->scanner->scan($libraryId, $path, $library['type']);
+            $this->scanner->scan($libraryId, $path, $library->type);
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);
@@ -293,10 +325,10 @@ class LibraryManager
      * Scans a music library using AudioScanner for tag harvesting.
      *
      * @param string $libraryId The library's unique identifier
-     * @param array<string, mixed> $library The library data
+     * @param LibraryRow $library The library data
      * @return void
      */
-    private function scanMusicLibrary(string $libraryId, array $library): void
+    private function scanMusicLibrary(string $libraryId, LibraryRow $library): void
     {
         // Music scanning is handled by MusicLibraryManager which uses
         // AudioScanner for ID3/MP4 tag harvesting. This requires
@@ -304,7 +336,7 @@ class LibraryManager
         //
         // For now, fall back to basic scanning. The AudioScanner
         // will handle tag harvesting when available.
-        foreach ($library['paths'] as $path) {
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
@@ -320,14 +352,14 @@ class LibraryManager
      * Scans a photo library using PhotoLibraryManager for EXIF extraction.
      *
      * @param string $libraryId The library's unique identifier
-     * @param array<string, mixed> $library The library data
+     * @param LibraryRow $library The library data
      * @return void
      *
      * @since 0.16.0
      */
-    private function scanPhotoLibrary(string $libraryId, array $library): void
+    private function scanPhotoLibrary(string $libraryId, LibraryRow $library): void
     {
-        foreach ($library['paths'] as $path) {
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Photo library path does not exist', ['path' => $path]);
                 continue;
@@ -345,16 +377,16 @@ class LibraryManager
      * Scans a book library using BookScanner for EPUB/PDF/CBZ extraction.
      *
      * @param string $libraryId The library's unique identifier
-     * @param array<string, mixed> $library The library data
+     * @param LibraryRow $library The library data
      * @return void
      *
      * @since 0.17.0
      */
-    private function scanBookLibrary(string $libraryId, array $library): void
+    private function scanBookLibrary(string $libraryId, LibraryRow $library): void
     {
         // Book scanning is handled by BookScanner for EPUB content.opf,
         // PDF metadata, and CBZ ComicInfo.xml extraction.
-        foreach ($library['paths'] as $path) {
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Book library path does not exist', ['path' => $path]);
                 continue;
@@ -370,16 +402,16 @@ class LibraryManager
      * Scans an audiobook library using AudiobookScanner for M4B chapter extraction.
      *
      * @param string $libraryId The library's unique identifier
-     * @param array<string, mixed> $library The library data
+     * @param LibraryRow $library The library data
      * @return void
      *
      * @since 0.18.0
      */
-    private function scanAudiobookLibrary(string $libraryId, array $library): void
+    private function scanAudiobookLibrary(string $libraryId, LibraryRow $library): void
     {
         // Audiobook scanning is handled by AudiobookScanner for M4B chpl atom
         // chapter extraction and metadata harvesting.
-        foreach ($library['paths'] as $path) {
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Audiobook library path does not exist', ['path' => $path]);
                 continue;
@@ -438,23 +470,19 @@ class LibraryManager
             return;
         }
 
-        $library = $this->getLibrary($libraryId);
+        $library = $this->fetchLibraryRow($libraryId);
         if ($library === null) {
             return;
         }
 
-        /** @var mixed $paths */
-        $paths = $library['paths'];
-        if (is_array($paths)) {
-            foreach ($paths as $path) {
-                if (!is_string($path) || !is_dir($path)) {
-                    continue;
-                }
+        foreach ($library->paths as $path) {
+            if (!is_dir($path)) {
+                continue;
+            }
 
-                $themeMedia = $this->themeMediaFinder->findForLibrary($libraryId, $path);
-                if ($themeMedia !== null) {
-                    $this->themeMediaRepository->upsert($themeMedia);
-                }
+            $themeMedia = $this->themeMediaFinder->findForLibrary($libraryId, $path);
+            if ($themeMedia !== null) {
+                $this->themeMediaRepository->upsert($themeMedia);
             }
         }
     }

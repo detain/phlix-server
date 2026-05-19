@@ -46,11 +46,12 @@ class ItemRepository
             [$id]
         );
 
-        if (empty($result)) {
+        $row = $this->firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrateItem($result[0]);
+        return $this->hydrateItem($row);
     }
 
     /**
@@ -66,11 +67,12 @@ class ItemRepository
             [$path]
         );
 
-        if (empty($result)) {
+        $row = $this->firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->hydrateItem($result[0]);
+        return $this->hydrateItem($row);
     }
 
     /**
@@ -86,7 +88,7 @@ class ItemRepository
             [$parentId]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -105,7 +107,7 @@ class ItemRepository
             [$libraryId, $type, $limit, $offset]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -125,7 +127,7 @@ class ItemRepository
             [$type, $limit, $offset]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -143,7 +145,7 @@ class ItemRepository
             [$type]
         );
 
-        return (int)($result[0]['count'] ?? 0);
+        return $this->extractCount($result);
     }
 
     /**
@@ -161,7 +163,7 @@ class ItemRepository
             [$libraryId, $limit, $offset]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -178,7 +180,7 @@ class ItemRepository
             [$query, $limit]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -196,7 +198,7 @@ class ItemRepository
             [$escapedQuery, $limit]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -208,7 +210,8 @@ class ItemRepository
      */
     public function create(array $data): string
     {
-        $id = $data['id'] ?? $this->generateUuid();
+        $idCandidate = $data['id'] ?? null;
+        $id = is_string($idCandidate) ? $idCandidate : $this->generateUuid();
         $metadataJson = isset($data['metadata_json'])
             ? (is_array($data['metadata_json']) ? json_encode($data['metadata_json']) : $data['metadata_json'])
             : '{}';
@@ -298,7 +301,7 @@ class ItemRepository
             [$libraryId, $type]
         );
 
-        return (int)($result[0]['count'] ?? 0);
+        return $this->extractCount($result);
     }
 
     /**
@@ -315,7 +318,7 @@ class ItemRepository
             [$libraryId, $limit]
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -326,10 +329,22 @@ class ItemRepository
      */
     public function getItemStreams(string $itemId): array
     {
-        return $this->db->query(
+        $result = $this->db->query(
             "SELECT * FROM media_streams WHERE media_item_id = ? ORDER BY stream_index",
             [$itemId]
         );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $rows = [];
+        foreach ($result as $row) {
+            if (is_array($row)) {
+                $rows[] = $row;
+            }
+        }
+        return $rows;
     }
 
     /**
@@ -341,7 +356,8 @@ class ItemRepository
      */
     public function addStream(string $itemId, array $streamData): string
     {
-        $id = $streamData['id'] ?? $this->generateUuid();
+        $idCandidate = $streamData['id'] ?? null;
+        $id = is_string($idCandidate) ? $idCandidate : $this->generateUuid();
 
         $this->db->query(
             "INSERT INTO media_streams (id, media_item_id, stream_index, stream_type, codec, language, bitrate, width, height)
@@ -588,7 +604,7 @@ class ItemRepository
             array_merge([$libraryId], $allowedRatings, [$limit, $offset])
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -629,7 +645,10 @@ class ItemRepository
             return false;
         }
 
-        $rating = $item['metadata']['rating'] ?? 'UNRATED';
+        $metadata = $item['metadata'] ?? null;
+        $rating = is_array($metadata) && isset($metadata['rating'])
+            ? $metadata['rating']
+            : 'UNRATED';
 
         if ($rating === 'UNRATED') {
             return in_array('UNRATED', $allowedRatings);
@@ -668,7 +687,7 @@ class ItemRepository
             array_merge([$libraryId], $allowedGenres, [$limit, $offset])
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -697,7 +716,7 @@ class ItemRepository
             array_merge([$libraryId], $blockedGenres, [$limit, $offset])
         );
 
-        return array_map(fn($r) => $this->hydrateItem($r), $results);
+        return $this->hydrateRows($results);
     }
 
     /**
@@ -715,6 +734,86 @@ class ItemRepository
             $row['metadata'] = $row['metadata_json'];
         }
         return $row;
+    }
+
+    /**
+     * Hydrates a list of raw DB rows into media item arrays, filtering out any
+     * non-array entries that the database driver might return as `mixed`.
+     *
+     * @param mixed $results Raw result set from {@see Connection::query()}.
+     * @return list<array<string, mixed>> Hydrated rows.
+     */
+    private function hydrateRows(mixed $results): array
+    {
+        if (!is_array($results)) {
+            return [];
+        }
+        $out = [];
+        foreach ($results as $row) {
+            $normalized = $this->normalizeRow($row);
+            if ($normalized !== null) {
+                $out[] = $this->hydrateItem($normalized);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Returns the first row of a query result if present and array-typed.
+     *
+     * @param mixed $results Raw result set from {@see Connection::query()}.
+     * @return array<string, mixed>|null First row or null.
+     */
+    private function firstRow(mixed $results): ?array
+    {
+        if (!is_array($results) || count($results) === 0) {
+            return null;
+        }
+        return $this->normalizeRow($results[0] ?? null);
+    }
+
+    /**
+     * Coerces a single raw query row into a string-keyed associative array.
+     *
+     * @param mixed $row Raw row value.
+     * @return array<string, mixed>|null
+     */
+    private function normalizeRow(mixed $row): ?array
+    {
+        if (!is_array($row)) {
+            return null;
+        }
+        $out = [];
+        foreach ($row as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Extracts a `count` aggregate from a `SELECT COUNT(*) as count` result set.
+     *
+     * @param mixed $results Raw result set from {@see Connection::query()}.
+     */
+    private function extractCount(mixed $results): int
+    {
+        $row = $this->firstRow($results);
+        if ($row === null) {
+            return 0;
+        }
+        $count = $row['count'] ?? 0;
+        if (is_int($count)) {
+            return $count;
+        }
+        if (is_string($count) && is_numeric($count)) {
+            return (int) $count;
+        }
+        if (is_float($count)) {
+            return (int) $count;
+        }
+        return 0;
     }
 
     /**

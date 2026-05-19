@@ -6,6 +6,7 @@ namespace Phlex\Media\Library;
 
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Media\Library\Dto\LibraryRow;
 use Phlex\Media\Metadata\MetadataManager;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -27,8 +28,8 @@ use Workerman\MySQL\Connection;
  */
 class MusicLibraryManager
 {
-    /** @var StructuredLogger|null Logger instance for structured logging */
-    private ?StructuredLogger $logger;
+    /** @var StructuredLogger Logger instance for structured logging */
+    private StructuredLogger $logger;
 
     /** @var Connection Database connection */
     private Connection $db;
@@ -41,9 +42,6 @@ class MusicLibraryManager
 
     /** @var ItemRepository Repository for media item persistence */
     private ItemRepository $item_repo;
-
-    /** @var EventDispatcherInterface|null PSR-14 dispatcher for library lifecycle events */
-    private ?EventDispatcherInterface $eventDispatcher;
 
     /**
      * Constructor for MusicLibraryManager.
@@ -63,12 +61,12 @@ class MusicLibraryManager
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null
     ) {
+        unset($eventDispatcher); // Reserved for future event-driven scan hooks.
         $this->scanner = $scanner;
         $this->metadata = $metadata;
         $this->item_repo = $item_repo;
         $this->db = $db;
         $this->logger = $logger ?? $this->createDefaultLogger();
-        $this->eventDispatcher = $eventDispatcher;
     }
 
     /**
@@ -116,8 +114,8 @@ class MusicLibraryManager
      */
     public function rescanLibrary(string $libraryId): ScanResult
     {
-        $library = $this->getLibrary($libraryId);
-        if (!$library) {
+        $library = $this->fetchLibraryRow($libraryId);
+        if ($library === null) {
             throw new \InvalidArgumentException("Library not found: $libraryId");
         }
 
@@ -126,23 +124,27 @@ class MusicLibraryManager
 
         $this->logger->info('Starting music library rescan', [
             'library_id' => $libraryId,
-            'name' => $library['name'],
+            'name' => $library->name,
         ]);
 
-        foreach ($library['paths'] as $path) {
+        $basePath = $library->paths[0] ?? '';
+
+        foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Music library path does not exist', ['path' => $path]);
                 continue;
             }
 
-            foreach ($this->scanner->scanMusicLibrary($libraryId, $library['paths'][0], $path) as $itemData) {
+            foreach ($this->scanner->scanMusicLibrary($libraryId, $basePath, $path) as $itemData) {
                 $result->scanned++;
 
-                $existing = $this->item_repo->findByPath($itemData['path']);
+                $itemPath = is_string($itemData['path'] ?? null) ? $itemData['path'] : '';
+                $existing = $this->item_repo->findByPath($itemPath);
                 if ($existing) {
+                    $existingId = is_string($existing['id'] ?? null) ? $existing['id'] : '';
                     // Update existing item with new tag data
-                    $this->item_repo->update($existing['id'], [
-                        'metadata_json' => $itemData['metadata_json'],
+                    $this->item_repo->update($existingId, [
+                        'metadata_json' => $itemData['metadata_json'] ?? null,
                     ]);
                     $result->updated++;
                 } else {
@@ -205,17 +207,22 @@ class MusicLibraryManager
         $existing = $this->item_repo->findByPath($path);
 
         if ($existing) {
+            $existingId = is_string($existing['id'] ?? null) ? $existing['id'] : '';
+            $existingName = is_string($existing['name'] ?? null) ? $existing['name'] : '';
+            $tagTitle = isset($tags['title']) && is_string($tags['title']) ? $tags['title'] : null;
             // Update existing
-            $this->item_repo->update($existing['id'], [
-                'name' => $tags['title'] ?? $existing['name'],
+            $this->item_repo->update($existingId, [
+                'name' => $tagTitle ?? $existingName,
                 'metadata_json' => json_encode($metadata),
             ]);
-            $itemId = $existing['id'];
+            $itemId = $existingId;
         } else {
+            $tagTitle = isset($tags['title']) && is_string($tags['title']) ? $tags['title'] : null;
+            $fallbackName = pathinfo($path, PATHINFO_FILENAME);
             // Create new
             $itemId = $this->item_repo->create([
                 'library_id' => $libraryId,
-                'name' => $tags['title'] ?? pathinfo($path, PATHINFO_FILENAME),
+                'name' => $tagTitle ?? $fallbackName,
                 'type' => 'track',
                 'path' => $path,
                 'metadata_json' => $metadata,
@@ -225,7 +232,42 @@ class MusicLibraryManager
         // Attempt metadata enrichment
         $this->enrichTrackMetadata($itemId, $tags);
 
-        return $this->item_repo->findById($itemId);
+        $row = $this->item_repo->findById($itemId);
+        if ($row === null) {
+            return null;
+        }
+        return $this->mediaItemFromRow($row);
+    }
+
+    /**
+     * Hydrates a {@see MediaItem} value object from an ItemRepository row.
+     *
+     * @param array<string, mixed> $row Raw repository row.
+     */
+    private function mediaItemFromRow(array $row): MediaItem
+    {
+        $id = is_string($row['id'] ?? null) ? $row['id'] : '';
+        $name = is_string($row['name'] ?? null) ? $row['name'] : '';
+        $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+        $path = is_string($row['path'] ?? null) ? $row['path'] : '';
+
+        $metadata = [];
+        $rawMeta = $row['metadata'] ?? null;
+        if (is_array($rawMeta)) {
+            foreach ($rawMeta as $key => $value) {
+                if (is_string($key)) {
+                    $metadata[$key] = $value;
+                }
+            }
+        }
+
+        return new MediaItem(
+            id: $id,
+            name: $name,
+            type: $type,
+            path: $path,
+            metadata: $metadata,
+        );
     }
 
     /**
@@ -246,39 +288,6 @@ class MusicLibraryManager
                 'error' => $e->getMessage(),
             ]);
         }
-    }
-
-    /**
-     * Scans a music library using AudioScanner for tag harvesting.
-     *
-     * @param string $libraryId The library's unique identifier
-     * @param array<string, mixed> $library The library data
-     * @return void
-     */
-    private function scanMusicLibrary(string $libraryId, array $library): void
-    {
-        $basePath = $library['paths'][0] ?? '';
-
-        foreach ($library['paths'] as $path) {
-            if (!is_dir($path)) {
-                $this->logger->warning('Music library path does not exist', ['path' => $path]);
-                continue;
-            }
-
-            // Delegate to AudioScanner's scanMusicLibrary for tag harvesting
-            foreach ($this->scanner->scanMusicLibrary($libraryId, $basePath, $path) as $itemData) {
-                $existing = $this->item_repo->findByPath($itemData['path']);
-                if ($existing) {
-                    $this->item_repo->update($existing['id'], [
-                        'metadata_json' => $itemData['metadata_json'],
-                    ]);
-                } else {
-                    $this->item_repo->create($itemData);
-                }
-            }
-        }
-
-        $this->logger->info('Music library scan complete', ['library_id' => $libraryId]);
     }
 
     /**
@@ -316,14 +325,31 @@ class MusicLibraryManager
      */
     public function getLibrary(string $id): ?array
     {
+        return $this->fetchLibraryRow($id)?->toArray();
+    }
+
+    /**
+     * Fetches a library and returns a typed DTO.
+     *
+     * @param string $id The library's unique identifier.
+     */
+    private function fetchLibraryRow(string $id): ?LibraryRow
+    {
         $result = $this->db->query("SELECT * FROM libraries WHERE id = ?", [$id]);
-        if (empty($result)) {
+        if (!is_array($result) || count($result) === 0) {
             return null;
         }
-        $library = $result[0];
-        $library['paths'] = json_decode($library['paths'] ?? '[]', true);
-        $library['options'] = json_decode($library['options'] ?? '{}', true);
-        return $library;
+        $first = $result[0] ?? null;
+        if (!is_array($first)) {
+            return null;
+        }
+        $row = [];
+        foreach ($first as $key => $value) {
+            if (is_string($key)) {
+                $row[$key] = $value;
+            }
+        }
+        return LibraryRow::fromRow($row);
     }
 
     /**
@@ -340,7 +366,9 @@ class MusicLibraryManager
 
         $artists = [];
         foreach ($items as $item) {
-            $artist = $item['metadata']['artist'] ?? 'Unknown Artist';
+            $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+            $rawArtist = $metadata['artist'] ?? 'Unknown Artist';
+            $artist = is_string($rawArtist) ? $rawArtist : 'Unknown Artist';
             if (!isset($artists[$artist])) {
                 $artists[$artist] = [
                     'name' => $artist,
@@ -350,7 +378,8 @@ class MusicLibraryManager
                 ];
             }
             $artists[$artist]['track_count']++;
-            $album = $item['metadata']['album'] ?? 'Unknown Album';
+            $rawAlbum = $metadata['album'] ?? 'Unknown Album';
+            $album = is_string($rawAlbum) ? $rawAlbum : 'Unknown Album';
             if (!in_array($album, $artists[$artist]['albums'], true)) {
                 $artists[$artist]['albums'][] = $album;
                 $artists[$artist]['album_count']++;
@@ -374,15 +403,18 @@ class MusicLibraryManager
 
         $albums = [];
         foreach ($items as $item) {
-            $album = $item['metadata']['album'] ?? 'Unknown Album';
-            $artist = $item['metadata']['artist'] ?? 'Unknown Artist';
+            $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+            $rawAlbum = $metadata['album'] ?? 'Unknown Album';
+            $album = is_string($rawAlbum) ? $rawAlbum : 'Unknown Album';
+            $rawArtist = $metadata['artist'] ?? 'Unknown Artist';
+            $artist = is_string($rawArtist) ? $rawArtist : 'Unknown Artist';
 
             $key = $album . ' - ' . $artist;
             if (!isset($albums[$key])) {
                 $albums[$key] = [
                     'name' => $album,
                     'artist' => $artist,
-                    'year' => $item['metadata']['year'] ?? null,
+                    'year' => $metadata['year'] ?? null,
                     'track_count' => 0,
                     'tracks' => [],
                 ];

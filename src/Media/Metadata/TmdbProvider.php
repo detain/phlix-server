@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Metadata;
 
+use Phlex\Media\Metadata\Dto\MetadataValue;
+
 /**
  * TmdbProvider fetches movie metadata from The Movie Database (TMDB) API.
  *
@@ -23,9 +25,6 @@ class TmdbProvider implements MetadataProviderInterface
 
     /** @var string Base URL for TMDB image CDN */
     private string $imageBaseUrl;
-
-    /** @var array<string, mixed> Response cache for API calls */
-    private array $cache = [];
 
     /**
      * Constructor for TmdbProvider.
@@ -47,7 +46,7 @@ class TmdbProvider implements MetadataProviderInterface
      * @param string $query Movie title search query
      * @param array<string, mixed> $options Search options (language, include_adult)
      * @return array<int, array{
-     *     id: int,
+     *     id: string,
      *     title: string,
      *     original_title: string,
      *     overview: string,
@@ -60,8 +59,8 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function search(string $query, array $options = []): array
     {
-        $language = $options['language'] ?? 'en-US';
-        $includeAdult = $options['include_adult'] ?? false;
+        $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
+        $includeAdult = (bool) ($options['include_adult'] ?? false);
 
         $params = [
             'query' => $query,
@@ -71,23 +70,30 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get('/search/movie', $params);
 
-        if (!$response || !isset($response['results'])) {
+        if ($response === null || !isset($response['results'])) {
             return [];
         }
 
-        return array_map(function ($result) {
-            return [
-                'id' => $result['id'],
-                'title' => $result['title'] ?? $result['name'] ?? '',
-                'original_title' => $result['original_title'] ?? '',
-                'overview' => $result['overview'] ?? '',
-                'poster_path' => $result['poster_path'] ?? null,
-                'backdrop_path' => $result['backdrop_path'] ?? null,
-                'release_date' => $result['release_date'] ?? '',
-                'vote_average' => $result['vote_average'] ?? 0,
-                'vote_count' => $result['vote_count'] ?? 0,
+        $results = MetadataValue::asAssocList($response['results']);
+
+        $output = [];
+        foreach ($results as $result) {
+            $output[] = [
+                'id' => MetadataValue::asString($result['id'] ?? null),
+                'title' => MetadataValue::asString(
+                    $result['title'] ?? ($result['name'] ?? null)
+                ),
+                'original_title' => MetadataValue::asString($result['original_title'] ?? null),
+                'overview' => MetadataValue::asString($result['overview'] ?? null),
+                'poster_path' => MetadataValue::asNullableString($result['poster_path'] ?? null),
+                'backdrop_path' => MetadataValue::asNullableString($result['backdrop_path'] ?? null),
+                'release_date' => MetadataValue::asString($result['release_date'] ?? null),
+                'vote_average' => MetadataValue::asFloat($result['vote_average'] ?? null),
+                'vote_count' => MetadataValue::asInt($result['vote_count'] ?? null),
             ];
-        }, $response['results']);
+        }
+
+        return $output;
     }
 
     /**
@@ -99,14 +105,14 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getDetails(string $externalId, array $options = []): array
     {
-        $language = $options['language'] ?? 'en-US';
+        $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
 
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
             'append_to_response' => 'credits,genres,production_companies',
         ]);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -129,21 +135,21 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $response = $this->http->get("/movie/{$externalId}/images");
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
         return [
-            'posters' => $this->formatImages($response['posters'] ?? []),
-            'backdrops' => $this->formatImages($response['backdrops'] ?? []),
-            'logos' => $this->formatImages($response['logos'] ?? []),
+            'posters' => $this->formatImages(MetadataValue::asAssocList($response['posters'] ?? null)),
+            'backdrops' => $this->formatImages(MetadataValue::asAssocList($response['backdrops'] ?? null)),
+            'logos' => $this->formatImages(MetadataValue::asAssocList($response['logos'] ?? null)),
         ];
     }
 
     /**
      * Get provider name aliases.
      *
-     * @return array<string> Provider names ['tmdb']
+     * @return array<int, string> Provider names ['tmdb']
      */
     public function getProviders(): array
     {
@@ -166,42 +172,78 @@ class TmdbProvider implements MetadataProviderInterface
      */
     private function formatMovieDetails(array $data): array
     {
+        $releaseDate = MetadataValue::asString($data['release_date'] ?? null);
+        $runtime = MetadataValue::asInt($data['runtime'] ?? null);
+
+        $year = null;
+        if ($releaseDate !== '') {
+            $timestamp = strtotime($releaseDate);
+            if ($timestamp !== false) {
+                $year = date('Y', $timestamp);
+            }
+        }
+
+        $genres = MetadataValue::asAssocList($data['genres'] ?? null);
+        $genreNames = [];
+        foreach ($genres as $genre) {
+            $genreNames[] = MetadataValue::asString($genre['name'] ?? null);
+        }
+
+        $studios = MetadataValue::asAssocList($data['production_companies'] ?? null);
+        $studio = isset($studios[0]['name'])
+            ? MetadataValue::asNullableString($studios[0]['name'])
+            : null;
+
+        $credits = MetadataValue::asAssoc($data['credits'] ?? null);
+        $cast = MetadataValue::asAssocList($credits['cast'] ?? null);
+        $crew = MetadataValue::asAssocList($credits['crew'] ?? null);
+
+        $actors = [];
+        foreach (array_slice($cast, 0, 20) as $member) {
+            $actors[] = [
+                'name' => MetadataValue::asString($member['name'] ?? null),
+                'role' => MetadataValue::asString($member['character'] ?? null),
+                'order' => MetadataValue::asInt($member['order'] ?? null),
+            ];
+        }
+
         return [
-            'name' => $data['title'] ?? $data['name'] ?? '',
-            'original_name' => $data['original_title'] ?? $data['original_name'] ?? '',
-            'overview' => $data['overview'] ?? '',
+            'name' => MetadataValue::asString(
+                $data['title'] ?? ($data['name'] ?? null)
+            ),
+            'original_name' => MetadataValue::asString(
+                $data['original_title'] ?? ($data['original_name'] ?? null)
+            ),
+            'overview' => MetadataValue::asString($data['overview'] ?? null),
             'official_rating' => null,
-            'vote_average' => $data['vote_average'] ?? 0,
-            'vote_count' => $data['vote_count'] ?? 0,
-            'year' => isset($data['release_date']) ? date('Y', strtotime($data['release_date'])) : null,
-            'runtime_ticks' => ($data['runtime'] ?? 0) * 600000000, // Convert minutes to ticks
-            'genres' => array_map(fn($g) => $g['name'], $data['genres'] ?? []),
-            'studio' => $data['production_companies'][0]['name'] ?? null,
-            'tagline' => $data['tagline'] ?? '',
-            'budget' => $data['budget'] ?? 0,
-            'revenue' => $data['revenue'] ?? 0,
-            'imdb_id' => $data['imdb_id'] ?? null,
-            'tmdb_id' => $data['id'] ?? null,
-            'actors' => array_map(fn($c) => [
-                'name' => $c['name'] ?? '',
-                'role' => $c['character'] ?? '',
-                'order' => $c['order'] ?? 0,
-            ], array_slice($data['credits']['cast'] ?? [], 0, 20)),
-            'director' => $this->findDirector($data['credits']['crew'] ?? []),
+            'vote_average' => MetadataValue::asFloat($data['vote_average'] ?? null),
+            'vote_count' => MetadataValue::asInt($data['vote_count'] ?? null),
+            'year' => $year,
+            'runtime_ticks' => $runtime * 600000000, // Convert minutes to ticks
+            'genres' => $genreNames,
+            'studio' => $studio,
+            'tagline' => MetadataValue::asString($data['tagline'] ?? null),
+            'budget' => MetadataValue::asInt($data['budget'] ?? null),
+            'revenue' => MetadataValue::asInt($data['revenue'] ?? null),
+            'imdb_id' => MetadataValue::asNullableString($data['imdb_id'] ?? null),
+            'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
+            'actors' => $actors,
+            'director' => $this->findDirector($crew),
         ];
     }
 
     /**
      * Find the director from a list of crew members.
      *
-     * @param array<int, array<string, mixed>> $crew Crew members from TMDB API
+     * @param list<array<string, mixed>> $crew Crew members from TMDB API
      * @return string|null Director name or null if not found
      */
     private function findDirector(array $crew): ?string
     {
         foreach ($crew as $member) {
-            if (($member['job'] ?? '') === 'Director') {
-                return $member['name'] ?? null;
+            $job = MetadataValue::asString($member['job'] ?? null);
+            if ($job === 'Director') {
+                return MetadataValue::asNullableString($member['name'] ?? null);
             }
         }
         return null;
@@ -210,7 +252,7 @@ class TmdbProvider implements MetadataProviderInterface
     /**
      * Format image list with full URLs.
      *
-     * @param array<int, array<string, mixed>> $images Raw image data from TMDB
+     * @param list<array<string, mixed>> $images Raw image data from TMDB
      * @return array<int, array{
      *     url: string,
      *     url_original: string,
@@ -221,15 +263,18 @@ class TmdbProvider implements MetadataProviderInterface
      */
     private function formatImages(array $images): array
     {
-        return array_map(function ($image) {
-            return [
-                'url' => $this->imageBaseUrl . '/w500' . $image['file_path'],
-                'url_original' => $this->imageBaseUrl . '/original' . $image['file_path'],
-                'width' => $image['width'] ?? 0,
-                'height' => $image['height'] ?? 0,
-                'language' => $image['iso_639_1'] ?? null,
+        $output = [];
+        foreach ($images as $image) {
+            $filePath = MetadataValue::asString($image['file_path'] ?? null);
+            $output[] = [
+                'url' => $this->imageBaseUrl . '/w500' . $filePath,
+                'url_original' => $this->imageBaseUrl . '/original' . $filePath,
+                'width' => MetadataValue::asInt($image['width'] ?? null),
+                'height' => MetadataValue::asInt($image['height'] ?? null),
+                'language' => MetadataValue::asNullableString($image['iso_639_1'] ?? null),
             ];
-        }, $images);
+        }
+        return $output;
     }
 
     /**
@@ -251,7 +296,7 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $response = $this->http->get("/movie/{$externalId}/videos");
 
-        if (!is_array($response) || !isset($response['results']) || !is_array($response['results'])) {
+        if ($response === null || !isset($response['results']) || !is_array($response['results'])) {
             return [];
         }
 

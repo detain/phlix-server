@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Metadata;
 
+use Phlex\Media\Metadata\Dto\MetadataValue;
+
 /**
  * Fanart.tv API provider for artwork (banners, thumbnails, logos).
  *
@@ -50,10 +52,7 @@ class FanartProvider implements MetadataProviderInterface
     /** @var MetadataHttpClient HTTP client for Fanart.tv API requests */
     private MetadataHttpClient $http;
 
-    /** @var string Fanart.tv API client key for authentication */
-    private string $apiKey;
-
-    /** @var array<string, mixed> In-memory response cache keyed by "fanart_{idType}_{id}" */
+    /** @var array<string, array<string, mixed>> In-memory response cache keyed by "fanart_{idType}_{id}" */
     private array $cache = [];
 
     /**
@@ -64,7 +63,6 @@ class FanartProvider implements MetadataProviderInterface
      */
     public function __construct(string $apiKey)
     {
-        $this->apiKey = $apiKey;
         $this->http = new MetadataHttpClient(
             'https://webservice.fanart.tv/v3',
             $apiKey
@@ -79,7 +77,8 @@ class FanartProvider implements MetadataProviderInterface
      *
      * @param string $query Ignored - Fanart.tv does not support search
      * @param array<string, mixed> $options Ignored
-     * @return array<int, mixed> Always empty - use getDetails() or getImages() with an external ID
+     * @return array<int, array{id: string, title: string, overview?: string, poster_path?: string}>
+     *         Always empty - use getDetails() or getImages() with an external ID
      */
     public function search(string $query, array $options = []): array
     {
@@ -102,11 +101,11 @@ class FanartProvider implements MetadataProviderInterface
     public function getDetails(string $externalId, array $options = []): array
     {
         // Fanart.tv uses external IDs - try to fetch by type
-        $idType = $options['id_type'] ?? 'tvdb'; // 'tvdb', 'imdb', 'tmdb', 'musicbrainz'
+        $idType = MetadataValue::asString($options['id_type'] ?? null, 'tvdb');
 
         $response = $this->fetchArtwork($idType, $externalId);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -137,7 +136,7 @@ class FanartProvider implements MetadataProviderInterface
         $idType = 'tvdb'; // Default to TVDB
         $response = $this->fetchArtwork($idType, $externalId);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -147,7 +146,7 @@ class FanartProvider implements MetadataProviderInterface
     /**
      * Get provider name aliases.
      *
-     * @return array<string> Provider names: ['fanart', 'fanarttv']
+     * @return array<int, string> Provider names: ['fanart', 'fanarttv']
      */
     public function getProviders(): array
     {
@@ -180,7 +179,7 @@ class FanartProvider implements MetadataProviderInterface
     {
         $response = $this->fetchArtwork('imdb', $imdbId);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -205,7 +204,7 @@ class FanartProvider implements MetadataProviderInterface
     {
         $response = $this->fetchArtwork('tvdb', $tvdbId);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -231,7 +230,7 @@ class FanartProvider implements MetadataProviderInterface
     {
         $response = $this->fetchArtwork('musicbrainz', $musicbrainzId);
 
-        if (!$response) {
+        if ($response === null) {
             return [];
         }
 
@@ -261,14 +260,14 @@ class FanartProvider implements MetadataProviderInterface
             default => null,
         };
 
-        if (!$endpoint) {
+        if ($endpoint === null) {
             return null;
         }
 
         // Fanart.tv requires X-Client-Key header
         $response = $this->http->get($endpoint);
 
-        if (!$response) {
+        if ($response === null) {
             return null;
         }
 
@@ -288,18 +287,31 @@ class FanartProvider implements MetadataProviderInterface
     {
         $images = $this->formatImages($data);
 
+        $hdData = MetadataValue::asAssoc($data['hddata'] ?? null);
+
         return [
-            'name' => $data['name'] ?? '',
+            'name' => MetadataValue::asString($data['name'] ?? null),
             'has_all_images' => !empty($images),
             'image_counts' => [
-                'hd_logos' => count($data['hddata']['hdmovielogo'] ?? []),
-                'logos' => count($data['hddata']['movielogo'] ?? []),
-                'posters' => count($data['movieposters']['movieposter'] ?? []),
-                'backdrops' => count($data['moviebackgrounds']['moviebackground'] ?? []),
-                'banners' => count($data['moviebanners']['moviebanner'] ?? []),
-                'thumbs' => count($data['moviethumbs']['moviethumb'] ?? []),
-                'logos' => count($data['movielogos']['movielogo'] ?? []),
-                'tshots' => count($data['moviescreencaps']['moviescreencap'] ?? []),
+                'hd_logos' => count(MetadataValue::asList($hdData['hdmovielogo'] ?? null)),
+                'logos' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['movielogos'] ?? null)['movielogo'] ?? null
+                )),
+                'posters' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['movieposters'] ?? null)['movieposter'] ?? null
+                )),
+                'backdrops' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['moviebackgrounds'] ?? null)['moviebackground'] ?? null
+                )),
+                'banners' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['moviebanners'] ?? null)['moviebanner'] ?? null
+                )),
+                'thumbs' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['moviethumbs'] ?? null)['moviethumb'] ?? null
+                )),
+                'tshots' => count(MetadataValue::asList(
+                    MetadataValue::asAssoc($data['moviescreencaps'] ?? null)['moviescreencap'] ?? null
+                )),
             ],
         ];
     }
@@ -322,73 +334,174 @@ class FanartProvider implements MetadataProviderInterface
     {
         $images = [];
 
+        $hdData = MetadataValue::asAssoc($data['hddata'] ?? null);
+
         // HD logos (for TV shows and movies)
-        foreach ($data['hddata']['hdmovielogo'] ?? [] as $logo) {
-            $images['hd_logos'][] = $this->formatImage($logo, 'hd_logo');
-        }
-        foreach ($data['hddata']['hdtvlogo'] ?? [] as $logo) {
-            $images['hd_tv_logos'][] = $this->formatImage($logo, 'hd_tv_logo');
-        }
+        $images = $this->collectInto(
+            $images,
+            'hd_logos',
+            'hd_logo',
+            MetadataValue::asAssocList($hdData['hdmovielogo'] ?? null)
+        );
+        $images = $this->collectInto(
+            $images,
+            'hd_tv_logos',
+            'hd_tv_logo',
+            MetadataValue::asAssocList($hdData['hdtvlogo'] ?? null)
+        );
 
         // Standard logos
-        foreach ($data['hddata']['movielogo'] ?? [] as $logo) {
-            $images['logos'][] = $this->formatImage($logo, 'logo');
-        }
-        foreach ($data['hddata']['tvlogo'] ?? [] as $logo) {
-            $images['tv_logos'][] = $this->formatImage($logo, 'tv_logo');
-        }
+        $images = $this->collectInto(
+            $images,
+            'logos',
+            'logo',
+            MetadataValue::asAssocList($hdData['movielogo'] ?? null)
+        );
+        $images = $this->collectInto(
+            $images,
+            'tv_logos',
+            'tv_logo',
+            MetadataValue::asAssocList($hdData['tvlogo'] ?? null)
+        );
 
         // Posters
-        foreach ($data['movieposters']['movieposter'] ?? [] as $poster) {
-            $images['posters'][] = $this->formatImage($poster, 'poster');
-        }
-        foreach ($data['tvposters']['tvposter'] ?? [] as $poster) {
-            $images['tv_posters'][] = $this->formatImage($poster, 'poster');
-        }
-        foreach ($data['seasonposters']['seasonposter'] ?? [] as $poster) {
-            $images['season_posters'][] = $this->formatImage($poster, 'season_poster');
-        }
+        $images = $this->collectInto(
+            $images,
+            'posters',
+            'poster',
+            $this->nested($data, 'movieposters', 'movieposter')
+        );
+        $images = $this->collectInto(
+            $images,
+            'tv_posters',
+            'poster',
+            $this->nested($data, 'tvposters', 'tvposter')
+        );
+        $images = $this->collectInto(
+            $images,
+            'season_posters',
+            'season_poster',
+            $this->nested($data, 'seasonposters', 'seasonposter')
+        );
 
         // Backdrops
-        foreach ($data['moviebackgrounds']['moviebackground'] ?? [] as $bg) {
-            $images['backdrops'][] = $this->formatImage($bg, 'backdrop');
-        }
-        foreach ($data['showbackgrounds']['showbackground'] ?? [] as $bg) {
-            $images['show_backdrops'][] = $this->formatImage($bg, 'backdrop');
-        }
-        foreach ($data['seasonbackgrounds']['seasonbackground'] ?? [] as $bg) {
-            $images['season_backdrops'][] = $this->formatImage($bg, 'season_backdrop');
-        }
+        $images = $this->collectInto(
+            $images,
+            'backdrops',
+            'backdrop',
+            $this->nested($data, 'moviebackgrounds', 'moviebackground')
+        );
+        $images = $this->collectInto(
+            $images,
+            'show_backdrops',
+            'backdrop',
+            $this->nested($data, 'showbackgrounds', 'showbackground')
+        );
+        $images = $this->collectInto(
+            $images,
+            'season_backdrops',
+            'season_backdrop',
+            $this->nested($data, 'seasonbackgrounds', 'seasonbackground')
+        );
 
         // Banners
-        foreach ($data['moviebanners']['moviebanner'] ?? [] as $banner) {
-            $images['banners'][] = $this->formatImage($banner, 'banner');
-        }
-        foreach ($data['tvthumbs']['tvthumb'] ?? [] as $thumb) {
-            $images['thumbs'][] = $this->formatImage($thumb, 'thumb');
-        }
+        $images = $this->collectInto(
+            $images,
+            'banners',
+            'banner',
+            $this->nested($data, 'moviebanners', 'moviebanner')
+        );
+        $images = $this->collectInto(
+            $images,
+            'thumbs',
+            'thumb',
+            $this->nested($data, 'tvthumbs', 'tvthumb')
+        );
 
         // Season thumbs (wide banners)
-        foreach ($data['seasonthumbs']['seasonthumb'] ?? [] as $thumb) {
-            $images['season_thumbs'][] = $this->formatImage($thumb, 'season_thumb');
-        }
-        foreach ($data['tvthumb']['tvthumb'] ?? [] as $thumb) {
-            $images['tv_thumbs'][] = $this->formatImage($thumb, 'tv_thumb');
-        }
+        $images = $this->collectInto(
+            $images,
+            'season_thumbs',
+            'season_thumb',
+            $this->nested($data, 'seasonthumbs', 'seasonthumb')
+        );
+        $images = $this->collectInto(
+            $images,
+            'tv_thumbs',
+            'tv_thumb',
+            $this->nested($data, 'tvthumb', 'tvthumb')
+        );
 
         // Clear arts (transparent PNG overlays)
-        foreach ($data['hddata']['clearart'] ?? [] as $art) {
-            $images['clear_arts'][] = $this->formatImage($art, 'clear_art');
-        }
-        foreach ($data['hddata']['tvcloud'] ?? [] as $art) {
-            $images['tv_clouds'][] = $this->formatImage($art, 'tv_cloud');
-        }
+        $images = $this->collectInto(
+            $images,
+            'clear_arts',
+            'clear_art',
+            MetadataValue::asAssocList($hdData['clearart'] ?? null)
+        );
+        $images = $this->collectInto(
+            $images,
+            'tv_clouds',
+            'tv_cloud',
+            MetadataValue::asAssocList($hdData['tvcloud'] ?? null)
+        );
 
         // Thumbnails
-        foreach ($data['moviethumbs']['moviethumb'] ?? [] as $thumb) {
-            $images['movie_thumbs'][] = $this->formatImage($thumb, 'movie_thumb');
-        }
+        $images = $this->collectInto(
+            $images,
+            'movie_thumbs',
+            'movie_thumb',
+            $this->nested($data, 'moviethumbs', 'moviethumb')
+        );
 
+        return $images;
+    }
+
+    /**
+     * Extract a nested image list from a fanart response shape.
+     *
+     * Fanart.tv responses wrap each image category in an object whose single
+     * key matches the singular form (e.g. `moviebanners` -> `moviebanner`).
+     *
+     * @param array<string, mixed> $data Raw API response
+     * @return list<array<string, mixed>>
+     */
+    private function nested(array $data, string $outerKey, string $innerKey): array
+    {
+        $outer = MetadataValue::asAssoc($data[$outerKey] ?? null);
+        return MetadataValue::asAssocList($outer[$innerKey] ?? null);
+    }
+
+    /**
+     * Append formatted images under a bucket key.
+     *
+     * @param array<string, array<int, array{
+     *     url: string,
+     *     type: string,
+     *     width: int,
+     *     height: int,
+     *     language: string|null,
+     *     rating: float|null,
+     *     likes: int
+     * }>> $images Accumulator (preserves all previously-seen buckets)
+     * @param string $bucket Output bucket key (e.g. 'posters')
+     * @param string $type Image type label written to each entry
+     * @param list<array<string, mixed>> $items Source list of raw image entries
+     * @return array<string, array<int, array{
+     *     url: string,
+     *     type: string,
+     *     width: int,
+     *     height: int,
+     *     language: string|null,
+     *     rating: float|null,
+     *     likes: int
+     * }>>
+     */
+    private function collectInto(array $images, string $bucket, string $type, array $items): array
+    {
+        foreach ($items as $item) {
+            $images[$bucket][] = $this->formatImage($item, $type);
+        }
         return $images;
     }
 
@@ -410,13 +523,13 @@ class FanartProvider implements MetadataProviderInterface
     private function formatImage(array $image, string $type): array
     {
         return [
-            'url' => $image['url'] ?? '',
+            'url' => MetadataValue::asString($image['url'] ?? null),
             'type' => $type,
-            'width' => $image['width'] ?? 0,
-            'height' => $image['height'] ?? 0,
-            'language' => $image['lang'] ?? null,
-            'rating' => $image['rating'] ?? null,
-            'likes' => $image['likes'] ?? 0,
+            'width' => MetadataValue::asInt($image['width'] ?? null),
+            'height' => MetadataValue::asInt($image['height'] ?? null),
+            'language' => MetadataValue::asNullableString($image['lang'] ?? null),
+            'rating' => MetadataValue::asNullableFloat($image['rating'] ?? null),
+            'likes' => MetadataValue::asInt($image['likes'] ?? null),
         ];
     }
 }

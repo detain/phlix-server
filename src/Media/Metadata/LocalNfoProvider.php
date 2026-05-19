@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Metadata;
 
+use SimpleXMLElement;
+
 /**
  * Local NFO file parser for movies and TV series metadata.
  *
@@ -42,21 +44,19 @@ namespace Phlex\Media\Metadata;
  */
 class LocalNfoProvider implements MetadataProviderInterface
 {
-    /** @var string Base media path for resolving relative NFO file paths */
-    private string $mediaPath;
-
-    /** @var array<string, mixed> In-memory cache for parsed NFO data (unused in current impl) */
-    private array $cache = [];
-
     /**
      * Constructor for LocalNfoProvider.
      *
-     * @param string $mediaPath Base path for media files (used for resolving relative paths)
-     *                         Can be empty if absolute paths are always provided
+     * @param string $mediaPath Reserved for future use (relative-path resolution).
+     *                          Accepted for API compatibility but not currently consulted —
+     *                          all parser entry points take absolute paths.
      */
     public function __construct(string $mediaPath = '')
     {
-        $this->mediaPath = rtrim($mediaPath, '/');
+        // Reserved: $mediaPath was previously stored on the instance but never
+        // read. Constructor parameter is kept to preserve the public contract
+        // used by tests and DI configuration.
+        unset($mediaPath);
     }
 
     /**
@@ -323,6 +323,9 @@ class LocalNfoProvider implements MetadataProviderInterface
 
         // Check content to determine type
         $content = file_get_contents($filePath);
+        if ($content === false) {
+            return [];
+        }
 
         if (str_contains($content, 'episodedetails')) {
             return $this->parseEpisodeNfo($filePath);
@@ -463,7 +466,8 @@ class LocalNfoProvider implements MetadataProviderInterface
             'credits' => (string) ($xml->credits ?? ''),
         ];
 
-        return array_filter($result, fn($v) => $v !== '' && $v !== null && $v !== []);
+        // No array slots in episode metadata, so we only need to strip empty strings and nulls.
+        return array_filter($result, fn($v): bool => $v !== '' && $v !== null);
     }
 
     /**
@@ -662,10 +666,17 @@ class LocalNfoProvider implements MetadataProviderInterface
         $backdropPatterns = ['fanart', 'backdrop', 'background', 'art'];
 
         $files = glob($dirPath . '/*.{jpg,jpeg,png}', GLOB_BRACE);
+        if ($files === false) {
+            $files = [];
+        }
 
         foreach ($files as $file) {
             $filename = strtolower(basename($file, '.jpg'));
-            $filename = strtok($filename, '.'); // Remove any suffix after extension
+            $stripped = strtok($filename, '.'); // Remove any suffix after extension
+            if ($stripped === false) {
+                continue;
+            }
+            $filename = $stripped;
 
             foreach ($posterPatterns as $pattern) {
                 if (str_contains($filename, $pattern)) {

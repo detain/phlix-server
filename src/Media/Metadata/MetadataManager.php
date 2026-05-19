@@ -7,7 +7,9 @@ namespace Phlex\Media\Metadata;
 use Workerman\MySQL\Connection;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\LogChannels;
+use Phlex\Common\Util\RowMap;
 use Phlex\Media\Library\ItemRepository;
+use Phlex\Media\Metadata\Dto\MetadataValue;
 
 /**
  * MetadataManager coordinates metadata fetching from multiple providers.
@@ -116,7 +118,7 @@ class MetadataManager
      * Get providers for a specific media type in priority order.
      *
      * @param string $mediaType The media type to get providers for
-     * @return MetadataProviderInterface[] Array of providers ordered by priority
+     * @return list<MetadataProviderInterface> Array of providers ordered by priority
      */
     public function getProvidersForType(string $mediaType): array
     {
@@ -147,7 +149,7 @@ class MetadataManager
             return false;
         }
 
-        $mediaType = $item['type'];
+        $mediaType = MetadataValue::asString($item['type'] ?? null);
         $providers = $this->getProvidersForType($mediaType);
 
         if (empty($providers)) {
@@ -155,9 +157,11 @@ class MetadataManager
             return false;
         }
 
-        $metadata = $this->parseMetadataJson($item['metadata_json'] ?? '{}');
-        $searchQuery = $metadata['name'] ?? $item['name'];
-        $year = $metadata['year'] ?? null;
+        $metadata = $this->parseMetadataJson(MetadataValue::asNullableString($item['metadata_json'] ?? null));
+        $searchQuery = MetadataValue::asString(
+            $metadata['name'] ?? ($item['name'] ?? null)
+        );
+        $year = MetadataValue::asNullableString($metadata['year'] ?? null);
 
         // Try each provider in priority order
         foreach ($providers as $provider) {
@@ -217,7 +221,7 @@ class MetadataManager
         ?string $year,
         bool $force
     ): bool {
-        $metadata = $this->parseMetadataJson($item['metadata_json'] ?? '{}');
+        $metadata = $this->parseMetadataJson(MetadataValue::asNullableString($item['metadata_json'] ?? null));
 
         // Check if we already have recent metadata from this provider
         if (!$force && $this->hasRecentMetadata($metadata, $providerName)) {
@@ -240,7 +244,7 @@ class MetadataManager
 
         // Get best match (first result)
         $match = $results[0];
-        $externalId = $match['id'];
+        $externalId = MetadataValue::asString($match['id'] ?? null);
 
         // Fetch full details
         $details = $provider->getDetails($externalId);
@@ -256,27 +260,31 @@ class MetadataManager
         $images = $provider->getImages($externalId);
 
         // Build external IDs tracking
-        $externalIds = $metadata['external_ids'] ?? [];
+        $externalIds = MetadataValue::asAssoc($metadata['external_ids'] ?? null);
         $externalIds[$providerName] = $externalId;
 
         // If we have IDs from other providers, preserve them
-        if (isset($metadata['external_ids']) && is_array($metadata['external_ids'])) {
-            foreach ($metadata['external_ids'] as $key => $value) {
-                if ($key !== $providerName && !isset($externalIds[$key])) {
-                    $externalIds[$key] = $value;
-                }
+        $existingExternalIds = MetadataValue::asAssoc($metadata['external_ids'] ?? null);
+        foreach ($existingExternalIds as $key => $value) {
+            if ($key !== $providerName && !isset($externalIds[$key])) {
+                $externalIds[$key] = $value;
             }
         }
 
         // Update item with metadata
+        $existingDetails = MetadataValue::asAssoc($metadata['details'] ?? null);
+        $existingImages = MetadataValue::asAssoc($metadata['images'] ?? null);
+
         $this->itemRepository->update($itemId, [
-            'name' => $details['name'] ?? $item['name'],
+            'name' => MetadataValue::asString(
+                $details['name'] ?? ($item['name'] ?? null)
+            ),
             'metadata_json' => json_encode(array_merge($metadata, [
                 'external_ids' => $externalIds,
-                'details' => array_merge($metadata['details'] ?? [], [
+                'details' => array_merge($existingDetails, [
                     $providerName => $details,
                 ]),
-                'images' => array_merge($metadata['images'] ?? [], [
+                'images' => array_merge($existingImages, [
                     $providerName => $images,
                 ]),
                 'metadata_refreshed_at' => date('c'),
@@ -303,16 +311,18 @@ class MetadataManager
     private function hasRecentMetadata(array $metadata, string $providerName): bool
     {
         // Check if we have details from this provider
-        if (!isset($metadata['details'][$providerName])) {
+        $details = MetadataValue::asAssoc($metadata['details'] ?? null);
+        if (!isset($details[$providerName])) {
             return false;
         }
 
         // Check refresh timestamp (within last 24 hours)
-        if (!isset($metadata['metadata_refreshed_at'])) {
+        $refreshedAtRaw = MetadataValue::asNullableString($metadata['metadata_refreshed_at'] ?? null);
+        if ($refreshedAtRaw === null) {
             return false;
         }
 
-        $refreshedAt = strtotime($metadata['metadata_refreshed_at']);
+        $refreshedAt = strtotime($refreshedAtRaw);
         if ($refreshedAt === false) {
             return false;
         }
@@ -327,22 +337,23 @@ class MetadataManager
      * @param callable|null $progressCallback Optional callback(current, total) for progress updates
      * @return int Number of items successfully refreshed
      */
-    public function refreshLibraryMetadata(string $libraryId, callable $progressCallback = null): int
+    public function refreshLibraryMetadata(string $libraryId, ?callable $progressCallback = null): int
     {
-        $items = $this->db->query(
+        $items = RowMap::listFromMixed($this->db->query(
             "SELECT id, name, metadata_json FROM media_items WHERE library_id = ?",
             [$libraryId]
-        );
+        ));
 
         $refreshed = 0;
         $total = count($items);
 
         foreach ($items as $index => $item) {
-            if ($this->refreshItemMetadata($item['id'])) {
+            $itemId = MetadataValue::asString($item['id'] ?? null);
+            if ($itemId !== '' && $this->refreshItemMetadata($itemId)) {
                 $refreshed++;
             }
 
-            if ($progressCallback) {
+            if ($progressCallback !== null) {
                 $progressCallback($index + 1, $total);
             }
         }
@@ -369,7 +380,7 @@ class MetadataManager
     /**
      * Get all registered provider names.
      *
-     * @return array<string> Array of provider names
+     * @return array<int, string> Array of provider names
      */
     public function getRegisteredProviders(): array
     {
@@ -406,10 +417,10 @@ class MetadataManager
      */
     private function parseMetadataJson(?string $json): array
     {
-        if (empty($json)) {
+        if ($json === null || $json === '') {
             return [];
         }
         $data = json_decode($json, true);
-        return is_array($data) ? $data : [];
+        return MetadataValue::asAssoc($data);
     }
 }

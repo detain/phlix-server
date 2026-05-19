@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Metadata;
 
-use SimpleXMLElement;
+use Phlex\Media\Metadata\Dto\MetadataValue;
 
 /**
  * TVDB API provider for TV series metadata.
@@ -46,9 +46,6 @@ class TvdbProvider implements MetadataProviderInterface
     /** @var string Default language code for API requests (ISO 639-1) */
     private string $language;
 
-    /** @var array<string, mixed> In-memory response cache keyed by cache key */
-    private array $cache = [];
-
     /**
      * Constructor for TvdbProvider.
      *
@@ -89,7 +86,7 @@ class TvdbProvider implements MetadataProviderInterface
      */
     public function search(string $query, array $options = []): array
     {
-        $language = $options['language'] ?? $this->language;
+        $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
         $params = [
             'name' => $query,
@@ -98,24 +95,31 @@ class TvdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get('/search/series', $params);
 
-        if (!$response || !isset($response['data'])) {
+        if ($response === null || !isset($response['data'])) {
             return [];
         }
 
-        return array_map(function ($result) {
-            return [
-                'id' => (string) ($result['id'] ?? ''),
-                'title' => $result['seriesName'] ?? $result['alias'] ?? '',
-                'original_title' => $result['seriesName'] ?? '',
-                'overview' => $result['overview'] ?? '',
-                'poster_path' => $result['poster'] ?? null,
-                'banner_path' => $result['banner'] ?? null,
-                'first_aired' => $result['firstAired'] ?? '',
-                'network' => $result['network'] ?? null,
-                'status' => $result['status'] ?? null,
-                'rating' => $result['siteRating'] ?? null,
+        $results = MetadataValue::asAssocList($response['data']);
+
+        $output = [];
+        foreach ($results as $result) {
+            $output[] = [
+                'id' => MetadataValue::asString($result['id'] ?? null),
+                'title' => MetadataValue::asString(
+                    $result['seriesName'] ?? ($result['alias'] ?? null)
+                ),
+                'original_title' => MetadataValue::asString($result['seriesName'] ?? null),
+                'overview' => MetadataValue::asString($result['overview'] ?? null),
+                'poster_path' => MetadataValue::asNullableString($result['poster'] ?? null),
+                'banner_path' => MetadataValue::asNullableString($result['banner'] ?? null),
+                'first_aired' => MetadataValue::asString($result['firstAired'] ?? null),
+                'network' => MetadataValue::asNullableString($result['network'] ?? null),
+                'status' => MetadataValue::asNullableString($result['status'] ?? null),
+                'rating' => MetadataValue::asNullableFloat($result['siteRating'] ?? null),
             ];
-        }, $response['data']);
+        }
+
+        return $output;
     }
 
     /**
@@ -132,7 +136,7 @@ class TvdbProvider implements MetadataProviderInterface
      */
     public function getDetails(string $externalId, array $options = []): array
     {
-        $language = $options['language'] ?? $this->language;
+        $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
         $params = [
             'language' => $language,
@@ -141,33 +145,46 @@ class TvdbProvider implements MetadataProviderInterface
         // Fetch series details
         $seriesResponse = $this->http->get("/series/{$externalId}", $params);
 
-        if (!$seriesResponse || !isset($seriesResponse['data'])) {
+        if ($seriesResponse === null || !isset($seriesResponse['data'])) {
             return [];
         }
 
-        $series = $seriesResponse['data'];
+        $series = MetadataValue::asAssoc($seriesResponse['data']);
 
         // Fetch actors
         $actorsResponse = $this->http->get("/series/{$externalId}/actors", $params);
-        $actors = $this->formatActors($actorsResponse['data'] ?? []);
+        $actors = $this->formatActors(
+            MetadataValue::asAssocList($actorsResponse['data'] ?? null)
+        );
 
         // Fetch episodes
         $episodesResponse = $this->http->get("/series/{$externalId}/episodes", $params);
-        $episodes = $this->formatEpisodes($episodesResponse['data'] ?? []);
+        $episodes = $this->formatEpisodes(
+            MetadataValue::asAssocList($episodesResponse['data'] ?? null)
+        );
+
+        $firstAired = MetadataValue::asString($series['firstAired'] ?? null);
+        $year = null;
+        if ($firstAired !== '') {
+            $timestamp = strtotime($firstAired);
+            if ($timestamp !== false) {
+                $year = date('Y', $timestamp);
+            }
+        }
 
         return [
-            'name' => $series['seriesName'] ?? '',
-            'original_name' => $series['seriesName'] ?? '',
-            'overview' => $series['overview'] ?? '',
-            'year' => isset($series['firstAired']) ? date('Y', strtotime($series['firstAired'])) : null,
-            'first_aired' => $series['firstAired'] ?? null,
-            'network' => $series['network'] ?? null,
-            'genre' => $this->parseGenres($series['genre'] ?? ''),
-            'rating' => $series['siteRating'] ?? null,
-            'runtime' => $series['runtime'] ?? null,
-            'status' => $series['status'] ?? null,
-            'imdb_id' => $series['imdbId'] ?? null,
-            'tvdb_id' => $series['id'] ?? null,
+            'name' => MetadataValue::asString($series['seriesName'] ?? null),
+            'original_name' => MetadataValue::asString($series['seriesName'] ?? null),
+            'overview' => MetadataValue::asString($series['overview'] ?? null),
+            'year' => $year,
+            'first_aired' => MetadataValue::asNullableString($series['firstAired'] ?? null),
+            'network' => MetadataValue::asNullableString($series['network'] ?? null),
+            'genre' => $this->parseGenres(MetadataValue::asString($series['genre'] ?? null)),
+            'rating' => MetadataValue::asNullableFloat($series['siteRating'] ?? null),
+            'runtime' => MetadataValue::asNullableInt($series['runtime'] ?? null),
+            'status' => MetadataValue::asNullableString($series['status'] ?? null),
+            'imdb_id' => MetadataValue::asNullableString($series['imdbId'] ?? null),
+            'tvdb_id' => MetadataValue::asNullableString($series['id'] ?? null),
             'actors' => $actors,
             'episodes' => $episodes,
             'episode_count' => count($episodes),
@@ -200,28 +217,40 @@ class TvdbProvider implements MetadataProviderInterface
             "/series/{$externalId}/images/query",
             array_merge($params, ['keyType' => 'poster'])
         );
-        $posters = $this->formatImages($posterResponse['data'] ?? [], 'poster');
+        $posters = $this->formatImages(
+            MetadataValue::asAssocList($posterResponse['data'] ?? null),
+            'poster'
+        );
 
         // Get banners
         $bannerResponse = $this->http->get(
             "/series/{$externalId}/images/query",
             array_merge($params, ['keyType' => 'series'])
         );
-        $banners = $this->formatImages($bannerResponse['data'] ?? [], 'banner');
+        $banners = $this->formatImages(
+            MetadataValue::asAssocList($bannerResponse['data'] ?? null),
+            'banner'
+        );
 
         // Get season posters
         $seasonPosterResponse = $this->http->get(
             "/series/{$externalId}/images/query",
             array_merge($params, ['keyType' => 'season'])
         );
-        $seasonPosters = $this->formatImages($seasonPosterResponse['data'] ?? [], 'season_poster');
+        $seasonPosters = $this->formatImages(
+            MetadataValue::asAssocList($seasonPosterResponse['data'] ?? null),
+            'season_poster'
+        );
 
         // Get season thumbs
         $seasonThumbResponse = $this->http->get(
             "/series/{$externalId}/images/query",
             array_merge($params, ['keyType' => 'seasonwide'])
         );
-        $seasonThumbs = $this->formatImages($seasonThumbResponse['data'] ?? [], 'season_thumb');
+        $seasonThumbs = $this->formatImages(
+            MetadataValue::asAssocList($seasonThumbResponse['data'] ?? null),
+            'season_thumb'
+        );
 
         return [
             'posters' => $posters,
@@ -234,7 +263,7 @@ class TvdbProvider implements MetadataProviderInterface
     /**
      * Get provider name aliases.
      *
-     * @return array<string> Provider names: ['tvdb', 'thetvdb']
+     * @return array<int, string> Provider names: ['tvdb', 'thetvdb']
      */
     public function getProviders(): array
     {
@@ -264,7 +293,7 @@ class TvdbProvider implements MetadataProviderInterface
      */
     public function getEpisode(string $seriesId, int $season, int $episode, array $options = []): array
     {
-        $language = $options['language'] ?? $this->language;
+        $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
         $params = ['language' => $language];
 
@@ -274,23 +303,28 @@ class TvdbProvider implements MetadataProviderInterface
             'airedEpisode' => $episode,
         ]));
 
-        if (!$response || !isset($response['data']) || empty($response['data'])) {
+        if ($response === null || !isset($response['data'])) {
             return [];
         }
 
-        $episodeData = $response['data'][0];
+        $data = MetadataValue::asAssocList($response['data']);
+        if ($data === []) {
+            return [];
+        }
+
+        $episodeData = $data[0];
 
         return [
-            'id' => (string) ($episodeData['id'] ?? ''),
+            'id' => MetadataValue::asString($episodeData['id'] ?? null),
             'series_id' => $seriesId,
-            'name' => $episodeData['episodeName'] ?? '',
-            'overview' => $episodeData['overview'] ?? '',
-            'season_number' => $episodeData['airedSeason'] ?? $season,
-            'episode_number' => $episodeData['airedEpisodeNumber'] ?? $episode,
-            'first_aired' => $episodeData['firstAired'] ?? null,
-            'runtime' => $episodeData['runtime'] ?? null,
-            'rating' => $episodeData['siteRating'] ?? null,
-            'thumbnail' => $episodeData['filename'] ?? null,
+            'name' => MetadataValue::asString($episodeData['episodeName'] ?? null),
+            'overview' => MetadataValue::asString($episodeData['overview'] ?? null),
+            'season_number' => MetadataValue::asInt($episodeData['airedSeason'] ?? null, $season),
+            'episode_number' => MetadataValue::asInt($episodeData['airedEpisodeNumber'] ?? null, $episode),
+            'first_aired' => MetadataValue::asNullableString($episodeData['firstAired'] ?? null),
+            'runtime' => MetadataValue::asNullableInt($episodeData['runtime'] ?? null),
+            'rating' => MetadataValue::asNullableFloat($episodeData['siteRating'] ?? null),
+            'thumbnail' => MetadataValue::asNullableString($episodeData['filename'] ?? null),
         ];
     }
 
@@ -315,24 +349,24 @@ class TvdbProvider implements MetadataProviderInterface
      */
     public function getSeasonEpisodes(string $seriesId, int $season, array $options = []): array
     {
-        $language = $options['language'] ?? $this->language;
+        $language = MetadataValue::asString($options['language'] ?? null, $this->language);
 
         $response = $this->http->get("/series/{$seriesId}/episodes/query", [
             'language' => $language,
             'airedSeason' => $season,
         ]);
 
-        if (!$response || !isset($response['data'])) {
+        if ($response === null || !isset($response['data'])) {
             return [];
         }
 
-        return $this->formatEpisodes($response['data']);
+        return $this->formatEpisodes(MetadataValue::asAssocList($response['data']));
     }
 
     /**
      * Format actor list from TVDB API response.
      *
-     * @param array<int, array<string, mixed>> $actors Raw actor data from TVDB
+     * @param list<array<string, mixed>> $actors Raw actor data from TVDB
      * @return array<int, array{
      *                name: string,
      *                role: string,
@@ -342,20 +376,24 @@ class TvdbProvider implements MetadataProviderInterface
      */
     private function formatActors(array $actors): array
     {
-        return array_map(function ($actor) {
-            return [
-                'name' => $actor['personName'] ?? $actor['actorName'] ?? '',
-                'role' => $actor['role'] ?? '',
-                'image_url' => $actor['image'] ?? null,
-                'sort_order' => $actor['sortOrder'] ?? 0,
+        $output = [];
+        foreach ($actors as $actor) {
+            $output[] = [
+                'name' => MetadataValue::asString(
+                    $actor['personName'] ?? ($actor['actorName'] ?? null)
+                ),
+                'role' => MetadataValue::asString($actor['role'] ?? null),
+                'image_url' => MetadataValue::asNullableString($actor['image'] ?? null),
+                'sort_order' => MetadataValue::asInt($actor['sortOrder'] ?? null),
             ];
-        }, $actors);
+        }
+        return $output;
     }
 
     /**
      * Format episode list from TVDB API response.
      *
-     * @param array<int, array<string, mixed>> $episodes Raw episode data from TVDB
+     * @param list<array<string, mixed>> $episodes Raw episode data from TVDB
      * @return array<int, array{
      *                id: string,
      *                name: string,
@@ -370,25 +408,27 @@ class TvdbProvider implements MetadataProviderInterface
      */
     private function formatEpisodes(array $episodes): array
     {
-        return array_map(function ($episode) {
-            return [
-                'id' => (string) ($episode['id'] ?? ''),
-                'name' => $episode['episodeName'] ?? '',
-                'overview' => $episode['overview'] ?? '',
-                'season_number' => $episode['airedSeason'] ?? 1,
-                'episode_number' => $episode['airedEpisodeNumber'] ?? 0,
-                'first_aired' => $episode['firstAired'] ?? null,
-                'runtime' => $episode['runtime'] ?? null,
-                'rating' => $episode['siteRating'] ?? null,
-                'thumbnail' => $episode['filename'] ?? null,
+        $output = [];
+        foreach ($episodes as $episode) {
+            $output[] = [
+                'id' => MetadataValue::asString($episode['id'] ?? null),
+                'name' => MetadataValue::asString($episode['episodeName'] ?? null),
+                'overview' => MetadataValue::asString($episode['overview'] ?? null),
+                'season_number' => MetadataValue::asInt($episode['airedSeason'] ?? null, 1),
+                'episode_number' => MetadataValue::asInt($episode['airedEpisodeNumber'] ?? null),
+                'first_aired' => MetadataValue::asNullableString($episode['firstAired'] ?? null),
+                'runtime' => MetadataValue::asNullableInt($episode['runtime'] ?? null),
+                'rating' => MetadataValue::asNullableFloat($episode['siteRating'] ?? null),
+                'thumbnail' => MetadataValue::asNullableString($episode['filename'] ?? null),
             ];
-        }, $episodes);
+        }
+        return $output;
     }
 
     /**
      * Format image list from TVDB API response.
      *
-     * @param array<int, array<string, mixed>> $images Raw image data from TVDB
+     * @param list<array<string, mixed>> $images Raw image data from TVDB
      * @param string $type Image type classification (poster, banner, season_poster, season_thumb)
      * @return array<int, array{
      *                url: string,
@@ -400,15 +440,18 @@ class TvdbProvider implements MetadataProviderInterface
      */
     private function formatImages(array $images, string $type): array
     {
-        return array_map(function ($image) use ($type) {
-            return [
-                'url' => $image['fileName'] ?? '',
+        $output = [];
+        foreach ($images as $image) {
+            $ratingsInfo = MetadataValue::asAssoc($image['ratingsInfo'] ?? null);
+            $output[] = [
+                'url' => MetadataValue::asString($image['fileName'] ?? null),
                 'type' => $type,
-                'width' => $image['resolution'] ?? 0,
-                'rating' => $image['ratingsInfo']['average'] ?? null,
-                'language' => $image['language'] ?? null,
+                'width' => MetadataValue::asInt($image['resolution'] ?? null),
+                'rating' => MetadataValue::asNullableFloat($ratingsInfo['average'] ?? null),
+                'language' => MetadataValue::asNullableString($image['language'] ?? null),
             ];
-        }, $images);
+        }
+        return $output;
     }
 
     /**
@@ -422,7 +465,7 @@ class TvdbProvider implements MetadataProviderInterface
         if (empty($genres)) {
             return [];
         }
-        return array_filter(array_map('trim', explode('|', $genres)));
+        return array_values(array_filter(array_map('trim', explode('|', $genres))));
     }
 
     /**
@@ -435,7 +478,7 @@ class TvdbProvider implements MetadataProviderInterface
     {
         $seasons = [];
         foreach ($episodes as $episode) {
-            $season = $episode['season_number'] ?? 1;
+            $season = MetadataValue::asInt($episode['season_number'] ?? null, 1);
             $seasons[$season] = true;
         }
         return count($seasons);

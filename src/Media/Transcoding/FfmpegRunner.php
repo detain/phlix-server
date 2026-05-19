@@ -95,12 +95,46 @@ class FfmpegRunner
         );
 
         $output = shell_exec($cmd);
-        if (!$output) {
+        if (!is_string($output) || $output === '') {
             return null;
         }
 
         $data = json_decode($output, true);
-        return is_array($data) ? $data : null;
+        if (!is_array($data)) {
+            return null;
+        }
+
+        $rawStreams = $data['streams'] ?? [];
+        $rawFormat = $data['format'] ?? [];
+        if (!is_array($rawStreams) || !is_array($rawFormat)) {
+            return null;
+        }
+
+        $streams = [];
+        foreach ($rawStreams as $stream) {
+            if (!is_array($stream)) {
+                continue;
+            }
+            $normalized = [];
+            foreach ($stream as $key => $value) {
+                if (is_string($key)) {
+                    $normalized[$key] = $value;
+                }
+            }
+            $streams[] = $normalized;
+        }
+
+        $format = [];
+        foreach ($rawFormat as $key => $value) {
+            if (is_string($key)) {
+                $format[$key] = $value;
+            }
+        }
+
+        return [
+            'streams' => $streams,
+            'format' => $format,
+        ];
     }
 
     /**
@@ -198,43 +232,49 @@ class FfmpegRunner
 
         $cmd .= ' -i ' . escapeshellarg($inputPath);
 
-        if (isset($params['video_codec'])) {
-            $cmd .= ' -c:v ' . $params['video_codec'];
+        $videoCodec = self::paramString($params, 'video_codec');
+        if ($videoCodec !== null) {
+            $cmd .= ' -c:v ' . $videoCodec;
 
-            switch ($params['video_codec']) {
+            switch ($videoCodec) {
                 case 'libx264':
-                    $cmd .= ' -preset ' . ($params['preset'] ?? 'medium');
-                    $cmd .= ' -crf ' . ($params['crf'] ?? 23);
+                    $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'medium');
+                    $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? 23);
                     break;
                 case 'libx265':
-                    $cmd .= ' -preset ' . ($params['preset'] ?? 'medium');
-                    $cmd .= ' -crf ' . ($params['crf'] ?? 28);
+                    $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'medium');
+                    $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? 28);
                     break;
             }
         }
 
-        if (isset($params['width']) && isset($params['height'])) {
-            $scaleFilter = "scale={$params['width']}:{$params['height']}:force_original_aspect_ratio=decrease";
+        $width = self::paramInt($params, 'width');
+        $height = self::paramInt($params, 'height');
+        if ($width !== null && $height !== null) {
+            $scaleFilter = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
             $cmd .= ' -vf "' . $scaleFilter . '"';
         }
 
-        if (isset($params['audio_codec'])) {
-            $cmd .= ' -c:a ' . $params['audio_codec'];
-            $cmd .= ' -b:a ' . ($params['audio_bitrate'] ?? '128k');
-            $cmd .= ' -ar ' . ($params['audio_sample_rate'] ?? 48000);
+        $audioCodec = self::paramString($params, 'audio_codec');
+        if ($audioCodec !== null) {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $cmd .= ' -ar ' . (self::paramInt($params, 'audio_sample_rate') ?? 48000);
 
-            if (isset($params['audio_channels'])) {
-                $cmd .= ' -ac ' . $params['audio_channels'];
+            $audioChannels = self::paramInt($params, 'audio_channels');
+            if ($audioChannels !== null) {
+                $cmd .= ' -ac ' . $audioChannels;
             }
         } else {
             $cmd .= ' -c:a copy';
         }
 
-        if (isset($params['format'])) {
-            $cmd .= ' -f ' . $params['format'];
+        $format = self::paramString($params, 'format');
+        if ($format !== null) {
+            $cmd .= ' -f ' . $format;
         }
 
-        if (($params['container'] ?? '') === 'mp4') {
+        if (self::paramString($params, 'container') === 'mp4') {
             $cmd .= ' -movflags +faststart';
         }
 
@@ -392,7 +432,10 @@ class FfmpegRunner
         }
 
         $output = shell_exec(escapeshellarg($this->ffmpegPath) . ' -version 2>/dev/null');
-        if (preg_match('/ffmpeg version (\S+)/', $output, $matches)) {
+        if (!is_string($output)) {
+            return null;
+        }
+        if (preg_match('/ffmpeg version (\S+)/', $output, $matches) === 1) {
             return $matches[1];
         }
         return null;
@@ -569,21 +612,28 @@ class FfmpegRunner
             ->setOutput($outputPath)
             ->setVideoCodec($codec);
 
-        if (isset($params['audio_codec'])) {
-            $builder->setAudioCodec($params['audio_codec']);
+        $audioCodec = self::paramString($params, 'audio_codec');
+        if ($audioCodec !== null) {
+            $builder->setAudioCodec($audioCodec);
         }
 
-        if (isset($params['bitrate'])) {
-            $builder->setBitrate((int) $params['bitrate']);
+        $bitrate = self::paramInt($params, 'bitrate');
+        if ($bitrate !== null) {
+            $builder->setBitrate($bitrate);
         }
 
-        if (isset($params['width']) && isset($params['height'])) {
-            $builder->setResolution((int) $params['width'], (int) $params['height']);
+        $width = self::paramInt($params, 'width');
+        $height = self::paramInt($params, 'height');
+        if ($width !== null && $height !== null) {
+            $builder->setResolution($width, $height);
         }
 
-        if (isset($params['filters']) && is_array($params['filters'])) {
-            foreach ($params['filters'] as $filter) {
-                $builder->addFilter($filter);
+        $filters = $params['filters'] ?? null;
+        if (is_array($filters)) {
+            foreach ($filters as $filter) {
+                if (is_string($filter)) {
+                    $builder->addFilter($filter);
+                }
             }
         }
 
@@ -647,25 +697,30 @@ class FfmpegRunner
                 $cmd .= ' -preset:v medium';
         }
 
-        if (isset($params['crf'])) {
-            $cmd .= ' -crf ' . $params['crf'];
+        $crf = self::paramInt($params, 'crf');
+        if ($crf !== null) {
+            $cmd .= ' -crf ' . $crf;
         }
 
-        if (isset($params['width']) && isset($params['height'])) {
-            $scaleFilter = "scale={$params['width']}:{$params['height']}:force_original_aspect_ratio=decrease";
+        $width = self::paramInt($params, 'width');
+        $height = self::paramInt($params, 'height');
+        if ($width !== null && $height !== null) {
+            $scaleFilter = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
             $cmd .= ' -vf "' . $scaleFilter . '"';
         }
 
-        if (isset($params['audio_codec'])) {
-            $cmd .= ' -c:a ' . $params['audio_codec'];
-            $cmd .= ' -b:a ' . ($params['audio_bitrate'] ?? '128k');
-            $cmd .= ' -ar ' . ($params['audio_sample_rate'] ?? 48000);
+        $audioCodec = self::paramString($params, 'audio_codec');
+        if ($audioCodec !== null) {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $cmd .= ' -ar ' . (self::paramInt($params, 'audio_sample_rate') ?? 48000);
         } else {
             $cmd .= ' -c:a copy';
         }
 
-        if (isset($params['format'])) {
-            $cmd .= ' -f ' . $params['format'];
+        $format = self::paramString($params, 'format');
+        if ($format !== null) {
+            $cmd .= ' -f ' . $format;
         }
 
         $cmd .= ' -threads 0';
@@ -695,5 +750,60 @@ class FfmpegRunner
             'v4l2' => ' -hwaccel v4l2m2m',
             default => '',
         };
+    }
+
+    /**
+     * Gets the configured default transcode output directory.
+     *
+     * @return string Transcode output directory
+     *
+     * @since 0.11.0
+     */
+    public function getTranscodeDir(): string
+    {
+        return $this->transcodeDir;
+    }
+
+    /**
+     * Extracts a string value from a mixed parameter array.
+     *
+     * Returns the value when it is a non-empty string; otherwise null. Numeric
+     * scalars are coerced to their string form to remain backwards-compatible
+     * with callers that pass numbers as strings (e.g. '128k').
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function paramString(array $params, string $key): ?string
+    {
+        $value = $params[$key] ?? null;
+        if (is_string($value)) {
+            return $value !== '' ? $value : null;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return null;
+    }
+
+    /**
+     * Extracts an integer value from a mixed parameter array.
+     *
+     * Returns the value when it is an int or a numeric string; otherwise null.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function paramInt(array $params, string $key): ?int
+    {
+        $value = $params[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        return null;
     }
 }

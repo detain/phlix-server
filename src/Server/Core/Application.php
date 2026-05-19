@@ -241,7 +241,46 @@ class Application
         // Roku API endpoints
         $this->loadRokuRoutes();
 
+        // Last.fm admin connect routes (G.3).
+        $this->loadLastfmRoutes();
+
         // Media request UI moved to phlex-hub in K.3 — no server routes here.
+    }
+
+    /**
+     * Registers the admin-side "Connect Last.fm" flow routes.
+     *
+     * Wires the GET landing page, the OAuth-like token callback, and the
+     * disconnect form post. The admin/auth middleware is configured at
+     * the router level elsewhere; these routes only register the handlers.
+     *
+     * @since 0.15.0
+     */
+    private function loadLastfmRoutes(): void
+    {
+        try {
+            $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
+            $config = \Phlex\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
+                is_array($rawConfig) ? $rawConfig : []
+            );
+            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
+            $sessions = new \Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
+            $api = new \Phlex\Plugins\Scrobbler\Lastfm\LastfmApi(
+                $config->apiKey,
+                $config->sharedSecret,
+            );
+            $controller = new \Phlex\Server\Http\Controllers\Admin\LastfmController(
+                $config,
+                $sessions,
+                $api,
+            );
+
+            $this->router->get('/admin/lastfm', [$controller, 'index']);
+            $this->router->get('/admin/lastfm/callback', [$controller, 'callback']);
+            $this->router->post('/admin/lastfm/disconnect', [$controller, 'disconnect']);
+        } catch (\Throwable) {
+            // Last.fm not configured — silent ignore (e.g. DB not ready).
+        }
     }
 
     /**

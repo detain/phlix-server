@@ -7,6 +7,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added (post-O.7 wave 4, G.3)
+
+- Last.fm scrobble plugin (`src/Plugins/Scrobbler/Lastfm/`):
+  - `LastfmApi` — Web Service v2 client. Builds `api_sig` per the official rule (alphabetical key+value concat + shared secret + MD5).
+  - `LastfmSessionRepository` — per-user session-key store backed by the new `lastfm_sessions` table (migration `023_lastfm_sessions.sql`).
+  - `LastfmScrobbler` — PSR-14 listener; subscribes to `phlex.playback.started` (Now Playing) and `phlex.playback.stopped` (scrobble). Enforces Last.fm's official rule: scrobble only when the track is longer than 30 s AND the user listened to more than 50 % of it.
+  - `LastfmPlugin` — `\Phlex\Shared\Plugin\LifecycleInterface` entry class; resolves dependencies from the host container on `enable()` and exposes the scrobbler via `subscribedEvents()`.
+  - `LastfmConfig` — typed wrapper over `config/lastfm.php`. New config keys default to `LASTFM_API_KEY`, `LASTFM_SHARED_SECRET`, `LASTFM_CALLBACK_URL`, `LASTFM_ENABLED` (env-driven).
+  - Admin connect flow: `GET /admin/lastfm`, `GET /admin/lastfm/callback`, `POST /admin/lastfm/disconnect` (`Admin\LastfmController`) plus a Smarty template at `public/templates/admin/lastfm.tpl`.
+- New required env vars (only when enabling the plugin): `LASTFM_API_KEY`, `LASTFM_SHARED_SECRET`. Optional: `LASTFM_CALLBACK_URL`, `LASTFM_USERNAME`, `LASTFM_ENABLED`, `LASTFM_SUBMIT_NOW_PLAYING`.
+
 ### Moved (post-O.7 wave 4)
 
 - K.3 request UI: moved to phlex-hub (now lives at `/api/v1/me/requests` on the hub, with the admin queue at `/api/v1/admin/requests`). Server no longer exposes `/api/v1/requests`, `/requests` (SSR), `/requests/{id}`, or the `requests` table — those were dropped along with `migrations/016_media_requests.sql`. The hub stores requests against its own `users` table (hub migration `011_media_requests.sql`) and dispatches approvals through Sonarr/Radarr via `Phlex\Shared\Arr` v0.4.0.

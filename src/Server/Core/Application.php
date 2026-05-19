@@ -943,7 +943,7 @@ class Application
 
         try {
             $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
-            $arrClientFactory = new \Phlex\Arr\ArrClientFactory([]);
+            $arrClientFactory = new \Phlex\Shared\Arr\ArrClientFactory([]);
             $requestManager = new \Phlex\Requests\RequestManager($db, $arrClientFactory);
             $notification = new \Phlex\Requests\RequestNotification();
             $controller = new \Phlex\Server\Http\Controllers\Requests\RequestController(

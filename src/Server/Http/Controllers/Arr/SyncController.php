@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Controllers\Arr;
 
-use Phlex\Arr\CustomFormatSyncer;
+use Phlex\Server\Arr\CustomFormatSyncer;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 

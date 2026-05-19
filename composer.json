@@ -13,7 +13,7 @@
         "php": ">=8.3",
         "ext-ldap": "*",
         "crell/tukio": "^2.0",
-        "detain/phlex-shared": "^0.3.0",
+        "detain/phlex-shared": "^0.4.0",
         "directorytree/ldaprecord": "^3.0",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",

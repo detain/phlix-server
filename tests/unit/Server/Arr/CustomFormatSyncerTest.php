@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Phlex\Tests\Unit\Arr;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Arr\CustomFormatSyncer;
-use Phlex\Arr\RadarrClient;
-use Phlex\Arr\SyncResult;
-use Phlex\Arr\TrashGuidesProvider;
+use Phlex\Server\Arr\CustomFormatSyncer;
+use Phlex\Shared\Arr\RadarrClient;
+use Phlex\Shared\Arr\SyncResult;
+use Phlex\Shared\Arr\TrashGuidesProvider;
 use Phlex\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 use DateTimeImmutable;

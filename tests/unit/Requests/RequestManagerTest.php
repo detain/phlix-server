@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Phlex\Tests\Unit\Requests;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Arr\ArrClientFactory;
+use Phlex\Shared\Arr\ArrClientFactory;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Requests\RequestManager;
 use Workerman\MySQL\Connection;

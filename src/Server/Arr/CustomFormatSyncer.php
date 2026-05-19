@@ -2,17 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Arr;
+namespace Phlex\Server\Arr;
 
 use DateTimeImmutable;
 use Phlex\Common\Logger\StructuredLogger;
-use Workerman\MySQL\Connection;
+use Phlex\Shared\Arr\RadarrClient;
+use Phlex\Shared\Arr\SyncResult;
+use Phlex\Shared\Arr\TrashGuidesProvider;
 use RuntimeException;
+use Workerman\MySQL\Connection;
 
 /**
  * Syncs TRaSH-Guides custom formats and quality profiles to Radarr.
  *
- * @package Phlex\Arr
+ * @package Phlex\Server\Arr
  * @since 0.12.0
  */
 class CustomFormatSyncer

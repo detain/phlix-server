@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Phlex\Requests;
 
-use Phlex\Arr\ArrClientFactory;
-use Phlex\Arr\RadarrClient;
-use Phlex\Arr\SonarrClient;
+use Phlex\Shared\Arr\ArrClientFactory;
+use Phlex\Shared\Arr\RadarrClient;
+use Phlex\Shared\Arr\SonarrClient;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\LogChannels;
 use Workerman\MySQL\Connection;

@@ -2,13 +2,15 @@
 
 namespace Phlex\Common\Logger;
 
-use Monolog\Logger;
 use Monolog\Handler\RotatingFileHandler;
 use Monolog\Handler\StreamHandler;
-use Monolog\Processor\PsrLogMessageProcessor;
 use Monolog\Level;
+use Monolog\Logger;
+use Monolog\Processor\PsrLogMessageProcessor;
+use Psr\Log\LoggerInterface;
+use Stringable;
 
-class StructuredLogger
+class StructuredLogger implements LoggerInterface
 {
     private Logger $logger;
     private string $channel;
@@ -125,50 +127,62 @@ class StructuredLogger
         };
     }
 
-    public function emergency(string $message, array $context = []): void
+    public function emergency(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Emergency, $message, $context);
     }
 
-    public function alert(string $message, array $context = []): void
+    public function alert(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Alert, $message, $context);
     }
 
-    public function critical(string $message, array $context = []): void
+    public function critical(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Critical, $message, $context);
     }
 
-    public function error(string $message, array $context = []): void
+    public function error(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Error, $message, $context);
     }
 
-    public function warning(string $message, array $context = []): void
+    public function warning(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Warning, $message, $context);
     }
 
-    public function notice(string $message, array $context = []): void
+    public function notice(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Notice, $message, $context);
     }
 
-    public function info(string $message, array $context = []): void
+    public function info(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Info, $message, $context);
     }
 
-    public function debug(string $message, array $context = []): void
+    public function debug(string|Stringable $message, array $context = []): void
     {
         $this->log(Level::Debug, $message, $context);
     }
 
-    public function log(Level $level, string $message, array $context = []): void
+    /**
+     * PSR-3 compatible log entrypoint. `$level` may be a Monolog Level enum,
+     * a PSR-3 level string (e.g. "info", "warning"), or an int (PSR-3 numeric
+     * level). All are normalized to a Monolog Level.
+     *
+     * @param mixed              $level
+     * @param string|Stringable  $message
+     * @param array<string,mixed> $context
+     */
+    public function log($level, string|Stringable $message, array $context = []): void
     {
         $context['channel'] = $this->channel;
-        $this->logger->log($level, $message, $context);
+        $resolvedLevel = $level instanceof Level
+            ? $level
+            : $this->mapLevel(is_string($level) ? $level : (string) $level);
+        $this->logger->log($resolvedLevel, (string) $message, $context);
     }
 
     public function withContext(array $context): Logger

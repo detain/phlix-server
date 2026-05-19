@@ -7,6 +7,8 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\LiveTv\Dto\RowAccess;
+use Phlex\LiveTv\Dto\RowQuery;
 use Workerman\MySQL\Connection;
 
 /**
@@ -61,8 +63,11 @@ class GuideManager
     /** @var StructuredLogger Structured logger instance */
     private StructuredLogger $logger;
 
-    /** @var array<string, array<string, mixed>> In-memory cache for program data */
-    private array $cache = [];
+    /** @var array<string, array<string, mixed>> In-memory cache for single-program lookups (keyed `program:<id>`) */
+    private array $programCache = [];
+
+    /** @var array<string, array<int, array<string, mixed>>> In-memory cache for channel program listings (keyed `channel:<id>:<start>:<end>`) */
+    private array $channelCache = [];
 
     /** @var int Cache TTL in seconds (default: 1 hour) */
     private int $cacheTtl = 3600;
@@ -173,11 +178,12 @@ class GuideManager
             [$channelId, $now, $now]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        return $this->mapProgram($result->fetch());
+        return $this->mapProgram($row);
     }
 
     /**
@@ -190,9 +196,8 @@ class GuideManager
      */
     public function getProgram(string $programId): ?array
     {
-        $cacheKey = "program:$programId";
-        if (isset($this->cache[$cacheKey])) {
-            return $this->cache[$cacheKey];
+        if (isset($this->programCache[$programId])) {
+            return $this->programCache[$programId];
         }
 
         $result = $this->db->query(
@@ -200,12 +205,13 @@ class GuideManager
             [$programId]
         );
 
-        if ($result->num_rows === 0) {
+        $row = RowQuery::firstRow($result);
+        if ($row === null) {
             return null;
         }
 
-        $program = $this->mapProgram($result->fetch());
-        $this->cache[$cacheKey] = $program;
+        $program = $this->mapProgram($row);
+        $this->programCache[$programId] = $program;
 
         return $program;
     }
@@ -228,10 +234,10 @@ class GuideManager
      */
     public function getProgramsForChannel(string $channelId, int $startTime, int $endTime): array
     {
-        $cacheKey = "channel:$channelId:$startTime:$endTime";
+        $cacheKey = "$channelId:$startTime:$endTime";
 
-        if (isset($this->cache[$cacheKey])) {
-            return $this->cache[$cacheKey];
+        if (isset($this->channelCache[$cacheKey])) {
+            return $this->channelCache[$cacheKey];
         }
 
         $result = $this->db->query(
@@ -242,11 +248,11 @@ class GuideManager
         );
 
         $programs = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $programs[] = $this->mapProgram($row);
         }
 
-        $this->cache[$cacheKey] = $programs;
+        $this->channelCache[$cacheKey] = $programs;
 
         return $programs;
     }
@@ -278,8 +284,8 @@ class GuideManager
         );
 
         $programsByChannel = [];
-        while ($row = $result->fetch()) {
-            $channelId = $row['channel_id'];
+        foreach (RowQuery::rows($result) as $row) {
+            $channelId = RowAccess::string($row, 'channel_id');
             if (!isset($programsByChannel[$channelId])) {
                 $programsByChannel[$channelId] = [];
             }
@@ -311,7 +317,7 @@ class GuideManager
         );
 
         $programs = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $programs[] = $this->mapProgram($row);
         }
 
@@ -336,7 +342,7 @@ class GuideManager
         );
 
         $programs = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $programs[] = $this->mapProgram($row);
         }
 
@@ -361,7 +367,7 @@ class GuideManager
         );
 
         $programs = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $programs[] = $this->mapProgram($row);
         }
 
@@ -390,9 +396,11 @@ class GuideManager
      *   - xmltv_id: string|null (EPG/xmltv channel ID for IPTV matching)
      * @return array<string, mixed>|null The upserted program or null on failure
      */
-    public function upsertProgram(array $data): array
+    public function upsertProgram(array $data): ?array
     {
-        $programId = $data['program_id'] ?? $this->generateUuid();
+        $programIdRaw = $data['program_id'] ?? $this->generateUuid();
+        $programId = is_string($programIdRaw) ? $programIdRaw : $this->generateUuid();
+        $channelId = is_string($data['channel_id'] ?? null) ? (string) $data['channel_id'] : '';
 
         $this->db->query(
             "INSERT INTO livetv_programs
@@ -418,7 +426,7 @@ class GuideManager
                 updated_at = NOW()",
             [
                 $programId,
-                $data['channel_id'],
+                $channelId,
                 $data['title'] ?? 'Unknown',
                 $data['description'] ?? null,
                 $data['start_time'] ?? time(),
@@ -437,9 +445,9 @@ class GuideManager
         );
 
         // Invalidate cache
-        $this->invalidateCacheForChannel($data['channel_id']);
+        $this->invalidateCacheForChannel($channelId);
 
-        $this->logger->debug('Program upserted', ['program_id' => $programId, 'title' => $data['title']]);
+        $this->logger->debug('Program upserted', ['program_id' => $programId, 'title' => $data['title'] ?? 'Unknown']);
 
         return $this->getProgram($programId);
     }
@@ -459,7 +467,8 @@ class GuideManager
 
         $this->db->query("DELETE FROM livetv_programs WHERE program_id = ?", [$programId]);
 
-        $this->invalidateCacheForChannel($program['channel_id']);
+        $channelId = is_string($program['channel_id'] ?? null) ? (string) $program['channel_id'] : '';
+        $this->invalidateCacheForChannel($channelId);
 
         $this->logger->debug('Program deleted', ['program_id' => $programId]);
 
@@ -476,12 +485,14 @@ class GuideManager
     {
         $cutoff = time() - ($daysToKeep * 86400);
 
-        $this->db->query(
+        $result = $this->db->query(
             "DELETE FROM livetv_programs WHERE end_time < ?",
             [$cutoff]
         );
 
-        $deleted = $this->db->affected_rows;
+        // Workerman MySQL\Connection::query() returns rowCount for DELETE
+        // statements; fall back to 0 for unexpected return shapes.
+        $deleted = is_int($result) ? $result : 0;
 
         if ($deleted > 0) {
             $this->logger->info('Cleaned up old programs', ['deleted' => $deleted, 'cutoff_days' => $daysToKeep]);
@@ -551,7 +562,7 @@ class GuideManager
         );
 
         $programs = [];
-        while ($row = $result->fetch()) {
+        foreach (RowQuery::rows($result) as $row) {
             $programs[] = $this->mapProgram($row);
         }
 
@@ -593,7 +604,8 @@ class GuideManager
      */
     public function clearCache(): void
     {
-        $this->cache = [];
+        $this->programCache = [];
+        $this->channelCache = [];
         $this->logger->debug('Guide cache cleared');
     }
 
@@ -605,7 +617,7 @@ class GuideManager
     public function getCacheStats(): array
     {
         return [
-            'entries' => count($this->cache),
+            'entries' => count($this->programCache) + count($this->channelCache),
             'ttl' => $this->cacheTtl,
         ];
     }
@@ -621,7 +633,9 @@ class GuideManager
      */
     private function invalidateCacheForChannel(string $channelId): void
     {
-        $this->cache = [];
+        unset($channelId); // future implementations may filter by channel
+        $this->programCache = [];
+        $this->channelCache = [];
     }
 
     /**
@@ -632,27 +646,30 @@ class GuideManager
      */
     private function mapProgram(array $row): array
     {
+        $start = RowAccess::int($row, 'start_time');
+        $end = RowAccess::int($row, 'end_time');
+
         return [
-            'id' => $row['program_id'],
-            'program_id' => $row['program_id'],
-            'channel_id' => $row['channel_id'],
-            'title' => $row['title'],
-            'description' => $row['description'],
-            'start_time' => (int) $row['start_time'],
-            'end_time' => (int) $row['end_time'],
-            'duration' => (int) $row['end_time'] - (int) $row['start_time'],
-            'category' => $row['category'],
-            'series_id' => $row['series_id'],
-            'episode_number' => $row['episode_number'] ? (int) $row['episode_number'] : null,
-            'episode_title' => $row['episode_title'],
-            'rating_system' => $row['rating_system'],
-            'rating' => $row['rating'],
-            'year' => $row['year'] ? (int) $row['year'] : null,
-            'series_episode' => $row['series_episode'],
-            'is_repeat' => (bool) $row['is_repeat'],
-            'is_film' => (bool) $row['is_film'],
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'id' => $row['program_id'] ?? null,
+            'program_id' => $row['program_id'] ?? null,
+            'channel_id' => $row['channel_id'] ?? null,
+            'title' => $row['title'] ?? null,
+            'description' => $row['description'] ?? null,
+            'start_time' => $start,
+            'end_time' => $end,
+            'duration' => $end - $start,
+            'category' => $row['category'] ?? null,
+            'series_id' => $row['series_id'] ?? null,
+            'episode_number' => RowAccess::intOrNull($row, 'episode_number'),
+            'episode_title' => $row['episode_title'] ?? null,
+            'rating_system' => $row['rating_system'] ?? null,
+            'rating' => $row['rating'] ?? null,
+            'year' => RowAccess::intOrNull($row, 'year'),
+            'series_episode' => $row['series_episode'] ?? null,
+            'is_repeat' => RowAccess::bool($row, 'is_repeat'),
+            'is_film' => RowAccess::bool($row, 'is_film'),
+            'created_at' => $row['created_at'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
         ];
     }
 

@@ -80,11 +80,14 @@ class EncodingHelper
         $needsTranscode = $this->needsTranscode($videoStream, $audioStream, $profile);
 
         if (!$needsTranscode) {
-            return [
-                'method' => 'direct',
-                'video_codec' => $videoStream['codec'] ?? null,
-                'audio_codec' => $audioStream['codec'] ?? null,
-            ];
+            $direct = ['method' => 'direct'];
+            if (isset($videoStream['codec'])) {
+                $direct['video_codec'] = $videoStream['codec'];
+            }
+            if (isset($audioStream['codec'])) {
+                $direct['audio_codec'] = $audioStream['codec'];
+            }
+            return $direct;
         }
 
         $params['method'] = 'transcode';
@@ -118,9 +121,9 @@ class EncodingHelper
      * Checks video codec support and resolution constraints to decide
      * if direct play is possible.
      *
-     * @param array $videoStream Video stream info
-     * @param array $audioStream Audio stream info
-     * @param array $profile Device profile
+     * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int, channels?: int} $videoStream Video stream info
+     * @param array{codec_type?: string, codec?: string, channels?: int} $audioStream Audio stream info
+     * @param array{max_bitrate?: int, max_resolution?: array<int, int>, direct_play?: array<string>, transcode?: array<string>} $profile Device profile
      *
      * @return bool True if transcoding is needed
      */
@@ -147,8 +150,8 @@ class EncodingHelper
     /**
      * Selects appropriate video codec for transcoding.
      *
-     * @param array $profile Device profile
-     * @param array $videoStream Video stream info
+     * @param array{max_bitrate?: int, max_resolution?: array<int, int>, direct_play?: array<string>, transcode?: array<string>} $profile Device profile
+     * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int, channels?: int} $videoStream Video stream info
      *
      * @return string Selected video codec (libx264, libx265, etc.)
      */
@@ -184,7 +187,7 @@ class EncodingHelper
     /**
      * Selects audio bitrate based on device profile.
      *
-     * @param array $profile Device profile
+     * @param array{max_bitrate?: int, max_resolution?: array<int, int>, direct_play?: array<string>, transcode?: array<string>} $profile Device profile
      *
      * @return string Audio bitrate (96k, 128k, or 192k)
      */
@@ -204,9 +207,9 @@ class EncodingHelper
     /**
      * Extracts video stream from source info.
      *
-     * @param array $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int, channels?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
      *
-     * @return array Video stream data or empty array
+     * @return array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int, channels?: int} Video stream data or empty array
      */
     private function getVideoStream(array $sourceInfo): array
     {
@@ -221,9 +224,9 @@ class EncodingHelper
     /**
      * Extracts audio stream from source info.
      *
-     * @param array $sourceInfo Source media information
+     * @param array{streams?: array<int, array{codec_type?: string, codec?: string, channels?: int}>, format?: array{format_name?: string}} $sourceInfo Source media information
      *
-     * @return array Audio stream data or empty array
+     * @return array{codec_type?: string, codec?: string, channels?: int} Audio stream data or empty array
      */
     private function getAudioStream(array $sourceInfo): array
     {

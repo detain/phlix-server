@@ -540,9 +540,14 @@ class LiveTvManager
     {
         $discoveredChannels = [];
 
-        $frequencies = $options['frequencies'] ?? [474000000, 498000000, 522000000, 570000000];
+        $frequenciesRaw = $options['frequencies'] ?? [474000000, 498000000, 522000000, 570000000];
+        $frequencies = is_array($frequenciesRaw) ? $frequenciesRaw : [];
 
-        foreach ($frequencies as $frequency) {
+        foreach ($frequencies as $frequencyRaw) {
+            if (!is_int($frequencyRaw) && !(is_string($frequencyRaw) && is_numeric($frequencyRaw))) {
+                continue;
+            }
+            $frequency = (int) $frequencyRaw;
             $services = $this->scanFrequency($tuner, $frequency);
             foreach ($services as $service) {
                 $channel = $this->channelManager->createChannel([
@@ -611,7 +616,9 @@ class LiveTvManager
             throw new \RuntimeException('No available tuner');
         }
 
-        $this->updateTunerStatus($tuner['id'], self::TUNER_STATUS_TUNING);
+        $resolvedTunerId = is_string($tuner['id'] ?? null) ? (string) $tuner['id'] : '';
+
+        $this->updateTunerStatus($resolvedTunerId, self::TUNER_STATUS_TUNING);
 
         // Generate unique tune request ID
         $tuneRequestId = $this->generateUuid();
@@ -623,17 +630,17 @@ class LiveTvManager
         $this->activeTuneRequests[$tuneRequestId] = [
             'id' => $tuneRequestId,
             'channel_id' => $channelId,
-            'tuner_id' => $tuner['id'],
+            'tuner_id' => $resolvedTunerId,
             'started_at' => time(),
             'stream_url' => $streamUrl,
         ];
 
-        $this->updateTunerStatus($tuner['id'], self::TUNER_STATUS_STREAMING);
+        $this->updateTunerStatus($resolvedTunerId, self::TUNER_STATUS_STREAMING);
 
         $this->logger->info('Tuned to channel', [
             'tune_request_id' => $tuneRequestId,
             'channel_id' => $channelId,
-            'tuner_id' => $tuner['id'],
+            'tuner_id' => $resolvedTunerId,
             'stream_url' => $streamUrl,
         ]);
 

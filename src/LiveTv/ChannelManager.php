@@ -7,6 +7,8 @@ namespace Phlex\LiveTv;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Common\Util\RowMap;
+use Phlex\LiveTv\Dto\RowAccess;
 use Workerman\MySQL\Connection;
 
 /**
@@ -164,11 +166,12 @@ class ChannelManager
             [$channelId, self::VISIBILITY_DELETED]
         );
 
-        if (empty($result)) {
+        $rows = RowMap::listFromMixed($result);
+        if ($rows === []) {
             return null;
         }
 
-        return $this->mapChannel($result[0]);
+        return $this->mapChannel($rows[0]);
     }
 
     /**
@@ -184,11 +187,12 @@ class ChannelManager
             [$number, self::VISIBILITY_VISIBLE]
         );
 
-        if (empty($result)) {
+        $rows = RowMap::listFromMixed($result);
+        if ($rows === []) {
             return null;
         }
 
-        return $this->mapChannel($result[0]);
+        return $this->mapChannel($rows[0]);
     }
 
     /**
@@ -210,7 +214,7 @@ class ChannelManager
         );
 
         $channels = [];
-        foreach ($result as $row) {
+        foreach (RowMap::listFromMixed($result) as $row) {
             $channels[] = $this->mapChannel($row);
         }
 
@@ -231,7 +235,7 @@ class ChannelManager
         );
 
         $channels = [];
-        foreach ($result as $row) {
+        foreach (RowMap::listFromMixed($result) as $row) {
             $channels[] = $this->mapChannel($row);
         }
 
@@ -367,7 +371,7 @@ class ChannelManager
             [$channelId]
         );
 
-        if (empty($result)) {
+        if (RowMap::listFromMixed($result) === []) {
             return false;
         }
 
@@ -443,7 +447,7 @@ class ChannelManager
         );
 
         $channels = [];
-        foreach ($result as $row) {
+        foreach (RowMap::listFromMixed($result) as $row) {
             $channels[] = $this->mapChannel($row);
         }
 
@@ -464,7 +468,7 @@ class ChannelManager
             [$channelId, $userId]
         );
 
-        return !empty($result);
+        return RowMap::listFromMixed($result) !== [];
     }
 
     /**
@@ -516,11 +520,12 @@ class ChannelManager
             [$lineupId]
         );
 
-        if (empty($result)) {
+        $rows = RowMap::listFromMixed($result);
+        if ($rows === []) {
             return null;
         }
 
-        $lineup = $result[0];
+        $lineup = $rows[0];
         $lineup['channels'] = $this->getLineupChannels($lineupId);
 
         return $lineup;
@@ -539,7 +544,7 @@ class ChannelManager
             [$userId]
         );
 
-        return $result;
+        return RowMap::listFromMixed($result);
     }
 
     /**
@@ -596,7 +601,7 @@ class ChannelManager
         );
 
         $channels = [];
-        foreach ($result as $row) {
+        foreach (RowMap::listFromMixed($result) as $row) {
             $channels[] = $this->mapChannel($row);
         }
 
@@ -631,7 +636,12 @@ class ChannelManager
             [self::VISIBILITY_VISIBLE]
         );
 
-        return (int) ($result[0]['cnt'] ?? 0);
+        $rows = RowMap::listFromMixed($result);
+        if ($rows === []) {
+            return 0;
+        }
+
+        return RowAccess::int($rows[0], 'cnt');
     }
 
     /**
@@ -643,20 +653,20 @@ class ChannelManager
     private function mapChannel(array $row): array
     {
         return [
-            'id' => $row['channel_id'],
-            'channel_id' => $row['channel_id'],
-            'name' => $row['name'],
-            'number' => (int) $row['number'],
-            'type' => $row['type'],
-            'frequency' => (int) $row['frequency'],
-            'tuner_id' => $row['tuner_id'],
-            'service_id' => $row['service_id'],
-            'visual_id' => $row['visual_id'],
-            'description' => $row['description'],
-            'icon_url' => $row['icon_url'],
-            'visibility' => $row['visibility'],
-            'created_at' => $row['created_at'],
-            'updated_at' => $row['updated_at'],
+            'id' => $row['channel_id'] ?? null,
+            'channel_id' => $row['channel_id'] ?? null,
+            'name' => $row['name'] ?? null,
+            'number' => RowAccess::int($row, 'number'),
+            'type' => $row['type'] ?? null,
+            'frequency' => RowAccess::int($row, 'frequency'),
+            'tuner_id' => $row['tuner_id'] ?? null,
+            'service_id' => $row['service_id'] ?? null,
+            'visual_id' => $row['visual_id'] ?? null,
+            'description' => $row['description'] ?? null,
+            'icon_url' => $row['icon_url'] ?? null,
+            'visibility' => $row['visibility'] ?? null,
+            'created_at' => $row['created_at'] ?? null,
+            'updated_at' => $row['updated_at'] ?? null,
         ];
     }
 

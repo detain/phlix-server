@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Phlex\Media\Transcoding;
 
-use Phlex\Common\Database\Connection;
+use Phlex\Common\Util\RowMap;
 use Phlex\Media\Streaming\StreamState;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Workerman\MySQL\Connection;
 
 /**
  * Transcode Manager - Manages media transcoding jobs and lifecycle.
@@ -39,7 +40,7 @@ class TranscodeManager
     /** @var string Base directory for HLS segments */
     private string $segmentDir;
 
-    /** @var array<string, array{id: string, state: StreamState, output_path: string, encoding_params: array, started_at: int}> Active jobs */
+    /** @var array<string, array{id: string, state: StreamState, output_path: string, encoding_params: array<string, mixed>, started_at: int}> Active jobs */
     private array $activeJobs = [];
 
     /** @var int Maximum concurrent transcode jobs allowed */
@@ -108,6 +109,12 @@ class TranscodeManager
      */
     public function startTranscode(StreamState $state, array $options = []): string
     {
+        if (count($this->activeJobs) >= $this->maxConcurrentTranscodes) {
+            throw new \RuntimeException(
+                "Maximum concurrent transcodes ({$this->maxConcurrentTranscodes}) reached"
+            );
+        }
+
         $jobId = $this->generateUuid();
 
         $outputDir = "{$this->transcodeDir}/{$jobId}";
@@ -120,23 +127,30 @@ class TranscodeManager
             throw new \InvalidArgumentException("Media item not found");
         }
 
-        $sourceInfo = $this->ffmpeg->probe($item['path']);
-        if (!$sourceInfo) {
+        $itemPath = is_string($item['path'] ?? null) ? (string) $item['path'] : '';
+        $sourceInfoRaw = $this->ffmpeg->probe($itemPath);
+        if (!$sourceInfoRaw) {
             throw new \RuntimeException("Failed to probe media file");
         }
 
-        $profile = $options['device_profile'] ?? [];
+        $sourceInfo = $this->normalizeSourceInfo($sourceInfoRaw);
+
+        $profileRaw = $options['device_profile'] ?? [];
+        $profile = $this->normalizeProfile(is_array($profileRaw) ? $profileRaw : []);
+
         $encodingParams = $this->encodingHelper->getEncodingParams($sourceInfo, $profile, $options);
 
-        $container = $encodingParams['container'] ?? 'ts';
+        $container = is_string($encodingParams['container'] ?? null)
+            ? (string) $encodingParams['container']
+            : 'ts';
         $outputPath = "{$outputDir}/output.{$container}";
 
         $this->db->query(
             "INSERT INTO transcode_jobs (id, media_item_id, input_path, output_path, status) VALUES (?, ?, ?, ?, 'running')",
-            [$jobId, $state->mediaItemId, $item['path'], $outputPath]
+            [$jobId, $state->mediaItemId, $itemPath, $outputPath]
         );
 
-        $success = $this->ffmpeg->transcode($item['path'], $outputPath, $encodingParams);
+        $success = $this->ffmpeg->transcode($itemPath, $outputPath, $encodingParams);
 
         if (!$success) {
             $this->db->query("UPDATE transcode_jobs SET status = 'failed' WHERE id = ?", [$jobId]);
@@ -154,6 +168,92 @@ class TranscodeManager
         $this->logger->info('Transcode started', ['job_id' => $jobId]);
 
         return $jobId;
+    }
+
+    /**
+     * Normalize an untyped probe payload to the shape EncodingHelper expects.
+     *
+     * @param array<string, mixed> $sourceInfo
+     * @return array{streams: array<int, array{codec_type: string, codec?: string, width?: int, height?: int, bitrate?: int, channels?: int}>, format?: array{format_name?: string}}
+     */
+    private function normalizeSourceInfo(array $sourceInfo): array
+    {
+        $streamsRaw = $sourceInfo['streams'] ?? [];
+        $streams = [];
+        if (is_array($streamsRaw)) {
+            foreach ($streamsRaw as $streamRaw) {
+                if (!is_array($streamRaw)) {
+                    continue;
+                }
+                $stream = ['codec_type' => is_string($streamRaw['codec_type'] ?? null) ? (string) $streamRaw['codec_type'] : ''];
+                if (isset($streamRaw['codec']) && is_string($streamRaw['codec'])) {
+                    $stream['codec'] = $streamRaw['codec'];
+                }
+                if (isset($streamRaw['width']) && is_int($streamRaw['width'])) {
+                    $stream['width'] = $streamRaw['width'];
+                }
+                if (isset($streamRaw['height']) && is_int($streamRaw['height'])) {
+                    $stream['height'] = $streamRaw['height'];
+                }
+                if (isset($streamRaw['bitrate']) && is_int($streamRaw['bitrate'])) {
+                    $stream['bitrate'] = $streamRaw['bitrate'];
+                }
+                if (isset($streamRaw['channels']) && is_int($streamRaw['channels'])) {
+                    $stream['channels'] = $streamRaw['channels'];
+                }
+                $streams[] = $stream;
+            }
+        }
+
+        $out = ['streams' => $streams];
+        $formatRaw = $sourceInfo['format'] ?? null;
+        if (is_array($formatRaw) && isset($formatRaw['format_name']) && is_string($formatRaw['format_name'])) {
+            $out['format'] = ['format_name' => $formatRaw['format_name']];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Normalize an untyped device profile to the shape EncodingHelper expects.
+     *
+     * @param array<int|string, mixed> $profile
+     * @return array{max_bitrate?: int, max_resolution?: array<int, int>, direct_play?: array<string>, transcode?: array<string>}
+     */
+    private function normalizeProfile(array $profile): array
+    {
+        $out = [];
+
+        if (isset($profile['max_bitrate']) && is_int($profile['max_bitrate'])) {
+            $out['max_bitrate'] = $profile['max_bitrate'];
+        }
+
+        if (isset($profile['max_resolution']) && is_array($profile['max_resolution'])) {
+            $res = [];
+            foreach ($profile['max_resolution'] as $dim) {
+                if (is_int($dim)) {
+                    $res[] = $dim;
+                }
+            }
+            if (count($res) >= 2) {
+                $out['max_resolution'] = [$res[0], $res[1]];
+            }
+        }
+
+        foreach (['direct_play', 'transcode'] as $key) {
+            if (!isset($profile[$key]) || !is_array($profile[$key])) {
+                continue;
+            }
+            $codecs = [];
+            foreach ($profile[$key] as $codec) {
+                if (is_string($codec)) {
+                    $codecs[] = $codec;
+                }
+            }
+            $out[$key] = $codecs;
+        }
+
+        return $out;
     }
 
     /**
@@ -175,9 +275,11 @@ class TranscodeManager
         $dir = dirname($job['output_path']);
         if (is_dir($dir)) {
             $files = glob("{$dir}/*");
-            foreach ($files as $file) {
-                if (is_file($file)) {
-                    unlink($file);
+            if ($files !== false) {
+                foreach ($files as $file) {
+                    if (is_file($file)) {
+                        unlink($file);
+                    }
                 }
             }
             rmdir($dir);
@@ -212,17 +314,55 @@ class TranscodeManager
         }
 
         $result = $this->db->query("SELECT * FROM transcode_jobs WHERE id = ?", [$jobId]);
-        return $result[0] ?? null;
+        $rows = RowMap::listFromMixed($result);
+        if ($rows === []) {
+            return null;
+        }
+
+        $row = $rows[0];
+        $status = [
+            'id' => is_string($row['id'] ?? null) ? (string) $row['id'] : $jobId,
+            'status' => is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_PENDING,
+        ];
+        if (isset($row['output_path']) && is_string($row['output_path'])) {
+            $status['output_path'] = $row['output_path'];
+        }
+
+        return $status;
     }
 
     /**
      * Gets count of currently running transcode jobs.
      *
+     * Any entry in {@see self::$activeJobs} is by definition running — completed,
+     * failed, and cancelled jobs are removed from the map.
+     *
      * @return int Number of active transcodes
      */
     public function getActiveTranscodeCount(): int
     {
-        return count(array_filter($this->activeJobs, fn($j) => ($j['status'] ?? '') === self::STATUS_RUNNING));
+        return count($this->activeJobs);
+    }
+
+    /**
+     * Returns the configured maximum concurrent transcode budget.
+     *
+     * @return int Concurrency limit applied by {@see self::startTranscode()}
+     */
+    public function getMaxConcurrentTranscodes(): int
+    {
+        return $this->maxConcurrentTranscodes;
+    }
+
+    /**
+     * Returns the configured HLS segment directory.
+     *
+     * @return string Base directory where segments are written by external HLS
+     *                writers when transcoding to HLS variants.
+     */
+    public function getSegmentDir(): string
+    {
+        return $this->segmentDir;
     }
 
     /**
@@ -250,12 +390,13 @@ class TranscodeManager
      *
      * @param string $itemId Media item identifier
      *
-     * @return array|null Media item row or null
+     * @return array<string, mixed>|null Media item row or null
      */
     private function getMediaItem(string $itemId): ?array
     {
         $result = $this->db->query("SELECT * FROM media_items WHERE id = ?", [$itemId]);
-        return $result[0] ?? null;
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**

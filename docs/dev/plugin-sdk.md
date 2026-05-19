@@ -16,6 +16,16 @@ contracts without dragging in the whole server — see
 
 ---
 
+## TL;DR
+
+This page is the **server-internals reference** for plugin SDK authors and phlex-server contributors extending the plugin loader. It covers the manifest schema, lifecycle walkthrough, container bindings, PSR-14 events, how to add a new plugin type, the `phlex-shared` migration, and loader extension points.
+
+If you are **writing a plugin**, start with [`docs/plugins/developer-guide.md`](../plugins/developer-guide.md) instead. That guide is the author-facing getting-started view; this doc explains how the host implements it.
+
+**What N.26 added:** complete `plugin.json` manifest field table, numbered lifecycle walkthrough (install → enable → disable → uninstall), PSR-14 hook reference table, end-to-end sample plugin walkthrough with code, and three canonical failure scenarios with fixes.
+
+---
+
 ## 1. Container bindings plugins can resolve
 
 `PluginLoader::enable()` instantiates the plugin's entry class through
@@ -109,6 +119,84 @@ plugins that want to enumerate or introspect other plugins:
 
 ---
 
+## Lifecycle walkthrough
+
+### Install
+
+```
+1. Operator or API calls  POST /api/v1/admin/plugins/install
+2. HttpInstaller fetches plugin.json from the supplied URL
+   — refuses http:// unless PHLEX_PLUGINS_ALLOW_HTTP=1
+3. SignatureVerifier checks sha256:<hex> against the trusted-key
+   allowlist if PHLEX_PLUGINS_REQUIRE_SIGNATURE=1 (default: off)
+4. Manifest::validate() parses and validates the manifest;
+   rejects missing name / version / entry
+5. tarball extracted to data/plugins/<name>/
+6. ComposerRunner runs composer install --no-dev inside the plugin dir
+   — plugins MUST NOT ship a composer.json that conflicts with the
+     host's pinned deps (use --no-dev and avoid conflicting require)
+7. Plugin row inserted to plugins table (state = staged, disabled)
+```
+
+### Enable
+
+```
+1. PATCH /api/v1/admin/plugins/<name>/enable
+2. PluginLoader calls Plugin::onEnable($container)
+3. Loader subscribes every phlex.* listener returned by
+   Plugin::subscribedEvents() to the PSR-14 ListenerRegistry
+4. Plugin registers its routes (if any) with the host router
+5. Plugin state set to enabled in plugins table
+```
+
+### Disable
+
+```
+1. POST /api/v1/admin/plugins/<name>/disable
+2. PluginLoader calls Plugin::onDisable($container)
+3. Loader unsubscribes all the plugin's listeners from the registry
+4. Plugin state set to disabled (config / settings_json preserved)
+```
+
+### Uninstall
+
+```
+1. DELETE /api/v1/admin/plugins/<name>
+2. Loader calls Plugin::onDisable() (cleanup before removal)
+3. Plugin's vendor dir removed (data/plugins/<name>/vendor/)
+4. Plugin row deleted from plugins table
+5. Plugin files removed (data/plugins/<name>/)
+   — Optional cleanup hook: Plugin::onUninstall() called before
+     files are deleted if the method exists
+```
+
+```mermaid
+sequenceDiagram
+    Operator->>PluginLoader: POST /api/v1/admin/plugins/install
+    PluginLoader->>HttpInstaller: fetch plugin.json + tarball
+    HttpInstaller-->>PluginLoader: plugin.json validated
+    PluginLoader->>ComposerRunner: composer install --no-dev
+    ComposerRunner-->>PluginLoader: deps installed
+    PluginLoader->>PluginRepository: insert plugin row (staged)
+
+    Operator->>PluginLoader: PATCH /api/v1/admin/plugins/{name}/enable
+    PluginLoader->>PluginLoader: onEnable(container)
+    PluginLoader->>ListenerRegistry: addListener(event, method)
+    PluginLoader->>PluginRepository: update state=enabled
+
+    Operator->>PluginLoader: POST /api/v1/admin/plugins/{name}/disable
+    PluginLoader->>PluginLoader: onDisable(container)
+    PluginLoader->>ListenerRegistry: removeListener(event, method)
+    PluginLoader->>PluginRepository: update state=disabled
+
+    Operator->>PluginLoader: DELETE /api/v1/admin/plugins/{name}
+    PluginLoader->>PluginLoader: onDisable() + onUninstall()
+    PluginLoader->>PluginRepository: delete plugin row
+    PluginLoader->>PluginRepository: remove plugin files
+```
+
+---
+
 ## 2. Adding a new plugin type
 
 The eleven-value enum in `Phlex\Shared\Plugin\ManifestType` (shipped
@@ -199,6 +287,20 @@ on the relevant service**, exposed through the container — not a
 mutable event payload. Phase A intentionally does not ship any
 mutating extension points; they will be designed per-subsystem as
 those subsystems gain plugin slots.
+
+### PSR-14 hook reference
+
+Plugins subscribe via `Plugin::subscribedEvents()` which returns `[EventName::class => 'methodName']` — the PSR-14 ListenerProvider pattern. The loader registers those with `ListenerRegistry::addListener()`. The five canonical events for plugin authors:
+
+| Event alias | Typical plugin types | Payload fields |
+|------------|---------------------|----------------|
+| `phlex.playback.started` | scrobbler, analytics-sink | `media_id`, `user_id`, `profile_id`, `position_ticks` |
+| `phlex.playback.stopped` | scrobbler, analytics-sink | `media_id`, `user_id`, `position_ticks`, `completed` |
+| `phlex.library.scanned` | metadata-provider | `library_id`, `item_count` |
+| `phlex.user.created` | notifier, analytics-sink | `user_id`, `email` |
+| `phlex.scrobble.submit` | scrobbler | `media_id`, `user_id`, `scrobbler_type`, `progress_percent` |
+
+Full twelve-event catalog → [`docs/dev/event-reference.md`](event-reference.md).
 
 ### Adding a new event
 
@@ -314,6 +416,195 @@ The `PluginsProvider` reads three env vars at provider-register time:
 
 When you add a new env var that the loader honours, document it both
 here and in `docs/reference/env-vars.md`.
+
+---
+
+## Plugin manifest reference
+
+Every field in `plugin.json`:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | `string` | yes | Unique plugin ID, kebab-case (e.g. `my-awesome-plugin`) |
+| `version` | `string` | yes | Semver string (e.g. `1.0.0`) |
+| `phlex_min_server_version` | `string` | yes | Minimum server version (e.g. `0.10.0`) |
+| `type` | `enum` | yes | One of: `metadata-provider`, `auth-provider`, `notifier`, `scrobbler`, `tuner`, `transcoder-hook`, `ui-theme`, `arr-integration`, `analytics-sink` |
+| `entry` | `string` | yes | FQCN of the plugin's `Plugin` entry class |
+| `events` | `string[]` | no | List of `phlex.*` event aliases to subscribe on enable |
+| `settings` | `object` | no | Declarative form schema (see below) |
+| `signature` | `string` | no | `sha256:<hex>` — required when `PHLEX_PLUGINS_REQUIRE_SIGNATURE=1` |
+
+**Settings sub-schema** — each entry under `settings` accepts:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `type` | `string\|number\|boolean\|array\|object` | Field type |
+| `required` | `boolean` | Whether the field is mandatory |
+| `secret` | `boolean` | Mask the value in the admin UI |
+| `default` | `mixed` | Default value if not supplied |
+| `label` | `string` | Human-readable label for the settings form |
+| `options` | `array` | Enum-like options for dropdown fields |
+
+`type` is the canonical plugin category used for filtering in the plugin catalog UI, dispatch inside host subsystems (e.g. `MetadataManager` iterates all `metadata-provider` plugins), and the `ManifestType` enum in both `Phlex\Plugins\ManifestType` and `Phlex\Shared\Plugin\ManifestType`.
+
+---
+
+## Sample walkthrough: phlex-plugin-example
+
+End-to-end walkthrough of a minimal plugin at
+[`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example).
+
+### 1. `plugin.json`
+
+```json
+{
+  "name": "phlex-plugin-example",
+  "version": "1.0.0",
+  "phlex_min_server_version": "0.10.0",
+  "type": "metadata-provider",
+  "entry": "Phlex\\Plugins\\Example\\Plugin",
+  "events": ["phlex.playback.started", "phlex.library.scanned"],
+  "settings": {
+    "api_key": { "type": "string", "required": true, "secret": true }
+  }
+}
+```
+
+### 2. Plugin class
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace Phlex\Plugins\Example;
+
+use Phlex\Plugins\Contract\LifecycleInterface;
+use Phlex\Shared\Events\PlaybackStartedEvent;
+use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
+
+class Plugin implements LifecycleInterface
+{
+    private ?LoggerInterface $log;
+    private ContainerInterface $container;
+    private array $settings;
+
+    public function __construct(
+        LoggerInterface $log,
+        ContainerInterface $container,
+        array $settings = []
+    ) {
+        $this->log       = $log;
+        $this->container = $container;
+        $this->settings  = $settings;
+    }
+
+    public static function subscribedEvents(): array
+    {
+        return [
+            PlaybackStartedEvent::class => 'onPlaybackStarted',
+        ];
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        $this->log->info('Example plugin enabled', [
+            'has_api_key' => isset($this->settings['api_key']),
+        ]);
+    }
+
+    public function onDisable(ContainerInterface $container): void
+    {
+        $this->log->info('Example plugin disabled');
+    }
+
+    public function onPlaybackStarted(PlaybackStartedEvent $event): void
+    {
+        $this->log->info('Playback started', [
+            'media_id'        => $event->media_id,
+            'user_id'         => $event->user_id,
+            'position_ticks'  => $event->position_ticks,
+        ]);
+        // Submit scrobble via $this->settings['api_key'] ...
+    }
+}
+```
+
+### 3. Settings form
+
+The `settings` block in `plugin.json` drives the admin UI settings form. Settings are persisted as JSON in `plugins.settings_json`. The plugin receives its settings as the `$settings` array in the constructor. Secrets (`"secret": true`) are masked in the UI and transmitted to the plugin via the constructor — not stored in plain text in logs.
+
+### 4. Package and sign
+
+```bash
+# 1. Install deps only (no dev dependencies)
+composer install --no-dev --optimize-autoloader
+
+# 2. Create the distribution archive
+zip -r phlex-plugin-example-1.0.0.tar.gz data/plugins/phlex-plugin-example/
+
+# 3. Sign it
+sha256sum phlex-plugin-example-1.0.0.tar.gz
+# Add the hex digest to plugin.json:
+#   "signature": "sha256:<hex>"
+```
+
+`PHLEX_PLUGINS_REQUIRE_SIGNATURE` env var enables enforcement. The trust allowlist is managed via `SignatureVerifier`. `--no-dev` prevents the plugin's dev deps from conflicting with the host's pinned composer dependencies.
+
+---
+
+## What can go wrong
+
+### Missing required manifest fields
+
+**Symptom:** `ManifestValidationError` at install time.
+
+**Cause:** `plugin.json` missing `name`, `version`, or `entry`.
+
+**Fix:** Add all three required fields. Run `Manifest::validate()` locally before publishing:
+
+```php
+$manifest = Manifest::fromPath('/path/to/plugin.json');
+// throws ManifestValidationError on failure
+```
+
+### Version mismatch silently ignored
+
+**Symptom:** Plugin loads but its hooks never fire.
+
+**Cause:** `phlex_min_server_version` in the manifest is higher than the running server version. The server does not error on load — it simply skips plugins whose minimum version requirement is not met.
+
+**Fix:** Upgrade phlex-server to at least `phlex_min_server_version`, or set the manifest field to the minimum server version your plugin actually requires.
+
+### Composer dependency conflict
+
+**Symptom:** `ComposerRunner` exits non-zero. Plugin install fails.
+
+**Cause:** Plugin's `composer.json` requires a package version that conflicts with the host's pinned deps (e.g. both require different versions of `monolog/monolog`).
+
+**Fix:** Use `--no-dev`, keep your `require` block minimal, and test on a clean phlex-server install before publishing:
+
+```bash
+composer install --no-dev --dry-run  # verify no conflicts
+```
+
+### Signature verification failure
+
+**Symptom:** `plugin.signature.mismatch` error at install.
+
+**Cause:** Downloaded tarball is corrupted or the plugin was tampered with after signing.
+
+**Fix:** Re-download the plugin. Ensure it is served over HTTPS. Verify the signature hex matches `sha256sum` output on the author's published artifact. If you are an author, re-sign and publish a new release.
+
+---
+
+## Next steps
+
+- [`docs/plugins/developer-guide.md`](../plugins/developer-guide.md) — full author-facing guide (lifecycle, types, distribution, FAQ).
+- [`docs/plugins/manifest.md`](../plugins/manifest.md) — exhaustive `plugin.json` field reference.
+- [`docs/dev/event-reference.md`](event-reference.md) — all twelve events with payload shapes and dispatch sites.
+- [`docs/plugins/install-from-catalog.md`](../plugins/install-from-catalog.md) — how users install your plugin from the in-product catalog.
+- [`docs/plugins/install-from-url.md`](../plugins/install-from-url.md) — manual URL install for pre-release / not-yet-catalogued plugins.
 
 ---
 

@@ -130,3 +130,145 @@ They are removed in 0.12.0.
   container
 - [`detain/phlex-shared`](https://github.com/detain/phlex-shared) –
   the shared Composer package consumed since 0.11.0.
+
+---
+
+## Namespace map
+
+Every `Phlex\*` namespace, its key classes, and the role each plays:
+
+| Namespace | Key classes | Role |
+|----------|-------------|------|
+| `Phlex\Auth\*` | `JwtHandler`, `UserRepository`, `AuthManager`, `UserProfileManager` | JWT auth (HS256, 1h access / 7d refresh), user management, profiles (≤5), parental PIN and rating filter |
+| `Phlex\Media\Library\*` | `LibraryManager`, `MediaScanner`, `FolderWatcher`, `ItemRepository` | Media library scanning, filesystem watching (mtime checksum), `metadata_json` persistence |
+| `Phlex\Media\Metadata\*` | `MetadataManager`, `TmdbProvider`, `TvdbProvider`, `FanartProvider`, `LocalNfoProvider` | Metadata fetching with provider priority (`tmdb→local` for movies, `tvdb→fanart→local` for series), 24 h cache |
+| `Phlex\Media\Streaming\*` | `HlsStreamer`, `QualitySelector`, `StreamManager` | HLS master/variant `.m3u8` packaging, quality profiles (generic / mobile-low / mobile-high / web / tv-4k), stream selection (direct-play vs transcode) |
+| `Phlex\Media\Transcoding\*` | `FfmpegRunner`, `EncodingHelper`, `TranscodeManager` | FFmpeg probe / transcode / thumbnail, CRF 23/28, libx264 / libx265, hardware acceleration |
+| `Phlex\Session\*` | `SessionManager`, `PlaybackController`, `SyncPlay\*` | Device sessions, continue-watched (marks complete at 95 %), SyncPlay NTP-style time-sync (`OFFSET_SAMPLE_COUNT=5`, weighted-mean offset) |
+| `Phlex\Hub\*` | `HubClient`, `RelayConsumer` | Hub claim protocol and relay heartbeat (Phase C) |
+| `Phlex\Plugins\*` | `Loader`, `PluginManager`, `PluginLoader` | Plugin manifest loading, lifecycle management (install / enable / disable / uninstall) |
+| `Phlex\LiveTv\*` | `ChannelManager`, `GuideManager`, `Recorder` | Live TV channels, EPG, DVR recording |
+| `Phlex\Dlna\*` | `ContentDirectory`, `AvTransport`, `DlnaServer` | DLNA/DMS ContentDirectory and AVTransport services |
+| `Phlex\Common\*` | `Container`, `ConnectionPool`, `QueryBuilder`, `LoggerFactory` | PSR-11 DI container, MySQL `Workerman\MySQL\Connection` pool, structured Monolog logging |
+| `Phlex\Server\*` | `Core` (`Application`), `Http` (`Router`, `Controllers`), `WebSocket`, `WebPortal` | Workerman HTTP / WS entry, `{param}` routing, middleware groups, Smarty page rendering |
+
+---
+
+## PSR-14 event map
+
+All dispatched PSR-14 events, their payload shapes, and the step that introduced them:
+
+| Event name | Payload | Introduced |
+|------------|---------|------------|
+| `phlex.playback.started` | `{media_id, user_id, profile_id, position_ticks}` | A.2 |
+| `phlex.playback.stopped` | `{media_id, user_id, position_ticks, completed}` | A.2 |
+| `phlex.library.scanned` | `{library_id, item_count, duration}` | A.2 |
+| `phlex.user.created` | `{user_id, email}` | A.2 |
+| `phlex.scrobble.*` | `{media_id, user_id, scrobbler_type}` | A.2 |
+| `phlex.webhook.*` | `{event_type, payload}` | A.2 |
+
+> Wildcard patterns (`phlex.scrobble.*`, `phlex.webhook.*`) match all sub-events. Listeners use `EventDispatcher::getListeners($eventName)` with the wildcard to receive all variants. All payloads are `readonly` DTOs — plugins must not mutate them.
+
+Full twelve-event catalog → [`docs/dev/event-reference.md`](event-reference.md).
+
+---
+
+## Test harness
+
+### Running tests
+
+```bash
+./vendor/bin/phpunit                        # unit + integration suites
+./vendor/bin/phpunit --testsuite Unit       # unit tests only
+./vendor/bin/phpunit tests/unit/Auth/JwtHandlerTest.php --testdox
+./vendor/bin/phpunit --coverage-text         # coverage → coverage.xml + coverage-report/
+```
+
+### Mocking the database
+
+All DB access goes through `Workerman\MySQL\Connection`. Mock it like this:
+
+```php
+$db = $this->createMock(Workerman\MySQL\Connection::class);
+$db->method('query')
+   ->willReturn([['col' => 'val']]);  // SELECT result rows
+
+$db->expects($this->once())
+    ->method('query')
+    ->with($this->stringContains('INSERT'), $this->anything());  // write assertion
+```
+
+### Test conventions
+
+| Convention | Value |
+|-----------|-------|
+| Location | `tests/unit/{Module}/{Class}Test.php` |
+| Namespace | `Phlex\Tests\Unit\{Module}` |
+| Base class | `PHPUnit\Framework\TestCase` |
+| BDD-style output | `./vendor/bin/phpunit --testdox` |
+
+### Static analysis
+
+```bash
+./vendor/bin/phpstan analyze src/ --level=9
+./vendor/bin/phpcs --standard=PSR12 src/
+find src -name '*.php' -exec php -l {} \;   # parse check only
+```
+
+---
+
+## Debug recipes
+
+### 1. Enable debug logging
+
+```bash
+PHLEX_LOG_LEVEL=debug php public/index.php
+# Valid levels (least → most verbose): emergency, alert, critical, error, warning, notice, info, debug
+```
+
+Debug output lands in `.logs/phlex.log`. Filter by channel:
+
+```bash
+tail -f .logs/phlex.log | grep -i "debug\|error"
+```
+
+### 2. Xdebug
+
+```bash
+php -d xdebug.mode=debug -d xdebug.clientHost=localhost public/index.php
+```
+
+**VS Code** — `launch.json`:
+
+```json
+{
+  "request": "launch",
+  "pathMappings": {
+    "/home/sites/phlex": "${workspaceFolder}"
+  }
+}
+```
+
+**PhpStorm** — set `DBGp Proxy` port `9003` and map server paths via the deployment configuration.
+
+### 3. Tail logs in real time
+
+```bash
+# All errors
+tail -f .logs/phlex.log | grep -i error
+
+# Auth channel
+tail -f .logs/auth.log
+
+# Transcode logs
+tail -f .logs/transcode/*.log
+
+# Specific server
+tail -f .logs/phlex.log | grep "192.168.1.100"
+```
+
+### 4. Verify phpstan on a single file
+
+```bash
+./vendor/bin/phpstan analyze src/Server/Http/Router.php --level=9 --no-progress
+```

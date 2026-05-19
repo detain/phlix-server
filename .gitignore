@@ -25,3 +25,11 @@ templates_c/
 
 # Claude Code transient runtime files
 .claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# Local-only Caliber session tooling (NEVER stage — these contain user-machine paths)
+.claude/hooks/caliber-freshness-notify.sh
+.claude/hooks/caliber-session-freshness.sh
+
+# Transient supervisor handoff docs (Wave-N work notes, intentionally untracked)
+HANDOFF_*.md

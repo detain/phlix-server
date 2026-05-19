@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Session;
 
+use Phlex\Common\Util\RowMap;
 use Phlex\Stats\StatsCollector;
 use Phlex\Shared\Events\Playback\PlaybackPaused;
 use Phlex\Shared\Events\Playback\PlaybackResumed;
@@ -215,7 +216,8 @@ class PlaybackController
             [$sessionId]
         );
 
-        return $result[0] ?? null;
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**
@@ -246,7 +248,8 @@ class PlaybackController
             [$userId, $mediaItemId]
         );
 
-        return $result[0] ?? null;
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**
@@ -344,10 +347,12 @@ class PlaybackController
             [$userId, $limit]
         );
 
-        return array_map(function ($row) {
-            $row['metadata'] = json_decode($row['metadata_json'] ?? '{}', true);
+        return array_map(static function (array $row): array {
+            $rawJson = $row['metadata_json'] ?? '{}';
+            $json = is_string($rawJson) ? $rawJson : '{}';
+            $row['metadata'] = json_decode($json, true);
             return $row;
-        }, $result);
+        }, RowMap::listFromMixed($result));
     }
 
     /**
@@ -378,10 +383,12 @@ class PlaybackController
             [$userId, $limit]
         );
 
-        return array_map(function ($row) {
-            $row['metadata'] = json_decode($row['metadata_json'] ?? '{}', true);
+        return array_map(static function (array $row): array {
+            $rawJson = $row['metadata_json'] ?? '{}';
+            $json = is_string($rawJson) ? $rawJson : '{}';
+            $row['metadata'] = json_decode($json, true);
             return $row;
-        }, $result);
+        }, RowMap::listFromMixed($result));
     }
 
     /**
@@ -438,11 +445,8 @@ class PlaybackController
             "SELECT * FROM playback_state WHERE session_id = ? AND media_item_id = ? ORDER BY updated_at DESC LIMIT 1",
             [$sessionId, $mediaItemId]
         );
-        if (!is_array($result) || $result === []) {
-            return null;
-        }
-        $first = $result[0] ?? null;
-        return is_array($first) ? $first : null;
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**

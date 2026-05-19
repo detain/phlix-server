@@ -46,9 +46,6 @@ class TimeSync
     /** Protocol version for time sync messages */
     private const PROTOCOL_VERSION = 1;
 
-    /** Timing window for ping/pong exchange in milliseconds */
-    private const PING_WINDOW = 5000;
-
     /** Maximum acceptable round-trip time in milliseconds */
     private const MAX_ACCEPTABLE_RTT = 1000;
 
@@ -57,12 +54,6 @@ class TimeSync
 
     /** Drift correction factor (lower = smoother but slower to adapt) */
     private const DRIFT_CORRECTION_FACTOR = 0.1;
-
-    /** @var int|null Estimated clock offset in milliseconds (null if not yet calculated) */
-    private ?int $serverTimeOffset = null;
-
-    /** @var int|null Estimated one-way latency in milliseconds */
-    private ?int $estimatedLatency = null;
 
     /** @var array<int, array{offset: int, rtt: int, timestamp: float}> Recent offset samples */
     private array $offsetSamples = [];
@@ -132,7 +123,7 @@ class TimeSync
      */
     public function processPing(array $payload): array
     {
-        $clientTimestamp = $payload['client_time'] ?? 0;
+        $clientTimestamp = self::intFromMixed($payload['client_time'] ?? 0);
         $serverReceiveTime = (int)(microtime(true) * 1000);
 
         return [
@@ -164,9 +155,9 @@ class TimeSync
      */
     public function processPong(array $payload): array
     {
-        $clientSendTime = $payload['client_time'] ?? 0;
-        $serverTime = $payload['server_time'] ?? 0;
-        $serverReceiveTime = $payload['server_receive_time'] ?? 0;
+        $clientSendTime = self::intFromMixed($payload['client_time'] ?? 0);
+        $serverTime = self::intFromMixed($payload['server_time'] ?? 0);
+        $serverReceiveTime = self::intFromMixed($payload['server_receive_time'] ?? 0);
         $clientReceiveTime = (int)(microtime(true) * 1000);
 
         // Calculate round-trip time
@@ -435,8 +426,6 @@ class TimeSync
     public function reset(): void
     {
         $this->offsetSamples = [];
-        $this->serverTimeOffset = null;
-        $this->estimatedLatency = null;
         $this->localDriftRate = 1.0;
         $this->lastSyncTimestamp = 0;
     }
@@ -484,8 +473,54 @@ class TimeSync
      */
     public function unserialize(array $data): void
     {
-        $this->offsetSamples = $data['offset_samples'] ?? [];
-        $this->localDriftRate = $data['drift_rate'] ?? 1.0;
-        $this->lastSyncTimestamp = $data['last_sync'] ?? 0;
+        $rawSamples = $data['offset_samples'] ?? [];
+        $samples = [];
+        if (is_array($rawSamples)) {
+            foreach ($rawSamples as $sample) {
+                if (
+                    is_array($sample)
+                    && isset($sample['offset'], $sample['rtt'], $sample['timestamp'])
+                    && is_int($sample['offset'])
+                    && is_int($sample['rtt'])
+                    && (is_float($sample['timestamp']) || is_int($sample['timestamp']))
+                ) {
+                    $samples[] = [
+                        'offset' => $sample['offset'],
+                        'rtt' => $sample['rtt'],
+                        'timestamp' => (float) $sample['timestamp'],
+                    ];
+                }
+            }
+        }
+        $this->offsetSamples = $samples;
+
+        $driftRate = $data['drift_rate'] ?? 1.0;
+        $this->localDriftRate = is_float($driftRate) || is_int($driftRate) ? (float) $driftRate : 1.0;
+
+        $lastSync = $data['last_sync'] ?? 0;
+        $this->lastSyncTimestamp = is_float($lastSync) || is_int($lastSync) ? (float) $lastSync : 0.0;
+    }
+
+    /**
+     * Coerce a mixed value into an int. Numeric strings/floats are accepted;
+     * anything else becomes 0.
+     *
+     * @param mixed $value Untyped value, typically pulled from a WebSocket payload.
+     */
+    private static function intFromMixed(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+        return 0;
     }
 }

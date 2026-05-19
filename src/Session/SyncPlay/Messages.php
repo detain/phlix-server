@@ -434,8 +434,8 @@ final class Messages
      * Create a playback queue update message.
      *
      * @param string $groupId The group ID
-     * @param array<int, array{media_id: string, media_info?: array}> $queue The updated queue
-     * @return array{type: string, protocol_version: int, group_id: string, queue: array, timestamp: int} The message array
+     * @param array<int, array{media_id: string, media_info?: array<string, mixed>}> $queue The updated queue
+     * @return array{type: string, protocol_version: int, group_id: string, queue: array<int, array{media_id: string, media_info?: array<string, mixed>}>, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -642,7 +642,7 @@ final class Messages
      * @param string $code Error code (e.g., 'NOT_IN_GROUP', 'INVALID_PASSWORD')
      * @param string $message Human-readable error message
      * @param array<string, mixed>|null $details Optional additional error details
-     * @return array{type: string, protocol_version: int, error_code: string, message: string, details?: array, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, error_code: string, message: string, details?: array<string, mixed>, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -672,7 +672,7 @@ final class Messages
      *
      * @param string $message The informational message
      * @param array<string, mixed>|null $data Optional additional data
-     * @return array{type: string, protocol_version: int, message: string, data?: array, timestamp: int} The message array
+     * @return array{type: string, protocol_version: int, message: string, data?: array<string, mixed>, timestamp: int} The message array
      *
      * @example
      * ```php
@@ -724,18 +724,26 @@ final class Messages
             return ['valid' => false, 'errors' => $errors];
         }
 
-        if (!self::isValidType($message['type'])) {
-            $errors[] = 'Invalid message type: ' . $message['type'];
+        $type = $message['type'];
+        if (!is_string($type)) {
+            $errors[] = 'Invalid message type: not a string';
+            return ['valid' => false, 'errors' => $errors];
+        }
+
+        if (!self::isValidType($type)) {
+            $errors[] = 'Invalid message type: ' . $type;
         }
 
         if (!isset($message['protocol_version'])) {
             $errors[] = 'Missing required field: protocol_version';
-        } elseif ($message['protocol_version'] > self::PROTOCOL_VERSION) {
-            $errors[] = 'Protocol version mismatch: expected ' . self::PROTOCOL_VERSION . ', got ' . $message['protocol_version'];
+        } else {
+            $protocolVersion = $message['protocol_version'];
+            if (!is_int($protocolVersion)) {
+                $errors[] = 'Protocol version must be an integer';
+            } elseif ($protocolVersion > self::PROTOCOL_VERSION) {
+                $errors[] = 'Protocol version mismatch: expected ' . self::PROTOCOL_VERSION . ', got ' . $protocolVersion;
+            }
         }
-
-        // Validate based on message type
-        $type = $message['type'];
 
         if (in_array($type, [self::TYPE_GROUP_CREATE, self::TYPE_GROUP_JOIN], true)) {
             if (empty($message['group_name'] ?? $message['group_id'] ?? '')) {
@@ -803,10 +811,18 @@ final class Messages
     public static function deserialize(string $json): array
     {
         try {
-            $message = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+            $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
 
-            if (!is_array($message)) {
+            if (!is_array($decoded)) {
                 return ['valid' => false, 'error' => 'Invalid message format'];
+            }
+
+            // Narrow to array<string, mixed> by discarding any int keys.
+            $message = [];
+            foreach ($decoded as $key => $value) {
+                if (is_string($key)) {
+                    $message[$key] = $value;
+                }
             }
 
             $validation = self::validate($message);

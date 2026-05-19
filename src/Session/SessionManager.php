@@ -7,6 +7,7 @@ namespace Phlex\Session;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
+use Phlex\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -23,7 +24,7 @@ use Workerman\MySQL\Connection;
  * @see PlaybackController For playback session management
  *
  * @property Connection $db Database connection instance
- * @property array $activeSessions In-memory active session cache
+ * @property array<string, array<string, mixed>> $activeSessions In-memory active session cache
  * @property StructuredLogger $logger Application logger
  */
 class SessionManager
@@ -31,7 +32,7 @@ class SessionManager
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
 
-    /** @var array<string, array> In-memory cache of active sessions indexed by session ID */
+    /** @var array<string, array<string, mixed>> In-memory cache of active sessions indexed by session ID */
     private array $activeSessions = [];
 
     /** @var StructuredLogger Application logger for session events */
@@ -109,9 +110,12 @@ class SessionManager
     {
         // Check if session already exists for this device
         $existing = $this->findByDeviceId($deviceId);
-        if ($existing) {
-            $this->updateActivity($existing['id']);
-            return $existing['id'];
+        if ($existing !== null) {
+            $existingId = $existing['id'] ?? null;
+            if (is_string($existingId) && $existingId !== '') {
+                $this->updateActivity($existingId);
+                return $existingId;
+            }
         }
 
         $sessionId = $this->generateUuid();
@@ -162,11 +166,8 @@ class SessionManager
             [$sessionId]
         );
 
-        if (empty($result)) {
-            return null;
-        }
-
-        return $result[0];
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**
@@ -190,7 +191,8 @@ class SessionManager
             [$deviceId]
         );
 
-        return $result[0] ?? null;
+        $rows = RowMap::listFromMixed($result);
+        return $rows[0] ?? null;
     }
 
     /**
@@ -210,10 +212,12 @@ class SessionManager
      */
     public function getUserSessions(string $userId): array
     {
-        return $this->db->query(
+        $result = $this->db->query(
             "SELECT * FROM sessions WHERE user_id = ? ORDER BY last_activity DESC",
             [$userId]
         );
+
+        return RowMap::listFromMixed($result);
     }
 
     /**
@@ -322,7 +326,8 @@ class SessionManager
             [$cutoff]
         );
 
-        $count = count($result);
+        $rows = RowMap::listFromMixed($result);
+        $count = count($rows);
 
         if ($count > 0) {
             $this->db->query(
@@ -374,7 +379,15 @@ class SessionManager
             [$cutoff]
         );
 
-        return array_column($result, 'user_id');
+        $rows = RowMap::listFromMixed($result);
+        $userIds = [];
+        foreach ($rows as $row) {
+            $userId = $row['user_id'] ?? null;
+            if (is_string($userId)) {
+                $userIds[] = $userId;
+            }
+        }
+        return $userIds;
     }
 
     /**

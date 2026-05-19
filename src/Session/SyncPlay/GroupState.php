@@ -98,7 +98,7 @@ class GroupState
     /** @var string Current playback state (one of STATE_*) */
     private string $playbackState = self::STATE_STOPPED;
 
-    /** @var array<int, array{media_id: string, media_info: array, added_at: int, added_by: string|null}> Playback queue items */
+    /** @var array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}> Playback queue items */
     private array $playbackQueue = [];
 
     /** @var array<int, array{member_id: string, message: string, timestamp: int}> Chat messages (max 100 stored) */
@@ -210,7 +210,7 @@ class GroupState
      * Get a specific member's data.
      *
      * @param string $memberId The member ID to retrieve
-     * @return array|null Member data array or null if not found
+     * @return array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}|null Member data array or null if not found
      */
     public function getMember(string $memberId): ?array
     {
@@ -234,10 +234,12 @@ class GroupState
             return false;
         }
 
-        $this->members[$memberId] = array_merge($memberData, [
+        $this->members[$memberId] = [
+            'name' => $memberData['name'] ?? 'Unknown',
+            'connection_id' => $memberData['connection_id'] ?? null,
             'joined_at' => time(),
             'is_active' => true,
-        ]);
+        ];
 
         $this->lastActivityAt = time();
 
@@ -274,6 +276,9 @@ class GroupState
     /**
      * Update a member's data.
      *
+     * Only the fields known to the member shape are accepted; unknown keys are
+     * ignored to preserve the typed structure.
+     *
      * @param string $memberId The member ID to update
      * @param array<string, mixed> $updates Key-value pairs to update
      * @return bool True if updated, false if member not found
@@ -284,7 +289,26 @@ class GroupState
             return false;
         }
 
-        $this->members[$memberId] = array_merge($this->members[$memberId], $updates);
+        $current = $this->members[$memberId];
+
+        if (array_key_exists('name', $updates) && is_string($updates['name'])) {
+            $current['name'] = $updates['name'];
+        }
+        if (array_key_exists('connection_id', $updates)) {
+            $rawConn = $updates['connection_id'];
+            $current['connection_id'] = is_string($rawConn) ? $rawConn : null;
+        }
+        if (array_key_exists('joined_at', $updates) && is_int($updates['joined_at'])) {
+            $current['joined_at'] = $updates['joined_at'];
+        }
+        if (array_key_exists('is_active', $updates) && is_bool($updates['is_active'])) {
+            $current['is_active'] = $updates['is_active'];
+        }
+        if (array_key_exists('is_host', $updates) && is_bool($updates['is_host'])) {
+            $current['is_host'] = $updates['is_host'];
+        }
+
+        $this->members[$memberId] = $current;
         $this->lastActivityAt = time();
 
         return true;
@@ -468,7 +492,7 @@ class GroupState
     /**
      * Get the current playback queue.
      *
-     * @return array<int, array{media_id: string, media_info: array, added_at: int, added_by: string|null}> Queue items
+     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}> Queue items
      */
     public function getPlaybackQueue(): array
     {
@@ -525,7 +549,7 @@ class GroupState
     /**
      * Get the next item in the queue without removing it.
      *
-     * @return array|null The first queue item or null if queue is empty
+     * @return array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}|null The first queue item or null if queue is empty
      */
     public function getNextInQueue(): ?array
     {
@@ -709,25 +733,164 @@ class GroupState
      */
     public static function deserialize(array $data): self
     {
-        $group = new self(
-            $data['id'],
-            $data['name'],
-            $data['password_hash'] ?? null,
-            $data['position_tolerance'] ?? self::POSITION_TOLERANCE
-        );
+        $id = $data['id'] ?? null;
+        $name = $data['name'] ?? null;
+        if (!is_string($id) || !is_string($name)) {
+            throw new \InvalidArgumentException('GroupState::deserialize requires string id and name');
+        }
 
-        $group->members = $data['members'] ?? [];
-        $group->hostId = $data['host_id'] ?? null;
-        $group->currentMediaId = $data['current_media_id'] ?? null;
-        $group->currentMediaDuration = $data['current_media_duration'] ?? 0;
-        $group->playbackPosition = $data['playback_position'] ?? 0;
-        $group->playbackState = $data['playback_state'] ?? self::STATE_STOPPED;
-        $group->playbackQueue = $data['playback_queue'] ?? [];
-        $group->chatMessages = $data['chat_messages'] ?? [];
-        $group->createdAt = $data['created_at'] ?? time();
-        $group->lastActivityAt = $data['last_activity_at'] ?? time();
+        $passwordHashRaw = $data['password_hash'] ?? null;
+        $passwordHash = is_string($passwordHashRaw) ? $passwordHashRaw : null;
+
+        $positionToleranceRaw = $data['position_tolerance'] ?? self::POSITION_TOLERANCE;
+        $positionTolerance = is_int($positionToleranceRaw) ? $positionToleranceRaw : self::POSITION_TOLERANCE;
+
+        $group = new self($id, $name, $passwordHash, $positionTolerance);
+
+        $group->members = self::deserializeMembers($data['members'] ?? []);
+
+        $hostIdRaw = $data['host_id'] ?? null;
+        $group->hostId = is_string($hostIdRaw) ? $hostIdRaw : null;
+
+        $currentMediaIdRaw = $data['current_media_id'] ?? null;
+        $group->currentMediaId = is_string($currentMediaIdRaw) ? $currentMediaIdRaw : null;
+
+        $currentMediaDurationRaw = $data['current_media_duration'] ?? 0;
+        $group->currentMediaDuration = is_int($currentMediaDurationRaw) ? $currentMediaDurationRaw : 0;
+
+        $playbackPositionRaw = $data['playback_position'] ?? 0;
+        $group->playbackPosition = is_int($playbackPositionRaw) ? $playbackPositionRaw : 0;
+
+        $playbackStateRaw = $data['playback_state'] ?? self::STATE_STOPPED;
+        $group->playbackState = is_string($playbackStateRaw) ? $playbackStateRaw : self::STATE_STOPPED;
+
+        $group->playbackQueue = self::deserializeQueue($data['playback_queue'] ?? []);
+        $group->chatMessages = self::deserializeChatMessages($data['chat_messages'] ?? []);
+
+        $createdAtRaw = $data['created_at'] ?? null;
+        $group->createdAt = is_int($createdAtRaw) ? $createdAtRaw : time();
+
+        $lastActivityRaw = $data['last_activity_at'] ?? null;
+        $group->lastActivityAt = is_int($lastActivityRaw) ? $lastActivityRaw : time();
 
         return $group;
+    }
+
+    /**
+     * Narrow a raw `members` payload into the typed members shape.
+     *
+     * @param mixed $raw
+     * @return array<string, array{name: string, connection_id: string|null, joined_at: int, is_active: bool, is_host?: bool}>
+     */
+    private static function deserializeMembers(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $key => $member) {
+            if (!is_string($key) || !is_array($member)) {
+                continue;
+            }
+
+            $name = $member['name'] ?? 'Unknown';
+            $connId = $member['connection_id'] ?? null;
+            $joinedAt = $member['joined_at'] ?? 0;
+            $isActive = $member['is_active'] ?? true;
+
+            $entry = [
+                'name' => is_string($name) ? $name : 'Unknown',
+                'connection_id' => is_string($connId) ? $connId : null,
+                'joined_at' => is_int($joinedAt) ? $joinedAt : 0,
+                'is_active' => is_bool($isActive) ? $isActive : true,
+            ];
+
+            if (isset($member['is_host']) && is_bool($member['is_host'])) {
+                $entry['is_host'] = $member['is_host'];
+            }
+
+            $out[$key] = $entry;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Narrow a raw `playback_queue` payload into the typed queue shape.
+     *
+     * @param mixed $raw
+     * @return array<int, array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null}>
+     */
+    private static function deserializeQueue(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $mediaId = $item['media_id'] ?? null;
+            if (!is_string($mediaId)) {
+                continue;
+            }
+            $mediaInfo = $item['media_info'] ?? [];
+            $addedAt = $item['added_at'] ?? 0;
+            $addedBy = $item['added_by'] ?? null;
+
+            $mediaInfoOut = [];
+            if (is_array($mediaInfo)) {
+                foreach ($mediaInfo as $infoKey => $infoValue) {
+                    if (is_string($infoKey)) {
+                        $mediaInfoOut[$infoKey] = $infoValue;
+                    }
+                }
+            }
+
+            $out[] = [
+                'media_id' => $mediaId,
+                'media_info' => $mediaInfoOut,
+                'added_at' => is_int($addedAt) ? $addedAt : 0,
+                'added_by' => is_string($addedBy) ? $addedBy : null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Narrow a raw `chat_messages` payload into the typed chat shape.
+     *
+     * @param mixed $raw
+     * @return array<int, array{member_id: string, message: string, timestamp: int}>
+     */
+    private static function deserializeChatMessages(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $msg) {
+            if (!is_array($msg)) {
+                continue;
+            }
+            $memberId = $msg['member_id'] ?? null;
+            $message = $msg['message'] ?? null;
+            $timestamp = $msg['timestamp'] ?? null;
+            if (is_string($memberId) && is_string($message) && is_int($timestamp)) {
+                $out[] = [
+                    'member_id' => $memberId,
+                    'message' => $message,
+                    'timestamp' => $timestamp,
+                ];
+            }
+        }
+
+        return $out;
     }
 
     /**

@@ -69,22 +69,11 @@ class SyncPlayManager
      */
     private const GROUP_TIMEOUT = 3600;
 
-    /**
-     * Sync interval for host broadcasts in milliseconds.
-     *
-     * The host broadcasts playback state updates at this interval
-     * to keep all members synchronized.
-     */
-    private const SYNC_INTERVAL = 1000;
-
     /** @var array<string, GroupState> Active groups indexed by group ID */
     private array $groups = [];
 
     /** @var array<string, string> Member ID to group ID mapping */
     private array $memberToGroup = [];
-
-    /** @var array<string, string> Connection ID to member ID mapping */
-    private array $connectionToMember = [];
 
     /** @var TimeSync Time synchronization handler for playback sync */
     private TimeSync $timeSync;
@@ -97,9 +86,6 @@ class SyncPlayManager
 
     /** @var int Position tolerance in milliseconds for sync detection */
     private int $positionTolerance;
-
-    /** @var int Timestamp of last sync broadcast */
-    private int $lastSyncTime = 0;
 
     public function __construct(
         ?StructuredLogger $logger = null,
@@ -238,7 +224,7 @@ class SyncPlayManager
      * @param string|null $password Optional password to protect the group (null for open groups)
      * @param string|null $memberId The member ID of the group creator (null if not joining)
      * @param string|null $memberName The display name of the creator (defaults to 'Host')
-     * @return array{success: bool, group?: array, error?: string} Result with group state or error
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group state or error
      *
      * @example
      * ```php
@@ -298,7 +284,7 @@ class SyncPlayManager
      * @param string $memberId Unique identifier for the member joining
      * @param string $memberName Display name for the member
      * @param string|null $password Optional password if group is protected
-     * @return array{success: bool, group?: array, error?: string} Result with group state or error
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string} Result with group state or error
      *
      * @example
      * ```php
@@ -365,7 +351,7 @@ class SyncPlayManager
      * is deleted.
      *
      * @param string $memberId The ID of the member leaving
-     * @return array{success: bool, message?: string, error?: string} Result with message or error
+     * @return array{success: true, message?: string}|array{success: false, error: string} Result with message or error
      *
      * @example
      * ```php
@@ -387,7 +373,8 @@ class SyncPlayManager
             return ['success' => true];
         }
 
-        $memberName = $group->getMember($memberId)['name'] ?? 'Unknown';
+        $memberRecord = $group->getMember($memberId);
+        $memberName = $memberRecord['name'] ?? 'Unknown';
         $wasHost = $group->isHost($memberId);
 
         $group->removeMember($memberId);
@@ -423,7 +410,7 @@ class SyncPlayManager
      * Returns the full group state including members, playback info, and queue.
      *
      * @param string $groupId The group ID to retrieve
-     * @return array|null The group state array, or null if group not found
+     * @return array<string, mixed>|null The group state array, or null if group not found
      *
      * @see GroupState::getState() For the structure of the returned array
      */
@@ -482,11 +469,15 @@ class SyncPlayManager
      */
     private function handlePlaybackPlay(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
         $groupId = $this->memberToGroup[$memberId] ?? null;
-        $group = $this->groups[$groupId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
-        if ($group === null) {
+        if ($group === null || $groupId === null) {
             $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
             return;
         }
@@ -496,8 +487,8 @@ class SyncPlayManager
             return;
         }
 
-        $position = $payload['position'] ?? 0;
-        $serverTime = $payload['server_time'] ?? time();
+        $position = self::intFromMixed($payload['position'] ?? 0);
+        $serverTime = self::intFromMixed($payload['server_time'] ?? time());
 
         $group->updatePlayback(GroupState::STATE_PLAYING, $position);
 
@@ -519,11 +510,15 @@ class SyncPlayManager
      */
     private function handlePlaybackPause(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
         $groupId = $this->memberToGroup[$memberId] ?? null;
-        $group = $this->groups[$groupId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
-        if ($group === null) {
+        if ($group === null || $groupId === null) {
             $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
             return;
         }
@@ -533,8 +528,8 @@ class SyncPlayManager
             return;
         }
 
-        $position = $payload['position'] ?? 0;
-        $serverTime = $payload['server_time'] ?? time();
+        $position = self::intFromMixed($payload['position'] ?? 0);
+        $serverTime = self::intFromMixed($payload['server_time'] ?? time());
 
         $group->updatePlayback(GroupState::STATE_PAUSED, $position);
 
@@ -556,11 +551,15 @@ class SyncPlayManager
      */
     private function handlePlaybackSeek(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
         $groupId = $this->memberToGroup[$memberId] ?? null;
-        $group = $this->groups[$groupId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
-        if ($group === null) {
+        if ($group === null || $groupId === null) {
             $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
             return;
         }
@@ -570,9 +569,9 @@ class SyncPlayManager
             return;
         }
 
-        $fromPosition = $payload['from_position'] ?? 0;
-        $toPosition = $payload['to_position'] ?? 0;
-        $serverTime = $payload['server_time'] ?? time();
+        $fromPosition = self::intFromMixed($payload['from_position'] ?? 0);
+        $toPosition = self::intFromMixed($payload['to_position'] ?? 0);
+        $serverTime = self::intFromMixed($payload['server_time'] ?? time());
 
         $group->setPlaybackPosition($toPosition);
 
@@ -597,11 +596,15 @@ class SyncPlayManager
      */
     private function handlePlaybackQueue(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
         $groupId = $this->memberToGroup[$memberId] ?? null;
-        $group = $this->groups[$groupId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
-        if ($group === null) {
+        if ($group === null || $groupId === null) {
             $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
             return;
         }
@@ -611,12 +614,30 @@ class SyncPlayManager
             return;
         }
 
-        $queue = $payload['queue'] ?? [];
+        $queueRaw = $payload['queue'] ?? [];
 
         // Update queue
         $group->clearQueue();
-        foreach ($queue as $item) {
-            $group->addToQueue($item['media_id'], $item['media_info'] ?? []);
+        if (is_array($queueRaw)) {
+            foreach ($queueRaw as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $mediaId = $item['media_id'] ?? null;
+                if (!is_string($mediaId)) {
+                    continue;
+                }
+                $mediaInfoRaw = $item['media_info'] ?? [];
+                $mediaInfo = [];
+                if (is_array($mediaInfoRaw)) {
+                    foreach ($mediaInfoRaw as $infoKey => $infoValue) {
+                        if (is_string($infoKey)) {
+                            $mediaInfo[$infoKey] = $infoValue;
+                        }
+                    }
+                }
+                $group->addToQueue($mediaId, $mediaInfo);
+            }
         }
 
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_QUEUE, [
@@ -638,19 +659,24 @@ class SyncPlayManager
      */
     private function handleChatMessage(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
         $groupId = $this->memberToGroup[$memberId] ?? null;
-        $group = $this->groups[$groupId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
 
-        if ($group === null) {
+        if ($group === null || $groupId === null) {
             $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
             return;
         }
 
-        $message = $payload['message'] ?? '';
-        $memberName = $group->getMember($memberId)['name'] ?? 'Unknown';
+        $message = self::stringFromMixed($payload['message'] ?? '');
+        $memberRecord = $group->getMember($memberId);
+        $memberName = $memberRecord['name'] ?? 'Unknown';
 
-        if (empty(trim($message))) {
+        if (trim($message) === '') {
             return;
         }
 
@@ -696,14 +722,14 @@ class SyncPlayManager
      */
     private function handleGroupCreate(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? $connection->getId();
-        $memberName = $payload['member_name'] ?? 'Host';
-        $groupName = $payload['group_name'] ?? 'New Group';
-        $password = $payload['password'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? $connection->getId());
+        $memberName = self::stringFromMixed($payload['member_name'] ?? 'Host');
+        $groupName = self::stringFromMixed($payload['group_name'] ?? 'New Group');
+        $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
         $result = $this->createGroup($groupName, $password, $memberId, $memberName);
 
-        if ($result['success']) {
+        if ($result['success'] === true) {
             $connection->sendMessage(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
@@ -725,14 +751,14 @@ class SyncPlayManager
      */
     private function handleGroupJoin(Connection $connection, array $payload): void
     {
-        $groupId = $payload['group_id'] ?? '';
-        $memberId = $payload['member_id'] ?? $connection->getId();
-        $memberName = $payload['member_name'] ?? 'User';
-        $password = $payload['password'] ?? null;
+        $groupId = self::stringFromMixed($payload['group_id'] ?? '');
+        $memberId = self::stringFromMixed($payload['member_id'] ?? $connection->getId());
+        $memberName = self::stringFromMixed($payload['member_name'] ?? 'User');
+        $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
         $result = $this->joinGroup($groupId, $memberId, $memberName, $password);
 
-        if ($result['success']) {
+        if ($result['success'] === true) {
             $connection->sendMessage(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
@@ -754,11 +780,15 @@ class SyncPlayManager
      */
     private function handleGroupLeave(Connection $connection, array $payload): void
     {
-        $memberId = $payload['member_id'] ?? null;
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $this->sendError($connection, 'LEAVE_FAILED', 'Not in any group');
+            return;
+        }
 
         $result = $this->leaveGroup($memberId);
 
-        if ($result['success']) {
+        if ($result['success'] === true) {
             $connection->sendMessage(Messages::TYPE_INFO, [
                 'message' => $result['message'] ?? 'Left group',
             ]);
@@ -908,7 +938,7 @@ class SyncPlayManager
     /**
      * Get statistics about the SyncPlay subsystem.
      *
-     * @return array{total_groups: int, total_members: int, time_sync_status: array} Statistics
+     * @return array{total_groups: int, total_members: int, time_sync_status: array{offset: int, latency: int, drift_rate: float, is_stable: bool, sample_count: int, last_sync: float}} Statistics
      *
      * @see TimeSync::getStatus() For the structure of time_sync_status
      */
@@ -938,5 +968,63 @@ class SyncPlayManager
         }
 
         $this->logger->log($level, "[SyncPlay] {$message}", $context);
+    }
+
+    /**
+     * Coerce a mixed value to a string. Numeric values are stringified; null
+     * and non-scalars collapse to the empty string. Centralises the WebSocket
+     * payload narrowing so callers can rely on a typed string.
+     */
+    private static function stringFromMixed(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        if (is_bool($value)) {
+            return $value ? '1' : '';
+        }
+        return '';
+    }
+
+    /**
+     * Coerce a mixed value to a nullable string. Null and non-stringable
+     * values become null; otherwise behaves like {@see self::stringFromMixed()}.
+     */
+    private static function stringOrNullFromMixed(mixed $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (is_string($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return null;
+    }
+
+    /**
+     * Coerce a mixed value to an int. Numeric strings and floats are accepted;
+     * everything else falls back to 0.
+     */
+    private static function intFromMixed(mixed $value): int
+    {
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_float($value)) {
+            return (int) $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        if (is_bool($value)) {
+            return $value ? 1 : 0;
+        }
+        return 0;
     }
 }

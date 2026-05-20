@@ -33,6 +33,12 @@ use Workerman\MySQL\Connection;
  */
 class AuthManager
 {
+    private const RATE_LIMIT_MAX_ATTEMPTS = 5;
+    private const RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
+
+    /** @var array<string, array{attempts: int, reset_at: int}> Static rate limit storage per IP */
+    private static array $rateLimitStore = [];
+
     /** @var UserRepository User data access repository */
     private UserRepository $userRepository;
 
@@ -135,6 +141,78 @@ class AuthManager
         ];
 
         return new StructuredLogger(LogChannels::AUTH, $config);
+    }
+
+    /**
+     * Get the client IP address for rate limiting.
+     */
+    private function getClientIp(): string
+    {
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+    }
+
+    /**
+     * Check if the client IP has exceeded the rate limit.
+     *
+     * @throws RateLimitException When rate limit is exceeded
+     */
+    private function checkRateLimit(string $ip): void
+    {
+        $now = time();
+
+        if (!isset(self::$rateLimitStore[$ip])) {
+            return;
+        }
+
+        $record = &self::$rateLimitStore[$ip];
+
+        // Clean up expired records
+        if ($record['reset_at'] <= $now) {
+            unset(self::$rateLimitStore[$ip]);
+            return;
+        }
+
+        if ($record['attempts'] >= self::RATE_LIMIT_MAX_ATTEMPTS) {
+            throw new RateLimitException(
+                resetAt: $record['reset_at'],
+                remaining: 0
+            );
+        }
+    }
+
+    /**
+     * Record a failed authentication attempt for rate limiting.
+     */
+    private function recordFailedAttempt(string $ip): void
+    {
+        $now = time();
+
+        if (!isset(self::$rateLimitStore[$ip])) {
+            self::$rateLimitStore[$ip] = [
+                'attempts' => 0,
+                'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
+            ];
+        }
+
+        $record = &self::$rateLimitStore[$ip];
+
+        // Reset if window has expired
+        if ($record['reset_at'] <= $now) {
+            $record = [
+                'attempts' => 0,
+                'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
+            ];
+        }
+
+        $record['attempts']++;
+    }
+
+    /**
+     * Clear rate limit data for a client IP after successful auth.
+     */
+    private function clearRateLimit(string $ip): void
+    {
+        unset(self::$rateLimitStore[$ip]);
     }
 
     /**
@@ -274,16 +352,22 @@ class AuthManager
      */
     public function login(string $username, string $password, string $deviceId): array
     {
+        $clientIp = $this->getClientIp();
+        $this->checkRateLimit($clientIp);
+
         $user = $this->userRepository->findByUsername($username);
         $userId = UserRow::string($user, 'id');
 
         if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {
+            $this->recordFailedAttempt($clientIp);
             $this->auditLogger->logFailedAuth('invalid_credentials', [
                 'username' => $username,
                 'device_id' => $deviceId,
             ]);
             throw new \InvalidArgumentException('Invalid username or password');
         }
+
+        $this->clearRateLimit($clientIp);
 
         // Update last login
         $this->userRepository->updateLastLogin($userId);

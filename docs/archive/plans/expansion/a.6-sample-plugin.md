@@ -88,7 +88,7 @@ After A.5:
 
 ### Create — in the EXISTING server repo `/home/sites/phlex/`
 
-- `tests/integration/Plugins/SamplePluginSmokeTest.php` — installs
+- `tests/Integration/Plugins/SamplePluginSmokeTest.php` — installs
   `/home/sites/phlex-plugin-example/` via
   `PluginLoader::installFromDirectory()`, enables it, calls
   `MetadataManager::fetchMovieMetadata($fixturePath)`, asserts the
@@ -154,7 +154,7 @@ Sequence (assuming confirmation):
        --add-topic self-hosted
    ```
 4. **Server-side smoke.** Back in `/home/sites/phlex`, run
-   `tests/integration/Plugins/SamplePluginSmokeTest.php` against the
+   `tests/Integration/Plugins/SamplePluginSmokeTest.php` against the
    local checkout (the test points at the sibling dir). If the suite
    is green, proceed.
 5. **Manual UI smoke.** Optional but recommended: actually browse to

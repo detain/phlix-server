@@ -119,10 +119,10 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Webhooks/Plugins/DiscordPluginTest.php`
-- `tests/unit/Webhooks/Plugins/SlackPluginTest.php`
-- `tests/unit/Webhooks/Plugins/TelegramPluginTest.php`
-- `tests/unit/Webhooks/Plugins/NtfyPluginTest.php`
+- `tests/Unit/Webhooks/Plugins/DiscordPluginTest.php`
+- `tests/Unit/Webhooks/Plugins/SlackPluginTest.php`
+- `tests/Unit/Webhooks/Plugins/TelegramPluginTest.php`
+- `tests/Unit/Webhooks/Plugins/NtfyPluginTest.php`
 
 ### Modify
 
@@ -175,7 +175,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b l.2-notification-plugins
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Webhooks/Plugins/
+./vendor/bin/phpunit tests/Unit/Webhooks/Plugins/
 ./vendor/bin/phpstan analyze src/Webhooks/Plugins --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Webhooks/Plugins/
 git add -A

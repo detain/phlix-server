@@ -14,10 +14,10 @@
          displayDetailsOnTestsThatTriggerErrors="true">
     <testsuites>
         <testsuite name="Unit">
-            <directory suffix="Test.php">tests/unit</directory>
+            <directory suffix="Test.php">tests/Unit</directory>
         </testsuite>
         <testsuite name="Integration">
-            <directory suffix="Test.php">tests/integration</directory>
+            <directory suffix="Test.php">tests/Integration</directory>
         </testsuite>
     </testsuites>
     <coverage>

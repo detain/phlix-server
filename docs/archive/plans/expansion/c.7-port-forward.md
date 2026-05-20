@@ -172,11 +172,11 @@ All paths inside `/home/sites/phlex/`.
 
 #### Unit Tests
 
-- `tests/unit/Hub/UpnpIgdClientTest.php` — mock UDP socket; test
+- `tests/Unit/Hub/UpnpIgdClientTest.php` — mock UDP socket; test
   gateway discovery, add/remove port mapping
-- `tests/unit/Hub/StunClientTest.php` — mock STUN server response; test
+- `tests/Unit/Hub/StunClientTest.php` — mock STUN server response; test
   public IP extraction, port accessibility test
-- `tests/unit/Hub/PortForwardManagerTest.php` — mock UpnpIgdClient +
+- `tests/Unit/Hub/PortForwardManagerTest.php` — mock UpnpIgdClient +
   StunClient; test full workflow
 
 #### Documentation

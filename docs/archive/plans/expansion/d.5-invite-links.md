@@ -179,8 +179,8 @@ a minor `CHANGELOG.md` entry.
 
 ### Unit Tests (hub-side)
 
-- `tests/unit/Hub/InviteLinkTest.php`
-- `tests/unit/Hub/InviteLinkHandlerTest.php`:
+- `tests/Unit/Hub/InviteLinkTest.php`
+- `tests/Unit/Hub/InviteLinkHandlerTest.php`:
   - createInviteLink success
   - createInviteLink not-owner throws
   - redeemInviteLink success
@@ -189,7 +189,7 @@ a minor `CHANGELOG.md` entry.
   - redeemInviteLink invalid token throws
   - listForOwner
   - revokeInviteLink
-- `tests/unit/Hub/InviteLinkControllerTest.php`
+- `tests/Unit/Hub/InviteLinkControllerTest.php`
 
 ### Documentation
 

@@ -224,11 +224,11 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Chromecast/CastDeviceTest.php`
-- `tests/unit/Chromecast/CastDiscoveryTest.php`
-- `tests/unit/Chromecast/CastApiClientTest.php`
-- `tests/unit/Chromecast/CastSessionTest.php`
-- `tests/unit/Chromecast/CastManagerTest.php`
+- `tests/Unit/Chromecast/CastDeviceTest.php`
+- `tests/Unit/Chromecast/CastDiscoveryTest.php`
+- `tests/Unit/Chromecast/CastApiClientTest.php`
+- `tests/Unit/Chromecast/CastSessionTest.php`
+- `tests/Unit/Chromecast/CastManagerTest.php`
 
 #### Documentation
 

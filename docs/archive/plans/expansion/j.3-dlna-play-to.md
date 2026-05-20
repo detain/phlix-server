@@ -208,10 +208,10 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Dlna/RendererDiscoveryTest.php`
-- `tests/unit/Dlna/RendererControlClientTest.php`
-- `tests/unit/Dlna/PlayToSessionTest.php`
-- `tests/unit/Dlna/PlayToManagerTest.php`
+- `tests/Unit/Dlna/RendererDiscoveryTest.php`
+- `tests/Unit/Dlna/RendererControlClientTest.php`
+- `tests/Unit/Dlna/PlayToSessionTest.php`
+- `tests/Unit/Dlna/PlayToManagerTest.php`
 
 #### Documentation
 

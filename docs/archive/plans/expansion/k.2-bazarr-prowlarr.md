@@ -49,8 +49,8 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Arr/BazarrClientTest.php`
-- `tests/unit/Arr/ProwlarrClientTest.php`
+- `tests/Unit/Arr/BazarrClientTest.php`
+- `tests/Unit/Arr/ProwlarrClientTest.php`
 
 ### Modify
 

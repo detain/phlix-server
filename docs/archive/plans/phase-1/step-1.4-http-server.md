@@ -607,7 +607,7 @@ class Application
 
 ### 1.4.5 Create Unit Tests
 
-Create `tests/unit/Server/Http/RequestTest.php`:
+Create `tests/Unit/Server/Http/RequestTest.php`:
 ```php
 <?php
 
@@ -664,7 +664,7 @@ class RequestTest extends TestCase
 }
 ```
 
-Create `tests/unit/Server/Http/ResponseTest.php`:
+Create `tests/Unit/Server/Http/ResponseTest.php`:
 ```php
 <?php
 
@@ -720,7 +720,7 @@ class ResponseTest extends TestCase
 }
 ```
 
-Create `tests/unit/Server/Http/RouterTest.php`:
+Create `tests/Unit/Server/Http/RouterTest.php`:
 ```php
 <?php
 
@@ -807,7 +807,7 @@ After completing all tasks:
 1. Run the unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Server/Http/ --testdox
+./vendor/bin/phpunit tests/Unit/Server/Http/ --testdox
 ```
 
 2. Verify all classes exist:

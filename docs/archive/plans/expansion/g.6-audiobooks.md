@@ -181,10 +181,10 @@ parity with the podcast/books features of Plex/Emby/Jellyfin.
 - `public/assets/js/audiobook-player.js` — player with chapter nav,
   position persistence every 10s, skip ±30s buttons.
 
-- `tests/unit/Media/Library/AudiobookScannerTest.php`
-- `tests/unit/Media/Library/AudiobookProgressStoreTest.php`
-- `tests/unit/Media/Library/AudiobookLibraryManagerTest.php`
-- `tests/unit/Server/Http/Controllers/AudiobookControllerTest.php`
+- `tests/Unit/Media/Library/AudiobookScannerTest.php`
+- `tests/Unit/Media/Library/AudiobookProgressStoreTest.php`
+- `tests/Unit/Media/Library/AudiobookLibraryManagerTest.php`
+- `tests/Unit/Server/Http/Controllers/AudiobookControllerTest.php`
 
 #### Documentation
 

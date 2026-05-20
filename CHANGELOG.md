@@ -236,7 +236,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `RelayConsumer` — added `registerMount()` and `unregisterMount()` methods for dynamic path handlers; `dispatchViaMount()` routes `/relay/live/{sessionId}/*` to registered handlers
   - `migrations/015_livetv_relay_sessions.sql` — creates `livetv_relay_sessions` table
   - `config/livetv.php` — added `relay` section with `enabled`, `prefetch_segments`, `max_concurrent_sessions`, `segment_cache_ttl_seconds`, `relay_path_prefix`
-  - Unit tests in `tests/unit/LiveTv/Relay/` (HlsRelaySessionTest, HlsRelayManagerTest, HlsSegmentPrefetcherTest — 26+ tests)
+  - Unit tests in `tests/Unit/LiveTv/Relay/` (HlsRelaySessionTest, HlsRelayManagerTest, HlsSegmentPrefetcherTest — 26+ tests)
   - `docs/developers/live-relay.md` — architecture docs, session lifecycle, configuration
 
 ### Added (Step I.6)
@@ -255,7 +255,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     `ini_path`, `output_dir`, `queue_processing`, `max_concurrent`
   - `Recorder` — registers `ComskipLifecycleManager::enqueue()` via `onComplete()`
     callback at construction time
-  - Unit tests in `tests/unit/LiveTv/Recording/` (ComskipIntegrationTest,
+  - Unit tests in `tests/Unit/LiveTv/Recording/` (ComskipIntegrationTest,
     ComskipLifecycleManagerTest, ChapterMarkerServiceTest — 12+ tests)
   - `docs/developers/comskip-live.md` — integration docs, EDL format, config
 
@@ -278,7 +278,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     `default_post_padding_seconds`, `auto_resolution`, `storage_path`,
     `max_storage_bytes`
   - `RecordingHooks` — already wires `ComskipPostProcessor` via `onComplete()` callback
-  - Unit tests in `tests/unit/LiveTv/Recording/` (SeriesRuleManagerTest,
+  - Unit tests in `tests/Unit/LiveTv/Recording/` (SeriesRuleManagerTest,
     RecordingDeduplicatorTest, RecordingSchedulerTest — 12+ tests)
   - `docs/developers/dvr.md` — series rules, deduplication, padding,
     conflict resolution, scheduler integration
@@ -296,7 +296,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     password, token_cache_path, lineup_id, sync_hours_ahead, timeout_secs)
   - `LiveTvManager` — wired `SdEpgService` as optional dependency;
     `getSdEpgService()`, `setSdConfig()`, `syncSdEpG()`
-  - Unit tests in `tests/unit/LiveTv/Epg/SchedulesDirect/` (SdApiClientTest,
+  - Unit tests in `tests/Unit/LiveTv/Epg/SchedulesDirect/` (SdApiClientTest,
     SdProgramMapperTest, SdEpgServiceTest — 12 tests total)
   - `docs/developers/schedules-direct.md` — SD API overview, auth, endpoints,
     data model, and config reference
@@ -366,8 +366,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `theme-media.js` — autoplay handling with browser policy fallback
   - `LibraryManager::scanThemeMedia()` — scans and caches after library scan
   - `PageRenderer::setThemeMediaRepository()` + `renderLibrary()` passes themeMedia to template
-  - Unit tests in `tests/unit/Theming/` (10+ tests)
-  - Integration test `tests/integration/Theming/ThemeMediaScanTest.php`
+  - Unit tests in `tests/Unit/Theming/` (10+ tests)
+  - Integration test `tests/Integration/Theming/ThemeMediaScanTest.php`
   - `docs/developers/theme-media.md` — file naming, scanning, streaming, autoplay policy
 
 ### Added (Step H.5)
@@ -387,8 +387,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `Router::extras()` — registers ExtrasController routes
   - `MediaScanner::hasTrailers()` — detects Trailers/ folders at scan time
   - `FolderWatcher::shouldRescanExtras()` — triggers extras rescan on change
-  - Unit tests in `tests/unit/Media/Extras/` (15 tests)
-  - Integration test `tests/integration/Media/Extras/TrailerScannerTest.php`
+  - Unit tests in `tests/Unit/Media/Extras/` (15 tests)
+  - Integration test `tests/Integration/Media/Extras/TrailerScannerTest.php`
   - `docs/developers/trailers-and-extras.md` — naming conventions, API reference, architecture
 
 ### Added (Step H.4)
@@ -425,7 +425,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     theme preferences.
   - `{$theme_css|raw}` and `{$theme_js|raw}` Smarty placeholders in base.tpl.
   - `var/themes/` runtime directory for extracted plugin themes (gitignored).
-  - Unit tests in `tests/unit/Theming/` (ThemeRegistryTest, ThemeMiddlewareTest — 11 tests).
+  - Unit tests in `tests/Unit/Theming/` (ThemeRegistryTest, ThemeMiddlewareTest — 11 tests).
   - `docs/developers/ui-themes.md` — plugin author guide with CSS variable reference.
 
 ### Added (Step H.2)
@@ -450,9 +450,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
     GET /api/v1/libraries/{libraryId}/collections.
   - Migration `migrations/005_collections.sql` — creates collections and
     collection_items tables with proper indexes.
-  - Unit tests in `tests/unit/Collections/` (CollectionRepositoryTest,
+  - Unit tests in `tests/Unit/Collections/` (CollectionRepositoryTest,
     CollectionItemRepositoryTest, CollectionManagerTest — 14 tests).
-  - Integration test `tests/integration/Collections/CollectionCrudTest.php`.
+  - Integration test `tests/Integration/Collections/CollectionCrudTest.php`.
   - `docs/developers/collections.md` — model, API reference, smart sync
     algorithm, integration guide.
   - `Router::collections()` — registers collection routes.
@@ -479,9 +479,9 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `LibraryUpdated` event dispatched by FolderWatcher on content changes.
   - Migration `migrations/004_smart_playlists.sql` — creates smart_playlists table
     with JSON rules column, limit, sort_by, sort_desc fields.
-  - Unit tests in `tests/unit/Playlists/` (RuleNodeTest, RuleOperatorsTest,
+  - Unit tests in `tests/Unit/Playlists/` (RuleNodeTest, RuleOperatorsTest,
     SmartPlaylistEngineTest, SmartPlaylistRepositoryTest, SmartPlaylistTest).
-  - Integration test `tests/integration/Playlists/SmartPlaylistRefreshTest.php`.
+  - Integration test `tests/Integration/Playlists/SmartPlaylistRefreshTest.php`.
   - `docs/developers/smart-playlists.md` — DSL reference, operator list,
     evaluation algorithm, extension guide.
   - `Router::smartPlaylists()` — registers smart playlist routes.
@@ -966,7 +966,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   `GET /api/v1/me/webauthn/credentials`,
   `DELETE /api/v1/me/webauthn/credentials/{id}`.
 - Composer dependency added: `web-auth/webauthn-lib: ^4.0`.
-- Unit tests in `tests/unit/Auth/WebAuthn/`: `WebAuthnManagerTest`,
+- Unit tests in `tests/Unit/Auth/WebAuthn/`: `WebAuthnManagerTest`,
   `WebAuthnCredentialTest`, `WebAuthnControllerTest`,
   `WebAuthnProviderTest`.
 - Documentation:

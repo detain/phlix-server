@@ -76,7 +76,7 @@ Concretely: after B.3 lands,
 - `detain/phlex-plugin-example` v0.1.0 (live on GitHub) implements
   `Phlex\Plugins\Contract\LifecycleInterface`. The deprecation shim
   must keep it working — verified by the existing
-  `tests/integration/Plugins/SamplePluginSmokeTest.php`.
+  `tests/Integration/Plugins/SamplePluginSmokeTest.php`.
 
 ## 3. Scope — files to create / modify
 
@@ -199,11 +199,11 @@ Concretely: after B.3 lands,
   new `Phlex\Shared\Events\…` FQCN. Registered via
   `composer.json#autoload.files`. The file is **not** in PSR-4
   namespace tree — it's a side-effect script.
-- `tests/unit/Plugins/AliasCompatShimTest.php` — for each aliased
+- `tests/Unit/Plugins/AliasCompatShimTest.php` — for each aliased
   FQCN, assert `class_exists(...)` returns true, then assert
   `(new ReflectionClass(...))->getName() === <Phlex\Shared\…>` to
   confirm the alias resolves.
-- `tests/unit/Plugins/Manifest/ManifestSchemaTest.php` — split out
+- `tests/Unit/Plugins/Manifest/ManifestSchemaTest.php` — split out
   the validator tests from the old `ManifestTest`. Same assertions,
   new collaborator.
 
@@ -280,12 +280,12 @@ Concretely: after B.3 lands,
 - `src/Session/PlaybackController.php` — `use Phlex\Common\Events\Playback\PlaybackStarted` becomes `use Phlex\Shared\Events\Playback\PlaybackStarted`. Same for the three other playback events.
 - `src/Media/Library/MediaScanner.php` — update `use` for the five library events.
 - `src/Auth/AuthManager.php` — update `use` for the three user events.
-- `tests/unit/Plugins/**/*.php` — every test that imports
+- `tests/Unit/Plugins/**/*.php` — every test that imports
   `Phlex\Plugins\Contract\LifecycleInterface`,
   `Phlex\Plugins\Manifest`, `Phlex\Plugins\ManifestType`,
   `Phlex\Plugins\ManifestValidationError`, `Phlex\Plugins\EventNameMap`
   must update its `use`.
-- `tests/unit/Common/Events/**/*.php` — every test that imports a
+- `tests/Unit/Common/Events/**/*.php` — every test that imports a
   `Phlex\Common\Events\*` event class must update its `use`.
 - `tests/Fixtures/Plugins/fixture-plugin/Plugin.php` — keeps the old
   `Phlex\Plugins\Contract\LifecycleInterface` import to prove the
@@ -394,8 +394,8 @@ update `phlex` to consume it.
       properties or expose via these accessors.
    8. **Update CHANGELOG.md** per §3.
    9. **Write the tests** listed under "Inside phlex-shared / Create".
-      Mirror the existing tests in `phlex`'s `tests/unit/Plugins/` and
-      `tests/unit/Common/Events/`, adapting namespaces.
+      Mirror the existing tests in `phlex`'s `tests/Unit/Plugins/` and
+      `tests/Unit/Common/Events/`, adapting namespaces.
    10. **Run the verification bar inside `phlex-shared`:**
        ```bash
        composer install
@@ -488,7 +488,7 @@ update `phlex` to consume it.
    13. **Run the sample plugin smoke test** to verify the
        deprecation shim:
        ```bash
-       ./vendor/bin/phpunit tests/integration/Plugins/SamplePluginSmokeTest.php
+       ./vendor/bin/phpunit tests/Integration/Plugins/SamplePluginSmokeTest.php
        ```
        This test imports `phlex-plugin-example` which implements
        `Phlex\Plugins\Contract\LifecycleInterface` (the deprecated
@@ -514,15 +514,15 @@ update `phlex` to consume it.
 
 **Inside `phlex`:**
 
-- `tests/unit/Plugins/AliasCompatShimTest.php` — for each of the 17
+- `tests/Unit/Plugins/AliasCompatShimTest.php` — for each of the 17
   aliases, assert:
   - `class_exists('Phlex\Common\Events\Playback\PlaybackStarted', true)` is `true`.
   - `(new ReflectionClass(...))->getName() === 'Phlex\Shared\Events\Playback\PlaybackStarted'` (the alias resolves to the real class).
   - `is_a('Phlex\Common\Events\Playback\PlaybackStarted', 'Phlex\Shared\Events\AbstractEvent', true)` is `true`.
-- `tests/unit/Plugins/Manifest/ManifestSchemaTest.php` — port the
+- `tests/Unit/Plugins/Manifest/ManifestSchemaTest.php` — port the
   old `Manifest::validate()` tests from `ManifestTest`. Same
   assertions.
-- `tests/integration/Plugins/LifecycleShimTest.php` — define a
+- `tests/Integration/Plugins/LifecycleShimTest.php` — define a
   fixture class that implements
   `\Phlex\Plugins\Contract\LifecycleInterface` (the deprecated
   alias). Assert that
@@ -698,7 +698,7 @@ composer update detain/phlex-shared
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/psalm --no-progress
 find src -name "*.php" -exec php -l {} \; 2>&1 | grep -v "No syntax errors"
-./vendor/bin/phpunit tests/integration/Plugins/SamplePluginSmokeTest.php  # shim guard
+./vendor/bin/phpunit tests/Integration/Plugins/SamplePluginSmokeTest.php  # shim guard
 
 # ─── 4. Caliber sync (hook active on /home/sites/phlex) ───
 git add -A

@@ -116,10 +116,10 @@ Existing patterns to follow:
       INDEX idx_plugins_enabled (enabled)
   ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
-- `tests/unit/Plugins/PluginLoaderTest.php` — see §5.
-- `tests/unit/Plugins/Repository/PluginRepositoryTest.php`
-- `tests/unit/Plugins/EventNameMapTest.php`
-- `tests/integration/Plugins/InstallEnableDisableTest.php` — uses a
+- `tests/Unit/Plugins/PluginLoaderTest.php` — see §5.
+- `tests/Unit/Plugins/Repository/PluginRepositoryTest.php`
+- `tests/Unit/Plugins/EventNameMapTest.php`
+- `tests/Integration/Plugins/InstallEnableDisableTest.php` — uses a
   fixture plugin from `tests/Fixtures/Plugins/fixture-plugin/`.
 - `tests/Fixtures/Plugins/fixture-plugin/plugin.json` — minimal
   metadata-provider manifest.
@@ -252,7 +252,7 @@ Existing patterns to follow:
 17. `test_delete_removes_row`.
 
 **Integration test** (`InstallEnableDisableTest`, in
-`tests/integration/Plugins/`):
+`tests/Integration/Plugins/`):
 
 18. `test_full_lifecycle_with_fixture_plugin` — installs
     `tests/Fixtures/Plugins/fixture-plugin/` via
@@ -368,7 +368,7 @@ Review = Yes. Reviewer runs `a.4-plugin-loader-review.md`. Reviewer
 must also run the integration test in isolation:
 
 ```bash
-./vendor/bin/phpunit tests/integration/Plugins/InstallEnableDisableTest.php
+./vendor/bin/phpunit tests/Integration/Plugins/InstallEnableDisableTest.php
 ```
 
 and confirm `var/plugins/` is clean after the test tear-down.

@@ -118,12 +118,12 @@ that returns the correct vendor-specific filter graph. It is called by
   }
   ```
 
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/HdrMetadataTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/ToneMapFilterChainTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/HwaccelToneMapperTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/NvencToneMapperTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/VaapiToneMapperTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/QsvToneMapperTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/HdrMetadataTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/ToneMapFilterChainTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/HwaccelToneMapperTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/NvencToneMapperTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/VaapiToneMapperTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/ToneMapping/Vendor/QsvToneMapperTest.php`
 
 #### Documentation
 

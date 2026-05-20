@@ -203,8 +203,8 @@ All paths inside `/home/sites/phlex-hub/`.
 
 #### Unit Tests
 
-- `tests/unit/Server/Http/Controllers/ServerListControllerTest.php`
-- `tests/unit/Server/Http/Controllers/ServerManageControllerTest.php`
+- `tests/Unit/Server/Http/Controllers/ServerListControllerTest.php`
+- `tests/Unit/Server/Http/Controllers/ServerManageControllerTest.php`
 
 #### Documentation
 

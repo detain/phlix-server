@@ -150,10 +150,10 @@ Existing patterns to follow:
   ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
 
-- `tests/unit/Theming/ThemeMediaFinderTest.php`
-- `tests/unit/Theming/ThemeMediaRepositoryTest.php`
-- `tests/unit/Theming/ThemeMediaTest.php`
-- `tests/integration/Theming/ThemeMediaScanTest.php`
+- `tests/Unit/Theming/ThemeMediaFinderTest.php`
+- `tests/Unit/Theming/ThemeMediaRepositoryTest.php`
+- `tests/Unit/Theming/ThemeMediaTest.php`
+- `tests/Integration/Theming/ThemeMediaScanTest.php`
 
 #### WebPortal UI additions
 

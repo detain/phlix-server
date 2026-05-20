@@ -166,9 +166,9 @@ existing `Recorder.php` framework (already has `scheduleRecording()`,
 
 #### Tests
 
-- `tests/unit/LiveTv/Recording/SeriesRuleManagerTest.php`
-- `tests/unit/LiveTv/Recording/RecordingDeduplicatorTest.php`
-- `tests/unit/LiveTv/Recording/RecordingSchedulerTest.php`
+- `tests/Unit/LiveTv/Recording/SeriesRuleManagerTest.php`
+- `tests/Unit/LiveTv/Recording/RecordingDeduplicatorTest.php`
+- `tests/Unit/LiveTv/Recording/RecordingSchedulerTest.php`
 
 #### Documentation
 

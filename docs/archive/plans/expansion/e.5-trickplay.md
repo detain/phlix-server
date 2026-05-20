@@ -131,10 +131,10 @@ HTTP, mapping byte-offset ranges to BIF grid indices.
   ];
   ```
 
-- `tests/unit/Media/Streaming/Trickplay/TrickplayConfigTest.php`
-- `tests/unit/Media/Streaming/Trickplay/TrickplayGeneratorTest.php`
-- `tests/unit/Media/Streaming/Trickplay/TrickplayResultTest.php`
-- `tests/unit/Media/Streaming/Trickplay/TrickplayControllerTest.php`
+- `tests/Unit/Media/Streaming/Trickplay/TrickplayConfigTest.php`
+- `tests/Unit/Media/Streaming/Trickplay/TrickplayGeneratorTest.php`
+- `tests/Unit/Media/Streaming/Trickplay/TrickplayResultTest.php`
+- `tests/Unit/Media/Streaming/Trickplay/TrickplayControllerTest.php`
 
 #### Documentation
 

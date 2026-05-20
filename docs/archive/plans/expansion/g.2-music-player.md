@@ -146,9 +146,9 @@ views. G.3 (Last.fm) builds on this by scrobbling what G.2 plays.
   -- ALTER TABLE libraries ADD COLUMN library_type ENUM('video','music','photo','book','audiobook') DEFAULT 'video';
   ```
 
-- `tests/unit/Media/Library/AudioScannerTest.php`
-- `tests/unit/Media/Library/MusicLibraryManagerTest.php`
-- `tests/unit/Server/Http/Controllers/MusicControllerTest.php`
+- `tests/Unit/Media/Library/AudioScannerTest.php`
+- `tests/Unit/Media/Library/MusicLibraryManagerTest.php`
+- `tests/Unit/Server/Http/Controllers/MusicControllerTest.php`
 
 #### Documentation
 

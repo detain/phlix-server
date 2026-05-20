@@ -144,11 +144,11 @@ Existing patterns to follow:
   ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
 
-- `tests/unit/Media/Extras/TrailerResolverTest.php`
-- `tests/unit/Media/Extras/TrailerFinderTest.php`
-- `tests/unit/Media/Extras/TrailerTest.php`
-- `tests/unit/Media/Extras/ExtraTest.php`
-- `tests/integration/Media/Extras/TrailerScannerTest.php`
+- `tests/Unit/Media/Extras/TrailerResolverTest.php`
+- `tests/Unit/Media/Extras/TrailerFinderTest.php`
+- `tests/Unit/Media/Extras/TrailerTest.php`
+- `tests/Unit/Media/Extras/ExtraTest.php`
+- `tests/Integration/Media/Extras/TrailerScannerTest.php`
 
 #### Documentation
 

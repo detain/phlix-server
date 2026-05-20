@@ -66,9 +66,9 @@ Read first, do not modify until §4:
   MetadataManager, HlsStreamer.
 - `src/Common/Container/Providers/SessionServicesProvider.php` — registers
   SessionManager, PlaybackController.
-- `tests/unit/Common/Container/ContainerFactoryTest.php` — unit tests
+- `tests/Unit/Common/Container/ContainerFactoryTest.php` — unit tests
   (see §5).
-- `tests/unit/Common/Container/Providers/CoreServicesProviderTest.php` —
+- `tests/Unit/Common/Container/Providers/CoreServicesProviderTest.php` —
   smoke test for the core provider.
 - `docs/dev/architecture-server.md` — new doc (see §6).
 - `docs/reference/env-vars.md` — new doc (see §6).
@@ -161,7 +161,7 @@ Read first, do not modify until §4:
 
 ## 5. Tests (REQUIRED — §0.4 minimum bar)
 
-Unit tests under `tests/unit/Common/Container/`. Use PHPUnit 10 +
+Unit tests under `tests/Unit/Common/Container/`. Use PHPUnit 10 +
 `createMock(\Workerman\MySQL\Connection::class)` per AGENTS.md convention.
 
 Required tests on `ContainerFactoryTest`:
@@ -193,7 +193,7 @@ Required test on `CoreServicesProviderTest`:
 `./vendor/bin/phpunit --coverage-text | grep 'Common/Container'`.
 
 **Integration test:** A.1 touches the bootstrap boundary. Add
-`tests/integration/Container/BootstrapTest.php` that includes
+`tests/Integration/Container/BootstrapTest.php` that includes
 `public/index.php`'s replacement logic against a sqlite-backed config
 fixture and confirms `Application` boots without throwing. Skip the test
 if `pdo_sqlite` is missing (document the skip in the test message).

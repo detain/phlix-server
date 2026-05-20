@@ -114,18 +114,18 @@ All paths inside `/home/sites/phlex-hub/`.
 - `public/templates/home/my-servers.tpl` — empty-state page: "You
   haven't claimed any servers yet. Claim one from your local Phlex
   install."
-- `tests/unit/Auth/JwtHandlerTest.php` — token issue + validate
+- `tests/Unit/Auth/JwtHandlerTest.php` — token issue + validate
   round-trip; returns `JwtClaims`; expired token returns null.
-- `tests/unit/Auth/UserRepositoryTest.php` — `findByUsername`,
+- `tests/Unit/Auth/UserRepositoryTest.php` — `findByUsername`,
   `findByEmail`, `insert` (mocks `Workerman\MySQL\Connection`).
-- `tests/unit/Auth/AuthManagerTest.php` — register, login (success +
+- `tests/Unit/Auth/AuthManagerTest.php` — register, login (success +
   bad password), refresh, logout. Mocks Repository + Logger.
-- `tests/unit/Http/Middleware/AuthMiddlewareTest.php` — valid token
+- `tests/Unit/Http/Middleware/AuthMiddlewareTest.php` — valid token
   populates `user`; missing / expired / mismatched-iss returns 401.
-- `tests/unit/Http/Middleware/AdminMiddlewareTest.php` —
+- `tests/Unit/Http/Middleware/AdminMiddlewareTest.php` —
   admin-flag gate.
-- `tests/unit/Http/Controllers/AuthControllerTest.php` — happy paths.
-- `tests/integration/Auth/SignupLoginFlowTest.php` — end-to-end:
+- `tests/Unit/Http/Controllers/AuthControllerTest.php` — happy paths.
+- `tests/Integration/Auth/SignupLoginFlowTest.php` — end-to-end:
   POST `/signup`, then POST `/login`, then GET `/my-servers` (with
   the cookie) returns 200; GET `/my-servers` without the cookie
   returns 302 → `/login`. **Skipped** if no test DB env is

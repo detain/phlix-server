@@ -82,9 +82,9 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Arr/SonarrClientTest.php`
-- `tests/unit/Arr/RadarrClientTest.php`
-- `tests/unit/Arr/ArrClientFactoryTest.php`
+- `tests/Unit/Arr/SonarrClientTest.php`
+- `tests/Unit/Arr/RadarrClientTest.php`
+- `tests/Unit/Arr/ArrClientFactoryTest.php`
 
 ### Modify
 

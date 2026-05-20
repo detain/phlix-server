@@ -150,10 +150,10 @@ transcode chain.
   ];
   ```
 
-- `tests/unit/Media/Transcoding/Subtitles/SubtitleFormatTest.php`
-- `tests/unit/Media/Transcoding/Subtitles/SubtitleTrackTest.php`
-- `tests/unit/Media/Transcoding/Subtitles/SubtitleBurnerTest.php`
-- `tests/unit/Media/Transcoding/Subtitles/SubtitleStyleOptionsTest.php`
+- `tests/Unit/Media/Transcoding/Subtitles/SubtitleFormatTest.php`
+- `tests/Unit/Media/Transcoding/Subtitles/SubtitleTrackTest.php`
+- `tests/Unit/Media/Transcoding/Subtitles/SubtitleBurnerTest.php`
+- `tests/Unit/Media/Transcoding/Subtitles/SubtitleStyleOptionsTest.php`
 
 #### Documentation
 

@@ -2984,7 +2984,7 @@ export default PlayerView;
 ### 8.1 Unit Tests
 
 ```javascript
-// tests/unit/api/ApiClient.test.js
+// tests/Unit/api/ApiClient.test.js
 
 describe('ApiClient', () => {
     let apiClient;
@@ -3037,7 +3037,7 @@ describe('ApiClient', () => {
 ### 8.2 Integration Tests
 
 ```javascript
-// tests/integration/Playback.test.js
+// tests/Integration/Playback.test.js
 
 describe('Playback Integration', () => {
     beforeAll(async () => {

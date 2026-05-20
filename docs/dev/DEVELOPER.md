@@ -2314,7 +2314,7 @@ class ResponseTest extends TestCase
 ./vendor/bin/phpunit --testsuite Integration
 
 # Run specific test class
-./vendor/bin/phpunit tests/unit/Server/Http/ResponseTest.php
+./vendor/bin/phpunit tests/Unit/Server/Http/ResponseTest.php
 
 # Run tests matching a pattern
 ./vendor/bin/phpunit --filter testCanCreate

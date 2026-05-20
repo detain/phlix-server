@@ -137,9 +137,9 @@ F.3 does NOT wire markers into the player UI (that is F.4 + Phase M).
 - `src/Server/Http/Router.php` — register the 4 marker routes
   (done in `addRoutes` or equivalent method).
 
-- `tests/unit/Media/Markers/MarkerServiceTest.php`
-- `tests/unit/Media/Markers/MarkerSetTest.php`
-- `tests/unit/Server/Http/Controllers/MarkerControllerTest.php`
+- `tests/Unit/Media/Markers/MarkerServiceTest.php`
+- `tests/Unit/Media/Markers/MarkerSetTest.php`
+- `tests/Unit/Server/Http/Controllers/MarkerControllerTest.php`
 
 #### Documentation
 

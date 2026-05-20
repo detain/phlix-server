@@ -110,8 +110,8 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Arr/TrashGuidesProviderTest.php`
-- `tests/unit/Arr/CustomFormatSyncerTest.php`
+- `tests/Unit/Arr/TrashGuidesProviderTest.php`
+- `tests/Unit/Arr/CustomFormatSyncerTest.php`
 
 ### Modify
 
@@ -162,7 +162,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b k.4-trash-guides
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Arr/TrashGuidesProviderTest.php tests/unit/Arr/CustomFormatSyncerTest.php
+./vendor/bin/phpunit tests/Unit/Arr/TrashGuidesProviderTest.php tests/Unit/Arr/CustomFormatSyncerTest.php
 ./vendor/bin/phpstan analyze src/Arr --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Arr/
 git add -A

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlix\Tests\Unit\Arr;
+namespace Phlix\Tests\Unit\Server\Arr;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Server\Arr\CustomFormatSyncer;

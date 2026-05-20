@@ -25,7 +25,7 @@ find src -name '*.php' -exec php -l {} \; 2>&1 | grep -v 'No syntax errors'
 Then run the integration test in isolation:
 
 ```bash
-./vendor/bin/phpunit tests/integration/Plugins/InstallEnableDisableTest.php
+./vendor/bin/phpunit tests/Integration/Plugins/InstallEnableDisableTest.php
 ls var/plugins/   # should be empty after tear-down
 ```
 

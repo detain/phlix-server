@@ -289,21 +289,21 @@ CREATE TABLE servers (
 
 #### Unit Tests
 
-- `tests/unit/Hub/Ed25519KeyManagerTest.php` — same pattern as server
-- `tests/unit/Hub/JwksControllerTest.php` — serves JWKS document
-- `tests/unit/Hub/ClaimRequestHandlerTest.php` — new claim, duplicate
+- `tests/Unit/Hub/Ed25519KeyManagerTest.php` — same pattern as server
+- `tests/Unit/Hub/JwksControllerTest.php` — serves JWKS document
+- `tests/Unit/Hub/ClaimRequestHandlerTest.php` — new claim, duplicate
   claim (returns existing), invalid JWK
-- `tests/unit/Hub/EnrollmentJwtServiceTest.php` — create + validate
+- `tests/Unit/Hub/EnrollmentJwtServiceTest.php` — create + validate
   enrollment JWT, extract claims
-- `tests/unit/Hub/HeartbeatHandlerTest.php` — valid heartbeat updates
+- `tests/Unit/Hub/HeartbeatHandlerTest.php` — valid heartbeat updates
   server, invalid JWT throws
-- `tests/unit/Hub/ServerInfoHandlerTest.php` — getServerInfo,
+- `tests/Unit/Hub/ServerInfoHandlerTest.php` — getServerInfo,
   getServersForUser (empty + populated)
-- `tests/unit/Hub/DeregisterHandlerTest.php` — deregister success
-- `tests/unit/Server/Http/Middleware/EnrollmentJwtMiddlewareTest.php`
-- `tests/unit/Server/Http/Middleware/HubProtocolMiddlewareTest.php`
-- `tests/unit/Server/Http/Controllers/ServerClaimControllerTest.php`
-- `tests/unit/Server/Http/Controllers/ServerControllerTest.php`
+- `tests/Unit/Hub/DeregisterHandlerTest.php` — deregister success
+- `tests/Unit/Server/Http/Middleware/EnrollmentJwtMiddlewareTest.php`
+- `tests/Unit/Server/Http/Middleware/HubProtocolMiddlewareTest.php`
+- `tests/Unit/Server/Http/Controllers/ServerClaimControllerTest.php`
+- `tests/Unit/Server/Http/Controllers/ServerControllerTest.php`
 
 #### Documentation
 

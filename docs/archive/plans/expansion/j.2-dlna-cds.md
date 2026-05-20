@@ -141,9 +141,9 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Dlna/LibraryBridgeTest.php`
-- `tests/unit/Dlna/CdsControlHandlerTest.php`
-- `tests/unit/Dlna/CdsServerTest.php`
+- `tests/Unit/Dlna/LibraryBridgeTest.php`
+- `tests/Unit/Dlna/CdsControlHandlerTest.php`
+- `tests/Unit/Dlna/CdsServerTest.php`
 
 #### Documentation
 

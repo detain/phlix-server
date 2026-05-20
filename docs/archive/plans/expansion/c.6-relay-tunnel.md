@@ -191,10 +191,10 @@ All paths inside `/home/sites/phlex/`.
 
 #### Unit Tests
 
-- `tests/unit/Hub/RelayMessageFramerTest.php` — frame/unframe round-trip
-- `tests/unit/Hub/RelayConsumerTest.php` — mock HubClient + HttpClient;
+- `tests/Unit/Hub/RelayMessageFramerTest.php` — frame/unframe round-trip
+- `tests/Unit/Hub/RelayConsumerTest.php` — mock HubClient + HttpClient;
   test connect, disconnect, frame handling
-- `tests/unit/Hub/HubClientTest.php` — extend to cover `startRelay()`,
+- `tests/Unit/Hub/HubClientTest.php` — extend to cover `startRelay()`,
   `stopRelay()`
 
 #### Documentation

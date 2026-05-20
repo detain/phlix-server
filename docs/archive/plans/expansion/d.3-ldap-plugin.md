@@ -127,9 +127,9 @@ final class UserMapper
 
 #### Unit Tests
 
-- `tests/unit/Plugins/Ldap/LdapProviderTest.php`
-- `tests/unit/Plugins/Ldap/LdapConnectionTest.php`
-- `tests/unit/Plugins/Ldap/UserMapperTest.php`
+- `tests/Unit/Plugins/Ldap/LdapProviderTest.php`
+- `tests/Unit/Plugins/Ldap/LdapConnectionTest.php`
+- `tests/Unit/Plugins/Ldap/UserMapperTest.php`
 
 #### Documentation
 

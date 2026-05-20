@@ -518,7 +518,7 @@ class StreamManager
 
 ### 3.1.4 Create Unit Tests
 
-Create `tests/unit/Media/Streaming/StreamStateTest.php`:
+Create `tests/Unit/Media/Streaming/StreamStateTest.php`:
 ```php
 <?php
 
@@ -580,7 +580,7 @@ class StreamStateTest extends TestCase
 }
 ```
 
-Create `tests/unit/Media/Streaming/QualitySelectorTest.php`:
+Create `tests/Unit/Media/Streaming/QualitySelectorTest.php`:
 ```php
 <?php
 
@@ -640,7 +640,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Streaming/ --testdox
+./vendor/bin/phpunit tests/Unit/Media/Streaming/ --testdox
 ```
 
 2. Verify classes exist:

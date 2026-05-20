@@ -564,7 +564,7 @@ class AuthController
 
 ### 4.1.5 Create Unit Tests
 
-Create `tests/unit/Auth/JwtHandlerTest.php`:
+Create `tests/Unit/Auth/JwtHandlerTest.php`:
 ```php
 <?php
 
@@ -635,7 +635,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Auth/ --testdox
+./vendor/bin/phpunit tests/Unit/Auth/ --testdox
 ```
 
 2. Verify classes exist:

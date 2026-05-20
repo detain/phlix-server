@@ -155,10 +155,10 @@ a basic reader stub in the web portal.
 - `public/assets/js/reader.js` — basic reader: page navigation,
   font size controls, theme (sepia/light/dark).
 
-- `tests/unit/Media/Library/BookScannerTest.php`
-- `tests/unit/Media/Library/BookLibraryManagerTest.php`
-- `tests/unit/Media/Metadata/OpdsFeedBuilderTest.php`
-- `tests/unit/Server/Http/Controllers/BookControllerTest.php`
+- `tests/Unit/Media/Library/BookScannerTest.php`
+- `tests/Unit/Media/Library/BookLibraryManagerTest.php`
+- `tests/Unit/Media/Metadata/OpdsFeedBuilderTest.php`
+- `tests/Unit/Server/Http/Controllers/BookControllerTest.php`
 
 #### Documentation
 

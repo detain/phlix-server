@@ -15,7 +15,7 @@ php public/index.php                        # web portal entry (also dispatches 
 ./vendor/bin/phpunit                        # full suite (Unit + Integration suites are wired in phpunit.xml)
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
-./vendor/bin/phpunit tests/unit/Auth/JwtHandlerTest.php --testdox    # single file
+./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php --testdox    # single file
 ./vendor/bin/phpunit --filter testRegisterCreatesUser                 # single test
 
 # Static analysis / style

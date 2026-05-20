@@ -125,9 +125,9 @@ intelligent codec decisions without hardcoding vendor logic.
 - `src/Media/Transcoding/Hwaccel/VendorProbe/V4L2Probe.php`
 - `src/Media/Transcoding/Hwaccel/VendorProbe/SoftwareProbe.php`
 
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelCapabilityTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelProbeTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelRegistryTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelCapabilityTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelProbeTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelRegistryTest.php`
 
 #### Documentation
 

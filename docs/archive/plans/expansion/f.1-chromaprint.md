@@ -130,8 +130,8 @@ blocked.
   ];
   ```
 
-- `tests/unit/Media/Markers/Fingerprinting/ChromaPrintTest.php`
-- `tests/unit/Media/Markers/Fingerprinting/FingerprintRepositoryTest.php`
+- `tests/Unit/Media/Markers/Fingerprinting/ChromaPrintTest.php`
+- `tests/Unit/Media/Markers/Fingerprinting/FingerprintRepositoryTest.php`
 
 #### Documentation
 

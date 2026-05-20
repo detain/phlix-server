@@ -574,7 +574,7 @@ class LibraryController
 
 ### 2.1.5 Create Unit Tests
 
-Create `tests/unit/Media/Library/LibraryManagerTest.php`:
+Create `tests/Unit/Media/Library/LibraryManagerTest.php`:
 ```php
 <?php
 
@@ -602,7 +602,7 @@ class LibraryManagerTest extends TestCase
 }
 ```
 
-Create `tests/unit/Media/Library/MediaScannerTest.php`:
+Create `tests/Unit/Media/Library/MediaScannerTest.php`:
 ```php
 <?php
 
@@ -634,7 +634,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Library/ --testdox
+./vendor/bin/phpunit tests/Unit/Media/Library/ --testdox
 ```
 
 2. Verify classes exist:

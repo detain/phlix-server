@@ -10,7 +10,7 @@ use Psr\Container\ContainerInterface;
 
 /**
  * Minimal plugin used by the A.4 integration test
- * (`tests/integration/Plugins/InstallEnableDisableTest.php`).
+ * (`tests/Integration/Plugins/InstallEnableDisableTest.php`).
  *
  * Subscribes to {@see PlaybackStarted} and counts the number of times
  * the listener fires; the test reads the counter to assert that the

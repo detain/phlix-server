@@ -212,12 +212,12 @@ All paths inside `/home/sites/phlex-hub/`.
 #### Unit Tests
 
 **Hub-side tests** (`/home/sites/phlex-hub/`):
-- `tests/unit/Hub/DnsAliasManagerTest.php`
-- `tests/unit/Hub/TlsCertificateManagerTest.php`
-- `tests/unit/Hub/RelayRouterTest.php`
+- `tests/Unit/Hub/DnsAliasManagerTest.php`
+- `tests/Unit/Hub/TlsCertificateManagerTest.php`
+- `tests/Unit/Hub/RelayRouterTest.php`
 
 **Server-side tests** (`/home/sites/phlex/`):
-- `tests/unit/Hub/SubdomainClientTest.php`
+- `tests/Unit/Hub/SubdomainClientTest.php`
 
 #### Documentation
 

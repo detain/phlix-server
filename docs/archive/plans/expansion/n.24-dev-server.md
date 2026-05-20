@@ -111,7 +111,7 @@ A concise section covering how to write and run unit tests using the project's P
 ```bash
 ./vendor/bin/phpunit                        # Unit + Integration suites
 ./vendor/bin/phpunit --testsuite Unit       # Unit tests only
-./vendor/bin/phpunit tests/unit/Auth/JwtHandlerTest.php --testdox
+./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php --testdox
 ```
 
 **Mocking the database:**
@@ -125,7 +125,7 @@ $db->expects($this->once())
 ```
 
 **Test location convention:**
-- Unit tests: `tests/unit/{Module}/{Class}Test.php`
+- Unit tests: `tests/Unit/{Module}/{Class}Test.php`
 - Namespace: `Phlex\Tests\Unit\{Module}`
 - Extends: `PHPUnit\Framework\TestCase`
 - Testdox output: `./vendor/bin/phpunit --testdox` for BDD-style descriptions

@@ -197,11 +197,11 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/AirPlay/AirPlayDeviceTest.php`
-- `tests/unit/AirPlay/AirPlayDiscoveryTest.php`
-- `tests/unit/AirPlay/RaopClientTest.php`
-- `tests/unit/AirPlay/AirPlaySessionTest.php`
-- `tests/unit/AirPlay/AirPlayManagerTest.php`
+- `tests/Unit/AirPlay/AirPlayDeviceTest.php`
+- `tests/Unit/AirPlay/AirPlayDiscoveryTest.php`
+- `tests/Unit/AirPlay/RaopClientTest.php`
+- `tests/Unit/AirPlay/AirPlaySessionTest.php`
+- `tests/Unit/AirPlay/AirPlayManagerTest.php`
 
 #### Documentation
 

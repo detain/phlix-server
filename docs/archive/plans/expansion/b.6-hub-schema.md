@@ -176,7 +176,7 @@ All paths inside `/home/sites/phlex-hub/`.
       CONSTRAINT fk_webhooks_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
-- `tests/integration/Migrations/MigrationRunnerTest.php` — sqlite or
+- `tests/Integration/Migrations/MigrationRunnerTest.php` — sqlite or
   test-MySQL backed. Runs the migrations in order against an empty
   DB, asserts every table exists, asserts the FK + index list.
   Skipped if neither sqlite nor a `HUB_TEST_DB_*` env is available.
@@ -285,7 +285,7 @@ PHPDoc per §0.4 on every public method/class in
       `migrations/005_webhooks.sql` exist with the SQL from §3.
 - [ ] `migrations/001_placeholder.sql` is deleted.
 - [ ] `scripts/run-migrations.php` is present and PHPDoc'd.
-- [ ] `tests/integration/Migrations/MigrationRunnerTest.php` exists
+- [ ] `tests/Integration/Migrations/MigrationRunnerTest.php` exists
       and exercises the four scenarios listed.
 - [ ] `docs/dev/schema.md` exists with the ER diagram + table
       reference.

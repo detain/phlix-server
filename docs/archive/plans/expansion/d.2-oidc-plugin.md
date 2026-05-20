@@ -145,10 +145,10 @@ callback can verify the request is not forged.
 
 #### Unit Tests
 
-- `tests/unit/Plugins/Oidc/OidcProviderTest.php`
-- `tests/unit/Plugins/Oidc/DiscoveryDocumentTest.php`
-- `tests/unit/Plugins/Oidc/IdTokenValidatorTest.php`
-- `tests/unit/Plugins/Oidc/OidcCallbackControllerTest.php`
+- `tests/Unit/Plugins/Oidc/OidcProviderTest.php`
+- `tests/Unit/Plugins/Oidc/DiscoveryDocumentTest.php`
+- `tests/Unit/Plugins/Oidc/IdTokenValidatorTest.php`
+- `tests/Unit/Plugins/Oidc/OidcCallbackControllerTest.php`
 
 #### Documentation
 

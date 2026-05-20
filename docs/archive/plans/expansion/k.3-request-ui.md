@@ -140,7 +140,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b k.3-request-ui
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Requests/
+./vendor/bin/phpunit tests/Unit/Requests/
 ./vendor/bin/phpstan analyze src/Requests src/Server/Http/Controllers/Requests --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Requests/ src/Server/Http/Controllers/Requests/
 git add -A

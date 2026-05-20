@@ -92,8 +92,8 @@ Parallelizable via `isolation: worktree` agents, one per file or per directory c
 After each cluster lands, regenerate `phpstan-baseline.neon` only if you must — preference is to delete it entirely once errors are zero.
 
 ### Pre-existing real failures to NOT mistake for regression
-- `tests/unit/LiveTv/LiveTvManagerTest::testGetActiveTuneRequestsReturnsArray` — `HdHomeRunTunerDriver::__construct` signature mismatch (predates Wave 2; verified via `git stash` round-trip).
-- `tests/unit/Common/Events/StructuredLoggerPsrAdapterTest` — fatal on anonymous class signature (predates Wave 4).
+- `tests/Unit/LiveTv/LiveTvManagerTest::testGetActiveTuneRequestsReturnsArray` — `HdHomeRunTunerDriver::__construct` signature mismatch (predates Wave 2; verified via `git stash` round-trip).
+- `tests/Unit/Common/Events/StructuredLoggerPsrAdapterTest` — fatal on anonymous class signature (predates Wave 4).
 - Fixing these is in scope for Wave 5; just don't blame them on someone else.
 
 ---

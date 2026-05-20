@@ -149,8 +149,8 @@ Existing patterns to follow:
     ADD COLUMN active_theme_id VARCHAR(64) NULL AFTER max_profiles;
   ```
 
-- `tests/unit/Theming/ThemeRegistryTest.php`
-- `tests/unit/Theming/ThemeMiddlewareTest.php`
+- `tests/Unit/Theming/ThemeRegistryTest.php`
+- `tests/Unit/Theming/ThemeMiddlewareTest.php`
 
 #### Documentation
 

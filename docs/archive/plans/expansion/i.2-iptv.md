@@ -140,9 +140,9 @@ making IPTV streams available alongside HDHomeRun/DVB-T tuners in the unified
 
 #### Tests
 
-- `tests/unit/LiveTv/Tuners/Iptv/M3UParserTest.php`
-- `tests/unit/LiveTv/Tuners/Iptv/XmlTvParserTest.php`
-- `tests/unit/LiveTv/Tuners/Iptv/IptvTunerDriverTest.php`
+- `tests/Unit/LiveTv/Tuners/Iptv/M3UParserTest.php`
+- `tests/Unit/LiveTv/Tuners/Iptv/XmlTvParserTest.php`
+- `tests/Unit/LiveTv/Tuners/Iptv/IptvTunerDriverTest.php`
 
 #### Documentation
 

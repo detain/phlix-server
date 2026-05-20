@@ -137,8 +137,8 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Webhooks/WebhookEventTest.php`
-- `tests/unit/Webhooks/WebhookDispatcherTest.php`
+- `tests/Unit/Webhooks/WebhookEventTest.php`
+- `tests/Unit/Webhooks/WebhookDispatcherTest.php`
 
 ### Modify
 
@@ -188,7 +188,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b l.1-webhook-framework
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Webhooks/
+./vendor/bin/phpunit tests/Unit/Webhooks/
 ./vendor/bin/phpstan analyze src/Webhooks --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Webhooks/
 git add -A

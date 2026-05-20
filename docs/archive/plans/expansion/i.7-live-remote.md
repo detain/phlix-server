@@ -157,9 +157,9 @@ the server-side relay mount and the HLS segment prefetching layer.
 
 #### Tests
 
-- `tests/unit/LiveTv/Relay/HlsRelaySessionTest.php`
-- `tests/unit/LiveTv/Relay/HlsRelayManagerTest.php`
-- `tests/unit/LiveTv/Relay/HlsSegmentPrefetcherTest.php`
+- `tests/Unit/LiveTv/Relay/HlsRelaySessionTest.php`
+- `tests/Unit/LiveTv/Relay/HlsRelayManagerTest.php`
+- `tests/Unit/LiveTv/Relay/HlsSegmentPrefetcherTest.php`
 
 #### Documentation
 

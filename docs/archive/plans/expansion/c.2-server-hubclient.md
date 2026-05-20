@@ -33,7 +33,7 @@ Build `Phlex\Hub\HubClient` — the server-side component that:
   hub communication — it uses raw `sodium_crypto_sign_*` for the Ed25519
   keypair and the enrollment JWT for auth)
 - `/home/sites/phlex/config/` — existing config structure
-- `tests/unit/Auth/JwtHandlerTest.php` — mock patterns for testing
+- `tests/Unit/Auth/JwtHandlerTest.php` — mock patterns for testing
 
 ## 3. Scope — files to create / modify
 
@@ -252,18 +252,18 @@ All paths inside `/home/sites/phlex/`.
 
 #### Unit Tests
 
-- `tests/unit/Hub/Ed25519KeyManagerTest.php` — generate key, store,
+- `tests/Unit/Hub/Ed25519KeyManagerTest.php` — generate key, store,
   load, rotate; invalid PEM file throws
-- `tests/unit/Hub/HubClientTest.php` — mock key manager + http client;
+- `tests/Unit/Hub/HubClientTest.php` — mock key manager + http client;
   test initiatePairing, pollClaimStatus, storeEnrollment, loadEnrollment,
   sendHeartbeat, reEnrollIfNeeded
-- `tests/unit/Hub/HttpClientTest.php` — GET/POST with headers, JSON
+- `tests/Unit/Hub/HttpClientTest.php` — GET/POST with headers, JSON
   round-trip, error handling
-- `tests/unit/Hub/ClaimInitiateResultTest.php`,
-  `tests/unit/Hub/ClaimStatusResultTest.php`,
-  `tests/unit/Hub/HeartbeatResultTest.php`,
-  `tests/unit/Hub/StoredEnrollmentTest.php` — DTO smoke tests
-- `tests/unit/Server/Http/Controllers/HubJwksControllerTest.php` —
+- `tests/Unit/Hub/ClaimInitiateResultTest.php`,
+  `tests/Unit/Hub/ClaimStatusResultTest.php`,
+  `tests/Unit/Hub/HeartbeatResultTest.php`,
+  `tests/Unit/Hub/StoredEnrollmentTest.php` — DTO smoke tests
+- `tests/Unit/Server/Http/Controllers/HubJwksControllerTest.php` —
   serves correct JWKS document
 
 #### Documentation

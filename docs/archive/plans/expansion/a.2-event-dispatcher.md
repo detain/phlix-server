@@ -80,11 +80,11 @@ typical listener. Plugin authors will read this doc.
   decorator that logs every dispatch via the `EVENTS` log channel.
 - `src/Common/Logger/LogChannels.php` — **modify** to add `public const
   EVENTS = 'events';`.
-- `tests/unit/Common/Events/EventDispatcherFactoryTest.php`
-- `tests/unit/Common/Events/ListenerRegistryTest.php`
-- `tests/unit/Common/Events/Playback/PlaybackStartedTest.php` — DTO smoke.
-- `tests/unit/Common/Events/Library/LibraryScanCompletedTest.php` — DTO smoke.
-- `tests/integration/Events/DispatchSmokeTest.php` — wires a stub listener
+- `tests/Unit/Common/Events/EventDispatcherFactoryTest.php`
+- `tests/Unit/Common/Events/ListenerRegistryTest.php`
+- `tests/Unit/Common/Events/Playback/PlaybackStartedTest.php` — DTO smoke.
+- `tests/Unit/Common/Events/Library/LibraryScanCompletedTest.php` — DTO smoke.
+- `tests/Integration/Events/DispatchSmokeTest.php` — wires a stub listener
   into the real container and asserts an event dispatched from
   `PlaybackController` reaches it.
 - `docs/dev/event-reference.md` — canonical event catalog.

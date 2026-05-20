@@ -266,7 +266,7 @@ class HlsController
 
 ### 3.2.3 Create Unit Tests
 
-Create `tests/unit/Media/Streaming/HlsStreamerTest.php`:
+Create `tests/Unit/Media/Streaming/HlsStreamerTest.php`:
 ```php
 <?php
 
@@ -352,7 +352,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Streaming/HlsStreamerTest.php --testdox
+./vendor/bin/phpunit tests/Unit/Media/Streaming/HlsStreamerTest.php --testdox
 ```
 
 2. Verify HLS functions work:

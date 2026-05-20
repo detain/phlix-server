@@ -46,7 +46,7 @@ cd /home/sites/phlex
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/psalm --no-progress
 find src -name '*.php' -exec php -l {} \; 2>&1 | grep -v 'No syntax errors'
-./vendor/bin/phpunit tests/integration/Plugins/SamplePluginSmokeTest.php   # shim guard
+./vendor/bin/phpunit tests/Integration/Plugins/SamplePluginSmokeTest.php   # shim guard
 ```
 
 Total test count must be **at least 667** (the Phase A snapshot from

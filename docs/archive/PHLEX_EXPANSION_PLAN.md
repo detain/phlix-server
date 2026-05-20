@@ -56,7 +56,7 @@ The original plan delivered a **single-repo standalone media server**. This plan
 - `./vendor/bin/phpstan analyze src/ --level=9` must pass with **zero new errors** vs. master.
 - `./vendor/bin/phpcs --standard=PSR12 src/` clean.
 - `find src -name "*.php" -exec php -l {} \;` reports no syntax errors.
-- Whenever a new directory of features is introduced (e.g., `src/Hub/`, `src/Plugins/`), a `tests/unit/<MatchingNamespace>/` directory and at least one smoke test must be created in the same step.
+- Whenever a new directory of features is introduced (e.g., `src/Hub/`, `src/Plugins/`), a `tests/Unit/<MatchingNamespace>/` directory and at least one smoke test must be created in the same step.
 
 **PHPDoc + code comments (per step):**
 - Every new public class has a class-level docblock with: short summary, longer description, `@package`, `@since`.

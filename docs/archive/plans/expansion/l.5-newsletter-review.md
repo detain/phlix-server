@@ -6,7 +6,7 @@
 cd /home/sites/phlex
 
 # ── 1. PHPUnit ──────────────────────────────────────────────
-./vendor/bin/phpunit tests/unit/Admin/NewsletterGeneratorTest.php tests/unit/Admin/NewsletterSenderTest.php
+./vendor/bin/phpunit tests/Unit/Admin/NewsletterGeneratorTest.php tests/Unit/Admin/NewsletterSenderTest.php
 # MUST be green; ≥ 7 new tests
 
 # ── 2. PHPStan level 9 ─────────────────────────────────────

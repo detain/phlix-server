@@ -147,9 +147,9 @@ explicitly deferred to a future step.
 - `public/assets/js/slideshow.js` — slideshow logic: auto-advance
   interval, keyboard nav (left/right/escape), touch/swipe support.
 
-- `tests/unit/Media/Library/PhotoScannerTest.php`
-- `tests/unit/Media/Library/PhotoLibraryManagerTest.php`
-- `tests/unit/Server/Http/Controllers/PhotoControllerTest.php`
+- `tests/Unit/Media/Library/PhotoScannerTest.php`
+- `tests/Unit/Media/Library/PhotoLibraryManagerTest.php`
+- `tests/Unit/Server/Http/Controllers/PhotoControllerTest.php`
 
 #### Documentation
 

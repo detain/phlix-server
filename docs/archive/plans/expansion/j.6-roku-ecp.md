@@ -203,11 +203,11 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Roku/RokuDeviceTest.php`
-- `tests/unit/Roku/RokuDiscoveryTest.php`
-- `tests/unit/Roku/RokuEcpClientTest.php`
-- `tests/unit/Roku/RokuSessionTest.php`
-- `tests/unit/Roku/RokuManagerTest.php`
+- `tests/Unit/Roku/RokuDeviceTest.php`
+- `tests/Unit/Roku/RokuDiscoveryTest.php`
+- `tests/Unit/Roku/RokuEcpClientTest.php`
+- `tests/Unit/Roku/RokuSessionTest.php`
+- `tests/Unit/Roku/RokuManagerTest.php`
 
 #### Documentation
 

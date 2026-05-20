@@ -165,10 +165,10 @@ Existing patterns to follow:
   ];
   ```
 
-- `tests/unit/Plugins/Scrobbler/Trakt/TraktApiTest.php`
-- `tests/unit/Plugins/Scrobbler/Trakt/TraktSettingsTest.php`
-- `tests/unit/Plugins/Scrobbler/Trakt/TraktHistorySyncTest.php`
-- `tests/unit/Plugins/Scrobbler/Trakt/TraktPluginTest.php`
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktApiTest.php`
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktSettingsTest.php`
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktHistorySyncTest.php`
+- `tests/Unit/Plugins/Scrobbler/Trakt/TraktPluginTest.php`
 
 #### New plugin (standalone package — `phlex-plugin-trakt/`)
 

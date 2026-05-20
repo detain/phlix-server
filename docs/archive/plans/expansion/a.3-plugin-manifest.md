@@ -67,8 +67,8 @@ A.4 / A.5 / A.7.
 - `src/Plugins/Exception/InvalidManifestException.php` — thrown by
   `Manifest::fromJson()` on parse errors only (validation errors are
   returned via `validate()` so callers can show all errors at once).
-- `tests/unit/Plugins/ManifestTest.php` — see §5.
-- `tests/unit/Plugins/ManifestTypeTest.php` — enum smoke.
+- `tests/Unit/Plugins/ManifestTest.php` — see §5.
+- `tests/Unit/Plugins/ManifestTypeTest.php` — enum smoke.
 - `tests/Fixtures/Plugins/valid-lastfm.json` — happy-path fixture.
 - `tests/Fixtures/Plugins/valid-oidc.json` — second happy-path fixture.
 - `tests/Fixtures/Plugins/invalid-missing-name.json` — error fixture.
@@ -142,7 +142,7 @@ A.4 / A.5 / A.7.
 
 ## 5. Tests (REQUIRED — §0.4 minimum bar)
 
-`tests/unit/Plugins/ManifestTest.php`:
+`tests/Unit/Plugins/ManifestTest.php`:
 
 1. `test_fromJson_parses_valid_lastfm_fixture` — loads
    `tests/Fixtures/Plugins/valid-lastfm.json`, asserts every field.
@@ -166,7 +166,7 @@ A.4 / A.5 / A.7.
     `description` field (not in our schema); `validate()` reports a
     `code = "unknown_field"` error but parsing succeeds.
 
-`tests/unit/Plugins/ManifestTypeTest.php`:
+`tests/Unit/Plugins/ManifestTypeTest.php`:
 
 11. `test_tryFrom_returns_enum_for_each_known_value` — loops through the
     eleven kebab-case values.

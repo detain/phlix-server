@@ -151,9 +151,9 @@ service at `https://api.schedulesdirect.tmsglobal.com` (or the newer JSON API).
 
 #### Tests
 
-- `tests/unit/LiveTv/Epg/SchedulesDirect/SdApiClientTest.php`
-- `tests/unit/LiveTv/Epg/SchedulesDirect/SdProgramMapperTest.php`
-- `tests/unit/LiveTv/Epg/SchedulesDirect/SdEpgServiceTest.php`
+- `tests/Unit/LiveTv/Epg/SchedulesDirect/SdApiClientTest.php`
+- `tests/Unit/LiveTv/Epg/SchedulesDirect/SdProgramMapperTest.php`
+- `tests/Unit/LiveTv/Epg/SchedulesDirect/SdEpgServiceTest.php`
 
 #### Documentation
 

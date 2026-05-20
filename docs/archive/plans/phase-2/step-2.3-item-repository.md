@@ -362,7 +362,7 @@ class MediaItemController
 
 ### 2.3.3 Create Unit Tests
 
-Create `tests/unit/Media/Library/ItemRepositoryTest.php`:
+Create `tests/Unit/Media/Library/ItemRepositoryTest.php`:
 ```php
 <?php
 
@@ -425,7 +425,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Library/ItemRepositoryTest.php --testdox
+./vendor/bin/phpunit tests/Unit/Media/Library/ItemRepositoryTest.php --testdox
 ```
 
 2. Verify classes exist:

@@ -1,6 +1,6 @@
 ---
 name: phpunit-mock-test
-description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Test.php` extending `PHPUnit\Framework\TestCase`, following the exact patterns in `tests/unit/Auth/JwtHandlerTest.php` and `tests/unit/Media/Library/ItemRepositoryTest.php` — uses `$this->createMock(Connection::class)` for `Workerman\MySQL\Connection` with `->method('query')->willReturn([['col' => 'val']])` for reads and `->expects($this->once())->method('query')->with($this->stringContains('SQL'), $this->callback(fn))` for writes. Use when the user says 'write a test', 'add unit test', 'TDD this', 'test this class', or adds files under `tests/unit/`. Covers PSR-4 namespacing (`Phlix\Tests\Unit\{Module}`), constructor-injection mocking, return-value stubs, expectation-based assertions, and running with `vendor/bin/phpunit --testsuite Unit`. Do NOT use for JS tests (project has no JS test runner), integration/E2E tests that need a real DB (no integration testsuite is configured), or non-`tests/unit/` paths.
+description: Writes a PHPUnit 10 unit test under `tests/Unit/{Module}/{Class}Test.php` extending `PHPUnit\Framework\TestCase`, following the exact patterns in `tests/Unit/Auth/JwtHandlerTest.php` and `tests/Unit/Media/Library/ItemRepositoryTest.php` — uses `$this->createMock(Connection::class)` for `Workerman\MySQL\Connection` with `->method('query')->willReturn([['col' => 'val']])` for reads and `->expects($this->once())->method('query')->with($this->stringContains('SQL'), $this->callback(fn))` for writes. Use when the user says 'write a test', 'add unit test', 'TDD this', 'test this class', or adds files under `tests/Unit/`. Covers PSR-4 namespacing (`Phlix\Tests\Unit\{Module}`), constructor-injection mocking, return-value stubs, expectation-based assertions, and running with `vendor/bin/phpunit --testsuite Unit`. Do NOT use for JS tests (project has no JS test runner), integration/E2E tests that need a real DB (no integration testsuite is configured), or non-`tests/Unit/` paths.
 ---
 
 # PHPUnit Mock Test (phlix)
@@ -8,8 +8,8 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 ## Critical
 
 - **PHPUnit version is 10** (`phpunit/phpunit: ^10.0` in `composer.json`). Do NOT use `@dataProvider` annotations only — attributes (`#[DataProvider]`) are preferred under PHPUnit 10, but annotations still work. Do NOT use `setExpectedException` (removed); use `$this->expectException(...)`.
-- **All tests live under `tests/unit/{Module}/{Class}Test.php`**. The `phpunit.xml` testsuite `Unit` scans `tests/unit` with suffix `Test.php`. Files placed elsewhere will NOT run.
-- **Namespace MUST be `Phlix\Tests\Unit\{Module}`** matching the directory under `tests/unit/`. Autoload is PSR-4 (`Phlix\Tests\` → `tests/`) per `composer.json`.
+- **All tests live under `tests/Unit/{Module}/{Class}Test.php`**. The `phpunit.xml` testsuite `Unit` scans `tests/Unit` with suffix `Test.php`. Files placed elsewhere will NOT run.
+- **Namespace MUST be `Phlix\Tests\Unit\{Module}`** matching the directory under `tests/Unit/`. Autoload is PSR-4 (`Phlix\Tests\` → `tests/`) per `composer.json`.
 - **Database type is `Workerman\MySQL\Connection`** — never `PDO`, never `mysqli`. Always mock it with `$this->createMock(Connection::class)`.
 - **The phpunit config is strict**: `failOnRisky="true"`, `failOnWarning="true"`, `beStrictAboutOutputDuringTests="true"`. A test that produces output (echo, var_dump, error_log to stdout) will FAIL. Every test must contain at least one assertion or `$mock->expects(...)`.
 - **No integration testsuite is wired up** — only `Unit` exists in `phpunit.xml`. Do not add tests that require a live DB connection; mock the `Connection` instead.
@@ -20,11 +20,11 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 
    Verify: `grep -rn "class {ClassName}" src/{Module}/` returns exactly one file. If not, ask the user which one.
 
-2. **Create the test file at the mirrored path** `tests/unit/{Module}/{Class}Test.php`. The directory under `tests/unit/` MUST mirror the directory under `src/`. Example: `src/Media/Library/ItemRepository.php` → `tests/unit/Media/Library/ItemRepositoryTest.php`.
+2. **Create the test file at the mirrored path** `tests/Unit/{Module}/{Class}Test.php`. The directory under `tests/Unit/` MUST mirror the directory under `src/`. Example: `src/Media/Library/ItemRepository.php` → `tests/Unit/Media/Library/ItemRepositoryTest.php`.
 
-   Verify the directory exists: `ls tests/unit/{Module}/` — create it if missing.
+   Verify the directory exists: `ls tests/Unit/{Module}/` — create it if missing.
 
-3. **Write the file header** exactly in this shape (from `tests/unit/Auth/JwtHandlerTest.php` and `tests/unit/Media/Library/ItemRepositoryTest.php`):
+3. **Write the file header** exactly in this shape (from `tests/Unit/Auth/JwtHandlerTest.php` and `tests/Unit/Media/Library/ItemRepositoryTest.php`):
 
    ```php
    <?php
@@ -41,9 +41,9 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
    }
    ```
 
-   Verify the namespace exactly matches the directory path under `tests/unit/`.
+   Verify the namespace exactly matches the directory path under `tests/Unit/`.
 
-4. **For classes without dependencies**, instantiate directly in `setUp()` and assert against real behavior — see `tests/unit/Auth/JwtHandlerTest.php:12-15`:
+4. **For classes without dependencies**, instantiate directly in `setUp()` and assert against real behavior — see `tests/Unit/Auth/JwtHandlerTest.php:12-15`:
 
    ```php
    private JwtHandler $jwtHandler;
@@ -56,7 +56,7 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 
    Do NOT introduce a `setUp()` for classes that need per-test mock variations — build the mock inside each test method instead (see step 5).
 
-5. **For classes with a `Connection` dependency**, build the mock inside each test method (NOT in `setUp`), since each test needs different stubbed data. Pattern from `tests/unit/Media/Library/ItemRepositoryTest.php`:
+5. **For classes with a `Connection` dependency**, build the mock inside each test method (NOT in `setUp`), since each test needs different stubbed data. Pattern from `tests/Unit/Media/Library/ItemRepositoryTest.php`:
 
    ```php
    public function testFindByIdReturnsItemWhenFound(): void
@@ -137,14 +137,14 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 
 **Actions taken:**
 
-1. Create `tests/unit/Session/SessionManagerTest.php`.
+1. Create `tests/Unit/Session/SessionManagerTest.php`.
 2. Write header with `namespace Phlix\Tests\Unit\Session;`, `use PHPUnit\Framework\TestCase;`, `use Phlix\Session\SessionManager;`, `use Workerman\MySQL\Connection;`.
 3. Add `testFindByIdReturnsNullWhenNotFound` stubbing `$db->method('query')->willReturn([])`.
 4. Add `testFindByIdReturnsSessionWhenFound` stubbing `willReturn([['id' => 'sess-1', ...]])`.
 5. Add `testCreateInsertsSession` using `$db->expects($this->once())->method('query')->with($this->stringContains('INSERT INTO sessions'), $this->callback(...))`.
 6. Run `vendor/bin/phpunit --filter SessionManagerTest`.
 
-**Result:** File mirrors `tests/unit/Media/Library/ItemRepositoryTest.php` structure exactly; all tests pass under strict mode.
+**Result:** File mirrors `tests/Unit/Media/Library/ItemRepositoryTest.php` structure exactly; all tests pass under strict mode.
 
 ### Example 2: Pure class with no dependencies
 
@@ -152,7 +152,7 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 
 **Actions taken:**
 
-1. Create `tests/unit/Auth/PasswordHasherTest.php`.
+1. Create `tests/Unit/Auth/PasswordHasherTest.php`.
 2. Mirror the `JwtHandlerTest` shape: private property `$hasher`, `setUp()` constructs the real instance, no mocks.
 3. Add tests like `testHashProducesNonEmptyString`, `testVerifyAcceptsCorrectPassword`, `testVerifyRejectsWrongPassword`.
 4. Run `vendor/bin/phpunit --filter PasswordHasherTest` — failing → implement → green.
@@ -161,7 +161,7 @@ description: Writes a PHPUnit 10 unit test under `tests/unit/{Module}/{Class}Tes
 
 ## Common Issues
 
-- **`Class "Phlix\...\FooTest" not found` when running phpunit:** The namespace in the test file does not match its directory. `tests/unit/Media/Library/FooTest.php` MUST declare `namespace Phlix\Tests\Unit\Media\Library;`. Fix the namespace, then re-run `composer dump-autoload` if needed.
+- **`Class "Phlix\...\FooTest" not found` when running phpunit:** The namespace in the test file does not match its directory. `tests/Unit/Media/Library/FooTest.php` MUST declare `namespace Phlix\Tests\Unit\Media\Library;`. Fix the namespace, then re-run `composer dump-autoload` if needed.
 
 - **`This test did not perform any assertions` causes failure:** `failOnRisky="true"` is set in `phpunit.xml:8`. Either add an `$this->assert*` call or use `$mock->expects($this->once())` (expectations count as assertions). Do NOT change phpunit.xml to silence this.
 

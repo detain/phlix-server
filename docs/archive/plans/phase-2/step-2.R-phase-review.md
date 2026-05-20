@@ -36,7 +36,7 @@ Check that each of the following was implemented:
 
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/ --testdox
+./vendor/bin/phpunit tests/Unit/Media/ --testdox
 ```
 
 ### 2.R.3 Verify API Endpoints Work

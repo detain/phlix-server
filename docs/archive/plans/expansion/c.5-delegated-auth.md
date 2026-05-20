@@ -159,13 +159,13 @@ All paths inside `/home/sites/phlex/`.
 
 #### Test Infrastructure
 
-- `tests/unit/Hub/HubJwtValidatorTest.php` — mock `HttpClientFactory`,
+- `tests/Unit/Hub/HubJwtValidatorTest.php` — mock `HttpClientFactory`,
   test valid JWT, invalid signature, expired, wrong issuer, wrong audience,
   unknown kid refetches JWKS
-- `tests/unit/Hub/HubUserClaimsTest.php` — DTO smoke tests
-- `tests/unit/Hub/JwksCacheTest.php` — cache hit, cache miss, TTL expiry,
+- `tests/Unit/Hub/HubUserClaimsTest.php` — DTO smoke tests
+- `tests/Unit/Hub/JwksCacheTest.php` — cache hit, cache miss, TTL expiry,
   invalidate
-- `tests/unit/Server/Http/Middleware/HubJwtMiddlewareTest.php`
+- `tests/Unit/Server/Http/Middleware/HubJwtMiddlewareTest.php`
 
 #### Documentation
 

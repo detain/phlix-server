@@ -88,9 +88,9 @@ From earlier:
    WHERE id = (SELECT id FROM (SELECT id FROM users
                                   ORDER BY created_at ASC LIMIT 1) t);
   ```
-- `tests/unit/Server/Http/Controllers/PluginAdminControllerTest.php`
-- `tests/unit/Server/Http/Middleware/AdminMiddlewareTest.php`
-- `tests/integration/Plugins/AdminRoutesTest.php` — boots a router with
+- `tests/Unit/Server/Http/Controllers/PluginAdminControllerTest.php`
+- `tests/Unit/Server/Http/Middleware/AdminMiddlewareTest.php`
+- `tests/Integration/Plugins/AdminRoutesTest.php` — boots a router with
   a mock loader, exercises every endpoint, asserts response shape and
   AuditLogger calls.
 
@@ -184,7 +184,7 @@ From earlier:
 12. `test_returns_401_when_no_user_id_on_request`.
 
 **Integration test** (`AdminRoutesTest`, in
-`tests/integration/Plugins/`):
+`tests/Integration/Plugins/`):
 
 13. `test_install_then_enable_then_disable_then_uninstall_via_http` —
     boots the real router + container with a mocked

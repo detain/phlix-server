@@ -1392,7 +1392,7 @@ export default App;
 ### 8.1 Unit Tests
 
 ```typescript
-// tests/unit/api.test.ts
+// tests/Unit/api.test.ts
 
 import { describe, it, expect, vi } from 'vitest';
 import api from '../../src/renderer/utils/api';

@@ -6,7 +6,7 @@
 cd /home/sites/phlex
 
 # ── 1. PHPUnit ──────────────────────────────────────────────
-./vendor/bin/phpunit tests/unit/Webhooks/Plugins/
+./vendor/bin/phpunit tests/Unit/Webhooks/Plugins/
 # MUST be green; ≥ 8 new tests
 
 # ── 2. PHPStan level 9 ─────────────────────────────────────

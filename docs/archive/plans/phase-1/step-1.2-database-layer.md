@@ -412,7 +412,7 @@ echo "Migrations complete.\n";
 
 ### 1.2.5 Create Unit Tests
 
-Create `tests/unit/Common/Database/QueryBuilderTest.php`:
+Create `tests/Unit/Common/Database/QueryBuilderTest.php`:
 ```php
 <?php
 
@@ -467,7 +467,7 @@ class QueryBuilderTest extends TestCase
 }
 ```
 
-Create `tests/unit/Common/Database/ConnectionPoolTest.php`:
+Create `tests/Unit/Common/Database/ConnectionPoolTest.php`:
 ```php
 <?php
 
@@ -513,7 +513,7 @@ ls -la /home/sites/phlex/src/Common/Database/
 2. Run the unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Common/Database/ --testdox
+./vendor/bin/phpunit tests/Unit/Common/Database/ --testdox
 ```
 
 3. Verify migration SQL is valid:

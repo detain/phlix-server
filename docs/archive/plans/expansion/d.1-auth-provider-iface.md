@@ -134,11 +134,11 @@ provider prefix (e.g. `oidc:alice@google.com` or `ldap:bob`).
     ADD UNIQUE INDEX idx_external (provider, external_id);
   ```
 
-- `tests/unit/Auth/AuthProviderRegistryTest.php`
-- `tests/unit/Auth/AuthResultTest.php`
-- `tests/unit/Auth/UserInfoTest.php`
-- `tests/unit/Auth/ProviderManagerTest.php`
-- `tests/unit/Auth/AuthProviderControllerTest.php`
+- `tests/Unit/Auth/AuthProviderRegistryTest.php`
+- `tests/Unit/Auth/AuthResultTest.php`
+- `tests/Unit/Auth/UserInfoTest.php`
+- `tests/Unit/Auth/ProviderManagerTest.php`
+- `tests/Unit/Auth/AuthProviderControllerTest.php`
 
 #### Documentation
 

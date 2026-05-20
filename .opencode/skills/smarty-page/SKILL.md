@@ -68,7 +68,7 @@ Adds a Smarty-rendered HTML page to the Phlix web portal. Every page requires tw
 
 7. **Smoke-test the rendered output.** With the dev server running, `curl -s -o /tmp/page.html -w '%{http_code}\n' http://localhost:<port>/<route>` must return `200`, and `grep -c 'class="sidebar"' /tmp/page.html` must return `1` (proves the layout extended correctly). For 404 paths, `curl -s -o /dev/null -w '%{http_code}\n' http://localhost:<port>/<bad-route>` must return `404`.
 
-8. **Add a unit test** at `tests/unit/Server/WebPortal/PageRendererTest.php` (create the directory if absent — mirrors `tests/unit/Auth/`, `tests/unit/Session/`, etc.). Test should construct `PageRenderer` with stubbed dependencies, call `render<Name>()`, and assert the returned `Response` has status `200` (or `404` for the missing-resource path) and that the HTML body contains a section-specific marker (e.g. the `<div class="<section>-page">` from step 2). Run `vendor/bin/phpunit tests/unit/Server/WebPortal/PageRendererTest.php` — must report `OK`.
+8. **Add a unit test** at `tests/Unit/Server/WebPortal/PageRendererTest.php` (create the directory if absent — mirrors `tests/Unit/Auth/`, `tests/Unit/Session/`, etc.). Test should construct `PageRenderer` with stubbed dependencies, call `render<Name>()`, and assert the returned `Response` has status `200` (or `404` for the missing-resource path) and that the HTML body contains a section-specific marker (e.g. the `<div class="<section>-page">` from step 2). Run `vendor/bin/phpunit tests/Unit/Server/WebPortal/PageRendererTest.php` — must report `OK`.
 
 ## Examples
 

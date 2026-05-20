@@ -50,7 +50,7 @@ description: Registers a new WebSocket event handler via MessageHandler->on('eve
 
 4. **Wrap state mutations** (DB writes, session updates) in `try/catch`. On `\Throwable`, log via `$this->logger->error(...)` and reply with `$conn->sendMessage('error', ['code' => 'internal', 'message' => 'Operation failed'])`. Do NOT leak exception messages to the client.
 
-5. **Add a unit test** at `tests/unit/Server/WebSocket/MessageHandlerTest.php` (or `tests/unit/Session/SyncPlay/...` for syncplay events). Mock `Connection` and assert `sendMessage` is called with the expected type+payload. Pattern:
+5. **Add a unit test** at `tests/Unit/Server/WebSocket/MessageHandlerTest.php` (or `tests/Unit/Session/SyncPlay/...` for syncplay events). Mock `Connection` and assert `sendMessage` is called with the expected type+payload. Pattern:
    ```php
    public function testEventNameRepliesWithStatus(): void
    {
@@ -72,7 +72,7 @@ description: Registers a new WebSocket event handler via MessageHandler->on('eve
 
 7. **Verify** before claiming done:
    - `php -l src/Server/WebSocket/Events.php src/Server/WebSocket/MessageHandler.php`
-   - `./vendor/bin/phpunit tests/unit/Server/WebSocket/` (or the specific test file)
+   - `./vendor/bin/phpunit tests/Unit/Server/WebSocket/` (or the specific test file)
    - Grep for the new constant: `grep -r 'WebSocketEvents::EVENT_NAME' src/ tests/` — must appear in both registration and tests.
 
 ## Examples

@@ -240,11 +240,11 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/Discovery/Ssdp/SsdpSocketTest.php`
-- `tests/unit/Discovery/Ssdp/SsdpDiscoveryTest.php`
-- `tests/unit/Discovery/Mdns/MdnsSocketTest.php`
-- `tests/unit/Discovery/Mdns/MdnsDiscoveryTest.php`
-- `tests/unit/Discovery/DiscoveryManagerTest.php`
+- `tests/Unit/Discovery/Ssdp/SsdpSocketTest.php`
+- `tests/Unit/Discovery/Ssdp/SsdpDiscoveryTest.php`
+- `tests/Unit/Discovery/Mdns/MdnsSocketTest.php`
+- `tests/Unit/Discovery/Mdns/MdnsDiscoveryTest.php`
+- `tests/Unit/Discovery/DiscoveryManagerTest.php`
 
 #### Documentation
 

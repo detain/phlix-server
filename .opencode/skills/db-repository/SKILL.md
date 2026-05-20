@@ -5,7 +5,7 @@ description: Adds a data-access/repository class in src/ using Workerman\MySQL\C
 
 # db-repository
 
-Adds a repository / data-access class under `src/{Module}/` that wraps `Workerman\MySQL\Connection`, follows the project's parameterized-query + JSON-hydration patterns, and produces tests under `tests/unit/{Module}/`.
+Adds a repository / data-access class under `src/{Module}/` that wraps `Workerman\MySQL\Connection`, follows the project's parameterized-query + JSON-hydration patterns, and produces tests under `tests/Unit/{Module}/`.
 
 ## Critical
 
@@ -95,7 +95,7 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
    ```
    If the table stores `metadata_json`, also copy `hydrateItem()` from `ItemRepository.php:510-519`.
 
-9. **Write the PHPUnit test.** Create `tests/unit/{Module}/{Name}RepositoryTest.php` mirroring `tests/unit/Media/Library/ItemRepositoryTest.php:1-50`:
+9. **Write the PHPUnit test.** Create `tests/Unit/{Module}/{Name}RepositoryTest.php` mirroring `tests/Unit/Media/Library/ItemRepositoryTest.php:1-50`:
    ```php
    <?php
 
@@ -117,7 +117,7 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
    }
    ```
    At minimum cover: constructor instantiation, `findById` not-found returns `null`, `findById` found returns hydrated array.
-   - **Verify:** `vendor/bin/phpunit tests/unit/{Module}/{Name}RepositoryTest.php` exits 0.
+   - **Verify:** `vendor/bin/phpunit tests/Unit/{Module}/{Name}RepositoryTest.php` exits 0.
 
 10. **Wire the repository into its consumer.** Repositories are constructor-injected, never `new`-ed inside business logic. Find the manager or service that should own it (e.g. `AuthManager`, `LibraryManager`, `SessionManager`) and add a `private {Name}Repository $repo;` property + constructor parameter. Do NOT register a DI container — this project uses manual constructor wiring at the composition root.
 
@@ -130,8 +130,8 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
 2. Create `src/Media/Library/PlaylistRepository.php` with namespace `Phlix\Media\Library`, `use Workerman\MySQL\Connection;`, strict types, constructor injecting `Connection $db`.
 3. Add `findById(string $id): ?array`, `findByUserId(string $userId): array`, `create(array $data): string` (UUID via `generateUuid()`, `items_json` encoded via `json_encode`), `update(string $id, array $data): void`, `delete(string $id): void`, and a private `hydrateItem()` that decodes `items_json` into `$row['items']`.
 4. Copy the `generateUuid()` helper verbatim from `UserRepository.php:475-485`.
-5. Create `tests/unit/Media/Library/PlaylistRepositoryTest.php` with the four baseline tests.
-6. Run `vendor/bin/phpunit tests/unit/Media/Library/PlaylistRepositoryTest.php` and confirm green.
+5. Create `tests/Unit/Media/Library/PlaylistRepositoryTest.php` with the four baseline tests.
+6. Run `vendor/bin/phpunit tests/Unit/Media/Library/PlaylistRepositoryTest.php` and confirm green.
 7. Inject `PlaylistRepository` into `LibraryManager` constructor.
 
 **Result:** A new class identical in shape to `ItemRepository.php`, all queries parameterized, JSON hydrated, tested.

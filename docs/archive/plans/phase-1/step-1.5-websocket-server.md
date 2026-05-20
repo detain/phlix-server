@@ -542,7 +542,7 @@ final class WebSocketEvents
 
 ### 1.5.6 Create Unit Tests
 
-Create `tests/unit/Server/WebSocket/ConnectionPoolTest.php`:
+Create `tests/Unit/Server/WebSocket/ConnectionPoolTest.php`:
 ```php
 <?php
 
@@ -619,7 +619,7 @@ class ConnectionPoolTest extends TestCase
 }
 ```
 
-Create `tests/unit/Server/WebSocket/MessageHandlerTest.php`:
+Create `tests/Unit/Server/WebSocket/MessageHandlerTest.php`:
 ```php
 <?php
 
@@ -666,7 +666,7 @@ After completing all tasks:
 1. Run the unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Server/WebSocket/ --testdox
+./vendor/bin/phpunit tests/Unit/Server/WebSocket/ --testdox
 ```
 
 2. Verify all classes exist:

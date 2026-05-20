@@ -125,9 +125,9 @@ runs it as a post-processing step, and handles the EDL → marker conversion.
   ];
   ```
 
-- `tests/unit/LiveTv/ComskipRunnerTest.php`
-- `tests/unit/LiveTv/ComskipEdlParserTest.php`
-- `tests/unit/LiveTv/ComskipPostProcessorTest.php`
+- `tests/Unit/LiveTv/ComskipRunnerTest.php`
+- `tests/Unit/LiveTv/ComskipEdlParserTest.php`
+- `tests/Unit/LiveTv/ComskipPostProcessorTest.php`
 
 #### Documentation
 

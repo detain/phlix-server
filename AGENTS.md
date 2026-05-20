@@ -11,7 +11,7 @@ php public/index.php
 ./vendor/bin/phpunit                        # Unit + Integration suites wired in phpunit.xml
 ./vendor/bin/phpunit --testsuite Unit
 ./vendor/bin/phpunit --testsuite Integration
-./vendor/bin/phpunit tests/unit/Auth/JwtHandlerTest.php --testdox
+./vendor/bin/phpunit tests/Unit/Auth/JwtHandlerTest.php --testdox
 ./vendor/bin/phpcs --standard=PSR12 src/
 ./vendor/bin/phpstan analyze src/ --level=9
 find src -name '*.php' -exec php -l {} \;

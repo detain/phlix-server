@@ -222,16 +222,16 @@ its existence and add any missing columns:
 
 #### Unit Tests
 
-- `tests/unit/Hub/LibraryShareTest.php` — DTO smoke tests
-- `tests/unit/Hub/LibrarySharingHandlerTest.php`:
+- `tests/Unit/Hub/LibraryShareTest.php` — DTO smoke tests
+- `tests/Unit/Hub/LibrarySharingHandlerTest.php`:
   - share with valid email
   - share with nonexistent email → error
   - share library user doesn't own → error
   - revoke share
   - getSharesForOwner
   - getSharedWithMe (empty + populated)
-- `tests/unit/Hub/SharedLibraryDtoTest.php` — DTO smoke tests
-- `tests/unit/Server/Http/Controllers/LibraryShareControllerTest.php`
+- `tests/Unit/Hub/SharedLibraryDtoTest.php` — DTO smoke tests
+- `tests/Unit/Server/Http/Controllers/LibraryShareControllerTest.php`
 
 #### Documentation
 

@@ -200,9 +200,9 @@ This step does NOT write to the final `chapters` / `intro_marker` /
   // Run BackgroundDetectorWorker in a loop
   ```
 
-- `tests/unit/Media/Markers/Detection/IntroDetectionJobTest.php`
-- `tests/unit/Media/Markers/Detection/FingerprintClustererTest.php`
-- `tests/unit/Media/Markers/Detection/MarkerCandidateStoreTest.php`
+- `tests/Unit/Media/Markers/Detection/IntroDetectionJobTest.php`
+- `tests/Unit/Media/Markers/Detection/FingerprintClustererTest.php`
+- `tests/Unit/Media/Markers/Detection/MarkerCandidateStoreTest.php`
 
 #### Documentation
 

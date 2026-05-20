@@ -980,7 +980,7 @@ end sub
 ### 8.1 Unit Testing
 
 ```brightscript
-' tests/unit/ApiClient.test.brs
+' tests/Unit/ApiClient.test.brs
 
 sub TestApiClient()
     ' Test initialization

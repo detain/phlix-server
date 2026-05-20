@@ -387,7 +387,7 @@ class MetadataManager
 
 ### 2.2.5 Create Unit Tests
 
-Create `tests/unit/Media/Metadata/TmdbProviderTest.php`:
+Create `tests/Unit/Media/Metadata/TmdbProviderTest.php`:
 ```php
 <?php
 
@@ -424,7 +424,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Metadata/ --testdox
+./vendor/bin/phpunit tests/Unit/Media/Metadata/ --testdox
 ```
 
 2. Verify classes exist:

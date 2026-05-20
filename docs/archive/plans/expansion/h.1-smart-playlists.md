@@ -185,11 +185,11 @@ Existing patterns to follow:
   ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
 
-- `tests/unit/Playlists/SmartPlaylistEngineTest.php`
-- `tests/unit/Playlists/RuleOperatorsTest.php`
-- `tests/unit/Playlists/RuleNodeTest.php`
-- `tests/unit/Playlists/SmartPlaylistRepositoryTest.php`
-- `tests/integration/Playlists/SmartPlaylistRefreshTest.php`
+- `tests/Unit/Playlists/SmartPlaylistEngineTest.php`
+- `tests/Unit/Playlists/RuleOperatorsTest.php`
+- `tests/Unit/Playlists/RuleNodeTest.php`
+- `tests/Unit/Playlists/SmartPlaylistRepositoryTest.php`
+- `tests/Integration/Playlists/SmartPlaylistRefreshTest.php`
 
 #### Documentation
 

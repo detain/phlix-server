@@ -34,7 +34,7 @@ Check that each of the following was implemented:
 
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Auth/ tests/unit/Session/ --testdox
+./vendor/bin/phpunit tests/Unit/Auth/ tests/Unit/Session/ --testdox
 ```
 
 ### 4.R.3 Verify Authentication Flow

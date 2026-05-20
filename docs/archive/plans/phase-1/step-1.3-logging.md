@@ -382,7 +382,7 @@ trait HasLogger
 
 ### 1.3.5 Create Unit Tests
 
-Create `tests/unit/Common/Logger/StructuredLoggerTest.php`:
+Create `tests/Unit/Common/Logger/StructuredLoggerTest.php`:
 ```php
 <?php
 
@@ -472,7 +472,7 @@ class StructuredLoggerTest extends TestCase
 }
 ```
 
-Create `tests/unit/Common/Logger/AuditLoggerTest.php`:
+Create `tests/Unit/Common/Logger/AuditLoggerTest.php`:
 ```php
 <?php
 
@@ -550,7 +550,7 @@ After completing all tasks:
 1. Run the unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Common/Logger/ --testdox
+./vendor/bin/phpunit tests/Unit/Common/Logger/ --testdox
 ```
 
 2. Verify log files are created:

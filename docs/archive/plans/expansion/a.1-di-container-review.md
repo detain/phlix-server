@@ -35,7 +35,7 @@ grep -E '500|Internal Server Error' /tmp/a1-smoke.out && echo FAIL || echo PASS
 Walk every checkbox from §7 of `a.1-di-container.md`. For each:
 
 - Files exist? `ls src/Common/Container/` and `ls
-  tests/unit/Common/Container/`.
+  tests/Unit/Common/Container/`.
 - `composer.json` declares `php-di/php-di:^7.0` and `psr/container:^2.0`?
   `jq '.require' composer.json`.
 - `Application` still has a backwards-compatible constructor?

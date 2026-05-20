@@ -170,9 +170,9 @@ Read first, do not modify until §4:
 
 #### Tests
 
-- `tests/unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoveryTest.php`
-- `tests/unit/LiveTv/Tuners/HdHomeRun/HdHomeRunApiClientTest.php`
-- `tests/unit/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriverTest.php`
+- `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoveryTest.php`
+- `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunApiClientTest.php`
+- `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriverTest.php`
 
 #### Documentation
 

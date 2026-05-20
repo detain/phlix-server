@@ -136,9 +136,9 @@ Linux DVB API devices.
 
 #### Tests
 
-- `tests/unit/LiveTv/Tuners/Dvbt/DvbtDeviceScannerTest.php`
-- `tests/unit/LiveTv/Tuners/Dvbt/DvbtSignalEngineTest.php`
-- `tests/unit/LiveTv/Tuners/Dvbt/DvbtTunerDriverTest.php`
+- `tests/Unit/LiveTv/Tuners/Dvbt/DvbtDeviceScannerTest.php`
+- `tests/Unit/LiveTv/Tuners/Dvbt/DvbtSignalEngineTest.php`
+- `tests/Unit/LiveTv/Tuners/Dvbt/DvbtTunerDriverTest.php`
 
 #### Documentation
 

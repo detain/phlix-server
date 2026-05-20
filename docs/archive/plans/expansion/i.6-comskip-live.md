@@ -129,9 +129,9 @@ completion flow and persists EDL data to the DB.
 
 #### Tests
 
-- `tests/unit/LiveTv/Recording/ComskipIntegrationTest.php`
-- `tests/unit/LiveTv/Recording/ComskipLifecycleManagerTest.php`
-- `tests/unit/LiveTv/Recording/ChapterMarkerServiceTest.php`
+- `tests/Unit/LiveTv/Recording/ComskipIntegrationTest.php`
+- `tests/Unit/LiveTv/Recording/ComskipLifecycleManagerTest.php`
+- `tests/Unit/LiveTv/Recording/ChapterMarkerServiceTest.php`
 
 #### Documentation
 

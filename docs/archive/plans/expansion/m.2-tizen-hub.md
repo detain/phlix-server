@@ -141,16 +141,16 @@ All paths inside `/home/sites/phlex-tizen-client/`.
 
 #### 6. Unit Tests
 
-- `tests/unit/hub/hubConfig.test.js`:
+- `tests/Unit/hub/hubConfig.test.js`:
   - `test_getEffectiveUrl_direct_mode`
   - `test_getEffectiveUrl_relay_mode`
   - `test_getAuthHeader_returns_bearer`
 
-- `tests/unit/hub/hubApi.test.js`:
+- `tests/Unit/hub/hubApi.test.js`:
   - `test_signIn_returns_session`
   - `test_listServers_returns_array`
 
-- `tests/unit/hub/hubAwareApi.test.js`:
+- `tests/Unit/hub/hubAwareApi.test.js`:
   - `test_routes_via_hubConfig_getEffectiveUrl`
   - `test_injects_auth_header`
 

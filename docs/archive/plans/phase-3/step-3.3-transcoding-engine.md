@@ -518,7 +518,7 @@ class TranscodeManager
 
 ### 3.3.4 Create Unit Tests
 
-Create `tests/unit/Media/Transcoding/FfmpegRunnerTest.php`:
+Create `tests/Unit/Media/Transcoding/FfmpegRunnerTest.php`:
 ```php
 <?php
 
@@ -577,7 +577,7 @@ After completing all tasks:
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Media/Transcoding/ --testdox
+./vendor/bin/phpunit tests/Unit/Media/Transcoding/ --testdox
 ```
 
 2. Verify classes exist:

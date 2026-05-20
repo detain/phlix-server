@@ -328,7 +328,7 @@ Unit tests:
 
 Integration test:
 
-6. `tests/integration/BootstrapTest::test_container_boots_health_controller`
+6. `tests/Integration/BootstrapTest::test_container_boots_health_controller`
    — builds the container against a fake config, resolves
    `HealthController`, calls `__invoke()`. **Skipped** if the
    container resolution requires a live DB connection (it shouldn't

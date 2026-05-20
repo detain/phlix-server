@@ -12,7 +12,7 @@ description: Creates HTTP controller classes in src/Server/Http/Controllers/ fol
 - Dependencies are constructor-injected. Do NOT use service locators, `new` inside methods, or static accessors for services.
 - `$params` is the second handler argument and contains route matches (e.g. `{id}` → `$params['id']`). Always validate `$params['id']` before passing to a service.
 - API routes register in `src/Server/Http/Router.php`. Web portal (HTML) routes register in `src/Server/WebPortal/WebPortalRouter.php`. Picking the wrong router will 404.
-- Every new controller needs a matching unit test in `tests/unit/Server/Http/Controllers/` before the task is complete.
+- Every new controller needs a matching unit test in `tests/Unit/Server/Http/Controllers/` before the task is complete.
 
 ## Instructions
 
@@ -52,7 +52,7 @@ description: Creates HTTP controller classes in src/Server/Http/Controllers/ fol
 
 6. **Wire dependency injection.** If the controller needs a service that is not already auto-wired, register the binding in the DI configuration (look for `config/services.php`, `config/container.php`, or wherever existing controllers' services are bound — search with `grep -rn 'LibraryService::class' config/ src/`). Skip this step only if the service is already a constructor-injectable class with no setup.
 
-7. **Add the unit test.** Create `tests/unit/Server/Http/Controllers/<Name>ControllerTest.php` extending `PHPUnit\\Framework\\TestCase`. Mock the injected service, instantiate the controller, call the method with a stub `Request` and `$params` array, and assert the returned `Response`'s status and JSON body. Match the test style of the most recent test in `tests/unit/Server/Http/Controllers/` (or `tests/unit/` if that subdir is empty). Run: `vendor/bin/phpunit tests/unit/Server/Http/Controllers/<Name>ControllerTest.php` — must be green before the task is complete.
+7. **Add the unit test.** Create `tests/Unit/Server/Http/Controllers/<Name>ControllerTest.php` extending `PHPUnit\\Framework\\TestCase`. Mock the injected service, instantiate the controller, call the method with a stub `Request` and `$params` array, and assert the returned `Response`'s status and JSON body. Match the test style of the most recent test in `tests/Unit/Server/Http/Controllers/` (or `tests/Unit/` if that subdir is empty). Run: `vendor/bin/phpunit tests/Unit/Server/Http/Controllers/<Name>ControllerTest.php` — must be green before the task is complete.
 
 8. **Smoke-test the route.** Boot the server (look in `README.md` or `composer.json` scripts for the start command — commonly `php -S localhost:8096 -t public/` or `composer serve`). Hit the new endpoint with `curl -i http://localhost:8096/api/<path>` and confirm the status code and JSON body match expectations. If 404, re-check Step 5 — the router didn't pick up the route.
 
@@ -93,8 +93,8 @@ description: Creates HTTP controller classes in src/Server/Http/Controllers/ fol
    }
    ```
 4. In `src/Server/Http/Router.php`, add `use Jellyfin\\Server\\Http\\Controllers\\LibraryController;` and `$this->get('/api/library/{id}', [LibraryController::class, 'show']);`.
-5. Add `tests/unit/Server/Http/Controllers/LibraryControllerTest.php` with cases for: missing id → 400, unknown id → 404, valid id → 200 + payload.
-6. Run `vendor/bin/phpunit tests/unit/Server/Http/Controllers/LibraryControllerTest.php` — green.
+5. Add `tests/Unit/Server/Http/Controllers/LibraryControllerTest.php` with cases for: missing id → 400, unknown id → 404, valid id → 200 + payload.
+6. Run `vendor/bin/phpunit tests/Unit/Server/Http/Controllers/LibraryControllerTest.php` — green.
 7. `curl -i http://localhost:8096/api/library/abc123` returns the item JSON.
 
 **Result:** `GET /api/library/{id}` returns the library item or a typed error response, fully tested, matching every other controller in the project.

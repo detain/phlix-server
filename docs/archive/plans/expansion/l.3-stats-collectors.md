@@ -125,7 +125,7 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Stats/StatsCollectorTest.php`
+- `tests/Unit/Stats/StatsCollectorTest.php`
 
 ### Modify
 
@@ -174,7 +174,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b l.3-stats-collectors
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Stats/
+./vendor/bin/phpunit tests/Unit/Stats/
 ./vendor/bin/phpstan analyze src/Stats --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Stats/
 git add -A

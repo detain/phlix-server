@@ -142,13 +142,13 @@ without any vendor-specific if/else chains.
   ];
   ```
 
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelEncoderProfileTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelEncoderProfileTest.php`
   (tests the interface and each concrete profile)
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelProfileFactoryTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/HwaccelCommandBuilderTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/Profiles/NvencProfileTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/Profiles/VaapiProfileTest.php`
-- `tests/unit/Media/Transcoding/Hwaccel/Profiles/QsvProfileTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelProfileFactoryTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/HwaccelCommandBuilderTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/Profiles/NvencProfileTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/Profiles/VaapiProfileTest.php`
+- `tests/Unit/Media/Transcoding/Hwaccel/Profiles/QsvProfileTest.php`
 
 #### Documentation
 

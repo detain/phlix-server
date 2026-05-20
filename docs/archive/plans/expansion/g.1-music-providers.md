@@ -126,8 +126,8 @@ as examples of the `metadata-provider` plugin type.
   ];
   ```
 
-- `tests/unit/Media/Metadata/Provider/MusicBrainzProviderTest.php`
-- `tests/unit/Media/Metadata/Provider/AudioDbProviderTest.php`
+- `tests/Unit/Media/Metadata/Provider/MusicBrainzProviderTest.php`
+- `tests/Unit/Media/Metadata/Provider/AudioDbProviderTest.php`
 
 #### Documentation
 

@@ -137,8 +137,8 @@ the `scrobbler` plugin type.
   ];
   ```
 
-- `tests/unit/Plugins/Lastfm/LastfmApiClientTest.php`
-- `tests/unit/Plugins/Lastfm/PluginTest.php`
+- `tests/Unit/Plugins/Lastfm/LastfmApiClientTest.php`
+- `tests/Unit/Plugins/Lastfm/PluginTest.php`
 
 #### Documentation
 

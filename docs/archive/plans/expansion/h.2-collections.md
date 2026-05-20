@@ -171,10 +171,10 @@ Existing patterns to follow:
   ) ENGINE=InnoDB CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
   ```
 
-- `tests/unit/Collections/CollectionManagerTest.php`
-- `tests/unit/Collections/CollectionRepositoryTest.php`
-- `tests/unit/Collections/CollectionItemRepositoryTest.php`
-- `tests/integration/Collections/CollectionCrudTest.php`
+- `tests/Unit/Collections/CollectionManagerTest.php`
+- `tests/Unit/Collections/CollectionRepositoryTest.php`
+- `tests/Unit/Collections/CollectionItemRepositoryTest.php`
+- `tests/Integration/Collections/CollectionCrudTest.php`
 
 #### Documentation
 

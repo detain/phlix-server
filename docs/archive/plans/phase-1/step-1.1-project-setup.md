@@ -231,7 +231,7 @@ class Application
 
 ### 1.1.6 Create Basic Unit Tests
 
-Create `tests/unit/Server/Core/ApplicationTest.php`:
+Create `tests/Unit/Server/Core/ApplicationTest.php`:
 ```php
 <?php
 
@@ -262,7 +262,7 @@ After completing all tasks:
 2. Run the unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Server/Core/ApplicationTest.php --testdox
+./vendor/bin/phpunit tests/Unit/Server/Core/ApplicationTest.php --testdox
 ```
 
 3. Verify the directory structure exists:

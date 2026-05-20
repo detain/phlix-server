@@ -148,7 +148,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b l.4-dashboard
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Admin/
+./vendor/bin/phpunit tests/Unit/Admin/
 ./vendor/bin/phpstan analyze src/Admin --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Admin/
 git add -A

@@ -140,7 +140,7 @@ Read first:
 
 #### Tests
 
-- `tests/unit/Admin/BackupManagerTest.php`
+- `tests/Unit/Admin/BackupManagerTest.php`
 
 ### Modify
 
@@ -199,7 +199,7 @@ cd /home/sites/phlex
 git checkout master && git pull --ff-only origin master
 git checkout -b l.6-backup-restore
 # ... implement ...
-./vendor/bin/phpunit tests/unit/Admin/BackupManagerTest.php tests/unit/Admin/S3ClientTest.php
+./vendor/bin/phpunit tests/Unit/Admin/BackupManagerTest.php tests/Unit/Admin/S3ClientTest.php
 ./vendor/bin/phpstan analyze src/Admin/BackupManager.php src/Admin/S3Client.php src/Admin/RestoreResult.php --level=9 --no-progress
 ./vendor/bin/phpcs --standard=PSR12 src/Admin/BackupManager.php src/Admin/S3Client.php src/Admin/RestoreResult.php
 git add -A

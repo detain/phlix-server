@@ -126,9 +126,9 @@ master manifest URL based on client request.
   ];
   ```
 
-- `tests/unit/Media/Streaming/Dash/DashStreamerTest.php`
-- `tests/unit/Media/Streaming/Dash/SegmentTemplateTest.php`
-- `tests/unit/Media/Streaming/Dash/AdaptationSetTest.php`
+- `tests/Unit/Media/Streaming/Dash/DashStreamerTest.php`
+- `tests/Unit/Media/Streaming/Dash/SegmentTemplateTest.php`
+- `tests/Unit/Media/Streaming/Dash/AdaptationSetTest.php`
 
 #### Documentation
 

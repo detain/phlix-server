@@ -462,7 +462,7 @@ class SessionController
 
 ### 4.2.4 Create Unit Tests
 
-Create `tests/unit/Session/SessionManagerTest.php`:
+Create `tests/Unit/Session/SessionManagerTest.php`:
 ```php
 <?php
 
@@ -490,7 +490,7 @@ class SessionManagerTest extends TestCase
 1. Run unit tests:
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/Session/ --testdox
+./vendor/bin/phpunit tests/Unit/Session/ --testdox
 ```
 
 2. Verify classes exist:

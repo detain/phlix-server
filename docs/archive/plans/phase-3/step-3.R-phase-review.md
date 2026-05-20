@@ -35,7 +35,7 @@ Check that each of the following was implemented:
 
 ```bash
 cd /home/sites/phlex
-./vendor/bin/phpunit tests/unit/ --testdox 2>&1 | head -100
+./vendor/bin/phpunit tests/Unit/ --testdox 2>&1 | head -100
 ```
 
 ### 3.R.3 Verify Code Quality

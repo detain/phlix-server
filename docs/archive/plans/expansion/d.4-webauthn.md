@@ -160,9 +160,9 @@ auth flows). Users manage passkeys in their account settings page.
 
 #### Unit Tests
 
-- `tests/unit/Auth/WebAuthn/WebAuthnManagerTest.php`
-- `tests/unit/Auth/WebAuthn/WebAuthnCredentialTest.php`
-- `tests/unit/Auth/WebAuthn/WebAuthnControllerTest.php`
+- `tests/Unit/Auth/WebAuthn/WebAuthnManagerTest.php`
+- `tests/Unit/Auth/WebAuthn/WebAuthnCredentialTest.php`
+- `tests/Unit/Auth/WebAuthn/WebAuthnControllerTest.php`
 
 #### Documentation
 

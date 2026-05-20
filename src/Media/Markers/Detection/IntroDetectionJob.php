@@ -236,7 +236,7 @@ class IntroDetectionJob
      */
     private function findShowsWithUnfingerprintedEpisodes(): array
     {
-        return [];
+        return $this->itemRepo->findShowsWithUnfingerprintedEpisodes(20);
     }
 
     /**

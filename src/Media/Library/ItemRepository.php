@@ -793,6 +793,44 @@ class ItemRepository
     }
 
     /**
+     * Finds series that have episodes without intro markers.
+     *
+     * An episode is considered "unfingerprinted" when intro_start_seconds is NULL.
+     * Only returns shows that have at least one episode needing fingerprinting.
+     *
+     * @param int $limit Maximum number of show IDs to return (default 20)
+     *
+     * @return array<string> Array of show/series media item IDs with unfingerprinted episodes
+     *
+     * @since 0.12.0
+     */
+    public function findShowsWithUnfingerprintedEpisodes(int $limit = 20): array
+    {
+        $result = $this->db->query(
+            "SELECT DISTINCT parent_id as show_id
+             FROM media_items
+             WHERE type IN ('episode', '_episode')
+               AND parent_id IS NOT NULL
+               AND intro_start_seconds IS NULL
+             LIMIT ?",
+            [$limit]
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $showIds = [];
+        foreach ($result as $row) {
+            if (is_array($row) && isset($row['show_id']) && is_string($row['show_id'])) {
+                $showIds[] = $row['show_id'];
+            }
+        }
+
+        return $showIds;
+    }
+
+    /**
      * Extracts a `count` aggregate from a `SELECT COUNT(*) as count` result set.
      *
      * @param mixed $results Raw result set from {@see Connection::query()}.

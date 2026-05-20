@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Controllers;
 
+use Phlex\Server\Http\Middleware\AdminMiddleware;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Media\Library\LibraryManager;
@@ -12,9 +13,59 @@ class LibraryController
 {
     private LibraryManager $libraryManager;
 
+    private ?AdminMiddleware $adminMiddleware = null;
+
     public function __construct(LibraryManager $libraryManager)
     {
         $this->libraryManager = $libraryManager;
+    }
+
+    /**
+     * Set the admin middleware (used for admin-only operations).
+     */
+    public function setAdminMiddleware(AdminMiddleware $middleware): void
+    {
+        $this->adminMiddleware = $middleware;
+    }
+
+    /**
+     * Require authentication for the request.
+     */
+    private function requireAuth(Request $request): ?Response
+    {
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+        return null;
+    }
+
+    /**
+     * Require admin access for the request.
+     */
+    private function requireAdmin(Request $request): ?Response
+    {
+        // First require auth
+        $authResponse = $this->requireAuth($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        // Then check admin status
+        if ($this->adminMiddleware !== null) {
+            $status = $this->adminMiddleware->checkAccess($request);
+            if ($status !== null) {
+                return (new Response())->status($status)->json([
+                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+                ]);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -22,6 +73,11 @@ class LibraryController
      */
     public function index(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAuth($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $libraries = $this->libraryManager->getAllLibraries();
         return (new Response())->json(['libraries' => $libraries]);
     }
@@ -31,6 +87,11 @@ class LibraryController
      */
     public function show(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAuth($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $library = $this->libraryManager->getLibrary($params['id']);
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
@@ -43,13 +104,21 @@ class LibraryController
      */
     public function create(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $data = $request->body;
 
         $name = $data['name'] ?? null;
         $type = $data['type'] ?? null;
         $paths = $data['paths'] ?? null;
 
-        if (!is_string($name) || $name === '' || !is_string($type) || $type === '' || !is_array($paths) || $paths === []) {
+        $isValidRequest = is_string($name) && $name !== ''
+            && is_string($type) && $type !== ''
+            && is_array($paths) && $paths !== [];
+        if (!$isValidRequest) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: name, type, paths',
             ]);
@@ -98,6 +167,11 @@ class LibraryController
      */
     public function update(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $data = $request->body;
         $library = $this->libraryManager->getLibrary($params['id']);
 
@@ -115,6 +189,11 @@ class LibraryController
      */
     public function delete(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $library = $this->libraryManager->getLibrary($params['id']);
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
@@ -130,6 +209,11 @@ class LibraryController
      */
     public function scan(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $library = $this->libraryManager->getLibrary($params['id']);
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
@@ -145,6 +229,11 @@ class LibraryController
      */
     public function rescan(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $library = $this->libraryManager->getLibrary($params['id']);
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);

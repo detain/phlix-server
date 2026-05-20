@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Util;
+namespace Phlix\Plugins\Util;
 
 use FilesystemIterator;
 use RecursiveDirectoryIterator;
@@ -12,16 +12,16 @@ use SplFileInfo;
 
 /**
  * Recursive directory removal helper used by
- * {@see \Phlex\Plugins\PluginLoader::uninstall()}.
+ * {@see \Phlix\Plugins\PluginLoader::uninstall()}.
  *
  * The plan calls for a hand-rolled helper rather than pulling in
  * `symfony/filesystem` just to delete a tree. The implementation
  * walks the tree with PHP SPL iterators in child-before-parent order,
  * so directories empty out before their `rmdir()` call.
  *
- * @internal Phlex-internal utility.
+ * @internal Phlix-internal utility.
  *
- * @package Phlex\Plugins\Util
+ * @package Phlix\Plugins\Util
  * @since 0.10.0
  */
 final class RecursiveDelete

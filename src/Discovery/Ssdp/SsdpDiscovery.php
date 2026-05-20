@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery\Ssdp;
+namespace Phlix\Discovery\Ssdp;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -11,7 +11,7 @@ use Psr\Log\NullLogger;
  * SSDP discovery service for finding DLNA/UPnP devices on the network.
  *
  * Provides methods to discover devices via M-SEARCH requests and to
- * announce the Phlex server via SSDP NOTIFY messages.
+ * announce the Phlix server via SSDP NOTIFY messages.
  *
  * @since 0.12.0
  */
@@ -82,18 +82,18 @@ class SsdpDiscovery
     }
 
     /**
-     * Announce the Phlex server via SSDP NOTIFY.
+     * Announce the Phlix server via SSDP NOTIFY.
      *
      * @param string $serverId Unique server identifier (UUID)
      * @param string $friendlyName Human-readable server name
-     * @param string $baseUrl Base URL of the Phlex server
-     * @param int $port Phlex server port
+     * @param string $baseUrl Base URL of the Phlix server
+     * @param int $port Phlix server port
      *
      * @since 0.12.0
      */
     public function announceServer(string $serverId, string $friendlyName, string $baseUrl, int $port): void
     {
-        $usn = "uuid:phlex-server-{$serverId}::urn:schemas-upnp-org:device:MediaServer:1";
+        $usn = "uuid:phlix-server-{$serverId}::urn:schemas-upnp-org:device:MediaServer:1";
         $nt = 'urn:schemas-upnp-org:device:MediaServer:1';
         $location = rtrim($baseUrl, '/') . ':' . $port;
 

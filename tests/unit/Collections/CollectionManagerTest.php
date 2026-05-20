@@ -1,17 +1,17 @@
 <?php
 
-namespace Phlex\Tests\Unit\Collections;
+namespace Phlix\Tests\Unit\Collections;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Collections\Collection;
-use Phlex\Collections\CollectionItemRepository;
-use Phlex\Collections\CollectionManager;
-use Phlex\Collections\CollectionRepository;
-use Phlex\Collections\CollectionWithItems;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Playlists\SmartPlaylist;
-use Phlex\Playlists\SmartPlaylistEngine;
-use Phlex\Playlists\SmartPlaylistRepository;
+use Phlix\Collections\Collection;
+use Phlix\Collections\CollectionItemRepository;
+use Phlix\Collections\CollectionManager;
+use Phlix\Collections\CollectionRepository;
+use Phlix\Collections\CollectionWithItems;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Playlists\SmartPlaylist;
+use Phlix\Playlists\SmartPlaylistEngine;
+use Phlix\Playlists\SmartPlaylistRepository;
 use Workerman\MySQL\Connection;
 
 class CollectionManagerTest extends TestCase

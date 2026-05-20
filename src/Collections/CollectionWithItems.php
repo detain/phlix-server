@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Collections;
+namespace Phlix\Collections;
 
 /**
  * Hydrated DTO representing a collection with its items.

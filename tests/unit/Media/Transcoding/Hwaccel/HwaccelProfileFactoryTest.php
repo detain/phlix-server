@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
 
 class HwaccelProfileFactoryTest extends TestCase
 {
@@ -55,7 +55,7 @@ class HwaccelProfileFactoryTest extends TestCase
         $profiles = $factory->getAllProfiles();
 
         $this->assertIsArray($profiles);
-        $this->assertContainsOnlyInstancesOf(\Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::class, $profiles);
+        $this->assertContainsOnlyInstancesOf(\Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::class, $profiles);
         $this->assertArrayHasKey('nvenc', $profiles);
         $this->assertArrayHasKey('vaapi', $profiles);
         $this->assertArrayHasKey('software', $profiles);
@@ -67,7 +67,7 @@ class HwaccelProfileFactoryTest extends TestCase
 
         $builder = $factory->createCommandBuilder('software', 'h264', 'high');
 
-        $this->assertInstanceOf(\Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder::class, $builder);
+        $this->assertInstanceOf(\Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder::class, $builder);
         $this->assertSame('high', $builder->getQualityLevel());
     }
 

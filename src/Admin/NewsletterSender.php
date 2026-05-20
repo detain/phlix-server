@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
 use DateTimeInterface;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 /**
@@ -14,7 +14,7 @@ use Workerman\MySQL\Connection;
  * This class manages the newsletter delivery queue, processes pending
  * emails in batches, and tracks delivery statistics.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Handles newsletter email queue processing and delivery
  */
@@ -45,8 +45,8 @@ class NewsletterSender
         $this->logger = $logger;
         $this->config = array_merge([
             'batch_size' => 50,
-            'from_email' => 'phlex@example.com',
-            'from_name' => 'Phlex Media Server',
+            'from_email' => 'phlix@example.com',
+            'from_name' => 'Phlix Media Server',
             'max_attempts' => 3,
         ], $config);
     }
@@ -260,8 +260,8 @@ class NewsletterSender
 
         $configTemplateDir = $this->config['template_dir'] ?? null;
         $templateDir = is_string($configTemplateDir) ? $configTemplateDir : 'public/templates';
-        $generator = new \Phlex\Admin\NewsletterGenerator(
-            new \Phlex\Stats\StatsCollector($this->db),
+        $generator = new \Phlix\Admin\NewsletterGenerator(
+            new \Phlix\Stats\StatsCollector($this->db),
             $this->createLibraryManager(),
             $this->db,
             $templateDir,
@@ -271,8 +271,8 @@ class NewsletterSender
         $content = $generator->generateForUser($userId, $weekStart);
 
         $userName = isset($user['username']) && is_string($user['username']) ? $user['username'] : $userEmail;
-        $fromName = is_string($this->config['from_name'] ?? null) ? $this->config['from_name'] : 'Phlex Media Server';
-        $fromEmail = is_string($this->config['from_email'] ?? null) ? $this->config['from_email'] : 'phlex@example.com';
+        $fromName = is_string($this->config['from_name'] ?? null) ? $this->config['from_name'] : 'Phlix Media Server';
+        $fromEmail = is_string($this->config['from_email'] ?? null) ? $this->config['from_email'] : 'phlix@example.com';
         $toAddress = $userName;
 
         $headers = [
@@ -280,7 +280,7 @@ class NewsletterSender
             'Content-Type: text/html; charset=UTF-8',
             "From: {$fromName} <{$fromEmail}>",
             "To: {$toAddress}",
-            'X-Mailer: Phlex-Media-Server',
+            'X-Mailer: Phlix-Media-Server',
         ];
 
         $result = @mail(
@@ -337,17 +337,17 @@ class NewsletterSender
     /**
      * Create a library manager instance for newsletter generation.
      *
-     * @return \Phlex\Media\Library\LibraryManager Library manager instance
+     * @return \Phlix\Media\Library\LibraryManager Library manager instance
      */
-    private function createLibraryManager(): \Phlex\Media\Library\LibraryManager
+    private function createLibraryManager(): \Phlix\Media\Library\LibraryManager
     {
-        return new \Phlex\Media\Library\LibraryManager(
+        return new \Phlix\Media\Library\LibraryManager(
             $this->db,
-            new \Phlex\Media\Library\MediaScanner(
+            new \Phlix\Media\Library\MediaScanner(
                 $this->db,
-                new \Phlex\Media\Library\ItemRepository($this->db)
+                new \Phlix\Media\Library\ItemRepository($this->db)
             ),
-            new \Phlex\Media\Library\FolderWatcher()
+            new \Phlix\Media\Library\FolderWatcher()
         );
     }
 

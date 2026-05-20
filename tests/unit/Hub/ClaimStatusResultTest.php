@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\ClaimStatusResult;
+use Phlix\Hub\ClaimStatusResult;
 
 class ClaimStatusResultTest extends TestCase
 {

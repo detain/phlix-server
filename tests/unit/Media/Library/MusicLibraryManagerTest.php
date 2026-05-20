@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\AudioScanner;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\MusicLibraryManager;
-use Phlex\Media\Library\ScanResult;
-use Phlex\Media\Metadata\MetadataManager;
+use Phlix\Media\Library\AudioScanner;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MusicLibraryManager;
+use Phlix\Media\Library\ScanResult;
+use Phlix\Media\Metadata\MetadataManager;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for MusicLibraryManager.
  *
- * @covers \Phlex\Media\Library\MusicLibraryManager
- * @covers \Phlex\Media\Library\ScanResult
+ * @covers \Phlix\Media\Library\MusicLibraryManager
+ * @covers \Phlix\Media\Library\ScanResult
  */
 class MusicLibraryManagerTest extends TestCase
 {
@@ -128,7 +128,7 @@ class MusicLibraryManagerTest extends TestCase
     public function testUpsertTrackStoresTags(): void
     {
         $libraryId = 'test-lib-789';
-        $tempFile = tempnam(sys_get_temp_dir(), 'phlex_test_') . '.mp3';
+        $tempFile = tempnam(sys_get_temp_dir(), 'phlix_test_') . '.mp3';
 
         // Write minimal MP3 data
         file_put_contents($tempFile, $this->createMinimalMp3());
@@ -166,7 +166,7 @@ class MusicLibraryManagerTest extends TestCase
     public function testUpsertTrackEnrichesViaMetadataManager(): void
     {
         $libraryId = 'test-lib-enrich';
-        $tempFile = tempnam(sys_get_temp_dir(), 'phlex_test_') . '.mp3';
+        $tempFile = tempnam(sys_get_temp_dir(), 'phlix_test_') . '.mp3';
 
         // Write minimal MP3 data
         file_put_contents($tempFile, $this->createMinimalMp3());

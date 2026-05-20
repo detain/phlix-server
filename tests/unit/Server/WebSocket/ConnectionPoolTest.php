@@ -1,20 +1,20 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\WebSocket;
+namespace Phlix\Tests\Unit\Server\WebSocket;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\WebSocket\ConnectionPool;
-use Phlex\Server\WebSocket\ConnectionInterface;
+use Phlix\Server\WebSocket\ConnectionPool;
+use Phlix\Server\WebSocket\ConnectionInterface;
 
 /**
  * Unit tests for ConnectionPool class.
  *
- * @covers \Phlex\Server\WebSocket\ConnectionPool
+ * @covers \Phlix\Server\WebSocket\ConnectionPool
  */
 class ConnectionPoolTest extends TestCase
 {
     /**
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::getInstance
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::getInstance
      */
     public function testCanGetInstance(): void
     {
@@ -23,11 +23,11 @@ class ConnectionPoolTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::add
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::remove
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::get
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::count
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::clear
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::add
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::remove
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::get
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::count
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::clear
      */
     public function testCanAddAndRemoveConnection(): void
     {
@@ -46,7 +46,7 @@ class ConnectionPoolTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\WebSocket\ConnectionPool::findByUserId
+     * @covers \Phlix\Server\WebSocket\ConnectionPool::findByUserId
      */
     public function testCanFindByUserId(): void
     {

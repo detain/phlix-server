@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Trickplay;
+namespace Phlix\Media\Streaming\Trickplay;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Trickplay Controller — HTTP handler for serving trickplay thumbnail images.

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
 
 /**

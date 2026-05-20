@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Discovery\Mdns;
+namespace Phlix\Tests\Unit\Discovery\Mdns;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
-use Phlex\Discovery\Mdns\MdnsSocket;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
+use Phlix\Discovery\Mdns\MdnsSocket;
 
 class MdnsDiscoveryTest extends TestCase
 {
@@ -95,9 +95,9 @@ class MdnsDiscoveryTest extends TestCase
         $discovery = new MdnsDiscovery($socket, null);
 
         // Should not throw
-        $discovery->announceServer('Phlex._phlex._tcp.local.', '_phlex._tcp.local.', 8200, [
+        $discovery->announceServer('Phlix._phlix._tcp.local.', '_phlix._tcp.local.', 8200, [
             'serverId' => 'test-id',
-            'friendlyName' => 'Phlex Server',
+            'friendlyName' => 'Phlix Server',
         ]);
 
         $this->assertTrue(true);

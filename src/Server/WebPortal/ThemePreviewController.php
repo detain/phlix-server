@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebPortal;
+namespace Phlix\Server\WebPortal;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Theming\Theme;
-use Phlex\Theming\ThemeRegistry;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Theming\Theme;
+use Phlix\Theming\ThemeRegistry;
 
 /**
  * Controller for rendering live theme previews in an iframe sandbox.
@@ -16,7 +16,7 @@ use Phlex\Theming\ThemeRegistry;
  * theme's CSS to demonstrate how the theme looks when applied to the
  * WebPortal interface. It is used by the Themes tab in the admin UI.
  *
- * @package Phlex\Server\WebPortal
+ * @package Phlix\Server\WebPortal
  * @since 0.14.0
  */
 class ThemePreviewController
@@ -155,7 +155,7 @@ class ThemePreviewController
 <body>
     <div class="preview-container">
         <h1>Theme Preview: {$themeName}</h1>
-        <p>This preview demonstrates how the "{$themeName}" theme looks when applied to Phlex.</p>
+        <p>This preview demonstrates how the "{$themeName}" theme looks when applied to Phlix.</p>
 
         <div class="card">
             <h3>Typography</h3>

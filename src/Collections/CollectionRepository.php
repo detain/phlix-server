@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Collections;
+namespace Phlix\Collections;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**

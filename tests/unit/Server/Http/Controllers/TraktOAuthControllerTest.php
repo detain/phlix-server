@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
-use Phlex\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
-use Phlex\Server\Http\Controllers\TraktOAuthController;
-use Phlex\Server\Http\Request;
+use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
+use Phlix\Server\Http\Controllers\TraktOAuthController;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**

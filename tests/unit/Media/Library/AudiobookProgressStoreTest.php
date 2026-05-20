@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\AudiobookProgress;
-use Phlex\Media\Library\AudiobookProgressStore;
+use Phlix\Media\Library\AudiobookProgress;
+use Phlix\Media\Library\AudiobookProgressStore;
 use Workerman\MySQL\Connection;
 
 class AudiobookProgressStoreTest extends TestCase

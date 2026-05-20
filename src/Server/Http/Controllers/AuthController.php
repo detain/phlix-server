@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Auth\AuthManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Auth\AuthManager;
 use InvalidArgumentException;
 
 /**
@@ -15,7 +15,7 @@ use InvalidArgumentException;
  * This controller provides endpoints for user registration, login,
  * token refresh, and user profile retrieval.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Authentication controller for user registration, login, and token management.
  * @see Request For request representation

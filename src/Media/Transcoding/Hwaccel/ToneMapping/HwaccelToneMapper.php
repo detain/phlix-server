@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\ToneMapping;
+namespace Phlix\Media\Transcoding\Hwaccel\ToneMapping;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 
 /**
  * Main orchestrator for HDR to SDR tone-mapping operations.

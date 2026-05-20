@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\RelayConfig;
-use Phlex\Hub\RelayConsumer;
-use Phlex\Hub\RelayMessageFramer;
-use Phlex\Hub\StoredEnrollment;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\RelayConfig;
+use Phlix\Hub\RelayConsumer;
+use Phlix\Hub\RelayMessageFramer;
+use Phlix\Hub\StoredEnrollment;
+use Phlix\Common\Logger\StructuredLogger;
 
 class RelayConsumerTest extends TestCase
 {
@@ -19,7 +19,7 @@ class RelayConsumerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-relay-consumer-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-relay-consumer-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
         $this->keyPath = $this->tmpDir . '/key.pem';
     }
@@ -87,21 +87,21 @@ class RelayConsumerTest extends TestCase
 
     public function test_relay_config_from_env_disabled(): void
     {
-        putenv('PHLEX_RELAY_ENABLED=false');
+        putenv('PHLIX_RELAY_ENABLED=false');
         $config = RelayConfig::fromEnv();
         $this->assertFalse($config->enabled);
-        putenv('PHLEX_RELAY_ENABLED');
+        putenv('PHLIX_RELAY_ENABLED');
     }
 
     public function test_relay_config_from_env_enabled(): void
     {
-        putenv('PHLEX_RELAY_ENABLED=true');
-        putenv('PHLEX_RELAY_HUB_URL=wss://hub.example.com/api/v1/servers/{id}/relay');
+        putenv('PHLIX_RELAY_ENABLED=true');
+        putenv('PHLIX_RELAY_HUB_URL=wss://hub.example.com/api/v1/servers/{id}/relay');
         $config = RelayConfig::fromEnv();
         $this->assertTrue($config->enabled);
         $this->assertStringContainsString('hub.example.com', $config->hubWssUrl);
-        putenv('PHLEX_RELAY_ENABLED');
-        putenv('PHLEX_RELAY_HUB_URL');
+        putenv('PHLIX_RELAY_ENABLED');
+        putenv('PHLIX_RELAY_HUB_URL');
     }
 
     public function test_relay_config_builds_wss_url_with_server_id(): void

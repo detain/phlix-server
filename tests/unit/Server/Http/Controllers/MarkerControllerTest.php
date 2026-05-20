@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Server\Http\Controllers\MarkerController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Server\Http\Controllers\MarkerController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;
 
 class MarkerControllerTest extends TestCase

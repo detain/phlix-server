@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Factory for creating HTTP clients used by HubJwtValidator to fetch JWKS.
@@ -10,7 +10,7 @@ namespace Phlex\Hub;
  * This abstraction allows HubJwtValidator to be tested without depending
  * on the actual HubClient or cURL infrastructure.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 interface HttpClientFactoryInterface

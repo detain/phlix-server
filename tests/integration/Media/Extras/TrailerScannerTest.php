@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Media\Extras;
+namespace Phlix\Tests\Integration\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Extras\ExtrasRepository;
-use Phlex\Media\Extras\Trailer;
-use Phlex\Media\Extras\TrailerFinder;
-use Phlex\Media\Extras\TrailerResolver;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\TmdbProvider;
-use Phlex\Server\Http\Controllers\ExtrasController;
+use Phlix\Media\Extras\ExtrasRepository;
+use Phlix\Media\Extras\Trailer;
+use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\Extras\TrailerResolver;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Server\Http\Controllers\ExtrasController;
 use Workerman\MySQL\Connection;
 
 class TrailerScannerTest extends TestCase

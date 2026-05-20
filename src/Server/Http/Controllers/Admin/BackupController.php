@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Admin;
+namespace Phlix\Server\Http\Controllers\Admin;
 
-use Phlex\Admin\BackupManager;
-use Phlex\Common\Database\ConnectionPool;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Admin\BackupManager;
+use Phlix\Common\Database\ConnectionPool;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use Throwable;
 
 /**
@@ -16,7 +16,7 @@ use Throwable;
  * Provides JSON API endpoints for backup management including
  * create, list, delete, restore, S3 upload/download, and scheduling.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Admin backup API controller
  */
@@ -236,7 +236,7 @@ class BackupController
         try {
             $nextBackup = $this->backupManager->getNextScheduledBackup();
 
-            $configPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
+            $configPath = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR : 'config';
             $backupConfigPath = $configPath . '/backup.php';
 
             $config = ['auto_backup_interval_days' => 7, 'retention_count' => 5];
@@ -301,7 +301,7 @@ class BackupController
                 }
             }
 
-            $configPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
+            $configPath = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR : 'config';
             $backupConfigPath = $configPath . '/backup.php';
 
             $config = [];

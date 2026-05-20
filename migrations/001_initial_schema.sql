@@ -1,4 +1,4 @@
--- Phlex Media Server Initial Schema
+-- Phlix Media Server Initial Schema
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (

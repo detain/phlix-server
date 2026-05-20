@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Dvbt;
+namespace Phlix\LiveTv\Tuners\Dvbt;
 
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
-use Phlex\LiveTv\Tuners\TunerDriverInterface;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
+use Phlix\LiveTv\Tuners\TunerDriverInterface;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**

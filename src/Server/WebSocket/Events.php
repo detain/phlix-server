@@ -5,7 +5,7 @@
  * WebSocketEvents.php to comply with PSR-4 (the class name must match the
  * filename). This file is kept only because phpstan.neon.dist references
  * its old path in `excludePaths`; the actual definition lives at
- * {@see \Phlex\Server\WebSocket\WebSocketEvents} in WebSocketEvents.php.
+ * {@see \Phlix\Server\WebSocket\WebSocketEvents} in WebSocketEvents.php.
  *
  * Loading this file is harmless (no class is defined here) and lets the
  * existing phpstan exclude entry resolve until the next config refresh.

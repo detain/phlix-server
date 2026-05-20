@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Plugins\Scrobbler\Lastfm;
 
 /**
  * Typed wrapper over `config/lastfm.php`.
@@ -12,7 +12,7 @@ namespace Phlex\Plugins\Scrobbler\Lastfm;
  * is expected to contain — at minimum — `api_key` and `shared_secret`;
  * see `config/lastfm.php` for the full schema.
  *
- * @package Phlex\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 final class LastfmConfig

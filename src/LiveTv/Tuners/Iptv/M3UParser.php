@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Iptv;
+namespace Phlix\LiveTv\Tuners\Iptv;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -107,7 +107,7 @@ class M3UParser
                 'timeout' => $timeoutSecs,
                 'follow_location' => true,
                 'max_redirects' => 5,
-                'user_agent' => 'Phlex/1.0 (M3U Parser)',
+                'user_agent' => 'Phlix/1.0 (M3U Parser)',
             ],
             'ssl' => [
                 'verify_peer' => true,

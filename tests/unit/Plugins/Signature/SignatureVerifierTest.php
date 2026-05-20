@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Signature;
+namespace Phlix\Tests\Unit\Plugins\Signature;
 
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\Signature\SignatureVerifier;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\Signature\SignatureVerifier;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\Signature\SignatureVerifier
+ * @covers \Phlix\Plugins\Signature\SignatureVerifier
  */
 final class SignatureVerifierTest extends TestCase
 {
@@ -18,14 +18,14 @@ final class SignatureVerifierTest extends TestCase
      * checks. The signature value below is `hash('sha256', self::MANIFEST_BYTES)`
      * with the `sha256:` prefix applied.
      */
-    private const MANIFEST_BYTES = '{"name":"phlex-plugin-sigtest","version":"1.0.0"}';
+    private const MANIFEST_BYTES = '{"name":"phlix-plugin-sigtest","version":"1.0.0"}';
 
     private string $tmpDir = '';
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex_sigtest_' . uniqid('', true);
+        $this->tmpDir = sys_get_temp_dir() . '/phlix_sigtest_' . uniqid('', true);
         mkdir($this->tmpDir, 0775, true);
     }
 
@@ -114,7 +114,7 @@ final class SignatureVerifierTest extends TestCase
         $declaredSignature = $this->expectedSignature();
         file_put_contents(
             $this->tmpDir . '/plugin.json',
-            '{"name":"phlex-plugin-sigtest","version":"9.9.9-tampered"}',
+            '{"name":"phlix-plugin-sigtest","version":"9.9.9-tampered"}',
         );
 
         $verifier = new SignatureVerifier(trustedSignatures: [$declaredSignature]);
@@ -163,11 +163,11 @@ final class SignatureVerifierTest extends TestCase
     private function buildManifest(?string $signature): Manifest
     {
         $payload = [
-            'name' => 'phlex-plugin-sigtest',
+            'name' => 'phlix-plugin-sigtest',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Tests\\Sig\\Plugin',
+            'entry' => 'Phlix\\Tests\\Sig\\Plugin',
         ];
         if ($signature !== null) {
             $payload['signature'] = $signature;

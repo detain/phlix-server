@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
 
 /**
  * WebSocket server implementation for real-time communication.
@@ -15,7 +15,7 @@ use Phlex\Common\Logger\LogChannels;
  * This class manages the Workerman-based WebSocket server, handling
  * client connections, message routing, and connection lifecycle events.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description WebSocket server using Workerman for real-time bidirectional communication.
  * @see Connection For WebSocket connection representation

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Session\PlaybackController;
-use Phlex\Session\SessionManager;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Session\PlaybackController;
+use Phlix\Session\SessionManager;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -17,9 +17,9 @@ use function DI\get;
  * Registers session-related services: device-session management and
  * the playback controller used by continue-watching.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class SessionServicesProvider implements ServiceProviderInterface

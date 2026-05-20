@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Network\NatPmpClient;
-use Phlex\Network\PortForwardService;
-use Phlex\Network\StunClient;
-use Phlex\Network\UpnpIgdClient;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Network\NatPmpClient;
+use Phlix\Network\PortForwardService;
+use Phlix\Network\StunClient;
+use Phlix\Network\UpnpIgdClient;
 use Psr\Log\LoggerInterface;
 
 use function DI\autowire;
@@ -19,9 +19,9 @@ use function DI\get;
  * Registers the network subsystem: UPnP-IGD client, STUN client,
  * NAT-PMP client, and PortForwardService.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.11.0
  */
 final class NetworkServicesProvider implements ServiceProviderInterface

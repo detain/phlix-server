@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Scripts;
+namespace Phlix\Tests\Unit\Scripts;
 
 use PHPUnit\Framework\TestCase;
 

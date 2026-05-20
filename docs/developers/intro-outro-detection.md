@@ -41,7 +41,7 @@ return [
     'outro_max_duration' => 180,         // Max outro length in seconds
     'similarity_threshold' => 0.85,     // Jaccard threshold (0.0–1.0)
     'min_episodes_for_detection' => 3,   // Minimum episodes needed
-    'job_queue_dir' => '/tmp/phlex_marker_jobs',
+    'job_queue_dir' => '/tmp/phlix_marker_jobs',
     'worker_interval' => 30,             // Worker poll interval
 ];
 ```
@@ -58,7 +58,7 @@ The worker runs continuously and processes shows from the queue at the configure
 
 ### Queue Management
 
-The worker uses a file-based queue in `/tmp/phlex_marker_jobs/`:
+The worker uses a file-based queue in `/tmp/phlix_marker_jobs/`:
 
 - Each show being processed has a `.lock` file
 - Use `MarkerCandidateStore` to manage the queue programmatically

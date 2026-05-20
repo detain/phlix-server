@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
  * ID3v2 CMT2/CHAP frames. Also extracts full audiobook metadata including
  * title, author, narrator, series, description, cover, duration, language, and ISBN.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Scanner for M4B/MP3 audiobook files with chapter extraction
  * @since 0.18.0
@@ -57,7 +57,7 @@ class AudiobookScanner extends BookScanner
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_audiobook_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_audiobook_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -685,7 +685,7 @@ class AudiobookScanner extends BookScanner
         };
 
         try {
-            $tempDir = sys_get_temp_dir() . '/phlex_audiobook_cover_' . uniqid();
+            $tempDir = sys_get_temp_dir() . '/phlix_audiobook_cover_' . uniqid();
             if (!is_dir($tempDir)) {
                 mkdir($tempDir, 0755, true);
             }

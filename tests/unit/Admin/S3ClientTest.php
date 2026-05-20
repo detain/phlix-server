@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Admin;
+namespace Phlix\Tests\Unit\Admin;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Admin\S3Client;
+use Phlix\Admin\S3Client;
 
 class S3ClientTest extends TestCase
 {

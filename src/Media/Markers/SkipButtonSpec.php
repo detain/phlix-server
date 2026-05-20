@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers;
+namespace Phlix\Media\Markers;
 
 /**
  * Value object representing skip-button boundaries for client UI.

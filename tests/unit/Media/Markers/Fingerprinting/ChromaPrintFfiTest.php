@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Markers\Fingerprinting;
+namespace Phlix\Tests\Unit\Media\Markers\Fingerprinting;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\Fingerprinting\ChromaPrintFfi;
-use Phlex\Media\Markers\Fingerprinting\ChromaPrintFingerprintFailedException;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintFfi;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintFingerprintFailedException;
 
 class ChromaPrintFfiTest extends TestCase
 {

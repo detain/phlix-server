@@ -14,7 +14,7 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
 - **`$db->query()` returns `array<int, array<string, mixed>>`** for SELECTs. Single-row lookups read `$result[0] ?? null`. Empty array means no rows.
 - **Use the project UUID helper.** Copy `private function generateUuid(): string` verbatim from `src/Auth/UserRepository.php:475-485` — do not pull in `ramsey/uuid` or `random_bytes`-based generators.
 - **Tables with a `metadata_json` column MUST hydrate it.** Implement `private function hydrateItem(array $row): array` per `src/Media/Library/ItemRepository.php:510-519` and map all SELECT results through it.
-- **`declare(strict_types=1);`** is the first non-`<?php` line in every file. Namespace is `Phlex\{Module}` matching the path under `src/`.
+- **`declare(strict_types=1);`** is the first non-`<?php` line in every file. Namespace is `Phlix\{Module}` matching the path under `src/`.
 
 ## Instructions
 
@@ -29,7 +29,7 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
 
    declare(strict_types=1);
 
-   namespace Phlex\{Module};
+   namespace Phlix\{Module};
 
    use Workerman\MySQL\Connection;
 
@@ -99,10 +99,10 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
    ```php
    <?php
 
-   namespace Phlex\Tests\Unit\{Module};
+   namespace Phlix\Tests\Unit\{Module};
 
    use PHPUnit\Framework\TestCase;
-   use Phlex\{Module}\{Name}Repository;
+   use Phlix\{Module}\{Name}Repository;
    use Workerman\MySQL\Connection;
 
    class {Name}RepositoryTest extends TestCase
@@ -127,7 +127,7 @@ Adds a repository / data-access class under `src/{Module}/` that wraps `Workerma
 
 **Actions taken:**
 1. Confirm `playlists` table exists in `migrations/`. If not, stop and request a migration first.
-2. Create `src/Media/Library/PlaylistRepository.php` with namespace `Phlex\Media\Library`, `use Workerman\MySQL\Connection;`, strict types, constructor injecting `Connection $db`.
+2. Create `src/Media/Library/PlaylistRepository.php` with namespace `Phlix\Media\Library`, `use Workerman\MySQL\Connection;`, strict types, constructor injecting `Connection $db`.
 3. Add `findById(string $id): ?array`, `findByUserId(string $userId): array`, `create(array $data): string` (UUID via `generateUuid()`, `items_json` encoded via `json_encode`), `update(string $id, array $data): void`, `delete(string $id): void`, and a private `hydrateItem()` that decodes `items_json` into `$row['items']`.
 4. Copy the `generateUuid()` helper verbatim from `UserRepository.php:475-485`.
 5. Create `tests/unit/Media/Library/PlaylistRepositoryTest.php` with the four baseline tests.

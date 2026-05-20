@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\AirPlay;
+namespace Phlix\AirPlay;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
 
 /**
  * Discovers AirPlay 2 devices via mDNS.

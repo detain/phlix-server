@@ -1,12 +1,12 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Markers\Detection;
+namespace Phlix\Tests\Unit\Media\Markers\Detection;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\Detection\ClusteringResult;
-use Phlex\Media\Markers\Detection\FingerprintClusterer;
-use Phlex\Media\Markers\Detection\IntroMarkerCandidate;
-use Phlex\Media\Markers\Detection\OutroMarkerCandidate;
+use Phlix\Media\Markers\Detection\ClusteringResult;
+use Phlix\Media\Markers\Detection\FingerprintClusterer;
+use Phlix\Media\Markers\Detection\IntroMarkerCandidate;
+use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
 
 class FingerprintClustererTest extends TestCase
 {

@@ -1,6 +1,6 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
 /**
  * Represents the state of a DLNA/UPnP AV Transport instance.

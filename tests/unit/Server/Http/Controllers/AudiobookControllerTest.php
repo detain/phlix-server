@@ -1,13 +1,13 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\AudiobookLibraryManager;
-use Phlex\Media\Library\AudiobookProgress;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Server\Http\Controllers\AudiobookController;
-use Phlex\Server\Http\Request;
+use Phlix\Media\Library\AudiobookLibraryManager;
+use Phlix\Media\Library\AudiobookProgress;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Server\Http\Controllers\AudiobookController;
+use Phlix\Server\Http\Request;
 
 class AudiobookControllerTest extends TestCase
 {

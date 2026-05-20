@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth\WebAuthn;
+namespace Phlix\Tests\Unit\Auth\WebAuthn;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\WebAuthnProvider;
-use Phlex\Auth\WebAuthn\WebAuthnManager;
-use Phlex\Shared\Auth\AuthResult;
+use Phlix\Auth\WebAuthnProvider;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
+use Phlix\Shared\Auth\AuthResult;
 
 final class WebAuthnProviderTest extends TestCase
 {

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Chromecast;
+namespace Phlix\Tests\Unit\Chromecast;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Chromecast\CastApiClient;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Chromecast\CastApiClient;
+use Phlix\Common\Logger\StructuredLogger;
 
 class CastApiClientTest extends TestCase
 {

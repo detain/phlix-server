@@ -5,7 +5,7 @@
 
 ## Overview
 
-Phlex uses two network discovery protocols to detect devices on the local network:
+Phlix uses two network discovery protocols to detect devices on the local network:
 
 - **SSDP (Simple Service Discovery Protocol)** — UDP multicast to `239.255.255.250:1900`
 - **mDNS (multicast DNS / Bonjour/Avahi)** — UDP multicast to `224.0.0.251:5353`
@@ -29,7 +29,7 @@ HOST: 239.255.255.250:1900
 MAN: "ssdp:discover"
 MX: 3
 ST: urn:schemas-upnp-org:device:MediaServer:1
-USER-AGENT: Phlex/1.0
+USER-AGENT: Phlix/1.0
 ```
 
 #### NOTIFY (Announcement)
@@ -38,9 +38,9 @@ USER-AGENT: Phlex/1.0
 NOTIFY * HTTP/1.1
 HOST: 239.255.255.250:1900
 NT: urn:schemas-upnp-org:device:MediaServer:1
-USN: uuid:phlex-server-{id}::urn:schemas-upnp-org:device:MediaServer:1
+USN: uuid:phlix-server-{id}::urn:schemas-upnp-org:device:MediaServer:1
 LOCATION: http://{ip}:{port}
-SERVER: Phlex/1.0 UPnP/1.0
+SERVER: Phlix/1.0 UPnP/1.0
 CACHE-CONTROL: max-age=1800
 ```
 
@@ -111,7 +111,7 @@ $manager->discoverDlnaRenderers();    // SSDP MediaRenderers
 $manager->discoverChromecastDevices(); // mDNS Chromecast
 $manager->discoverAirPlayDevices();    // mDNS AirPlay
 $manager->discoverRokuDevices();       // mDNS Roku
-$manager->announcePhlexServer();       // Both SSDP + mDNS
+$manager->announcePhlixServer();       // Both SSDP + mDNS
 ```
 
 ## Configuration
@@ -129,7 +129,7 @@ return [
         'enabled' => true,
         'discovery_timeout_secs' => 5,
     ],
-    'discovery_port' => 8200,  // Phlex server port
+    'discovery_port' => 8200,  // Phlix server port
 ];
 ```
 
@@ -145,7 +145,7 @@ return [
 ### Start/Stop
 
 ```php
-$discoveryServer = $container->get(\Phlex\Discovery\DiscoveryServer::class);
+$discoveryServer = $container->get(\Phlix\Discovery\DiscoveryServer::class);
 $discoveryServer->start();
 
 // Later...

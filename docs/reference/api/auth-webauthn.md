@@ -29,7 +29,7 @@ Begins the WebAuthn registration ceremony. Returns options for the browser's
   "challenge": "base64-encoded-32-byte-challenge",
   "rp": {
     "id": "localhost",
-    "name": "Phlex Media Server"
+    "name": "Phlix Media Server"
   },
   "user": {
     "id": "user-uuid",

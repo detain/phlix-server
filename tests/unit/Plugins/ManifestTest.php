@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
-use Phlex\Plugins\Exception\InvalidManifestException;
-use Phlex\Plugins\Manifest;
-use Phlex\Shared\Plugin\ManifestType;
-use Phlex\Shared\Plugin\ManifestValidationError;
+use Phlix\Plugins\Exception\InvalidManifestException;
+use Phlix\Plugins\Manifest;
+use Phlix\Shared\Plugin\ManifestType;
+use Phlix\Shared\Plugin\ManifestValidationError;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\Manifest
- * @covers \Phlex\Shared\Plugin\ManifestValidationError
- * @covers \Phlex\Plugins\Exception\InvalidManifestException
+ * @covers \Phlix\Plugins\Manifest
+ * @covers \Phlix\Shared\Plugin\ManifestValidationError
+ * @covers \Phlix\Plugins\Exception\InvalidManifestException
  */
 final class ManifestTest extends TestCase
 {
@@ -23,14 +23,14 @@ final class ManifestTest extends TestCase
     {
         $manifest = Manifest::fromJson($this->loadFixture('valid-lastfm.json'));
 
-        $this->assertSame('phlex-plugin-lastfm', $manifest->name);
+        $this->assertSame('phlix-plugin-lastfm', $manifest->name);
         $this->assertSame('1.0.0', $manifest->version);
-        $this->assertSame('0.10.0', $manifest->phlexMinServerVersion);
+        $this->assertSame('0.10.0', $manifest->phlixMinServerVersion);
         $this->assertSame('scrobbler', $manifest->type);
         $this->assertSame(ManifestType::Scrobbler, $manifest->manifestType());
-        $this->assertSame('Phlex\\Plugins\\Lastfm\\Plugin', $manifest->entry);
+        $this->assertSame('Phlix\\Plugins\\Lastfm\\Plugin', $manifest->entry);
         $this->assertSame(
-            ['phlex.playback.started', 'phlex.playback.stopped'],
+            ['phlix.playback.started', 'phlix.playback.stopped'],
             $manifest->events,
         );
         $this->assertArrayHasKey('api_key', $manifest->settings);
@@ -47,7 +47,7 @@ final class ManifestTest extends TestCase
     {
         $manifest = Manifest::fromJson($this->loadFixture('valid-oidc.json'));
 
-        $this->assertSame('phlex-plugin-oidc-google', $manifest->name);
+        $this->assertSame('phlix-plugin-oidc-google', $manifest->name);
         $this->assertSame(ManifestType::AuthProvider, $manifest->manifestType());
         $this->assertNull($manifest->signature);
         $this->assertTrue($manifest->settings['client_secret']['secret']);
@@ -126,11 +126,11 @@ final class ManifestTest extends TestCase
     public function test_signature_must_match_sha256_pattern(): void
     {
         $payload = [
-            'name' => 'phlex-plugin-bad-sig',
+            'name' => 'phlix-plugin-bad-sig',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\BadSig\\Plugin',
+            'entry' => 'Phlix\\Plugins\\BadSig\\Plugin',
             'signature' => 'not-a-real-signature',
         ];
 
@@ -144,11 +144,11 @@ final class ManifestTest extends TestCase
     public function test_unknown_fields_recorded_as_warnings(): void
     {
         $payload = [
-            'name' => 'phlex-plugin-extra',
+            'name' => 'phlix-plugin-extra',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\Extra\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Extra\\Plugin',
             'description' => 'A plugin with an unknown top-level field.',
         ];
 
@@ -181,10 +181,10 @@ final class ManifestTest extends TestCase
     public function test_manifestType_returns_null_when_type_is_missing(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-no-type',
+            'name' => 'phlix-plugin-no-type',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
-            'entry' => 'Phlex\\Plugins\\NoType\\Plugin',
+            'phlix_min_server_version' => '0.10.0',
+            'entry' => 'Phlix\\Plugins\\NoType\\Plugin',
         ]);
 
         $this->assertNull($manifest->manifestType());
@@ -200,9 +200,9 @@ final class ManifestTest extends TestCase
         $manifest = Manifest::fromArray([
             'name' => 'not-prefixed-correctly',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'scrobbler',
-            'entry' => 'Phlex\\Plugins\\Bad\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Bad\\Plugin',
         ]);
 
         $errors = $manifest->validate();
@@ -214,9 +214,9 @@ final class ManifestTest extends TestCase
     public function test_validate_reports_pattern_error_for_bad_entry(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-bad-entry',
+            'name' => 'phlix-plugin-bad-entry',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'scrobbler',
             'entry' => 'not\\a\\fqcn',
         ]);
@@ -230,11 +230,11 @@ final class ManifestTest extends TestCase
     public function test_validate_rejects_event_alias_with_bad_format(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-bad-event',
+            'name' => 'phlix-plugin-bad-event',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'scrobbler',
-            'entry' => 'Phlex\\Plugins\\BadEvent\\Plugin',
+            'entry' => 'Phlix\\Plugins\\BadEvent\\Plugin',
             'events' => ['NotAnAlias'],
         ]);
 
@@ -245,11 +245,11 @@ final class ManifestTest extends TestCase
     public function test_validate_accepts_settings_with_default_values(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-with-defaults',
+            'name' => 'phlix-plugin-with-defaults',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\Defaults\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Defaults\\Plugin',
             'settings' => [
                 'retries' => ['type' => 'int', 'required' => false, 'default' => 3],
                 'flag' => ['type' => 'bool', 'required' => false, 'default' => true],
@@ -264,11 +264,11 @@ final class ManifestTest extends TestCase
         // PHP arrays with numeric string keys round-trip through json
         // as objects; force a malformed shape directly through fromArray.
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-weird-settings',
+            'name' => 'phlix-plugin-weird-settings',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\Weird\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Weird\\Plugin',
             'settings' => ['ok' => ['type' => 'string'], 'bad' => 'not-an-object'],
         ]);
 
@@ -279,30 +279,30 @@ final class ManifestTest extends TestCase
     public function test_events_with_non_string_entries_are_dropped(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-weird-events',
+            'name' => 'phlix-plugin-weird-events',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\WeirdEvents\\Plugin',
-            'events' => ['phlex.playback.started', 42, null],
+            'entry' => 'Phlix\\Plugins\\WeirdEvents\\Plugin',
+            'events' => ['phlix.playback.started', 42, null],
         ]);
 
-        $this->assertSame(['phlex.playback.started'], $manifest->events);
+        $this->assertSame(['phlix.playback.started'], $manifest->events);
     }
 
     public function test_fromArray_accepts_a_decoded_payload(): void
     {
         $data = [
-            'name' => 'phlex-plugin-direct',
+            'name' => 'phlix-plugin-direct',
             'version' => '2.1.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
-            'entry' => 'Phlex\\Plugins\\Direct\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Direct\\Plugin',
         ];
 
         $manifest = Manifest::fromArray($data);
 
-        $this->assertSame('phlex-plugin-direct', $manifest->name);
+        $this->assertSame('phlix-plugin-direct', $manifest->name);
         $this->assertSame(ManifestType::MetadataProvider, $manifest->manifestType());
         $this->assertSame([], $manifest->validate());
     }

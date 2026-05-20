@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Plugins\Scrobbler\Trakt\HttpClient;
-use Phlex\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
-use Phlex\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
-use Phlex\Plugins\Scrobbler\Trakt\TraktApi;
-use Phlex\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
-use Phlex\Plugins\Scrobbler\Trakt\TraktSettings;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
+use Phlix\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
+use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
+use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
+use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
+use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -22,7 +22,7 @@ use Psr\Log\LoggerInterface;
  * Exchanges the authorization code for tokens and stores them
  * in the plugin settings.
  *
- * @package Phlex\Server\Http\Controllers
+ * @package Phlix\Server\Http\Controllers
  * @since 0.14.0
  */
 final class TraktOAuthController

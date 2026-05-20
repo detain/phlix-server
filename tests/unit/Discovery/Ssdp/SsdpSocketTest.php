@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Discovery\Ssdp;
+namespace Phlix\Tests\Unit\Discovery\Ssdp;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\Ssdp\SsdpSocket;
+use Phlix\Discovery\Ssdp\SsdpSocket;
 
 class SsdpSocketTest extends TestCase
 {
@@ -28,7 +28,7 @@ class SsdpSocketTest extends TestCase
 
         $rawResponse = "HTTP/1.1 200 OK\r\n" .
             "LOCATION: http://192.168.1.100:8200/device.xml\r\n" .
-            "SERVER: Linux/2.6 UPnP/1.0 Phlex/1.0\r\n" .
+            "SERVER: Linux/2.6 UPnP/1.0 Phlix/1.0\r\n" .
             "NT: urn:schemas-upnp-org:device:MediaServer:1\r\n" .
             "USN: uuid:12345678-1234-1234-1234-123456789012::urn:schemas-upnp-org:device:MediaServer:1\r\n" .
             "CACHE-CONTROL: max-age=1800\r\n" .
@@ -38,7 +38,7 @@ class SsdpSocketTest extends TestCase
 
         $this->assertIsArray($parsed);
         $this->assertEquals('http://192.168.1.100:8200/device.xml', $parsed['LOCATION']);
-        $this->assertEquals('Linux/2.6 UPnP/1.0 Phlex/1.0', $parsed['SERVER']);
+        $this->assertEquals('Linux/2.6 UPnP/1.0 Phlix/1.0', $parsed['SERVER']);
         $this->assertEquals('urn:schemas-upnp-org:device:MediaServer:1', $parsed['NT']);
         $this->assertStringContainsString('uuid:12345678-1234-1234-1234-123456789012', $parsed['USN']);
         $this->assertEquals('max-age=1800', $parsed['CACHE-CONTROL']);

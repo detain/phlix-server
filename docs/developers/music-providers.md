@@ -1,10 +1,10 @@
 # Music Metadata Providers
 
-This document describes the music metadata provider architecture in Phlex, covering provider implementation, configuration, and extension.
+This document describes the music metadata provider architecture in Phlix, covering provider implementation, configuration, and extension.
 
 ## Overview
 
-Phlex ships two in-core music metadata providers:
+Phlix ships two in-core music metadata providers:
 
 - **MusicBrainz** — Primary provider, public API with rate limiting (1 req/sec)
 - **AudioDB** — Fallback provider, requires user-supplied API key
@@ -48,7 +48,7 @@ return [
     'musicbrainz' => [
         'enabled'    => true,
         'rate_limit' => 1.0,        // seconds between requests
-        'user_agent' => 'Phlex/1.0 (https://phlex.media)',
+        'user_agent' => 'Phlix/1.0 (https://phlix.media)',
         'use_fallback' => true,    // fall back to AudioDB if MusicBrainz fails
     ],
     'audiodb' => [
@@ -63,10 +63,10 @@ return [
 
 | Variable | Description |
 |---------|-------------|
-| `PHLEX_MUSICBRAINZ_ENABLED` | Enable/disable MusicBrainz provider |
-| `PHLEX_MUSICBRAINZ_USER_AGENT` | Custom User-Agent for MusicBrainz |
-| `PHLEX_AUDIODB_ENABLED` | Enable/disable AudioDB provider |
-| `PHLEX_AUDIODB_API_KEY` | AudioDB API key |
+| `PHLIX_MUSICBRAINZ_ENABLED` | Enable/disable MusicBrainz provider |
+| `PHLIX_MUSICBRAINZ_USER_AGENT` | Custom User-Agent for MusicBrainz |
+| `PHLIX_AUDIODB_ENABLED` | Enable/disable AudioDB provider |
+| `PHLIX_AUDIODB_API_KEY` | AudioDB API key |
 
 ## MusicBrainz Requirements
 
@@ -78,7 +78,7 @@ MusicBrainz requires:
 
 Example User-Agent:
 ```
-Phlex/1.0 (https://phlex.media; contact@phlex.media)
+Phlix/1.0 (https://phlix.media; contact@phlix.media)
 ```
 
 ## Adding a Third Provider

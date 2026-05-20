@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
 use Workerman\MySQL\Connection;
 

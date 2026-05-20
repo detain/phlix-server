@@ -1,7 +1,7 @@
 <header class="site-header">
     <div class="header-content">
         <a href="/" class="header-logo">
-            <img src="/assets/images/logo.svg" alt="Phlex" height="32">
+            <img src="/assets/images/logo.svg" alt="Phlix" height="32">
         </a>
         <nav class="header-nav">
             <a href="/" class="header-nav-item {if $current_page == 'home'}active{/if}">Home</a>

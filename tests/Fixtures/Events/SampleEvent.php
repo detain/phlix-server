@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Fixtures\Events;
+namespace Phlix\Tests\Fixtures\Events;
 
-use Phlex\Shared\Events\AbstractEvent;
+use Phlix\Shared\Events\AbstractEvent;
 
 /**
  * Trivial event used by EventDispatcherFactoryTest /

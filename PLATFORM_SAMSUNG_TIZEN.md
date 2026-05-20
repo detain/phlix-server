@@ -1,4 +1,4 @@
-# Phlex Media Server - Samsung Smart TV (Tizen) Application
+# Phlix Media Server - Samsung Smart TV (Tizen) Application
 
 **Document Version:** 1.0  
 **Platform:** Samsung Tizen TV  
@@ -81,8 +81,8 @@ Samsung Tizen TVs support:
 2. **Create Author Certificate**
    ```
    Tools > Tizen > Certificate Manager > +
-   Certificate profile name: Phlex Dev
-   Publisher name: Phlex
+   Certificate profile name: Phlix Dev
+   Publisher name: Phlix
    Select "Samsung" as manufacturer
    ```
 
@@ -95,8 +95,8 @@ Samsung Tizen TVs support:
 
 ```bash
 # Create project directory
-mkdir phlex-tizen
-cd phlex-tizen
+mkdir phlix-tizen
+cd phlix-tizen
 
 # Initialize npm
 npm init -y
@@ -117,7 +117,7 @@ npm install --save-dev tizen-web-manager
 ## 3. Project Structure
 
 ```
-phlex-tizen/
+phlix-tizen/
 ├── app/
 │   ├── index.html           # Main HTML entry
 │   ├── js/
@@ -179,18 +179,18 @@ phlex-tizen/
 <?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" 
         xmlns:tizen="http://tizen.org/ns/widgets" 
-        id="http://phlex.app/phlextizen" 
+        id="http://phlix.app/phlixtizen" 
         version="1.0.0" 
         viewmodes="maximized">
     
     <access origin="*" subdomains="*"></access>
-    <tizen:application id="phlex.app.phlextizen" 
-                       package="phlex" 
+    <tizen:application id="phlix.app.phlixtizen" 
+                       package="phlix" 
                        required_version="2.3"/>
     
     <content src="index.html"/>
     <icon src="icon.png"/>
-    <name>Phlex</name>
+    <name>Phlix</name>
     <tizen:privilege name="http://tizen.org/privilege/internet"/>
     <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
     <tizen:privilege name="http://tizen.org/privilege/tv.window"/>
@@ -221,8 +221,8 @@ phlex-tizen/
 // app/js/api/ApiClient.js
 
 /**
- * Phlex API Client for Samsung Tizen TVs
- * Handles all communication with Phlex Media Server
+ * Phlix API Client for Samsung Tizen TVs
+ * Handles all communication with Phlix Media Server
  */
 
 class ApiClient {
@@ -318,9 +318,9 @@ class ApiClient {
         const url = `${this.baseUrl}/api/v1${path}`;
         const headers = {
             'Content-Type': 'application/json',
-            'X-Phlex-Device-ID': this.deviceId,
-            'X-Phlex-Device-Name': this.deviceName,
-            'X-Phlex-Device-Type': this.deviceType
+            'X-Phlix-Device-ID': this.deviceId,
+            'X-Phlix-Device-Name': this.deviceName,
+            'X-Phlix-Device-Type': this.deviceType
         };
 
         if (this.token) {
@@ -328,7 +328,7 @@ class ApiClient {
         }
 
         if (this.sessionId) {
-            headers['X-Phlex-Session-ID'] = this.sessionId;
+            headers['X-Phlix-Session-ID'] = this.sessionId;
         }
 
         const config = {
@@ -585,8 +585,8 @@ class ApiError extends Error {
 
 // Export singleton instance
 const api = new ApiClient(
-    window.PHLEX_SERVER_URL || 'http://localhost:8096',
-    window.PHLEX_DEVICE_ID || generateDeviceId(),
+    window.PHLIX_SERVER_URL || 'http://localhost:8096',
+    window.PHLIX_DEVICE_ID || generateDeviceId(),
     'Samsung Tizen TV'
 );
 
@@ -1151,7 +1151,7 @@ class VideoPlayer {
     }
 
     /**
-     * Seek by ticks (100-nanosecond units used by Phlex)
+     * Seek by ticks (100-nanosecond units used by Phlix)
      */
     async seekToTicks(positionTicks) {
         const positionSeconds = positionTicks / 10000000;
@@ -2347,7 +2347,7 @@ class App {
      * Initialize the application
      */
     async init() {
-        Logger.info('Initializing Phlex TV App');
+        Logger.info('Initializing Phlix TV App');
 
         // Create views
         this.createViews();
@@ -2431,7 +2431,7 @@ class App {
         const loginHtml = `
             <div class="login-screen">
                 <div class="login-container">
-                    <h1 class="login-title">Phlex</h1>
+                    <h1 class="login-title">Phlix</h1>
                     <form class="login-form" id="loginForm">
                         <input type="text" class="login-input" 
                                id="username" placeholder="Username" 

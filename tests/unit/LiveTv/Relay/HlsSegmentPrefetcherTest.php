@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Relay;
+namespace Phlix\Tests\Unit\LiveTv\Relay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Relay\HlsSegmentPrefetcher;
+use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 
 /**
  * Unit tests for HlsSegmentPrefetcher.

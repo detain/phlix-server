@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Phlex DVR system provides scheduled and series-based recording capabilities
+The Phlix DVR system provides scheduled and series-based recording capabilities
 built on top of the existing `Recorder.php` framework. This guide covers the
 architecture, configuration, and integration points.
 

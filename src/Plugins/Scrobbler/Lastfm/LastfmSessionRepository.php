@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Plugins\Scrobbler\Lastfm;
 
 use Workerman\MySQL\Connection;
 
 /**
  * DB-backed store for per-user Last.fm session keys.
  *
- * Each row in `lastfm_sessions` ties one Phlex `user_id` to one Last.fm
+ * Each row in `lastfm_sessions` ties one Phlix `user_id` to one Last.fm
  * `session_key` and the timestamp the user authorised access. Session
  * keys do not expire on the Last.fm side unless the user revokes them
  * from their account settings.
  *
- * @package Phlex\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 class LastfmSessionRepository
@@ -27,9 +27,9 @@ class LastfmSessionRepository
     }
 
     /**
-     * Look up the persisted Last.fm session for a Phlex user.
+     * Look up the persisted Last.fm session for a Phlix user.
      *
-     * @param string $userId Phlex user UUID.
+     * @param string $userId Phlix user UUID.
      *
      * @return array{user_id: string, session_key: string, connected_at: string}|null
      *         Session row or null when the user has not connected Last.fm.
@@ -66,7 +66,7 @@ class LastfmSessionRepository
      * Uses an `INSERT ... ON DUPLICATE KEY UPDATE` so reconnecting silently
      * replaces the previous key.
      *
-     * @param string $userId     Phlex user UUID.
+     * @param string $userId     Phlix user UUID.
      * @param string $sessionKey Session key returned by `auth.getSession`.
      */
     public function save(string $userId, string $sessionKey): void
@@ -83,7 +83,7 @@ class LastfmSessionRepository
     /**
      * Remove a user's Last.fm session — used when the user disconnects.
      *
-     * @param string $userId Phlex user UUID.
+     * @param string $userId Phlix user UUID.
      */
     public function delete(string $userId): void
     {

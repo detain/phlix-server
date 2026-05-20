@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\UserRepository;
+use Phlix\Auth\UserRepository;
 use Workerman\MySQL\Connection;
 
 /**
- * @covers \Phlex\Auth\UserRepository
+ * @covers \Phlix\Auth\UserRepository
  */
 final class UserRepositoryExternalIdTest extends TestCase
 {

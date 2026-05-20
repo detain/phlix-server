@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "phlex.fullname" . }}
+  name: {{ include "phlix.fullname" . }}
   labels:
-    {{- include "phlex.labels" . | nindent 4 }}
+    {{- include "phlix.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "phlex.selectorLabels" . | nindent 6 }}
+      {{- include "phlix.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "phlex.selectorLabels" . | nindent 8 }}
+        {{- include "phlix.selectorLabels" . | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
@@ -20,7 +20,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "phlex.serviceAccountName" . }}
+      serviceAccountName: {{ include "phlix.serviceAccountName" . }}
       {{- if and .Values.hwAccel.enabled .Values.hwAccel.runtimeClassName }}
       runtimeClassName: {{ .Values.hwAccel.runtimeClassName }}
       {{- end }}
@@ -51,33 +51,33 @@ spec:
           startupProbe:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           env:
-            - name: PHLEX_DATABASE_HOST
+            - name: PHLIX_DATABASE_HOST
               value: {{ tpl (.Values.config.database_host | toString) . | quote }}
-            - name: PHLEX_DATABASE_PORT
+            - name: PHLIX_DATABASE_PORT
               value: {{ .Values.config.database_port | quote }}
-            - name: PHLEX_DATABASE_NAME
+            - name: PHLIX_DATABASE_NAME
               value: {{ .Values.config.database_name | quote }}
-            - name: PHLEX_DATABASE_USER
+            - name: PHLIX_DATABASE_USER
               value: {{ .Values.config.database_user | quote }}
-            - name: PHLEX_DATABASE_PASSWORD
+            - name: PHLIX_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "phlex.fullname" . }}
+                  name: {{ include "phlix.fullname" . }}
                   key: database-password
-            - name: PHLEX_SECRET_KEY
+            - name: PHLIX_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "phlex.fullname" . }}
+                  name: {{ include "phlix.fullname" . }}
                   key: secret-key
-            - name: PHLEX_LOG_LEVEL
+            - name: PHLIX_LOG_LEVEL
               value: {{ .Values.config.log_level | quote }}
-            - name: PHLEX_HUB_URL
+            - name: PHLIX_HUB_URL
               value: {{ default .Values.config.hub_url .Values.hub.url | quote }}
             {{- if .Values.hub.enabled }}
-            - name: PHLEX_HUB_ENROLLMENT_JWT
+            - name: PHLIX_HUB_ENROLLMENT_JWT
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "phlex.fullname" . }}
+                  name: {{ include "phlix.fullname" . }}
                   key: hub-enrollment-jwt
             {{- end }}
             {{- with .Values.hwAccel.env }}
@@ -88,7 +88,7 @@ spec:
             {{- end }}
           envFrom:
             - configMapRef:
-                name: {{ include "phlex.fullname" . }}
+                name: {{ include "phlix.fullname" . }}
           resources:
             {{- if .Values.hwAccel.enabled }}
             {{- $base := .Values.resources -}}
@@ -99,16 +99,16 @@ spec:
             {{- end }}
           volumeMounts:
             - name: config
-              mountPath: /var/phlex/config
+              mountPath: /var/phlix/config
             - name: data
-              mountPath: /var/phlex/data
+              mountPath: /var/phlix/data
             - name: backups
-              mountPath: /var/phlex/backups
+              mountPath: /var/phlix/backups
             - name: logs
-              mountPath: /var/phlex/logs
+              mountPath: /var/phlix/logs
             {{- if .Values.persistence.recordings.enabled }}
             - name: recordings
-              mountPath: /var/phlex/recordings
+              mountPath: /var/phlix/recordings
             {{- end }}
             {{- if .Values.persistence.media.enabled }}
             - name: media
@@ -122,29 +122,29 @@ spec:
       volumes:
         - name: config
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-config
+            claimName: {{ include "phlix.fullname" . }}-config
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-data
+            claimName: {{ include "phlix.fullname" . }}-data
         - name: backups
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-backups
+            claimName: {{ include "phlix.fullname" . }}-backups
         - name: logs
           {{- if .Values.persistence.logs.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-logs
+            claimName: {{ include "phlix.fullname" . }}-logs
           {{- else }}
           emptyDir: {}
           {{- end }}
         {{- if .Values.persistence.recordings.enabled }}
         - name: recordings
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-recordings
+            claimName: {{ include "phlix.fullname" . }}-recordings
         {{- end }}
         {{- if .Values.persistence.media.enabled }}
         - name: media
           persistentVolumeClaim:
-            claimName: {{ include "phlex.fullname" . }}-media
+            claimName: {{ include "phlix.fullname" . }}-media
         {{- end }}
         {{- if and .Values.hwAccel.enabled .Values.hwAccel.mountDri }}
         - name: dri

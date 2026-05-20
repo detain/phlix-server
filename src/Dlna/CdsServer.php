@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\DiscoveryManager;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\DiscoveryManager;
 
 /**
  * CdsServer provides the HTTP endpoints for the DLNA Content Directory Service.

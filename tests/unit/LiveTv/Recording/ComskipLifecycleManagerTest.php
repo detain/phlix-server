@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Recording\ComskipIntegration;
-use Phlex\LiveTv\Recording\ComskipLifecycleManager;
+use Phlix\LiveTv\Recording\ComskipIntegration;
+use Phlix\LiveTv\Recording\ComskipLifecycleManager;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Markers;
+namespace Phlix\Tests\Unit\Media\Markers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\SkipButtonSpec;
-use Phlex\Media\Markers\MarkerSet;
-use Phlex\Media\Markers\IntroMarker;
-use Phlex\Media\Markers\OutroMarker;
+use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Media\Markers\MarkerSet;
+use Phlix\Media\Markers\IntroMarker;
+use Phlix\Media\Markers\OutroMarker;
 
 class SkipButtonSpecTest extends TestCase
 {

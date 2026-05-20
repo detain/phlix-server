@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\AudioScanner;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\AudioScanner;
+use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for AudioScanner tag harvesting functionality.
  *
- * @covers \Phlex\Media\Library\AudioScanner
+ * @covers \Phlix\Media\Library\AudioScanner
  */
 class AudioScannerTest extends TestCase
 {
@@ -51,7 +51,7 @@ class AudioScannerTest extends TestCase
     public function testHarvestTagsFlac(): void
     {
         // Create a minimal FLAC file structure to test parsing
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $filePath = $tempDir . '/test.flac';
@@ -74,7 +74,7 @@ class AudioScannerTest extends TestCase
      */
     public function testHarvestTagsMp3Id3v2(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $filePath = $tempDir . '/test.mp3';
@@ -96,7 +96,7 @@ class AudioScannerTest extends TestCase
      */
     public function testHarvestTagsM4a(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $filePath = $tempDir . '/test.m4a';
@@ -118,7 +118,7 @@ class AudioScannerTest extends TestCase
      */
     public function testHarvestTagsReturnsPartialOnFailure(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create a corrupted file
@@ -139,7 +139,7 @@ class AudioScannerTest extends TestCase
      */
     public function testScanMusicLibraryYieldsItems(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create some audio files
@@ -169,7 +169,7 @@ class AudioScannerTest extends TestCase
      */
     public function testScanMusicLibraryGeneratorIsLazy(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $generator = $this->scanner->scanMusicLibrary('lib-1', $tempDir, $tempDir);
@@ -245,7 +245,7 @@ class AudioScannerTest extends TestCase
      */
     public function testHarvestTagsReturnsStructuredArray(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $filePath = $tempDir . '/test.mp3';

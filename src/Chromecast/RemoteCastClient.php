@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
-use Phlex\Hub\RelayConsumer;
+use Phlix\Hub\RelayConsumer;
 
 /**
  * Cast via relay tunnel.

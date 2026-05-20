@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Manifest;
+namespace Phlix\Tests\Unit\Plugins\Manifest;
 
-use Phlex\Plugins\Manifest\ManifestSchema;
-use Phlex\Shared\Plugin\Manifest;
-use Phlex\Shared\Plugin\ManifestValidationError;
+use Phlix\Plugins\Manifest\ManifestSchema;
+use Phlix\Shared\Plugin\Manifest;
+use Phlix\Shared\Plugin\ManifestValidationError;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Validator tests for the JSON-Schema gate extracted from
- * `Phlex\Plugins\Manifest::validate()` during Step B.3.
+ * `Phlix\Plugins\Manifest::validate()` during Step B.3.
  *
- * @covers \Phlex\Plugins\Manifest\ManifestSchema
+ * @covers \Phlix\Plugins\Manifest\ManifestSchema
  */
 final class ManifestSchemaTest extends TestCase
 {
@@ -71,11 +71,11 @@ final class ManifestSchemaTest extends TestCase
     public function test_validate_reports_unknown_top_level_field(): void
     {
         $payload = [
-            'name' => 'phlex-plugin-extra',
+            'name' => 'phlix-plugin-extra',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\Extra\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Extra\\Plugin',
             'description' => 'Not part of the schema.',
         ];
 
@@ -93,11 +93,11 @@ final class ManifestSchemaTest extends TestCase
     public function test_validate_reports_signature_pattern_violation(): void
     {
         $payload = [
-            'name' => 'phlex-plugin-bad-sig',
+            'name' => 'phlix-plugin-bad-sig',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\BadSig\\Plugin',
+            'entry' => 'Phlix\\Plugins\\BadSig\\Plugin',
             'signature' => 'not-a-real-signature',
         ];
 
@@ -111,11 +111,11 @@ final class ManifestSchemaTest extends TestCase
     public function test_validate_accepts_settings_with_defaults(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-with-defaults',
+            'name' => 'phlix-plugin-with-defaults',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Plugins\\Defaults\\Plugin',
+            'entry' => 'Phlix\\Plugins\\Defaults\\Plugin',
             'settings' => [
                 'retries' => ['type' => 'int', 'required' => false, 'default' => 3],
                 'flag' => ['type' => 'bool', 'required' => false, 'default' => true],

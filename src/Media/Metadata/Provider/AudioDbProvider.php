@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata\Provider;
+namespace Phlix\Media\Metadata\Provider;
 
-use Phlex\Media\Metadata\MetadataHttpClient;
-use Phlex\Media\Metadata\MetadataProviderInterface;
+use Phlix\Media\Metadata\MetadataHttpClient;
+use Phlix\Media\Metadata\MetadataProviderInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
  * as retrieving detailed information about each. AudioDB requires an API key
  * and is more lenient on rate limiting than MusicBrainz.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @since 0.13.0
  * @see https://www.theaudiodb.com/api.php

@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\AirPlay;
+namespace Phlix\Tests\Unit\AirPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\AirPlay\AirPlayDevice;
-use Phlex\AirPlay\AirPlayDiscovery;
-use Phlex\AirPlay\AirPlayManager;
-use Phlex\AirPlay\AirPlaySession;
-use Phlex\AirPlay\RaopClient;
+use Phlix\AirPlay\AirPlayDevice;
+use Phlix\AirPlay\AirPlayDiscovery;
+use Phlix\AirPlay\AirPlayManager;
+use Phlix\AirPlay\AirPlaySession;
+use Phlix\AirPlay\RaopClient;
 
 class AirPlayManagerTest extends TestCase
 {

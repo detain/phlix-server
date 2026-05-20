@@ -1,11 +1,11 @@
 {
-    "name": "phlex/plugin-fixture",
+    "name": "phlix/plugin-fixture",
     "description": "Fixture plugin used by the A.4 integration test.",
-    "type": "phlex-plugin",
+    "type": "phlix-plugin",
     "license": "proprietary",
     "autoload": {
         "psr-4": {
-            "Phlex\\Tests\\Fixtures\\Plugins\\FixturePlugin\\": "src/"
+            "Phlix\\Tests\\Fixtures\\Plugins\\FixturePlugin\\": "src/"
         }
     }
 }

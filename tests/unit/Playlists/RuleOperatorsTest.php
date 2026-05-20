@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Playlists;
+namespace Phlix\Tests\Unit\Playlists;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Playlists\RuleOperators;
+use Phlix\Playlists\RuleOperators;
 
 class RuleOperatorsTest extends TestCase
 {

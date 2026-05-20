@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Common\Database;
+namespace Phlix\Tests\Unit\Common\Database;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Database\ConnectionPool;
+use Phlix\Common\Database\ConnectionPool;
 
 class ConnectionPoolTest extends TestCase
 {

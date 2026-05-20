@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 use InvalidArgumentException;
 use RuntimeException;
@@ -11,9 +11,9 @@ use RuntimeException;
  * Lightweight HTTP client for hub API communication.
  *
  * Wraps cURL to provide a minimal, tested HTTP layer that always sends
- * `Accept-Phlex-Protocol: v1` and supports optional Bearer authentication.
+ * `Accept-Phlix-Protocol: v1` and supports optional Bearer authentication.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 class HttpClient implements HttpClientInterface
@@ -104,7 +104,7 @@ class HttpClient implements HttpClientInterface
         }
 
         $requestHeaders = [
-            'Accept-Phlex-Protocol: v1',
+            'Accept-Phlix-Protocol: v1',
             'Content-Type: application/json',
         ];
 

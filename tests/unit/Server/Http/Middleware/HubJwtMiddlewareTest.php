@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Middleware;
+namespace Phlix\Tests\Unit\Server\Http\Middleware;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\HubJwtValidatorInterface;
-use Phlex\Hub\HubUserClaims;
-use Phlex\Server\Http\Middleware\HubJwtMiddleware;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Hub\HubUserClaims;
+use Phlix\Server\Http\Middleware\HubJwtMiddleware;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 class HubJwtMiddlewareTest extends TestCase
 {
@@ -19,7 +19,7 @@ class HubJwtMiddlewareTest extends TestCase
             userId: 'hub-user-123',
             serverId: 'server-456',
             subject: 'hub-user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() + 3600,
             scope: ['media:read'],
         );

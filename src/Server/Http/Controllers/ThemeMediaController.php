@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Theming\ThemeMediaFinder;
-use Phlex\Theming\ThemeMediaRepository;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Theming\ThemeMediaFinder;
+use Phlix\Theming\ThemeMediaRepository;
 
 /**
  * ThemeMediaController handles theme media API endpoints.

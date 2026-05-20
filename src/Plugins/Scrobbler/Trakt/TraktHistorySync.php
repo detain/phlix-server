@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
-use Phlex\Auth\WatchHistory;
-use Phlex\Media\Library\MediaItem;
+use Phlix\Auth\WatchHistory;
+use Phlix\Media\Library\MediaItem;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * Handles two-way watch history sync between Trakt and Phlex.
+ * Handles two-way watch history sync between Trakt and Phlix.
  *
- * - Trakt → Phlex: Pulls Trakt watched history on schedule and writes
+ * - Trakt → Phlix: Pulls Trakt watched history on schedule and writes
  *   new entries to local WatchHistory for items not yet at ≥ 90% complete.
- * - Phlex → Trakt: Pushes local WatchHistory entries (≥ 90%) to Trakt
+ * - Phlix → Trakt: Pushes local WatchHistory entries (≥ 90%) to Trakt
  *   after PlaybackStopped events where completion threshold was met.
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 class TraktHistorySync
@@ -40,11 +40,11 @@ class TraktHistorySync
     }
 
     /**
-     * Sync Trakt watched history → Phlex local history.
+     * Sync Trakt watched history → Phlix local history.
      *
      * Pulls the user's watched history from Trakt and compares against
      * local WatchHistory entries. For items watched on Trakt but not yet
-     * ≥ 90% complete in Phlex, writes a local entry.
+     * ≥ 90% complete in Phlix, writes a local entry.
      *
      * Uses last-write-wins based on watchedAt timestamp.
      *
@@ -54,15 +54,15 @@ class TraktHistorySync
      *
      * @since 0.14.0
      */
-    public function syncTraktToPhlex(string $profileId): int
+    public function syncTraktToPhlix(string $profileId): int
     {
         if (!$this->settings->isConfigured()) {
-            $this->logger->debug('TraktHistorySync: plugin not configured, skipping Trakt→Phlex');
+            $this->logger->debug('TraktHistorySync: plugin not configured, skipping Trakt→Phlix');
             return 0;
         }
 
         if (!$this->settings->syncEnabled) {
-            $this->logger->debug('TraktHistorySync: sync disabled, skipping Trakt→Phlex');
+            $this->logger->debug('TraktHistorySync: sync disabled, skipping Trakt→Phlix');
             return 0;
         }
 
@@ -126,7 +126,7 @@ class TraktHistorySync
             ]);
         }
 
-        $this->logger->info('TraktHistorySync: completed Trakt→Phlex sync', [
+        $this->logger->info('TraktHistorySync: completed Trakt→Phlix sync', [
             'profile_id' => $profileId,
             'items_written' => $written,
         ]);
@@ -135,7 +135,7 @@ class TraktHistorySync
     }
 
     /**
-     * Sync Phlex local history → Trakt.
+     * Sync Phlix local history → Trakt.
      *
      * Pushes local WatchHistory entries that have reached ≥ 90%
      * completion to Trakt so the user gets credit for the watch.
@@ -149,21 +149,21 @@ class TraktHistorySync
      *
      * @since 0.14.0
      */
-    public function syncPhlexToTrakt(string $mediaItemId, string $lastWatchedAt, int $positionTicks, ?int $durationTicks): bool
+    public function syncPhlixToTrakt(string $mediaItemId, string $lastWatchedAt, int $positionTicks, ?int $durationTicks): bool
     {
         if (!$this->settings->isConfigured()) {
-            $this->logger->debug('TraktHistorySync: plugin not configured, skipping Phlex→Trakt');
+            $this->logger->debug('TraktHistorySync: plugin not configured, skipping Phlix→Trakt');
             return false;
         }
 
         if (!$this->settings->syncEnabled) {
-            $this->logger->debug('TraktHistorySync: sync disabled, skipping Phlex→Trakt');
+            $this->logger->debug('TraktHistorySync: sync disabled, skipping Phlix→Trakt');
             return false;
         }
 
         $existing = $this->watchHistory->getForMediaItem('default', $mediaItemId);
         if ($existing === null || $existing['progress_percent'] < WatchHistory::COMPLETED_THRESHOLD) {
-            $this->logger->debug('TraktHistorySync: item below 90%, skipping Phlex→Trakt', [
+            $this->logger->debug('TraktHistorySync: item below 90%, skipping Phlix→Trakt', [
                 'media_item_id' => $mediaItemId,
                 'progress' => $existing['progress_percent'] ?? 0,
             ]);

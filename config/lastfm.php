@@ -31,7 +31,7 @@ return [
      * Required. Obtain alongside the API key.
      *
      * Also exposed as `api_secret` for backward compatibility with the
-     * legacy `Phlex\Plugins\Lastfm\Plugin` consumer.
+     * legacy `Phlix\Plugins\Lastfm\Plugin` consumer.
      */
     'shared_secret' => getenv('LASTFM_SHARED_SECRET') ?: '',
     'api_secret'    => getenv('LASTFM_SHARED_SECRET') ?: '',
@@ -64,8 +64,8 @@ return [
 
     /**
      * Legacy fraction-based threshold consumed by the original
-     * `Phlex\Plugins\Lastfm\Plugin`. The new
-     * `Phlex\Plugins\Scrobbler\Lastfm\LastfmScrobbler` enforces
+     * `Phlix\Plugins\Lastfm\Plugin`. The new
+     * `Phlix\Plugins\Scrobbler\Lastfm\LastfmScrobbler` enforces
      * Last.fm's official rule (>30s duration AND >50% played) regardless
      * of this value.
      */

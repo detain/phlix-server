@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Fingerprinting;
+namespace Phlix\Media\Markers\Fingerprinting;
 
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * Repository for storing and retrieving audio fingerprints.

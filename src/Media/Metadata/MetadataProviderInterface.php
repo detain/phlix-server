@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
 interface MetadataProviderInterface
 {

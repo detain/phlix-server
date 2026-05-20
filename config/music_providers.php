@@ -6,7 +6,7 @@
  * This file configures the MusicBrainz and AudioDB metadata providers
  * used for music library metadata fetching.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @since 0.13.0
  */
 
@@ -16,7 +16,7 @@ return [
     'musicbrainz' => [
         'enabled' => true,
         'rate_limit' => 1.0,        // seconds between requests (MusicBrainz requirement)
-        'user_agent' => 'Phlex/1.0 (https://phlex.media)',
+        'user_agent' => 'Phlix/1.0 (https://phlix.media)',
         'use_fallback' => true,       // fall back to AudioDB if MusicBrainz fails
     ],
     'audiodb' => [

@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Lastfm;
+namespace Phlix\Tests\Unit\Plugins\Lastfm;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Lastfm\LastfmApiClientInterface;
-use Phlex\Plugins\Lastfm\NowPlayingData;
-use Phlex\Plugins\Lastfm\Plugin;
-use Phlex\Plugins\Lastfm\ScrobbleData;
-use Phlex\Plugins\Lastfm\LastfmPluginNotConfiguredException;
-use Phlex\Plugins\Lastfm\LastfmScrobbleFailedException;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Plugins\Lastfm\LastfmApiClientInterface;
+use Phlix\Plugins\Lastfm\NowPlayingData;
+use Phlix\Plugins\Lastfm\Plugin;
+use Phlix\Plugins\Lastfm\ScrobbleData;
+use Phlix\Plugins\Lastfm\LastfmPluginNotConfiguredException;
+use Phlix\Plugins\Lastfm\LastfmScrobbleFailedException;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 
 /**
- * @covers \Phlex\Plugins\Lastfm\Plugin
+ * @covers \Phlix\Plugins\Lastfm\Plugin
  */
 final class PluginTest extends TestCase
 {

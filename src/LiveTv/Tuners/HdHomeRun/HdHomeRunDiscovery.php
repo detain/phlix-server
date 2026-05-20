@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -127,7 +127,7 @@ class HdHomeRunDiscovery
             . "MAN: \"ssdp:discover\"\r\n"
             . "MX: {$this->timeoutSecs}\r\n"
             . "ST: urn:schemas-upnp-org:device:MediaServer:1\r\n"
-            . "USER-AGENT: Phlex/1.0\r\n"
+            . "USER-AGENT: Phlix/1.0\r\n"
             . "\r\n";
 
         $sent = @socket_sendto($socket, $msearch, strlen($msearch), 0, self::SSDP_MULTICAST_ADDR, self::SSDP_PORT);
@@ -197,7 +197,7 @@ class HdHomeRunDiscovery
             'http' => [
                 'timeout' => $this->timeoutSecs,
                 'method' => 'GET',
-                'user_agent' => 'Phlex/1.0',
+                'user_agent' => 'Phlix/1.0',
             ],
         ]);
 

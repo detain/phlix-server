@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library\Dto;
+namespace Phlix\Media\Library\Dto;
 
 /**
  * Typed value object representing a hydrated row from the `libraries` table.
@@ -11,7 +11,7 @@ namespace Phlex\Media\Library\Dto;
  * `MusicLibraryManager::getLibrary()` with `paths` and `options` already
  * JSON-decoded so callers receive typed values instead of mixed.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Strongly-typed library row from DB hydration
  */

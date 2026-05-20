@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Relay;
+namespace Phlix\LiveTv\Relay;
 
-use Phlex\Hub\RelayConsumer;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\Media\Streaming\HlsStreamer;
+use Phlix\Hub\RelayConsumer;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\Media\Streaming\HlsStreamer;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -255,7 +255,7 @@ class HlsRelayManager
         $context = stream_context_create([
             'http' => [
                 'timeout' => 10,
-                'user_agent' => 'Phlex Media Server/1.0',
+                'user_agent' => 'Phlix Media Server/1.0',
             ],
         ]);
 

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session\SyncPlay;
+namespace Phlix\Session\SyncPlay;
 
 /**
  * GroupState - Manages state for a SyncPlay group
@@ -29,8 +29,8 @@ namespace Phlex\Session\SyncPlay;
  * playback position is "in sync" with the group. Members outside this
  * tolerance may need to seek to catch up.
  *
- * @author Phlex Development Team
- * @copyright 2024 Phlex Media Server
+ * @author Phlix Development Team
+ * @copyright 2024 Phlix Media Server
  * @license Proprietary
  *
  * @see SyncPlayManager For group lifecycle management

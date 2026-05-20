@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 /**
  * Thrown when the Last.fm API returns a non-OK status for a scrobble
  * or Now Playing submission.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final class LastfmScrobbleFailedException extends \RuntimeException

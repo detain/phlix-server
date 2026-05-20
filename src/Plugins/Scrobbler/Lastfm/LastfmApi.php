@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Plugins\Scrobbler\Lastfm;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -28,7 +28,7 @@ use Psr\Log\NullLogger;
  * `file_get_contents` so test doubles can swap in a custom HTTP runner
  * without dragging cURL in.
  *
- * @package Phlex\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 class LastfmApi
@@ -225,7 +225,7 @@ class LastfmApi
         $headers = [
             'Content-Type'   => 'application/x-www-form-urlencoded',
             'Content-Length' => (string) strlen($body),
-            'User-Agent'     => 'phlex/last.fm (+https://github.com/detain/phlex-server)',
+            'User-Agent'     => 'phlix/last.fm (+https://github.com/detain/phlix-server)',
         ];
 
         $result = ($this->http)(self::API_ROOT, $body, $headers);

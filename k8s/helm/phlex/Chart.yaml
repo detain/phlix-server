@@ -1,10 +1,10 @@
 apiVersion: v2
-name: phlex
-description: A Helm chart for Phlex Media Server
+name: phlix
+description: A Helm chart for Phlix Media Server
 type: application
 # Chart version (Helm artifact version) — bump independently of appVersion
 version: 0.1.0
-# appVersion mirrors composer.json version of phlex-server
+# appVersion mirrors composer.json version of phlix-server
 appVersion: "1.0.0"
 keywords:
   - media-server
@@ -12,7 +12,7 @@ keywords:
   - jellyfin
   - emby
 maintainers:
-  - name: Phlex Team
+  - name: Phlix Team
     url: https://github.com/detain
 sources:
-  - https://github.com/detain/phlex-server
+  - https://github.com/detain/phlix-server

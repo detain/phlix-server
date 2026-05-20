@@ -7,7 +7,7 @@
     <header class="page-header">
         <h1>Last.fm Scrobbling</h1>
         <p class="page-subtitle">
-            Connect your Last.fm account so Phlex can submit "Now Playing" updates
+            Connect your Last.fm account so Phlix can submit "Now Playing" updates
             and scrobbles whenever you finish listening to a track.
         </p>
     </header>
@@ -33,7 +33,7 @@
         {else}
         <div class="card">
             <h2>Not yet connected</h2>
-            <p>Click the button below to authorise Phlex with Last.fm. You will
+            <p>Click the button below to authorise Phlix with Last.fm. You will
                be redirected to last.fm/api/auth, sign in, approve access, and
                sent back here to finish setup.</p>
             <a href="{$auth_url|escape}" class="btn btn-primary">Connect Last.fm</a>
@@ -46,7 +46,7 @@
 
     <section class="lastfm-rules">
         <h2>Scrobble rules</h2>
-        <p>Phlex follows Last.fm's official scrobble rules: a scrobble is
+        <p>Phlix follows Last.fm's official scrobble rules: a scrobble is
            submitted only when both conditions are satisfied at the moment
            playback stops:</p>
         <ul>

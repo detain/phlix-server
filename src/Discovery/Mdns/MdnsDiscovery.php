@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery\Mdns;
+namespace Phlix\Discovery\Mdns;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -90,12 +90,12 @@ class MdnsDiscovery
     }
 
     /**
-     * Announce the Phlex server via mDNS.
+     * Announce the Phlix server via mDNS.
      *
-     * Registers the Phlex server as an available service on the network.
+     * Registers the Phlix server as an available service on the network.
      *
      * @param string $name Service name to announce
-     * @param string $type Service type (e.g., '_phlex._tcp.local.')
+     * @param string $type Service type (e.g., '_phlix._tcp.local.')
      * @param int $port Port number
      * @param array<string, string> $txt TXT record key-value pairs
      *

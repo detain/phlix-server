@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\Dto\RowAccess;
-use Phlex\LiveTv\Dto\RowQuery;
-use Phlex\LiveTv\Recording\ComskipLifecycleManager;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Dto\RowAccess;
+use Phlix\LiveTv\Dto\RowQuery;
+use Phlix\LiveTv\Recording\ComskipLifecycleManager;
 use Workerman\MySQL\Connection;
 
 /**
@@ -41,7 +41,7 @@ use Workerman\MySQL\Connection;
  * Time-shifting allows pausing and rewinding live TV by
  * maintaining a buffer of the last N seconds of broadcast.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @see LiveTvManager For tuner integration
  */
@@ -455,7 +455,7 @@ class Recorder
      * was killed alongside its parent.
      *
      * This method runs at bootstrap (call from
-     * {@see \Phlex\LiveTv\LiveTvManager} or the Application boot path)
+     * {@see \Phlix\LiveTv\LiveTvManager} or the Application boot path)
      * and reconciles DB state with reality:
      *
      *   1. Recordings whose stored `pid` is still alive

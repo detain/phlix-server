@@ -130,7 +130,7 @@ The built-in reader stub at `/books/{id}/read` provides:
 3. Browse and download books
 
 ### Komga
-1. Add server with your Phlex URL
+1. Add server with your Phlix URL
 2. Libraries are automatically discovered via OPDS
 
 ### Moon+ Reader

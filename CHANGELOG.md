@@ -12,23 +12,23 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - Last.fm scrobble plugin (`src/Plugins/Scrobbler/Lastfm/`):
   - `LastfmApi` — Web Service v2 client. Builds `api_sig` per the official rule (alphabetical key+value concat + shared secret + MD5).
   - `LastfmSessionRepository` — per-user session-key store backed by the new `lastfm_sessions` table (migration `023_lastfm_sessions.sql`).
-  - `LastfmScrobbler` — PSR-14 listener; subscribes to `phlex.playback.started` (Now Playing) and `phlex.playback.stopped` (scrobble). Enforces Last.fm's official rule: scrobble only when the track is longer than 30 s AND the user listened to more than 50 % of it.
-  - `LastfmPlugin` — `\Phlex\Shared\Plugin\LifecycleInterface` entry class; resolves dependencies from the host container on `enable()` and exposes the scrobbler via `subscribedEvents()`.
+  - `LastfmScrobbler` — PSR-14 listener; subscribes to `phlix.playback.started` (Now Playing) and `phlix.playback.stopped` (scrobble). Enforces Last.fm's official rule: scrobble only when the track is longer than 30 s AND the user listened to more than 50 % of it.
+  - `LastfmPlugin` — `\Phlix\Shared\Plugin\LifecycleInterface` entry class; resolves dependencies from the host container on `enable()` and exposes the scrobbler via `subscribedEvents()`.
   - `LastfmConfig` — typed wrapper over `config/lastfm.php`. New config keys default to `LASTFM_API_KEY`, `LASTFM_SHARED_SECRET`, `LASTFM_CALLBACK_URL`, `LASTFM_ENABLED` (env-driven).
   - Admin connect flow: `GET /admin/lastfm`, `GET /admin/lastfm/callback`, `POST /admin/lastfm/disconnect` (`Admin\LastfmController`) plus a Smarty template at `public/templates/admin/lastfm.tpl`.
 - New required env vars (only when enabling the plugin): `LASTFM_API_KEY`, `LASTFM_SHARED_SECRET`. Optional: `LASTFM_CALLBACK_URL`, `LASTFM_USERNAME`, `LASTFM_ENABLED`, `LASTFM_SUBMIT_NOW_PLAYING`.
 
 ### Moved (post-O.7 wave 4)
 
-- K.3 request UI: moved to phlex-hub (now lives at `/api/v1/me/requests` on the hub, with the admin queue at `/api/v1/admin/requests`). Server no longer exposes `/api/v1/requests`, `/requests` (SSR), `/requests/{id}`, or the `requests` table — those were dropped along with `migrations/016_media_requests.sql`. The hub stores requests against its own `users` table (hub migration `011_media_requests.sql`) and dispatches approvals through Sonarr/Radarr via `Phlex\Shared\Arr` v0.4.0.
+- K.3 request UI: moved to phlix-hub (now lives at `/api/v1/me/requests` on the hub, with the admin queue at `/api/v1/admin/requests`). Server no longer exposes `/api/v1/requests`, `/requests` (SSR), `/requests/{id}`, or the `requests` table — those were dropped along with `migrations/016_media_requests.sql`. The hub stores requests against its own `users` table (hub migration `011_media_requests.sql`) and dispatches approvals through Sonarr/Radarr via `Phlix\Shared\Arr` v0.4.0.
 
 ### Changed (post-O.7 wave 3)
 
-- Helm chart fleshed out for both `phlex-server` and `phlex-hub` (values + templates: deployment, service, ingress, pvc, configmap, secret, serviceaccount, hpa, NOTES).
+- Helm chart fleshed out for both `phlix-server` and `phlix-hub` (values + templates: deployment, service, ingress, pvc, configmap, secret, serviceaccount, hpa, NOTES).
 - Caddyfile WebSocket headers fixed (`Connection: upgrade` / `Upgrade: websocket` — previously inverted).
 - nginx `/media/` location now uses `proxy_request_buffering off` so large client uploads stream through; sensitive-path deny rule tightened to `^/+(...)(/|$)` to defeat double-slash bypass.
 - Dockerfile `composer install` no longer suffixed with `|| true` — composer failures now fail the build (default Alpine variant + NVIDIA/Intel HW-accel variants). Path-layout rationale documented in `docker/README.md`.
-- CI: added `phlex-hub` build/push job in `.github/workflows/docker.yml`.
+- CI: added `phlix-hub` build/push job in `.github/workflows/docker.yml`.
 - CI: `.github/workflows/release.yml` now verifies `Chart.yaml` `appVersion` and `composer.json` `version` match the release tag, lints + packages charts, and uploads them with the release.
 
 ### Removed
@@ -397,10 +397,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `TraktApi` — OAuth2 PKCE client, scrobble start/pause/stop, history sync
   - `TraktSettings` — per-user settings (tokens, sync prefs, username)
   - `TraktPlugin` — LifecycleInterface entry, subscribes to PlaybackStarted/Stopped/ProgressUpdated
-  - `TraktHistorySync` — syncTraktToPhlex() (pull on schedule) and syncPhlexToTrakt() (push on ≥90% completion)
+  - `TraktHistorySync` — syncTraktToPhlix() (pull on schedule) and syncPhlixToTrakt() (push on ≥90% completion)
   - `TraktOAuthController` — OAuth callback at GET /api/v1/oauth/trakt/callback
   - `config/scrobblers/trakt.php` — client_id, client_secret, redirect_uri, sync_interval
-  - `phlex-plugin-trakt/plugin.json` — scrobbler plugin manifest
+  - `phlix-plugin-trakt/plugin.json` — scrobbler plugin manifest
   - Unit tests (19 tests across TraktApi, TraktSettings, TraktHistorySync, TraktPlugin)
   - `docs/developers/scrobbler-plugins.md` — scrobbler plugin author guide
 - New Router method `traktAuth()` for Trakt OAuth routes
@@ -417,8 +417,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `ThemePluginInterface` — marker interface for ui-theme plugin entry classes.
   - `ThemePreviewController` — renders live theme preview in iframe sandbox at
     GET /portal/theme-preview?id={themeId}.
-  - `config/themes.php` — 4 built-in themes (phlex-dark, phlex-light,
-    phlex-amoled, phlex-contrast) with CSS and thumbnail assets.
+  - `config/themes.php` — 4 built-in themes (phlix-dark, phlix-light,
+    phlix-amoled, phlix-contrast) with CSS and thumbnail assets.
   - Migration `migrations/006_user_theme_settings.sql` — adds active_theme_id
     to user_profiles.
   - UserProfileManager::getActiveThemeId() / setActiveThemeId() for per-profile
@@ -622,22 +622,22 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step G.3)
 
-- `Phlex\Plugins\Lastfm\Plugin` — In-core Last.fm scrobbler plugin
+- `Phlix\Plugins\Lastfm\Plugin` — In-core Last.fm scrobbler plugin
   implementing the `scrobbler` plugin type. Subscribes to
-  `phlex.playback.started` (Now Playing updates) and
-  `phlex.playback.stopped` (scrobble submission). Off by default;
+  `phlix.playback.started` (Now Playing updates) and
+  `phlix.playback.stopped` (scrobble submission). Off by default;
   configure `config/lastfm.php` with API credentials to enable.
-- `Phlex\Plugins\Lastfm\LastfmApiClient` — Last.fm API v1.2 client
+- `Phlix\Plugins\Lastfm\LastfmApiClient` — Last.fm API v1.2 client
   with HMAC-MD5 signing. Supports `auth.getMobileSession`,
   `track.scrobble`, and `track.updateNowPlaying` endpoints.
-- `Phlex\Plugins\Lastfm\ScrobbleData` — Immutable value object for
+- `Phlix\Plugins\Lastfm\ScrobbleData` — Immutable value object for
   scrobble submission (artist, track, timestamp, album, duration,
   MusicBrainz ID).
-- `Phlex\Plugins\Lastfm\NowPlayingData` — Immutable value object for
+- `Phlix\Plugins\Lastfm\NowPlayingData` — Immutable value object for
   Now Playing notifications.
-- `Phlex\Plugins\Lastfm\LastfmPluginNotConfiguredException` — Thrown
+- `Phlix\Plugins\Lastfm\LastfmPluginNotConfiguredException` — Thrown
   when API key, secret, or session key is missing.
-- `Phlex\Plugins\Lastfm\LastfmScrobbleFailedException` — Thrown when
+- `Phlix\Plugins\Lastfm\LastfmScrobbleFailedException` — Thrown when
   Last.fm API returns an error on scrobble/Now Playing.
 - `config/lastfm.php` — Default configuration with `enabled` (default
   false), `api_key`, `api_secret`, `session_key`, `username`,
@@ -794,7 +794,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - `StoredMarkers` — parses stored marker candidates from episode metadata.
 - `MarkerCandidateRepository` — persists intro/outro candidates to
   `media_items.metadata_json` for consumption by F.3 API.
-- `MarkerCandidateStore` — file-based job queue (`/tmp/phlex_marker_jobs/`)
+- `MarkerCandidateStore` — file-based job queue (`/tmp/phlix_marker_jobs/`)
   with one lock file per show being processed.
 - `BackgroundDetectorWorker` — queue consumer loop that processes detection
   jobs continuously.
@@ -976,14 +976,14 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step D.3)
 
-- `phlex-plugin-ldap` — LDAP authentication provider plugin.
+- `phlix-plugin-ldap` — LDAP authentication provider plugin.
   Supports OpenLDAP and Active Directory via the LDAP protocol.
   Includes:
   - `LdapProvider` — implements `ProviderInterface` with bind
     authentication and user attribute mapping.
   - `LdapConnection` — wraps `directorytree/ldaprecord` Connection
     with request-scoped caching per host:port:ssl triple.
-  - `UserMapper` — maps LDAP attributes to Phlex user fields
+  - `UserMapper` — maps LDAP attributes to Phlix user fields
     (uid/sAMAccountName → username, mail → email, displayname/cn →
     display name, jpegPhoto/thumbnailPhoto → avatar_url).
   - `LdapUserInfo` — LDAP-specific user info carrier.
@@ -999,7 +999,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step D.2)
 
-- `phlex-plugin-oidc` — OIDC/OAuth2 authentication provider plugin.
+- `phlix-plugin-oidc` — OIDC/OAuth2 authentication provider plugin.
   Supports any OIDC-compliant identity provider (Authelia, Authentik,
   Keycloak, Google, GitHub). Includes:
   - `OidcProvider` — implements `ProviderInterface` with authorization
@@ -1022,21 +1022,21 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step D.1)
 
-- `Phlex\Auth\AuthProviderRegistry` — singleton registry holding
-  registered {@see \Phlex\Auth\ProviderInterface} instances; resolves
+- `Phlix\Auth\AuthProviderRegistry` — singleton registry holding
+  registered {@see \Phlix\Auth\ProviderInterface} instances; resolves
   provider-prefixed usernames to the correct external provider.
-- `Phlex\Auth\ProviderManager` — bridges {@see AuthManager} to the
+- `Phlix\Auth\ProviderManager` — bridges {@see AuthManager} to the
   registry; handles `provider:username` parsing and delegates to either
   an external provider or the standard password-based flow.
-- `Phlex\Auth\AuthProviderNotFoundException` — thrown when a
+- `Phlix\Auth\AuthProviderNotFoundException` — thrown when a
   provider-prefix references an unregistered provider.
-- `Phlex\Auth\AuthManager::loginWithProvider()` — authenticates a user
+- `Phlix\Auth\AuthManager::loginWithProvider()` — authenticates a user
   via an external provider (OIDC, LDAP, SAML, passkey). On first login,
   automatically creates a local user row with `password_hash = NULL`.
-- `Phlex\Auth\UserRepository::findByExternalId()`,
+- `Phlix\Auth\UserRepository::findByExternalId()`,
   `findOrCreateByExternalId()`, `updateProviderData()` — data access
   for provider-linked accounts.
-- `Phlex\Server\Http\Controllers\AuthProviderController` — admin API
+- `Phlix\Server\Http\Controllers\AuthProviderController` — admin API
   for listing / enabling / disabling providers and retrieving their
   configuration JSON schema.
 - Routes wired in `AdminRoutes`:
@@ -1047,8 +1047,8 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - Migration `009_auth_provider_schema.sql` adds `provider` (VARCHAR 64),
   `external_id` (VARCHAR 255), `provider_data` (JSON) columns to
   `users` table, with indexes `idx_provider` and `idx_external`.
-- `detain/phlex-shared:^0.3.0` — new package version with
-  `Phlex\Shared\Auth\ProviderInterface`, `AuthResult`, `UserInfo`.
+- `detain/phlix-shared:^0.3.0` — new package version with
+  `Phlix\Shared\Auth\ProviderInterface`, `AuthResult`, `UserInfo`.
 - `docs/plugins/developer-guide.md` — added "Auth Provider Plugins"
   section (Section 13) covering the interface contract, result types,
   manifest, lifecycle hooks, and admin API.
@@ -1058,41 +1058,41 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step C.9)
 
-- `Phlex\Hub\HubClient::sendHeartbeat()` — now includes `library_count`,
+- `Phlix\Hub\HubClient::sendHeartbeat()` — now includes `library_count`,
   `total_size_bytes`, and `library-sharing` capability in heartbeat
   payload to advertise library information to the hub.
 
 ### Added (Step C.8)
 
-- `Phlex\Hub\SubdomainResult` — DTO for subdomain allocation result with
+- `Phlix\Hub\SubdomainResult` — DTO for subdomain allocation result with
   subdomain, fqdn, tlsCertPath, and tlsKeyPath fields.
-- `Phlex\Hub\SubdomainClient` — client for claiming/releasing subdomains
+- `Phlix\Hub\SubdomainClient` — client for claiming/releasing subdomains
   from the hub and storing TLS configuration locally.
-- `Phlex\Hub\HttpClientInterface::delete()` — added DELETE method for
+- `Phlix\Hub\HttpClientInterface::delete()` — added DELETE method for
   subdomain release.
-- `Phlex\Hub\HttpClient::delete()` — implements DELETE method.
-- `Phlex\Hub\HubClient::getHttpClient()` — exposes HTTP client for use
+- `Phlix\Hub\HttpClient::delete()` — implements DELETE method.
+- `Phlix\Hub\HubClient::getHttpClient()` — exposes HTTP client for use
   by SubdomainClient.
 - `scripts/claim-subdomain.php` — CLI script for claiming a subdomain.
 - `config/hub.php` — added `subdomain_auto_claim`, `tls_enabled`,
   `domain` configuration options.
 - `docs/dev/tls-certificates.md` — guide covering TLS setup, certificate
   sources (hub-provisioned vs self-signed), and security considerations.
-- `docs/reference/env-vars.md` — added `PHLEX_SUBDOMAIN_AUTO_CLAIM`,
-  `PHLEX_TLS_ENABLED`, `PHLEX_DOMAIN` environment variables.
+- `docs/reference/env-vars.md` — added `PHLIX_SUBDOMAIN_AUTO_CLAIM`,
+  `PHLIX_TLS_ENABLED`, `PHLIX_DOMAIN` environment variables.
 
 ### Added (Step C.7)
 
-- `Phlex\Network\UpnpIgdClient` — UPnP-IGD client using raw sockets.
+- `Phlix\Network\UpnpIgdClient` — UPnP-IGD client using raw sockets.
   SSDP M-SEARCH discovery on `239.255.255.250:1900`, SOAP
   `AddPortMapping` / `GetExternalIPAddress` / `DeletePortMapping`
   actions for automatic port forwarding on compatible routers.
-- `Phlex\Network\StunClient` — RFC 5389 STUN client for discovering
+- `Phlix\Network\StunClient` — RFC 5389 STUN client for discovering
   the server's public IP address and testing port accessibility via
   TCP connect probe.
-- `Phlex\Network\NatPmpClient` — RFC 6886 NAT-PMP client for Apple
+- `Phlix\Network\NatPmpClient` — RFC 6886 NAT-PMP client for Apple
   AirPort routers and other NAT-PMP-compatible gateways.
-- `Phlex\Network\PortForwardService` — orchestrator that tries UPnP
+- `Phlix\Network\PortForwardService` — orchestrator that tries UPnP
   first, then NAT-PMP, then STUN for IP detection; falls back to
   manual port-forward instructions; stores result to
   `config/port-forward.json`.
@@ -1101,10 +1101,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 - `src/Common\Container\Providers\NetworkServicesProvider` — registers
   `UpnpIgdClient`, `StunClient`, `NatPmpClient`, and
   `PortForwardService` in the PHP-DI container.
-- `config/port-forward.php` — `PHLEX_PORT_FORWARD_AUTO`,
-  `PHLEX_EXTERNAL_PORT`, `PHLEX_EXTERNAL_HTTP_PORT`,
-  `PHLEX_EXTERNAL_HTTPS_PORT`, `PHLEX_UPNP_ENABLED`,
-  `PHLEX_STUN_SERVER`, `PHLEX_STUN_PORT` configuration.
+- `config/port-forward.php` — `PHLIX_PORT_FORWARD_AUTO`,
+  `PHLIX_EXTERNAL_PORT`, `PHLIX_EXTERNAL_HTTP_PORT`,
+  `PHLIX_EXTERNAL_HTTPS_PORT`, `PHLIX_UPNP_ENABLED`,
+  `PHLIX_STUN_SERVER`, `PHLIX_STUN_PORT` configuration.
 - `docs/hub/remote-access.md` — end-user guide covering UPnP, NAT-PMP,
   STUN, manual port forwarding setup, and troubleshooting.
 - `docs/hub-admin/network.md` — hub admin guide covering port forwarding
@@ -1118,33 +1118,33 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed (Step C.7)
 
-- `Phlex\Hub\HubClient` now injects `PortForwardService` and calls
+- `Phlix\Hub\HubClient` now injects `PortForwardService` and calls
   `discoverHostnameCandidates()` to augment heartbeat hostname
   candidates with LAN IP, mDNS, and public IP endpoints when available.
-- `Phlex\Common\Container\ContainerFactory::defaultProviders()` now
+- `Phlix\Common\Container\ContainerFactory::defaultProviders()` now
   registers `NetworkServicesProvider`.
 
 ### Added (Step C.6)
 
-- `Phlex\Hub\RelayMessageFramer` — binary framing for HTTP-over-WebSocket
+- `Phlix\Hub\RelayMessageFramer` — binary framing for HTTP-over-WebSocket
   tunnel. Wire format: `[1-byte type][4-byte seq][4-byte payload_len][payload]`.
   Types: HTTP_REQUEST (1), HTTP_RESPONSE (2), PING (3), PONG (4).
   All payloads are JSON.
-- `Phlex\Hub\RelayFrame` — immutable parsed frame DTO with accessors
+- `Phlix\Hub\RelayFrame` — immutable parsed frame DTO with accessors
   (`isRequest()`, `isResponse()`, `isPing()`, `isPong()`).
-- `Phlex\Hub\RelayConfig` — relay tunnel configuration from environment
-  variables (`PHLEX_RELAY_ENABLED`, `PHLEX_RELAY_HUB_URL`,
-  `PHLEX_RELAY_TUNNEL_HOSTNAME`, etc.).
-- `Phlex\Hub\RelayConsumer` — server-side Workerman consumer that opens a
+- `Phlix\Hub\RelayConfig` — relay tunnel configuration from environment
+  variables (`PHLIX_RELAY_ENABLED`, `PHLIX_RELAY_HUB_URL`,
+  `PHLIX_RELAY_TUNNEL_HOSTNAME`, etc.).
+- `Phlix\Hub\RelayConsumer` — server-side Workerman consumer that opens a
   persistent WSS connection to the hub, receives framed HTTP requests,
   dispatches them to the local router, and sends responses back over the
   tunnel. Implements auto-reconnect with configurable delay and
   keep-alive ping/pong.
-- `Phlex\Hub\RelayApplication` — thin Workerman Worker entry point
+- `Phlix\Hub\RelayApplication` — thin Workerman Worker entry point
   (`text://` protocol, timer-driven) wrapping `RelayConsumer`.
-- `config/relay.php` — `PHLEX_RELAY_ENABLED`, `PHLEX_RELAY_HUB_URL`,
-  `PHLEX_RELAY_TUNNEL_HOSTNAME`, `PHLEX_RELAY_RECONNECT_DELAY`,
-  `PHLEX_RELAY_PING_INTERVAL`, `PHLEX_RELAY_PING_TIMEOUT`.
+- `config/relay.php` — `PHLIX_RELAY_ENABLED`, `PHLIX_RELAY_HUB_URL`,
+  `PHLIX_RELAY_TUNNEL_HOSTNAME`, `PHLIX_RELAY_RECONNECT_DELAY`,
+  `PHLIX_RELAY_PING_INTERVAL`, `PHLIX_RELAY_PING_TIMEOUT`.
 - `config/hub.php` — added `relay` capability to heartbeat payload.
 - `docs/dev/relay-protocol.md` — wire protocol reference for the
   HTTP-over-WebSocket relay tunnel.
@@ -1155,44 +1155,44 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed (Step C.6)
 
-- `Phlex\Hub\HubClient::sendHeartbeat()` now advertises `relay`
+- `Phlix\Hub\HubClient::sendHeartbeat()` now advertises `relay`
   in the server capabilities list.
-- `Phlex\Server\Core\Application` now starts `RelayApplication`
+- `Phlix\Server\Core\Application` now starts `RelayApplication`
   automatically when `config/hub-enrollment.json` exists and
-  `PHLEX_RELAY_ENABLED=true`.
-- `Phlex\Common\Container\Providers\HubServicesProvider` now registers
+  `PHLIX_RELAY_ENABLED=true`.
+- `Phlix\Common\Container\Providers\HubServicesProvider` now registers
   `RelayConfig`, `RelayMessageFramer`, `RelayConsumer`, and
   `RelayApplication` in the PHP-DI container.
 
 ### Added (Step C.2)
 
-- `Phlex\Hub\HubClient` — server-side orchestrator for server↔hub pairing,
+- `Phlix\Hub\HubClient` — server-side orchestrator for server↔hub pairing,
   heartbeat loop, re-enrollment, and JWKS exposure. Implements the protocol
   defined in `docs/dev/pairing-protocol.md`.
-- `Phlex\Hub\Ed25519KeyManager` — generates, stores, loads, and rotates
+- `Phlix\Hub\Ed25519KeyManager` — generates, stores, loads, and rotates
   Ed25519 keypairs (libsodium `sodium_crypto_sign_*`). Key stored at
   `config/hub-server-key.pem` (mode 0600). Key ID is SHA-256 first 8 bytes
   of the public key (base64url).
-- `Phlex\Hub\HttpClient` — cURL-based HTTP client for hub API communication.
-  Always sends `Accept-Phlex-Protocol: v1` header.
-- `Phlex\Hub\HubApplication` — thin Workerman Worker wrapper for the
+- `Phlix\Hub\HttpClient` — cURL-based HTTP client for hub API communication.
+  Always sends `Accept-Phlix-Protocol: v1` header.
+- `Phlix\Hub\HubApplication` — thin Workerman Worker wrapper for the
   background heartbeat loop (`text://` protocol, timer-driven).
-- `Phlex\Server\Http\Controllers\HubJwksController` — serves
+- `Phlix\Server\Http\Controllers\HubJwksController` — serves
   `GET /.well-known/jwks.json` with the server's Ed25519 JWK(s).
   Cache-Control: public, max-age=3600.
 - `scripts/pair-with-hub.php` — CLI pairing script. Initiates claim request,
   displays claim code, polls until claimed, stores enrollment, starts
   heartbeat loop.
-- `config/hub.php` — hub subsystem configuration (`PHLEX_HUB_URL`,
-  `PHLEX_HUB_HEARTBEAT_INTERVAL`, key/enrollment paths).
-- `Phlex\Common\Container\Providers\HubServicesProvider` — registers
+- `config/hub.php` — hub subsystem configuration (`PHLIX_HUB_URL`,
+  `PHLIX_HUB_HEARTBEAT_INTERVAL`, key/enrollment paths).
+- `Phlix\Common\Container\Providers\HubServicesProvider` — registers
   Ed25519KeyManager, HubClient, HubJwksController, HubApplication in
   the PHP-DI container.
 - `docs/reference/api/hub-jwks.yaml` — OpenAPI 3.0 spec for
   `/.well-known/jwks.json`.
 - `docs/reference/cli.md` — documents `php scripts/pair-with-hub.php`.
-- `docs/reference/env-vars.md` — documents `PHLEX_HUB_URL`,
-  `PHLEX_HUB_ENROLLMENT_TOKEN`, `PHLEX_HUB_HEARTBEAT_INTERVAL`.
+- `docs/reference/env-vars.md` — documents `PHLIX_HUB_URL`,
+  `PHLIX_HUB_ENROLLMENT_TOKEN`, `PHLIX_HUB_HEARTBEAT_INTERVAL`.
 
 ### Changed (Step C.2)
 
@@ -1203,63 +1203,63 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Added (Step C.5)
 
-- `Phlex\Hub\HubJwtValidator` — validates JWTs issued by the Phlex Hub
+- `Phlix\Hub\HubJwtValidator` — validates JWTs issued by the Phlix Hub
   using the hub's JWKS. Supports Ed25519 signature verification via
   `sodium_crypto_sign_verify_detached`, automatic JWKS caching with TTL,
   and key rotation (refetches JWKS once on unknown `kid`).
-- `Phlex\Hub\HubUserClaims` — immutable DTO for extracted hub JWT claims
+- `Phlix\Hub\HubUserClaims` — immutable DTO for extracted hub JWT claims
   (`userId`, `serverId`, `subject`, `issuer`, `expiresAt`, `scope`).
-- `Phlex\Hub\JwksCache` — in-memory JWKS cache with TTL support.
-- `Phlex\Hub\HttpClientFactory` — factory for creating HTTP clients used
+- `Phlix\Hub\JwksCache` — in-memory JWKS cache with TTL support.
+- `Phlix\Hub\HttpClientFactory` — factory for creating HTTP clients used
   by `HubJwtValidator` to fetch JWKS (enables testability).
-- `Phlex\Server\Http\Middleware\HubJwtMiddleware` — validates hub JWTs on
+- `Phlix\Server\Http\Middleware\HubJwtMiddleware` — validates hub JWTs on
   routes that support hub-mediated access. Populates `$request->hubUser`
   with `HubUserClaims` on success; returns 401 on invalid/expired tokens.
-- `Phlex\Server\Http\Controllers\HubTokenController` — exchanges a hub JWT
+- `Phlix\Server\Http\Controllers\HubTokenController` — exchanges a hub JWT
   for a server-issued session token via `POST /api/v1/auth/hub-token`.
   Provides backward compatibility for older clients that present a hub
   JWT to get a server session token.
-- `Phlex\Server\Http\Request::$hubUser` — new property holding
+- `Phlix\Server\Http\Request::$hubUser` — new property holding
   `HubUserClaims` when the request was authenticated via hub JWT.
-- `config/hub.php` — added `hub_jwks_url` key (`PHLEX_HUB_JWKS_URL`
+- `config/hub.php` — added `hub_jwks_url` key (`PHLIX_HUB_JWKS_URL`
   env var) for the hub's JWKS endpoint.
-- `docs/reference/env-vars.md` — documents `PHLEX_HUB_JWKS_URL`.
+- `docs/reference/env-vars.md` — documents `PHLIX_HUB_JWKS_URL`.
 - Unit tests: `HubJwtValidatorTest`, `HubUserClaimsTest`,
   `JwksCacheTest`, `HubJwtMiddlewareTest` (18 new tests).
 
 ### Changed (Step C.5)
 
-- `Phlex\Common\Container\Providers\HubServicesProvider` now registers
+- `Phlix\Common\Container\Providers\HubServicesProvider` now registers
   `HubJwtValidator`, `HubTokenController`, `HubJwtMiddleware`,
   `HttpClientFactory`, and `JwksCache`.
-- `Phlex\Server\Core\Application` now registers the
+- `Phlix\Server\Core\Application` now registers the
   `POST /api/v1/auth/hub-token` route.
 
 ## [0.11.0] — 2026-05-17
 
 ### Changed
 
-- Repository moved from `github.com/detain/phlex` to
-  `github.com/detain/phlex-server`. The local working directory stays
-  `/home/sites/phlex` per the expansion plan; only the `origin` remote
+- Repository moved from `github.com/detain/phlix` to
+  `github.com/detain/phlix-server`. The local working directory stays
+  `/home/sites/phlix` per the expansion plan; only the `origin` remote
   URL changes. Update your local clone with
-  `git remote set-url origin git@github.com:detain/phlex-server.git`.
-  The old `detain/phlex` repo is archived (B.4b) with a README pointing
+  `git remote set-url origin git@github.com:detain/phlix-server.git`.
+  The old `detain/phlix` repo is archived (B.4b) with a README pointing
   at the new home.
-- Refactored to depend on `detain/phlex-shared:^0.2`. The
+- Refactored to depend on `detain/phlix-shared:^0.2`. The
   `LifecycleInterface`, manifest DTOs, event DTOs, and `EventNameMap`
   now live in the shared package. Old FQCNs
-  (`Phlex\Plugins\Contract\LifecycleInterface`,
-  `Phlex\Plugins\Manifest`, `Phlex\Plugins\ManifestType`,
-  `Phlex\Plugins\ManifestValidationError`,
-  `Phlex\Plugins\EventNameMap`, `Phlex\Common\Events\*`) remain as
+  (`Phlix\Plugins\Contract\LifecycleInterface`,
+  `Phlix\Plugins\Manifest`, `Phlix\Plugins\ManifestType`,
+  `Phlix\Plugins\ManifestValidationError`,
+  `Phlix\Plugins\EventNameMap`, `Phlix\Common\Events\*`) remain as
   deprecated aliases through 0.11.x; removed in 0.12.0.
 - Manifest schema validation extracted to
-  `Phlex\Plugins\Manifest\ManifestSchema`.
+  `Phlix\Plugins\Manifest\ManifestSchema`.
 
 ### Added
 
-- Composer require on `detain/phlex-shared:^0.2.0` via a VCS
+- Composer require on `detain/phlix-shared:^0.2.0` via a VCS
   repositories entry.
 - `src/Plugins/AliasCompatShim.php` registers the 16 `class_alias`
   entries for the moved classes.
@@ -1279,10 +1279,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   promotes the developer guide and the reference plugin.
 - Plugin manifest specification (`docs/plugins/manifest.md`,
   `docs/plugins/manifest.schema.json`) and the
-  `Phlex\Plugins\Manifest` value object that parses and validates
+  `Phlix\Plugins\Manifest` value object that parses and validates
   `plugin.json` files. The eleven plugin types from
-  `PHLEX_EXPANSION_PLAN.md` §5 are codified as the
-  `Phlex\Plugins\ManifestType` enum. No loader yet — see Step A.4.
+  `PHLIX_EXPANSION_PLAN.md` §5 are codified as the
+  `Phlix\Plugins\ManifestType` enum. No loader yet — see Step A.4.
   Adds `justinrainbow/json-schema:^5.2` as a runtime dependency.
 - PSR-11 dependency injection container (PHP-DI). Application services are
   now auto-wired; the legacy ConnectionPool / LoggerFactory statics remain
@@ -1296,19 +1296,19 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   auth lifecycle events are now published from `PlaybackController`,
   `MediaScanner`, and `AuthManager`; plugins will be able to subscribe in
   Phase A.4. Twelve typed `readonly` event DTOs ship in
-  `src/Common/Events/`. New env var `PHLEX_DEBUG_EVENTS` and `events`
+  `src/Common/Events/`. New env var `PHLIX_DEBUG_EVENTS` and `events`
   log channel. Canonical catalog in `docs/dev/event-reference.md`.
-- Plugin loader (`Phlex\Plugins\PluginLoader`) with the full
+- Plugin loader (`Phlix\Plugins\PluginLoader`) with the full
   install / enable / disable / uninstall lifecycle. Plugins can be
   installed from a URL (HTTPS + `file://` by default; HTTP behind
-  `PHLEX_PLUGINS_ALLOW_HTTP=1`) or from a local directory; each plugin
+  `PHLIX_PLUGINS_ALLOW_HTTP=1`) or from a local directory; each plugin
   gets its own Composer-resolved `vendor/` tree under
   `var/plugins/<name>/`. The lifecycle contract lives in
-  `Phlex\Plugins\Contract\LifecycleInterface` (temporary home — moves to
-  `Phlex\Shared\Plugin` in B.1). New table `plugins` (migration
+  `Phlix\Plugins\Contract\LifecycleInterface` (temporary home — moves to
+  `Phlix\Shared\Plugin` in B.1). New table `plugins` (migration
   `migrations/003_plugins.sql`). New `plugins` log channel and config
-  key. New env vars: `PHLEX_PLUGINS_ALLOW_HTTP`,
-  `PHLEX_PLUGINS_REQUIRE_SIGNATURE`, `PHLEX_PLUGINS_COMPOSER_TIMEOUT`.
+  key. New env vars: `PHLIX_PLUGINS_ALLOW_HTTP`,
+  `PHLIX_PLUGINS_REQUIRE_SIGNATURE`, `PHLIX_PLUGINS_COMPOSER_TIMEOUT`.
   Adds `symfony/process:^7.0`.
   See `docs/plugins/developer-guide.md` for the lifecycle diagram and
   a sample `LifecycleInterface` implementation.
@@ -1324,15 +1324,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   settings UI deferred to a later phase — A.5 renders settings
   read-only with `secret: true` fields masked.
 - Reference plugin
-  [`phlex-plugin-example`](https://github.com/detain/phlex-plugin-example)
-  — the first community-shaped Phlex plugin, published as its own
+  [`phlix-plugin-example`](https://github.com/detain/phlix-plugin-example)
+  — the first community-shaped Phlix plugin, published as its own
   public GitHub repo. Implements
-  `Phlex\Plugins\Contract\LifecycleInterface` as a
+  `Phlix\Plugins\Contract\LifecycleInterface` as a
   `metadata-provider` that returns `['title' => 'Hello, World']` for a
   fixed fixture path, and ships unsigned by design as the canonical
   fork-as-starter template for plugin authors. Installable through the
   A.5 admin UI by pasting
-  `https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json`
+  `https://raw.githubusercontent.com/detain/phlix-plugin-example/main/plugin.json`
   into **Install from URL**. Server-side wiring: new fixture
   `tests/fixtures/plugins/example-manifest.json` mirrors the published
   manifest so the loader's URL-install test can use a `file://` URL,
@@ -1342,5 +1342,5 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Deprecated
 
-- `Phlex\Server\Core\Application::getInstance()` — resolve services from
+- `Phlix\Server\Core\Application::getInstance()` — resolve services from
   the PSR-11 container instead. Slated for removal in Phase B.

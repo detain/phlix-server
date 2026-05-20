@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Detection;
+namespace Phlix\Media\Markers\Detection;
 
 /**
  * Result of clustering fingerprints into intro/outro groups.

@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events;
+namespace Phlix\Tests\Unit\Common\Events;
 
 use Crell\Tukio\Dispatcher;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
-use Phlex\Tests\Fixtures\Events\SampleEvent;
+use Phlix\Tests\Fixtures\Events\SampleEvent;
 
 /**
  * Unit tests for {@see ListenerRegistry}.
  *
- * @covers \Phlex\Common\Events\ListenerRegistry
+ * @covers \Phlix\Common\Events\ListenerRegistry
  */
 final class ListenerRegistryTest extends TestCase
 {
@@ -170,7 +170,7 @@ final class ListenerRegistryTest extends TestCase
         $registry = new ListenerRegistry();
         $registry->subscribe(
             SampleEvent::class,
-            [\Phlex\Tests\Fixtures\Events\StaticListener::class, 'handle']
+            [\Phlix\Tests\Fixtures\Events\StaticListener::class, 'handle']
         );
         $this->addToAssertionCount(1);
     }

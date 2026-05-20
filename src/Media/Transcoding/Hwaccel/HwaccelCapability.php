@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel;
+namespace Phlix\Media\Transcoding\Hwaccel;
 
 /**
  * Hardware acceleration capability value object.

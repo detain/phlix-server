@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Relay;
+namespace Phlix\LiveTv\Relay;
 
 use Psr\Log\LoggerInterface;
 use Workerman\Timer;
@@ -91,7 +91,7 @@ class HlsSegmentPrefetcher
         $context = stream_context_create([
             'http' => [
                 'timeout' => 10,
-                'user_agent' => 'Phlex Media Server/1.0',
+                'user_agent' => 'Phlix Media Server/1.0',
             ],
         ]);
 
@@ -174,7 +174,7 @@ class HlsSegmentPrefetcher
         $context = stream_context_create([
             'http' => [
                 'timeout' => 10,
-                'user_agent' => 'Phlex Media Server/1.0',
+                'user_agent' => 'Phlix Media Server/1.0',
             ],
         ]);
 

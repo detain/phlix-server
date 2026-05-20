@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Iptv;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Iptv\M3UEntry;
-use Phlex\LiveTv\Tuners\Iptv\M3UParser;
+use Phlix\LiveTv\Tuners\Iptv\M3UEntry;
+use Phlix\LiveTv\Tuners\Iptv\M3UParser;
 
 class M3UParserTest extends TestCase
 {

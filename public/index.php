@@ -3,18 +3,18 @@
 /**
  * Web Portal Entry Point
  *
- * This is the main entry point for the Phlex Web Portal. It handles:
+ * This is the main entry point for the Phlix Web Portal. It handles:
  * - Construction of the PSR-11 service container
  * - Request parsing and authentication
  * - Routing to either API endpoints or HTML page renderers
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Web portal entry point with request routing
  *
- * @see \Phlex\Common\Container\ContainerFactory For service wiring
- * @see \Phlex\Server\WebPortal\PageRenderer For HTML page rendering
- * @see \Phlex\Server\WebPortal\WebPortalRouter For API routing
+ * @see \Phlix\Common\Container\ContainerFactory For service wiring
+ * @see \Phlix\Server\WebPortal\PageRenderer For HTML page rendering
+ * @see \Phlix\Server\WebPortal\WebPortalRouter For API routing
  */
 
 declare(strict_types=1);
@@ -22,16 +22,16 @@ declare(strict_types=1);
 // Load Composer autoloader
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Phlex\Auth\AuthManager;
-use Phlex\Common\Container\ContainerFactory;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Server\Http\Middleware\AdminMiddleware;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\Http\Router;
-use Phlex\Server\Http\Routes\AdminRoutes;
-use Phlex\Server\WebPortal\Controllers\PluginAdminPageController;
-use Phlex\Server\WebPortal\PageRenderer;
+use Phlix\Auth\AuthManager;
+use Phlix\Common\Container\ContainerFactory;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
+use Phlix\Server\Http\Routes\AdminRoutes;
+use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
+use Phlix\Server\WebPortal\PageRenderer;
 
 /**
  * Initialize configuration paths and build the PSR-11 container.
@@ -105,7 +105,7 @@ $router = new Router();
 AdminRoutes::register($router, $container);
 
 if (str_starts_with($path, '/api/v1/admin/')) {
-    /** @var \Phlex\Server\Http\Response $response */
+    /** @var \Phlix\Server\Http\Response $response */
     $response = $router->dispatch($request);
     $response->send();
 } elseif (str_starts_with($path, '/api/')) {
@@ -116,7 +116,7 @@ if (str_starts_with($path, '/api/v1/admin/')) {
      * This implementation currently returns a placeholder message.
      * Full API implementation is in WebPortalRouter.
      *
-     * @see \Phlex\Server\WebPortal\WebPortalRouter For complete API handling
+     * @see \Phlix\Server\WebPortal\WebPortalRouter For complete API handling
      */
     header('Content-Type: application/json');
     echo json_encode(['message' => 'API endpoint - implement in Step 5.2']);

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 /**
  * Quality Selector - Device profile-based quality selection for adaptive streaming.
@@ -11,7 +11,7 @@ namespace Phlex\Media\Streaming;
  * compatibility. Evaluates codec support, resolution limits, and bitrate constraints
  * to decide between direct play and transcoding.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Adaptive quality selection based on device profiles and source compatibility
  * @see https://developer.mozilla.org/en-US/docs/Glossary/Adaptive_bitrate_streaming

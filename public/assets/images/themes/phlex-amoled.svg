@@ -6,5 +6,5 @@
   <circle cx="60" cy="75" r="20" fill="#818cf8"/>
   <rect x="40" y="100" width="40" height="4" rx="2" fill="#ffffff"/>
   <rect x="45" y="108" width="30" height="3" rx="1.5" fill="#606060"/>
-  <text x="150" y="80" font-family="Arial, sans-serif" font-size="14" fill="#a0a0a0" text-anchor="middle">Phlex AMOLED</text>
+  <text x="150" y="80" font-family="Arial, sans-serif" font-size="14" fill="#a0a0a0" text-anchor="middle">Phlix AMOLED</text>
 </svg>

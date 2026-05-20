@@ -1,10 +1,10 @@
-# Phlex Streaming Benchmark Suite
+# Phlix Streaming Benchmark Suite
 
-Performance benchmarking tools for Phlex Media Server v1.0 streaming capabilities.
+Performance benchmarking tools for Phlix Media Server v1.0 streaming capabilities.
 
 ## Overview
 
-This directory contains CLI tools to benchmark Phlex's streaming performance against the v1.0 release criteria defined in the [Phlex Expansion Plan §13](https://github.com/detain/phlex-server/blob/master/PHLEX_EXPANSION_PLAN.md#section-13-v10-criteria).
+This directory contains CLI tools to benchmark Phlix's streaming performance against the v1.0 release criteria defined in the [Phlix Expansion Plan §13](https://github.com/detain/phlix-server/blob/master/PHLIX_EXPANSION_PLAN.md#section-13-v10-criteria).
 
 ## v1.0 Pass Criteria
 
@@ -40,9 +40,9 @@ This directory contains CLI tools to benchmark Phlex's streaming performance aga
 For accurate benchmarks, your test library should contain:
 
 1. **At least one 1080p H.264 media file** (5+ GB recommended for sustained streaming)
-2. **Valid metadata in Phlex's database** so the `/api/v1/media/{id}` endpoint returns the file path
+2. **Valid metadata in Phlix's database** so the `/api/v1/media/{id}` endpoint returns the file path
 
-Example file naming conventions Phlex recognizes:
+Example file naming conventions Phlix recognizes:
 ```
 Movies/
   Movie Name (2024)/Movie Name (2024).mkv
@@ -51,7 +51,7 @@ TV Shows/
 ```
 
 The media item must be:
-- Added to a library in Phlex
+- Added to a library in Phlix
 - Scanned and indexed
 - Accessible via the API (`GET /api/v1/media/{id}`)
 
@@ -314,10 +314,10 @@ For VM testing, apply a correction factor:
 
 set -e
 
-SERVER="${PHLEX_SERVER:-http://localhost:8096}"
+SERVER="${PHLIX_SERVER:-http://localhost:8096}"
 
 echo "=========================================="
-echo "Phlex v1.0 Performance Benchmark Suite"
+echo "Phlix v1.0 Performance Benchmark Suite"
 echo "=========================================="
 echo ""
 
@@ -415,7 +415,7 @@ Based on FFmpeg performance charts and known hardware acceleration capabilities:
    - Verify FFmpeg was compiled with hardware support
 
 3. **Memory leak detected:**
-   - Bug in Phlex streaming code
+   - Bug in Phlix streaming code
    - Check for properly cleaned-up transcode processes
 
 4. **CPU creep detected:**
@@ -428,7 +428,7 @@ Based on FFmpeg performance charts and known hardware acceleration capabilities:
 
 ### "Could not retrieve media path from server"
 
-The media item doesn't exist in Phlex's database. Make sure:
+The media item doesn't exist in Phlix's database. Make sure:
 1. The media file is in a watched library folder
 2. Library scan has completed (`POST /api/v1/libraries/{id}/scan`)
 3. The media item ID is correct

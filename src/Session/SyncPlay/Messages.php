@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session\SyncPlay;
+namespace Phlix\Session\SyncPlay;
 
 /**
  * Messages - WebSocket message types for SyncPlay protocol
@@ -43,8 +43,8 @@ namespace Phlex\Session\SyncPlay;
  * The current protocol version is 1. All messages include a protocol_version
  * field for future compatibility and version negotiation.
  *
- * @author Phlex Development Team
- * @copyright 2024 Phlex Media Server
+ * @author Phlix Development Team
+ * @copyright 2024 Phlix Media Server
  * @license Proprietary
  *
  * @see SyncPlayManager For message handling

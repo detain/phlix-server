@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Auth\UserProfileManager;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Theming\Theme;
-use Phlex\Theming\ThemeMiddleware;
-use Phlex\Theming\ThemeRegistry;
+use Phlix\Auth\UserProfileManager;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Theming\Theme;
+use Phlix\Theming\ThemeMiddleware;
+use Phlix\Theming\ThemeRegistry;
 use Workerman\MySQL\Connection;
 
 use function DI\autowire;
@@ -23,9 +23,9 @@ use function DI\get;
  * construction. Plugin themes are registered via registerFromPlugin()
  * during the plugin bootstrap phase.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.14.0
  */
 final class ThemingServicesProvider implements ServiceProviderInterface

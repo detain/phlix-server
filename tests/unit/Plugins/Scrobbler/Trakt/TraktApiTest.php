@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Trakt;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Trakt;
 
-use Phlex\Plugins\Scrobbler\Trakt\HttpClient;
-use Phlex\Plugins\Scrobbler\Trakt\HttpClientInterface;
-use Phlex\Plugins\Scrobbler\Trakt\TraktApi;
-use Phlex\Plugins\Scrobbler\Trakt\TraktApiException;
+use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
+use Phlix\Plugins\Scrobbler\Trakt\HttpClientInterface;
+use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
+use Phlix\Plugins\Scrobbler\Trakt\TraktApiException;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 

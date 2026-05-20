@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Dto;
+namespace Phlix\Tests\Unit\LiveTv\Dto;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Dto\ResultSet;
-use Phlex\LiveTv\Dto\RowQuery;
+use Phlix\LiveTv\Dto\ResultSet;
+use Phlix\LiveTv\Dto\RowQuery;
 
 /**
- * @covers \Phlex\LiveTv\Dto\RowQuery
+ * @covers \Phlix\LiveTv\Dto\RowQuery
  */
 class RowQueryTest extends TestCase
 {

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\AirPlay;
+namespace Phlix\AirPlay;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * RAOP (Real-Time Audio Protocol) client for AirPlay audio streaming.
@@ -68,7 +68,7 @@ class RaopClient
             "Client-Info: <php>\r\n\r\n" .
             "v=0\r\n" .
             "o=- %d 0 IN IP4 %s\r\n" .
-            "s=Phlex AirPlay\r\n" .
+            "s=Phlix AirPlay\r\n" .
             "c=IN IP4 %s\r\n" .
             "t=0 0\r\n" .
             "m=audio 0 RTP/AVP 96\r\n" .

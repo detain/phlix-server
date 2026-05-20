@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Contract for the HTTP client used for hub API communication.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 interface HttpClientInterface

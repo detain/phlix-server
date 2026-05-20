@@ -1,6 +1,6 @@
 <footer class="site-footer">
     <div class="footer-content">
-        <p class="footer-copyright">&copy; {year} Phlex Media Server. All rights reserved.</p>
+        <p class="footer-copyright">&copy; {year} Phlix Media Server. All rights reserved.</p>
         <nav class="footer-nav">
             <a href="/about">About</a>
             <a href="/privacy">Privacy</a>

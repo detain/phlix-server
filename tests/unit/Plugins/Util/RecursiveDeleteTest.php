@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Util;
+namespace Phlix\Tests\Unit\Plugins\Util;
 
-use Phlex\Plugins\Util\RecursiveDelete;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\Util\RecursiveDelete
+ * @covers \Phlix\Plugins\Util\RecursiveDelete
  */
 final class RecursiveDeleteTest extends TestCase
 {
@@ -17,7 +17,7 @@ final class RecursiveDeleteTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex_recdel_' . uniqid('', true);
+        $this->tmpDir = sys_get_temp_dir() . '/phlix_recdel_' . uniqid('', true);
         mkdir($this->tmpDir, 0775, true);
     }
 

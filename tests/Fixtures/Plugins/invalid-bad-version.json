@@ -1,7 +1,7 @@
 {
-    "name": "phlex-plugin-badversion",
+    "name": "phlix-plugin-badversion",
     "version": "one-point-zero",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\BadVersion\\Plugin"
+    "entry": "Phlix\\Plugins\\BadVersion\\Plugin"
 }

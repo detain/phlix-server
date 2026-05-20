@@ -2,26 +2,26 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Plugins\Exception\PluginEnableException;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Plugins\SettingsMasker;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Plugins\Exception\PluginEnableException;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\SettingsMasker;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * JSON API for the admin-only plugin lifecycle (Step A.5).
  *
  * Endpoints (all wired via
- * {@see \Phlex\Server\Http\Routes\AdminRoutes} under the
+ * {@see \Phlix\Server\Http\Routes\AdminRoutes} under the
  * `/api/v1/admin` group, with
- * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} in front):
+ * {@see \Phlix\Server\Http\Middleware\AdminMiddleware} in front):
  *
  *  - `GET    /api/v1/admin/plugins`                    → list installed
  *  - `POST   /api/v1/admin/plugins/install`            → install from URL
@@ -43,14 +43,14 @@ use Phlex\Server\Http\Response;
  * {@see AuditLogger::logPluginAction()} audit entry so the operator can
  * see who installed / enabled / disabled / uninstalled what. The actor
  * user id comes from `$request->userId`, which
- * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} guarantees is set
+ * {@see \Phlix\Server\Http\Middleware\AdminMiddleware} guarantees is set
  * and admin.
  *
  * CSRF: the API is Bearer-token authenticated, so it is not subject to
  * cross-site cookie attacks. The middleware refuses anonymous traffic
  * with 401 before this controller ever sees the request.
  *
- * @package Phlex\Server\Http\Controllers
+ * @package Phlix\Server\Http\Controllers
  * @since   0.10.0 (Step A.5)
  */
 final class PluginAdminController
@@ -94,7 +94,7 @@ final class PluginAdminController
      * The URL scheme is restricted to `https://` and `file://` for
      * defence-in-depth — the underlying `HttpInstaller` also enforces
      * this in A.4. We refuse `http://` even when the underlying
-     * installer would tolerate it via `PHLEX_PLUGINS_ALLOW_HTTP=1`,
+     * installer would tolerate it via `PHLIX_PLUGINS_ALLOW_HTTP=1`,
      * because the admin UI surface MUST stay secure by default.
      *
      * @param Request              $request The HTTP request (`body.url`).
@@ -304,7 +304,7 @@ final class PluginAdminController
             'version'                  => $manifest->version,
             'type'                     => $manifest->type,
             'entry'                    => $manifest->entry,
-            'phlex_min_server_version' => $manifest->phlexMinServerVersion,
+            'phlix_min_server_version' => $manifest->phlixMinServerVersion,
             'signed'                   => $manifest->signature !== null,
             'events'                   => $manifest->events,
         ];

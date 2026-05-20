@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Routes;
+namespace Phlix\Server\Http\Routes;
 
-use Phlex\Server\Http\Controllers\Admin\BackupController;
-use Phlex\Server\Http\Controllers\Admin\DashboardController;
-use Phlex\Server\Http\Controllers\AuthProviderController;
-use Phlex\Server\Http\Controllers\PluginAdminController;
-use Phlex\Server\Http\Controllers\Stats\StatsController;
-use Phlex\Plugins\Ldap\Controller\LdapAdminController;
-use Phlex\Plugins\Oidc\Controller\OidcAdminController;
-use Phlex\Server\Http\Middleware\AdminMiddleware;
-use Phlex\Server\Http\Router;
+use Phlix\Server\Http\Controllers\Admin\BackupController;
+use Phlix\Server\Http\Controllers\Admin\DashboardController;
+use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Controllers\PluginAdminController;
+use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Plugins\Ldap\Controller\LdapAdminController;
+use Phlix\Plugins\Oidc\Controller\OidcAdminController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Router;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -38,7 +38,7 @@ use Psr\Container\ContainerInterface;
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
  *
- * @package Phlex\Server\Http\Routes
+ * @package Phlix\Server\Http\Routes
  * @since   0.10.0 (Step A.5)
  */
 final class AdminRoutes

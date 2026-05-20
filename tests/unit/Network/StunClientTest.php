@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Network;
+namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Network\StunClient;
+use Phlix\Network\StunClient;
 use Psr\Log\NullLogger;
 
 class StunClientTest extends TestCase

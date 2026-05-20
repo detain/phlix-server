@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Fingerprinting;
+namespace Phlix\Media\Markers\Fingerprinting;
 
 /**
  * Exception thrown when ChromaPrint is not available on the system.

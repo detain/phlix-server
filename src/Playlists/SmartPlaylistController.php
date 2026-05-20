@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;
 
 /**

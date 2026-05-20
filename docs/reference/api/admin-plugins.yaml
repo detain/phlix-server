@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: Phlex Admin Plugins API
+  title: Phlix Admin Plugins API
   description: |
-    JSON API for managing Phlex plugins from the admin web portal.
-    Introduced in **Step A.5** of `PHLEX_EXPANSION_PLAN.md`. All
+    JSON API for managing Phlix plugins from the admin web portal.
+    Introduced in **Step A.5** of `PHLIX_EXPANSION_PLAN.md`. All
     endpoints require an authenticated user whose `users.is_admin`
     flag is set; non-admin or anonymous requests receive 401 or 403.
 
@@ -15,7 +15,7 @@ info:
 
 servers:
   - url: /api/v1/admin
-    description: Admin sub-tree of the main Phlex HTTP API.
+    description: Admin sub-tree of the main Phlix HTTP API.
 
 security:
   - bearerAuth: []
@@ -49,7 +49,7 @@ paths:
         Downloads, validates, and installs the plugin source from the
         provided URL. Accepted schemes are `https://` and `file://`;
         `http://` is rejected at the controller boundary regardless of
-        `PHLEX_PLUGINS_ALLOW_HTTP`.
+        `PHLIX_PLUGINS_ALLOW_HTTP`.
       operationId: installPlugin
       requestBody:
         required: true
@@ -236,7 +236,7 @@ components:
         version: { type: string }
         type: { type: string }
         entry: { type: string }
-        phlex_min_server_version: { type: string }
+        phlix_min_server_version: { type: string }
         signed: { type: boolean }
         events:
           type: array

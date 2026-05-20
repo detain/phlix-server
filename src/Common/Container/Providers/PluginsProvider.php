@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Installer\ComposerRunner;
-use Phlex\Plugins\Installer\HttpInstaller;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Plugins\Repository\PluginRepository;
-use Phlex\Plugins\Signature\SignatureVerifier;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Installer\ComposerRunner;
+use Phlix\Plugins\Installer\HttpInstaller;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\Repository\PluginRepository;
+use Phlix\Plugins\Signature\SignatureVerifier;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
 
@@ -41,9 +41,9 @@ use function DI\factory;
  * `src/Server/Core/Application.php` (future commit) is the canonical
  * call site.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class PluginsProvider implements ServiceProviderInterface
@@ -70,10 +70,10 @@ final class PluginsProvider implements ServiceProviderInterface
             : self::resolveDefaultDir();
 
         $composerTimeout = self::envInt(
-            'PHLEX_PLUGINS_COMPOSER_TIMEOUT',
+            'PHLIX_PLUGINS_COMPOSER_TIMEOUT',
             ComposerRunner::DEFAULT_TIMEOUT_SECONDS,
         );
-        $requireSignature = self::envBool('PHLEX_PLUGINS_REQUIRE_SIGNATURE', false);
+        $requireSignature = self::envBool('PHLIX_PLUGINS_REQUIRE_SIGNATURE', false);
         $loggerConfigPath = $appConfig['logger_config_path'] ?? null;
 
         $builder->addDefinitions([
@@ -172,7 +172,7 @@ final class PluginsProvider implements ServiceProviderInterface
 
     /**
      * Read a boolean env var with the same truthy semantics used by
-     * {@see \Phlex\Common\Container\ContainerFactory::shouldCompile()}.
+     * {@see \Phlix\Common\Container\ContainerFactory::shouldCompile()}.
      */
     private static function envBool(string $name, bool $default): bool
     {

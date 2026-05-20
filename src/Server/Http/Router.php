@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http;
+namespace Phlix\Server\Http;
 
 /**
- * HTTP Router for the Phlex Media Server.
+ * HTTP Router for the Phlix Media Server.
  *
  * This class handles route registration and request dispatching.
  * It supports path parameters, middleware, and route groups.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description HTTP Router with support for path parameters, middleware, and route groups.
  * @see Request For request representation

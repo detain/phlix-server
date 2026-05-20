@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Subtitles;
+namespace Phlix\Media\Transcoding\Subtitles;
 
 /**
  * Styling options for subtitle burn-in rendering.

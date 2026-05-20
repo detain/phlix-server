@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Auth\ProviderManager;
-use Phlex\Auth\UserRepository;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Auth\ProviderManager;
+use Phlix\Auth\UserRepository;
 use Workerman\MySQL\Connection;
 
 /**
- * @covers \Phlex\Auth\ProviderManager
+ * @covers \Phlix\Auth\ProviderManager
  */
 final class ProviderManagerTest extends TestCase
 {
@@ -94,7 +94,7 @@ final class ProviderManagerTest extends TestCase
     {
         $manager = new ProviderManager($this->registry, $this->userRepo);
 
-        $this->expectException(\Phlex\Auth\AuthProviderNotFoundException::class);
+        $this->expectException(\Phlix\Auth\AuthProviderNotFoundException::class);
         $this->expectExceptionMessage("Provider 'unknown' is not registered");
 
         $manager->authenticate('unknown:alice', []);

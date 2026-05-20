@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Trickplay;
+namespace Phlix\Media\Streaming\Trickplay;
 
 /**
  * Trickplay Result Container.

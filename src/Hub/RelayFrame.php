@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Immutable parsed relay frame from the wire.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class RelayFrame

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 /**
  * Exception for Trakt API errors (non-auth).
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 class TraktApiException extends \RuntimeException

@@ -1,17 +1,17 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\NvencProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\VaapiProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\SoftwareProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\QsvProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\VideoToolboxProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\AmfProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\V4L2Probe;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\NvencProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\VaapiProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\SoftwareProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\QsvProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\VideoToolboxProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\AmfProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\V4L2Probe;
 
 class HwaccelProbeTest extends TestCase
 {

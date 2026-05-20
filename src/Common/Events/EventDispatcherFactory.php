@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Events;
+namespace Phlix\Common\Events;
 
 use Crell\Tukio\DebugEventDispatcher;
 use Crell\Tukio\Dispatcher;
 use Crell\Tukio\OrderedListenerProvider;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
@@ -22,7 +22,7 @@ use Psr\Log\LoggerInterface;
  * {@see DebugEventDispatcher} so every dispatched event is logged on the
  * {@see LogChannels::EVENTS} channel.
  *
- * The decorator is gated on the `PHLEX_DEBUG_EVENTS` environment
+ * The decorator is gated on the `PHLIX_DEBUG_EVENTS` environment
  * variable (`1`, `true`, `yes`, `on`). Off by default to keep production
  * logs noise-free.
  *
@@ -30,7 +30,7 @@ use Psr\Log\LoggerInterface;
  * factory without using a closure (PHP-DI's compiled container cannot
  * serialise `use`-capturing closures — see A.1's caveat).
  *
- * @package Phlex\Common\Events
+ * @package Phlix\Common\Events
  * @since 0.10.0
  */
 final class EventDispatcherFactory
@@ -38,7 +38,7 @@ final class EventDispatcherFactory
     /**
      * Environment variable that gates the debug-dispatch decorator.
      */
-    public const DEBUG_ENV_VAR = 'PHLEX_DEBUG_EVENTS';
+    public const DEBUG_ENV_VAR = 'PHLIX_DEBUG_EVENTS';
 
     /**
      * Resolve a fully-wired {@see EventDispatcherInterface} from the
@@ -46,7 +46,7 @@ final class EventDispatcherFactory
      *
      * Expects the container to provide a singleton {@see ListenerRegistry}
      * (registered by
-     * {@see \Phlex\Common\Container\Providers\EventServicesProvider}).
+     * {@see \Phlix\Common\Container\Providers\EventServicesProvider}).
      * The debug logger, when enabled, is pulled from the
      * `logger.events` alias if present, otherwise from {@see LoggerFactory}
      * directly so that early bootstraps still get a working logger.
@@ -78,7 +78,7 @@ final class EventDispatcherFactory
      *                                          consults.
      * @param LoggerInterface|null $debugLogger Logger used by the debug
      *                                          decorator when
-     *                                          `PHLEX_DEBUG_EVENTS` is
+     *                                          `PHLIX_DEBUG_EVENTS` is
      *                                          truthy. When null and the
      *                                          flag is set, a no-op is
      *                                          used.
@@ -119,7 +119,7 @@ final class EventDispatcherFactory
     /**
      * Whether the debug-dispatch decorator is enabled by environment.
      *
-     * @return bool True when `PHLEX_DEBUG_EVENTS` is set to a truthy value.
+     * @return bool True when `PHLIX_DEBUG_EVENTS` is set to a truthy value.
      *
      * @since 0.10.0
      */
@@ -136,7 +136,7 @@ final class EventDispatcherFactory
      * Resolve the logger the debug decorator should write to.
      *
      * Prefers the `logger.events` container alias (registered by
-     * {@see \Phlex\Common\Container\Providers\CoreServicesProvider}); falls
+     * {@see \Phlix\Common\Container\Providers\CoreServicesProvider}); falls
      * back to {@see LoggerFactory::get()} so the dispatcher still emits
      * useful output during early bootstrap.
      *

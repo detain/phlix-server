@@ -1,18 +1,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "phlex-hub.fullname" . }}
+  name: {{ include "phlix-hub.fullname" . }}
   labels:
-    {{- include "phlex-hub.labels" . | nindent 4 }}
+    {{- include "phlix-hub.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "phlex-hub.selectorLabels" . | nindent 6 }}
+      {{- include "phlix-hub.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "phlex-hub.selectorLabels" . | nindent 8 }}
+        {{- include "phlix-hub.selectorLabels" . | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
@@ -20,7 +20,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "phlex-hub.serviceAccountName" . }}
+      serviceAccountName: {{ include "phlix-hub.serviceAccountName" . }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -48,44 +48,44 @@ spec:
           startupProbe:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           env:
-            - name: PHLEX_HUB_DATABASE_HOST
+            - name: PHLIX_HUB_DATABASE_HOST
               value: {{ tpl (.Values.config.database_host | toString) . | quote }}
-            - name: PHLEX_HUB_DATABASE_PORT
+            - name: PHLIX_HUB_DATABASE_PORT
               value: {{ .Values.config.database_port | quote }}
-            - name: PHLEX_HUB_DATABASE_NAME
+            - name: PHLIX_HUB_DATABASE_NAME
               value: {{ .Values.config.database_name | quote }}
-            - name: PHLEX_HUB_DATABASE_USER
+            - name: PHLIX_HUB_DATABASE_USER
               value: {{ .Values.config.database_user | quote }}
-            - name: PHLEX_HUB_DATABASE_PASSWORD
+            - name: PHLIX_HUB_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "phlex-hub.fullname" . }}
+                  name: {{ include "phlix-hub.fullname" . }}
                   key: database-password
-            - name: PHLEX_HUB_SECRET_KEY
+            - name: PHLIX_HUB_SECRET_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "phlex-hub.fullname" . }}
+                  name: {{ include "phlix-hub.fullname" . }}
                   key: secret-key
-            - name: PHLEX_HUB_LOG_LEVEL
+            - name: PHLIX_HUB_LOG_LEVEL
               value: {{ .Values.config.log_level | quote }}
-            - name: PHLEX_HUB_PUBLIC_URL
+            - name: PHLIX_HUB_PUBLIC_URL
               value: {{ .Values.config.public_url | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           envFrom:
             - configMapRef:
-                name: {{ include "phlex-hub.fullname" . }}
+                name: {{ include "phlix-hub.fullname" . }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: logs
-              mountPath: /var/phlex-hub/logs
+              mountPath: /var/phlix-hub/logs
       volumes:
         - name: logs
           {{- if and .Values.persistence.enabled .Values.persistence.logs.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "phlex-hub.fullname" . }}-logs
+            claimName: {{ include "phlix-hub.fullname" . }}-logs
           {{- else }}
           emptyDir: {}
           {{- end }}

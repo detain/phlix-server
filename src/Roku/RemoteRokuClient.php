@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Roku;
+namespace Phlix\Roku;
 
-use Phlex\Hub\RelayConsumer;
+use Phlix\Hub\RelayConsumer;
 
 /**
  * Roku control via relay tunnel.

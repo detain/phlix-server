@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Server\Http\Controllers\AuthProviderController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
- * @covers \Phlex\Server\Http\Controllers\AuthProviderController
+ * @covers \Phlix\Server\Http\Controllers\AuthProviderController
  */
 final class AuthProviderControllerTest extends TestCase
 {

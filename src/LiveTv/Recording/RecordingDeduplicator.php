@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Recording;
+namespace Phlix\LiveTv\Recording;
 
-use Phlex\LiveTv\Dto\RowAccess;
-use Phlex\LiveTv\Dto\RowQuery;
+use Phlix\LiveTv\Dto\RowAccess;
+use Phlix\LiveTv\Dto\RowQuery;
 use Workerman\MySQL\Connection;
 
 /**

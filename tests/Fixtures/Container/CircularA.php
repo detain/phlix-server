@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Fixtures\Container;
+namespace Phlix\Tests\Fixtures\Container;
 
 /**
  * Fixture used by ContainerFactoryTest::test_get_with_circular_dependency_throws

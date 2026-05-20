@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Playlists\LibraryUpdated;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Playlists\LibraryUpdated;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 /**
@@ -17,7 +17,7 @@ use Psr\EventDispatcher\EventDispatcherInterface;
  * change detection for efficiency. When changes are detected, it dispatches
  * LibraryUpdated events to notify subscribers (such as SmartPlaylistRefreshHandler).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Filesystem watcher for detecting media library changes
  * @see LibraryManager For library management operations
@@ -64,7 +64,7 @@ class FolderWatcher
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_media_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_media_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Theming;
+namespace Phlix\Tests\Unit\Theming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\UserProfileManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Theming\Theme;
-use Phlex\Theming\ThemeMiddleware;
-use Phlex\Theming\ThemeRegistry;
+use Phlix\Auth\UserProfileManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Theming\Theme;
+use Phlix\Theming\ThemeMiddleware;
+use Phlix\Theming\ThemeRegistry;
 use Workerman\MySQL\Connection;
 
 class ThemeMiddlewareTest extends TestCase
@@ -30,11 +30,11 @@ class ThemeMiddlewareTest extends TestCase
         // Register the default theme
         $this->registry->registerBuiltIn(new Theme(
             id: ThemeRegistry::DEFAULT_THEME_ID,
-            name: 'Phlex Dark',
+            name: 'Phlix Dark',
             type: 'builtin',
-            cssUrl: '/assets/css/themes/phlex-dark.css',
+            cssUrl: '/assets/css/themes/phlix-dark.css',
             jsUrl: null,
-            thumbnailUrl: '/assets/images/themes/phlex-dark.png',
+            thumbnailUrl: '/assets/images/themes/phlix-dark.png',
             version: '1.0.0',
             pluginName: null,
             dark: true
@@ -72,8 +72,8 @@ class ThemeMiddlewareTest extends TestCase
         $result = $this->middleware->onHttpRequest($request, $next);
 
         $this->assertTrue($nextCalled);
-        // Uses default phlex-dark theme since no user is authenticated
-        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlex-dark.css">', $result->body);
+        // Uses default phlix-dark theme since no user is authenticated
+        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlix-dark.css">', $result->body);
         $this->assertStringNotContainsString('{$theme_css|raw}', $result->body);
     }
 
@@ -92,8 +92,8 @@ class ThemeMiddlewareTest extends TestCase
 
         $result = $this->middleware->onHttpRequest($request, $next);
 
-        // Uses default phlex-dark theme since no user is authenticated (no JS in default)
-        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlex-dark.css">', $result->body);
+        // Uses default phlix-dark theme since no user is authenticated (no JS in default)
+        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlix-dark.css">', $result->body);
         $this->assertStringNotContainsString('{$theme_css|raw}', $result->body);
         $this->assertStringNotContainsString('{$theme_js|raw}', $result->body);
     }
@@ -123,11 +123,11 @@ class ThemeMiddlewareTest extends TestCase
     {
         $this->registry->registerBuiltIn(new Theme(
             id: ThemeRegistry::DEFAULT_THEME_ID,
-            name: 'Phlex Dark',
+            name: 'Phlix Dark',
             type: 'builtin',
-            cssUrl: '/assets/css/themes/phlex-dark.css',
+            cssUrl: '/assets/css/themes/phlix-dark.css',
             jsUrl: null,
-            thumbnailUrl: '/assets/images/themes/phlex-dark.png',
+            thumbnailUrl: '/assets/images/themes/phlix-dark.png',
             version: '1.0.0',
             pluginName: null,
             dark: true
@@ -146,6 +146,6 @@ class ThemeMiddlewareTest extends TestCase
 
         $result = $this->middleware->onHttpRequest($request, $next);
 
-        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlex-dark.css">', $result->body);
+        $this->assertStringContainsString('<link rel="stylesheet" href="/assets/css/themes/phlix-dark.css">', $result->body);
     }
 }

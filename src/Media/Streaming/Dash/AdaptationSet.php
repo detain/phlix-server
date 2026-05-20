@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Dash;
+namespace Phlix\Media\Streaming\Dash;
 
 use DOMElement;
 
@@ -13,7 +13,7 @@ use DOMElement;
  * content type (video, audio, or text). Clients select between representations
  * based on bandwidth, device capabilities, and network conditions.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @since 0.11.0
  * @see https://dashif.org/specifications/DASH-MPD.pdf

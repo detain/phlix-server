@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * Core rule evaluator for smart playlists.

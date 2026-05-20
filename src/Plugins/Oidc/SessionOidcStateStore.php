@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
 /**
  * `$_SESSION`-backed implementation of {@see OidcStateStore}.

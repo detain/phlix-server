@@ -1,6 +1,6 @@
-# Phlex Media Server — Agent Guide
+# Phlix Media Server — Agent Guide
 
-PHP 8.3+ media server on Workerman 5.x with HTTP REST, WebSocket, Smarty web portal, HLS streaming via FFmpeg, JWT auth, and DLNA/SyncPlay/LiveTV modules. Namespace `Phlex\` → `src/`, tests `Phlex\Tests\` → `tests/`.
+PHP 8.3+ media server on Workerman 5.x with HTTP REST, WebSocket, Smarty web portal, HLS streaming via FFmpeg, JWT auth, and DLNA/SyncPlay/LiveTV modules. Namespace `Phlix\` → `src/`, tests `Phlix\Tests\` → `tests/`.
 
 ## Commands
 
@@ -27,7 +27,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 
 **WebSocket** (`src/Server/WebSocket/`): `WebSocketServer.php` wraps `Workerman\Worker` on `websocket://`. `Connection.php` implements `ConnectionInterface.php`. `ConnectionPool.php` is singleton (`getInstance()`). `MessageHandler->on($event, $cb)` registers handlers; events listed in `Events.php` (`WebSocketEvents::PLAYBACK_*`, `SYNCPLAY_*`, `AUTH_*`).
 
-**Auth** (`src/Auth/`): `JwtHandler.php` HS256, 1h access / 7d refresh, `iss=phlex`. `UserRepository.php` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager.php` orchestrates register/login/refresh, calls `AuditLogger`. `UserProfileManager.php` enforces up to 5 profiles, PIN (4 or 6 digits, Argon2ID), rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory.php` tracks 90% completion threshold.
+**Auth** (`src/Auth/`): `JwtHandler.php` HS256, 1h access / 7d refresh, `iss=phlix`. `UserRepository.php` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager.php` orchestrates register/login/refresh, calls `AuditLogger`. `UserProfileManager.php` enforces up to 5 profiles, PIN (4 or 6 digits, Argon2ID), rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory.php` tracks 90% completion threshold.
 
 **Media** (`src/Media/`):
 - `Library/`: `LibraryManager.php` · `MediaScanner.php` (parses `S01E02`, `(2020)`) · `FolderWatcher.php` (mtime checksum) · `ItemRepository.php` (hydrates `metadata_json`)
@@ -43,7 +43,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 - `Database/`: `ConnectionPool.php` (static `init()`/`getConnection('mysql')`), `QueryBuilder.php`
 - `Logger/`: `LoggerFactory.php` · `LogChannels.php` (`AUTH`, `HTTP`, `WEBSOCKET`, `MEDIA`, `SESSION`, `STREAMING`) · `StructuredLogger.php` (Monolog wrapper) · `AuditLogger.php`
 
-**Web portal** (`src/Server/WebPortal/` + `public/`): `WebPortalRouter.php` for `/api/v1/libraries`, `/api/v1/media/{id}`. `PageRenderer.php` instantiates `\Smarty`, `setTemplateDir($templateDir)`, `assign()`, `fetch('home/index.tpl')`. Templates: `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`. Assets: `public/assets/{css,js,images}/`. JS: `app.js` (global helpers, `window.PhlexApp`), `api-client.js` (`Auth`/`Library`/`Player` namespaces, refresh-token retry), `player.js` (30s `Player.reportProgress`).
+**Web portal** (`src/Server/WebPortal/` + `public/`): `WebPortalRouter.php` for `/api/v1/libraries`, `/api/v1/media/{id}`. `PageRenderer.php` instantiates `\Smarty`, `setTemplateDir($templateDir)`, `assign()`, `fetch('home/index.tpl')`. Templates: `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`. Assets: `public/assets/{css,js,images}/`. JS: `app.js` (global helpers, `window.PhlixApp`), `api-client.js` (`Auth`/`Library`/`Player` namespaces, refresh-token retry), `player.js` (30s `Player.reportProgress`).
 
 ## Database
 
@@ -77,7 +77,7 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 
 ## Reference docs
 
-`README.md` · `docs/dev/DEVELOPER.md` · `docs/archive/SUPERVISOR_PLAN.md` (phase orchestration) · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/dev/PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
+`README.md` · `docs/dev/DEVELOPER.md` · `docs/archive/SUPERVISOR_PLAN.md` (phase orchestration) · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/dev/PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
 
 <!-- caliber:managed:pre-commit -->
 ## Before Committing

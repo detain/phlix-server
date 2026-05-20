@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers;
+namespace Phlix\Media\Markers;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlex\Media\Markers\Detection\StoredMarkers;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\Detection\StoredMarkers;
 
 /**
  * Service for managing marker data on media items.

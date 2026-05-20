@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
 /**
  * Photo scan result data transfer object.

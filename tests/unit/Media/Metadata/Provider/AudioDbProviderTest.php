@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata\Provider;
+namespace Phlix\Tests\Unit\Media\Metadata\Provider;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\MetadataHttpClient;
-use Phlex\Media\Metadata\Provider\AudioDbProvider;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Metadata\MetadataHttpClient;
+use Phlix\Media\Metadata\Provider\AudioDbProvider;
+use Phlix\Common\Logger\LoggerFactory;
 
 class AudioDbProviderTest extends TestCase
 {

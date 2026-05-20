@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
-use Phlex\Plugins\Oidc\OidcProvider;
-use Phlex\Plugins\Oidc\OidcValidationException;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Shared\Auth\UserInfo;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Plugins\Oidc\OidcProvider;
+use Phlix\Plugins\Oidc\OidcValidationException;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\UserInfo;
 use RuntimeException;
 
 /**
- * @covers \Phlex\Plugins\Oidc\OidcProvider
+ * @covers \Phlix\Plugins\Oidc\OidcProvider
  */
 final class OidcProviderTest extends TestCase
 {
@@ -23,7 +23,7 @@ final class OidcProviderTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->cacheDir = sys_get_temp_dir() . '/phlex_oidc_provider_test_' . uniqid();
+        $this->cacheDir = sys_get_temp_dir() . '/phlix_oidc_provider_test_' . uniqid();
         mkdir($this->cacheDir, 0755, true);
         DiscoveryDocument::clearMemoryCache();
     }

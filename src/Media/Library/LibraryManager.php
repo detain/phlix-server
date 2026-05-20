@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\Dto\LibraryRow;
-use Phlex\Media\Music\MusicLibraryType;
-use Phlex\Media\Music\BookLibraryType;
-use Phlex\Media\Music\AudiobookLibraryType;
-use Phlex\Theming\ThemeMediaFinder;
-use Phlex\Theming\ThemeMediaRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\Dto\LibraryRow;
+use Phlix\Media\Music\MusicLibraryType;
+use Phlix\Media\Music\BookLibraryType;
+use Phlix\Media\Music\AudiobookLibraryType;
+use Phlix\Theming\ThemeMediaFinder;
+use Phlix\Theming\ThemeMediaRepository;
 use Workerman\MySQL\Connection;
 
 /**
@@ -21,7 +21,7 @@ use Workerman\MySQL\Connection;
  * creation, updates, deletion, and scanning operations. It coordinates between
  * the database, media scanner, and folder watcher components.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Manages media library operations including creation, updates, deletion, and scanning
  * @see MediaScanner For media file scanning functionality
@@ -75,7 +75,7 @@ class LibraryManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_media_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_media_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

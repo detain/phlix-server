@@ -1,6 +1,6 @@
 [Unit]
-Description=Phlex Media Server
-Documentation=https://docs.phlex.media
+Description=Phlix Media Server
+Documentation=https://docs.phlix.media
 After=network.target mysql.service
 Wants=mysql.service
 StartLimitIntervalSec=500
@@ -8,10 +8,10 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=phlex
-Group=phlex
-WorkingDirectory=/var/www/phlex
-ExecStart=/usr/bin/php /var/www/phlex/public/index.php start
+User=phlix
+Group=phlix
+WorkingDirectory=/var/www/phlix
+ExecStart=/usr/bin/php /var/www/phlix/public/index.php start
 ExecReload=/bin/kill -SIGUSR1 $MAINPID
 ExecStop=/bin/kill -SIGTERM $MAINPID
 Restart=on-failure
@@ -19,18 +19,18 @@ RestartSec=5s
 TimeoutStopSec=30
 TimeoutStartSec=30
 
-Environment="PHLEX_ENV=production"
-EnvironmentFile=/etc/phlex/env
+Environment="PHLIX_ENV=production"
+EnvironmentFile=/etc/phlix/env
 
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=phlex-server
+SyslogIdentifier=phlix-server
 
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/phlex /var/log/phlex /run
+ReadWritePaths=/var/phlix /var/log/phlix /run
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

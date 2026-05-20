@@ -2,7 +2,7 @@
 
 ## Overview
 
-ChromaPrint (via libchromaprint/acoustid) provides audio fingerprinting capabilities for the Phlex media server. This enables episode grouping and skip-intro/outro detection in Phase F.
+ChromaPrint (via libchromaprint/acoustid) provides audio fingerprinting capabilities for the Phlix media server. This enables episode grouping and skip-intro/outro detection in Phase F.
 
 ## Implementation Architecture
 
@@ -71,9 +71,9 @@ No schema changes required at this stage.
 ## Usage
 
 ```php
-use Phlex\Media\Markers\Fingerprinting\ChromaPrint;
-use Phlex\Media\Markers\Fingerprinting\FingerprintRepository;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrint;
+use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
+use Phlix\Media\Library\ItemRepository;
 
 // Generate a fingerprint
 $chromaprint = new ChromaPrint('/usr/local/bin/fpcalc');

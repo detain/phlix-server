@@ -1,6 +1,6 @@
 # Subtitle Processing
 
-**Scope**: Developer documentation for subtitle processing in Phlex Media Server
+**Scope**: Developer documentation for subtitle processing in Phlix Media Server
 
 This document covers subtitle detection, extraction, soft-subtitling (external tracks), and hard-subtitling (burn-in) for devices that do not support external subtitle tracks.
 
@@ -8,7 +8,7 @@ This document covers subtitle detection, extraction, soft-subtitling (external t
 
 ## Overview
 
-Phlex supports two subtitle rendering modes:
+Phlix supports two subtitle rendering modes:
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
@@ -110,8 +110,8 @@ return [
 ### Detecting Subtitle Tracks
 
 ```php
-use Phlex\Media\Transcoding\Subtitles\SubtitleBurner;
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 $ffmpeg = new FfmpegRunner();
 $burner = new SubtitleBurner($ffmpeg);
@@ -137,9 +137,9 @@ $success = $burner->extractSubtitle(
 ### Integrating with HwaccelCommandBuilder
 
 ```php
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
-use Phlex\Media\Transcoding\Subtitles\SubtitleBurner;
-use Phlex\Media\Transcoding\Subtitles\SubtitleStyleOptions;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
+use Phlix\Media\Transcoding\Subtitles\SubtitleStyleOptions;
 
 $burner = new SubtitleBurner($ffmpeg);
 $subtitleTrack = new SubtitleTrack(

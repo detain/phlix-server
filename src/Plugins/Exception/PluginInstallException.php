@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Exception;
+namespace Phlix\Plugins\Exception;
 
-use Phlex\Shared\Plugin\ManifestValidationError;
+use Phlix\Shared\Plugin\ManifestValidationError;
 use RuntimeException;
 use Throwable;
 
 /**
- * Thrown by {@see \Phlex\Plugins\PluginLoader::install()} and
- * {@see \Phlex\Plugins\PluginLoader::installFromDirectory()} when the
+ * Thrown by {@see \Phlix\Plugins\PluginLoader::install()} and
+ * {@see \Phlix\Plugins\PluginLoader::installFromDirectory()} when the
  * plugin source cannot be installed for any reason — invalid manifest,
- * unsatisfied `phlex_min_server_version`, signature mismatch, vendor
+ * unsatisfied `phlix_min_server_version`, signature mismatch, vendor
  * `composer install` failure, IO errors while extracting the archive.
  *
  * When the failure originates in schema validation, the list of
@@ -20,7 +20,7 @@ use Throwable;
  * {@see self::validationErrors()} so callers can surface every problem
  * at once rather than the single first failure.
  *
- * @package Phlex\Plugins\Exception
+ * @package Phlix\Plugins\Exception
  * @since 0.10.0
  */
 final class PluginInstallException extends RuntimeException

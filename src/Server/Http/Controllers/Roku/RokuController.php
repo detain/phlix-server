@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Roku;
+namespace Phlix\Server\Http\Controllers\Roku;
 
-use Phlex\Roku\RokuManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Roku\RokuManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Roku HTTP API controller.

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * HTTP SOAP client for AVTransport control of a remote DLNA renderer.
@@ -48,7 +48,7 @@ class RendererControlClient
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_renderer_client_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_renderer_client_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -238,7 +238,7 @@ class RendererControlClient
                 'header' => implode("\r\n", [
                     'Content-Type: text/xml; charset="utf-8"',
                     'SOAPACTION: "' . $soapAction . '"',
-                    'User-Agent: Phlex/1.0 DLNA Renderer Client',
+                    'User-Agent: Phlix/1.0 DLNA Renderer Client',
                     'Accept: text/xml',
                 ]),
                 'content' => $soapBody,

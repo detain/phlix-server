@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 /**
  * Thrown when the Last.fm plugin is not fully configured (e.g. api_key,
  * api_secret, or session_key is empty).
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final class LastfmPluginNotConfiguredException extends \RuntimeException

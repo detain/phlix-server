@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Subtitles;
+namespace Phlix\Media\Transcoding\Subtitles;
 
 /**
  * Supported subtitle formats for burn-in and extraction.

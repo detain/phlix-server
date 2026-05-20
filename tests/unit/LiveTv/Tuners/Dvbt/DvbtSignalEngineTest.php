@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Dvbt;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Dvbt;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtSignalEngine;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtSignalEngine;
 
 class DvbtSignalEngineTest extends TestCase
 {

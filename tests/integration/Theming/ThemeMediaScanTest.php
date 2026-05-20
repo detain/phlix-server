@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Theming;
+namespace Phlix\Tests\Integration\Theming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\FfmpegRunner;
-use Phlex\Theming\ThemeMedia;
-use Phlex\Theming\ThemeMediaFinder;
-use Phlex\Theming\ThemeMediaRepository;
+use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Theming\ThemeMedia;
+use Phlix\Theming\ThemeMediaFinder;
+use Phlix\Theming\ThemeMediaRepository;
 use Workerman\MySQL\Connection;
 
 class ThemeMediaScanTest extends TestCase

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Streaming\Dash;
+namespace Phlix\Tests\Unit\Media\Streaming\Dash;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\Dash\SegmentTemplate;
+use Phlix\Media\Streaming\Dash\SegmentTemplate;
 
 class SegmentTemplateTest extends TestCase
 {

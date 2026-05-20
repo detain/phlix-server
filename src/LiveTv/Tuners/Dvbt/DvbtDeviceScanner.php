@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Dvbt;
+namespace Phlix\LiveTv\Tuners\Dvbt;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**

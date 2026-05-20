@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Installing Phlex Caddy reverse-proxy configuration..."
+echo "Installing Phlix Caddy reverse-proxy configuration..."
 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root or with sudo"

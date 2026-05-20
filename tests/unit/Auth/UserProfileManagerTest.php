@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\UserProfileManager;
+use Phlix\Auth\UserProfileManager;
 use Workerman\MySQL\Connection;
 
 class UserProfileManagerTest extends TestCase

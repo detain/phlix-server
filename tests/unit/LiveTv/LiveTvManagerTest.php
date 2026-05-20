@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\ChannelManager;
-use Phlex\LiveTv\GuideManager;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\LiveTv\Recorder;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
-use Phlex\LiveTv\Tuners\TunerDriverInterface;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\ChannelManager;
+use Phlix\LiveTv\GuideManager;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlix\LiveTv\Tuners\TunerDriverInterface;
+use Phlix\Common\Logger\StructuredLogger;
 
 class LiveTvManagerTest extends TestCase
 {

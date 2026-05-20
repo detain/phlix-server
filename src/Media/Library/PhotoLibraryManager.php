@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -16,7 +16,7 @@ use Workerman\MySQL\Connection;
  * full library rescans and single-photo upserts. It handles the complete pipeline
  * from filesystem scanning through EXIF extraction to database persistence.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Orchestrates photo library scanning with EXIF extraction
  * @see PhotoScanner For photo discovery and EXIF extraction
@@ -52,7 +52,7 @@ class PhotoLibraryManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_photo_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_photo_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

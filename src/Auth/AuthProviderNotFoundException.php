@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
 use RuntimeException;
 
 /**
  * Thrown when an auth provider lookup fails.
  *
- * @package Phlex\Auth
- * @author Phlex Team
+ * @package Phlix\Auth
+ * @author Phlix Team
  * @version 1.0.0
  * @description Exception thrown when a requested auth provider is not registered.
  */

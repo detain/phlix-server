@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
 /**
  * Immutable value object representing validated ID token claims.
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final readonly class IdTokenClaims

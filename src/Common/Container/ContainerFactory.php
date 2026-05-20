@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container;
+namespace Phlix\Common\Container;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\Providers\AdminServicesProvider;
-use Phlex\Common\Container\Providers\AuthServicesProvider;
-use Phlex\Common\Container\Providers\CoreServicesProvider;
-use Phlex\Common\Container\Providers\EventServicesProvider;
-use Phlex\Common\Container\Providers\HubServicesProvider;
-use Phlex\Common\Container\Providers\MediaServicesProvider;
-use Phlex\Common\Container\Providers\NetworkServicesProvider;
-use Phlex\Common\Container\Providers\PluginsProvider;
-use Phlex\Common\Container\Providers\SessionServicesProvider;
-use Phlex\Common\Container\Providers\ThemingServicesProvider;
-use Phlex\Common\Container\Providers\WebPortalServicesProvider;
+use Phlix\Common\Container\Providers\AdminServicesProvider;
+use Phlix\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Common\Container\Providers\CoreServicesProvider;
+use Phlix\Common\Container\Providers\EventServicesProvider;
+use Phlix\Common\Container\Providers\HubServicesProvider;
+use Phlix\Common\Container\Providers\MediaServicesProvider;
+use Phlix\Common\Container\Providers\NetworkServicesProvider;
+use Phlix\Common\Container\Providers\PluginsProvider;
+use Phlix\Common\Container\Providers\SessionServicesProvider;
+use Phlix\Common\Container\Providers\ThemingServicesProvider;
+use Phlix\Common\Container\Providers\WebPortalServicesProvider;
 use Psr\Container\ContainerInterface;
 
 /**
@@ -27,13 +27,13 @@ use Psr\Container\ContainerInterface;
  * a fresh PHP-DI {@see ContainerBuilder} with autowiring and PHP 8
  * attribute parsing enabled, then returns the compiled container.
  *
- * Caching: when the `PHLEX_CONTAINER_COMPILE` env var is truthy
+ * Caching: when the `PHLIX_CONTAINER_COMPILE` env var is truthy
  * ("1", "true", "yes"), the factory writes compiled definitions to
  * `var/cache/container/` for production deployments. Compilation is
  * disabled by default so that local development picks up new
  * definitions without manual cache clears.
  *
- * @package Phlex\Common\Container
+ * @package Phlix\Common\Container
  * @since 0.10.0
  */
 final class ContainerFactory
@@ -97,7 +97,7 @@ final class ContainerFactory
     }
 
     /**
-     * Canonical list of providers wired into a stock Phlex container.
+     * Canonical list of providers wired into a stock Phlix container.
      *
      * Exposed so plugins / tests can prepend or append their own
      * providers without re-implementing the defaults.
@@ -126,13 +126,13 @@ final class ContainerFactory
     /**
      * Whether to enable PHP-DI's compiled-container cache.
      *
-     * @return bool True when PHLEX_CONTAINER_COMPILE is set to a truthy value.
+     * @return bool True when PHLIX_CONTAINER_COMPILE is set to a truthy value.
      *
      * @since 0.10.0
      */
     private static function shouldCompile(): bool
     {
-        $value = getenv('PHLEX_CONTAINER_COMPILE');
+        $value = getenv('PHLIX_CONTAINER_COMPILE');
         if ($value === false) {
             return false;
         }

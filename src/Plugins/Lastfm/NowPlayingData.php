@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 /**
  * Immutable value object carrying the data required for a Last.fm
@@ -11,7 +11,7 @@ namespace Phlex\Plugins\Lastfm;
  * Sending Now Playing does not scrobble — it only updates the user's
  * profile to show what they are currently listening to.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final readonly class NowPlayingData

@@ -34,7 +34,7 @@ return [
     'redirect_uri' => 'https://your-server.com/api/v1/oauth/trakt/callback',
 
     /**
-     * Sync interval for Trakt → Phlex history sync (in minutes).
+     * Sync interval for Trakt → Phlix history sync (in minutes).
      *
      * Default: 30 minutes
      * Min: 5 minutes, Max: 1440 minutes (24 hours)

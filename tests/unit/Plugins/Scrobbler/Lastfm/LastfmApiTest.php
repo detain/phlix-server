@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmApi;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
 
 /**
  * Unit tests for {@see LastfmApi}.
  *
- * @covers \Phlex\Plugins\Scrobbler\Lastfm\LastfmApi
+ * @covers \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi
  *
- * @package Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 final class LastfmApiTest extends TestCase

@@ -6,7 +6,7 @@
 
 ## Overview
 
-When a Live TV recording completes, Phlex can automatically run [Comskip](https://github.com/erikkaashoek/Comskip) to detect commercial breaks and store the detected segments as chapters. This gives users automatic commercial skip on their DVR recordings with zero additional configuration.
+When a Live TV recording completes, Phlix can automatically run [Comskip](https://github.com/erikkaashoek/Comskip) to detect commercial breaks and store the detected segments as chapters. This gives users automatic commercial skip on their DVR recordings with zero additional configuration.
 
 ## What is Comskip?
 
@@ -17,7 +17,7 @@ Comskip is a third-party, open-source commercial detector for Linux, Windows, an
 - Aspect ratio changes
 - Black frames
 
-**Important:** Comskip is **not** bundled with Phlex. You must install it separately on your system.
+**Important:** Comskip is **not** bundled with Phlix. You must install it separately on your system.
 
 ## Installation
 

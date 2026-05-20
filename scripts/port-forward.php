@@ -3,9 +3,9 @@
 
 declare(strict_types=1);
 
-use Phlex\Network\PortForwardService;
-use Phlex\Network\UpnpIgdClient;
-use Phlex\Network\StunClient;
+use Phlix\Network\PortForwardService;
+use Phlix\Network\UpnpIgdClient;
+use Phlix\Network\StunClient;
 
 $autoloadPath = dirname(__DIR__) . '/vendor/autoload.php';
 if (!file_exists($autoloadPath)) {

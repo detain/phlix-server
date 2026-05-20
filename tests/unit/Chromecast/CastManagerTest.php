@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Chromecast;
+namespace Phlix\Tests\Unit\Chromecast;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Chromecast\CastDevice;
-use Phlex\Chromecast\CastDiscovery;
-use Phlex\Chromecast\CastManager;
-use Phlex\Chromecast\CastSession;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Session\PlaybackController;
+use Phlix\Chromecast\CastDevice;
+use Phlix\Chromecast\CastDiscovery;
+use Phlix\Chromecast\CastManager;
+use Phlix\Chromecast\CastSession;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Session\PlaybackController;
 
 class CastManagerTest extends TestCase
 {

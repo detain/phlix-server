@@ -1,12 +1,12 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\PhotoLibraryManager;
-use Phlex\Media\Library\PhotoScanResult;
-use Phlex\Media\Library\PhotoScanner;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PhotoLibraryManager;
+use Phlix\Media\Library\PhotoScanResult;
+use Phlix\Media\Library\PhotoScanner;
 use Workerman\MySQL\Connection;
 
 /**
@@ -32,7 +32,7 @@ class PhotoLibraryManagerTest extends TestCase
     public function testRescanLibraryCallsScanner(): void
     {
         // Create temp directory with a test photo
-        $tempDir = sys_get_temp_dir() . '/phlex_test_rescan_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_rescan_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $testFile = $tempDir . '/test_photo.jpg';
@@ -70,7 +70,7 @@ class PhotoLibraryManagerTest extends TestCase
     public function testUpsertPhotoStoresExif(): void
     {
         // Create temp directory with a test photo
-        $tempDir = sys_get_temp_dir() . '/phlex_test_upsert_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_upsert_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $testFile = $tempDir . '/test_photo.jpg';
@@ -128,7 +128,7 @@ class PhotoLibraryManagerTest extends TestCase
     public function testUpsertPhotoReturnsNullForUnsupportedFormat(): void
     {
         // Create temp directory with a non-photo file
-        $tempDir = sys_get_temp_dir() . '/phlex_test_invalid_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_invalid_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $testFile = $tempDir . '/test_video.mp4';

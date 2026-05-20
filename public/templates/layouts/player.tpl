@@ -5,7 +5,7 @@
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
             <a href="/" class="logo">
-                <img src="/assets/images/logo.svg" alt="Phlex" height="32">
+                <img src="/assets/images/logo.svg" alt="Phlix" height="32">
             </a>
         </div>
 

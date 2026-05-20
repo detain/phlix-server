@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
 use Psr\Container\ContainerInterface;
 use RuntimeException;
 
@@ -16,8 +16,8 @@ use RuntimeException;
  * provider-prefixed usernames (e.g. "oidc:alice@example.com") to the
  * correct provider. Used by {@see ProviderManager} during authentication.
  *
- * @package Phlex\Auth
- * @author Phlex Team
+ * @package Phlix\Auth
+ * @author Phlix Team
  * @version 1.0.0
  * @description Registry of pluggable external authentication providers.
  *

@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Media\Library\FolderWatcher;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\MediaScanner;
-use Phlex\Media\Metadata\MetadataManager;
-use Phlex\Media\Streaming\HlsStreamer;
-use Phlex\Media\Streaming\QualitySelector;
-use Phlex\Playlists\SmartPlaylistController;
-use Phlex\Playlists\SmartPlaylistEngine;
-use Phlex\Playlists\SmartPlaylistRefreshHandler;
-use Phlex\Playlists\SmartPlaylistRepository;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Media\Library\FolderWatcher;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Media\Streaming\QualitySelector;
+use Phlix\Playlists\SmartPlaylistController;
+use Phlix\Playlists\SmartPlaylistEngine;
+use Phlix\Playlists\SmartPlaylistRefreshHandler;
+use Phlix\Playlists\SmartPlaylistRepository;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -32,9 +32,9 @@ use function DI\get;
  * not class-level concerns, so they come from $appConfig['hls'] with
  * sensible defaults aligned to public/index.php's current behaviour.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class MediaServicesProvider implements ServiceProviderInterface
@@ -53,7 +53,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
     {
         $hlsConfig = is_array($appConfig['hls'] ?? null) ? $appConfig['hls'] : [];
         $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
-        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlex_hls';
+        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_hls';
         $baseUrlRaw = $hlsConfig['base_url'] ?? null;
         $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
 

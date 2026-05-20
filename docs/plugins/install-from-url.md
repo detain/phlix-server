@@ -4,12 +4,12 @@
 > curated catalog (in-product list of trusted plugins) arrives with the
 > hub in Phase C — see [`install-from-catalog.md`](install-from-catalog.md).
 
-This is the lowest-friction install path for Phlex plugins today. You
+This is the lowest-friction install path for Phlix plugins today. You
 need:
 
 1. The plugin's public `plugin.json` URL (HTTPS) — or a local
    `file://` URL for testing.
-2. An admin account on the running Phlex server (the **first** user
+2. An admin account on the running Phlix server (the **first** user
    that registered after Step A.5 was applied is auto-promoted to
    admin; `users.is_admin = 1`).
 3. A logged-in browser session OR an access-token Bearer header.
@@ -37,12 +37,12 @@ Paste this URL into the **Install from URL** form and click
 **Install**:
 
 ```
-https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json
+https://raw.githubusercontent.com/detain/phlix-plugin-example/main/plugin.json
 ```
 
-After install, flip the toggle for `phlex-plugin-example` in the
+After install, flip the toggle for `phlix-plugin-example` in the
 table to enable it. The plugin's source lives at
-[`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example);
+[`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example);
 fork it as the starting point for your own plugin.
 
 ## From the command line
@@ -54,17 +54,17 @@ JWT for `$TOKEN`:
 TOKEN="…your admin bearer token…"
 
 # 1. Install
-curl -sS -X POST https://phlex.example.com/api/v1/admin/plugins/install \
+curl -sS -X POST https://phlix.example.com/api/v1/admin/plugins/install \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
      -d '{"url": "https://example.com/my-plugin/plugin.json"}'
 
 # 2. Enable
-curl -sS -X POST https://phlex.example.com/api/v1/admin/plugins/phlex-plugin-demo/enable \
+curl -sS -X POST https://phlix.example.com/api/v1/admin/plugins/phlix-plugin-demo/enable \
      -H "Authorization: Bearer $TOKEN"
 
 # 3. List
-curl -sS https://phlex.example.com/api/v1/admin/plugins \
+curl -sS https://phlix.example.com/api/v1/admin/plugins \
      -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -84,7 +84,7 @@ curl -sS https://phlex.example.com/api/v1/admin/plugins \
 
 - **HTTPS only by default.** The controller refuses `http://` even
   when the operator allowed it elsewhere via
-  `PHLEX_PLUGINS_ALLOW_HTTP=1`.
+  `PHLIX_PLUGINS_ALLOW_HTTP=1`.
 - **Signatures are honoured.** If the manifest declares a `sha256:…`
   signature, the install fails unless that signature appears in the
   trusted-key allowlist (see [`trusted-plugin-list.md`](trusted-plugin-list.md)).

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery;
+namespace Phlix\Discovery;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LoggerFactory;
 use Workerman\Timer;
 
 /**

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Iptv;
+namespace Phlix\LiveTv\Tuners\Iptv;
 
 use Psr\Log\LoggerInterface;
 
@@ -68,7 +68,7 @@ class XmlTvParser
      */
     private function loadXmltvConfig(): array
     {
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : __DIR__ . '/../../../../config';
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../../../config';
         $configFile = $configPath . '/livetv.php';
         if (is_file($configFile)) {
             /** @var array<string, mixed> $config */
@@ -163,7 +163,7 @@ class XmlTvParser
                 'timeout' => $timeoutSecs,
                 'follow_location' => 1,
                 'max_redirects' => $this->maxRedirects,
-                'user_agent' => 'Phlex/1.0 (XMLTV Parser)',
+                'user_agent' => 'Phlix/1.0 (XMLTV Parser)',
             ],
             'ssl' => [
                 'verify_peer' => true,

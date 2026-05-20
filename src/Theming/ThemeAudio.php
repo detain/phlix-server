@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
 /**
  * ThemeAudio represents audio theme media for a library.

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Session\PlaybackController;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Session\PlaybackController;
 
 /**
  * Manages multiple "play to" sessions with DLNA renderers.
@@ -23,7 +23,7 @@ class PlayToManager
     /** @var RendererDiscovery SSDP renderer discovery service */
     private RendererDiscovery $rendererDiscovery;
 
-    /** @var PlaybackController Phlex playback controller */
+    /** @var PlaybackController Phlix playback controller */
     private PlaybackController $playbackController;
 
     /** @var StructuredLogger Logger instance */
@@ -34,7 +34,7 @@ class PlayToManager
 
     /**
      * @param RendererDiscovery $rendererDiscovery SSDP renderer discovery service
-     * @param PlaybackController $playbackController Phlex playback controller
+     * @param PlaybackController $playbackController Phlix playback controller
      * @param StructuredLogger|null $logger Optional logger instance
      *
      * @since 0.12.0
@@ -56,7 +56,7 @@ class PlayToManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_play_to_manager_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_play_to_manager_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
 use RuntimeException;
 
 /**
- * @covers \Phlex\Plugins\Oidc\DiscoveryDocument
+ * @covers \Phlix\Plugins\Oidc\DiscoveryDocument
  */
 final class DiscoveryDocumentTest extends TestCase
 {
@@ -18,7 +18,7 @@ final class DiscoveryDocumentTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->cacheDir = sys_get_temp_dir() . '/phlex_oidc_test_' . uniqid();
+        $this->cacheDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid();
         mkdir($this->cacheDir, 0755, true);
         DiscoveryDocument::clearMemoryCache();
     }

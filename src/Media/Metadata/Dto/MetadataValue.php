@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata\Dto;
+namespace Phlix\Media\Metadata\Dto;
 
 /**
  * Static helpers for safely narrowing mixed values from JSON-decoded
@@ -14,7 +14,7 @@ namespace Phlex\Media\Metadata\Dto;
  * repeating `is_string/is_int/is_array` guards inline at every call site,
  * this helper centralises the narrowing.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @since Wave 5b
  */
 final class MetadataValue

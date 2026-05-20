@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Detection;
+namespace Phlix\Media\Markers\Detection;
 
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * Repository for storing and retrieving marker candidates on media items.

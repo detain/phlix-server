@@ -5,11 +5,11 @@
 
 ## Overview
 
-This document describes the trailers and extras support in Phlex, including local `Trailers/` folder support, `-trailer.mkv` naming conventions, and TMDB trailer URL integration.
+This document describes the trailers and extras support in Phlix, including local `Trailers/` folder support, `-trailer.mkv` naming conventions, and TMDB trailer URL integration.
 
 ## Local Trailer Discovery
 
-Phlex scans media directories for trailers in two locations:
+Phlix scans media directories for trailers in two locations:
 
 ### Same-Level Trailers
 

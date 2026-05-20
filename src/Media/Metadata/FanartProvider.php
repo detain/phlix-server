@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
-use Phlex\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
  * Fanart.tv API provider for artwork (banners, thumbnails, logos).
@@ -39,7 +39,7 @@ use Phlex\Media\Metadata\Dto\MetadataValue;
  * Responses are cached in-memory using key "fanart_{idType}_{id}" for the
  * duration of the instance lifecycle.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Fanart.tv API provider for high-quality artwork retrieval
  * @see MetadataProviderInterface For provider contract

@@ -42,7 +42,7 @@ return [
      * Directory for the file-based job queue.
      * Each show being processed is represented by a lock file.
      */
-    'job_queue_dir' => '/tmp/phlex_marker_jobs',
+    'job_queue_dir' => '/tmp/phlix_marker_jobs',
 
     /*
      * Sleep interval in seconds when the queue is empty.

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "Installing Phlex nginx reverse-proxy configuration..."
+echo "Installing Phlix nginx reverse-proxy configuration..."
 
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root or with sudo"
@@ -26,7 +26,7 @@ $PKG_MANAGER update -qq
 $PKG_MANAGER install -y nginx
 
 echo "Installing configuration..."
-install -m 644 reverse-proxy/nginx/phlex.conf $NGINX_SITES/phlex.conf
+install -m 644 reverse-proxy/nginx/phlix.conf $NGINX_SITES/phlix.conf
 
 echo "Testing nginx configuration..."
 nginx -t
@@ -37,7 +37,7 @@ systemctl reload nginx
 echo ""
 echo "Nginx configuration installed!"
 echo ""
-echo "IMPORTANT: Update $NGINX_SITES/phlex.conf with:"
+echo "IMPORTANT: Update $NGINX_SITES/phlix.conf with:"
 echo "  - Your server_name"
 echo "  - Path to your SSL certificates"
 echo "  - Backend server address"

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\VendorProbe;
+namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbeInterface;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
 /**

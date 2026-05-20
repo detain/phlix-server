@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Iptv;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Iptv\XmlTvParser;
-use Phlex\LiveTv\Tuners\Iptv\XmlTvProgramme;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvParser;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvProgramme;
 
 class XmlTvParserTest extends TestCase
 {

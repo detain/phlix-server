@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
-use Phlex\Auth\UserProfileManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Auth\UserProfileManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * HTTP middleware that injects active theme CSS/JS into WebPortal responses.
  *
  * This middleware operates on HTML responses rendered by Smarty. It reads
- * the X-Phlex-User-Id header (set by auth middleware earlier in the pipeline)
+ * the X-Phlix-User-Id header (set by auth middleware earlier in the pipeline)
  * to determine the user's active theme, then injects theme assets by replacing
  * the {$theme_css|raw} and {$theme_js|raw} placeholders in the HTML body.
  *
  * Only HTML responses are modified; other content types pass through unchanged.
  *
- * @package Phlex\Theming
+ * @package Phlix\Theming
  * @since 0.14.0
  */
 class ThemeMiddleware
@@ -26,7 +26,7 @@ class ThemeMiddleware
     /**
      * Header name for the authenticated user ID (set by auth middleware).
      */
-    public const USER_ID_HEADER = 'X-Phlex-User-Id';
+    public const USER_ID_HEADER = 'X-Phlix-User-Id';
 
     /**
      * @var ThemeRegistry Registry for looking up theme metadata

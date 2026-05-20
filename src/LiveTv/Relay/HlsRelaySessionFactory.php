@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Relay;
+namespace Phlix\LiveTv\Relay;
 
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Hub\RelayConsumer;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\Media\Streaming\HlsStreamer;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Hub\RelayConsumer;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\Media\Streaming\HlsStreamer;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Dash;
+namespace Phlix\Media\Streaming\Dash;
 
 use DOMElement;
 
@@ -13,7 +13,7 @@ use DOMElement;
  * to list every segment explicitly in the manifest. Used for efficient
  * live streaming where new segments appear continuously.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @since 0.11.0
  * @see https://dashif.org/specifications/DASH-MPD.pdf

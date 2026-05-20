@@ -253,7 +253,7 @@
         const slideshowPage = document.querySelector('.slideshow-page');
         if (slideshowPage) {
             const interval = parseInt(slideshowPage.dataset.interval, 10) || 5000;
-            global.phlexSlideshow = new SlideshowController({
+            global.phlixSlideshow = new SlideshowController({
                 interval: interval * 1000
             });
         }

@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebPortal\Controllers;
+namespace Phlix\Server\WebPortal\Controllers;
 
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Plugins\SettingsMasker;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\WebPortal\PageRenderer;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\SettingsMasker;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\WebPortal\PageRenderer;
 
 /**
  * Server-side renderer for the `/admin/plugins` HTML pages (Step A.5).
  *
- * The companion to {@see \Phlex\Server\Http\Controllers\PluginAdminController}.
+ * The companion to {@see \Phlix\Server\Http\Controllers\PluginAdminController}.
  * Where the controller is the JSON API consumed by the JS layer, this
  * class renders the Smarty templates so the page works with JS
  * disabled — every enable/disable button submits a regular form to the
@@ -28,11 +28,11 @@ use Phlex\Server\WebPortal\PageRenderer;
  *  - `admin/plugins/install.tpl`  — fallback install form for JS-off
  *
  * AuthN/AuthZ: caller MUST gate these routes behind the same
- * authenticated-admin check that {@see \Phlex\Server\Http\Middleware\AdminMiddleware}
+ * authenticated-admin check that {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * applies to the JSON API. The page controller does NOT re-validate
  * (single source of truth for auth lives in the middleware).
  *
- * @package Phlex\Server\WebPortal\Controllers
+ * @package Phlix\Server\WebPortal\Controllers
  * @since   0.10.0 (Step A.5)
  */
 final class PluginAdminPageController

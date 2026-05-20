@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Auth\JwtHandler;
-use Phlex\Hub\HubJwtValidatorInterface;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Auth\JwtHandler;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Exchanges a hub-issued JWT for a server-internal session token.
@@ -25,7 +25,7 @@ use Phlex\Server\Http\Response;
  * Response 400: { "error": "hub_token required" }
  * Response 401: { "error": "hub.jwt_invalid" }
  *
- * @package Phlex\Server\Http\Controllers
+ * @package Phlix\Server\Http\Controllers
  * @since 0.11.0
  */
 final class HubTokenController

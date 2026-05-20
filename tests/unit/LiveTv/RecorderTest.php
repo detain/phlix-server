@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Recorder;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Recorder;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class RecorderTest extends TestCase

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Trakt;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Trakt;
 
-use Phlex\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
 use PHPUnit\Framework\TestCase;
 
 /**

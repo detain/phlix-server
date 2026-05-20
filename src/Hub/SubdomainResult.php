@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Result of subdomain allocation from the hub.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class SubdomainResult
 {
     /**
      * @param string $subdomain   Subdomain label (e.g. "abc12345").
-     * @param string $fqdn       Fully qualified domain name (e.g. "abc12345.phlex.media").
+     * @param string $fqdn       Fully qualified domain name (e.g. "abc12345.phlix.media").
      * @param string $tlsCertPath Path to the TLS certificate file.
      * @param string $tlsKeyPath  Path to the TLS private key file.
      */

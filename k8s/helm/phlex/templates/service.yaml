@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "phlex.fullname" . }}
+  name: {{ include "phlix.fullname" . }}
   labels:
-    {{- include "phlex.labels" . | nindent 4 }}
+    {{- include "phlix.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -16,4 +16,4 @@ spec:
       protocol: TCP
       name: websocket
   selector:
-    {{- include "phlex.selectorLabels" . | nindent 4 }}
+    {{- include "phlix.selectorLabels" . | nindent 4 }}

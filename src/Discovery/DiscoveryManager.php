@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery;
+namespace Phlix\Discovery;
 
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
-use Phlex\Discovery\Ssdp\SsdpDevice;
-use Phlex\Discovery\Ssdp\SsdpDiscovery;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
+use Phlix\Discovery\Ssdp\SsdpDevice;
+use Phlix\Discovery\Ssdp\SsdpDiscovery;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -111,18 +111,18 @@ class DiscoveryManager
     }
 
     /**
-     * Announce the Phlex server via both SSDP and mDNS.
+     * Announce the Phlix server via both SSDP and mDNS.
      *
      * @param string $serverId Unique server identifier (UUID)
      * @param string $friendlyName Human-readable server name
-     * @param string $baseUrl Base URL of the Phlex server
-     * @param int $port Phlex server port
+     * @param string $baseUrl Base URL of the Phlix server
+     * @param int $port Phlix server port
      *
      * @since 0.12.0
      */
-    public function announcePhlexServer(string $serverId, string $friendlyName, string $baseUrl, int $port): void
+    public function announcePhlixServer(string $serverId, string $friendlyName, string $baseUrl, int $port): void
     {
-        $this->logger->info('DiscoveryManager: Announcing Phlex server', [
+        $this->logger->info('DiscoveryManager: Announcing Phlix server', [
             'serverId' => $serverId,
             'friendlyName' => $friendlyName,
             'baseUrl' => $baseUrl,
@@ -133,8 +133,8 @@ class DiscoveryManager
         $this->ssdp->announceServer($serverId, $friendlyName, $baseUrl, $port);
 
         // Announce via mDNS
-        $mdnsName = 'Phlex._phlex._tcp.local.';
-        $this->mdns->announceServer($mdnsName, '_phlex._tcp.local.', $port, [
+        $mdnsName = 'Phlix._phlix._tcp.local.';
+        $this->mdns->announceServer($mdnsName, '_phlix._tcp.local.', $port, [
             'serverId' => $serverId,
             'friendlyName' => $friendlyName,
         ]);

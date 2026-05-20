@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
-use Phlex\Auth\AuthProviderRegistry;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
+use Phlix\Auth\AuthProviderRegistry;
 use Psr\Container\ContainerInterface;
 
 /**
  * OIDC/OAuth2 authentication provider plugin entry point.
  *
- * Implements LifecycleInterface to integrate with the Phlex plugin
+ * Implements LifecycleInterface to integrate with the Phlix plugin
  * system. On enable, registers the OidcProvider with the AuthProviderRegistry.
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class Plugin implements LifecycleInterface

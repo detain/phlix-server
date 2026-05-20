@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Logger;
+namespace Phlix\Common\Logger;
 
 use Monolog\Handler\HandlerInterface;
 use Monolog\Handler\RotatingFileHandler;
@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
 use Stringable;
 
 /**
- * Phlex wrapper around Monolog 3 that exposes a PSR-3 surface while
+ * Phlix wrapper around Monolog 3 that exposes a PSR-3 surface while
  * also accepting Monolog {@see Level} objects directly.
  *
  * Config shape (`array<string, mixed>`):
@@ -37,7 +37,7 @@ use Stringable;
  * ]
  * ```
  *
- * @package Phlex\Common\Logger
+ * @package Phlix\Common\Logger
  */
 class StructuredLogger implements LoggerInterface
 {

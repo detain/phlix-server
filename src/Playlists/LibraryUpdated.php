@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
 /**
  * Event fired when library content is updated (files added/modified/deleted).

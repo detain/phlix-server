@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\Dto;
+namespace Phlix\Auth\Dto;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Typed value object representing a hydrated `user_profiles` row.
@@ -12,7 +12,7 @@ use Phlex\Common\Util\RowMap;
  * Optionally enriched with JOINed `profile_settings` columns (content
  * rating, PIN-required flag, allowed/blocked genres, allow_unrated).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Strongly-typed user-profile row from DB hydration.
  * @since Wave 5b-J

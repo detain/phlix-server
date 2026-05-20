@@ -1,18 +1,18 @@
-# phlex-plugin-trakt
+# phlix-plugin-trakt
 
-Trakt.tv scrobbler plugin for Phlex Media Server.
+Trakt.tv scrobbler plugin for Phlix Media Server.
 
 ## Features
 
 - **OAuth2 PKCE Authentication** — Secure login with Trakt.tv
 - **3-State Scrobbling** — Start/pause/stop on playback events
 - **Two-Way Watch History Sync**:
-  - Trakt → Phlex: Pull watched history on schedule
-  - Phlex → Trakt: Push completed watches (≥90%) after playback
+  - Trakt → Phlix: Pull watched history on schedule
+  - Phlix → Trakt: Push completed watches (≥90%) after playback
 
 ## Requirements
 
-- Phlex Media Server 0.14.0+
+- Phlix Media Server 0.14.0+
 - Trakt.tv account
 - Trakt application (register at https://trakt.tv/apps)
 
@@ -21,7 +21,7 @@ Trakt.tv scrobbler plugin for Phlex Media Server.
 1. Create a Trakt application at https://trakt.tv/apps
 2. Note your `client_id` and `client_secret`
 3. Set your redirect URI to `https://your-server.com/api/v1/oauth/trakt/callback`
-4. Install the plugin via the Phlex admin panel or CLI
+4. Install the plugin via the Phlix admin panel or CLI
 5. Configure the plugin with your Trakt credentials
 6. Authenticate via the OAuth flow
 
@@ -47,18 +47,18 @@ return [
 
 ## History Sync
 
-- **Trakt → Phlex**: Runs every 30 minutes (configurable). Pulls watched
+- **Trakt → Phlix**: Runs every 30 minutes (configurable). Pulls watched
   episodes/movies from Trakt and writes them to local watch history if
   not already at ≥90% complete.
-- **Phlex → Trakt**: Pushes local history entries to Trakt after
+- **Phlix → Trakt**: Pushes local history entries to Trakt after
   `PlaybackStopped` events where progress reached ≥90%.
 
 ## Events
 
 The plugin subscribes to:
-- `phlex.playback.started`
-- `phlex.playback.stopped`
-- `phlex.playback.progress`
+- `phlix.playback.started`
+- `phlix.playback.stopped`
+- `phlix.playback.progress`
 
 ## API Endpoints
 
@@ -67,4 +67,4 @@ The plugin subscribes to:
 
 ## License
 
-Proprietary — Phlex Media Server
+Proprietary — Phlix Media Server

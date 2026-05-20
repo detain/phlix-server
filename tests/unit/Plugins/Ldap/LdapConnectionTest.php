@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Ldap;
+namespace Phlix\Tests\Unit\Plugins\Ldap;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Ldap\LdapConnection;
+use Phlix\Plugins\Ldap\LdapConnection;
 
 final class LdapConnectionTest extends TestCase
 {

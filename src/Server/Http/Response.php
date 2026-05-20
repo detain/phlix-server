@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http;
+namespace Phlix\Server\Http;
 
 /**
- * Represents an HTTP response in the Phlex Media Server.
+ * Represents an HTTP response in the Phlix Media Server.
  *
  * This class provides a fluent interface for building HTTP responses
  * with various content types, status codes, and headers.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description HTTP Response class with fluent builder pattern for content types.
  * @see Request For request representation

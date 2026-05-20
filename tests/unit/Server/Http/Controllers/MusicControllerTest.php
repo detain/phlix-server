@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Http\Controllers\MusicController;
-use Phlex\Server\Http\Request;
-use Phlex\Media\Library\MusicLibraryManager;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Session\SessionManager;
+use Phlix\Server\Http\Controllers\MusicController;
+use Phlix\Server\Http\Request;
+use Phlix\Media\Library\MusicLibraryManager;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Session\SessionManager;
 
 /**
  * Unit tests for MusicController.
  *
- * @covers \Phlex\Server\Http\Controllers\MusicController
+ * @covers \Phlix\Server\Http\Controllers\MusicController
  */
 class MusicControllerTest extends TestCase
 {

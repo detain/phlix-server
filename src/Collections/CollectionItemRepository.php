@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Collections;
+namespace Phlix\Collections;
 
 use Workerman\MySQL\Connection;
 

@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Stats;
+namespace Phlix\Server\Http\Controllers\Stats;
 
 use DateTime;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Stats\StatsCollector;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Stats\StatsCollector;
 
 /**
  * JSON API for admin statistics endpoints (Step L.3).
  *
- * All routes are wired via {@see \Phlex\Server\Http\Routes\AdminRoutes}
+ * All routes are wired via {@see \Phlix\Server\Http\Routes\AdminRoutes}
  * under the `/api/v1/admin` group, with
- * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} in front).
+ * {@see \Phlix\Server\Http\Middleware\AdminMiddleware} in front).
  *
  * Endpoints:
  *
@@ -23,7 +23,7 @@ use Phlex\Stats\StatsCollector;
  *  - `GET /api/v1/admin/stats/top-media`   → top media items by play count
  *  - `GET /api/v1/admin/stats/storage`      → storage usage snapshots
  *
- * @package Phlex\Server\Http\Controllers\Stats
+ * @package Phlix\Server\Http\Controllers\Stats
  * @since   1.0.0 (Step L.3)
  */
 final class StatsController

@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events;
+namespace Phlix\Tests\Unit\Common\Events;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Tests\Fixtures\Events\SampleEvent;
+use Phlix\Tests\Fixtures\Events\SampleEvent;
 
 /**
- * Smoke test for {@see \Phlex\Common\Events\AbstractEvent}.
+ * Smoke test for {@see \Phlix\Common\Events\AbstractEvent}.
  *
- * @covers \Phlex\Shared\Events\AbstractEvent
+ * @covers \Phlix\Shared\Events\AbstractEvent
  */
 final class AbstractEventTest extends TestCase
 {

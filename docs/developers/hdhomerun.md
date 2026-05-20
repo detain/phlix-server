@@ -36,7 +36,7 @@ HOST: 239.255.255.250:1900
 MAN: "ssdp:discover"
 MX: 5
 ST: urn:schemas-upnp-org:device:MediaServer:1
-USER-AGENT: Phlex/1.0
+USER-AGENT: Phlix/1.0
 ```
 
 ### Response Processing

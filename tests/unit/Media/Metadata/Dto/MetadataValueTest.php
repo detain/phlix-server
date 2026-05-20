@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata\Dto;
+namespace Phlix\Tests\Unit\Media\Metadata\Dto;
 
-use Phlex\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Dto\MetadataValue;
 use PHPUnit\Framework\TestCase;
 
 /**

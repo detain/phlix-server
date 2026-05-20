@@ -5,10 +5,10 @@
  * - Watch time summary
  * - Top 5 media of the week with posters
  * - New items added this week
- * - View in Phlex CTA button
+ * - View in Phlix CTA button
  * - Unsubscribe link
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  *}
 
@@ -324,24 +324,24 @@
 
                 <!-- CTA Section -->
                 <div class="cta-section">
-                    <a href="#" class="cta-button">View in Phlex</a>
+                    <a href="#" class="cta-button">View in Phlix</a>
                 </div>
             </div>
 
             <!-- Footer -->
             <div class="email-footer">
                 <div class="footer-links">
-                    <a href="#">Visit Phlex</a>
+                    <a href="#">Visit Phlix</a>
                     <a href="#">Help Center</a>
                     <a href="#">Preferences</a>
                 </div>
                 <p class="footer-text">
-                    You're receiving this email because you have an active Phlex account.
+                    You're receiving this email because you have an active Phlix account.
                     <br />
                     <a href="#" class="unsubscribe-link">Unsubscribe</a> from these emails.
                 </p>
                 <p class="footer-text">
-                    &copy; {$year|default:'2024'} Phlex Media Server. All rights reserved.
+                    &copy; {$year|default:'2024'} Phlix Media Server. All rights reserved.
                 </p>
             </div>
         </div>

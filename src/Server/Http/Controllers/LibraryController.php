@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Middleware\AdminMiddleware;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Library\LibraryManager;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Library\LibraryManager;
 
 class LibraryController
 {

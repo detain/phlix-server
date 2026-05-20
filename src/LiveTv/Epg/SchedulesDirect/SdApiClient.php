@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**

@@ -1,7 +1,7 @@
 [Unit]
-Description=Phlex Media Server Backup Timer
-Documentation=https://docs.phlex.media
-After=phlex-backup.service
+Description=Phlix Media Server Backup Timer
+Documentation=https://docs.phlix.media
+After=phlix-backup.service
 
 [Timer]
 OnCalendar=weekly

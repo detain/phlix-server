@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Admin\Dto;
+namespace Phlix\Tests\Unit\Admin\Dto;
 
-use Phlex\Admin\Dto\BackupConfig;
-use Phlex\Admin\Dto\S3Config;
+use Phlix\Admin\Dto\BackupConfig;
+use Phlix\Admin\Dto\S3Config;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Admin\Dto\BackupConfig
- * @covers \Phlex\Admin\Dto\S3Config
+ * @covers \Phlix\Admin\Dto\BackupConfig
+ * @covers \Phlix\Admin\Dto\S3Config
  */
 final class BackupConfigTest extends TestCase
 {
@@ -19,7 +19,7 @@ final class BackupConfigTest extends TestCase
         $config = BackupConfig::defaults();
 
         $this->assertTrue($config->enabled);
-        $this->assertSame('/var/phlex/backups', $config->localPath);
+        $this->assertSame('/var/phlix/backups', $config->localPath);
         $this->assertSame(5, $config->retentionCount);
         $this->assertSame(7, $config->autoBackupIntervalDays);
         $this->assertInstanceOf(S3Config::class, $config->s3);
@@ -35,7 +35,7 @@ final class BackupConfigTest extends TestCase
             'auto_backup_interval_days' => 3,
             's3' => [
                 'enabled' => true,
-                'bucket' => 'phlex-backups',
+                'bucket' => 'phlix-backups',
                 'region' => 'eu-west-1',
                 'access_key' => 'AKIA...',
                 'secret_key' => 'shh',
@@ -50,7 +50,7 @@ final class BackupConfigTest extends TestCase
         $this->assertSame(3, $config->autoBackupIntervalDays);
 
         $this->assertTrue($config->s3->enabled);
-        $this->assertSame('phlex-backups', $config->s3->bucket);
+        $this->assertSame('phlix-backups', $config->s3->bucket);
         $this->assertSame('eu-west-1', $config->s3->region);
         $this->assertTrue($config->s3->hasCredentials());
     }
@@ -67,7 +67,7 @@ final class BackupConfigTest extends TestCase
         ]);
 
         $this->assertTrue($config->enabled);
-        $this->assertSame('/var/phlex/backups', $config->localPath);
+        $this->assertSame('/var/phlix/backups', $config->localPath);
         $this->assertSame(15, $config->retentionCount);
         $this->assertSame(0, $config->autoBackupIntervalDays);
         // Non-array `s3` falls back to defaults

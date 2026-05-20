@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Music;
+namespace Phlix\Media\Music;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\BookLibraryManager;
-use Phlex\Media\Library\BookScanner;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\BookLibraryManager;
+use Phlix\Media\Library\BookScanner;
+use Phlix\Media\Library\ItemRepository;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -18,14 +18,14 @@ use Workerman\MySQL\Connection;
  * scanning and metadata handling. It supports EPUB, PDF, and CBZ formats
  * and provides OPDS 1.2 compliant feeds for third-party clients.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Library type plugin for book media with OPDS support
  * @see BookScanner For EPUB, PDF, CBZ discovery and metadata extraction
  * @see BookLibraryManager For book library management
  * @since 0.17.0
  */
-final class BookLibraryType implements \Phlex\Media\Library\LibraryTypeInterface
+final class BookLibraryType implements \Phlix\Media\Library\LibraryTypeInterface
 {
     /** Library type identifier */
     public const TYPE = 'book';

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
 /**
  * ThemeMedia represents theme media (audio and/or video) for a library.

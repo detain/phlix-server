@@ -2,27 +2,27 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Auth\JwtHandler;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\HubApplication;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\HubJwtValidator;
-use Phlex\Hub\HubJwtValidatorInterface;
-use Phlex\Hub\HttpClient;
-use Phlex\Hub\HttpClientFactory;
-use Phlex\Hub\HttpClientFactoryInterface;
-use Phlex\Hub\JwksCache;
-use Phlex\Hub\RelayApplication;
-use Phlex\Hub\RelayConfig;
-use Phlex\Hub\RelayConsumer;
-use Phlex\Hub\RelayMessageFramer;
-use Phlex\Server\Http\Controllers\HubJwksController;
-use Phlex\Server\Http\Controllers\HubTokenController;
-use Phlex\Server\Http\Middleware\HubJwtMiddleware;
+use Phlix\Auth\JwtHandler;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\HubApplication;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\HubJwtValidator;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Hub\HttpClient;
+use Phlix\Hub\HttpClientFactory;
+use Phlix\Hub\HttpClientFactoryInterface;
+use Phlix\Hub\JwksCache;
+use Phlix\Hub\RelayApplication;
+use Phlix\Hub\RelayConfig;
+use Phlix\Hub\RelayConsumer;
+use Phlix\Hub\RelayMessageFramer;
+use Phlix\Server\Http\Controllers\HubJwksController;
+use Phlix\Server\Http\Controllers\HubTokenController;
+use Phlix\Server\Http\Middleware\HubJwtMiddleware;
 use Psr\Log\LoggerInterface;
 
 use function DI\autowire;
@@ -33,9 +33,9 @@ use function DI\get;
  * Registers the hub subsystem: key manager, HTTP client, hub client,
  * hub application worker, JWKS controller, JWT validator, and token exchange.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.11.0
  */
 final class HubServicesProvider implements ServiceProviderInterface

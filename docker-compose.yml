@@ -1,23 +1,23 @@
 version: '3.8'
 
 services:
-  phlex:
+  phlix:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: phlex-server
+    container_name: phlix-server
     ports:
       - "8080:80"
     environment:
-      - PHLEX_DATABASE_HOST=mysql
-      - PHLEX_DATABASE_PORT=3306
-      - PHLEX_DATABASE_NAME=phlex
-      - PHLEX_DATABASE_USER=phlex
-      - PHLEX_DATABASE_PASSWORD=phlex_secret
+      - PHLIX_DATABASE_HOST=mysql
+      - PHLIX_DATABASE_PORT=3306
+      - PHLIX_DATABASE_NAME=phlix
+      - PHLIX_DATABASE_USER=phlix
+      - PHLIX_DATABASE_PASSWORD=phlix_secret
     volumes:
-      - phlex_config:/var/phlex/config
-      - phlex_data:/var/phlex/data
-      - phlex_backups:/var/phlex/backups
+      - phlix_config:/var/phlix/config
+      - phlix_data:/var/phlix/data
+      - phlix_backups:/var/phlix/backups
       - media_library:/media
     depends_on:
       mysql:
@@ -26,12 +26,12 @@ services:
 
   mysql:
     image: mysql:8.0
-    container_name: phlex-mysql
+    container_name: phlix-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: phlex
-      MYSQL_USER: phlex
-      MYSQL_PASSWORD: phlex_secret
+      MYSQL_DATABASE: phlix
+      MYSQL_USER: phlix
+      MYSQL_PASSWORD: phlix_secret
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -42,8 +42,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  phlex_config:
-  phlex_data:
-  phlex_backups:
+  phlix_config:
+  phlix_data:
+  phlix_backups:
   media_library:
   mysql_data:

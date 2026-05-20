@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery\Mdns;
+namespace Phlix\Discovery\Mdns;
 
 /**
  * Discovered mDNS service descriptor.

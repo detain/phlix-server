@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\HdHomeRun;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
 
 class HdHomeRunTunerDriverTest extends TestCase
 {

@@ -2,7 +2,7 @@
 
 **Since:** 0.15.0
 **Plugin type:** `scrobbler`
-**Reference implementation:** `Phlex\Plugins\Lastfm\Plugin`
+**Reference implementation:** `Phlix\Plugins\Lastfm\Plugin`
 
 This document covers the Last.fm API protocol, scrobble semantics,
 session key management, and configuration options for the built-in
@@ -12,12 +12,12 @@ Last.fm scrobble plugin.
 
 ## 1. Overview
 
-Phlex ships an in-core Last.fm scrobbler as a **reference implementation**
+Phlix ships an in-core Last.fm scrobbler as a **reference implementation**
 of the `scrobbler` plugin type. It is enabled by creating a plugin entry
 in `config/plugins.php` (or installing via the admin UI from the plugin
 catalog). The plugin:
 
-1. Subscribes to `phlex.playback.started` and `phlex.playback.stopped`.
+1. Subscribes to `phlix.playback.started` and `phlix.playback.stopped`.
 2. On **start**: sends a `track.updateNowPlaying` notification (if
    `submit_now_playing` is `true`).
 3. On **stop**: sends a `track.scrobble` submission (if the
@@ -178,7 +178,7 @@ threshold check is bypassed and the scrobble is always submitted.
 ### Obtaining credentials
 
 1. Go to https://www.last.fm/api/account/create
-2. Create an API account (name can be "Phlex Media Server")
+2. Create an API account (name can be "Phlix Media Server")
 3. Copy the **API Key** and **API Secret**
 4. Use `LastfmApiClient::getMobileSession('username', md5('password'))`
    once to get a session key (use PHP CLI or a script)
@@ -188,7 +188,7 @@ threshold check is bypassed and the scrobble is always submitted.
 
 ## 5. Class Reference
 
-### `Phlex\Plugins\Lastfm\LastfmApiClient`
+### `Phlix\Plugins\Lastfm\LastfmApiClient`
 
 ```php
 class LastfmApiClient
@@ -209,7 +209,7 @@ class LastfmApiClient
 }
 ```
 
-### `Phlex\Plugins\Lastfm\ScrobbleData`
+### `Phlix\Plugins\Lastfm\ScrobbleData`
 
 ```php
 final readonly class ScrobbleData
@@ -226,7 +226,7 @@ final readonly class ScrobbleData
 }
 ```
 
-### `Phlex\Plugins\Lastfm\NowPlayingData`
+### `Phlix\Plugins\Lastfm\NowPlayingData`
 
 ```php
 final readonly class NowPlayingData
@@ -259,7 +259,7 @@ scrobble should not crash the playback pipeline.
 ## 7. Plugin Architecture
 
 ```
-Phlex\Plugins\Lastfm\Plugin
+Phlix\Plugins\Lastfm\Plugin
   ├── implements LifecycleInterface        (onEnable/onDisable/subscribedEvents)
   ├── implements EventSubscriberInterface (getSubscribedEvents)
   │

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
-use Phlex\Common\Util\RowMap;
-use Phlex\Media\Streaming\StreamState;
+use Phlix\Common\Util\RowMap;
+use Phlix\Media\Streaming\StreamState;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
@@ -17,7 +17,7 @@ use Workerman\MySQL\Connection;
  * status, managing concurrent job limits, and cleaning up stale jobs.
  * Integrates with the streaming system to provide transcoded content.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Job management for FFmpeg-based media transcoding with concurrency limits
  * @see FfmpegRunner For FFmpeg process execution

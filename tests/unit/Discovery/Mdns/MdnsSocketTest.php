@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Discovery\Mdns;
+namespace Phlix\Tests\Unit\Discovery\Mdns;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\Mdns\MdnsSocket;
+use Phlix\Discovery\Mdns\MdnsSocket;
 
 class MdnsSocketTest extends TestCase
 {

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\LiveTv\GuideManager;
+use Phlix\LiveTv\GuideManager;
 
 /**
- * Maps Schedules Direct data to Phlex GuideManager format.
+ * Maps Schedules Direct data to Phlix GuideManager format.
  *
  * Converts SD schedule entries, program metadata, and station data
  * into the flat array format expected by GuideManager::upsertProgram()

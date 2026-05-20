@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Music;
+namespace Phlix\Media\Music;
 
-use Phlex\Media\Library\AudioScanner;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\MetadataManager;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\AudioScanner;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -18,13 +18,13 @@ use Psr\Log\LoggerInterface;
  * scanning and metadata handling. It is automatically discovered by the
  * library type registry and used when creating or scanning music libraries.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Library type plugin for music media
  * @see LibraryManager For library management operations
  * @see AudioScanner For audio file scanning
  */
-final class MusicLibraryType implements \Phlex\Media\Library\LibraryTypeInterface
+final class MusicLibraryType implements \Phlix\Media\Library\LibraryTypeInterface
 {
     /** Library type identifier */
     public const TYPE = 'music';
@@ -80,7 +80,7 @@ final class MusicLibraryType implements \Phlex\Media\Library\LibraryTypeInterfac
      * @param MetadataManager $metadataManager Metadata manager
      * @param ItemRepository $itemRepo Item repository
      * @param LoggerInterface|null $logger Optional logger
-     * @return \Phlex\Media\Library\MusicLibraryManager Configured music library manager
+     * @return \Phlix\Media\Library\MusicLibraryManager Configured music library manager
      */
     public function getLibraryManager(
         \Workerman\MySQL\Connection $db,
@@ -88,9 +88,9 @@ final class MusicLibraryType implements \Phlex\Media\Library\LibraryTypeInterfac
         MetadataManager $metadataManager,
         ItemRepository $itemRepo,
         ?LoggerInterface $logger = null
-    ): \Phlex\Media\Library\MusicLibraryManager {
+    ): \Phlix\Media\Library\MusicLibraryManager {
         $structured = $logger instanceof StructuredLogger ? $logger : null;
-        return new \Phlex\Media\Library\MusicLibraryManager(
+        return new \Phlix\Media\Library\MusicLibraryManager(
             $scanner,
             $metadataManager,
             $itemRepo,

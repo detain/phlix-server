@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks\Plugins;
+namespace Phlix\Webhooks\Plugins;
 
 use DateTimeImmutable;
-use Phlex\Webhooks\WebhookEvent;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Webhooks\WebhookEvent;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 
 /**
  * Slack notification plugin using Block Kit payloads.
@@ -113,7 +113,7 @@ class SlackPlugin extends AbstractNotificationPlugin
                 'elements' => [
                     [
                         'type' => 'mrkdwn',
-                        'text' => 'Sent from *Phlex Media Server* at ' . $event->occurredAt->format('H:i:s'),
+                        'text' => 'Sent from *Phlix Media Server* at ' . $event->occurredAt->format('H:i:s'),
                     ],
                 ],
             ],
@@ -151,7 +151,7 @@ class SlackPlugin extends AbstractNotificationPlugin
             return $this->config;
         }
 
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
         $configFile = $configPath . '/notifications.php';
 
         if (file_exists($configFile)) {
@@ -179,7 +179,7 @@ class SlackPlugin extends AbstractNotificationPlugin
         return null;
     }
 
-    private function getLogger(): \Phlex\Common\Logger\StructuredLogger
+    private function getLogger(): \Phlix\Common\Logger\StructuredLogger
     {
         return LoggerFactory::get(LogChannels::APPLICATION);
     }

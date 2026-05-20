@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
 use Workerman\MySQL\Connection;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Util\RowMap;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\Dto\MetadataValue;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Util\RowMap;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
  * MetadataManager coordinates metadata fetching from multiple providers.
@@ -18,7 +18,7 @@ use Phlex\Media\Metadata\Dto\MetadataValue;
  * prioritizes them by media type, and handles the refresh workflow for items.
  * It supports cascading provider fallback when one provider fails to return results.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Metadata fetching coordination with provider prioritization and fallback
  * @see MetadataProviderInterface For provider implementation contract
@@ -49,8 +49,8 @@ class MetadataManager
     /** @var array<string, MetadataProviderInterface> Flat provider lookup by name */
     private array $providers = [];
 
-    /** @var \Phlex\Common\Logger\StructuredLogger Structured logger instance */
-    private \Phlex\Common\Logger\StructuredLogger $logger;
+    /** @var \Phlix\Common\Logger\StructuredLogger Structured logger instance */
+    private \Phlix\Common\Logger\StructuredLogger $logger;
 
     /**
      * Constructor for MetadataManager.

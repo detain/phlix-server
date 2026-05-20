@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Dash;
+namespace Phlix\Media\Streaming\Dash;
 
 use DOMDocument;
 use DOMElement;
@@ -19,7 +19,7 @@ use DOMElement;
  * This streamer generates the manifest structure while relying on shared
  * segment storage.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @since 0.11.0
  * @see https://developer.mozilla.org/en-US/docs/Web/Media/DASH_Adaptive_Streaming

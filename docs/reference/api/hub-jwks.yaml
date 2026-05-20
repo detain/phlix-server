@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Phlex Hub JWKS API
+  title: Phlix Hub JWKS API
   description: |
     JWKS endpoint exposing this server's Ed25519 public key(s) for
     verification of server-signed JWTs by the hub. Introduced in
-    **Step C.2** of `PHLEX_EXPANSION_PLAN.md`.
+    **Step C.2** of `PHLIX_EXPANSION_PLAN.md`.
 
     This document is self-hosted at `/.well-known/jwks.json` rather
     than proxied through the hub. It is cacheable for up to 1 hour
@@ -16,7 +16,7 @@ info:
 
 servers:
   - url: /
-    description: Relative to the Phlex server root (Workerman HTTP server).
+    description: Relative to the Phlix server root (Workerman HTTP server).
 
 paths:
   /.well-known/jwks.json:

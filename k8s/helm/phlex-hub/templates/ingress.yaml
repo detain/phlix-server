@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "phlex-hub.fullname" . }}
+  name: {{ include "phlix-hub.fullname" . }}
   labels:
-    {{- include "phlex-hub.labels" . | nindent 4 }}
+    {{- include "phlix-hub.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -31,7 +31,7 @@ spec:
             pathType: {{ .pathType }}
             backend:
               service:
-                name: {{ include "phlex-hub.fullname" $ }}
+                name: {{ include "phlix-hub.fullname" $ }}
                 port:
                   number: {{ $.Values.service.http.port }}
           {{- end }}

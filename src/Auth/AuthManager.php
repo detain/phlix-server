@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Auth\Dto\UserRow;
-use Phlex\Shared\Events\Auth\UserCreated;
-use Phlex\Shared\Events\Auth\UserLoggedIn;
-use Phlex\Shared\Events\Auth\UserLoggedOut;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Auth\Dto\UserRow;
+use Phlix\Shared\Events\Auth\UserCreated;
+use Phlix\Shared\Events\Auth\UserLoggedIn;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -23,10 +23,10 @@ use Workerman\MySQL\Connection;
  * user registration, login with credential verification, JWT token generation
  * and validation, and session management.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Handles user authentication workflows including registration,
- *              login, token refresh, and validation for the Phlex Media Server.
+ *              login, token refresh, and validation for the Phlix Media Server.
  * @see JwtHandler For JWT token creation and validation
  * @see UserRepository For user data access and management
  * @see AuditLogger For security audit logging
@@ -122,7 +122,7 @@ class AuthManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_auth_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_auth_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
 use Jose\Component\Checker\AlgorithmChecker;
 use Jose\Component\Checker\AudienceChecker;
@@ -29,7 +29,7 @@ use RuntimeException;
  * Verifies the signature against the provider's JWKS, checks standard
  * OIDC claims (iss, aud, exp, iat, nonce), and extracts the claims.
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class IdTokenValidator

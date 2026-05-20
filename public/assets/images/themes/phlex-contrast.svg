@@ -6,5 +6,5 @@
   <circle cx="60" cy="75" r="18" fill="#000000"/>
   <rect x="42" y="100" width="36" height="5" rx="0" fill="#000000"/>
   <rect x="46" y="109" width="28" height="4" rx="0" fill="#666666"/>
-  <text x="150" y="80" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#000000" text-anchor="middle">Phlex Contrast</text>
+  <text x="150" y="80" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#000000" text-anchor="middle">Phlix Contrast</text>
 </svg>

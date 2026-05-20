@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Session\SyncPlay;
+namespace Phlix\Tests\Unit\Session\SyncPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Session\SyncPlay\SyncPlayManager;
-use Phlex\Session\SyncPlay\Messages;
-use Phlex\Session\SyncPlay\GroupState;
+use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Session\SyncPlay\Messages;
+use Phlix\Session\SyncPlay\GroupState;
 
 class SyncPlayManagerTest extends TestCase
 {
@@ -171,7 +171,7 @@ class SyncPlayManagerTest extends TestCase
     {
         $timeSync = $this->manager->getTimeSync();
 
-        $this->assertInstanceOf(\Phlex\Session\SyncPlay\TimeSync::class, $timeSync);
+        $this->assertInstanceOf(\Phlix\Session\SyncPlay\TimeSync::class, $timeSync);
     }
 
     public function testCleanupStaleGroupsRemovesInactiveGroups(): void

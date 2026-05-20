@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\Tests\Unit\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\LiveTv\Epg\SchedulesDirect\SdProgramMapper;
-use Phlex\LiveTv\GuideManager;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdProgramMapper;
+use Phlix\LiveTv\GuideManager;
 use PHPUnit\Framework\TestCase;
 
 class SdProgramMapperTest extends TestCase

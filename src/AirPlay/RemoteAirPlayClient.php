@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\AirPlay;
+namespace Phlix\AirPlay;
 
-use Phlex\Hub\RelayConsumer;
+use Phlix\Hub\RelayConsumer;
 
 /**
  * AirPlay client via relay tunnel for devices behind NAT.

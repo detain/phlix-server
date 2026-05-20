@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Session\PlaybackController;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Session\PlaybackController;
 
 /**
  * Manages Chromecast sessions.
@@ -21,7 +21,7 @@ class CastManager
     /** @var CastDiscovery Device discovery service */
     private CastDiscovery $discovery;
 
-    /** @var PlaybackController Phlex playback controller */
+    /** @var PlaybackController Phlix playback controller */
     private PlaybackController $playbackController;
 
     /** @var StructuredLogger Logger instance */
@@ -32,7 +32,7 @@ class CastManager
 
     /**
      * @param CastDiscovery $discovery Device discovery service
-     * @param PlaybackController $playbackController Phlex playback controller
+     * @param PlaybackController $playbackController Phlix playback controller
      * @param StructuredLogger|null $logger Optional logger instance
      *
      * @since 0.12.0
@@ -54,7 +54,7 @@ class CastManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_cast_manager_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_cast_manager_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

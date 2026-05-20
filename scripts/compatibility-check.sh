@@ -7,17 +7,17 @@ SERVER_VERSION=$(grep '"version"' composer.json | sed 's/.*"version": "\([^"]*\)
 SERVER_MAJOR=$(echo $SERVER_VERSION | cut -d. -f1)
 
 # Check if hub is available
-if [ -z "$PHLEX_HUB_URL" ]; then
-    echo "PHLEX_HUB_URL not set, skipping compatibility check"
+if [ -z "$PHLIX_HUB_URL" ]; then
+    echo "PHLIX_HUB_URL not set, skipping compatibility check"
     exit 0
 fi
 
 # Get hub version
-HUB_VERSION=$(curl -s "$PHLEX_HUB_URL/api/v1/info" | jq -r '.version // empty')
+HUB_VERSION=$(curl -s "$PHLIX_HUB_URL/api/v1/info" | jq -r '.version // empty')
 HUB_MAJOR=$(echo $HUB_VERSION | cut -d. -f1)
 
 if [ -z "$HUB_VERSION" ]; then
-    echo "WARNING: Could not fetch hub version from $PHLEX_HUB_URL"
+    echo "WARNING: Could not fetch hub version from $PHLIX_HUB_URL"
     exit 1
 fi
 

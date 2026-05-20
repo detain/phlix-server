@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Relay;
+namespace Phlix\Tests\Unit\LiveTv\Relay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Relay\SegmentCache;
+use Phlix\LiveTv\Relay\SegmentCache;
 
 /**
  * Eviction behaviour for {@see SegmentCache}.
@@ -16,7 +16,7 @@ use Phlex\LiveTv\Relay\SegmentCache;
  *   - Cumulative-duration cap evicts independently of count cap.
  *   - size()/totalDuration()/stats() report accurate values.
  *
- * @covers \Phlex\LiveTv\Relay\SegmentCache
+ * @covers \Phlix\LiveTv\Relay\SegmentCache
  *
  * @since Wave 2 (post-O.7)
  */

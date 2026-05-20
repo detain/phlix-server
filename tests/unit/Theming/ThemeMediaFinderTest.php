@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Theming;
+namespace Phlix\Tests\Unit\Theming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Theming\ThemeMedia;
-use Phlex\Theming\ThemeMediaFinder;
+use Phlix\Theming\ThemeMedia;
+use Phlix\Theming\ThemeMediaFinder;
 
 class ThemeMediaFinderTest extends TestCase
 {

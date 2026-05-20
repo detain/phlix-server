@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins;
+namespace Phlix\Plugins;
 
 /**
  * Shared helper that hides values for manifest-declared secret settings
  * before they are returned to the admin UI (JSON or SSR).
  *
- * Both {@see \Phlex\Server\Http\Controllers\PluginAdminController} and
- * {@see \Phlex\Server\WebPortal\Controllers\PluginAdminPageController}
+ * Both {@see \Phlix\Server\Http\Controllers\PluginAdminController} and
+ * {@see \Phlix\Server\WebPortal\Controllers\PluginAdminPageController}
  * used to carry a private copy of this logic; this class is the single
  * source of truth.
  *
@@ -21,7 +21,7 @@ namespace Phlex\Plugins;
  *  - {@see self::view()} returns the row form expected by Smarty
  *    (`[ {key, type, value, secret}, ... ]`).
  *
- * @package Phlex\Plugins
+ * @package Phlix\Plugins
  * @since 0.10.1
  */
 final class SettingsMasker

@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * Device Registry for DLNA/UPnP Device Discovery and Management.
@@ -64,7 +64,7 @@ class DeviceRegistry
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_reg_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_reg_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -156,7 +156,7 @@ class DeviceRegistry
             'MAN: "ssdp:discover"',
             'MX: ' . $timeout,
             'ST: ssdp:all',
-            'USER-AGENT: Phlex/1.0',
+            'USER-AGENT: Phlix/1.0',
             '',
             '',
         ]);
@@ -383,7 +383,7 @@ class DeviceRegistry
             'http' => [
                 'timeout' => $timeout,
                 'method' => 'GET',
-                'header' => "User-Agent: Phlex/1.0\r\n",
+                'header' => "User-Agent: Phlix/1.0\r\n",
                 'ignore_errors' => true,
             ],
         ]);

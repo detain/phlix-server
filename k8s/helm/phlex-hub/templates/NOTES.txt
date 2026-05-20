@@ -1,4 +1,4 @@
-Phlex Hub has been installed.
+Phlix Hub has been installed.
 
 Release: {{ .Release.Name }}
 Namespace: {{ .Release.Namespace }}
@@ -14,11 +14,11 @@ Access the hub at:
 Hub endpoints:
   /         — admin UI
   /api      — REST API (server claims, enrollment)
-  /relay    — WebSocket relay (phlex-server connections)
+  /relay    — WebSocket relay (phlix-server connections)
 {{- else }}
 
 To access the hub:
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlex-hub.fullname" . }} 8080:{{ .Values.service.http.port }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix-hub.fullname" . }} 8080:{{ .Values.service.http.port }}
   Then open http://localhost:8080
 
 {{- end }}

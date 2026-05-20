@@ -1,8 +1,8 @@
-# Phlex Release Process
+# Phlix Release Process
 
 ## Versioning Strategy
 
-Phlex follows [Semantic Versioning (SemVer)](https://semver.org/):
+Phlix follows [Semantic Versioning (SemVer)](https://semver.org/):
 
 - **MAJOR** version: Incompatible API changes between server and hub
 - **MINOR** version: New backward-compatible functionality
@@ -83,7 +83,7 @@ Update `composer.json`:
 {
   "version": "1.2.0",
   "extra": {
-    "phlex": {
+    "phlix": {
       "minHubVersion": "1.2.0"
     }
   }
@@ -131,10 +131,10 @@ GitHub Actions will:
 
 | Tag | Description | Example |
 |-----|-------------|---------|
-| `latest` | Most recent stable release | `ghcr.io/detain/phlex-server:latest` |
-| `v1.2.3` | Specific version | `ghcr.io/detain/phlex-server:v1.2.3` |
-| `v1.2` | Minor version alias | `ghcr.io/detain/phlex-server:v1.2` |
-| `nightly-YYYYMMDD` | Nightly build | `ghcr.io/detain/phlex-server:nightly-20240518` |
+| `latest` | Most recent stable release | `ghcr.io/detain/phlix-server:latest` |
+| `v1.2.3` | Specific version | `ghcr.io/detain/phlix-server:v1.2.3` |
+| `v1.2` | Minor version alias | `ghcr.io/detain/phlix-server:v1.2` |
+| `nightly-YYYYMMDD` | Nightly build | `ghcr.io/detain/phlix-server:nightly-20240518` |
 
 ## Hub/Server Compatibility
 
@@ -159,10 +159,10 @@ GitHub Actions will:
 
 ```bash
 # Rollback to previous version
-docker pull ghcr.io/detain/phlex-server:v1.2.2
+docker pull ghcr.io/detain/phlix-server:v1.2.2
 
 # Update deployment
-kubectl set image deployment/phlex phlex=ghcr.io/detain/phlex-server:v1.2.2
+kubectl set image deployment/phlix phlix=ghcr.io/detain/phlix-server:v1.2.2
 ```
 
 ### Database Migration Rollback
@@ -227,8 +227,8 @@ Docker images are signed using Cosign:
 
 ```bash
 # Sign the image
-cosign sign --yes ghcr.io/detain/phlex-server:v1.2.0
+cosign sign --yes ghcr.io/detain/phlix-server:v1.2.0
 
 # Verify the image
-cosign verify ghcr.io/detain/phlex-server:v1.2.0
+cosign verify ghcr.io/detain/phlix-server:v1.2.0
 ```

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events\Playback;
+namespace Phlix\Tests\Unit\Common\Events\Playback;
 
-use Phlex\Shared\Events\Playback\PlaybackResumed;
+use Phlix\Shared\Events\Playback\PlaybackResumed;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Events\Playback\PlaybackResumed
+ * @covers \Phlix\Shared\Events\Playback\PlaybackResumed
  */
 final class PlaybackResumedTest extends TestCase
 {

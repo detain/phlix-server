@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
 /**
  * Registers post-record hooks for Live TV recording lifecycle.

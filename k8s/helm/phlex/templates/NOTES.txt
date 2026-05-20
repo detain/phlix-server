@@ -1,4 +1,4 @@
-Phlex Media Server has been installed.
+Phlix Media Server has been installed.
 
 Release: {{ .Release.Name }}
 Namespace: {{ .Release.Namespace }}
@@ -13,7 +13,7 @@ Access the application at:
 {{- else }}
 
 To access the application:
-  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlex.fullname" . }} 8080:{{ .Values.service.http.port }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "phlix.fullname" . }} 8080:{{ .Values.service.http.port }}
   Then open http://localhost:8080
 
 {{- end }}

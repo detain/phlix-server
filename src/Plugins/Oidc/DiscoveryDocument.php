@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
 use RuntimeException;
 
@@ -12,7 +12,7 @@ use RuntimeException;
  * The discovery document contains endpoints and capabilities of the OIDC
  * provider, including authorization, token, userinfo, and JWKS endpoints.
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class DiscoveryDocument
@@ -38,7 +38,7 @@ final class DiscoveryDocument
     public function __construct(string $providerUrl, ?string $cacheDir = null)
     {
         $this->providerUrl = rtrim($providerUrl, '/');
-        $this->cacheDir = $cacheDir ?? sys_get_temp_dir() . '/phlex_oidc_cache';
+        $this->cacheDir = $cacheDir ?? sys_get_temp_dir() . '/phlix_oidc_cache';
         if (!is_dir($this->cacheDir)) {
             mkdir($this->cacheDir, 0755, true);
         }

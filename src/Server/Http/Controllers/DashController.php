@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Streaming\Dash\DashStreamer;
-use Phlex\Media\Streaming\Dash\AdaptationSet;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Streaming\Dash\DashStreamer;
+use Phlix\Media\Streaming\Dash\AdaptationSet;
 
 /**
  * DASH Streaming Controller.
@@ -15,7 +15,7 @@ use Phlex\Media\Streaming\Dash\AdaptationSet;
  * Handles DASH streaming endpoints for manifest and segment delivery.
  * DASH uses MPD (Media Presentation Description) manifests with M4S segments.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @since 0.11.0
  * @see https://developer.mozilla.org/en-US/docs/Web/Media/DASH_Adaptive_Streaming

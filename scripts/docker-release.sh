@@ -12,7 +12,7 @@ if [[ "$2" == "--dry-run" ]]; then
 fi
 
 REGISTRY="${REGISTRY:-ghcr.io}"
-IMAGE_NAME="${IMAGE_NAME:-detain/phlex-server}"
+IMAGE_NAME="${IMAGE_NAME:-detain/phlix-server}"
 
 echo "Building Docker images for v$VERSION..."
 

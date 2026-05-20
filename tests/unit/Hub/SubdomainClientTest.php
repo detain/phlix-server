@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\HeartbeatResult;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\HttpClient;
-use Phlex\Hub\HttpResponse;
-use Phlex\Hub\StoredEnrollment;
-use Phlex\Hub\SubdomainClient;
-use Phlex\Hub\SubdomainResult;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\HeartbeatResult;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\HttpClient;
+use Phlix\Hub\HttpResponse;
+use Phlix\Hub\StoredEnrollment;
+use Phlix\Hub\SubdomainClient;
+use Phlix\Hub\SubdomainResult;
+use Phlix\Common\Logger\StructuredLogger;
 
 class SubdomainClientTest extends TestCase
 {
@@ -25,7 +25,7 @@ class SubdomainClientTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-subdomain-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-subdomain-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
 
         $this->logger = new StructuredLogger('test', []);
@@ -69,7 +69,7 @@ class SubdomainClientTest extends TestCase
         $configFile = $this->tmpDir . '/hub-subdomain.json';
         $configData = [
             'subdomain' => 'abc12345',
-            'fqdn' => 'abc12345.phlex.media',
+            'fqdn' => 'abc12345.phlix.media',
             'tls_cert_path' => '/certs/fullchain.pem',
             'tls_key_path' => '/certs/privkey.pem',
         ];

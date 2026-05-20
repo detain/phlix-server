@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Admin;
+namespace Phlix\Tests\Unit\Admin;
 
 use DateTime;
 use PHPUnit\Framework\TestCase;
-use Phlex\Admin\NewsletterSender;
+use Phlix\Admin\NewsletterSender;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for NewsletterSender class.
  *
- * @covers \Phlex\Admin\NewsletterSender
+ * @covers \Phlix\Admin\NewsletterSender
  */
 class NewsletterSenderTest extends TestCase
 {

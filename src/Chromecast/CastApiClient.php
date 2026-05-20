@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * HTTP/JSON Cast protocol client.

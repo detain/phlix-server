@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata;
+namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\OpdsFeedBuilder;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\OpdsFeedBuilder;
 
 /**
  * Unit tests for OpdsFeedBuilder.
  *
- * @covers \Phlex\Media\Metadata\OpdsFeedBuilder
+ * @covers \Phlix\Media\Metadata\OpdsFeedBuilder
  * @since 0.17.0
  */
 class OpdsFeedBuilderTest extends TestCase

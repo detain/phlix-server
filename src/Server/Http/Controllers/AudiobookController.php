@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Library\AudiobookLibraryManager;
-use Phlex\Media\Library\AudiobookProgress;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\AudiobookLibraryManager;
+use Phlix\Media\Library\AudiobookProgress;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * AudiobookController handles audiobook library API endpoints.
@@ -22,7 +22,7 @@ use Phlex\Server\Http\Response;
  * - GET /audiobooks/{id}/read — HTML audiobook player
  * - GET /audiobooks/{id}/stream?chapter=N&offset=MS — stream with chapter resume
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description REST API for audiobook library browsing, chapters, and progress tracking
  * @since 0.18.0

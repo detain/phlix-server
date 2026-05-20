@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
-use Phlex\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
  * TVDB API provider for TV series metadata.
@@ -32,7 +32,7 @@ use Phlex\Media\Metadata\Dto\MetadataValue;
  * Responses are cached in-memory for the duration of the instance lifecycle.
  * Use MetadataHttpClient for persistent caching across requests.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description TVDB API provider for TV series metadata with episode support
  * @see MetadataProviderInterface For provider contract

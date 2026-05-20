@@ -1,9 +1,9 @@
 /**
- * Phlex admin plugins page — progressive enhancement (Step A.5).
+ * Phlix admin plugins page — progressive enhancement (Step A.5).
  *
  * Vanilla ES2023. Talks to the JSON API at /api/v1/admin/plugins/*
  * using the same JWT the user authenticated with (read from the
- * "phlex_access_token" cookie or, failing that, sessionStorage).
+ * "phlix_access_token" cookie or, failing that, sessionStorage).
  *
  * The page degrades gracefully: every action also has a regular form
  * submission target so disabling JavaScript still works.
@@ -13,12 +13,12 @@
 
     function getToken() {
         // Cookie first (set by the login flow on this origin).
-        const cookieMatch = document.cookie.match(/(?:^|; )phlex_access_token=([^;]+)/);
+        const cookieMatch = document.cookie.match(/(?:^|; )phlix_access_token=([^;]+)/);
         if (cookieMatch) {
             return decodeURIComponent(cookieMatch[1]);
         }
         try {
-            return sessionStorage.getItem('phlex_access_token') || '';
+            return sessionStorage.getItem('phlix_access_token') || '';
         } catch (_e) {
             return '';
         }

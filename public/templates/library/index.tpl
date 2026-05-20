@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="title"}Library - Phlex{/block}
+{block name="title"}Library - Phlix{/block}
 
 {block name="main"}
 <div class="library-page">

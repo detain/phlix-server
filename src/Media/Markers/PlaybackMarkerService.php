@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers;
+namespace Phlix\Media\Markers;
 
 /**
  * Service for providing skip-button specs enriched with playback position context.

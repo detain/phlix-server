@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Streaming;
+namespace Phlix\Tests\Unit\Media\Streaming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\HlsStreamer;
-use Phlex\Media\Streaming\QualitySelector;
+use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Media\Streaming\QualitySelector;
 
 class HlsStreamerTest extends TestCase
 {
@@ -13,7 +13,7 @@ class HlsStreamerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->segmentDir = sys_get_temp_dir() . '/phlex_test_segments_' . uniqid();
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_test_segments_' . uniqid();
         mkdir($this->segmentDir, 0755, true);
 
         $this->hlsStreamer = new HlsStreamer(

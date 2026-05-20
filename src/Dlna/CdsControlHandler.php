@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * CdsControlHandler processes HTTP SOAP requests for the ContentDirectory Service.

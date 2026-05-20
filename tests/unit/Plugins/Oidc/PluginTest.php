@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\Plugin;
+use Phlix\Plugins\Oidc\Plugin;
 
 /**
- * @covers \Phlex\Plugins\Oidc\Plugin
+ * @covers \Phlix\Plugins\Oidc\Plugin
  */
 final class PluginTest extends TestCase
 {
@@ -18,7 +18,7 @@ final class PluginTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->pluginDir = sys_get_temp_dir() . '/phlex_oidc_plugin_test_' . uniqid();
+        $this->pluginDir = sys_get_temp_dir() . '/phlix_oidc_plugin_test_' . uniqid();
         mkdir($this->pluginDir, 0755, true);
         $this->originalDir = Plugin::getPluginDirectory();
     }

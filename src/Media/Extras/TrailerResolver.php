@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Extras;
+namespace Phlix\Media\Extras;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\TmdbProvider;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TmdbProvider;
 
 /**
  * TrailerResolver merges local trailers with TMDB trailers.

@@ -4,7 +4,7 @@
 
 Schedules Direct (https://www.schedulesdirect.org) provides authoritative TV guide data
 including program listings, series info, artwork, and ratings. This integration allows
-Phlex to sync EPG data from SD's JSON API.
+Phlix to sync EPG data from SD's JSON API.
 
 ## Overview
 
@@ -46,7 +46,7 @@ Add to `config/livetv.php`:
     'enabled' => true,
     'username' => 'your_sd_username',
     'password' => 'your_sd_password',
-    'token_cache_path' => '/var/phlex/sd_token.json',
+    'token_cache_path' => '/var/phlix/sd_token.json',
     'lineup_id' => null,           // null = auto-detect, or set 'USA-OTA-XXXXX'
     'sync_hours_ahead' => 336,      // 14 days (SD limit)
     'timeout_secs' => 30,
@@ -108,7 +108,7 @@ efficient upserts without duplicates.
 
 ## Channel Mapping
 
-SD stations are mapped to Phlex channels with:
+SD stations are mapped to Phlix channels with:
 
 - `name` → callSign
 - `number` → channelNumber / logicalChannelNumber
@@ -132,7 +132,7 @@ echo "Imported: {$stats['imported']}, Errors: {$stats['errors']}";
 ### Direct Service Usage
 
 ```php
-use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
 
 $service = SdEpgServiceFactory::build(
     $config['schedules_direct'],

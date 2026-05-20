@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
-use Phlex\Auth\AuthManager;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Workerman\MySQL\Connection;
@@ -19,7 +19,7 @@ use Workerman\MySQL\Connection;
  *  - Empty `users` table → newly-registered user is promoted to admin.
  *  - Non-empty `users` table → newly-registered user stays non-admin.
  *
- * @covers \Phlex\Auth\AuthManager
+ * @covers \Phlix\Auth\AuthManager
  */
 final class AuthManagerFirstUserAdminTest extends TestCase
 {
@@ -236,7 +236,7 @@ final class AuthManagerFirstUserAdminTest extends TestCase
     private function silentLogger(): StructuredLogger
     {
         // Build a no-op StructuredLogger that swallows messages.
-        $tmp = sys_get_temp_dir() . '/phlex_admin_test_' . uniqid('', true);
+        $tmp = sys_get_temp_dir() . '/phlix_admin_test_' . uniqid('', true);
         @mkdir($tmp, 0775, true);
         return new StructuredLogger('test', [
             'handlers' => [

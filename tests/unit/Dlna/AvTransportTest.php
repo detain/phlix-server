@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Dlna\AvTransport;
-use Phlex\Dlna\TransportState;
+use Phlix\Dlna\AvTransport;
+use Phlix\Dlna\TransportState;
 
 class AvTransportTest extends TestCase
 {

@@ -1,9 +1,9 @@
 {
-    "name": "phlex-plugin-ldap",
+    "name": "phlix-plugin-ldap",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.11.0",
+    "phlix_min_server_version": "0.11.0",
     "type": "auth-provider",
-    "entry": "Phlex\\Plugins\\Ldap\\Plugin",
+    "entry": "Phlix\\Plugins\\Ldap\\Plugin",
     "settings": {
         "host": {
             "type": "string",

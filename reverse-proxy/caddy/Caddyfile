@@ -1,4 +1,4 @@
-phlex.example.com {
+phlix.example.com {
     reverse_proxy localhost:8080 {
         transport http {
             versions h2c h2 1.1
@@ -78,7 +78,7 @@ phlex.example.com {
     }
 
     log {
-        output file /var/log/caddy/phlex.log
+        output file /var/log/caddy/phlix.log
     }
 
     encode gzip zstd

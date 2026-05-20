@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\Tests\Unit\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\LiveTv\Epg\SchedulesDirect\SdApiClient;
-use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgService;
-use Phlex\LiveTv\Epg\SchedulesDirect\SdLineupHandler;
-use Phlex\LiveTv\Epg\SchedulesDirect\SdProgramMapper;
-use Phlex\LiveTv\ChannelManager;
-use Phlex\LiveTv\GuideManager;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdApiClient;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgService;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdLineupHandler;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdProgramMapper;
+use Phlix\LiveTv\ChannelManager;
+use Phlix\LiveTv\GuideManager;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 

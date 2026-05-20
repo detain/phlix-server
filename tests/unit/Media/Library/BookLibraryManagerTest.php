@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\BookLibraryManager;
-use Phlex\Media\Library\BookScanner;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\ScanResult;
+use Phlix\Media\Library\BookLibraryManager;
+use Phlix\Media\Library\BookScanner;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\ScanResult;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for BookLibraryManager.
  *
- * @covers \Phlex\Media\Library\BookLibraryManager
+ * @covers \Phlix\Media\Library\BookLibraryManager
  * @since 0.17.0
  */
 class BookLibraryManagerTest extends TestCase
@@ -38,7 +38,7 @@ class BookLibraryManagerTest extends TestCase
     public function testRescanLibraryCallsScanner(): void
     {
         $libraryId = 'test-lib-123';
-        $paths = [sys_get_temp_dir() . '/phlex_test_' . uniqid()];
+        $paths = [sys_get_temp_dir() . '/phlix_test_' . uniqid()];
         mkdir($paths[0], 0755, true);
 
         // Create some book files
@@ -83,7 +83,7 @@ class BookLibraryManagerTest extends TestCase
     public function testUpsertBookStoresMetadata(): void
     {
         $libraryId = 'test-lib-book-456';
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create an EPUB file

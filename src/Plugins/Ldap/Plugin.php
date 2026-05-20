@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Ldap;
+namespace Phlix\Plugins\Ldap;
 
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
-use Phlex\Auth\AuthProviderRegistry;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
+use Phlix\Auth\AuthProviderRegistry;
 use Psr\Container\ContainerInterface;
 
 final class Plugin implements LifecycleInterface

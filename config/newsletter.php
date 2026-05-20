@@ -43,21 +43,21 @@ return [
      *
      * @var string
      */
-    'from_email' => 'phlex@example.com',
+    'from_email' => 'phlix@example.com',
 
     /**
      * Sender name for newsletters.
      *
      * @var string
      */
-    'from_name' => 'Phlex Media Server',
+    'from_name' => 'Phlix Media Server',
 
     /**
      * Email subject template.
      *
      * @var string
      */
-    'subject_template' => 'Your Phlex Weekly Watch Report',
+    'subject_template' => 'Your Phlix Weekly Watch Report',
 
     /**
      * Number of days after last login to consider a user active.

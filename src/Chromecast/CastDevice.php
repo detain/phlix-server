@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
 /**
  * Chromecast device descriptor.

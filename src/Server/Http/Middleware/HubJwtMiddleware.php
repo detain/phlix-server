@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Middleware;
+namespace Phlix\Server\Http\Middleware;
 
-use Phlex\Hub\HubJwtValidatorInterface;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Hub\HubJwtValidatorInterface;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Validates hub-issued JWTs and populates $request->hubUser on success.
@@ -21,7 +21,7 @@ use Phlex\Server\Http\Response;
  * - Valid hub JWT → sets `$request->hubUser` with HubUserClaims, returns null.
  * - Invalid/expired hub JWT → returns 401 Unauthorized JSON.
  *
- * @package Phlex\Server\Http\Middleware
+ * @package Phlix\Server\Http\Middleware
  * @since 0.11.0
  */
 final class HubJwtMiddleware

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Shared\Auth\UserInfo;
+use Phlix\Shared\Auth\UserInfo;
 
 /**
- * @covers \Phlex\Shared\Auth\UserInfo
+ * @covers \Phlix\Shared\Auth\UserInfo
  */
 final class UserInfoTest extends TestCase
 {

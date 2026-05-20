@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
-use Phlex\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
  * TmdbProvider fetches movie metadata from The Movie Database (TMDB) API.
@@ -12,7 +12,7 @@ use Phlex\Media\Metadata\Dto\MetadataValue;
  * This provider supports searching movies, fetching detailed information
  * including credits and genres, and retrieving images (posters, backdrops, logos).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description TMDB API provider for movie metadata
  * @see https://api.themoviedb.org/3/

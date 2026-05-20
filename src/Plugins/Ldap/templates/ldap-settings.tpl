@@ -1,7 +1,7 @@
 {**
  * LDAP Provider Settings Template
  *
- * @package Phlex\Plugins\Ldap\templates
+ * @package Phlix\Plugins\Ldap\templates
  * @since 0.11.0
  *}
 <form id="ldap-settings-form" class="auth-provider-settings">
@@ -113,7 +113,7 @@
             placeholder="cn=admins,ou=groups,dc=example,dc=com"
         />
         <span class="help-text">
-            Optional. Members of this LDAP group will get admin privileges in Phlex.
+            Optional. Members of this LDAP group will get admin privileges in Phlix.
         </span>
     </div>
 
@@ -156,7 +156,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + (window.PhlexApp && window.PhlexApp.getToken ? window.PhlexApp.getToken() : ''),
+                    'Authorization': 'Bearer ' + (window.PhlixApp && window.PhlixApp.getToken ? window.PhlixApp.getToken() : ''),
                 },
                 body: JSON.stringify(data),
             });
@@ -195,7 +195,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + (window.PhlexApp && window.PhlexApp.getToken ? window.PhlexApp.getToken() : ''),
+                    'Authorization': 'Bearer ' + (window.PhlixApp && window.PhlixApp.getToken ? window.PhlixApp.getToken() : ''),
                 },
                 body: JSON.stringify(data),
             });
@@ -218,7 +218,7 @@
         try {
             var response = await fetch('/api/v1/admin/auth-providers/ldap/config', {
                 headers: {
-                    'Authorization': 'Bearer ' + (window.PhlexApp && window.PhlexApp.getToken ? window.PhlexApp.getToken() : ''),
+                    'Authorization': 'Bearer ' + (window.PhlixApp && window.PhlixApp.getToken ? window.PhlixApp.getToken() : ''),
                 },
             });
 

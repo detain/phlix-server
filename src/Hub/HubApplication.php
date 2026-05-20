@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\Worker;
 
 /**
@@ -18,7 +18,7 @@ use Workerman\Worker;
  * (has a valid `hub-enrollment.json`) and stopped when the server
  * is de-registered.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class HubApplication
@@ -70,7 +70,7 @@ final class HubApplication
         }
 
         $this->worker = new Worker('text://0.0.0.0:0');
-        $this->worker->name = 'phlex-hub-heartbeat';
+        $this->worker->name = 'phlix-hub-heartbeat';
         $this->worker->count = 1;
         $this->worker->onWorkerStart = function (): void {
             $this->logger->info('HubApplication worker started');

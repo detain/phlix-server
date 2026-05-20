@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Common\Util\RowMap;
-use Phlex\LiveTv\Dto\RowAccess;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Util\RowMap;
+use Phlix\LiveTv\Dto\RowAccess;
 use Workerman\MySQL\Connection;
 
 /**
@@ -32,7 +32,7 @@ use Workerman\MySQL\Connection;
  * - VISIBILITY_HIDDEN: Channel is hidden but not deleted
  * - VISIBILITY_DELETED: Soft-deleted channel (excluded from queries)
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @see LiveTvManager For tuner integration
  */

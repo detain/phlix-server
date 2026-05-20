@@ -1,20 +1,20 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\WebSocket;
+namespace Phlix\Tests\Unit\Server\WebSocket;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\WebSocket\MessageHandler;
-use Phlex\Server\WebSocket\ConnectionPool;
+use Phlix\Server\WebSocket\MessageHandler;
+use Phlix\Server\WebSocket\ConnectionPool;
 
 /**
  * Unit tests for MessageHandler class.
  *
- * @covers \Phlex\Server\WebSocket\MessageHandler
+ * @covers \Phlix\Server\WebSocket\MessageHandler
  */
 class MessageHandlerTest extends TestCase
 {
     /**
-     * @covers \Phlex\Server\WebSocket\MessageHandler::on
+     * @covers \Phlix\Server\WebSocket\MessageHandler::on
      */
     public function testCanRegisterCallback(): void
     {
@@ -31,8 +31,8 @@ class MessageHandlerTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\WebSocket\MessageHandler::broadcast
-     * @covers \Phlex\Server\WebSocket\MessageHandler::getConnectionCount
+     * @covers \Phlix\Server\WebSocket\MessageHandler::broadcast
+     * @covers \Phlix\Server\WebSocket\MessageHandler::getConnectionCount
      */
     public function testCanBroadcast(): void
     {

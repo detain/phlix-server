@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel;
+namespace Phlix\Media\Transcoding\Hwaccel;
 
-use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
-use Phlex\Media\Transcoding\Subtitles\SubtitleBurner;
-use Phlex\Media\Transcoding\Subtitles\SubtitleStyleOptions;
-use Phlex\Media\Transcoding\Subtitles\SubtitleTrack;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
+use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
+use Phlix\Media\Transcoding\Subtitles\SubtitleStyleOptions;
+use Phlix\Media\Transcoding\Subtitles\SubtitleTrack;
 
 /**
  * Fluent builder for FFmpeg hardware-accelerated transcoding commands.

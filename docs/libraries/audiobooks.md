@@ -92,7 +92,7 @@ Audiobook library type is registered via `AudiobookLibraryType` which implements
 
 ```php
 // In config/plugins.php or library type registry
-use Phlex\Media\Music\AudiobookLibraryType;
+use Phlix\Media\Music\AudiobookLibraryType;
 
 $registry->register(new AudiobookLibraryType());
 ```

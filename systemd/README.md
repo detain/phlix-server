@@ -1,6 +1,6 @@
-# Phlex systemd Service
+# Phlix systemd Service
 
-This directory contains systemd unit files for running Phlex Media Server as a system service.
+This directory contains systemd unit files for running Phlix Media Server as a system service.
 
 ## Installation
 
@@ -21,40 +21,40 @@ sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # Enable and start
-sudo systemctl enable phlex-server
-sudo systemctl start phlex-server
+sudo systemctl enable phlix-server
+sudo systemctl start phlix-server
 ```
 
 ## Services
 
-### phlex-server.service
+### phlix-server.service
 
 Main application service. Runs the Workerman HTTP/WebSocket server.
 
-### phlex-server.timer
+### phlix-server.timer
 
 Timer for periodic tasks (statistics collection, etc.)
 
-### phlex-hub.service
+### phlix-hub.service
 
-Hub relay service for remote access (when using phlex-hub).
+Hub relay service for remote access (when using phlix-hub).
 
-### phlex-backup.service / phlex-backup.timer
+### phlix-backup.service / phlix-backup.timer
 
 Automated backup service. Runs weekly by default.
 
 ## Configuration
 
-Edit `/etc/phlex/env` to configure environment variables:
+Edit `/etc/phlix/env` to configure environment variables:
 
 ```
-PHLEX_DATABASE_HOST=localhost
-PHLEX_DATABASE_PORT=3306
-PHLEX_DATABASE_NAME=phlex
-PHLEX_DATABASE_USER=phlex
-PHLEX_DATABASE_PASSWORD=your_secure_password
-PHLEX_SECRET_KEY=your_secret_key_here
-PHLEX_LOG_LEVEL=info
+PHLIX_DATABASE_HOST=localhost
+PHLIX_DATABASE_PORT=3306
+PHLIX_DATABASE_NAME=phlix
+PHLIX_DATABASE_USER=phlix
+PHLIX_DATABASE_PASSWORD=your_secure_password
+PHLIX_SECRET_KEY=your_secret_key_here
+PHLIX_LOG_LEVEL=info
 ```
 
 ## Security
@@ -73,17 +73,17 @@ The service files include security hardening:
 
 View logs:
 ```bash
-journalctl -u phlex-server -f
+journalctl -u phlix-server -f
 ```
 
 Restart after config change:
 ```bash
-sudo systemctl restart phlex-server
+sudo systemctl restart phlix-server
 ```
 
 Check service status:
 ```bash
-sudo systemctl status phlex-server
+sudo systemctl status phlix-server
 ```
 
 Check failed services:
@@ -96,24 +96,24 @@ sudo systemctl --failed
 The backup timer runs weekly. To run a backup manually:
 
 ```bash
-sudo systemctl start phlex-backup
+sudo systemctl start phlix-backup
 ```
 
 List backups:
 ```bash
-ls /var/phlex/backups/
+ls /var/phlix/backups/
 ```
 
 ## Upgrading
 
 1. Stop the service:
    ```bash
-   sudo systemctl stop phlex-server
+   sudo systemctl stop phlix-server
    ```
 
 2. Update the application files
 
 3. Restart:
    ```bash
-   sudo systemctl start phlex-server
+   sudo systemctl start phlix-server
    ```

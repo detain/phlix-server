@@ -1,12 +1,12 @@
 <?php
 
-namespace Phlex\Tests\Unit\Webhooks;
+namespace Phlix\Tests\Unit\Webhooks;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Webhooks\DispatchResult;
-use Phlex\Webhooks\WebhookDispatcher;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Webhooks\DispatchResult;
+use Phlix\Webhooks\WebhookDispatcher;
+use Phlix\Webhooks\WebhookEvent;
 use Workerman\MySQL\Connection;
 use DateTimeImmutable;
 

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Webhooks\Plugins;
+namespace Phlix\Tests\Unit\Webhooks\Plugins;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
-use Phlex\Webhooks\Plugins\TelegramPlugin;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Webhooks\Plugins\TelegramPlugin;
+use Phlix\Webhooks\WebhookEvent;
 
 class TelegramPluginTest extends TestCase
 {
@@ -97,7 +97,7 @@ class TelegramPluginTest extends TestCase
         $this->assertEquals('123456789', $payload['chat_id']);
         $this->assertArrayHasKey('text', $payload);
         $this->assertStringContainsString('Test Movie', $payload['text']);
-        $this->assertStringContainsString('Phlex Media Server', $payload['text']);
+        $this->assertStringContainsString('Phlix Media Server', $payload['text']);
         $this->assertArrayHasKey('parse_mode', $payload);
         $this->assertEquals('Markdown', $payload['parse_mode']);
         $this->assertArrayHasKey('disable_web_page_preview', $payload);

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -13,7 +13,7 @@ use Psr\Log\LoggerInterface;
  * Extends BookLibraryManager for audiobook-specific logic including chapter extraction
  * and per-user progress tracking.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Orchestrates audiobook library scanning and progress tracking
  * @since 0.18.0

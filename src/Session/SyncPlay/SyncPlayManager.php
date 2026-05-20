@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session\SyncPlay;
+namespace Phlix\Session\SyncPlay;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Server\WebSocket\Connection;
-use Phlex\Server\WebSocket\ConnectionPool;
-use Phlex\Server\WebSocket\MessageHandler;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Server\WebSocket\Connection;
+use Phlix\Server\WebSocket\ConnectionPool;
+use Phlix\Server\WebSocket\MessageHandler;
 
 /**
  * SyncPlayManager - Main manager for SyncPlay group watching functionality
@@ -36,8 +36,8 @@ use Phlex\Server\WebSocket\MessageHandler;
  * 4. Members leave or host leaves → group state updated
  * 5. Empty groups are automatically cleaned up
  *
- * @author Phlex Development Team
- * @copyright 2024 Phlex Media Server
+ * @author Phlix Development Team
+ * @copyright 2024 Phlix Media Server
  * @license Proprietary
  *
  * @see GroupState For individual group state management

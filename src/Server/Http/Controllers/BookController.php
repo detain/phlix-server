@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Metadata\OpdsFeedBuilder;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\WebPortal\PageRenderer;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Metadata\OpdsFeedBuilder;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\WebPortal\PageRenderer;
 
 /**
  * BookController handles book library and OPDS feed endpoints.
@@ -18,7 +18,7 @@ use Phlex\Server\WebPortal\PageRenderer;
  * - OPDS 1.2 compliant feeds at /opds/v1.2/*
  * - Web portal endpoints at /books/*
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description REST API for book library browsing and OPDS feeds
  * @since 0.17.0

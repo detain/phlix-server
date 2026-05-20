@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Auth\Dto\UserRow;
-use Phlex\Common\Util\RowMap;
+use Phlix\Auth\Dto\UserRow;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -33,8 +33,8 @@ use Workerman\MySQL\Connection;
  * - X: Adult content restriction
  * - UNRATED: Content without a rating (can be blocked via allow_unrated setting)
  *
- * @package Phlex\Auth
- * @author Phlex Development Team
+ * @package Phlix\Auth
+ * @author Phlix Development Team
  * @license Proprietary
  *
  * @see WatchHistory For watch history tracking per profile

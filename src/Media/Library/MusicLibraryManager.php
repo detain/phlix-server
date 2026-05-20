@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\Dto\LibraryRow;
-use Phlex\Media\Metadata\MetadataManager;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\Dto\LibraryRow;
+use Phlix\Media\Metadata\MetadataManager;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -19,7 +19,7 @@ use Workerman\MySQL\Connection;
  * coordinating between the AudioScanner for tag harvesting, MetadataManager
  * for metadata enrichment, and ItemRepository for persistence.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Manages music library operations including scanning, tag parsing, and metadata enrichment
  * @see AudioScanner For audio file scanning and tag harvesting
@@ -76,7 +76,7 @@ class MusicLibraryManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_music_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_music_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

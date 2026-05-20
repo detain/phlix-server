@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\SkipButtonSpec;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\SkipButtonSpec;
 
 class MediaItemController
 {

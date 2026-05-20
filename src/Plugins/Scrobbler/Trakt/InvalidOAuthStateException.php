@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 use RuntimeException;
 

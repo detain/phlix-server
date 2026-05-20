@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\RelayFrame;
-use Phlex\Hub\RelayMessageFramer;
+use Phlix\Hub\RelayFrame;
+use Phlix\Hub\RelayMessageFramer;
 
 class RelayMessageFramerTest extends TestCase
 {

@@ -2,25 +2,25 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Container;
+namespace Phlix\Tests\Unit\Common\Container;
 
 use DI\ContainerBuilder;
-use Phlex\Auth\AuthManager;
-use Phlex\Auth\JwtHandler;
-use Phlex\Common\Container\ContainerFactory;
-use Phlex\Common\Container\Providers\AuthServicesProvider;
-use Phlex\Common\Container\Providers\CoreServicesProvider;
-use Phlex\Common\Container\Providers\EventServicesProvider;
-use Phlex\Common\Container\Providers\MediaServicesProvider;
-use Phlex\Common\Container\Providers\PluginsProvider;
-use Phlex\Common\Container\Providers\SessionServicesProvider;
-use Phlex\Common\Container\Providers\WebPortalServicesProvider;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Tests\Fixtures\Container\CircularA;
-use Phlex\Tests\Fixtures\Container\CircularB;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\JwtHandler;
+use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Common\Container\Providers\CoreServicesProvider;
+use Phlix\Common\Container\Providers\EventServicesProvider;
+use Phlix\Common\Container\Providers\MediaServicesProvider;
+use Phlix\Common\Container\Providers\PluginsProvider;
+use Phlix\Common\Container\Providers\SessionServicesProvider;
+use Phlix\Common\Container\Providers\WebPortalServicesProvider;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Tests\Fixtures\Container\CircularA;
+use Phlix\Tests\Fixtures\Container\CircularB;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -36,12 +36,12 @@ use function DI\factory;
  * container can be exercised in isolation without touching MySQL or the
  * filesystem-bound logger handlers.
  *
- * @covers \Phlex\Common\Container\ContainerFactory
- * @covers \Phlex\Common\Container\Providers\CoreServicesProvider
- * @covers \Phlex\Common\Container\Providers\AuthServicesProvider
- * @covers \Phlex\Common\Container\Providers\MediaServicesProvider
- * @covers \Phlex\Common\Container\Providers\SessionServicesProvider
- * @covers \Phlex\Common\Container\Providers\WebPortalServicesProvider
+ * @covers \Phlix\Common\Container\ContainerFactory
+ * @covers \Phlix\Common\Container\Providers\CoreServicesProvider
+ * @covers \Phlix\Common\Container\Providers\AuthServicesProvider
+ * @covers \Phlix\Common\Container\Providers\MediaServicesProvider
+ * @covers \Phlix\Common\Container\Providers\SessionServicesProvider
+ * @covers \Phlix\Common\Container\Providers\WebPortalServicesProvider
  */
 final class ContainerFactoryTest extends TestCase
 {
@@ -56,7 +56,7 @@ final class ContainerFactoryTest extends TestCase
         parent::setUp();
         LoggerFactory::reset();
 
-        $this->tempDir = sys_get_temp_dir() . '/phlex_container_' . uniqid('', true);
+        $this->tempDir = sys_get_temp_dir() . '/phlix_container_' . uniqid('', true);
         mkdir($this->tempDir, 0775, true);
 
         $configContents = "<?php\nreturn [\n"
@@ -73,7 +73,7 @@ final class ContainerFactoryTest extends TestCase
         file_put_contents($this->loggerConfigPath, $configContents);
 
         putenv('JWT_SECRET');
-        putenv('PHLEX_CONTAINER_COMPILE');
+        putenv('PHLIX_CONTAINER_COMPILE');
     }
 
     protected function tearDown(): void
@@ -245,9 +245,9 @@ final class ContainerFactoryTest extends TestCase
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
-        $this->assertInstanceOf(\Phlex\Common\Container\Providers\HubServicesProvider::class, $providers[3]);
+        $this->assertInstanceOf(\Phlix\Common\Container\Providers\HubServicesProvider::class, $providers[3]);
         $this->assertInstanceOf(MediaServicesProvider::class, $providers[4]);
-        $this->assertInstanceOf(\Phlex\Common\Container\Providers\NetworkServicesProvider::class, $providers[5]);
+        $this->assertInstanceOf(\Phlix\Common\Container\Providers\NetworkServicesProvider::class, $providers[5]);
         $this->assertInstanceOf(SessionServicesProvider::class, $providers[6]);
         $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[7]);
         $this->assertInstanceOf(PluginsProvider::class, $providers[8]);
@@ -263,8 +263,8 @@ final class ContainerFactoryTest extends TestCase
             ],
         ]);
 
-        $streamer = $container->get(\Phlex\Media\Streaming\HlsStreamer::class);
-        $this->assertInstanceOf(\Phlex\Media\Streaming\HlsStreamer::class, $streamer);
+        $streamer = $container->get(\Phlix\Media\Streaming\HlsStreamer::class);
+        $this->assertInstanceOf(\Phlix\Media\Streaming\HlsStreamer::class, $streamer);
         $this->assertSame(
             $this->tempDir . '/segments',
             $this->readPrivate($streamer, 'segmentDir')
@@ -302,13 +302,13 @@ final class ContainerFactoryTest extends TestCase
             'web_portal' => ['template_dir' => $customDir],
         ], $providers);
 
-        /** @var \Phlex\Server\WebPortal\PageRenderer $renderer */
-        $renderer = $container->get(\Phlex\Server\WebPortal\PageRenderer::class);
-        $this->assertInstanceOf(\Phlex\Server\WebPortal\PageRenderer::class, $renderer);
+        /** @var \Phlix\Server\WebPortal\PageRenderer $renderer */
+        $renderer = $container->get(\Phlix\Server\WebPortal\PageRenderer::class);
+        $this->assertInstanceOf(\Phlix\Server\WebPortal\PageRenderer::class, $renderer);
         $this->assertSame($customDir, $this->readPrivate($renderer, 'templateDir'));
 
         // Singleton semantics: resolving twice yields the same instance.
-        $this->assertSame($renderer, $container->get(\Phlex\Server\WebPortal\PageRenderer::class));
+        $this->assertSame($renderer, $container->get(\Phlix\Server\WebPortal\PageRenderer::class));
     }
 
     public function test_resolves_page_renderer_with_default_template_dir_when_config_missing(): void
@@ -332,8 +332,8 @@ final class ContainerFactoryTest extends TestCase
 
         $container = ContainerFactory::create($this->baseConfig(), $providers);
 
-        /** @var \Phlex\Server\WebPortal\PageRenderer $renderer */
-        $renderer = $container->get(\Phlex\Server\WebPortal\PageRenderer::class);
+        /** @var \Phlix\Server\WebPortal\PageRenderer $renderer */
+        $renderer = $container->get(\Phlix\Server\WebPortal\PageRenderer::class);
         $resolved = $this->readPrivate($renderer, 'templateDir');
         $this->assertIsString($resolved);
         $this->assertStringEndsWith(
@@ -358,7 +358,7 @@ final class ContainerFactoryTest extends TestCase
     public function test_compile_dir_created_when_flag_enabled(): void
     {
         $compileDir = $this->tempDir . '/compiled';
-        putenv('PHLEX_CONTAINER_COMPILE=1');
+        putenv('PHLIX_CONTAINER_COMPILE=1');
 
         try {
             // PHP-DI 7 cannot compile closures that capture `use` variables;
@@ -379,7 +379,7 @@ final class ContainerFactoryTest extends TestCase
             }
             $this->assertDirectoryExists($compileDir);
         } finally {
-            putenv('PHLEX_CONTAINER_COMPILE');
+            putenv('PHLIX_CONTAINER_COMPILE');
         }
     }
 

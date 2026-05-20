@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\AirPlay;
+namespace Phlix\AirPlay;
 
 /**
  * AirPlay device descriptor.

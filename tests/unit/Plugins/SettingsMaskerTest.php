@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
 use DateTimeImmutable;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\SettingsMasker;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\SettingsMasker;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\SettingsMasker
+ * @covers \Phlix\Plugins\SettingsMasker
  */
 final class SettingsMaskerTest extends TestCase
 {
@@ -129,9 +129,9 @@ final class SettingsMaskerTest extends TestCase
         return new InstalledPlugin(
             id: 'id-test',
             manifest: Manifest::fromArray([
-                'name'                     => 'phlex-plugin-mask',
+                'name'                     => 'phlix-plugin-mask',
                 'version'                  => '1.0.0',
-                'phlex_min_server_version' => '0.10.0',
+                'phlix_min_server_version' => '0.10.0',
                 'type'                     => 'notifier',
                 'entry'                    => 'X\\Y',
                 'settings'                 => $manifestSettings,

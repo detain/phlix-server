@@ -2,7 +2,7 @@
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Phlex\Common\Database\ConnectionPool;
+use Phlix\Common\Database\ConnectionPool;
 
 $configPath = __DIR__ . '/../config/database.php';
 ConnectionPool::init($configPath);

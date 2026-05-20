@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\AuthResult;
 
 /**
- * @covers \Phlex\Shared\Auth\AuthResult
+ * @covers \Phlix\Shared\Auth\AuthResult
  */
 final class AuthResultTest extends TestCase
 {

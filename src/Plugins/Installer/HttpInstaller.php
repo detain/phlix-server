@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Installer;
+namespace Phlix\Plugins\Installer;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\Util\RecursiveDelete;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\Util\RecursiveDelete;
 
 /**
  * Downloads a plugin source from a URL (or local `file://` path) into
@@ -23,12 +23,12 @@ use Phlex\Plugins\Util\RecursiveDelete;
  *                  field points to a real tarball or zip; that URL is
  *                  then fetched recursively.
  *
- * Non-HTTPS URLs are refused unless the `PHLEX_PLUGINS_ALLOW_HTTP=1`
+ * Non-HTTPS URLs are refused unless the `PHLIX_PLUGINS_ALLOW_HTTP=1`
  * env var is set (default off — HTTPS-only). The `file://` scheme is
  * always allowed so unit and integration tests can stage local
  * fixtures.
  *
- * @package Phlex\Plugins\Installer
+ * @package Phlix\Plugins\Installer
  * @since 0.10.0
  */
 class HttpInstaller
@@ -218,14 +218,14 @@ class HttpInstaller
             return;
         }
         if ($scheme === 'http') {
-            $envValue = getenv('PHLEX_PLUGINS_ALLOW_HTTP');
+            $envValue = getenv('PHLIX_PLUGINS_ALLOW_HTTP');
             $allowed = $envValue !== false
                 && in_array(strtolower($envValue), ['1', 'true', 'yes', 'on'], true);
             if ($allowed) {
                 return;
             }
             throw new PluginInstallException(
-                'Plain HTTP plugin sources are forbidden. Set PHLEX_PLUGINS_ALLOW_HTTP=1 to override.',
+                'Plain HTTP plugin sources are forbidden. Set PHLIX_PLUGINS_ALLOW_HTTP=1 to override.',
             );
         }
 
@@ -242,7 +242,7 @@ class HttpInstaller
      */
     private function guardPluginName(string $name): void
     {
-        if (!preg_match('/^phlex-plugin-[a-z0-9][a-z0-9-]*$/', $name)) {
+        if (!preg_match('/^phlix-plugin-[a-z0-9][a-z0-9-]*$/', $name)) {
             throw new PluginInstallException(sprintf(
                 'Plugin name %s is not a safe directory component.',
                 $name,
@@ -322,7 +322,7 @@ class HttpInstaller
      */
     private function downloadToTemp(string $sourceUrl, string $extension = ''): string
     {
-        $localFile = tempnam(sys_get_temp_dir(), 'phlex_plugin_');
+        $localFile = tempnam(sys_get_temp_dir(), 'phlix_plugin_');
         if ($localFile === false) {
             throw new PluginInstallException('Cannot allocate temporary file for plugin download.');
         }
@@ -491,7 +491,7 @@ class HttpInstaller
      */
     private function createTempDir(): string
     {
-        $base = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'phlex_plugin_' . bin2hex(random_bytes(8));
+        $base = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'phlix_plugin_' . bin2hex(random_bytes(8));
         if (!@mkdir($base, 0700, true) && !is_dir($base)) {
             throw new PluginInstallException(sprintf('Cannot create temp directory %s.', $base));
         }

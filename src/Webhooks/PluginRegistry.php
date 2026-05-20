@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks;
+namespace Phlix\Webhooks;
 
-use Phlex\Webhooks\Plugins\AbstractNotificationPlugin;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Webhooks\Plugins\AbstractNotificationPlugin;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 
 /**
  * Registry for managing webhook notification plugins.
@@ -117,7 +117,7 @@ class PluginRegistry
         $this->register(new Plugins\MqttPlugin($config));
     }
 
-    private function getLogger(): \Phlex\Common\Logger\StructuredLogger
+    private function getLogger(): \Phlix\Common\Logger\StructuredLogger
     {
         return LoggerFactory::get(LogChannels::APPLICATION);
     }

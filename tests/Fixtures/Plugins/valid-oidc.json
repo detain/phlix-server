@@ -1,10 +1,10 @@
 {
-    "name": "phlex-plugin-oidc-google",
+    "name": "phlix-plugin-oidc-google",
     "version": "0.4.2",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "auth-provider",
-    "entry": "Phlex\\Plugins\\OidcGoogle\\Plugin",
-    "events": ["phlex.auth.user.registered"],
+    "entry": "Phlix\\Plugins\\OidcGoogle\\Plugin",
+    "events": ["phlix.auth.user.registered"],
     "settings": {
         "client_id": { "type": "string", "required": true, "secret": false },
         "client_secret": { "type": "string", "required": true, "secret": true },

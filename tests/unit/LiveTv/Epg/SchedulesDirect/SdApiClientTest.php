@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\Tests\Unit\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\LiveTv\Epg\SchedulesDirect\SdApiClient;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdApiClient;
 use PHPUnit\Framework\TestCase;
 
 class SdApiClientTest extends TestCase

@@ -1,9 +1,9 @@
 {
-    "name": "phlex-plugin-oidc",
+    "name": "phlix-plugin-oidc",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.11.0",
+    "phlix_min_server_version": "0.11.0",
     "type": "auth-provider",
-    "entry": "Phlex\\Plugins\\Oidc\\Plugin",
+    "entry": "Phlix\\Plugins\\Oidc\\Plugin",
     "settings": {
         "provider_url": {
             "type": "string",

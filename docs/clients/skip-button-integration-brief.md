@@ -6,7 +6,7 @@
 
 ## What Is This?
 
-The server now provides skip button boundaries in the playback info response. Your client (phlex-mobile-client, phlex-roku-client, phlex-tizen-client, phlex-windows-client) should use these to render "Skip Intro" and "Skip Outro" buttons.
+The server now provides skip button boundaries in the playback info response. Your client (phlix-mobile-client, phlix-roku-client, phlix-tizen-client, phlix-windows-client) should use these to render "Skip Intro" and "Skip Outro" buttons.
 
 ## Quick Start
 

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Streaming\Trickplay;
+namespace Phlix\Tests\Unit\Media\Streaming\Trickplay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\Trickplay\TrickplayGenerator;
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Streaming\Trickplay\TrickplayGenerator;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 class TrickplayGeneratorTest extends TestCase
 {
@@ -15,7 +15,7 @@ class TrickplayGeneratorTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $generator = new TrickplayGenerator($ffmpeg, '/tmp/trickplay');
 
-        $config = new \Phlex\Media\Streaming\Trickplay\TrickplayConfig(
+        $config = new \Phlix\Media\Streaming\Trickplay\TrickplayConfig(
             interval_seconds: 10,
             grid_columns: 8,
             grid_rows: 4,
@@ -39,7 +39,7 @@ class TrickplayGeneratorTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $generator = new TrickplayGenerator($ffmpeg, '/tmp/trickplay');
 
-        $config = new \Phlex\Media\Streaming\Trickplay\TrickplayConfig(
+        $config = new \Phlix\Media\Streaming\Trickplay\TrickplayConfig(
             interval_seconds: 5,
             grid_columns: 8,
             grid_rows: 4,

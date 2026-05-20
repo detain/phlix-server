@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin\Dto;
+namespace Phlix\Admin\Dto;
 
 /**
  * Typed value object for S3 backup destination configuration.
  *
  * Hydrated from the `s3` section of `config/backup.php` (see
- * {@see \Phlex\Admin\BackupManager}). Keeping a strongly-typed shape here
+ * {@see \Phlix\Admin\BackupManager}). Keeping a strongly-typed shape here
  * lets PHPStan reason about every access without per-call `is_string()`
  * narrowing or `(string)` casts on `mixed`.
  *
- * @package Phlex\Admin\Dto
+ * @package Phlix\Admin\Dto
  * @since 0.20.0
  */
 final class S3Config

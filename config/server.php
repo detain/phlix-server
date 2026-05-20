@@ -2,7 +2,7 @@
 
 return [
     'server' => [
-        'name' => 'Phlex Media Server',
+        'name' => 'Phlix Media Server',
         'host' => '0.0.0.0',
         'port' => 8096,
         'context' => [],
@@ -10,7 +10,7 @@ return [
     'worker' => [
         'count' => 'auto',
         'stdout_file' => __DIR__ . '/../.logs/stdout.log',
-        'pid_file' => '/var/run/phlex/pid',
+        'pid_file' => '/var/run/phlix/pid',
     ],
     'process' => [
         'reloadable' => true,

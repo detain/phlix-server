@@ -1,11 +1,11 @@
-# Annotated example values for a production phlex-server deployment.
+# Annotated example values for a production phlix-server deployment.
 # Copy to values-prod.yaml and customize, then:
-#   helm install phlex k8s/helm/phlex -f values-prod.yaml -n phlex --create-namespace
+#   helm install phlix k8s/helm/phlix -f values-prod.yaml -n phlix --create-namespace
 
 replicaCount: 2
 
 image:
-  repository: ghcr.io/detain/phlex-server
+  repository: ghcr.io/detain/phlix-server
   # Pin to an immutable tag in production rather than `latest`
   tag: "v1.0.0"
   pullPolicy: IfNotPresent
@@ -25,7 +25,7 @@ ingress:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: phlex-tls
+    - secretName: phlix-tls
       hosts:
         - media.example.com
 
@@ -69,8 +69,8 @@ persistence:
 mysql:
   enabled: true
   auth:
-    database: phlex
-    username: phlex
+    database: phlix
+    username: phlix
     # Always set a strong password — see https://github.com/bitnami/charts
     rootPassword: "CHANGE_ME"
     password: "CHANGE_ME"
@@ -82,14 +82,14 @@ mysql:
 config:
   database_host: "{{ .Release.Name }}-mysql"
   database_port: 3306
-  database_name: phlex
-  database_user: phlex
+  database_name: phlix
+  database_user: phlix
   database_password: "CHANGE_ME"
   secret_key: "openssl rand -hex 64"
   log_level: info
   hub_url: "https://hub.example.com"
 
-# Connect to phlex-hub
+# Connect to phlix-hub
 hub:
   enabled: true
   enrollmentJwt: "eyJ...replace.with.jwt.from.hub.ui..."

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Streaming\HlsStreamer;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\HlsStreamer;
 
 /**
  * LibraryBridge connects the media library (ItemRepository) to the DLNA ContentDirectory service.

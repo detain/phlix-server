@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events\Auth;
+namespace Phlix\Tests\Unit\Common\Events\Auth;
 
-use Phlex\Shared\Events\Auth\UserLoggedOut;
+use Phlix\Shared\Events\Auth\UserLoggedOut;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Events\Auth\UserLoggedOut
+ * @covers \Phlix\Shared\Events\Auth\UserLoggedOut
  */
 final class UserLoggedOutTest extends TestCase
 {

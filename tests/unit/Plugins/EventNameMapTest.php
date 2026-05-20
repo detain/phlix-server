@@ -2,34 +2,34 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
-use Phlex\Shared\Plugin\EventNameMap;
+use Phlix\Shared\Plugin\EventNameMap;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Plugin\EventNameMap
+ * @covers \Phlix\Shared\Plugin\EventNameMap
  */
 final class EventNameMapTest extends TestCase
 {
     public function test_fromAlias_returns_fqcn_for_known_alias(): void
     {
         $this->assertSame(
-            \Phlex\Shared\Events\Playback\PlaybackStarted::class,
-            EventNameMap::fromAlias('phlex.playback.started'),
+            \Phlix\Shared\Events\Playback\PlaybackStarted::class,
+            EventNameMap::fromAlias('phlix.playback.started'),
         );
     }
 
     public function test_fromAlias_returns_null_for_unknown_alias(): void
     {
-        $this->assertNull(EventNameMap::fromAlias('phlex.nonsense.event'));
+        $this->assertNull(EventNameMap::fromAlias('phlix.nonsense.event'));
     }
 
     public function test_toAlias_returns_alias_for_known_fqcn(): void
     {
         $this->assertSame(
-            'phlex.user.logged_in',
-            EventNameMap::toAlias(\Phlex\Shared\Events\Auth\UserLoggedIn::class),
+            'phlix.user.logged_in',
+            EventNameMap::toAlias(\Phlix\Shared\Events\Auth\UserLoggedIn::class),
         );
     }
 

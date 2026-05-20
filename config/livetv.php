@@ -111,7 +111,7 @@ return [
     /**
      * XMLTV guide fetcher settings.
      *
-     * Used by {@see \Phlex\LiveTv\Tuners\Iptv\XmlTvParser::parseUrl()} when
+     * Used by {@see \Phlix\LiveTv\Tuners\Iptv\XmlTvParser::parseUrl()} when
      * downloading remote XMLTV guide files. Bounds protect the worker
      * against malicious endpoints that serve arbitrarily large payloads.
      */
@@ -119,7 +119,7 @@ return [
         /**
          * Maximum number of bytes to read from a remote XMLTV URL.
          *
-         * Downloads exceeding this size throw {@see \Phlex\LiveTv\Tuners\Iptv\XmlTvOversizedException}.
+         * Downloads exceeding this size throw {@see \Phlix\LiveTv\Tuners\Iptv\XmlTvOversizedException}.
          *
          * @default 67108864 (64 MiB)
          */
@@ -227,9 +227,9 @@ return [
          *
          * Token is auto-refreshed before expiration (23h TTL, refreshes at 24h).
          *
-         * @default '/var/phlex/sd_token.json'
+         * @default '/var/phlix/sd_token.json'
          */
-        'token_cache_path' => '/var/phlex/sd_token.json',
+        'token_cache_path' => '/var/phlix/sd_token.json',
 
         /**
          * Specific lineup ID to use (null = auto-detect from account).

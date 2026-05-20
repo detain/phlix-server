@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\PhotoLibraryManager;
-use Phlex\Media\Metadata\ExifProvider;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PhotoLibraryManager;
+use Phlix\Media\Metadata\ExifProvider;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * PhotoController handles photo library API endpoints.
@@ -16,7 +16,7 @@ use Phlex\Server\Http\Response;
  * Provides endpoints for browsing photo albums, viewing individual photos,
  * generating thumbnails, and slideshow functionality.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description REST API for photo library browsing and slideshow
  * @since 0.16.0

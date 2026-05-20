@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 /**
  * WebSocket event type constants.
@@ -10,7 +10,7 @@ namespace Phlex\Server\WebSocket;
  * This class defines all available WebSocket event types used for
  * real-time communication between server and clients.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Defines all WebSocket event type constants for real-time communication.
  *

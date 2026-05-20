@@ -1,13 +1,13 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\PhotoLibraryManager;
-use Phlex\Media\Metadata\ExifProvider;
-use Phlex\Server\Http\Controllers\PhotoController;
-use Phlex\Server\Http\Request;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PhotoLibraryManager;
+use Phlix\Media\Metadata\ExifProvider;
+use Phlix\Server\Http\Controllers\PhotoController;
+use Phlix\Server\Http\Request;
 use Workerman\MySQL\Connection;
 
 /**

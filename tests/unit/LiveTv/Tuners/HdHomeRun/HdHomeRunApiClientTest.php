@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\HdHomeRun;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
 
 class HdHomeRunApiClientTest extends TestCase
 {

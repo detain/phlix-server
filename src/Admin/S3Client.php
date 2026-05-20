@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
 use Throwable;
 
@@ -12,7 +12,7 @@ use Throwable;
  * Supports: upload, download, listObjects, deleteObject operations against
  * any S3-compatible service (AWS S3, MinIO, Backblaze B2, etc.).
  *
- * @package Phlex\Admin
+ * @package Phlix\Admin
  */
 class S3Client
 {

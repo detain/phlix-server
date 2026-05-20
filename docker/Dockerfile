@@ -26,14 +26,14 @@ RUN apk add --no-cache \
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # PHP overrides (Alpine layout — official php:* image uses /usr/local/etc/php/conf.d/)
-COPY docker/php.ini /usr/local/etc/php/conf.d/zz-phlex.ini
+COPY docker/php.ini /usr/local/etc/php/conf.d/zz-phlix.ini
 
 COPY docker/nginx.conf /etc/nginx/http.d/default.conf
 
 COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
-RUN mkdir -p /var/www/html /var/phlex/{config,data,logs,backups} \
-    && chown -R nobody:nobody /var/www/html /var/phlex
+RUN mkdir -p /var/www/html /var/phlix/{config,data,logs,backups} \
+    && chown -R nobody:nobody /var/www/html /var/phlix
 
 WORKDIR /var/www/html
 

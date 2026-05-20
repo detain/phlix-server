@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Collections\Collection;
-use Phlex\Collections\CollectionManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Collections\Collection;
+use Phlix\Collections\CollectionManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * REST API controller for collections.

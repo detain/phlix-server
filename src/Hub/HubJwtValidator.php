@@ -2,29 +2,29 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 use InvalidArgumentException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
- * Validates JWTs issued by the Phlex Hub using the hub's JWKS.
+ * Validates JWTs issued by the Phlix Hub using the hub's JWKS.
  *
  * This validator:
  * 1. Extracts the `kid` (key ID) from the JWT header.
  * 2. Fetches and caches JWKS from the hub's JWKS URL.
  * 3. Finds the signing key matching the `kid`; refetches once on cache miss (handles key rotation).
  * 4. Verifies the Ed25519 signature using `sodium_crypto_sign_verify_detached`.
- * 5. Validates `iss == 'phlex-hub'`, `aud == 'phlex-server'`, `server_id` matches the server's own ID.
+ * 5. Validates `iss == 'phlix-hub'`, `aud == 'phlix-server'`, `server_id` matches the server's own ID.
  * 6. Returns `HubUserClaims` on success; `null` on any failure.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class HubJwtValidator implements HubJwtValidatorInterface
 {
-    private const EXPECTED_ISSUER = 'phlex-hub';
+    private const EXPECTED_ISSUER = 'phlix-hub';
 
     private JwksCache $jwksCache;
 
@@ -98,9 +98,9 @@ final class HubJwtValidator implements HubJwtValidatorInterface
             }
 
             $payloadAud = is_string($payload['aud'] ?? null) ? $payload['aud'] : '';
-            if ($payloadAud !== 'phlex-server') {
+            if ($payloadAud !== 'phlix-server') {
                 $this->logger->debug('Hub JWT validation failed: wrong audience', [
-                    'expected' => 'phlex-server',
+                    'expected' => 'phlix-server',
                     'actual' => $payloadAud,
                 ]);
                 return null;

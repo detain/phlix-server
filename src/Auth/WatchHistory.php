@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Auth\Dto\UserRow;
-use Phlex\Auth\Dto\WatchHistoryRow;
-use Phlex\Common\Util\RowMap;
+use Phlix\Auth\Dto\UserRow;
+use Phlix\Auth\Dto\WatchHistoryRow;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -32,8 +32,8 @@ use Workerman\MySQL\Connection;
  * - playback_status: Current state (playing, paused, stopped, completed)
  * - completed_at: Timestamp when progress reached completion threshold
  *
- * @package Phlex\Auth
- * @author Phlex Development Team
+ * @package Phlix\Auth
+ * @author Phlix Development Team
  * @license Proprietary
  *
  * @see UserProfileManager For profile-based access control and restrictions

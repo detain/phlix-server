@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Ldap\Controller;
+namespace Phlix\Plugins\Ldap\Controller;
 
-use Phlex\Plugins\Ldap\Plugin;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Plugins\Ldap\Plugin;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 final class LdapAdminController
 {
@@ -137,7 +137,7 @@ final class LdapAdminController
         $userFilter = is_string($body['user_filter'] ?? null) ? trim($body['user_filter']) : '(uid={{username}})';
 
         try {
-            $connection = new \Phlex\Plugins\Ldap\LdapConnection(
+            $connection = new \Phlix\Plugins\Ldap\LdapConnection(
                 host: $host,
                 port: $port,
                 ssl: $ssl,

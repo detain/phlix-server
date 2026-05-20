@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Discovery;
+namespace Phlix\Tests\Unit\Discovery;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\DiscoveryManager;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
-use Phlex\Discovery\Ssdp\SsdpDevice;
-use Phlex\Discovery\Ssdp\SsdpDiscovery;
+use Phlix\Discovery\DiscoveryManager;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
+use Phlix\Discovery\Ssdp\SsdpDevice;
+use Phlix\Discovery\Ssdp\SsdpDiscovery;
 
 class DiscoveryManagerTest extends TestCase
 {
@@ -94,7 +94,7 @@ class DiscoveryManagerTest extends TestCase
             ->method('announceServer')
             ->with(
                 'test-server-id',
-                'Phlex Test Server',
+                'Phlix Test Server',
                 'http://192.168.1.100',
                 8200
             );
@@ -103,14 +103,14 @@ class DiscoveryManagerTest extends TestCase
         $mdns->expects($this->once())
             ->method('announceServer')
             ->with(
-                'Phlex._phlex._tcp.local.',
-                '_phlex._tcp.local.',
+                'Phlix._phlix._tcp.local.',
+                '_phlix._tcp.local.',
                 8200,
                 $this->anything()
             );
 
         $manager = new DiscoveryManager($ssdp, $mdns, null);
-        $manager->announcePhlexServer('test-server-id', 'Phlex Test Server', 'http://192.168.1.100', 8200);
+        $manager->announcePhlixServer('test-server-id', 'Phlix Test Server', 'http://192.168.1.100', 8200);
     }
 
     public function testStartListenersDoesNotThrow(): void

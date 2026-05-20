@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\IdTokenClaims;
-use Phlex\Plugins\Oidc\OidcUserInfo;
+use Phlix\Plugins\Oidc\IdTokenClaims;
+use Phlix\Plugins\Oidc\OidcUserInfo;
 
 /**
- * @covers \Phlex\Plugins\Oidc\OidcUserInfo
+ * @covers \Phlix\Plugins\Oidc\OidcUserInfo
  */
 final class OidcUserInfoTest extends TestCase
 {

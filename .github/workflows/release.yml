@@ -7,7 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/detain/phlex-server
+  IMAGE_NAME: ghcr.io/detain/phlix-server
 
 jobs:
   verify-chart-version:
@@ -27,7 +27,7 @@ jobs:
         run: |
           set -e
           TAG_VERSION="${{ steps.version.outputs.VERSION }}"
-          for chart in k8s/helm/phlex/Chart.yaml k8s/helm/phlex-hub/Chart.yaml; do
+          for chart in k8s/helm/phlix/Chart.yaml k8s/helm/phlix-hub/Chart.yaml; do
             APP_VERSION=$(awk '/^appVersion:/ {gsub(/"/,"",$2); print $2; exit}' "$chart")
             if [ -z "$APP_VERSION" ]; then
               echo "::error file=$chart::appVersion not found"
@@ -68,14 +68,14 @@ jobs:
 
       - name: Lint charts
         run: |
-          helm lint k8s/helm/phlex
-          helm lint k8s/helm/phlex-hub
+          helm lint k8s/helm/phlix
+          helm lint k8s/helm/phlix-hub
 
       - name: Package charts
         run: |
           mkdir -p dist/charts
-          helm package k8s/helm/phlex -d dist/charts
-          helm package k8s/helm/phlex-hub -d dist/charts
+          helm package k8s/helm/phlix -d dist/charts
+          helm package k8s/helm/phlix-hub -d dist/charts
           ls -la dist/charts/
 
       - name: Upload chart artifacts
@@ -125,7 +125,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          name: Phlex Server ${{ github.ref_name }}
+          name: Phlix Server ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Plugins;
+namespace Phlix\Tests\Integration\Plugins;
 
-use Phlex\Plugins\Contract\LifecycleInterface as LegacyLifecycleInterface;
-use Phlex\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
+use Phlix\Plugins\Contract\LifecycleInterface as LegacyLifecycleInterface;
+use Phlix\Shared\Plugin\LifecycleInterface as SharedLifecycleInterface;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
 /**
  * Guard for the `interface … extends …` bridge that keeps
- * `Phlex\Plugins\Contract\LifecycleInterface` (pre-0.11 FQCN) usable
- * after the contract moved to `Phlex\Shared\Plugin\LifecycleInterface`.
+ * `Phlix\Plugins\Contract\LifecycleInterface` (pre-0.11 FQCN) usable
+ * after the contract moved to `Phlix\Shared\Plugin\LifecycleInterface`.
  *
  * @coversNothing
  */
@@ -33,7 +33,7 @@ final class LifecycleShimTest extends TestCase
 }
 
 /**
- * Fixture: implements the LEGACY `Phlex\Plugins\Contract\LifecycleInterface`
+ * Fixture: implements the LEGACY `Phlix\Plugins\Contract\LifecycleInterface`
  * — proving the `extends` bridge keeps existing plugin code working.
  */
 final class LegacyImplementer implements LegacyLifecycleInterface

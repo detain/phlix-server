@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Fingerprinting;
+namespace Phlix\Media\Markers\Fingerprinting;
 
 use Psr\Log\LoggerInterface;
 

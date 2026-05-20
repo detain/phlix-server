@@ -1,10 +1,10 @@
 # Network Configuration (Hub Admin Guide)
 
-Guide for hub administrators configuring network settings for Phlex server deployments.
+Guide for hub administrators configuring network settings for Phlix server deployments.
 
 ## Port Forwarding
 
-Phlex Media Server supports automatic port forwarding via UPnP-IGD and NAT-PMP to enable direct client connections without relay tunnel.
+Phlix Media Server supports automatic port forwarding via UPnP-IGD and NAT-PMP to enable direct client connections without relay tunnel.
 
 ### Enabling Automatic Port Forwarding
 
@@ -24,9 +24,9 @@ return [
 Or via environment variables:
 
 ```bash
-PHLEX_PORT_FORWARD_AUTO=1
-PHLEX_EXTERNAL_PORT=32400
-PHLEX_UPNP_ENABLED=1
+PHLIX_PORT_FORWARD_AUTO=1
+PHLIX_EXTERNAL_PORT=32400
+PHLIX_UPNP_ENABLED=1
 ```
 
 ### Checking Server Connectivity
@@ -50,8 +50,8 @@ These commands show:
 When automatic port forwarding fails or is unavailable, the relay tunnel provides connectivity:
 
 ```bash
-PHLEX_RELAY_ENABLED=1
-PHLEX_RELAY_HUB_URL=wss://hub.example.com/api/v1/servers/{id}/relay
+PHLIX_RELAY_ENABLED=1
+PHLIX_RELAY_HUB_URL=wss://hub.example.com/api/v1/servers/{id}/relay
 ```
 
 See `docs/dev/relay-protocol.md` for relay tunnel protocol details.
@@ -63,7 +63,7 @@ See `docs/dev/relay-protocol.md` for relay tunnel protocol details.
 | Destination           | Port | Protocol | Purpose |
 | --------------------- | ---- | -------- | ------- |
 | `stun.l.google.com`   | 19302 | UDP | STUN public IP discovery |
-| Your Phlex Hub URL    | 443  | TCP | Hub heartbeat and relay |
+| Your Phlix Hub URL    | 443  | TCP | Hub heartbeat and relay |
 
 ### Inbound
 
@@ -82,9 +82,9 @@ If your server is behind a firewall, ensure:
 ### UFW Example
 
 ```bash
-ufw allow 32400/tcp comment 'Phlex Media Server'
+ufw allow 32400/tcp comment 'Phlix Media Server'
 ufw allow out 19302/udp comment 'STUN'
-ufw allow out 443/tcp comment 'Phlex Hub'
+ufw allow out 443/tcp comment 'Phlix Hub'
 ```
 
 ### firewalld Example

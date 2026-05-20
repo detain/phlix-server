@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks;
+namespace Phlix\Webhooks;
 
 class DispatchResult
 {

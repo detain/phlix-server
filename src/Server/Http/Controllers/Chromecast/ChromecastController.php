@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Chromecast;
+namespace Phlix\Server\Http\Controllers\Chromecast;
 
-use Phlex\Chromecast\CastManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Chromecast\CastManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Chromecast HTTP API controller.

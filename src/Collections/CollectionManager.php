@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Collections;
+namespace Phlix\Collections;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Playlists\RuleNode;
-use Phlex\Playlists\SmartPlaylistEngine;
-use Phlex\Playlists\SmartPlaylistRepository;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Playlists\RuleNode;
+use Phlix\Playlists\SmartPlaylistEngine;
+use Phlix\Playlists\SmartPlaylistRepository;
 
 /**
  * Orchestrator for collection operations.

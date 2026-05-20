@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel;
+namespace Phlix\Media\Transcoding\Hwaccel;
 
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\AmfProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\NvencProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\QsvProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\SoftwareProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\V4L2Probe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\VaapiProbe;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbe\VideoToolboxProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\AmfProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\NvencProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\QsvProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\SoftwareProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\V4L2Probe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\VaapiProbe;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbe\VideoToolboxProbe;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 

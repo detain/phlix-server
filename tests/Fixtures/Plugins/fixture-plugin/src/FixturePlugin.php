@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Fixtures\Plugins\FixturePlugin;
+namespace Phlix\Tests\Fixtures\Plugins\FixturePlugin;
 
-use Phlex\Common\Events\Playback\PlaybackStarted;
-use Phlex\Plugins\Contract\LifecycleInterface;
+use Phlix\Common\Events\Playback\PlaybackStarted;
+use Phlix\Plugins\Contract\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 
 /**

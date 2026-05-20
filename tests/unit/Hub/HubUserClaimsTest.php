@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\HubUserClaims;
+use Phlix\Hub\HubUserClaims;
 
 class HubUserClaimsTest extends TestCase
 {
@@ -15,7 +15,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'user-123',
             serverId: 'server-456',
             subject: 'user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() - 3600,
             scope: ['media:read'],
         );
@@ -29,7 +29,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'user-123',
             serverId: 'server-456',
             subject: 'user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() + 3600,
             scope: ['media:read'],
         );
@@ -43,7 +43,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'user-123',
             serverId: 'server-456',
             subject: 'user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() + 3600,
             scope: ['media:read', 'media:write'],
         );
@@ -58,7 +58,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'user-123',
             serverId: 'server-456',
             subject: 'user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() + 3600,
             scope: ['media:read'],
         );
@@ -73,7 +73,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'user-123',
             serverId: 'server-456',
             subject: 'user-123',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: time() + 3600,
             scope: [],
         );
@@ -87,7 +87,7 @@ class HubUserClaimsTest extends TestCase
             userId: 'hub-user-abc',
             serverId: 'server-xyz',
             subject: 'hub-user-abc',
-            issuer: 'phlex-hub',
+            issuer: 'phlix-hub',
             expiresAt: 1700000000,
             scope: ['scope1'],
         );
@@ -95,7 +95,7 @@ class HubUserClaimsTest extends TestCase
         $this->assertEquals('hub-user-abc', $claims->userId);
         $this->assertEquals('server-xyz', $claims->serverId);
         $this->assertEquals('hub-user-abc', $claims->subject);
-        $this->assertEquals('phlex-hub', $claims->issuer);
+        $this->assertEquals('phlix-hub', $claims->issuer);
         $this->assertEquals(1700000000, $claims->expiresAt);
         $this->assertEquals(['scope1'], $claims->scope);
     }

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Iptv;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
-use Phlex\LiveTv\Tuners\Iptv\XmlTvOversizedException;
-use Phlex\LiveTv\Tuners\Iptv\XmlTvParser;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvOversizedException;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvParser;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -23,29 +23,29 @@ final class XmlTvParserMaxBytesTest extends TestCase
     {
         parent::setUpBeforeClass();
 
-        if (in_array('phlextest', stream_get_wrappers(), true)) {
-            stream_wrapper_unregister('phlextest');
+        if (in_array('phlixtest', stream_get_wrappers(), true)) {
+            stream_wrapper_unregister('phlixtest');
         }
-        stream_wrapper_register('phlextest', PhlexTestStreamWrapper::class);
+        stream_wrapper_register('phlixtest', PhlixTestStreamWrapper::class);
     }
 
     public static function tearDownAfterClass(): void
     {
-        if (in_array('phlextest', stream_get_wrappers(), true)) {
-            stream_wrapper_unregister('phlextest');
+        if (in_array('phlixtest', stream_get_wrappers(), true)) {
+            stream_wrapper_unregister('phlixtest');
         }
         parent::tearDownAfterClass();
     }
 
     protected function tearDown(): void
     {
-        PhlexTestStreamWrapper::$payload = '';
+        PhlixTestStreamWrapper::$payload = '';
         parent::tearDown();
     }
 
     public function test_payload_under_limit_parses_normally(): void
     {
-        PhlexTestStreamWrapper::$payload = <<<'XML'
+        PhlixTestStreamWrapper::$payload = <<<'XML'
 <?xml version="1.0" encoding="UTF-8"?>
 <tv>
   <programme start="20260101120000 +0000" stop="20260101130000 +0000" channel="cnn">
@@ -56,7 +56,7 @@ XML;
 
         $parser = new XmlTvParser(logger: null, maxBytes: 1024, maxRedirects: 0);
 
-        $programmes = $parser->parseUrl('phlextest://example.com/epg.xml');
+        $programmes = $parser->parseUrl('phlixtest://example.com/epg.xml');
 
         self::assertCount(1, $programmes);
         self::assertSame('cnn', $programmes[0]->channelId);
@@ -66,14 +66,14 @@ XML;
     public function test_payload_over_limit_throws(): void
     {
         // Cap the parser at 1 KiB; serve 2 KiB.
-        PhlexTestStreamWrapper::$payload = str_repeat('A', 2048);
+        PhlixTestStreamWrapper::$payload = str_repeat('A', 2048);
 
         $parser = new XmlTvParser(logger: null, maxBytes: 1024, maxRedirects: 0);
 
         $this->expectException(XmlTvOversizedException::class);
         $this->expectExceptionMessage('exceeds maximum allowed size');
 
-        $parser->parseUrl('phlextest://example.com/huge.xml');
+        $parser->parseUrl('phlixtest://example.com/huge.xml');
     }
 
     public function test_default_max_bytes_constant_is_64_mib(): void
@@ -85,13 +85,13 @@ XML;
 /**
  * Minimal in-memory stream wrapper used by the test above.
  *
- * fopen("phlextest://...") returns a handle that streams
+ * fopen("phlixtest://...") returns a handle that streams
  * {@see self::$payload}. fread/stream_get_contents read from it
  * sequentially.
  *
  * @internal Test fixture only.
  */
-final class PhlexTestStreamWrapper
+final class PhlixTestStreamWrapper
 {
     public static string $payload = '';
     private int $position = 0;

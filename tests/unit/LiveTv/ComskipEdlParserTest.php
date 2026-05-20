@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\ComskipEdlParser;
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\LiveTv\ComskipEdlParser;
+use Phlix\Media\Markers\ChapterMarker;
 
 /**
  * @since 0.12.0

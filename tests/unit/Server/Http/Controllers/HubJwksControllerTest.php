@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\KeyPair;
-use Phlex\Server\Http\Controllers\HubJwksController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\KeyPair;
+use Phlix\Server\Http\Controllers\HubJwksController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 class HubJwksControllerTest extends TestCase
 {

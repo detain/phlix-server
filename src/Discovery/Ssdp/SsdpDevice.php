@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery\Ssdp;
+namespace Phlix\Discovery\Ssdp;
 
 /**
  * Discovered SSDP device descriptor.

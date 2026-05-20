@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events\Library;
+namespace Phlix\Tests\Unit\Common\Events\Library;
 
-use Phlex\Shared\Events\Library\MediaItemUpdated;
+use Phlix\Shared\Events\Library\MediaItemUpdated;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Events\Library\MediaItemUpdated
+ * @covers \Phlix\Shared\Events\Library\MediaItemUpdated
  */
 final class MediaItemUpdatedTest extends TestCase
 {

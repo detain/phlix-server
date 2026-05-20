@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\ComskipRunner;
+use Phlix\LiveTv\ComskipRunner;
 
 /**
  * @since 0.12.0

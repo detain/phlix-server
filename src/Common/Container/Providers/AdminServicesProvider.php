@@ -2,23 +2,23 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Admin\BackupManager;
-use Phlex\Admin\DashboardService;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Server\Http\Controllers\Admin\BackupController;
-use Phlex\Server\Http\Controllers\Admin\DashboardController;
-use Phlex\Server\Http\Controllers\Stats\StatsController;
-use Phlex\Stats\StatsCollector;
+use Phlix\Admin\BackupManager;
+use Phlix\Admin\DashboardService;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Server\Http\Controllers\Admin\BackupController;
+use Phlix\Server\Http\Controllers\Admin\DashboardController;
+use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Stats\StatsCollector;
 
 use function DI\autowire;
 
 /**
  * Wires admin-tier services into the container.
  *
- * {@see \Phlex\Server\Http\Routes\AdminRoutes::register()} eagerly
+ * {@see \Phlix\Server\Http\Routes\AdminRoutes::register()} eagerly
  * resolves every controller it registers (including the Stats,
  * Dashboard and Backup controllers) at route-bind time, so each of
  * those entries — and their transitive dependencies — must be
@@ -29,9 +29,9 @@ use function DI\autowire;
  * is already registered by {@see CoreServicesProvider}, so plain
  * autowiring is sufficient.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since Wave 2 (post-O.7)
  */
 final class AdminServicesProvider implements ServiceProviderInterface

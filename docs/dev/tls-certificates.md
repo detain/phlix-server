@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phlex Media Server supports TLS certificates for secure HTTPS communication.
+Phlix Media Server supports TLS certificates for secure HTTPS communication.
 When a server is enrolled with a hub that has subdomain allocation (C.8),
 the server can obtain a TLS certificate for its public hostname.
 
@@ -12,7 +12,7 @@ the server can obtain a TLS certificate for its public hostname.
 
 When a server enrolls with a hub that supports subdomain allocation,
 the hub provisions a Let's Encrypt certificate for the server's subdomain
-(e.g., `abc12345.phlex.media`).
+(e.g., `abc12345.phlix.media`).
 
 **Flow:**
 1. Server enrolls with hub (C.3)
@@ -22,8 +22,8 @@ the hub provisions a Let's Encrypt certificate for the server's subdomain
 5. Server stores certificates locally
 
 **Certificate Storage:**
-- Certificate: `config/tls/{subdomain}.phlex.media/fullchain.pem`
-- Private key: `config/tls/{subdomain}.phlex.media/privkey.pem`
+- Certificate: `config/tls/{subdomain}.phlix.media/fullchain.pem`
+- Private key: `config/tls/{subdomain}.phlix.media/privkey.pem`
 
 **Renewal:**
 - Hub automatically renews certificates 60 days before expiry
@@ -53,8 +53,8 @@ return [
 
 | Variable         | Default | Description |
 | ---------------- | ------- | ----------- |
-| `PHLEX_TLS_ENABLED` | `1`   | Enable TLS for the server |
-| `PHLEX_DOMAIN`   | `phlex.media` | Base domain for subdomains |
+| `PHLIX_TLS_ENABLED` | `1`   | Enable TLS for the server |
+| `PHLIX_DOMAIN`   | `phlix.media` | Base domain for subdomains |
 
 ## Certificate Scripts
 
@@ -66,9 +66,9 @@ php scripts/claim-subdomain.php
 
 Output:
 ```
-Allocated subdomain: abc12345.phlex.media
-Certificate: /home/phlex/config/tls/abc12345.phlex.media.crt
-Key: /home/phlex/config/tls/abc12345.phlex.media.key
+Allocated subdomain: abc12345.phlix.media
+Certificate: /home/phlix/config/tls/abc12345.phlix.media.crt
+Key: /home/phlix/config/tls/abc12345.phlix.media.key
 ```
 
 ## Security Considerations

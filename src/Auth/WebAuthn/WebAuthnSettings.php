@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\WebAuthn;
+namespace Phlix\Auth\WebAuthn;
 
 final class WebAuthnSettings
 {
@@ -21,7 +21,7 @@ final class WebAuthnSettings
     {
         return new self(
             rpId: is_string($config['rp_id'] ?? null) ? $config['rp_id'] : 'localhost',
-            rpName: is_string($config['rp_name'] ?? null) ? $config['rp_name'] : 'Phlex Media Server',
+            rpName: is_string($config['rp_name'] ?? null) ? $config['rp_name'] : 'Phlix Media Server',
             rpOrigin: is_string($config['rp_origin'] ?? null) ? $config['rp_origin'] : 'https://localhost',
             attestationRequired: (bool) ($config['attestation_required'] ?? false),
         );

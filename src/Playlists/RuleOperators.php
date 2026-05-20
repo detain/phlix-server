@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
 /**
  * Static operator methods for evaluating rule comparisons.

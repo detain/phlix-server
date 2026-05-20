@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Library\MusicLibraryManager;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Session\SessionManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Library\MusicLibraryManager;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Session\SessionManager;
 
 /**
  * MusicController handles music library API endpoints.
@@ -16,7 +16,7 @@ use Phlex\Session\SessionManager;
  * Provides REST endpoints for browsing and playing music including
  * artists, albums, tracks, and now-playing information.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description HTTP API controller for music library browsing and playback
  * @see MusicLibraryManager For music library operations

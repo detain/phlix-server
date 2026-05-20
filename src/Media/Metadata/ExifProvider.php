@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\ItemRepository;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -14,7 +14,7 @@ use Psr\Log\LoggerInterface;
  * photo scanning and stored in the media_items metadata_json field.
  * It does not make external API calls.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Local EXIF metadata provider for photos
  * @see MetadataProviderInterface For the provider contract

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Chromecast;
+namespace Phlix\Tests\Unit\Chromecast;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Chromecast\CastDevice;
+use Phlix\Chromecast\CastDevice;
 
 class CastDeviceTest extends TestCase
 {

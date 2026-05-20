@@ -1,11 +1,11 @@
-# Default values for phlex-hub.
+# Default values for phlix-hub.
 
-# Number of phlex-hub pods to run (stateless, scale horizontally behind a shared DB)
+# Number of phlix-hub pods to run (stateless, scale horizontally behind a shared DB)
 replicaCount: 2
 
 image:
-  # Container image repository for phlex-hub
-  repository: ghcr.io/detain/phlex-hub
+  # Container image repository for phlix-hub
+  repository: ghcr.io/detain/phlix-hub
   pullPolicy: IfNotPresent
   # Image tag — defaults to .Chart.AppVersion if empty
   tag: "latest"
@@ -34,9 +34,9 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
   hosts:
-    - host: hub.phlex.local
+    - host: hub.phlix.local
       paths:
-        # Relay endpoint: phlex-server connects here to register & receive claims
+        # Relay endpoint: phlix-server connects here to register & receive claims
         - path: /relay
           pathType: Prefix
         # Server-claims API: hub UI / API consumers
@@ -45,9 +45,9 @@ ingress:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: phlex-hub-tls
+    - secretName: phlix-hub-tls
       hosts:
-        - hub.phlex.local
+        - hub.phlix.local
 
 resources:
   limits:
@@ -70,8 +70,8 @@ mysql:
   # Disabled by default — hub usually points at a shared / external MySQL
   enabled: false
   auth:
-    database: phlex_hub
-    username: phlex_hub
+    database: phlix_hub
+    username: phlix_hub
   primary:
     persistence:
       size: 10Gi
@@ -80,8 +80,8 @@ config:
   # MySQL host for hub data (server claims, enrollment tokens, audit log)
   database_host: ""
   database_port: 3306
-  database_name: phlex_hub
-  database_user: phlex_hub
+  database_name: phlix_hub
+  database_user: phlix_hub
   # Database password — required
   database_password: ""
   # JWT signing secret used to mint server enrollment tokens — required

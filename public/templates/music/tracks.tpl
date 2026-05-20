@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="title"}Tracks - Phlex Music{/block}
+{block name="title"}Tracks - Phlix Music{/block}
 
 {block name="main"}
 <div class="music-page tracks-page">

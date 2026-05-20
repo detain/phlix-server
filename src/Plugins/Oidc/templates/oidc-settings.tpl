@@ -1,7 +1,7 @@
 {**
  * OIDC Provider Settings Template
  *
- * @package Phlex\Plugins\Oidc\templates
+ * @package Phlix\Plugins\Oidc\templates
  * @since 0.11.0
  *}
 <form id="oidc-settings-form" class="auth-provider-settings">
@@ -103,7 +103,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + window.PhlexApp?.getToken(),
+                    'Authorization': 'Bearer ' + window.PhlixApp?.getToken(),
                 },
                 body: JSON.stringify(data),
             });
@@ -156,7 +156,7 @@
         try {
             const response = await fetch('/api/v1/admin/auth-providers/oidc/config', {
                 headers: {
-                    'Authorization': 'Bearer ' + window.PhlexApp?.getToken(),
+                    'Authorization': 'Bearer ' + window.PhlixApp?.getToken(),
                 },
             });
 

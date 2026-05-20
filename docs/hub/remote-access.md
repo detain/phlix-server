@@ -1,6 +1,6 @@
 # Remote Access Without Relay Tunnel
 
-Phlex Media Server supports direct internet access to your media library without requiring the relay tunnel. This guide explains how to set up and verify direct connectivity.
+Phlix Media Server supports direct internet access to your media library without requiring the relay tunnel. This guide explains how to set up and verify direct connectivity.
 
 ## Overview
 
@@ -14,7 +14,7 @@ When your server is reachable from the internet directly (via port forwarding on
 
 ### UPnP-IGD (Universal Plug and Play - Internet Gateway Device)
 
-UPnP-IGD allows devices on your LAN to automatically configure port mappings on your router. Phlex uses this to:
+UPnP-IGD allows devices on your LAN to automatically configure port mappings on your router. Phlix uses this to:
 
 1. **Discovery** — Sends an SSDP M-SEARCH multicast to `239.255.255.250:1900` to find UPnP-capable routers.
 2. **External IP detection** — Queries the router's `GetExternalIPAddress` SOAP action.
@@ -22,7 +22,7 @@ UPnP-IGD allows devices on your LAN to automatically configure port mappings on 
 
 ### NAT-PMP (NAT Port Mapping Protocol)
 
-For Apple AirPort routers and other NAT-PMP-compatible devices, Phlex falls back to RFC 6886 NAT-PMP:
+For Apple AirPort routers and other NAT-PMP-compatible devices, Phlix falls back to RFC 6886 NAT-PMP:
 
 1. Sends a public address request to the router's LAN IP on UDP port 5350.
 2. Uses the response to determine the external IP.
@@ -104,7 +104,7 @@ You can also use an external port checker like [you-get-signal.com](https://www.
 When direct access is available, your server includes hostname candidates in heartbeats to the hub:
 
 - `http://<lan-ip>:32400` — Local network access
-- `http://phlex.local:32400` — mDNS/local hostname
+- `http://phlix.local:32400` — mDNS/local hostname
 - `http://<public-ip>:32400` — Direct internet access (when port is open)
 
 The hub uses these candidates to determine the best connection method for clients.

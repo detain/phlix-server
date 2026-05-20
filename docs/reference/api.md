@@ -1,4 +1,4 @@
-# Phlex Media Server API Reference
+# Phlix Media Server API Reference
 
 ## Marker Endpoints
 
@@ -206,9 +206,9 @@ Returns the root OPDS catalog feed.
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:opds="http://opds-spec.org/2010/catalog">
-  <title>Phlex Library</title>
+  <title>Phlix Library</title>
   <updated>2024-01-15T10:30:00Z</updated>
-  <id>urn:phlex:library:root</id>
+  <id>urn:phlix:library:root</id>
   <link rel="self" href="http://localhost:8080/opds/v1.2" type="application/atom+xml;profile=opds-catalog"/>
   <link rel="alternate" href="http://localhost:8080/opds/v1.2/libraries" type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
 </feed>

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\Dto;
+namespace Phlix\Auth\Dto;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Typed value object representing a hydrated row from `watch_history`.
@@ -13,7 +13,7 @@ use Phlex\Common\Util\RowMap;
  * (`media_name`, `media_type`, `metadata_json`) so callers can render
  * "continue watching" / history lists without re-querying.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Strongly-typed watch-history row from DB hydration.
  * @since Wave 5b-J

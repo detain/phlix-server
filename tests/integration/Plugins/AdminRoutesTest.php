@@ -2,32 +2,32 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Plugins;
+namespace Phlix\Tests\Integration\Plugins;
 
 use DateTimeImmutable;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Ldap\Controller\LdapAdminController;
-use Phlex\Plugins\Ldap\Plugin as LdapPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\Oidc\Controller\OidcAdminController;
-use Phlex\Plugins\Oidc\Plugin;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Admin\BackupManager;
-use Phlex\Admin\DashboardService;
-use Phlex\Server\Http\Controllers\Admin\BackupController;
-use Phlex\Server\Http\Controllers\Admin\DashboardController;
-use Phlex\Server\Http\Controllers\AuthProviderController;
-use Phlex\Server\Http\Controllers\PluginAdminController;
-use Phlex\Server\Http\Controllers\Stats\StatsController;
-use Phlex\Server\Http\Middleware\AdminMiddleware;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Router;
-use Phlex\Server\Http\Routes\AdminRoutes;
-use Phlex\Stats\StatsCollector;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Ldap\Controller\LdapAdminController;
+use Phlix\Plugins\Ldap\Plugin as LdapPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\Oidc\Controller\OidcAdminController;
+use Phlix\Plugins\Oidc\Plugin;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Admin\BackupManager;
+use Phlix\Admin\DashboardService;
+use Phlix\Server\Http\Controllers\Admin\BackupController;
+use Phlix\Server\Http\Controllers\Admin\DashboardController;
+use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Controllers\PluginAdminController;
+use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Router;
+use Phlix\Server\Http\Routes\AdminRoutes;
+use Phlix\Stats\StatsCollector;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
@@ -40,9 +40,9 @@ use Psr\Container\ContainerInterface;
  * synthetic {@see Request} objects through the router and asserts both
  * the HTTP response and the side-effects on the collaborators.
  *
- * @covers \Phlex\Server\Http\Routes\AdminRoutes
- * @covers \Phlex\Server\Http\Controllers\PluginAdminController
- * @covers \Phlex\Server\Http\Middleware\AdminMiddleware
+ * @covers \Phlix\Server\Http\Routes\AdminRoutes
+ * @covers \Phlix\Server\Http\Controllers\PluginAdminController
+ * @covers \Phlix\Server\Http\Middleware\AdminMiddleware
  */
 final class AdminRoutesTest extends TestCase
 {
@@ -88,12 +88,12 @@ final class AdminRoutesTest extends TestCase
                 private readonly DashboardController $dashboardController,
                 private readonly BackupController $backupController,
             ) {
-                $tempDir = sys_get_temp_dir() . '/phlex_oidc_test_' . uniqid('', true);
+                $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
                 Plugin::setPluginDirectory($tempDir);
                 $this->oidcPlugin = new Plugin();
 
-                $ldapTempDir = sys_get_temp_dir() . '/phlex_ldap_test_' . uniqid('', true);
+                $ldapTempDir = sys_get_temp_dir() . '/phlix_ldap_test_' . uniqid('', true);
                 mkdir($ldapTempDir, 0775, true);
                 LdapPlugin::setPluginDirectory($ldapTempDir);
                 $this->ldapPlugin = new LdapPlugin();
@@ -163,7 +163,7 @@ final class AdminRoutesTest extends TestCase
     public function test_admin_request_lists_plugins(): void
     {
         $this->users->register('admin-1', true);
-        $this->loader->installed[] = $this->fixturePlugin('phlex-plugin-demo', enabled: true);
+        $this->loader->installed[] = $this->fixturePlugin('phlix-plugin-demo', enabled: true);
 
         $response = $this->router->dispatch($this->request('GET', '/api/v1/admin/plugins', 'admin-1'));
 
@@ -171,7 +171,7 @@ final class AdminRoutesTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertCount(1, $body['plugins']);
-        $this->assertSame('phlex-plugin-demo', $body['plugins'][0]['name']);
+        $this->assertSame('phlix-plugin-demo', $body['plugins'][0]['name']);
     }
 
     public function test_install_then_enable_then_disable_then_uninstall_via_http(): void
@@ -180,12 +180,12 @@ final class AdminRoutesTest extends TestCase
 
         // Stage a fake fixture manifest on disk so we can install via
         // file:// without spinning up an HTTP server.
-        $fixtureDir = sys_get_temp_dir() . '/phlex_admin_routes_' . uniqid('', true);
+        $fixtureDir = sys_get_temp_dir() . '/phlix_admin_routes_' . uniqid('', true);
         mkdir($fixtureDir, 0775, true);
         $manifest = [
-            'name' => 'phlex-plugin-demo',
+            'name' => 'phlix-plugin-demo',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ];
@@ -214,31 +214,31 @@ final class AdminRoutesTest extends TestCase
         // 2. Enable
         $response = $this->router->dispatch($this->request(
             'POST',
-            '/api/v1/admin/plugins/phlex-plugin-demo/enable',
+            '/api/v1/admin/plugins/phlix-plugin-demo/enable',
             'admin-1',
         ));
         $this->assertSame(200, $response->statusCode);
-        $this->assertSame(['phlex-plugin-demo'], $this->loader->enableCalls);
+        $this->assertSame(['phlix-plugin-demo'], $this->loader->enableCalls);
         $this->assertSame(1, $this->audit->pluginActions['enable.ui'] ?? 0);
 
         // 3. Disable
         $response = $this->router->dispatch($this->request(
             'POST',
-            '/api/v1/admin/plugins/phlex-plugin-demo/disable',
+            '/api/v1/admin/plugins/phlix-plugin-demo/disable',
             'admin-1',
         ));
         $this->assertSame(200, $response->statusCode);
-        $this->assertSame(['phlex-plugin-demo'], $this->loader->disableCalls);
+        $this->assertSame(['phlix-plugin-demo'], $this->loader->disableCalls);
         $this->assertSame(1, $this->audit->pluginActions['disable.ui'] ?? 0);
 
         // 4. Uninstall
         $response = $this->router->dispatch($this->request(
             'DELETE',
-            '/api/v1/admin/plugins/phlex-plugin-demo',
+            '/api/v1/admin/plugins/phlix-plugin-demo',
             'admin-1',
         ));
         $this->assertSame(204, $response->statusCode);
-        $this->assertSame(['phlex-plugin-demo'], $this->loader->uninstallCalls);
+        $this->assertSame(['phlix-plugin-demo'], $this->loader->uninstallCalls);
         $this->assertSame(1, $this->audit->pluginActions['uninstall.ui'] ?? 0);
 
         // Cleanup fixture dir.
@@ -301,7 +301,7 @@ final class AdminRoutesTest extends TestCase
             manifest: Manifest::fromArray([
                 'name' => $name,
                 'version' => '1.0.0',
-                'phlex_min_server_version' => '0.10.0',
+                'phlix_min_server_version' => '0.10.0',
                 'type' => 'metadata-provider',
                 'entry' => 'Demo\\Plugin',
             ]),

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Trakt;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Trakt;
 
-use Phlex\Plugins\Scrobbler\Trakt\TraktPlugin;
-use Phlex\Plugins\Scrobbler\Trakt\TraktSettings;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Plugins\Scrobbler\Trakt\TraktPlugin;
+use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\NullLogger;
 

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Dlna;
+namespace Phlix\Server\Http\Controllers\Dlna;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * CdsControlController handles CDS SOAP control requests at /cds/control.
@@ -18,15 +18,15 @@ use Phlex\Server\Http\Response;
  */
 class CdsControlController
 {
-    /** @var \Phlex\Dlna\CdsServer The CDS server instance */
-    private \Phlex\Dlna\CdsServer $cdsServer;
+    /** @var \Phlix\Dlna\CdsServer The CDS server instance */
+    private \Phlix\Dlna\CdsServer $cdsServer;
 
     /**
-     * @param \Phlex\Dlna\CdsServer $cdsServer The CDS server instance
+     * @param \Phlix\Dlna\CdsServer $cdsServer The CDS server instance
      *
      * @since 0.12.0
      */
-    public function __construct(\Phlex\Dlna\CdsServer $cdsServer)
+    public function __construct(\Phlix\Dlna\CdsServer $cdsServer)
     {
         $this->cdsServer = $cdsServer;
     }

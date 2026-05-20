@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Dto;
+namespace Phlix\Tests\Unit\LiveTv\Dto;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Dto\RowAccess;
+use Phlix\LiveTv\Dto\RowAccess;
 
 /**
- * @covers \Phlex\LiveTv\Dto\RowAccess
+ * @covers \Phlix\LiveTv\Dto\RowAccess
  */
 class RowAccessTest extends TestCase
 {

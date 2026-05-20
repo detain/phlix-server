@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 /**
  * Marker interface for Trakt scrobbler plugin entry classes.
@@ -11,7 +11,7 @@ namespace Phlex\Plugins\Scrobbler\Trakt;
  * Any class implementing this interface is recognized as a Trakt plugin
  * by the plugin loader.
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 interface TraktPluginInterface

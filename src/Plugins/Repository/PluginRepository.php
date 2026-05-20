@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Repository;
+namespace Phlix\Plugins\Repository;
 
 use DateTimeImmutable;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
 use Workerman\MySQL\Connection;
 
 /**
@@ -18,7 +18,7 @@ use Workerman\MySQL\Connection;
  * SQL string. The repository hands back fully-hydrated
  * {@see InstalledPlugin} DTOs so the loader doesn't deal in raw rows.
  *
- * @package Phlex\Plugins\Repository
+ * @package Phlix\Plugins\Repository
  * @since 0.10.0
  */
 class PluginRepository
@@ -79,7 +79,7 @@ class PluginRepository
     /**
      * Look up an installed plugin by manifest name.
      *
-     * @param string $name Manifest `name` field, e.g. `phlex-plugin-lastfm`.
+     * @param string $name Manifest `name` field, e.g. `phlix-plugin-lastfm`.
      *
      * @return InstalledPlugin Fully hydrated DTO.
      *
@@ -104,7 +104,7 @@ class PluginRepository
             throw new PluginNotFoundException(sprintf('No installed plugin named "%s".', $name));
         }
 
-        return $this->hydrate(\Phlex\Common\Util\RowMap::fromMixed($row));
+        return $this->hydrate(\Phlix\Common\Util\RowMap::fromMixed($row));
     }
 
     /**
@@ -207,7 +207,7 @@ class PluginRepository
     private function mapToPlugins(mixed $rows): array
     {
         $out = [];
-        foreach (\Phlex\Common\Util\RowMap::listFromMixed($rows) as $row) {
+        foreach (\Phlix\Common\Util\RowMap::listFromMixed($rows) as $row) {
             $out[] = $this->hydrate($row);
         }
         return $out;

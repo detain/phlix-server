@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Discovery\Ssdp;
+namespace Phlix\Tests\Unit\Discovery\Ssdp;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\Ssdp\SsdpDevice;
-use Phlex\Discovery\Ssdp\SsdpDiscovery;
-use Phlex\Discovery\Ssdp\SsdpSocket;
+use Phlix\Discovery\Ssdp\SsdpDevice;
+use Phlix\Discovery\Ssdp\SsdpDiscovery;
+use Phlix\Discovery\Ssdp\SsdpSocket;
 
 class SsdpDiscoveryTest extends TestCase
 {
@@ -68,7 +68,7 @@ class SsdpDiscoveryTest extends TestCase
             "NT: urn:schemas-upnp-org:device:MediaServer:1\r\n" .
             "USN: uuid:12345678-1234-1234-1234-123456789012::urn:schemas-upnp-org:device:MediaServer:1\r\n" .
             "CACHE-CONTROL: max-age=1800\r\n" .
-            "SERVER: Linux/2.6 UPnP/1.0 Phlex/1.0\r\n" .
+            "SERVER: Linux/2.6 UPnP/1.0 Phlix/1.0\r\n" .
             "\r\n"
         ]);
         $socket->method('parseResponse')->willReturn([
@@ -76,7 +76,7 @@ class SsdpDiscoveryTest extends TestCase
             'NT' => 'urn:schemas-upnp-org:device:MediaServer:1',
             'USN' => 'uuid:12345678-1234-1234-1234-123456789012::urn:schemas-upnp-org:device:MediaServer:1',
             'CACHE-CONTROL' => 'max-age=1800',
-            'SERVER' => 'Linux/2.6 UPnP/1.0 Phlex/1.0',
+            'SERVER' => 'Linux/2.6 UPnP/1.0 Phlix/1.0',
         ]);
 
         $discovery = new SsdpDiscovery($socket, null);
@@ -89,7 +89,7 @@ class SsdpDiscoveryTest extends TestCase
         $this->assertEquals('urn:schemas-upnp-org:device:MediaServer:1', $device->nt);
         $this->assertEquals('uuid:12345678-1234-1234-1234-123456789012::urn:schemas-upnp-org:device:MediaServer:1', $device->usn);
         $this->assertEquals(1800, $device->cacheTimeout);
-        $this->assertEquals('Linux/2.6 UPnP/1.0 Phlex/1.0', $device->server);
+        $this->assertEquals('Linux/2.6 UPnP/1.0 Phlix/1.0', $device->server);
     }
 
     public function testDeviceGetDeviceId(): void
@@ -139,11 +139,11 @@ class SsdpDiscoveryTest extends TestCase
             ->with(
                 'urn:schemas-upnp-org:device:MediaServer:1',
                 'http://192.168.1.100:8200',
-                'uuid:phlex-server-test-server-id::urn:schemas-upnp-org:device:MediaServer:1'
+                'uuid:phlix-server-test-server-id::urn:schemas-upnp-org:device:MediaServer:1'
             );
 
         $discovery = new SsdpDiscovery($socket, null);
-        $discovery->announceServer('test-server-id', 'Phlex Server', 'http://192.168.1.100', 8200);
+        $discovery->announceServer('test-server-id', 'Phlix Server', 'http://192.168.1.100', 8200);
     }
 
     public function testDiscoverSkipsInvalidResponses(): void

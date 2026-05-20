@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Immutable DTO containing the extracted claims from a hub-issued JWT.
@@ -11,7 +11,7 @@ namespace Phlex\Hub;
  * hub JWT and represent the user identity and authorization context
  * granted by the hub.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class HubUserClaims
@@ -22,7 +22,7 @@ final class HubUserClaims
      * @param string $userId    The user's ID on the hub (the hub_user_id claim).
      * @param string $serverId The server ID this token is scoped to.
      * @param string $subject  The JWT subject (same as userId for user tokens).
-     * @param string $issuer   The JWT issuer (must be 'phlex-hub').
+     * @param string $issuer   The JWT issuer (must be 'phlix-hub').
      * @param int    $expiresAt Unix timestamp when this token expires.
      * @param array<string> $scope     Array of scope strings granted by the hub.
      */

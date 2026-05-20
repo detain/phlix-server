@@ -1,16 +1,16 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http;
+namespace Phlix\Tests\Unit\Server\Http;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Http\Router;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Http\Router;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Unit tests for Router class.
  *
- * @covers \Phlex\Server\Http\Router
+ * @covers \Phlix\Server\Http\Router
  */
 class RouterTest extends TestCase
 {
@@ -26,8 +26,8 @@ class RouterTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Router::get
-     * @covers \Phlex\Server\Http\Router::getRoutes
+     * @covers \Phlix\Server\Http\Router::get
+     * @covers \Phlix\Server\Http\Router::getRoutes
      */
     public function testCanRegisterGetRoute(): void
     {
@@ -41,9 +41,9 @@ class RouterTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Router::post
-     * @covers \Phlex\Server\Http\Router::put
-     * @covers \Phlex\Server\Http\Router::delete
+     * @covers \Phlix\Server\Http\Router::post
+     * @covers \Phlix\Server\Http\Router::put
+     * @covers \Phlix\Server\Http\Router::delete
      */
     public function testCanRegisterMultipleHttpMethods(): void
     {
@@ -59,8 +59,8 @@ class RouterTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Router::get
-     * @covers \Phlex\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::get
+     * @covers \Phlix\Server\Http\Router::dispatch
      */
     public function testCanUsePathParameters(): void
     {
@@ -81,7 +81,7 @@ class RouterTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Router::dispatch
+     * @covers \Phlix\Server\Http\Router::dispatch
      */
     public function testReturns404ForUnknownRoute(): void
     {

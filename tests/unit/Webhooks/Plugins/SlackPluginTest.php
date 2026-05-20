@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Webhooks\Plugins;
+namespace Phlix\Tests\Unit\Webhooks\Plugins;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
-use Phlex\Webhooks\Plugins\SlackPlugin;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Webhooks\Plugins\SlackPlugin;
+use Phlix\Webhooks\WebhookEvent;
 
 class SlackPluginTest extends TestCase
 {

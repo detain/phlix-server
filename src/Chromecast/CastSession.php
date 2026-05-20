@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Session\PlaybackController;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Session\PlaybackController;
 use Workerman\Timer;
 
 /**
@@ -53,7 +53,7 @@ class CastSession
     /** @var CastApiClient HTTP client for device communication */
     private CastApiClient $client;
 
-    /** @var PlaybackController Phlex playback controller */
+    /** @var PlaybackController Phlix playback controller */
     private PlaybackController $playbackController;
 
     /** @var StructuredLogger Logger instance */
@@ -75,7 +75,7 @@ class CastSession
      * @param string $sessionId Unique session identifier
      * @param CastDevice $device Chromecast device
      * @param CastApiClient $client HTTP client for Cast protocol
-     * @param PlaybackController $playbackController Phlex playback controller
+     * @param PlaybackController $playbackController Phlix playback controller
      * @param StructuredLogger|null $logger Optional logger instance
      *
      * @since 0.12.0
@@ -101,7 +101,7 @@ class CastSession
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_cast_session_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_cast_session_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

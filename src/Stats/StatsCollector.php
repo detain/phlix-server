@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Stats;
+namespace Phlix\Stats;
 
 use DateTimeInterface;
 use Workerman\MySQL\Connection;
@@ -13,9 +13,9 @@ use Workerman\MySQL\Connection;
  * This service records events into the stats_* tables and provides aggregation
  * queries for the admin dashboard (top users, top media, playback time series).
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
- * @description Collects and aggregates statistics for the Phlex Media Server.
+ * @description Collects and aggregates statistics for the Phlix Media Server.
  */
 class StatsCollector
 {

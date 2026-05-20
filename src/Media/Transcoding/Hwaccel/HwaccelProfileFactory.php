@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel;
+namespace Phlix\Media\Transcoding\Hwaccel;
 
-use Phlex\Media\Transcoding\Hwaccel\Profiles\AmfProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\QsvProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\V4L2Profile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\VideoToolboxProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\AmfProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\QsvProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\V4L2Profile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\VideoToolboxProfile;
 
 /**
  * Factory for creating hardware encoder profile instances.

@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * AV Transport Service for DLNA/UPnP Media Renderers.
@@ -146,7 +146,7 @@ class AvTransport
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_avt_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_avt_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

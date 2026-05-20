@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Dvbt;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Dvbt;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDeviceScanner;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDeviceScanner;
 
 class DvbtDeviceScannerTest extends TestCase
 {

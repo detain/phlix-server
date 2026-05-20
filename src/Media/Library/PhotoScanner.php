@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\LoggerInterface;
 use SplFileInfo;
@@ -18,7 +18,7 @@ use Workerman\MySQL\Connection;
  * extracting EXIF metadata including camera info, lens settings, GPS coordinates,
  * and image dimensions. Uses PHP's built-in exif_read_data() for JPEG files.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Filesystem scanner for discovering and indexing photo files with EXIF extraction
  * @see MediaScanner For base scanning functionality

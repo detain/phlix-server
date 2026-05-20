@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 /**
  * Manages active WebSocket connections in a thread-safe manner.
@@ -10,7 +10,7 @@ namespace Phlex\Server\WebSocket;
  * This class implements a singleton pattern to provide global
  * access to the connection pool from anywhere in the application.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Singleton connection pool for managing active WebSocket connections.
  * @see Connection For the connection wrapper class

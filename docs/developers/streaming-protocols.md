@@ -1,6 +1,6 @@
 # Streaming Protocols
 
-Phlex Media Server supports two adaptive streaming protocols: **HLS** (HTTP Live Streaming) and **DASH** (Dynamic Adaptive Streaming over HTTP). Both protocols enable adaptive bitrate streaming, allowing clients to select appropriate quality levels based on network conditions and device capabilities.
+Phlix Media Server supports two adaptive streaming protocols: **HLS** (HTTP Live Streaming) and **DASH** (Dynamic Adaptive Streaming over HTTP). Both protocols enable adaptive bitrate streaming, allowing clients to select appropriate quality levels based on network conditions and device capabilities.
 
 ## Overview
 
@@ -137,7 +137,7 @@ Both streamers share the same segment storage (transcode pipeline writes segment
 ### Getting the Correct Manifest URL
 
 ```php
-use Phlex\Media\Streaming\StreamManager;
+use Phlix\Media\Streaming\StreamManager;
 
 // $protocol is 'hls' or 'dash'
 $manifestUrl = $streamManager->getManifestUrl($jobId, $protocol);

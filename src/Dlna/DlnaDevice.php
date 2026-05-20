@@ -1,6 +1,6 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
 /**
  * Represents a DLNA/UPnP device on the network.
@@ -92,9 +92,9 @@ class DlnaDevice
         $this->friendlyName = $friendlyName;
         $this->baseUrl = $baseUrl;
         $this->port = $port;
-        $this->manufacturer = 'Phlex';
-        $this->modelDescription = 'Phlex Media Server';
-        $this->modelName = 'Phlex';
+        $this->manufacturer = 'Phlix';
+        $this->modelDescription = 'Phlix Media Server';
+        $this->modelName = 'Phlix';
         $this->modelNumber = '1.0';
         $this->serialNumber = $this->generateSerial();
         $this->presentationUrl = "http://{$baseUrl}:{$port}/";

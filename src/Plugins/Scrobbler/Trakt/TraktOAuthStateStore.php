@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 /**
  * Server-side store for the Trakt OAuth `state` (CSRF) value and the

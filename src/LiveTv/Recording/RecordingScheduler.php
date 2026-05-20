@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Recording;
+namespace Phlix\LiveTv\Recording;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\Dto\RowAccess;
-use Phlex\LiveTv\Dto\RowQuery;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\LiveTv\Recorder;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Dto\RowAccess;
+use Phlix\LiveTv\Dto\RowQuery;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\LiveTv\Recorder;
 use Workerman\MySQL\Connection;
 
 /**

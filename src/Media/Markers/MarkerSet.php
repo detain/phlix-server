@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers;
+namespace Phlix\Media\Markers;
 
 /**
  * Aggregate marker set DTO containing all markers for a media item.

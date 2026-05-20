@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\BookScanner;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\BookScanner;
+use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for BookScanner EPUB/PDF/CBZ harvesting functionality.
  *
- * @covers \Phlex\Media\Library\BookScanner
+ * @covers \Phlix\Media\Library\BookScanner
  * @since 0.17.0
  */
 class BookScannerTest extends TestCase
@@ -33,7 +33,7 @@ class BookScannerTest extends TestCase
      */
     public function testHarvestEpubParsesContentOpf(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $epubPath = $tempDir . '/test.epub';
@@ -62,7 +62,7 @@ class BookScannerTest extends TestCase
         $this->assertEquals([], $result);
 
         // Test with invalid file
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $invalidEpub = $tempDir . '/invalid.epub';
@@ -81,7 +81,7 @@ class BookScannerTest extends TestCase
      */
     public function testHarvestPdfExtractsMetadata(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $pdfPath = $tempDir . '/test.pdf';
@@ -105,7 +105,7 @@ class BookScannerTest extends TestCase
      */
     public function testHarvestCbzExtractsPagesAndCover(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $cbzPath = $tempDir . '/test.cbz';
@@ -132,7 +132,7 @@ class BookScannerTest extends TestCase
      */
     public function testScanBookLibraryYieldsItems(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create some book files

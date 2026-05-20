@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
 use DOMDocument;
 use DOMElement;
 use DOMNode;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * OpdsFeedBuilder builds OPDS 1.2 compliant XML feeds.
@@ -16,7 +16,7 @@ use Phlex\Media\Library\ItemRepository;
  * and distributing electronic publications. This class generates compliant
  * Atom/OPDS feeds for third-party OPDS clients (Uboiquity, Komga, Kore, etc.).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Builds OPDS 1.2 compliant catalog feeds
  * @since 0.17.0
@@ -75,13 +75,13 @@ class OpdsFeedBuilder
         $doc->appendChild($feed);
 
         // Title
-        $this->appendElement($feed, 'title', 'Phlex Library');
+        $this->appendElement($feed, 'title', 'Phlix Library');
 
         // Updated
         $this->appendElement($feed, 'updated', gmdate('Y-m-d\TH:i:s\Z'));
 
         // ID
-        $this->appendElement($feed, 'id', 'urn:phlex:library:root');
+        $this->appendElement($feed, 'id', 'urn:phlix:library:root');
 
         // Root link
         $selfLink = $this->createLinkElement(
@@ -124,13 +124,13 @@ class OpdsFeedBuilder
         $doc->appendChild($feed);
 
         // Title
-        $this->appendElement($feed, 'title', 'Phlex Libraries');
+        $this->appendElement($feed, 'title', 'Phlix Libraries');
 
         // Updated
         $this->appendElement($feed, 'updated', gmdate('Y-m-d\TH:i:s\Z'));
 
         // ID
-        $this->appendElement($feed, 'id', 'urn:phlex:library:libraries');
+        $this->appendElement($feed, 'id', 'urn:phlix:library:libraries');
 
         // Self link
         $selfLink = $this->createLinkElement(
@@ -170,7 +170,7 @@ class OpdsFeedBuilder
             $feed->appendChild($entry);
 
             $this->appendElement($entry, 'title', $libraryName);
-            $this->appendElement($entry, 'id', 'urn:phlex:library:' . $libraryId);
+            $this->appendElement($entry, 'id', 'urn:phlix:library:' . $libraryId);
             $this->appendElement($entry, 'updated', gmdate('Y-m-d\TH:i:s\Z'));
 
             // Content summary
@@ -233,7 +233,7 @@ class OpdsFeedBuilder
         $this->appendElement($feed, 'updated', gmdate('Y-m-d\TH:i:s\Z'));
 
         // ID
-        $this->appendElement($feed, 'id', 'urn:phlex:library:' . $libraryId . ':books');
+        $this->appendElement($feed, 'id', 'urn:phlix:library:' . $libraryId . ':books');
 
         // Self link
         $selfLink = $this->createLinkElement(
@@ -326,7 +326,7 @@ class OpdsFeedBuilder
         $isbnValue = is_string($metadata['isbn'] ?? null) ? $metadata['isbn'] : null;
         $identifier = $isbnValue !== null
             ? $isbnValue
-            : ('urn:phlex:book:' . $bookId);
+            : ('urn:phlix:book:' . $bookId);
         $idEl = $doc->createElementNS(self::OPDS_NS, 'id');
         $idEl->appendChild($doc->createTextNode($identifier));
         $entry->appendChild($idEl);

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Auth\AuthProviderNotFoundException;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Auth\AuthProviderNotFoundException;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Admin API controller for managing external auth providers.
@@ -15,8 +15,8 @@ use Phlex\Server\Http\Response;
  * Provides endpoints for listing registered providers, enabling/disabling them,
  * and retrieving their configuration JSON schema.
  *
- * @package Phlex\Server\Http\Controllers
- * @author Phlex Team
+ * @package Phlix\Server\Http\Controllers
+ * @author Phlix Team
  * @version 1.0.0
  * @description Admin API for managing external authentication providers.
  *

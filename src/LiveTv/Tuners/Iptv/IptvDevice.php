@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Iptv;
+namespace Phlix\LiveTv\Tuners\Iptv;
 
 /**
  * Immutable descriptor for an IPTV source.

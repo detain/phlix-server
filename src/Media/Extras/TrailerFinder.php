@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Extras;
+namespace Phlix\Media\Extras;
 
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use SplFileInfo;
 
 /**

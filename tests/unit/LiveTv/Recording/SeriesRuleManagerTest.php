@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Dto\ResultSet;
-use Phlex\LiveTv\Recording\SeriesRuleManager;
-use Phlex\LiveTv\Recorder;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Dto\ResultSet;
+use Phlix\LiveTv\Recording\SeriesRuleManager;
+use Phlix\LiveTv\Recorder;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class SeriesRuleManagerTest extends TestCase

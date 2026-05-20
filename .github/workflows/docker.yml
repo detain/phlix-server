@@ -13,7 +13,7 @@ env:
 
 jobs:
   docker:
-    name: Build and Push phlex-server
+    name: Build and Push phlix-server
     runs-on: ubuntu-latest
 
     permissions:
@@ -72,15 +72,15 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             PHP_VERSION=8.3
-            PHLEX_VERSION=${{ github.ref_name }}
+            PHLIX_VERSION=${{ github.ref_name }}
 
-  # TODO: hub Dockerfile lives in detain/phlex-hub; ensure the workflow picks it up
+  # TODO: hub Dockerfile lives in detain/phlix-hub; ensure the workflow picks it up
   # via the hub repo's release event. For now, this job clones the hub repo and
-  # builds from its Dockerfile so the structure exists. If detain/phlex-hub does
+  # builds from its Dockerfile so the structure exists. If detain/phlix-hub does
   # not yet contain a Dockerfile, this job will fail loudly — that is intentional
-  # and the next PR (in the phlex-hub repo) should add it.
+  # and the next PR (in the phlix-hub repo) should add it.
   docker-hub:
-    name: Build and Push phlex-hub
+    name: Build and Push phlix-hub
     runs-on: ubuntu-latest
 
     permissions:
@@ -88,18 +88,18 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout phlex-hub repository
+      - name: Checkout phlix-hub repository
         uses: actions/checkout@v4
         with:
-          repository: detain/phlex-hub
+          repository: detain/phlix-hub
           ref: master
-          path: phlex-hub
+          path: phlix-hub
 
       - name: Verify hub Dockerfile exists
         run: |
-          if [ ! -f phlex-hub/Dockerfile ]; then
-            echo "::error::phlex-hub/Dockerfile not found in detain/phlex-hub@master."
-            echo "Add a Dockerfile to the phlex-hub repo before this workflow can succeed."
+          if [ ! -f phlix-hub/Dockerfile ]; then
+            echo "::error::phlix-hub/Dockerfile not found in detain/phlix-hub@master."
+            echo "Add a Dockerfile to the phlix-hub repo before this workflow can succeed."
             exit 1
           fi
 
@@ -118,15 +118,15 @@ jobs:
         id: hubmeta
         run: |
           SHA="${GITHUB_SHA::12}"
-          echo "tags=${{ env.REGISTRY }}/detain/phlex-hub:latest,${{ env.REGISTRY }}/detain/phlex-hub:${SHA}" >> "$GITHUB_OUTPUT"
+          echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push phlex-hub
+      - name: Build and push phlix-hub
         uses: docker/build-push-action@v5
         with:
-          context: phlex-hub
-          file: phlex-hub/Dockerfile
+          context: phlix-hub
+          file: phlix-hub/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.hubmeta.outputs.tags }}
-          cache-from: type=gha,scope=phlex-hub
-          cache-to: type=gha,mode=max,scope=phlex-hub
+          cache-from: type=gha,scope=phlix-hub
+          cache-to: type=gha,mode=max,scope=phlix-hub

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Roku;
+namespace Phlix\Tests\Unit\Roku;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Roku\RokuEcpClient;
+use Phlix\Roku\RokuEcpClient;
 
 class RokuEcpClientTest extends TestCase
 {

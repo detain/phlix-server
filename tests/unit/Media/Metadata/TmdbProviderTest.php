@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Metadata;
+namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\TmdbProvider;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Common\Logger\LoggerFactory;
 
 class TmdbProviderTest extends TestCase
 {

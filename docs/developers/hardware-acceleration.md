@@ -4,7 +4,7 @@
 
 ## Overview
 
-Phlex Media Server supports hardware-accelerated transcoding via GPU encoders. The hardware acceleration system automatically detects available encoders (NVENC, VAAPI, QSV, VideoToolbox, AMF, V4L2) and provides a unified interface for selecting the best encoder for a given codec.
+Phlix Media Server supports hardware-accelerated transcoding via GPU encoders. The hardware acceleration system automatically detects available encoders (NVENC, VAAPI, QSV, VideoToolbox, AMF, V4L2) and provides a unified interface for selecting the best encoder for a given codec.
 
 ## Architecture
 
@@ -50,7 +50,7 @@ vendor_priority => [
 ### Automatic Encoder Selection
 
 ```php
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 
 // Get the best encoder for a codec
 $capability = HwaccelRegistry::getInstance()->getEncoder('h264');
@@ -64,7 +64,7 @@ if ($capability !== null) {
 ### With FfmpegRunner
 
 ```php
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 // Probe hardware acceleration at startup
 $runner = new FfmpegRunner();
@@ -103,10 +103,10 @@ if ($capability !== null && $capability->supports_hdr_tone_mapping) {
 Example:
 
 ```php
-namespace Phlex\Media\Transcoding\Hwaccel\VendorProbe;
+namespace Phlix\Media\Transcoding\Hwaccel\VendorProbe;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\VendorProbeInterface;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\VendorProbeInterface;
 use Psr\Log\LoggerInterface;
 
 class NewVendorProbe implements VendorProbeInterface
@@ -183,8 +183,8 @@ Each profile supports four quality levels with associated bitrate and preset set
 ### Using the Profile Factory
 
 ```php
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 
 // Get the best profile for a vendor+codec combination
 $registry = HwaccelRegistry::getInstance();
@@ -197,9 +197,9 @@ $builder = $factory->createCommandBuilder('nvenc', 'h264', 'high');
 ### Using the Command Builder
 
 ```php
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 
 $capability = new HwaccelCapability(
     vendor: 'nvenc',
@@ -342,11 +342,11 @@ zscale=transfer=bt709:min_luminance=2.0:max_luminance=10.0:param1=0.18:param2=0.
 ### Usage Example
 
 ```php
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
 
 // Get HDR metadata from ffprobe
 $probeResult = $ffmpegRunner->probe('/path/to/hdr/video.mkv');

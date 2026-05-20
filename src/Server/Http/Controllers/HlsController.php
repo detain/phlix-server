@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Streaming\HlsStreamer;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Streaming\HlsStreamer;
 
 class HlsController
 {

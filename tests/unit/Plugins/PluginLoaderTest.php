@@ -2,36 +2,36 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Shared\Plugin\LifecycleInterface;
-use Phlex\Plugins\Exception\PluginEnableException;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\Installer\ComposerRunner;
-use Phlex\Plugins\Installer\HttpInstaller;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Plugins\Repository\PluginRepository;
-use Phlex\Plugins\Signature\SignatureVerifier;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Shared\Plugin\LifecycleInterface;
+use Phlix\Plugins\Exception\PluginEnableException;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\Installer\ComposerRunner;
+use Phlix\Plugins\Installer\HttpInstaller;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\Repository\PluginRepository;
+use Phlix\Plugins\Signature\SignatureVerifier;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 
 /**
- * @covers \Phlex\Plugins\PluginLoader
- * @covers \Phlex\Plugins\InstalledPlugin
- * @covers \Phlex\Plugins\Exception\PluginInstallException
- * @covers \Phlex\Plugins\Exception\PluginEnableException
- * @covers \Phlex\Plugins\Exception\PluginNotFoundException
+ * @covers \Phlix\Plugins\PluginLoader
+ * @covers \Phlix\Plugins\InstalledPlugin
+ * @covers \Phlix\Plugins\Exception\PluginInstallException
+ * @covers \Phlix\Plugins\Exception\PluginEnableException
+ * @covers \Phlix\Plugins\Exception\PluginNotFoundException
  */
 final class PluginLoaderTest extends TestCase
 {
@@ -52,7 +52,7 @@ final class PluginLoaderTest extends TestCase
     {
         parent::setUp();
 
-        $this->stagedDir = sys_get_temp_dir() . '/phlex_loadertest_' . uniqid('', true);
+        $this->stagedDir = sys_get_temp_dir() . '/phlix_loadertest_' . uniqid('', true);
         mkdir($this->stagedDir, 0775, true);
 
         $this->installer = Mockery::mock(HttpInstaller::class);
@@ -90,15 +90,15 @@ final class PluginLoaderTest extends TestCase
         );
     }
 
-    private function manifest(string $name = 'phlex-plugin-fixture'): Manifest
+    private function manifest(string $name = 'phlix-plugin-fixture'): Manifest
     {
         return Manifest::fromArray([
             'name' => $name,
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
             'entry' => FakeLifecyclePlugin::class,
-            'events' => ['phlex.playback.started'],
+            'events' => ['phlix.playback.started'],
         ]);
     }
 
@@ -149,12 +149,12 @@ final class PluginLoaderTest extends TestCase
         $this->makeLoader()->installFromDirectory('/bad');
     }
 
-    public function test_install_rejects_unsupported_phlex_min_server_version(): void
+    public function test_install_rejects_unsupported_phlix_min_server_version(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-future',
+            'name' => 'phlix-plugin-future',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '99.99.0',
+            'phlix_min_server_version' => '99.99.0',
             'type' => 'notifier',
             'entry' => FakeLifecyclePlugin::class,
         ]);
@@ -164,14 +164,14 @@ final class PluginLoaderTest extends TestCase
         $this->repository->shouldNotReceive('insert');
 
         $this->expectException(PluginInstallException::class);
-        $this->expectExceptionMessage('requires Phlex >= 99.99.0');
+        $this->expectExceptionMessage('requires Phlix >= 99.99.0');
 
         $this->makeLoader()->installFromDirectory('/x');
     }
 
     public function test_install_writes_to_var_plugins_subdir_named_after_plugin(): void
     {
-        $manifest = $this->manifest('phlex-plugin-bar');
+        $manifest = $this->manifest('phlix-plugin-bar');
 
         $this->installer->shouldReceive('installFromDirectory')
             ->once()
@@ -235,9 +235,9 @@ final class PluginLoaderTest extends TestCase
     public function test_enable_requires_lifecycle_interface_or_throws(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-bad',
+            'name' => 'phlix-plugin-bad',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
             'entry' => \stdClass::class,
         ]);
@@ -248,7 +248,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('must implement');
 
-        $this->makeLoader()->enable('phlex-plugin-bad');
+        $this->makeLoader()->enable('phlix-plugin-bad');
     }
 
     public function test_enable_subscribes_each_declared_event_to_listener_registry(): void
@@ -258,9 +258,9 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->with(FakeLifecyclePlugin::class)->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlex-plugin-fixture', true);
+        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
 
         $this->assertTrue($plugin->onEnableCalled);
     }
@@ -277,7 +277,7 @@ final class PluginLoaderTest extends TestCase
         $this->repository->shouldReceive('setEnabled')->once();
 
         $loader = $this->makeLoader();
-        $loader->enable('phlex-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture');
 
         $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
         foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
@@ -290,9 +290,9 @@ final class PluginLoaderTest extends TestCase
     public function test_enable_throws_when_subscribed_event_class_missing(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-bad-event',
+            'name' => 'phlix-plugin-bad-event',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
             'entry' => FakeLifecyclePluginMissingEvent::class,
         ]);
@@ -303,7 +303,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('non-existent event class');
 
-        $this->makeLoader()->enable('phlex-plugin-bad-event');
+        $this->makeLoader()->enable('phlix-plugin-bad-event');
     }
 
     public function test_enable_persists_enabled_true(): void
@@ -313,9 +313,9 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlex-plugin-fixture', true);
+        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
     public function test_enable_is_no_op_when_already_enabled_in_process(): void
@@ -325,11 +325,11 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlex-plugin-fixture', true);
+        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
 
         $loader = $this->makeLoader();
-        $loader->enable('phlex-plugin-fixture');
-        $loader->enable('phlex-plugin-fixture'); // 2nd call should bail before re-subscribing.
+        $loader->enable('phlix-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture'); // 2nd call should bail before re-subscribing.
         $this->assertSame(1, $plugin->onEnableCount);
     }
 
@@ -340,12 +340,12 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', false)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
 
         $loader = $this->makeLoader();
-        $loader->enable('phlex-plugin-fixture');
-        $loader->disable('phlex-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture');
+        $loader->disable('phlix-plugin-fixture');
 
         $event = new PlaybackStarted('sess', 'user', 'item', 'dev', 0);
         foreach ($this->listenerRegistry->provider()->getListenersForEvent($event) as $listener) {
@@ -361,12 +361,12 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', false)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
 
         $loader = $this->makeLoader();
-        $loader->enable('phlex-plugin-fixture');
-        $loader->disable('phlex-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture');
+        $loader->disable('phlix-plugin-fixture');
 
         $this->assertTrue($plugin->onDisableCalled);
     }
@@ -376,16 +376,16 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $tempDir = sys_get_temp_dir() . '/phlex_uninst_' . uniqid('', true);
+        $tempDir = sys_get_temp_dir() . '/phlix_uninst_' . uniqid('', true);
         mkdir($tempDir, 0775, true);
 
         $installed = $this->makeInstalled($manifest, enabled: true, directory: $tempDir);
         $this->repository->shouldReceive('findByName')->andReturn($installed);
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', false)->once();
-        $this->repository->shouldReceive('delete')->once()->with('phlex-plugin-fixture');
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
+        $this->repository->shouldReceive('delete')->once()->with('phlix-plugin-fixture');
 
-        $this->makeLoader()->uninstall('phlex-plugin-fixture');
+        $this->makeLoader()->uninstall('phlix-plugin-fixture');
 
         $this->assertDirectoryDoesNotExist($tempDir);
     }
@@ -393,14 +393,14 @@ final class PluginLoaderTest extends TestCase
     public function test_uninstall_removes_var_plugins_subdir_and_db_row(): void
     {
         $manifest = $this->manifest();
-        $tempDir = sys_get_temp_dir() . '/phlex_uninst2_' . uniqid('', true);
+        $tempDir = sys_get_temp_dir() . '/phlix_uninst2_' . uniqid('', true);
         mkdir($tempDir . '/sub', 0775, true);
         file_put_contents($tempDir . '/sub/file.txt', 'x');
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest, directory: $tempDir));
-        $this->repository->shouldReceive('delete')->once()->with('phlex-plugin-fixture');
+        $this->repository->shouldReceive('delete')->once()->with('phlix-plugin-fixture');
 
-        $this->makeLoader()->uninstall('phlex-plugin-fixture');
+        $this->makeLoader()->uninstall('phlix-plugin-fixture');
 
         $this->assertDirectoryDoesNotExist($tempDir);
     }
@@ -411,7 +411,7 @@ final class PluginLoaderTest extends TestCase
             ->andThrow(new PluginNotFoundException('missing'));
 
         $this->expectException(PluginNotFoundException::class);
-        $this->makeLoader()->uninstall('phlex-plugin-missing');
+        $this->makeLoader()->uninstall('phlix-plugin-missing');
     }
 
     public function test_listInstalled_returns_dtos_with_settings_hydrated(): void
@@ -445,7 +445,7 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('listEnabled')->andReturn([$installed]);
         $this->repository->shouldReceive('findByName')->andReturn($installed);
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', true);
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true);
         $this->container->shouldReceive('get')->andReturn($plugin);
 
         $this->makeLoader()->bootstrapEnabled();
@@ -455,7 +455,7 @@ final class PluginLoaderTest extends TestCase
     public function test_install_removes_directory_when_composer_fails(): void
     {
         $manifest = $this->manifest();
-        $stagedDir = sys_get_temp_dir() . '/phlex_loader_failure_' . uniqid('', true);
+        $stagedDir = sys_get_temp_dir() . '/phlix_loader_failure_' . uniqid('', true);
         mkdir($stagedDir, 0775, true);
 
         $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $stagedDir]);
@@ -490,7 +490,7 @@ final class PluginLoaderTest extends TestCase
     public function test_install_validationErrors_attached_to_exception(): void
     {
         $this->installer->shouldReceive('installFromDirectory')
-            ->andThrow(new PluginInstallException('bad', [new \Phlex\Shared\Plugin\ManifestValidationError('x', 'y', 'z')]));
+            ->andThrow(new PluginInstallException('bad', [new \Phlix\Shared\Plugin\ManifestValidationError('x', 'y', 'z')]));
 
         try {
             $this->makeLoader()->installFromDirectory('/x');
@@ -503,11 +503,11 @@ final class PluginLoaderTest extends TestCase
     public function test_enable_throws_when_entry_class_does_not_exist(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-noexist',
+            'name' => 'phlix-plugin-noexist',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Definitely\\Not\\Real\\Plugin',
+            'entry' => 'Phlix\\Definitely\\Not\\Real\\Plugin',
         ]);
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
@@ -515,7 +515,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('does not exist');
 
-        $this->makeLoader()->enable('phlex-plugin-noexist');
+        $this->makeLoader()->enable('phlix-plugin-noexist');
     }
 
     public function test_enable_throws_when_container_throws(): void
@@ -528,7 +528,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('could not be resolved');
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
     public function test_enable_throws_when_onEnable_throws(): void
@@ -542,18 +542,18 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('onEnable() threw');
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
     public function test_enable_throws_when_manifest_alias_unknown(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-badalias',
+            'name' => 'phlix-plugin-badalias',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
             'entry' => FakeLifecyclePlugin::class,
-            'events' => ['phlex.not.a.real.event'],
+            'events' => ['phlix.not.a.real.event'],
         ]);
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
@@ -562,7 +562,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('unknown event alias');
 
-        $this->makeLoader()->enable('phlex-plugin-badalias');
+        $this->makeLoader()->enable('phlix-plugin-badalias');
     }
 
     public function test_enable_throws_when_subscribed_method_missing(): void
@@ -576,7 +576,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('the entry class does not implement it');
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
     public function test_enable_accepts_closure_handler(): void
@@ -588,7 +588,7 @@ final class PluginLoaderTest extends TestCase
         $this->container->shouldReceive('get')->andReturn($plugin);
         $this->repository->shouldReceive('setEnabled')->once();
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
         $this->assertTrue(true); // No throw means success.
     }
 
@@ -603,7 +603,7 @@ final class PluginLoaderTest extends TestCase
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('must be a method name or callable');
 
-        $this->makeLoader()->enable('phlex-plugin-fixture');
+        $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
     public function test_disable_continues_when_onDisable_throws(): void
@@ -613,22 +613,22 @@ final class PluginLoaderTest extends TestCase
 
         $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
         $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlex-plugin-fixture', false)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
 
         $this->logger->shouldReceive('warning')->atLeast()->once();
 
         $loader = $this->makeLoader();
-        $loader->enable('phlex-plugin-fixture');
-        $loader->disable('phlex-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture');
+        $loader->disable('phlix-plugin-fixture');
     }
 
     public function test_install_hydrates_default_settings_from_manifest(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-defaults',
+            'name' => 'phlix-plugin-defaults',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
             'entry' => FakeLifecyclePlugin::class,
             'settings' => [
@@ -714,7 +714,7 @@ final class FakeLifecyclePluginMissingEvent implements LifecycleInterface
     public function subscribedEvents(): array
     {
         return [
-            'Phlex\\Definitely\\Not\\AnEvent' => 'handle',
+            'Phlix\\Definitely\\Not\\AnEvent' => 'handle',
         ];
     }
 

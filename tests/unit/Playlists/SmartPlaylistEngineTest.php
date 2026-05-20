@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Playlists;
+namespace Phlix\Tests\Unit\Playlists;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Playlists\RuleNode;
-use Phlex\Playlists\SmartPlaylistEngine;
-use Phlex\Playlists\RuleOperators;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Playlists\RuleNode;
+use Phlix\Playlists\SmartPlaylistEngine;
+use Phlix\Playlists\RuleOperators;
 
 class SmartPlaylistEngineTest extends TestCase
 {

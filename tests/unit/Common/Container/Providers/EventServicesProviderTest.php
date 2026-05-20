@@ -2,24 +2,24 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Container\Providers;
+namespace Phlix\Tests\Unit\Common\Container\Providers;
 
 use Crell\Tukio\Dispatcher;
 use Crell\Tukio\OrderedListenerProvider;
 use DI\ContainerBuilder;
-use Phlex\Common\Container\Providers\CoreServicesProvider;
-use Phlex\Common\Container\Providers\EventServicesProvider;
-use Phlex\Common\Events\EventDispatcherFactory;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Container\Providers\CoreServicesProvider;
+use Phlix\Common\Container\Providers\EventServicesProvider;
+use Phlix\Common\Events\EventDispatcherFactory;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
-use Phlex\Tests\Fixtures\Events\SampleEvent;
+use Phlix\Tests\Fixtures\Events\SampleEvent;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\EventDispatcher\ListenerProviderInterface;
 
 /**
- * @covers \Phlex\Common\Container\Providers\EventServicesProvider
+ * @covers \Phlix\Common\Container\Providers\EventServicesProvider
  */
 final class EventServicesProviderTest extends TestCase
 {
@@ -32,7 +32,7 @@ final class EventServicesProviderTest extends TestCase
         LoggerFactory::reset();
         putenv(EventDispatcherFactory::DEBUG_ENV_VAR);
 
-        $this->tempDir = sys_get_temp_dir() . '/phlex_events_provider_' . uniqid('', true);
+        $this->tempDir = sys_get_temp_dir() . '/phlix_events_provider_' . uniqid('', true);
         mkdir($this->tempDir, 0775, true);
 
         $config = "<?php\nreturn [\n"

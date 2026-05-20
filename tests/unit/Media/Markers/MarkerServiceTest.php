@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Markers;
+namespace Phlix\Tests\Unit\Media\Markers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\IntroMarkerCandidate;
-use Phlex\Media\Markers\Detection\IntroDetectionResult;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlex\Media\Markers\Detection\OutroMarkerCandidate;
-use Phlex\Media\Markers\Detection\StoredMarkers;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\MarkerSet;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\IntroMarkerCandidate;
+use Phlix\Media\Markers\Detection\IntroDetectionResult;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
+use Phlix\Media\Markers\Detection\StoredMarkers;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerSet;
 use Workerman\MySQL\Connection;
 
 class MarkerServiceTest extends TestCase

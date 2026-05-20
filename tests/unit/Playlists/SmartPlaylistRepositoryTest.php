@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Playlists;
+namespace Phlix\Tests\Unit\Playlists;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Playlists\SmartPlaylist;
-use Phlex\Playlists\SmartPlaylistRepository;
+use Phlix\Playlists\SmartPlaylist;
+use Phlix\Playlists\SmartPlaylistRepository;
 use Workerman\MySQL\Connection;
 
 class SmartPlaylistRepositoryTest extends TestCase

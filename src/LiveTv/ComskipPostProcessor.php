@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
-use Phlex\Media\Markers\ChapterMarker;
-use Phlex\Media\Markers\MarkerService;
+use Phlix\Media\Markers\ChapterMarker;
+use Phlix\Media\Markers\MarkerService;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 

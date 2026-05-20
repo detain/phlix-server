@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 use Workerman\Connection\TcpConnection;
 
 /**
- * Wraps a Workerman TcpConnection with additional Phlex-specific functionality.
+ * Wraps a Workerman TcpConnection with additional Phlix-specific functionality.
  *
  * This class provides a higher-level interface for WebSocket connections,
  * including session data management, authentication state, and activity tracking.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Connection wrapper with session data, authentication, and activity tracking.
  * @see ConnectionInterface For the connection contract

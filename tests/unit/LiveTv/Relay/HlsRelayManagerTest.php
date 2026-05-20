@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Relay;
+namespace Phlix\Tests\Unit\LiveTv\Relay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\LiveTv\Relay\HlsRelayManager;
-use Phlex\LiveTv\Relay\HlsRelaySession;
-use Phlex\LiveTv\Relay\HlsSegmentPrefetcher;
-use Phlex\Media\Streaming\HlsStreamer;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\LiveTv\Relay\HlsRelayManager;
+use Phlix\LiveTv\Relay\HlsRelaySession;
+use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
+use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * Stub RelayConsumer for testing since RelayConsumer is final.

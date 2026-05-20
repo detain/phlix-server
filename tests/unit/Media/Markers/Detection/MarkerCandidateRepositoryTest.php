@@ -1,14 +1,14 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Markers\Detection;
+namespace Phlix\Tests\Unit\Media\Markers\Detection;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\IntroDetectionResult;
-use Phlex\Media\Markers\Detection\IntroMarkerCandidate;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlex\Media\Markers\Detection\OutroMarkerCandidate;
-use Phlex\Media\Markers\Detection\StoredMarkers;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\IntroDetectionResult;
+use Phlix\Media\Markers\Detection\IntroMarkerCandidate;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
+use Phlix\Media\Markers\Detection\StoredMarkers;
 use Workerman\MySQL\Connection;
 
 class MarkerCandidateRepositoryTest extends TestCase

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Configuration for the server-side relay tunnel.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class RelayConfig
@@ -18,7 +18,7 @@ final class RelayConfig
      *                                (e.g. wss://hub.example.com/api/v1/servers/{id}/relay).
      * @param string $localAddress    Local address the relay consumer binds to
      *                                (default 127.0.0.1:0 for auto).
-     * @param string $tunnelHostname  Public hostname for the tunnel (e.g. my-server.phlex.media).
+     * @param string $tunnelHostname  Public hostname for the tunnel (e.g. my-server.phlix.media).
      * @param int    $reconnectDelay  Seconds to wait before reconnecting after disconnect.
      * @param int    $pingInterval    Seconds between keep-alive pings.
      * @param int    $pingTimeout    Seconds to wait for pong before considering connection dead.
@@ -45,12 +45,12 @@ final class RelayConfig
      */
     public static function fromEnv(?array $overrides = null): self
     {
-        $enabled = self::getEnvBool('PHLEX_RELAY_ENABLED', false);
-        $hubUrl = getenv('PHLEX_RELAY_HUB_URL') ?: '';
-        $tunnelHostname = getenv('PHLEX_RELAY_TUNNEL_HOSTNAME') ?: '';
-        $reconnectDelay = (int)(getenv('PHLEX_RELAY_RECONNECT_DELAY') ?: '5');
-        $pingInterval = (int)(getenv('PHLEX_RELAY_PING_INTERVAL') ?: '30');
-        $pingTimeout = (int)(getenv('PHLEX_RELAY_PING_TIMEOUT') ?: '10');
+        $enabled = self::getEnvBool('PHLIX_RELAY_ENABLED', false);
+        $hubUrl = getenv('PHLIX_RELAY_HUB_URL') ?: '';
+        $tunnelHostname = getenv('PHLIX_RELAY_TUNNEL_HOSTNAME') ?: '';
+        $reconnectDelay = (int)(getenv('PHLIX_RELAY_RECONNECT_DELAY') ?: '5');
+        $pingInterval = (int)(getenv('PHLIX_RELAY_PING_INTERVAL') ?: '30');
+        $pingTimeout = (int)(getenv('PHLIX_RELAY_PING_TIMEOUT') ?: '10');
         $localAddress = '127.0.0.1:0';
 
         if ($overrides !== null) {

@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Common\Database;
+namespace Phlix\Tests\Unit\Common\Database;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Database\QueryBuilder;
+use Phlix\Common\Database\QueryBuilder;
 use Workerman\MySQL\Connection;
 
 class QueryBuilderTest extends TestCase

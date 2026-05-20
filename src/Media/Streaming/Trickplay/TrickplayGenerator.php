@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming\Trickplay;
+namespace Phlix\Media\Streaming\Trickplay;
 
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
  * Trickplay Generator — generates BIF thumbnail grid images for thumbnail seek.

@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks\Plugins;
+namespace Phlix\Webhooks\Plugins;
 
-use Phlex\Webhooks\WebhookEvent;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Webhooks\WebhookEvent;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 
 /**
  * Apprise notification plugin as generic webhook receiver.
  *
  * Sends notifications to any Apprise URL with:
  * - JSON payload body
- * - Event type in X-Phlex-Event header
- * - Timestamp in X-Phlex-Timestamp header
+ * - Event type in X-Phlix-Event header
+ * - Timestamp in X-Phlix-Timestamp header
  */
 class ApprisePlugin extends AbstractNotificationPlugin
 {
@@ -66,8 +66,8 @@ class ApprisePlugin extends AbstractNotificationPlugin
                 'method' => 'POST',
                 'header' => [
                     'Content-Type: application/json',
-                    'X-Phlex-Event: ' . $event->eventType,
-                    'X-Phlex-Timestamp: ' . $event->occurredAt->format(\DateTimeImmutable::ATOM),
+                    'X-Phlix-Event: ' . $event->eventType,
+                    'X-Phlix-Timestamp: ' . $event->occurredAt->format(\DateTimeImmutable::ATOM),
                 ],
                 'content' => json_encode($payload, JSON_THROW_ON_ERROR),
                 'timeout' => 10,
@@ -122,7 +122,7 @@ class ApprisePlugin extends AbstractNotificationPlugin
             return $this->config;
         }
 
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
         $configFile = $configPath . '/notifications.php';
 
         if (file_exists($configFile)) {
@@ -150,7 +150,7 @@ class ApprisePlugin extends AbstractNotificationPlugin
         return null;
     }
 
-    private function getLogger(): \Phlex\Common\Logger\StructuredLogger
+    private function getLogger(): \Phlix\Common\Logger\StructuredLogger
     {
         return LoggerFactory::get(LogChannels::APPLICATION);
     }

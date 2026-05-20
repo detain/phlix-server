@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\Controller\OidcAdminController;
-use Phlex\Plugins\Oidc\Plugin;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Plugins\Oidc\Controller\OidcAdminController;
+use Phlix\Plugins\Oidc\Plugin;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
- * @covers \Phlex\Plugins\Oidc\Controller\OidcAdminController
+ * @covers \Phlix\Plugins\Oidc\Controller\OidcAdminController
  */
 final class OidcAdminControllerTest extends TestCase
 {
@@ -22,7 +22,7 @@ final class OidcAdminControllerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->pluginDir = sys_get_temp_dir() . '/phlex_oidc_admin_test_' . uniqid();
+        $this->pluginDir = sys_get_temp_dir() . '/phlix_oidc_admin_test_' . uniqid();
         mkdir($this->pluginDir, 0755, true);
 
         Plugin::setPluginDirectory($this->pluginDir);

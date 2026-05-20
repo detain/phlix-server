@@ -1,12 +1,12 @@
-# Phlex plugin developer guide
+# Phlix plugin developer guide
 
-This is the end-to-end guide for authoring a Phlex plugin. Read it
+This is the end-to-end guide for authoring a Phlix plugin. Read it
 top-to-bottom once and you'll have everything you need to ship a
 working plugin: pick a type, declare the manifest, implement the
 lifecycle contract, subscribe to events, package, sign (optional),
 publish, and install through the admin UI.
 
-Phase A of [`PHLEX_EXPANSION_PLAN.md`](../../PHLEX_EXPANSION_PLAN.md)
+Phase A of [`PHLIX_EXPANSION_PLAN.md`](../../PHLIX_EXPANSION_PLAN.md)
 delivers the **loader, manifest, lifecycle, signature, admin UI, and
 reference plugin**. Everything documented here works today (as of the
 Phase A.7 release); sections that anticipate later phases are flagged
@@ -31,7 +31,7 @@ explicitly.
 
 ## 1. Overview
 
-A **plugin** is an independently-deployed PHP package that the Phlex
+A **plugin** is an independently-deployed PHP package that the Phlix
 server discovers, validates, autoloads, and wires into its PSR-11
 container and PSR-14 dispatcher at runtime. Plugins are the supported
 extension point for everything that's not core to the media server
@@ -47,8 +47,8 @@ Concretely, every plugin ships:
   per-plugin `vendor/` directory so plugins don't pollute the host's
   dependency tree.
 - One PHP entry class implementing
-  `Phlex\Shared\Plugin\LifecycleInterface` (the legacy
-  `Phlex\Plugins\Contract\LifecycleInterface` FQCN still works as a
+  `Phlix\Shared\Plugin\LifecycleInterface` (the legacy
+  `Phlix\Plugins\Contract\LifecycleInterface` FQCN still works as a
   deprecated bridge through 0.11.x). The loader instantiates
   it through the host container, calls `onEnable()` on enable, and
   unsubscribes its listeners + calls `onDisable()` on disable.
@@ -60,10 +60,10 @@ the next enable click. No restart, no FTP, no manual file copying.
 
 ### Who plugins are for
 
-- **Phlex operators** running their own server who want to integrate
+- **Phlix operators** running their own server who want to integrate
   with a third-party service (Trakt, Last.fm, Sonarr, Discord, Slack,
   …) without forking the core.
-- **Service authors** who want to make their backend Phlex-aware
+- **Service authors** who want to make their backend Phlix-aware
   without convincing core to take a hard dependency on it.
 - **UI / theme authors** who want to restyle the web portal.
 - **Storage and library experiments** that don't belong in the
@@ -84,7 +84,7 @@ implementation status.
 > **Implementation status today (Phase A complete):** the loader
 > instantiates and dispatches events to plugins of every type uniformly
 > — there is no type-specific dispatch path yet. The reference
-> `phlex-plugin-example` is a `metadata-provider` shell that
+> `phlix-plugin-example` is a `metadata-provider` shell that
 > demonstrates the lifecycle but is not yet invoked by
 > `MetadataManager`. Type-specific dispatch (e.g. the metadata manager
 > falling through to plugins for unknown providers) lands as each
@@ -92,16 +92,16 @@ implementation status.
 
 | `type` value         | Use case                                                       | Typical events subscribed                                                                  | Implemented today                                          |
 | -------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| `metadata-provider`  | Pulls media metadata (alternative TMDb, AniDB, MusicBrainz…)   | `phlex.library.item.added` (refresh-on-add)                                                | Loader yes; manager dispatch wired in Phase C              |
-| `subtitle-provider`  | Downloads or generates subtitles                               | `phlex.library.item.added`, `phlex.playback.started`                                       | Loader yes; subtitle pipeline wired in Phase C             |
-| `auth-provider`      | Authenticates users (OIDC, LDAP, SSO)                          | `phlex.user.created`, `phlex.user.logged_in`                                               | Loader yes; pluggable auth backend wired in Phase D        |
-| `library-type`       | Adds a brand-new library kind (comics, audiobooks, …)          | `phlex.library.scan.started`, `phlex.library.scan.completed`                               | Loader yes; library-type registry wired in Phase E         |
-| `notifier`           | Sends notifications (push, email, chat)                        | `phlex.library.item.added`, `phlex.user.created`, `phlex.playback.started`                 | Loader yes; notifier dispatch live via PSR-14 today        |
-| `scrobbler`          | Reports playback to an external service (Trakt, Last.fm)       | `phlex.playback.started`, `phlex.playback.paused`, `phlex.playback.resumed`, `phlex.playback.stopped` | Loader yes; scrobbling live via PSR-14 today               |
+| `metadata-provider`  | Pulls media metadata (alternative TMDb, AniDB, MusicBrainz…)   | `phlix.library.item.added` (refresh-on-add)                                                | Loader yes; manager dispatch wired in Phase C              |
+| `subtitle-provider`  | Downloads or generates subtitles                               | `phlix.library.item.added`, `phlix.playback.started`                                       | Loader yes; subtitle pipeline wired in Phase C             |
+| `auth-provider`      | Authenticates users (OIDC, LDAP, SSO)                          | `phlix.user.created`, `phlix.user.logged_in`                                               | Loader yes; pluggable auth backend wired in Phase D        |
+| `library-type`       | Adds a brand-new library kind (comics, audiobooks, …)          | `phlix.library.scan.started`, `phlix.library.scan.completed`                               | Loader yes; library-type registry wired in Phase E         |
+| `notifier`           | Sends notifications (push, email, chat)                        | `phlix.library.item.added`, `phlix.user.created`, `phlix.playback.started`                 | Loader yes; notifier dispatch live via PSR-14 today        |
+| `scrobbler`          | Reports playback to an external service (Trakt, Last.fm)       | `phlix.playback.started`, `phlix.playback.paused`, `phlix.playback.resumed`, `phlix.playback.stopped` | Loader yes; scrobbling live via PSR-14 today               |
 | `tuner`              | Live-TV tuner backend (HDHomeRun, IPTV, …)                     | rarely subscribes — usually exposes a polled API                                           | Loader yes; tuner registry wired in Phase F                |
 | `transcoder-hook`    | Adjusts the FFmpeg transcoder pipeline                         | rarely subscribes — usually exposes a filter API                                           | Loader yes; transcoder hook points wired in Phase G        |
 | `ui-theme`           | Restyles the web portal                                        | none                                                                                       | Loader yes; theme registry wired in Phase H                |
-| `arr-integration`    | Integrates with the *arr stack (Sonarr, Radarr)                | `phlex.library.scan.completed`, `phlex.library.item.added`                                 | Loader yes; webhook bridge wired in Phase I                |
+| `arr-integration`    | Integrates with the *arr stack (Sonarr, Radarr)                | `phlix.library.scan.completed`, `phlix.library.item.added`                                 | Loader yes; webhook bridge wired in Phase I                |
 | `analytics-sink`     | Exports analytics to external systems                          | every event the operator wants to mirror                                                   | Loader yes; sinks live via PSR-14 today                    |
 
 **Pragmatically**, today (Phase A) you can ship any of the
@@ -126,17 +126,17 @@ relevant highlights for plugin authors:
 
 ### Canonical example
 
-This is the example from `PHLEX_EXPANSION_PLAN.md` §5 — the
+This is the example from `PHLIX_EXPANSION_PLAN.md` §5 — the
 authoritative shape of a plugin manifest:
 
 ```json
 {
-    "name": "phlex-plugin-lastfm",
+    "name": "phlix-plugin-lastfm",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
-    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "entry": "Phlix\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlix.playback.started", "phlix.playback.stopped"],
     "settings": {
         "api_key": { "type": "string", "required": true, "secret": true },
         "api_secret": { "type": "string", "required": true, "secret": true }
@@ -147,17 +147,17 @@ authoritative shape of a plugin manifest:
 
 ### Required fields at a glance
 
-- `name` — kebab-case, **must start with `phlex-plugin-`** (regex
-  `^phlex-plugin-[a-z0-9][a-z0-9-]*$`, max 64 chars). The loader
+- `name` — kebab-case, **must start with `phlix-plugin-`** (regex
+  `^phlix-plugin-[a-z0-9][a-z0-9-]*$`, max 64 chars). The loader
   refuses any plugin whose name does not match this prefix because
   the name is also used as a filesystem path component under
   `var/plugins/<name>/`. Pick the name carefully — it is the
   plugin's identity for the lifetime of the install.
 - `version` — semver of the plugin itself (regex
   `^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.\-]+)?$`). Bump it every release.
-- `phlex_min_server_version` — minimum Phlex server semver the plugin
+- `phlix_min_server_version` — minimum Phlix server semver the plugin
   is compatible with. The loader refuses to install when the running
-  server's `Phlex\Common\Version::STRING` is older than this value.
+  server's `Phlix\Common\Version::STRING` is older than this value.
   Start at `0.10.0` (the release that introduced the plugin system).
 - `type` — one of the eleven values from
   [§2](#2-plugin-types).
@@ -169,9 +169,9 @@ authoritative shape of a plugin manifest:
 ### Optional fields
 
 - `events` — list of **manifest aliases** (e.g.
-  `phlex.playback.started`). The loader translates each alias to the
+  `phlix.playback.started`). The loader translates each alias to the
   matching event FQCN through
-  `Phlex\Plugins\EventNameMap` at enable time. The complete alias →
+  `Phlix\Plugins\EventNameMap` at enable time. The complete alias →
   FQCN table is in [`docs/dev/event-reference.md`](../dev/event-reference.md).
   Plugins that subscribe via `subscribedEvents()` rather than via
   the manifest can leave this empty (the manifest list is currently
@@ -191,17 +191,17 @@ returned from `Manifest::validate()`, read
 ## 4. Lifecycle reference
 
 Every plugin entry class implements
-`Phlex\Shared\Plugin\LifecycleInterface` (in the `detain/phlex-shared`
-Composer package, since `phlex-server` 0.11.0).
+`Phlix\Shared\Plugin\LifecycleInterface` (in the `detain/phlix-shared`
+Composer package, since `phlix-server` 0.11.0).
 
 > **Migrating from 0.10.x.** Plugins compiled against
-> `Phlex\Plugins\Contract\LifecycleInterface` keep working in 0.11.x
+> `Phlix\Plugins\Contract\LifecycleInterface` keep working in 0.11.x
 > because the old FQCN is a deprecated `interface … extends …` bridge.
 > The shim is removed in 0.12.0 — update your imports at your earliest
 > convenience.
 
 ```php
-namespace Phlex\Shared\Plugin;
+namespace Phlix\Shared\Plugin;
 
 use Psr\Container\ContainerInterface;
 
@@ -258,14 +258,14 @@ Runs once, after the manifest is loaded, the plugin's
 entry class through the host PSR-11 container.
 
 - The container parameter is the **host** container — every binding
-  that `Phlex\Common\Container\ContainerFactory` produces is
+  that `Phlix\Common\Container\ContainerFactory` produces is
   resolvable, including loggers, the DB connection, the listener
   registry, and the `AuthManager` / `ItemRepository` services. See
   [`docs/dev/plugin-sdk.md`](../dev/plugin-sdk.md#1-container-bindings-plugins-can-resolve)
   for the catalog of container IDs.
 - Throwing from `onEnable()` aborts enabling — the loader wraps the
   throwable in
-  `Phlex\Plugins\Exception\PluginEnableException` and surfaces it to
+  `Phlix\Plugins\Exception\PluginEnableException` and surfaces it to
   the operator UI. The plugin row stays installed but `enabled = 0`.
 - Keep this method **cheap and non-blocking**. Heavy work (HTTP
   warmup, polling background workers) belongs in the listeners
@@ -281,8 +281,8 @@ Returns a map keyed by **event class FQCN** (e.g.
 - A **PHP callable** — closure, invokable object, `[$obj, 'method']`,
   `'free_function'`, etc.
 
-The loader translates manifest aliases (`phlex.playback.started`) to
-FQCNs through `Phlex\Plugins\EventNameMap` before calling this method,
+The loader translates manifest aliases (`phlix.playback.started`) to
+FQCNs through `Phlix\Plugins\EventNameMap` before calling this method,
 so plugin authors deal exclusively with FQCNs at runtime.
 
 If an entry in the returned map references a class that doesn't exist,
@@ -306,7 +306,7 @@ state, close HTTP clients, cancel background workers, etc.
 ### Auto-enable on boot
 
 The bootstrap path
-(`Phlex\Common\Container\Providers\PluginsProvider` →
+(`Phlix\Common\Container\Providers\PluginsProvider` →
 `PluginLoader::bootstrapEnabled()`) re-enables every plugin with
 `plugins.enabled = 1` after the container is built. Per-plugin
 failures are logged to the `plugins` channel but **do not** block
@@ -317,10 +317,10 @@ server.
 
 ## 5. Event subscription
 
-Phlex uses [`Crell\Tukio`](https://github.com/Crell/Tukio) as its
+Phlix uses [`Crell\Tukio`](https://github.com/Crell/Tukio) as its
 PSR-14 implementation. The loader wires your plugin's
 `subscribedEvents()` map into Tukio by calling
-`Phlex\Common\Events\ListenerRegistry::subscribe()` for every entry
+`Phlix\Common\Events\ListenerRegistry::subscribe()` for every entry
 and stashes the resulting callables so `disable()` can call
 `unsubscribe()` for exactly the same callables.
 
@@ -332,20 +332,20 @@ twelve events the server publishes today are:
 
 | Manifest alias                  | Event class FQCN                                       |
 | ------------------------------- | ------------------------------------------------------ |
-| `phlex.playback.started`        | `Phlex\Shared\Events\Playback\PlaybackStarted`         |
-| `phlex.playback.paused`         | `Phlex\Shared\Events\Playback\PlaybackPaused`          |
-| `phlex.playback.resumed`        | `Phlex\Shared\Events\Playback\PlaybackResumed`         |
-| `phlex.playback.stopped`        | `Phlex\Shared\Events\Playback\PlaybackStopped`         |
-| `phlex.library.scan.started`    | `Phlex\Shared\Events\Library\LibraryScanStarted`       |
-| `phlex.library.scan.completed`  | `Phlex\Shared\Events\Library\LibraryScanCompleted`     |
-| `phlex.library.item.added`      | `Phlex\Shared\Events\Library\MediaItemAdded`           |
-| `phlex.library.item.updated`    | `Phlex\Shared\Events\Library\MediaItemUpdated`         |
-| `phlex.library.item.removed`    | `Phlex\Shared\Events\Library\MediaItemRemoved`         |
-| `phlex.user.created`            | `Phlex\Shared\Events\Auth\UserCreated`                 |
-| `phlex.user.logged_in`          | `Phlex\Shared\Events\Auth\UserLoggedIn`                |
-| `phlex.user.logged_out`         | `Phlex\Shared\Events\Auth\UserLoggedOut`               |
+| `phlix.playback.started`        | `Phlix\Shared\Events\Playback\PlaybackStarted`         |
+| `phlix.playback.paused`         | `Phlix\Shared\Events\Playback\PlaybackPaused`          |
+| `phlix.playback.resumed`        | `Phlix\Shared\Events\Playback\PlaybackResumed`         |
+| `phlix.playback.stopped`        | `Phlix\Shared\Events\Playback\PlaybackStopped`         |
+| `phlix.library.scan.started`    | `Phlix\Shared\Events\Library\LibraryScanStarted`       |
+| `phlix.library.scan.completed`  | `Phlix\Shared\Events\Library\LibraryScanCompleted`     |
+| `phlix.library.item.added`      | `Phlix\Shared\Events\Library\MediaItemAdded`           |
+| `phlix.library.item.updated`    | `Phlix\Shared\Events\Library\MediaItemUpdated`         |
+| `phlix.library.item.removed`    | `Phlix\Shared\Events\Library\MediaItemRemoved`         |
+| `phlix.user.created`            | `Phlix\Shared\Events\Auth\UserCreated`                 |
+| `phlix.user.logged_in`          | `Phlix\Shared\Events\Auth\UserLoggedIn`                |
+| `phlix.user.logged_out`         | `Phlix\Shared\Events\Auth\UserLoggedOut`               |
 
-Each event extends `Phlex\Shared\Events\AbstractEvent` and exposes
+Each event extends `Phlix\Shared\Events\AbstractEvent` and exposes
 an `int $timestamp` (UNIX seconds at construction). All other payload
 fields are documented per-event in `event-reference.md`.
 
@@ -354,11 +354,11 @@ fields are documented per-event in `event-reference.md`.
 A minimal scrobbler that fires on playback start and stop:
 
 ```php
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
-use Phlex\Shared\Plugin\LifecycleInterface;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -402,7 +402,7 @@ final class Plugin implements LifecycleInterface
 
 ### Debugging event delivery
 
-Set the env var `PHLEX_DEBUG_EVENTS=1` (truthy values: `1`, `true`,
+Set the env var `PHLIX_DEBUG_EVENTS=1` (truthy values: `1`, `true`,
 `yes`, `on`) and every dispatched event lands at debug level on the
 `events` channel — `.logs/events.log` by default. This is the fastest
 way to confirm that your listener is actually being called.
@@ -459,8 +459,8 @@ to inject the host container and ask the repository for its row:
 ```php
 public function onEnable(ContainerInterface $container): void
 {
-    $repo = $container->get(\Phlex\Plugins\Repository\PluginRepository::class);
-    $installed = $repo->findByName('phlex-plugin-lastfm');
+    $repo = $container->get(\Phlix\Plugins\Repository\PluginRepository::class);
+    $installed = $repo->findByName('phlix-plugin-lastfm');
     $this->apiKey = (string) ($installed->settings['api_key'] ?? '');
 }
 ```
@@ -483,7 +483,7 @@ declared default at runtime.
 contract. Today the loader respects the flag by masking the value in
 admin-UI rendering. End-to-end at-rest encryption of the
 `settings_json` column is on the Phase B backlog (it depends on a key
-management story that arrives with `phlex-shared`). Until then, treat
+management story that arrives with `phlix-shared`). Until then, treat
 `secret: true` as "do not log this and do not display it in the
 table", but assume the value is plaintext on disk.
 
@@ -491,16 +491,16 @@ table", but assume the value is plaintext on disk.
 
 ## 7. Walkthrough: the example plugin
 
-`detain/phlex-plugin-example` is the canonical fork-as-starter
+`detain/phlix-plugin-example` is the canonical fork-as-starter
 template. It's a `metadata-provider` shell that implements the
 lifecycle contract, exposes one configurable setting, and ships with
 its own PHPUnit suite plus a `dev-stubs/` directory so plugin tests
-can run **without** phlex-server on the classpath.
+can run **without** phlix-server on the classpath.
 
 ### Clone it
 
 ```bash
-git clone https://github.com/detain/phlex-plugin-example.git my-plugin
+git clone https://github.com/detain/phlix-plugin-example.git my-plugin
 cd my-plugin
 ```
 
@@ -526,11 +526,11 @@ The published manifest:
 
 ```json
 {
-    "name": "phlex-plugin-example",
+    "name": "phlix-plugin-example",
     "version": "0.1.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "metadata-provider",
-    "entry": "Phlex\\PluginExample\\HelloMetadataProvider",
+    "entry": "Phlix\\PluginExample\\HelloMetadataProvider",
     "events": [],
     "settings": {
         "greeting": {
@@ -553,8 +553,8 @@ misleading.
 
 ```json
 {
-    "name": "phlex/plugin-example",
-    "type": "phlex-plugin",
+    "name": "phlix/plugin-example",
+    "type": "phlix-plugin",
     "license": "MIT",
     "require": {
         "php": ">=8.1",
@@ -562,7 +562,7 @@ misleading.
     },
     "autoload": {
         "psr-4": {
-            "Phlex\\PluginExample\\": "src/"
+            "Phlix\\PluginExample\\": "src/"
         }
     }
 }
@@ -570,9 +570,9 @@ misleading.
 
 A few things worth noting:
 
-- `type` is `phlex-plugin`, which is purely informational — no
+- `type` is `phlix-plugin`, which is purely informational — no
   Composer installer plugin reads it today, but it's a convention
-  that lets the wider ecosystem identify Phlex plugins from their
+  that lets the wider ecosystem identify Phlix plugins from their
   `composer.json`.
 - The PSR-4 autoload map matches the namespace used in the manifest's
   `entry` field.
@@ -592,10 +592,10 @@ greeting for the fixed fixture path so the integration test in
 
 #### `dev-stubs/LifecycleInterface.php`
 
-A **byte-compatible** stub of the shared `Phlex\Shared\Plugin\LifecycleInterface`
+A **byte-compatible** stub of the shared `Phlix\Shared\Plugin\LifecycleInterface`
 (or, for plugins still pinned to 0.10.x, the legacy
-`Phlex\Plugins\Contract\LifecycleInterface`) so the plugin's PHPUnit
-suite can run on developer machines that don't have a phlex-server
+`Phlix\Plugins\Contract\LifecycleInterface`) so the plugin's PHPUnit
+suite can run on developer machines that don't have a phlix-server
 checkout on the include path. `tests/bootstrap.php` autoloads this
 stub when the canonical class isn't already loaded. See
 [§10](#10-testing-your-plugin-locally) for the pattern.
@@ -606,7 +606,7 @@ With the plugin admin UI from A.5 enabled, paste this URL into
 **Admin → Plugins → Install from URL** and click **Install**:
 
 ```
-https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json
+https://raw.githubusercontent.com/detain/phlix-plugin-example/main/plugin.json
 ```
 
 Or via the JSON API:
@@ -614,13 +614,13 @@ Or via the JSON API:
 ```bash
 TOKEN="…your admin bearer token…"
 
-curl -sS -X POST https://phlex.example.com/api/v1/admin/plugins/install \
+curl -sS -X POST https://phlix.example.com/api/v1/admin/plugins/install \
      -H "Authorization: Bearer $TOKEN" \
      -H "Content-Type: application/json" \
-     -d '{"url": "https://raw.githubusercontent.com/detain/phlex-plugin-example/main/plugin.json"}'
+     -d '{"url": "https://raw.githubusercontent.com/detain/phlix-plugin-example/main/plugin.json"}'
 ```
 
-After install, flip the toggle for `phlex-plugin-example` in the
+After install, flip the toggle for `phlix-plugin-example` in the
 plugins table to enable it. The `onEnable()` hook fires immediately;
 re-disabling the toggle calls `onDisable()`.
 
@@ -736,10 +736,10 @@ hub will adopt in Phase C.
 
 ### Verifier outcomes
 
-The host's `Phlex\Plugins\Signature\SignatureVerifier` returns one of
+The host's `Phlix\Plugins\Signature\SignatureVerifier` returns one of
 three results per install:
 
-| Manifest state                  | `PHLEX_PLUGINS_REQUIRE_SIGNATURE` | Result    | Loader behaviour                                                |
+| Manifest state                  | `PHLIX_PLUGINS_REQUIRE_SIGNATURE` | Result    | Loader behaviour                                                |
 | ------------------------------- | --------------------------------- | --------- | --------------------------------------------------------------- |
 | Signature present, on allowlist | any                               | `valid`   | Install proceeds.                                               |
 | Signature present, allowlist empty | unset / `0`                    | `valid`   | Install proceeds (warning-free).                                |
@@ -748,7 +748,7 @@ three results per install:
 | No signature                    | unset / `0`                       | `unsigned`| Install proceeds; loader logs a `warning` on the `plugins` channel. |
 | No signature                    | `1`                               | `invalid` | Install fails.                                                  |
 
-The only env var honoured today is **`PHLEX_PLUGINS_REQUIRE_SIGNATURE`**.
+The only env var honoured today is **`PHLIX_PLUGINS_REQUIRE_SIGNATURE`**.
 When unset or falsy (the default) unsigned plugins install with a
 warning on the `plugins` log channel; set it to `1`, `true`, `yes`, or
 `on` to refuse unsigned installs.
@@ -761,9 +761,9 @@ operator-configured in code by overriding the container binding for
 
 ```php
 $builder->addDefinitions([
-    \Phlex\Plugins\Signature\SignatureVerifier::class => DI\factory(
-        static fn (): \Phlex\Plugins\Signature\SignatureVerifier =>
-            new \Phlex\Plugins\Signature\SignatureVerifier(
+    \Phlix\Plugins\Signature\SignatureVerifier::class => DI\factory(
+        static fn (): \Phlix\Plugins\Signature\SignatureVerifier =>
+            new \Phlix\Plugins\Signature\SignatureVerifier(
                 trustedSignatures: [
                     'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
                 ],
@@ -787,11 +787,11 @@ a defence-in-depth digest check.
 ### Unit tests inside the plugin repo
 
 Use the `dev-stubs/` pattern from the example plugin so your test
-suite has no hard dependency on a checked-out phlex-server:
+suite has no hard dependency on a checked-out phlix-server:
 
 ```php
 // dev-stubs/LifecycleInterface.php
-namespace Phlex\Plugins\Contract;
+namespace Phlix\Plugins\Contract;
 
 use Psr\Container\ContainerInterface;
 
@@ -812,7 +812,7 @@ And in `tests/bootstrap.php`:
 require __DIR__ . '/../vendor/autoload.php';
 
 // Only fall back to the stub when the real interface isn't on the classpath.
-if (!interface_exists(\Phlex\Plugins\Contract\LifecycleInterface::class, true)) {
+if (!interface_exists(\Phlix\Plugins\Contract\LifecycleInterface::class, true)) {
     require __DIR__ . '/../dev-stubs/LifecycleInterface.php';
 }
 ```
@@ -830,24 +830,24 @@ if (!interface_exists(\Phlex\Plugins\Contract\LifecycleInterface::class, true)) 
 ```
 
 Now `composer install && ./vendor/bin/phpunit` works in any clean
-checkout of your plugin, no Phlex server required.
+checkout of your plugin, no Phlix server required.
 
-### End-to-end install against a real Phlex server (local)
+### End-to-end install against a real Phlix server (local)
 
 Two paths are supported today:
 
 #### A. Install from a local directory
 
-If you have phlex-server checked out and your plugin lives next to
+If you have phlix-server checked out and your plugin lives next to
 it, use `installFromDirectory()` instead of going through HTTP:
 
 ```bash
-cd /path/to/phlex
+cd /path/to/phlix
 php -r '
 require "vendor/autoload.php";
-$container = (new \Phlex\Common\Container\ContainerFactory())
+$container = (new \Phlix\Common\Container\ContainerFactory())
     ->create(require __DIR__."/config/server.php");
-$loader = $container->get(\Phlex\Plugins\PluginLoader::class);
+$loader = $container->get(\Phlix\Plugins\PluginLoader::class);
 $manifest = $loader->installFromDirectory("/path/to/my-plugin");
 $loader->enable($manifest->name);
 echo "enabled\n";
@@ -874,15 +874,15 @@ Then install:
 ```bash
 php -r '
 require "vendor/autoload.php";
-$container = (new \Phlex\Common\Container\ContainerFactory())
+$container = (new \Phlix\Common\Container\ContainerFactory())
     ->create(require __DIR__."/config/server.php");
-$loader = $container->get(\Phlex\Plugins\PluginLoader::class);
+$loader = $container->get(\Phlix\Plugins\PluginLoader::class);
 $loader->install("file:///tmp/my-plugin.tar.gz");
 '
 ```
 
 The `file://` scheme is always allowed (unlike `http://`, which
-requires `PHLEX_PLUGINS_ALLOW_HTTP=1`).
+requires `PHLIX_PLUGINS_ALLOW_HTTP=1`).
 
 ### Verifying the install
 
@@ -892,7 +892,7 @@ After install:
 mysql -e 'SELECT name, version, enabled, installed_at FROM plugins ORDER BY installed_at DESC LIMIT 5'
 ls var/plugins/my-plugin/                   # plugin.json, composer.json, src/, vendor/
 tail -f .logs/plugins.log                   # watch for enable / disable events
-PHLEX_DEBUG_EVENTS=1 php public/index.php   # watch event delivery in .logs/events.log
+PHLIX_DEBUG_EVENTS=1 php public/index.php   # watch event delivery in .logs/events.log
 ```
 
 ---
@@ -905,8 +905,8 @@ Once your plugin is in shape:
    URLs short and predictable.
 2. **Tag a release.** `git tag v0.1.0 && git push origin v0.1.0`. The
    tag becomes the `<ref>` segment of pinned install URLs.
-3. **Update `phlex_min_server_version`** in `plugin.json` if you've
-   started depending on a feature introduced in a newer Phlex
+3. **Update `phlix_min_server_version`** in `plugin.json` if you've
+   started depending on a feature introduced in a newer Phlix
    release.
 4. **Share the install URL.** Operators paste:
 
@@ -918,7 +918,7 @@ Once your plugin is in shape:
 
 For now, plugin distribution lives in the operator's manual workflow.
 The in-product **catalog** (a curated, browsable list of trusted
-plugins fetched from the Phlex hub) ships with **Phase C**; until
+plugins fetched from the Phlix hub) ships with **Phase C**; until
 then, install-from-URL is the supported install path.
 
 ---
@@ -946,7 +946,7 @@ then, install-from-URL is the supported install path.
 ### Source
 
 - `src/Plugins/Contract/LifecycleInterface.php` — the contract every
-  plugin implements (moving to `Phlex\Shared\Plugin` in B.1).
+  plugin implements (moving to `Phlix\Shared\Plugin` in B.1).
 - `src/Plugins/PluginLoader.php` — install / enable / disable /
   uninstall orchestrator.
 - `src/Plugins/Manifest.php`, `src/Plugins/ManifestType.php` —
@@ -961,33 +961,33 @@ then, install-from-URL is the supported install path.
 
 ### Reference plugin
 
-- [`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example)
+- [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example)
   — the fork-as-starter template.
 
 ### Where to file issues
 
 Open a GitHub issue against
-[`detain/phlex-server`](https://github.com/detain/phlex-server) with
+[`detain/phlix-server`](https://github.com/detain/phlix-server) with
 the label `area:plugins`.
 
 ---
 
 ## 13. Auth Provider Plugins (Phase D)
 
-Phlex supports pluggable external authentication providers (OIDC,
+Phlix supports pluggable external authentication providers (OIDC,
 LDAP, SAML, passkeys) through the `auth-provider` plugin type. This
 section covers how to implement a custom auth provider.
 
 ### Core interface
 
 All auth providers must implement
-`Phlex\Shared\Auth\ProviderInterface` (from `detain/phlex-shared:^0.3.0`).
+`Phlix\Shared\Auth\ProviderInterface` (from `detain/phlix-shared:^0.3.0`).
 The interface is **pure PHP with zero I/O dependencies** — all network
 calls, token validation, and userinfo fetching happen inside the
 concrete implementation.
 
 ```php
-namespace Phlex\Shared\Auth;
+namespace Phlix\Shared\Auth;
 
 interface ProviderInterface
 {
@@ -1010,14 +1010,14 @@ interface ProviderInterface
 
 ### Result types
 
-`Phlex\Shared\Auth\AuthResult` is returned by `authenticate()`:
+`Phlix\Shared\Auth\AuthResult` is returned by `authenticate()`:
 
 ```php
 final readonly class AuthResult
 {
     public function __construct(
         public bool   $success,
-        public ?string $userId     = null,  // local Phlex UUID
+        public ?string $userId     = null,  // local Phlix UUID
         public ?string $externalId = null,  // provider-specific ID
         public ?string $error      = null,
         public array  $attributes  = [],    // email, name, avatarUrl …
@@ -1031,7 +1031,7 @@ final readonly class AuthResult
 }
 ```
 
-`Phlex\Shared\Auth\UserInfo` is returned by `getUserInfo()`:
+`Phlix\Shared\Auth\UserInfo` is returned by `getUserInfo()`:
 
 ```php
 final readonly class UserInfo
@@ -1057,11 +1057,11 @@ In `plugin.json`, set `type: "auth-provider"`:
 
 ```json
 {
-    "name": "phlex-plugin-oidc-google",
+    "name": "phlix-plugin-oidc-google",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.12.0",
+    "phlix_min_server_version": "0.12.0",
     "type": "auth-provider",
-    "entry": "Phlex\\Plugins\\GoogleOIDC\\Plugin",
+    "entry": "Phlix\\Plugins\\GoogleOIDC\\Plugin",
     "settings": {
         "client_id":     { "type": "string", "required": true },
         "client_secret": { "type": "string", "required": true, "secret": true },
@@ -1073,18 +1073,18 @@ In `plugin.json`, set `type: "auth-provider"`:
 ### Lifecycle hooks
 
 ```php
-use Phlex\Common\Container\ContainerInterface;
-use Phlex\Shared\Auth\ProviderInterface;
+use Phlix\Common\Container\ContainerInterface;
+use Phlix\Shared\Auth\ProviderInterface;
 
 class Plugin implements LifecycleInterface
 {
     public function onEnable(ContainerInterface $container): void
     {
         $provider = new GoogleOidcProvider(
-            $container->get(\Phlex\Auth\AuthProviderRegistry::class)
+            $container->get(\Phlix\Auth\AuthProviderRegistry::class)
         );
 
-        $container->get(\Phlex\Auth\AuthProviderRegistry::class)
+        $container->get(\Phlix\Auth\AuthProviderRegistry::class)
             ->registerProvider($provider);
     }
 
@@ -1129,15 +1129,15 @@ for the full OpenAPI spec.
 
 A `scrobbler` plugin subscribes to playback events and reports what the
 user is listening to/watching to an external service (Last.fm, Trakt,
-etc.). Phlex ships an in-core reference implementation:
-[`Phlex\Plugins\Lastfm\Plugin`](../../src/Plugins/Lastfm/Plugin.php).
+etc.). Phlix ships an in-core reference implementation:
+[`Phlix\Plugins\Lastfm\Plugin`](../../src/Plugins/Lastfm/Plugin.php).
 
 ### What gets submitted
 
 | Event                     | Action taken by scrobbler                                                    |
 | ------------------------- | ------------------------------------------------------------------------- |
-| `phlex.playback.started` | (Optional) Submit "Now Playing" — updates the user's profile live         |
-| `phlex.playback.stopped`  | Submit scrobble when the track has been played past the threshold          |
+| `phlix.playback.started` | (Optional) Submit "Now Playing" — updates the user's profile live         |
+| `phlix.playback.stopped`  | Submit scrobble when the track has been played past the threshold          |
 
 ### Core classes
 
@@ -1154,12 +1154,12 @@ etc.). Phlex ships an in-core reference implementation:
 
 ```json
 {
-    "name": "phlex-plugin-lastfm",
+    "name": "phlix-plugin-lastfm",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.15.0",
+    "phlix_min_server_version": "0.15.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
-    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "entry": "Phlix\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlix.playback.started", "phlix.playback.stopped"],
     "settings": {
         "api_key":          { "type": "string", "required": true, "secret": true },
         "api_secret":       { "type": "string", "required": true, "secret": true },
@@ -1174,12 +1174,12 @@ etc.). Phlex ships an in-core reference implementation:
 ### Plugin lifecycle
 
 ```php
-use Phlex\Plugins\Lastfm\Plugin;
-use Phlex\Plugins\Lastfm\LastfmApiClient;
-use Phlex\Session\SessionManager;
+use Phlix\Plugins\Lastfm\Plugin;
+use Phlix\Plugins\Lastfm\LastfmApiClient;
+use Phlix\Session\SessionManager;
 use Psr\Container\ContainerInterface;
 
-final class MyLastfmPlugin implements \Phlex\Plugins\Contract\LifecycleInterface
+final class MyLastfmPlugin implements \Phlix\Plugins\Contract\LifecycleInterface
 {
     private ?LastfmApiClient $client = null;
 
@@ -1199,7 +1199,7 @@ final class MyLastfmPlugin implements \Phlex\Plugins\Contract\LifecycleInterface
 
     public function subscribedEvents(): array
     {
-        return \Phlex\Plugins\Lastfm\Plugin::getSubscribedEvents();
+        return \Phlix\Plugins\Lastfm\Plugin::getSubscribedEvents();
     }
 }
 ```

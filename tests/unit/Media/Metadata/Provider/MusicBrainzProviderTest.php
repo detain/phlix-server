@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata\Provider;
+namespace Phlix\Tests\Unit\Media\Metadata\Provider;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\MetadataHttpClient;
-use Phlex\Media\Metadata\Provider\MusicBrainzProvider;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Metadata\MetadataHttpClient;
+use Phlix\Media\Metadata\Provider\MusicBrainzProvider;
+use Phlix\Common\Logger\LoggerFactory;
 
 class MusicBrainzProviderTest extends TestCase
 {
@@ -46,7 +46,7 @@ class MusicBrainzProviderTest extends TestCase
                 ],
             ]);
 
-        $provider = new MusicBrainzProvider($this->httpClient, 'Phlex/1.0 (test@example.com)');
+        $provider = new MusicBrainzProvider($this->httpClient, 'Phlix/1.0 (test@example.com)');
         $results = $provider->search('test query', ['entity' => 'artist']);
 
         $this->assertIsArray($results);
@@ -61,7 +61,7 @@ class MusicBrainzProviderTest extends TestCase
             ->method('get')
             ->willReturn(null);
 
-        $provider = new MusicBrainzProvider($this->httpClient, 'Phlex/1.0 (test@example.com)');
+        $provider = new MusicBrainzProvider($this->httpClient, 'Phlix/1.0 (test@example.com)');
         $results = $provider->search('test query');
 
         $this->assertIsArray($results);
@@ -173,18 +173,18 @@ class MusicBrainzProviderTest extends TestCase
 
     public function test_mb_headers_includes_ua(): void
     {
-        $provider = new MusicBrainzProvider($this->httpClient, 'Phlex/1.0 (test@example.com)');
+        $provider = new MusicBrainzProvider($this->httpClient, 'Phlix/1.0 (test@example.com)');
 
         // Use reflection to access mbHeaders method
         $reflection = new \ReflectionClass($provider);
         $method = $reflection->getMethod('mbHeaders');
         $method->setAccessible(true);
 
-        $headers = $method->invoke($provider, 'Phlex/1.0 (test@example.com)');
+        $headers = $method->invoke($provider, 'Phlix/1.0 (test@example.com)');
 
         $this->assertArrayHasKey('User-Agent', $headers);
         $this->assertArrayHasKey('Content-Type', $headers);
-        $this->assertEquals('Phlex/1.0 (test@example.com)', $headers['User-Agent']);
+        $this->assertEquals('Phlix/1.0 (test@example.com)', $headers['User-Agent']);
     }
 
     public function test_get_source_name(): void
@@ -316,7 +316,7 @@ class MusicBrainzProviderTest extends TestCase
             ->method('get')
             ->willThrowException(new \RuntimeException('Network error'));
 
-        $provider = new MusicBrainzProvider($this->httpClient, 'Phlex/1.0 (test@example.com)');
+        $provider = new MusicBrainzProvider($this->httpClient, 'Phlix/1.0 (test@example.com)');
         $results = $provider->search('test query', ['entity' => 'artist']);
 
         $this->assertIsArray($results);

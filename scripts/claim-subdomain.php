@@ -6,25 +6,25 @@ declare(strict_types=1);
 /**
  * Claim a subdomain from the hub.
  *
- * After enrollment, this script claims a *.phlex.media subdomain
+ * After enrollment, this script claims a *.phlix.media subdomain
  * for the server, provisions TLS certificates, and stores the
  * configuration locally.
  *
  * Usage: php scripts/claim-subdomain.php
  *
- * @package Phlex\Scripts
+ * @package Phlix\Scripts
  * @since 0.12.0
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Phlex\Hub\SubdomainClient;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\HttpClient;
-use Phlex\Hub\HttpResponse;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Hub\SubdomainClient;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\HttpClient;
+use Phlix\Hub\HttpResponse;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 
 $configDir = __DIR__ . '/../config';
 $hubConfigFile = $configDir . '/hub.php';
@@ -35,7 +35,7 @@ if (!file_exists($hubConfigFile)) {
 }
 
 $hubConfig = require $hubConfigFile;
-$hubBaseUrl = $hubConfig['hub_base_url'] ?? 'https://hub.phlex.media';
+$hubBaseUrl = $hubConfig['hub_base_url'] ?? 'https://hub.phlix.media';
 $subdomainAutoClaim = $hubConfig['subdomain_auto_claim'] ?? true;
 
 $keyManager = new Ed25519KeyManager($configDir . '/hub-signing-key.pem');
@@ -59,7 +59,7 @@ $subdomainClient = new SubdomainClient(
 
 $existingSubdomain = $subdomainClient->getCurrentSubdomain();
 if ($existingSubdomain !== null) {
-    echo "Subdomain already claimed: {$existingSubdomain}.phlex.media\n";
+    echo "Subdomain already claimed: {$existingSubdomain}.phlix.media\n";
     echo "Use --release to release and re-claim.\n";
     exit(0);
 }
@@ -78,7 +78,7 @@ if ($result === null) {
     exit(1);
 }
 
-echo "Allocated subdomain: {$result->subdomain}.phlex.media\n";
+echo "Allocated subdomain: {$result->subdomain}.phlix.media\n";
 echo "Certificate: {$result->tlsCertPath}\n";
 echo "Key: {$result->tlsKeyPath}\n";
 echo "Success!\n";

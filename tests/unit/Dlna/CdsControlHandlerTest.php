@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlex\Dlna\CdsControlHandler;
-use Phlex\Dlna\ContentDirectory;
-use Phlex\Dlna\DlnaServer;
+use Phlix\Dlna\CdsControlHandler;
+use Phlix\Dlna\ContentDirectory;
+use Phlix\Dlna\DlnaServer;
 
 /**
  * Tests for CdsControlHandler class.

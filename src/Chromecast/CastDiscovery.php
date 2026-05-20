@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Chromecast;
+namespace Phlix\Chromecast;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
 
 /**
  * Chromecast device discovery via mDNS.

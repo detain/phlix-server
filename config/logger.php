@@ -16,7 +16,7 @@ return [
             'level' => 'error',
         ],
         // PSR-14 event-dispatch debug log. Active only when
-        // PHLEX_DEBUG_EVENTS=1; otherwise the file stays empty.
+        // PHLIX_DEBUG_EVENTS=1; otherwise the file stays empty.
         'events' => [
             'type' => 'rotating_file',
             'path' => __DIR__ . '/../.logs/events.log',

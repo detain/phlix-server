@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebPortal;
+namespace Phlix\Server\WebPortal;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\Http\Router;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\PlaybackMarkerService;
-use Phlex\Session\SessionManager;
-use Phlex\Session\PlaybackController;
-use Phlex\Auth\AuthManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Session\SessionManager;
+use Phlix\Session\PlaybackController;
+use Phlix\Auth\AuthManager;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -22,7 +22,7 @@ use Phlex\Auth\AuthManager;
  * All endpoints return JSON responses suitable for consumption
  * by the web portal's JavaScript client.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Handles REST API routing for the web portal interface
  *

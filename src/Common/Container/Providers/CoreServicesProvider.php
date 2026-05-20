@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Database\ConnectionPool;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Common\Logger\AuditLogger;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\AuditLogger;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -31,9 +31,9 @@ use function DI\factory;
  * - {@see AuditLogger} is wired against the AUDIT channel so AuthManager
  *   resolves with the correct logger automatically.
  *
- * @internal Phlex-internal service provider; consumed by ContainerFactory only.
+ * @internal Phlix-internal service provider; consumed by ContainerFactory only.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class CoreServicesProvider implements ServiceProviderInterface

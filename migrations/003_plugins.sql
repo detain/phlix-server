@@ -1,5 +1,5 @@
--- Phlex Media Server — Plugin loader (Step A.4)
--- Tracks plugins that have been installed via Phlex Plugins PluginLoader.
+-- Phlix Media Server — Plugin loader (Step A.4)
+-- Tracks plugins that have been installed via Phlix Plugins PluginLoader.
 -- One row per installed plugin keyed on the manifest name. The enabled
 -- flag drives the auto-enable bootstrap that runs at container build
 -- time. manifest_json stores the full parsed manifest so the loader can

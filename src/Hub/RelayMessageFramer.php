@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Frames and parses relay messages over the WebSocket tunnel.
@@ -19,7 +19,7 @@ namespace Phlex\Hub;
  *
  * Payload is always JSON.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class RelayMessageFramer

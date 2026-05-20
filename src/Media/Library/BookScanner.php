@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
@@ -17,7 +17,7 @@ use SplFileInfo;
  * extracting metadata from EPUB content.opf, PDF metadata, and CBZ
  * ComicInfo.xml files.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Scanner for EPUB, PDF, and CBZ book files
  * @since 0.17.0
@@ -59,7 +59,7 @@ class BookScanner extends MediaScanner
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_media_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_media_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -246,7 +246,7 @@ class BookScanner extends MediaScanner
                             $coverData = $za->getFromName($coverPath);
                             if ($coverData !== false) {
                                 $ext = pathinfo($coverHref, PATHINFO_EXTENSION);
-                                $tempCover = sys_get_temp_dir() . '/phlex_cover_' . uniqid() . '.' . $ext;
+                                $tempCover = sys_get_temp_dir() . '/phlix_cover_' . uniqid() . '.' . $ext;
                                 file_put_contents($tempCover, $coverData);
                                 $metadata['cover_path'] = $tempCover;
                             }
@@ -467,7 +467,7 @@ class BookScanner extends MediaScanner
                 $coverData = $za->getFromName($coverFile);
                 if ($coverData !== false) {
                     $ext = pathinfo($coverFile, PATHINFO_EXTENSION);
-                    $tempCover = sys_get_temp_dir() . '/phlex_cover_' . uniqid() . '.' . $ext;
+                    $tempCover = sys_get_temp_dir() . '/phlix_cover_' . uniqid() . '.' . $ext;
                     file_put_contents($tempCover, $coverData);
                     $metadata['cover_path'] = $tempCover;
                 }

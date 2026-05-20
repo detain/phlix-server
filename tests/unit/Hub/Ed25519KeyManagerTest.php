@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\KeyPair;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\KeyPair;
 use RuntimeException;
 
 class Ed25519KeyManagerTest extends TestCase
@@ -17,7 +17,7 @@ class Ed25519KeyManagerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
         $this->keyPath = $this->tmpDir . '/ed25519-test-key.pem';
     }

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -13,7 +13,7 @@ use Psr\Log\NullLogger;
  *
  * All API calls are signed with HMAC-MD5 per the Last.fm API specification.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final class LastfmApiClient implements LastfmApiClientInterface
@@ -114,7 +114,7 @@ final class LastfmApiClient implements LastfmApiClientInterface
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
-            CURLOPT_HTTPHEADER => ['User-Agent: PhlexMediaServer/1.0'],
+            CURLOPT_HTTPHEADER => ['User-Agent: PhlixMediaServer/1.0'],
         ]);
 
         $raw = curl_exec($ch);
@@ -320,7 +320,7 @@ final class LastfmApiClient implements LastfmApiClientInterface
             CURLOPT_POSTFIELDS => http_build_query($params),
             CURLOPT_TIMEOUT => 15,
             CURLOPT_HTTPHEADER => [
-                'User-Agent: PhlexMediaServer/1.0',
+                'User-Agent: PhlixMediaServer/1.0',
                 'Content-Type: application/x-www-form-urlencoded',
             ],
         ]);

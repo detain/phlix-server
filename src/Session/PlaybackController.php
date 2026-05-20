@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session;
+namespace Phlix\Session;
 
-use Phlex\Common\Util\RowMap;
-use Phlex\Stats\StatsCollector;
-use Phlex\Shared\Events\Playback\PlaybackPaused;
-use Phlex\Shared\Events\Playback\PlaybackResumed;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Util\RowMap;
+use Phlix\Stats\StatsCollector;
+use Phlix\Shared\Events\Playback\PlaybackPaused;
+use Phlix\Shared\Events\Playback\PlaybackResumed;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -23,10 +23,10 @@ use Workerman\MySQL\Connection;
  * providing functionality to report progress, retrieve playback state,
  * and manage "continue watching" and "recently watched" lists.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Manages playback state persistence and progress tracking
- *              for session-based media playback in the Phlex Media Server.
+ *              for session-based media playback in the Phlix Media Server.
  * @see SessionManager For session lifecycle management
  *
  * @property Connection $db Database connection instance
@@ -50,8 +50,8 @@ class PlaybackController
     /** @var StatsCollector|null Stats collector for recording playback events */
     private ?StatsCollector $statsCollector;
 
-    /** @var \Phlex\Dlna\PlayToManager|null DLNA play-to manager for renderer sessions */
-    private ?\Phlex\Dlna\PlayToManager $playToManager;
+    /** @var \Phlix\Dlna\PlayToManager|null DLNA play-to manager for renderer sessions */
+    private ?\Phlix\Dlna\PlayToManager $playToManager;
 
     /** @var array<string, string> Map of sessionId:mediaItemId -> eventId for playback tracking */
     private array $playbackEventIds = [];
@@ -84,7 +84,7 @@ class PlaybackController
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
         ?StatsCollector $statsCollector = null,
-        ?\Phlex\Dlna\PlayToManager $playToManager = null
+        ?\Phlix\Dlna\PlayToManager $playToManager = null
     ) {
         $this->db = $db;
         $this->sessionManager = $sessionManager;
@@ -101,7 +101,7 @@ class PlaybackController
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_playback_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_playback_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [
@@ -665,7 +665,7 @@ class PlaybackController
      * @param string $streamUrl HLS stream URL for the renderer
      * @param string $metadata DIDL-Lite metadata (optional)
      *
-     * @return \Phlex\Dlna\PlayToSession|null New play-to session or null on failure
+     * @return \Phlix\Dlna\PlayToSession|null New play-to session or null on failure
      *
      * @since 0.12.0
      */
@@ -675,7 +675,7 @@ class PlaybackController
         string $rendererId,
         string $streamUrl,
         string $metadata = ''
-    ): ?\Phlex\Dlna\PlayToSession {
+    ): ?\Phlix\Dlna\PlayToSession {
         try {
             if ($this->playToManager === null) {
                 $this->logger->warning('PlayToManager not available — inject it via constructor');

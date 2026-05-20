@@ -1,7 +1,7 @@
 [Unit]
-Description=Phlex Media Server Scheduled Tasks Timer
-Documentation=https://docs.phlex.media
-After=phlex-server.service
+Description=Phlix Media Server Scheduled Tasks Timer
+Documentation=https://docs.phlix.media
+After=phlix-server.service
 
 [Timer]
 OnBootSec=5min

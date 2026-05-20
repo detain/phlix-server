@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Music;
+namespace Phlix\Media\Music;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\PhotoLibraryManager;
-use Phlex\Media\Library\PhotoScanner;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PhotoLibraryManager;
+use Phlix\Media\Library\PhotoScanner;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -18,14 +18,14 @@ use Workerman\MySQL\Connection;
  * scanning and metadata handling. It is automatically discovered by the
  * library type registry and used when creating or scanning photo libraries.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Library type plugin for photo media with EXIF extraction
  * @see PhotoScanner For photo discovery and EXIF extraction
  * @see PhotoLibraryManager For photo library management
  * @since 0.16.0
  */
-final class PhotoLibraryType implements \Phlex\Media\Library\LibraryTypeInterface
+final class PhotoLibraryType implements \Phlix\Media\Library\LibraryTypeInterface
 {
     /** Library type identifier */
     public const TYPE = 'photo';

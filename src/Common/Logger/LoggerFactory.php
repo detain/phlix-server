@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Logger;
+namespace Phlix\Common\Logger;
 
 class LoggerFactory
 {

@@ -5,7 +5,7 @@ description: Adds a new Smarty template under `public/templates/{section}/*.tpl`
 
 # smarty-page
 
-Adds a Smarty-rendered HTML page to the Phlex web portal. Every page requires two artifacts that must stay in sync: a `.tpl` file under `public/templates/{section}/` and a `renderXxx(Request $request): Response` method in `src/Server/WebPortal/PageRenderer.php`.
+Adds a Smarty-rendered HTML page to the Phlix web portal. Every page requires two artifacts that must stay in sync: a `.tpl` file under `public/templates/{section}/` and a `renderXxx(Request $request): Response` method in `src/Server/WebPortal/PageRenderer.php`.
 
 ## Critical
 
@@ -25,7 +25,7 @@ Adds a Smarty-rendered HTML page to the Phlex web portal. Every page requires tw
    ```smarty
    {extends file="layouts/main.tpl"}
 
-   {block name="title"}<Page Name> - Phlex{/block}
+   {block name="title"}<Page Name> - Phlix{/block}
 
    {block name="main"}
    <div class="<section>-page">
@@ -78,7 +78,7 @@ Adds a Smarty-rendered HTML page to the Phlex web portal. Every page requires tw
 1. Create `public/templates/settings/index.tpl`:
    ```smarty
    {extends file="layouts/main.tpl"}
-   {block name="title"}Settings - Phlex{/block}
+   {block name="title"}Settings - Phlix{/block}
    {block name="main"}
    <div class="settings-page">
        <h1>Settings</h1>
@@ -111,7 +111,7 @@ Adds a Smarty-rendered HTML page to the Phlex web portal. Every page requires tw
 - **`Smarty\Exception: Unable to load template file 'X/Y.tpl'`** — `setTemplateDir($this->templateDir)` was called but the file is in the wrong place. Run `ls -la $(php -r "require 'vendor/autoload.php'; echo realpath(__DIR__.'/public/templates');")/<section>/<view>.tpl`. Path is relative to `$this->templateDir`, not the project root.
 - **Page renders without sidebar / no styling** — the template forgot `{extends file="layouts/main.tpl"}` or wrapped its content in `{block name="body"}` instead of `{block name="main"}`. `body` is owned by `layouts/base.tpl`; portal pages override `main`. Compare against `public/templates/home/index.tpl:5`.
 - **Sidebar shows no active nav item** — `$template->assign('current_page', '<section>')` was omitted or the value doesn't match the `{if $current_page == '...'}` in `layouts/main.tpl:13-28`. Values currently recognized: `home`, `library`, `search`, `settings`.
-- **`Call to undefined method Phlex\Server\Http\Response::html()`** — wrong namespace imported. The top of `PageRenderer.php` uses `use Phlex\Server\Http\Response;` (line 8). Do not import `Symfony\...\Response` or PSR-7 `ResponseInterface`.
+- **`Call to undefined method Phlix\Server\Http\Response::html()`** — wrong namespace imported. The top of `PageRenderer.php` uses `use Phlix\Server\Http\Response;` (line 8). Do not import `Symfony\...\Response` or PSR-7 `ResponseInterface`.
 - **`Smarty\Exception: Syntax error in template ... unbalanced block`** — `{block name="main"}` has no matching `{/block}`, or a `{foreach}`/`{if}` is unclosed. Quick check: `awk '/\{block|\{foreach|\{if/{o++} /\{\/block|\{\/foreach|\{\/if/{c++} END{print o, c}' public/templates/<section>/<view>.tpl` — open and close counts must match.
 - **Route 404s even though `renderXxx` exists** — step 4 was skipped. `grep -n 'render<Name>' src/Server/WebPortal/WebPortalRouter.php` returns nothing. Add the route registration; restart the dev server so the router rebuilds.
 - **`Cannot instantiate Smarty: class not found`** — Smarty must be loaded via Composer autoload. Run `composer require smarty/smarty` if missing, then `composer dump-autoload`. `vendor/smarty/smarty/` should exist.

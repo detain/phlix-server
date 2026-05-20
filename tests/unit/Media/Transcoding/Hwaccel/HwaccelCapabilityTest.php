@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 
 class HwaccelCapabilityTest extends TestCase
 {

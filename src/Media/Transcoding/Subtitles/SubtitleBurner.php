@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Subtitles;
+namespace Phlix\Media\Transcoding\Subtitles;
 
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
  * Burns subtitles into video streams during transcoding.

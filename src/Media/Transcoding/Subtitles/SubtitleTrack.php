@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Subtitles;
+namespace Phlix\Media\Transcoding\Subtitles;
 
 /**
  * Immutable metadata for a subtitle track detected in a media file.

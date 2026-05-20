@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use Jose\Component\Core\JWKSet;
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
-use Phlex\Plugins\Oidc\IdTokenClaims;
-use Phlex\Plugins\Oidc\IdTokenValidator;
-use Phlex\Plugins\Oidc\OidcValidationException;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Plugins\Oidc\IdTokenClaims;
+use Phlix\Plugins\Oidc\IdTokenValidator;
+use Phlix\Plugins\Oidc\OidcValidationException;
 
 /**
- * @covers \Phlex\Plugins\Oidc\IdTokenValidator
+ * @covers \Phlix\Plugins\Oidc\IdTokenValidator
  */
 final class IdTokenValidatorTest extends TestCase
 {

@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Ldap;
+namespace Phlix\Tests\Unit\Plugins\Ldap;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Ldap\LdapProvider;
-use Phlex\Plugins\Ldap\LdapConnection;
-use Phlex\Plugins\Ldap\UserMapper;
-use Phlex\Plugins\Ldap\LdapUserInfo;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
+use Phlix\Plugins\Ldap\LdapProvider;
+use Phlix\Plugins\Ldap\LdapConnection;
+use Phlix\Plugins\Ldap\UserMapper;
+use Phlix\Plugins\Ldap\LdapUserInfo;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
 
 final class LdapProviderTest extends TestCase
 {

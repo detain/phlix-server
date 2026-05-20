@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Stats;
+namespace Phlix\Tests\Unit\Stats;
 
 use DateTime;
 use PHPUnit\Framework\TestCase;
-use Phlex\Stats\StatsCollector;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 class StatsCollectorTest extends TestCase

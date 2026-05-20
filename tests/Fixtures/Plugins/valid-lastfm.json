@@ -1,10 +1,10 @@
 {
-    "name": "phlex-plugin-lastfm",
+    "name": "phlix-plugin-lastfm",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
-    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "entry": "Phlix\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlix.playback.started", "phlix.playback.stopped"],
     "settings": {
         "api_key": { "type": "string", "required": true, "secret": true },
         "api_secret": { "type": "string", "required": true, "secret": true }

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Oidc\IdTokenClaims;
+use Phlix\Plugins\Oidc\IdTokenClaims;
 
 /**
- * @covers \Phlex\Plugins\Oidc\IdTokenClaims
+ * @covers \Phlix\Plugins\Oidc\IdTokenClaims
  */
 final class IdTokenClaimsTest extends TestCase
 {

@@ -1,6 +1,6 @@
 # Developer Documentation
 
-This document provides detailed information for developers working on the Phlex Media Server project.
+This document provides detailed information for developers working on the Phlix Media Server project.
 
 ## Table of Contents
 
@@ -25,8 +25,8 @@ This document provides detailed information for developers working on the Phlex 
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/phlex.git
-cd phlex
+git clone https://github.com/your-org/phlix.git
+cd phlix
 
 # Install PHP dependencies
 composer install
@@ -1241,7 +1241,7 @@ Metadata is stored as JSON in the `metadata_json` column:
 
 ## Authentication Architecture
 
-The Phlex Media Server uses JWT-based authentication with refresh tokens for secure stateless authentication across multiple devices.
+The Phlix Media Server uses JWT-based authentication with refresh tokens for secure stateless authentication across multiple devices.
 
 ### Component Overview
 
@@ -1294,7 +1294,7 @@ API Request (with access token):
 **Access Token Claims:**
 ```json
 {
-    "iss": "phlex",
+    "iss": "phlix",
     "sub": "user-uuid-123",
     "iat": 1700000000,
     "exp": 1700003600,
@@ -1305,7 +1305,7 @@ API Request (with access token):
 **Refresh Token Claims:**
 ```json
 {
-    "iss": "phlex",
+    "iss": "phlix",
     "sub": "user-uuid-123",
     "iat": 1700000000,
     "exp": 1700600000,
@@ -1961,7 +1961,7 @@ For each device:
 
 | Type | URN | Description |
 |------|-----|-------------|
-| MediaServer | `urn:schemas-upnp-org:device:MediaServer:1` | Content provider (Phlex server) |
+| MediaServer | `urn:schemas-upnp-org:device:MediaServer:1` | Content provider (Phlix server) |
 | MediaRenderer | `urn:schemas-upnp-org:device:MediaRenderer:1` | Playback device (TV, receiver) |
 
 ### UPnP Services
@@ -2001,7 +2001,7 @@ The main DLNA server class implementing UPnP MediaServer:
 // Create DLNA server
 $server = new DlnaServer(
     'server-001',
-    'Phlex Media Server',
+    'Phlix Media Server',
     '192.168.1.100',
     8200,
     $itemRepository,
@@ -2031,9 +2031,9 @@ Represents a DLNA/UPnP device (server or renderer):
 ```php
 // Create a MediaServer device
 $device = new DlnaDevice(
-    'uuid:phlex-server-001',
+    'uuid:phlix-server-001',
     DlnaDevice::TYPE_SERVER,
-    'Phlex Media Server',
+    'Phlix Media Server',
     '192.168.1.100',
     8200
 );
@@ -2266,21 +2266,21 @@ tests/
 ```php
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http;
+namespace Phlix\Tests\Unit\Server\Http;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Http\Response;
 
 /**
  * Unit tests for Response class.
  *
- * @covers \Phlex\Server\Http\Response
+ * @covers \Phlix\Server\Http\Response
  */
 class ResponseTest extends TestCase
 {
     /**
-     * @covers \Phlex\Server\Http\Response::json
-     * @covers \Phlex\Server\Http\Response::status
+     * @covers \Phlix\Server\Http\Response::json
+     * @covers \Phlix\Server\Http\Response::status
      */
     public function testCanCreateJsonResponse(): void
     {
@@ -2416,7 +2416,7 @@ php scripts/seed.php                     # Seed database
 
 ## Additional Resources
 
-- [Technical Specification](./PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md)
+- [Technical Specification](./PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md)
 - [Implementation Plan](./IMPLEMENTATION_PLAN.md)
 - [API Documentation](./public_html/spec/openapi.yaml)
 - [Platform Documentation](./PLATFORM_*.md)

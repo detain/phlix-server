@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="title"}{$item.name|default:'Item Details'} - Phlex{/block}
+{block name="title"}{$item.name|default:'Item Details'} - Phlix{/block}
 
 {block name="main"}
 <div class="detail-page">

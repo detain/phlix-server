@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Roku;
+namespace Phlix\Tests\Unit\Roku;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
-use Phlex\Roku\RokuDevice;
-use Phlex\Roku\RokuDiscovery;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
+use Phlix\Roku\RokuDevice;
+use Phlix\Roku\RokuDiscovery;
 
 class RokuDiscoveryTest extends TestCase
 {

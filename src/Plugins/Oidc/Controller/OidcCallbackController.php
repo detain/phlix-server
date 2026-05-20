@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc\Controller;
+namespace Phlix\Plugins\Oidc\Controller;
 
-use Phlex\Plugins\Oidc\OidcProvider;
-use Phlex\Plugins\Oidc\OidcStateStore;
-use Phlex\Plugins\Oidc\SessionOidcStateStore;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
+use Phlix\Plugins\Oidc\OidcProvider;
+use Phlix\Plugins\Oidc\OidcStateStore;
+use Phlix\Plugins\Oidc\SessionOidcStateStore;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
 
 /**
  * Handles OIDC authentication callback endpoints.
@@ -22,7 +22,7 @@ use Phlex\Common\Logger\LogChannels;
  * - GET  /auth/oidc/authorize  → redirect to provider authorization endpoint
  * - GET  /auth/oidc/callback   → handle callback from provider
  *
- * @package Phlex\Plugins\Oidc\Controller
+ * @package Phlix\Plugins\Oidc\Controller
  * @since 0.11.0
  */
 final class OidcCallbackController

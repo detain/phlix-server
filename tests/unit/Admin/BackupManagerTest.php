@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Admin;
+namespace Phlix\Tests\Unit\Admin;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Admin\BackupManager;
-use Phlex\Admin\RestoreResult;
+use Phlix\Admin\BackupManager;
+use Phlix\Admin\RestoreResult;
 use Workerman\MySQL\Connection;
 
 class BackupManagerTest extends TestCase
@@ -31,7 +31,7 @@ class BackupManagerTest extends TestCase
             [
                 'id' => 'backup-1',
                 'label' => 'First Backup',
-                'file_path' => '/var/phlex/backups/backup_1.tar.gz',
+                'file_path' => '/var/phlix/backups/backup_1.tar.gz',
                 'size_bytes' => 1024,
                 'checksum_sha256' => 'abc123',
                 'is_s3' => false,
@@ -41,7 +41,7 @@ class BackupManagerTest extends TestCase
             [
                 'id' => 'backup-2',
                 'label' => 'Second Backup',
-                'file_path' => '/var/phlex/backups/backup_2.tar.gz',
+                'file_path' => '/var/phlix/backups/backup_2.tar.gz',
                 'size_bytes' => 2048,
                 'checksum_sha256' => 'def456',
                 'is_s3' => true,

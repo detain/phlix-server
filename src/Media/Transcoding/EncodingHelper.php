@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
 /**
  * Encoding Helper - Calculates encoding parameters based on source and profile.
@@ -10,7 +10,7 @@ namespace Phlex\Media\Transcoding;
  * Analyzes source media information and device capabilities to determine
  * optimal encoding parameters for transcoding operations.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Encoding parameter calculator for FFmpeg transcoding
  * @see FfmpegRunner For command execution

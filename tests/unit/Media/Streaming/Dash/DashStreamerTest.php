@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Streaming\Dash;
+namespace Phlix\Tests\Unit\Media\Streaming\Dash;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\Dash\DashStreamer;
-use Phlex\Media\Streaming\Dash\AdaptationSet;
+use Phlix\Media\Streaming\Dash\DashStreamer;
+use Phlix\Media\Streaming\Dash\AdaptationSet;
 
 class DashStreamerTest extends TestCase
 {
@@ -15,7 +15,7 @@ class DashStreamerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->segmentDir = sys_get_temp_dir() . '/phlex_test_dash_' . uniqid();
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_test_dash_' . uniqid();
         mkdir($this->segmentDir, 0755, true);
 
         $this->dashStreamer = new DashStreamer(

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 /**
  * Immutable value object carrying the data required for a Last.fm scrobble
  * submission to the `track.scrobble` API endpoint.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final readonly class ScrobbleData

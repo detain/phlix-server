@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="title"}Home - Phlex{/block}
+{block name="title"}Home - Phlix{/block}
 
 {block name="main"}
 <div class="home-page">

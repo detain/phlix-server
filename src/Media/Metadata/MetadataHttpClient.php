@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
 
 /**
  * MetadataHttpClient provides HTTP communication with metadata provider APIs.
@@ -14,7 +14,7 @@ use Phlex\Common\Logger\LogChannels;
  * caching, error handling, and API key authentication. It validates JSON responses
  * and logs errors appropriately.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description HTTP client for metadata provider API communication with caching
  */
@@ -29,8 +29,8 @@ class MetadataHttpClient
     /** @var int Request timeout in seconds */
     private int $timeout;
 
-    /** @var \Phlex\Common\Logger\StructuredLogger Structured logger instance */
-    private \Phlex\Common\Logger\StructuredLogger $logger;
+    /** @var \Phlix\Common\Logger\StructuredLogger Structured logger instance */
+    private \Phlix\Common\Logger\StructuredLogger $logger;
 
     /** @var array<string, array<string, mixed>> Response cache keyed by endpoint and parameters */
     private array $cache = [];

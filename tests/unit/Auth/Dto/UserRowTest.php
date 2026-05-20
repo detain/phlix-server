@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth\Dto;
+namespace Phlix\Tests\Unit\Auth\Dto;
 
-use Phlex\Auth\Dto\UserRow;
+use Phlix\Auth\Dto\UserRow;
 use PHPUnit\Framework\TestCase;
 
 /**

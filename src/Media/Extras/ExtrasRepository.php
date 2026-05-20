@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Extras;
+namespace Phlix\Media\Extras;
 
 use Workerman\MySQL\Connection;
 

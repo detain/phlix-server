@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Dlna\RendererControlClient;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Dlna\RendererControlClient;
 
 class RendererControlClientTest extends TestCase
 {

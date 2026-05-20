@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Relay;
+namespace Phlix\Tests\Unit\LiveTv\Relay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Relay\HlsRelaySession;
+use Phlix\LiveTv\Relay\HlsRelaySession;
 
 /**
  * Unit tests for HlsRelaySession value object.

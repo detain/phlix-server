@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Detection;
+namespace Phlix\Media\Markers\Detection;
 
 use Generator;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Fingerprinting\ChromaPrintInterface;
-use Phlex\Media\Markers\Fingerprinting\FingerprintRepository;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
+use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 

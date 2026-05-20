@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
-use Phlex\Auth\UserRepository;
+use Phlix\Auth\UserRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -12,7 +12,7 @@ use Workerman\MySQL\Connection;
  * Targeted tests for the admin-flag helpers added to
  * {@see UserRepository} in Step A.5.
  *
- * @covers \Phlex\Auth\UserRepository
+ * @covers \Phlix\Auth\UserRepository
  */
 final class UserRepositoryAdminTest extends TestCase
 {

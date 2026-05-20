@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\Dvbt;
+namespace Phlix\LiveTv\Tuners\Dvbt;
 
 /**
  * Immutable descriptor for a Linux DVB-T USB tuner device.

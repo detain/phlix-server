@@ -1,7 +1,7 @@
 # Install a plugin from the curated catalog
 
 > **Status:** planned. The in-product catalog — a curated, browsable
-> list of trusted plugins fetched from the Phlex hub — is on the
+> list of trusted plugins fetched from the Phlix hub — is on the
 > roadmap for **Phase L** (notifications, analytics, and ecosystem
 > wiring) once the hub itself has shipped. The supervisor's plan does
 > not currently pin a calendar date to the catalog; the
@@ -20,7 +20,7 @@ When the catalog ships:
   list, so operators don't have to maintain their own allowlist for
   community plugins.
 - Update notifications when a known plugin publishes a new version
-  that satisfies the running server's `phlex_min_server_version`.
+  that satisfies the running server's `phlix_min_server_version`.
 
 ## What works today
 
@@ -30,7 +30,7 @@ from URL**. See [`install-from-url.md`](install-from-url.md) for the
 end-to-end walkthrough, and
 [`trusted-plugin-list.md`](trusted-plugin-list.md) for the operator's
 trust model. The reference plugin
-[`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example)
+[`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example)
 is the canonical install target for verifying the URL flow on a fresh
 server.
 
@@ -38,6 +38,6 @@ server.
 
 - [`developer-guide.md`](developer-guide.md) §11 (publishing) for the
   plugin author's view of distribution today.
-- [`PHLEX_EXPANSION_PLAN.md`](../../PHLEX_EXPANSION_PLAN.md) Phase C
+- [`PHLIX_EXPANSION_PLAN.md`](../../PHLIX_EXPANSION_PLAN.md) Phase C
   (hub) and Phase L (notifications / analytics / ecosystem wiring)
   for the long-term plan.

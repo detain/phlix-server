@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Middleware;
+namespace Phlix\Server\Http\Middleware;
 
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Gates an HTTP route group behind the `users.is_admin` flag.
  *
  * The middleware is callable so it can be registered with the existing
- * {@see \Phlex\Server\Http\Router::group()} signature, which expects
+ * {@see \Phlix\Server\Http\Router::group()} signature, which expects
  * `array<callable>` rather than a typed middleware interface.
  *
  * Behaviour:
@@ -24,11 +24,11 @@ use Phlex\Server\Http\Response;
  *    `is_admin = 1` → 403 Forbidden JSON `{error}` and an
  *    `AuditLogger::logPermissionDenied()` entry so privilege
  *    escalation attempts are traceable.
- *  - Otherwise → returns `null`, signalling the {@see \Phlex\Server\Http\Router}
+ *  - Otherwise → returns `null`, signalling the {@see \Phlix\Server\Http\Router}
  *    to continue to the route handler.
  *
  * The "admin row" looked up here is attached to `$request->userId`
- * implicitly — controllers in `Phlex\Server\Http\Controllers\Admin`
+ * implicitly — controllers in `Phlix\Server\Http\Controllers\Admin`
  * can re-use `UserRepository::findAdminById()` if they need the row
  * itself.
  *
@@ -38,7 +38,7 @@ use Phlex\Server\Http\Response;
  * token is intentionally NOT required — see also
  * `docs/plugins/install-from-url.md`.
  *
- * @package Phlex\Server\Http\Middleware
+ * @package Phlix\Server\Http\Middleware
  * @since   0.10.0 (Step A.5)
  */
 final class AdminMiddleware
@@ -58,7 +58,7 @@ final class AdminMiddleware
      * Run the middleware against a request. Returning `null` means
      * "continue routing"; returning a {@see Response} short-circuits
      * the dispatch chain (per
-     * {@see \Phlex\Server\Http\Router::runMiddleware()} semantics).
+     * {@see \Phlix\Server\Http\Router::runMiddleware()} semantics).
      *
      * @param Request $request Incoming request. {@see Request::$userId}
      *                         is expected to be filled by the bearer-token

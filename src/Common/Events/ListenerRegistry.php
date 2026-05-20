@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Events;
+namespace Phlix\Common\Events;
 
 use Crell\Tukio\OrderedListenerProvider;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\EventDispatcher\ListenerProviderInterface;
 
 /**
@@ -34,7 +34,7 @@ use Psr\EventDispatcher\ListenerProviderInterface;
  * lookup) and the API stays simple. Plugin disable + re-enable cycles
  * behave correctly.
  *
- * @package Phlex\Common\Events
+ * @package Phlix\Common\Events
  * @since 0.10.0
  */
 final class ListenerRegistry

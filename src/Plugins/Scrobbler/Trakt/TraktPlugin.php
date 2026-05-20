@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
-use Phlex\Auth\WatchHistory;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\MediaItem;
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Auth\WatchHistory;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MediaItem;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -21,10 +21,10 @@ use Psr\Log\NullLogger;
  * scrobble data to Trakt.tv using the 3-state scrobble protocol (start/stop).
  *
  * Also handles two-way watch history sync:
- * - Phlex → Trakt: On PlaybackStopped with ≥ 90% completion
- * - Trakt → Phlex: On scheduled sync (via TraktHistorySync)
+ * - Phlix → Trakt: On PlaybackStopped with ≥ 90% completion
+ * - Trakt → Phlix: On scheduled sync (via TraktHistorySync)
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 final class TraktPlugin implements LifecycleInterface
@@ -178,7 +178,7 @@ final class TraktPlugin implements LifecycleInterface
     /**
      * Handle playback stop — submit scrobble stop to Trakt.
      *
-     * Also triggers Phlex → Trakt sync if the item reached ≥ 90% completion.
+     * Also triggers Phlix → Trakt sync if the item reached ≥ 90% completion.
      *
      * @param PlaybackStopped $event The playback stopped event
      *
@@ -372,7 +372,7 @@ final class TraktPlugin implements LifecycleInterface
         $lastWatchedAt = $entry['last_watched_at'] ?? 'now';
         $durationTicks = $entry['duration_ticks'] ?? null;
 
-        $sync->syncPhlexToTrakt(
+        $sync->syncPhlixToTrakt(
             $mediaItemId,
             is_string($lastWatchedAt) ? $lastWatchedAt : 'now',
             $positionTicks,

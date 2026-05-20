@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Plugins\Scrobbler\Lastfm;
 
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * PSR-14 listener that fans Phlex playback events out to Last.fm.
+ * PSR-14 listener that fans Phlix playback events out to Last.fm.
  *
- * On `phlex.playback.started` the listener calls
+ * On `phlix.playback.started` the listener calls
  * {@see LastfmApi::updateNowPlaying()} so the user's Last.fm profile shows
  * what they are listening to in real time.
  *
- * On `phlex.playback.stopped` the listener applies the official Last.fm
+ * On `phlix.playback.stopped` the listener applies the official Last.fm
  * scrobble rules:
  *
  *  - the track must be longer than 30 seconds, AND
@@ -24,7 +24,7 @@ use Psr\Log\NullLogger;
  *
  * Only when both gates pass is {@see LastfmApi::scrobble()} invoked.
  *
- * @package Phlex\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 class LastfmScrobbler
@@ -70,7 +70,7 @@ class LastfmScrobbler
     }
 
     /**
-     * Handle `phlex.playback.started` — sends Now Playing if the user has
+     * Handle `phlix.playback.started` — sends Now Playing if the user has
      * a Last.fm session.
      */
     public function onPlaybackStarted(PlaybackStarted $event): void
@@ -92,7 +92,7 @@ class LastfmScrobbler
     }
 
     /**
-     * Handle `phlex.playback.stopped` — scrobbles when Last.fm's official
+     * Handle `phlix.playback.stopped` — scrobbles when Last.fm's official
      * `>30s AND >50%` rule is satisfied.
      *
      * The rule is enforced here (the underlying {@see LastfmApi::scrobble()}

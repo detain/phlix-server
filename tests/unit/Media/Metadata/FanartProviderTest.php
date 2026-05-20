@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata;
+namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\FanartProvider;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Metadata\FanartProvider;
+use Phlix\Common\Logger\LoggerFactory;
 
 class FanartProviderTest extends TestCase
 {

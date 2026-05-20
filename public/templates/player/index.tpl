@@ -1,6 +1,6 @@
 {extends file="layouts/player.tpl"}
 
-{block name="title"}{$item.name|default:'Now Playing'} - Phlex{/block}
+{block name="title"}{$item.name|default:'Now Playing'} - Phlix{/block}
 
 {block name="main"}
 <div class="player-page">

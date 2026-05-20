@@ -1,6 +1,6 @@
 # Plugin SDK — internals reference
 
-This document is for **phlex-server contributors** who want to extend
+This document is for **phlix-server contributors** who want to extend
 the plugin loader itself, add a new plugin slot to a host subsystem,
 or document new container bindings that plugin authors can resolve.
 
@@ -10,15 +10,15 @@ you want is [`docs/plugins/developer-guide.md`](../plugins/developer-guide.md).
 The contracts described here are stable enough to be relied on by
 plugin authors. Step B.1 hoists the most important ones
 (`LifecycleInterface`, `ManifestType`, the manifest value object) into
-a separate `phlex-shared` package so plugins can depend on the
+a separate `phlix-shared` package so plugins can depend on the
 contracts without dragging in the whole server — see
-[§4](#4-phlex-shared-namespace-migration-plan).
+[§4](#4-phlix-shared-namespace-migration-plan).
 
 ---
 
 ## TL;DR
 
-This page is the **server-internals reference** for plugin SDK authors and phlex-server contributors extending the plugin loader. It covers the manifest schema, lifecycle walkthrough, container bindings, PSR-14 events, how to add a new plugin type, the `phlex-shared` migration, and loader extension points.
+This page is the **server-internals reference** for plugin SDK authors and phlix-server contributors extending the plugin loader. It covers the manifest schema, lifecycle walkthrough, container bindings, PSR-14 events, how to add a new plugin type, the `phlix-shared` migration, and loader extension points.
 
 If you are **writing a plugin**, start with [`docs/plugins/developer-guide.md`](../plugins/developer-guide.md) instead. That guide is the author-facing getting-started view; this doc explains how the host implements it.
 
@@ -45,10 +45,10 @@ excluded.
 | Container ID                                | Type                                         | Purpose                                                |
 | ------------------------------------------- | -------------------------------------------- | ------------------------------------------------------ |
 | `Psr\Log\LoggerInterface`                   | Default Monolog channel                      | Generic logging when you don't care about the channel  |
-| `Phlex\Common\Logger\LoggerFactory`         | Factory                                      | Resolve `LoggerFactory::get(LogChannels::PLUGINS)` etc.|
-| `logger.plugins`                            | `Phlex\Common\Logger\StructuredLogger`       | Plugins channel — recommended for plugin output        |
+| `Phlix\Common\Logger\LoggerFactory`         | Factory                                      | Resolve `LoggerFactory::get(LogChannels::PLUGINS)` etc.|
+| `logger.plugins`                            | `Phlix\Common\Logger\StructuredLogger`       | Plugins channel — recommended for plugin output        |
 | `logger.auth`, `logger.http`, `logger.media`, `logger.session`, `logger.streaming`, `logger.websocket`, `logger.events` | `StructuredLogger` | Named loggers per `LogChannels` constant               |
-| `Phlex\Common\Logger\AuditLogger`           | `AuditLogger`                                | Security-event audit trail                             |
+| `Phlix\Common\Logger\AuditLogger`           | `AuditLogger`                                | Security-event audit trail                             |
 
 Convention: use `logger.plugins` from plugin code so the operator can
 filter your output with the `--channel=plugins` log-cat dial.
@@ -68,8 +68,8 @@ sanctioned shape.
 | Container ID                                       | Type                                            | Purpose                                         |
 | -------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
 | `Psr\EventDispatcher\EventDispatcherInterface`     | `Crell\Tukio\Dispatcher`                        | **Publish** events                              |
-| `Phlex\Common\Events\ListenerRegistry`             | `ListenerRegistry`                              | **Subscribe** listeners (the loader uses this)  |
-| `Phlex\Common\Events\EventDispatcherFactory`       | Factory                                         | Rarely needed — exposed for tests               |
+| `Phlix\Common\Events\ListenerRegistry`             | `ListenerRegistry`                              | **Subscribe** listeners (the loader uses this)  |
+| `Phlix\Common\Events\EventDispatcherFactory`       | Factory                                         | Rarely needed — exposed for tests               |
 
 Plugins normally subscribe via `subscribedEvents()` and let the loader
 register listeners through `ListenerRegistry`. Direct use of the
@@ -79,26 +79,26 @@ registry is fair game for advanced plugins that want priority control.
 
 | Container ID                              | Type                  | Purpose                                |
 | ----------------------------------------- | --------------------- | -------------------------------------- |
-| `Phlex\Auth\AuthManager`                  | `AuthManager`         | Register / login / logout / refresh    |
-| `Phlex\Auth\UserRepository`               | `UserRepository`      | Look up users by id, username, email   |
-| `Phlex\Auth\JwtHandler`                   | `JwtHandler`          | HS256 token operations                 |
-| `Phlex\Auth\UserProfileManager`           | `UserProfileManager`  | Profile CRUD (rating filter, PIN)      |
+| `Phlix\Auth\AuthManager`                  | `AuthManager`         | Register / login / logout / refresh    |
+| `Phlix\Auth\UserRepository`               | `UserRepository`      | Look up users by id, username, email   |
+| `Phlix\Auth\JwtHandler`                   | `JwtHandler`          | HS256 token operations                 |
+| `Phlix\Auth\UserProfileManager`           | `UserProfileManager`  | Profile CRUD (rating filter, PIN)      |
 
 ### Media
 
 | Container ID                                      | Type                  | Purpose                                          |
 | ------------------------------------------------- | --------------------- | ------------------------------------------------ |
-| `Phlex\Media\Library\LibraryManager`              | `LibraryManager`      | Library list / detail                            |
-| `Phlex\Media\Library\ItemRepository`              | `ItemRepository`      | Media-item CRUD (parses `metadata_json`)         |
-| `Phlex\Media\Library\MediaScanner`                | `MediaScanner`        | Trigger ad-hoc rescans (avoid in event handlers) |
-| `Phlex\Media\Metadata\MetadataManager`            | `MetadataManager`     | Resolve metadata via configured providers        |
+| `Phlix\Media\Library\LibraryManager`              | `LibraryManager`      | Library list / detail                            |
+| `Phlix\Media\Library\ItemRepository`              | `ItemRepository`      | Media-item CRUD (parses `metadata_json`)         |
+| `Phlix\Media\Library\MediaScanner`                | `MediaScanner`        | Trigger ad-hoc rescans (avoid in event handlers) |
+| `Phlix\Media\Metadata\MetadataManager`            | `MetadataManager`     | Resolve metadata via configured providers        |
 
 ### Session
 
 | Container ID                                | Type                  | Purpose                                 |
 | ------------------------------------------- | --------------------- | --------------------------------------- |
-| `Phlex\Session\SessionManager`              | `SessionManager`      | Device session CRUD                     |
-| `Phlex\Session\PlaybackController`          | `PlaybackController`  | Continue-watching / progress reporting  |
+| `Phlix\Session\SessionManager`              | `SessionManager`      | Device session CRUD                     |
+| `Phlix\Session\PlaybackController`          | `PlaybackController`  | Continue-watching / progress reporting  |
 
 ### Plugin-system services
 
@@ -107,9 +107,9 @@ plugins that want to enumerate or introspect other plugins:
 
 | Container ID                                              | Type                | Purpose                                |
 | --------------------------------------------------------- | ------------------- | -------------------------------------- |
-| `Phlex\Plugins\PluginLoader`                              | `PluginLoader`      | List / install / enable / etc          |
-| `Phlex\Plugins\Repository\PluginRepository`               | `PluginRepository`  | Read own settings, find sibling rows   |
-| `Phlex\Plugins\Signature\SignatureVerifier`               | `SignatureVerifier` | Inspect the current trust posture      |
+| `Phlix\Plugins\PluginLoader`                              | `PluginLoader`      | List / install / enable / etc          |
+| `Phlix\Plugins\Repository\PluginRepository`               | `PluginRepository`  | Read own settings, find sibling rows   |
+| `Phlix\Plugins\Signature\SignatureVerifier`               | `SignatureVerifier` | Inspect the current trust posture      |
 
 > **Adding a new binding for plugins.** Bindings considered "plugin
 > stable" are documented in this table. To add one, register it in a
@@ -126,9 +126,9 @@ plugins that want to enumerate or introspect other plugins:
 ```
 1. Operator or API calls  POST /api/v1/admin/plugins/install
 2. HttpInstaller fetches plugin.json from the supplied URL
-   — refuses http:// unless PHLEX_PLUGINS_ALLOW_HTTP=1
+   — refuses http:// unless PHLIX_PLUGINS_ALLOW_HTTP=1
 3. SignatureVerifier checks sha256:<hex> against the trusted-key
-   allowlist if PHLEX_PLUGINS_REQUIRE_SIGNATURE=1 (default: off)
+   allowlist if PHLIX_PLUGINS_REQUIRE_SIGNATURE=1 (default: off)
 4. Manifest::validate() parses and validates the manifest;
    rejects missing name / version / entry
 5. tarball extracted to data/plugins/<name>/
@@ -143,7 +143,7 @@ plugins that want to enumerate or introspect other plugins:
 ```
 1. PATCH /api/v1/admin/plugins/<name>/enable
 2. PluginLoader calls Plugin::onEnable($container)
-3. Loader subscribes every phlex.* listener returned by
+3. Loader subscribes every phlix.* listener returned by
    Plugin::subscribedEvents() to the PSR-14 ListenerRegistry
 4. Plugin registers its routes (if any) with the host router
 5. Plugin state set to enabled in plugins table
@@ -199,15 +199,15 @@ sequenceDiagram
 
 ## 2. Adding a new plugin type
 
-The eleven-value enum in `Phlex\Shared\Plugin\ManifestType` (shipped
-in the `detain/phlex-shared` Composer package) is the master list of
-plugin categories. The legacy `Phlex\Plugins\ManifestType` FQCN remains
+The eleven-value enum in `Phlix\Shared\Plugin\ManifestType` (shipped
+in the `detain/phlix-shared` Composer package) is the master list of
+plugin categories. The legacy `Phlix\Plugins\ManifestType` FQCN remains
 available as a deprecated alias through 0.11.x. Each value also appears in:
 
 - `docs/plugins/manifest.schema.json` (the `type` enum block).
 - `docs/plugins/manifest.md` (the field reference table).
 - `docs/plugins/developer-guide.md` §2 (the type matrix).
-- `PHLEX_EXPANSION_PLAN.md` §5 (the master plan).
+- `PHLIX_EXPANSION_PLAN.md` §5 (the master plan).
 
 These five sites are kept manually in sync — there is no
 single-source codegen yet. **Adding a new type is therefore a
@@ -220,17 +220,17 @@ multi-file edit** and every site needs to be touched in the same PR.
    type (e.g. `MetadataManager` calling `metadata-provider` plugins).
    Without a dispatch path, a new type is dead documentation — better
    to use one of the existing values until the host side is ready.
-2. **Add the enum case** in `detain/phlex-shared`'s
+2. **Add the enum case** in `detain/phlix-shared`'s
    `src/Plugin/ManifestType.php`. Pick a kebab-case value and
-   document the use case in the docblock. Bump `phlex-shared` to a new
-   tag and bump `phlex-server`'s composer require accordingly.
+   document the use case in the docblock. Bump `phlix-shared` to a new
+   tag and bump `phlix-server`'s composer require accordingly.
 3. **Update the JSON schema** at `docs/plugins/manifest.schema.json`
    — add the value to the `type` enum array.
 4. **Update the field tables** in `docs/plugins/manifest.md` and
    `docs/plugins/developer-guide.md` §2 (the matrix). Flag the
    implementation status honestly — "Loader yes; manager dispatch
    wired in Phase X" beats over-claiming.
-5. **Update `PHLEX_EXPANSION_PLAN.md` §5** so the master plan and the
+5. **Update `PHLIX_EXPANSION_PLAN.md` §5** so the master plan and the
    docs agree.
 6. **Add a fixture** under `tests/Fixtures/Plugins/valid-<type>.json`
    so the manifest validator tests cover the new type at least once.
@@ -294,27 +294,27 @@ Plugins subscribe via `Plugin::subscribedEvents()` which returns `[EventName::cl
 
 | Event alias | Typical plugin types | Payload fields |
 |------------|---------------------|----------------|
-| `phlex.playback.started` | scrobbler, analytics-sink | `media_id`, `user_id`, `profile_id`, `position_ticks` |
-| `phlex.playback.stopped` | scrobbler, analytics-sink | `media_id`, `user_id`, `position_ticks`, `completed` |
-| `phlex.library.scanned` | metadata-provider | `library_id`, `item_count` |
-| `phlex.user.created` | notifier, analytics-sink | `user_id`, `email` |
-| `phlex.scrobble.submit` | scrobbler | `media_id`, `user_id`, `scrobbler_type`, `progress_percent` |
+| `phlix.playback.started` | scrobbler, analytics-sink | `media_id`, `user_id`, `profile_id`, `position_ticks` |
+| `phlix.playback.stopped` | scrobbler, analytics-sink | `media_id`, `user_id`, `position_ticks`, `completed` |
+| `phlix.library.scanned` | metadata-provider | `library_id`, `item_count` |
+| `phlix.user.created` | notifier, analytics-sink | `user_id`, `email` |
+| `phlix.scrobble.submit` | scrobbler | `media_id`, `user_id`, `scrobbler_type`, `progress_percent` |
 
 Full twelve-event catalog → [`docs/dev/event-reference.md`](event-reference.md).
 
 ### Adding a new event
 
-1. Add the event class to `detain/phlex-shared` under
+1. Add the event class to `detain/phlix-shared` under
    `src/Events/<Area>/<Name>.php`. Extend
-   `Phlex\Shared\Events\AbstractEvent`. Make every payload field
-   `readonly`. Tag a new `phlex-shared` release and bump
-   `phlex-server`'s composer require.
+   `Phlix\Shared\Events\AbstractEvent`. Make every payload field
+   `readonly`. Tag a new `phlix-shared` release and bump
+   `phlix-server`'s composer require.
 2. Pick a manifest alias of the form
-   `phlex.<area>.<verb>(.<sub>)*` (regex `^phlex\.[a-z]+(?:\.[a-z]+)*$`).
-3. Wire the alias in `Phlex\Shared\Plugin\EventNameMap::ALIAS_TO_FQCN`
-   (in `phlex-shared`). Keep the array literal sorted by alias.
+   `phlix.<area>.<verb>(.<sub>)*` (regex `^phlix\.[a-z]+(?:\.[a-z]+)*$`).
+3. Wire the alias in `Phlix\Shared\Plugin\EventNameMap::ALIAS_TO_FQCN`
+   (in `phlix-shared`). Keep the array literal sorted by alias.
 4. Add a row to the catalog table in
-   `docs/dev/event-reference.md` (in `phlex-server`) — payload fields,
+   `docs/dev/event-reference.md` (in `phlix-server`) — payload fields,
    dispatch site, typical listener — and to the twelve-events table
    in `docs/plugins/developer-guide.md` §5.
 5. Dispatch the event from the relevant service via
@@ -328,43 +328,43 @@ Full twelve-event catalog → [`docs/dev/event-reference.md`](event-reference.md
 
 ---
 
-## 4. `phlex-shared` migration
+## 4. `phlix-shared` migration
 
-Step B.3 of `PHLEX_EXPANSION_PLAN.md` extracted the **contracts** —
+Step B.3 of `PHLIX_EXPANSION_PLAN.md` extracted the **contracts** —
 the parts of the plugin system that plugin authors depend on — into
-the separate [`detain/phlex-shared`](https://github.com/detain/phlex-shared)
+the separate [`detain/phlix-shared`](https://github.com/detain/phlix-shared)
 Composer package. Plugins can now require:
 
 ```json
 "require": {
-    "detain/phlex-shared": "^0.2",
+    "detain/phlix-shared": "^0.2",
     "psr/container": "^1.1 || ^2.0"
 }
 ```
 
-rather than vendoring the entire phlex-server tree.
+rather than vendoring the entire phlix-server tree.
 
-### What moved to `phlex-shared` in B.3
+### What moved to `phlix-shared` in B.3
 
-- `Phlex\Plugins\Contract\LifecycleInterface`
-  → `Phlex\Shared\Plugin\LifecycleInterface`
-- `Phlex\Plugins\ManifestType`
-  → `Phlex\Shared\Plugin\ManifestType`
-- `Phlex\Plugins\Manifest`, `Phlex\Plugins\ManifestValidationError`,
-  `Phlex\Plugins\EventNameMap`
-  → `Phlex\Shared\Plugin\…`. The validator
-  (`Phlex\Plugins\Manifest\ManifestSchema`) stays in phlex-server
+- `Phlix\Plugins\Contract\LifecycleInterface`
+  → `Phlix\Shared\Plugin\LifecycleInterface`
+- `Phlix\Plugins\ManifestType`
+  → `Phlix\Shared\Plugin\ManifestType`
+- `Phlix\Plugins\Manifest`, `Phlix\Plugins\ManifestValidationError`,
+  `Phlix\Plugins\EventNameMap`
+  → `Phlix\Shared\Plugin\…`. The validator
+  (`Phlix\Plugins\Manifest\ManifestSchema`) stays in phlix-server
   because it depends on the bundled JSON Schema file.
-- `Phlex\Common\Events\AbstractEvent` and the twelve concrete event
+- `Phlix\Common\Events\AbstractEvent` and the twelve concrete event
   classes under `src/Common/Events/`
-  → `Phlex\Shared\Events\…`. The manifest aliases stay stable.
+  → `Phlix\Shared\Events\…`. The manifest aliases stay stable.
 
 All legacy FQCNs remain available as deprecated `class_alias` /
 interface-bridge entries through 0.11.x; they are removed in 0.12.0.
 See `src/Plugins/AliasCompatShim.php` for the alias registrations and
 `src/Plugins/Contract/LifecycleInterface.php` for the interface bridge.
 
-### What stays in `phlex/phlex` (host-only)
+### What stays in `phlix/phlix` (host-only)
 
 - The loader itself (`PluginLoader`, `HttpInstaller`,
   `ComposerRunner`, `SignatureVerifier`, `PluginRepository`,
@@ -375,9 +375,9 @@ See `src/Plugins/AliasCompatShim.php` for the alias registrations and
 ### Backwards compatibility
 
 For one minor release after B.1, the old FQCNs under
-`Phlex\Plugins\Contract\…` and `Phlex\Common\Events\…` will continue
+`Phlix\Plugins\Contract\…` and `Phlix\Common\Events\…` will continue
 to work as **`class_alias()`-style aliases** to the new
-`Phlex\Shared\…` classes. Plugin authors get a full release cycle to
+`Phlix\Shared\…` classes. Plugin authors get a full release cycle to
 update their imports; CI will flag the old FQCNs with a deprecation
 notice but builds will not break.
 
@@ -386,8 +386,8 @@ Plugin authors should:
 - Read the B.1 release notes when they land.
 - Run the upgrade rewriter (we'll ship a sed script as part of B.1)
   to update imports in one pass.
-- Bump `phlex_min_server_version` in their manifest to the release
-  that introduced `phlex-shared`.
+- Bump `phlix_min_server_version` in their manifest to the release
+  that introduced `phlix-shared`.
 
 ---
 
@@ -398,18 +398,18 @@ so each can be decorated or replaced in tests and forks:
 
 | Collaborator                                      | What it owns                                          | How to extend                                                     |
 | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------- |
-| `Phlex\Plugins\Installer\HttpInstaller`           | Fetch, extract, stage to `var/plugins/<name>/`        | Subclass or decorate; rebind in container.                        |
-| `Phlex\Plugins\Installer\ComposerRunner`          | Run `composer install --no-dev` per plugin            | Subclass to inject custom env, timeouts, or proxy settings.       |
-| `Phlex\Plugins\Signature\SignatureVerifier`       | Trust check against allowlist                         | Replace with a real PGP / sigstore-backed implementation.         |
-| `Phlex\Plugins\Repository\PluginRepository`       | `plugins` table CRUD                                  | Subclass for multi-tenant filtering, audit decoration, etc.       |
-| `Phlex\Plugins\PluginLoader`                      | Public orchestrator                                   | Avoid subclassing — wrap with a façade if you need new operations.|
-| `Phlex\Common\Container\Providers\PluginsProvider`| Container wiring                                      | Append your own provider to the `ContainerFactory` stack.         |
+| `Phlix\Plugins\Installer\HttpInstaller`           | Fetch, extract, stage to `var/plugins/<name>/`        | Subclass or decorate; rebind in container.                        |
+| `Phlix\Plugins\Installer\ComposerRunner`          | Run `composer install --no-dev` per plugin            | Subclass to inject custom env, timeouts, or proxy settings.       |
+| `Phlix\Plugins\Signature\SignatureVerifier`       | Trust check against allowlist                         | Replace with a real PGP / sigstore-backed implementation.         |
+| `Phlix\Plugins\Repository\PluginRepository`       | `plugins` table CRUD                                  | Subclass for multi-tenant filtering, audit decoration, etc.       |
+| `Phlix\Plugins\PluginLoader`                      | Public orchestrator                                   | Avoid subclassing — wrap with a façade if you need new operations.|
+| `Phlix\Common\Container\Providers\PluginsProvider`| Container wiring                                      | Append your own provider to the `ContainerFactory` stack.         |
 
 The `PluginsProvider` reads three env vars at provider-register time:
 
-- `PHLEX_PLUGINS_COMPOSER_TIMEOUT` — integer seconds, default
+- `PHLIX_PLUGINS_COMPOSER_TIMEOUT` — integer seconds, default
   `ComposerRunner::DEFAULT_TIMEOUT_SECONDS`.
-- `PHLEX_PLUGINS_REQUIRE_SIGNATURE` — truthy strings (`1`, `true`,
+- `PHLIX_PLUGINS_REQUIRE_SIGNATURE` — truthy strings (`1`, `true`,
   `yes`, `on`) make `SignatureVerifier` reject unsigned plugins.
 - The plugins base directory comes from `appConfig['plugins_base_dir']`
   with a default of `var/plugins/`.
@@ -427,12 +427,12 @@ Every field in `plugin.json`:
 |-------|------|----------|-------------|
 | `name` | `string` | yes | Unique plugin ID, kebab-case (e.g. `my-awesome-plugin`) |
 | `version` | `string` | yes | Semver string (e.g. `1.0.0`) |
-| `phlex_min_server_version` | `string` | yes | Minimum server version (e.g. `0.10.0`) |
+| `phlix_min_server_version` | `string` | yes | Minimum server version (e.g. `0.10.0`) |
 | `type` | `enum` | yes | One of: `metadata-provider`, `auth-provider`, `notifier`, `scrobbler`, `tuner`, `transcoder-hook`, `ui-theme`, `arr-integration`, `analytics-sink` |
 | `entry` | `string` | yes | FQCN of the plugin's `Plugin` entry class |
-| `events` | `string[]` | no | List of `phlex.*` event aliases to subscribe on enable |
+| `events` | `string[]` | no | List of `phlix.*` event aliases to subscribe on enable |
 | `settings` | `object` | no | Declarative form schema (see below) |
-| `signature` | `string` | no | `sha256:<hex>` — required when `PHLEX_PLUGINS_REQUIRE_SIGNATURE=1` |
+| `signature` | `string` | no | `sha256:<hex>` — required when `PHLIX_PLUGINS_REQUIRE_SIGNATURE=1` |
 
 **Settings sub-schema** — each entry under `settings` accepts:
 
@@ -445,25 +445,25 @@ Every field in `plugin.json`:
 | `label` | `string` | Human-readable label for the settings form |
 | `options` | `array` | Enum-like options for dropdown fields |
 
-`type` is the canonical plugin category used for filtering in the plugin catalog UI, dispatch inside host subsystems (e.g. `MetadataManager` iterates all `metadata-provider` plugins), and the `ManifestType` enum in both `Phlex\Plugins\ManifestType` and `Phlex\Shared\Plugin\ManifestType`.
+`type` is the canonical plugin category used for filtering in the plugin catalog UI, dispatch inside host subsystems (e.g. `MetadataManager` iterates all `metadata-provider` plugins), and the `ManifestType` enum in both `Phlix\Plugins\ManifestType` and `Phlix\Shared\Plugin\ManifestType`.
 
 ---
 
-## Sample walkthrough: phlex-plugin-example
+## Sample walkthrough: phlix-plugin-example
 
 End-to-end walkthrough of a minimal plugin at
-[`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example).
+[`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example).
 
 ### 1. `plugin.json`
 
 ```json
 {
-  "name": "phlex-plugin-example",
+  "name": "phlix-plugin-example",
   "version": "1.0.0",
-  "phlex_min_server_version": "0.10.0",
+  "phlix_min_server_version": "0.10.0",
   "type": "metadata-provider",
-  "entry": "Phlex\\Plugins\\Example\\Plugin",
-  "events": ["phlex.playback.started", "phlex.library.scanned"],
+  "entry": "Phlix\\Plugins\\Example\\Plugin",
+  "events": ["phlix.playback.started", "phlix.library.scanned"],
   "settings": {
     "api_key": { "type": "string", "required": true, "secret": true }
   }
@@ -476,10 +476,10 @@ End-to-end walkthrough of a minimal plugin at
 <?php
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Example;
+namespace Phlix\Plugins\Example;
 
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Shared\Events\PlaybackStartedEvent;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Shared\Events\PlaybackStartedEvent;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -541,15 +541,15 @@ The `settings` block in `plugin.json` drives the admin UI settings form. Setting
 composer install --no-dev --optimize-autoloader
 
 # 2. Create the distribution archive
-zip -r phlex-plugin-example-1.0.0.tar.gz data/plugins/phlex-plugin-example/
+zip -r phlix-plugin-example-1.0.0.tar.gz data/plugins/phlix-plugin-example/
 
 # 3. Sign it
-sha256sum phlex-plugin-example-1.0.0.tar.gz
+sha256sum phlix-plugin-example-1.0.0.tar.gz
 # Add the hex digest to plugin.json:
 #   "signature": "sha256:<hex>"
 ```
 
-`PHLEX_PLUGINS_REQUIRE_SIGNATURE` env var enables enforcement. The trust allowlist is managed via `SignatureVerifier`. `--no-dev` prevents the plugin's dev deps from conflicting with the host's pinned composer dependencies.
+`PHLIX_PLUGINS_REQUIRE_SIGNATURE` env var enables enforcement. The trust allowlist is managed via `SignatureVerifier`. `--no-dev` prevents the plugin's dev deps from conflicting with the host's pinned composer dependencies.
 
 ---
 
@@ -572,9 +572,9 @@ $manifest = Manifest::fromPath('/path/to/plugin.json');
 
 **Symptom:** Plugin loads but its hooks never fire.
 
-**Cause:** `phlex_min_server_version` in the manifest is higher than the running server version. The server does not error on load — it simply skips plugins whose minimum version requirement is not met.
+**Cause:** `phlix_min_server_version` in the manifest is higher than the running server version. The server does not error on load — it simply skips plugins whose minimum version requirement is not met.
 
-**Fix:** Upgrade phlex-server to at least `phlex_min_server_version`, or set the manifest field to the minimum server version your plugin actually requires.
+**Fix:** Upgrade phlix-server to at least `phlix_min_server_version`, or set the manifest field to the minimum server version your plugin actually requires.
 
 ### Composer dependency conflict
 
@@ -582,7 +582,7 @@ $manifest = Manifest::fromPath('/path/to/plugin.json');
 
 **Cause:** Plugin's `composer.json` requires a package version that conflicts with the host's pinned deps (e.g. both require different versions of `monolog/monolog`).
 
-**Fix:** Use `--no-dev`, keep your `require` block minimal, and test on a clean phlex-server install before publishing:
+**Fix:** Use `--no-dev`, keep your `require` block minimal, and test on a clean phlix-server install before publishing:
 
 ```bash
 composer install --no-dev --dry-run  # verify no conflicts
@@ -617,6 +617,6 @@ composer install --no-dev --dry-run  # verify no conflicts
 - [`docs/dev/event-reference.md`](event-reference.md) — event catalog.
 - [`docs/dev/architecture-server.md`](architecture-server.md) —
   container, bootstrap, request lifecycle.
-- [`PHLEX_EXPANSION_PLAN.md`](../../PHLEX_EXPANSION_PLAN.md) §5,
+- [`PHLIX_EXPANSION_PLAN.md`](../../PHLIX_EXPANSION_PLAN.md) §5,
   §10, and Phase B for the long-term plan around contracts, signing,
-  and the `phlex-shared` extraction.
+  and the `phlix-shared` extraction.

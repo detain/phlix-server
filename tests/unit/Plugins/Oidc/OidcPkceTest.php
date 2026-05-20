@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Plugins\Oidc\Controller\OidcCallbackController;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
-use Phlex\Plugins\Oidc\OidcProvider;
-use Phlex\Plugins\Oidc\OidcStateStore;
-use Phlex\Server\Http\Request;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Plugins\Oidc\OidcProvider;
+use Phlix\Plugins\Oidc\OidcStateStore;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -35,7 +35,7 @@ final class OidcPkceTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->cacheDir = sys_get_temp_dir() . '/phlex_oidc_pkce_test_' . uniqid();
+        $this->cacheDir = sys_get_temp_dir() . '/phlix_oidc_pkce_test_' . uniqid();
         mkdir($this->cacheDir, 0755, true);
         DiscoveryDocument::clearMemoryCache();
         LoggerFactory::reset();

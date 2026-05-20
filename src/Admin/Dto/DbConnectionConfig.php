@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin\Dto;
+namespace Phlix\Admin\Dto;
 
 /**
  * Typed view of the single MySQL connection block from
  * `config/database.php` that the backup subsystem uses to invoke
  * `mysqldump` / `mysql` CLI commands.
  *
- * @package Phlex\Admin\Dto
+ * @package Phlix\Admin\Dto
  * @since 0.20.0
  */
 final class DbConnectionConfig
@@ -33,7 +33,7 @@ final class DbConnectionConfig
             port: self::asInt($raw['port'] ?? 3306),
             username: self::asString($raw['username'] ?? 'root'),
             password: self::asString($raw['password'] ?? ''),
-            database: self::asString($raw['database'] ?? 'phlex'),
+            database: self::asString($raw['database'] ?? 'phlix'),
         );
     }
 

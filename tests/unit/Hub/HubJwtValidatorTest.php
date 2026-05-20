@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\HubJwtValidator;
-use Phlex\Hub\HubUserClaims;
-use Phlex\Hub\HttpClientFactoryInterface;
-use Phlex\Hub\HttpClientInterface;
-use Phlex\Hub\HttpResponse;
-use Phlex\Hub\JwksCache;
+use Phlix\Hub\HubJwtValidator;
+use Phlix\Hub\HubUserClaims;
+use Phlix\Hub\HttpClientFactoryInterface;
+use Phlix\Hub\HttpClientInterface;
+use Phlix\Hub\HttpResponse;
+use Phlix\Hub\JwksCache;
 use Psr\Log\NullLogger;
 
 class HubJwtValidatorTest extends TestCase
@@ -92,8 +92,8 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -104,7 +104,7 @@ class HubJwtValidatorTest extends TestCase
         $this->assertInstanceOf(HubUserClaims::class, $claims);
         $this->assertEquals('hub-user-123', $claims->userId);
         $this->assertEquals('test-server', $claims->serverId);
-        $this->assertEquals('phlex-hub', $claims->issuer);
+        $this->assertEquals('phlix-hub', $claims->issuer);
     }
 
     public function testExpiredJwtReturnsNull(): void
@@ -114,8 +114,8 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -135,7 +135,7 @@ class HubJwtValidatorTest extends TestCase
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
             'iss' => 'wrong-issuer',
-            'aud' => 'phlex-server',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -154,7 +154,7 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
+            'iss' => 'phlix-hub',
             'aud' => 'wrong-audience',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
@@ -174,8 +174,8 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient, 'my-server');
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'different-server',
@@ -200,8 +200,8 @@ class HubJwtValidatorTest extends TestCase
 
         $header = ['alg' => 'EdDSA', 'typ' => 'JWT', 'kid' => $this->kid];
         $payload = [
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -240,8 +240,8 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -261,8 +261,8 @@ class HubJwtValidatorTest extends TestCase
 
         $validator = $this->createValidator($httpClient);
         $jwt = $this->createJwt([
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',
@@ -283,8 +283,8 @@ class HubJwtValidatorTest extends TestCase
 
         $header = ['alg' => 'EdDSA', 'typ' => 'JWT'];
         $payload = [
-            'iss' => 'phlex-hub',
-            'aud' => 'phlex-server',
+            'iss' => 'phlix-hub',
+            'aud' => 'phlix-server',
             'sub' => 'hub-user-123',
             'hub_user_id' => 'hub-user-123',
             'server_id' => 'test-server',

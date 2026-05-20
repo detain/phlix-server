@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Dlna\DlnaDevice;
+use Phlix\Dlna\DlnaDevice;
 
 class DlnaDeviceTest extends TestCase
 {
@@ -216,7 +216,7 @@ class DlnaDeviceTest extends TestCase
             80
         );
 
-        $this->assertEquals('Phlex', $device->getManufacturer());
+        $this->assertEquals('Phlix', $device->getManufacturer());
 
         $device->setManufacturer('Test Corp');
         $this->assertEquals('Test Corp', $device->getManufacturer());

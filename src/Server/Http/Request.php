@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http;
+namespace Phlix\Server\Http;
 
 /**
- * Represents an HTTP request in the Phlex Media Server.
+ * Represents an HTTP request in the Phlix Media Server.
  *
  * This class encapsulates all information about an incoming HTTP request
  * including the HTTP method, URI, headers, query parameters, and body.
  * It provides utility methods for common request operations.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description HTTP Request class that encapsulates request data from globals.
  * @see Response For response generation
@@ -73,8 +73,8 @@ class Request
     /** @var string|null Authenticated user ID (set by auth middleware) */
     public ?string $userId = null;
 
-    /** @var \Phlex\Hub\HubUserClaims|null Hub user claims (set by HubJwtMiddleware when using hub auth) */
-    public ?\Phlex\Hub\HubUserClaims $hubUser = null;
+    /** @var \Phlix\Hub\HubUserClaims|null Hub user claims (set by HubJwtMiddleware when using hub auth) */
+    public ?\Phlix\Hub\HubUserClaims $hubUser = null;
 
     /** @var array<string, string> Extracted path parameters from route patterns */
     public array $pathParams = [];

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\Dto\ResultSet;
-use Phlex\LiveTv\Recorder;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Dto\ResultSet;
+use Phlix\LiveTv\Recorder;
 use Workerman\MySQL\Connection;
 
 /**
@@ -18,8 +18,8 @@ use Workerman\MySQL\Connection;
  *   - status=recording + live pid → re-attached in memory
  *   - status=scheduled + start_time in past → re-armed via startRecording()
  *
- * @covers \Phlex\LiveTv\Recorder::resumeActiveRecordings
- * @covers \Phlex\LiveTv\Recorder::startRecording
+ * @covers \Phlix\LiveTv\Recorder::resumeActiveRecordings
+ * @covers \Phlix\LiveTv\Recorder::startRecording
  *
  * @since Wave 2 (post-O.7)
  */

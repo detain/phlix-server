@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Common\Logger;
+namespace Phlix\Tests\Unit\Common\Logger;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Monolog\Level;
 
 class StructuredLoggerTest extends TestCase
@@ -13,7 +13,7 @@ class StructuredLoggerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tempDir = sys_get_temp_dir() . '/phlex_test_logs_' . uniqid();
+        $this->tempDir = sys_get_temp_dir() . '/phlix_test_logs_' . uniqid();
         mkdir($this->tempDir, 0755, true);
         
         $this->config = [

@@ -2,24 +2,24 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins;
+namespace Phlix\Plugins;
 
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Common\Version;
-use Phlex\Plugins\Exception\PluginEnableException;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\Installer\ComposerRunner;
-use Phlex\Plugins\Installer\HttpInstaller;
-use Phlex\Plugins\Repository\PluginRepository;
-use Phlex\Plugins\Signature\SignatureVerifier;
-use Phlex\Plugins\Util\RecursiveDelete;
-use Phlex\Shared\Plugin\EventNameMap;
-use Phlex\Shared\Plugin\LifecycleInterface;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Version;
+use Phlix\Plugins\Exception\PluginEnableException;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\Installer\ComposerRunner;
+use Phlix\Plugins\Installer\HttpInstaller;
+use Phlix\Plugins\Repository\PluginRepository;
+use Phlix\Plugins\Signature\SignatureVerifier;
+use Phlix\Plugins\Util\RecursiveDelete;
+use Phlix\Shared\Plugin\EventNameMap;
+use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -39,10 +39,10 @@ use Throwable;
  *    autowiring; gives the plugin a handle to the host container.
  *
  * Auto-enable on boot is handled by
- * {@see \Phlex\Common\Container\Providers\PluginsProvider} which calls
+ * {@see \Phlix\Common\Container\Providers\PluginsProvider} which calls
  * {@see self::bootstrapEnabled()} once the container is built.
  *
- * @package Phlex\Plugins
+ * @package Phlix\Plugins
  * @since 0.10.0
  */
 class PluginLoader
@@ -84,7 +84,7 @@ class PluginLoader
      *
      * Steps:
      *  1. Download + extract via {@see HttpInstaller}.
-     *  2. Validate `phlex_min_server_version` against {@see Version::STRING}.
+     *  2. Validate `phlix_min_server_version` against {@see Version::STRING}.
      *  3. Verify the manifest signature (if present) via {@see SignatureVerifier}.
      *  4. Run `composer install --no-dev` via {@see ComposerRunner}.
      *  5. Persist a row in `plugins`.
@@ -128,12 +128,12 @@ class PluginLoader
      */
     private function finalizeInstall(Manifest $manifest, string $directory, string $source): Manifest
     {
-        if (!self::satisfiesServerVersion($manifest->phlexMinServerVersion)) {
+        if (!self::satisfiesServerVersion($manifest->phlixMinServerVersion)) {
             RecursiveDelete::remove($directory);
             throw new PluginInstallException(sprintf(
-                'Plugin %s requires Phlex >= %s but running server is %s.',
+                'Plugin %s requires Phlix >= %s but running server is %s.',
                 $manifest->name,
-                $manifest->phlexMinServerVersion,
+                $manifest->phlixMinServerVersion,
                 Version::STRING,
             ));
         }
@@ -193,7 +193,7 @@ class PluginLoader
      * `onEnable()`, subscribe declared listeners, and flip the
      * `enabled` flag in the DB.
      *
-     * @param string $name Manifest name (e.g. `phlex-plugin-lastfm`).
+     * @param string $name Manifest name (e.g. `phlix-plugin-lastfm`).
      *
      * @throws PluginNotFoundException
      * @throws PluginEnableException
@@ -401,7 +401,7 @@ class PluginLoader
 
     /**
      * Re-attach every persisted-as-enabled plugin to the dispatcher.
-     * Called by the {@see \Phlex\Common\Container\Providers\PluginsProvider}
+     * Called by the {@see \Phlix\Common\Container\Providers\PluginsProvider}
      * after the container is built so server restarts pick up plugins
      * automatically.
      *
@@ -427,7 +427,7 @@ class PluginLoader
     }
 
     /**
-     * Compare the manifest's `phlex_min_server_version` against
+     * Compare the manifest's `phlix_min_server_version` against
      * {@see Version::STRING} using {@see version_compare()}.
      */
     private static function satisfiesServerVersion(string $minVersion): bool

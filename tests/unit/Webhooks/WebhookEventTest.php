@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Webhooks;
+namespace Phlix\Tests\Unit\Webhooks;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Webhooks\WebhookEvent;
 
 class WebhookEventTest extends TestCase
 {

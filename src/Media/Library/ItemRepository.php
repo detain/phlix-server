@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
 use Workerman\MySQL\Connection;
 
@@ -13,7 +13,7 @@ use Workerman\MySQL\Connection;
  * tables, including querying, searching, filtering by content ratings and genres,
  * and stream management.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Data access layer for media items with content filtering support
  * @see LibraryManager For library-level operations

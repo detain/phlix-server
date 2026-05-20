@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Oidc;
+namespace Phlix\Tests\Unit\Plugins\Oidc;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\UserRepository;
-use Phlex\Plugins\Oidc\Controller\OidcCallbackController;
-use Phlex\Plugins\Oidc\OidcProvider;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\UserRepository;
+use Phlix\Plugins\Oidc\Controller\OidcCallbackController;
+use Phlix\Plugins\Oidc\OidcProvider;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
 
 /**
- * @covers \Phlex\Plugins\Oidc\Controller\OidcCallbackController
+ * @covers \Phlix\Plugins\Oidc\Controller\OidcCallbackController
  */
 final class OidcCallbackControllerTest extends TestCase
 {
@@ -24,7 +24,7 @@ final class OidcCallbackControllerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->cacheDir = sys_get_temp_dir() . '/phlex_oidc_callback_test_' . uniqid();
+        $this->cacheDir = sys_get_temp_dir() . '/phlix_oidc_callback_test_' . uniqid();
         mkdir($this->cacheDir, 0755, true);
         DiscoveryDocument::clearMemoryCache();
     }
@@ -224,12 +224,12 @@ final class OidcCallbackControllerTest extends TestCase
 }
 
 /**
- * Lightweight in-memory implementation of {@see \Phlex\Plugins\Oidc\OidcStateStore}
+ * Lightweight in-memory implementation of {@see \Phlix\Plugins\Oidc\OidcStateStore}
  * used by the OIDC callback tests in this file.
  *
  * @internal Test fixture only.
  */
-final class InMemoryOidcStateStore implements \Phlex\Plugins\Oidc\OidcStateStore
+final class InMemoryOidcStateStore implements \Phlix\Plugins\Oidc\OidcStateStore
 {
     /** @var array<string, array{code_verifier: string, nonce: string}> */
     private array $entries = [];

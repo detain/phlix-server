@@ -4,7 +4,7 @@
 
 ## Overview
 
-Phlex supports music library browsing with ID3v2/MP4/Vorbis tag harvesting.
+Phlix supports music library browsing with ID3v2/MP4/Vorbis tag harvesting.
 Music files are scanned, tagged, and made available via both a REST API and
 a web portal interface.
 
@@ -182,7 +182,7 @@ return [
     'musicbrainz' => [
         'enabled' => true,
         'rate_limit' => 1, // requests per second
-        'user_agent' => 'Phlex/1.0 (https://phlex.example.com)',
+        'user_agent' => 'Phlix/1.0 (https://phlix.example.com)',
     ],
     'audiodb' => [
         'enabled' => true,

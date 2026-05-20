@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Container\Providers;
+namespace Phlix\Tests\Unit\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\Providers\CoreServicesProvider;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Container\Providers\CoreServicesProvider;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
  * Smoke test for {@see CoreServicesProvider}.
  *
- * @covers \Phlex\Common\Container\Providers\CoreServicesProvider
+ * @covers \Phlix\Common\Container\Providers\CoreServicesProvider
  */
 final class CoreServicesProviderTest extends TestCase
 {
@@ -27,7 +27,7 @@ final class CoreServicesProviderTest extends TestCase
         parent::setUp();
         LoggerFactory::reset();
 
-        $this->tempDir = sys_get_temp_dir() . '/phlex_core_provider_' . uniqid('', true);
+        $this->tempDir = sys_get_temp_dir() . '/phlix_core_provider_' . uniqid('', true);
         mkdir($this->tempDir, 0775, true);
 
         $config = "<?php\nreturn [\n"

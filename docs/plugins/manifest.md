@@ -1,17 +1,17 @@
 # Plugin manifest (`plugin.json`) — A.3 reference
 
-Every Phlex plugin ships a `plugin.json` at the root of its package.
+Every Phlix plugin ships a `plugin.json` at the root of its package.
 This file is the source of truth for the loader (A.4), the admin UI
 (A.5), and the signature verifier (A.7+). A.3 defines:
 
 - **The schema** — `docs/plugins/manifest.schema.json` (JSON Schema
   draft 2020-12). IDEs and CI lint manifests against this file.
-- **The parser** — `Phlex\Shared\Plugin\Manifest`, an immutable PHP
-  value object (shipped in the `detain/phlex-shared` Composer package).
+- **The parser** — `Phlix\Shared\Plugin\Manifest`, an immutable PHP
+  value object (shipped in the `detain/phlix-shared` Composer package).
   Parses `plugin.json` into typed properties. The validator
-  (`Phlex\Plugins\Manifest\ManifestSchema`) stays in `phlex-server` and
-  emits `Phlex\Shared\Plugin\ManifestValidationError` instances. The
-  legacy `Phlex\Plugins\Manifest` and `Phlex\Plugins\ManifestValidationError`
+  (`Phlix\Plugins\Manifest\ManifestSchema`) stays in `phlix-server` and
+  emits `Phlix\Shared\Plugin\ManifestValidationError` instances. The
+  legacy `Phlix\Plugins\Manifest` and `Phlix\Plugins\ManifestValidationError`
   FQCNs remain available as deprecated aliases through 0.11.x.
 
 > **Scope reminder.** A.3 ships the spec and the parser only. The
@@ -22,12 +22,12 @@ This file is the source of truth for the loader (A.4), the admin UI
 
 ```json
 {
-    "name": "phlex-plugin-lastfm",
+    "name": "phlix-plugin-lastfm",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Lastfm\\Plugin",
-    "events": ["phlex.playback.started", "phlex.playback.stopped"],
+    "entry": "Phlix\\Plugins\\Lastfm\\Plugin",
+    "events": ["phlix.playback.started", "phlix.playback.stopped"],
     "settings": {
         "api_key": { "type": "string", "required": true, "secret": true },
         "api_secret": { "type": "string", "required": true, "secret": true }
@@ -36,7 +36,7 @@ This file is the source of truth for the loader (A.4), the admin UI
 }
 ```
 
-This is the same example as `PHLEX_EXPANSION_PLAN.md` §5 — keep them in
+This is the same example as `PHLIX_EXPANSION_PLAN.md` §5 — keep them in
 sync. The two `valid-*.json` fixtures under
 `tests/Fixtures/Plugins/` are minimal, working manifests you can copy
 to bootstrap a new plugin.
@@ -47,15 +47,15 @@ to bootstrap a new plugin.
 
 | Field | Type | Constraints |
 | --- | --- | --- |
-| `name` | string | Kebab-case. Must start with `phlex-plugin-`. Max 64 chars. Regex `^phlex-plugin-[a-z0-9][a-z0-9-]*$`. |
+| `name` | string | Kebab-case. Must start with `phlix-plugin-`. Max 64 chars. Regex `^phlix-plugin-[a-z0-9][a-z0-9-]*$`. |
 | `version` | string | Plugin semver. Regex `^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.\-]+)?$`. |
-| `phlex_min_server_version` | string | Minimum supported Phlex server semver. Same regex. |
+| `phlix_min_server_version` | string | Minimum supported Phlix server semver. Same regex. |
 | `type` | string | One of the eleven values below. |
 | `entry` | string | Fully-qualified entry class name. Regex `^[A-Z][A-Za-z0-9_]*(?:\\[A-Z][A-Za-z0-9_]*)+$`. |
 
 ### Plugin types (`type` enum)
 
-Mirrors `PHLEX_EXPANSION_PLAN.md` §5 and `Phlex\Shared\Plugin\ManifestType`:
+Mirrors `PHLIX_EXPANSION_PLAN.md` §5 and `Phlix\Shared\Plugin\ManifestType`:
 
 | Value | Purpose |
 | --- | --- |
@@ -76,8 +76,8 @@ Mirrors `PHLEX_EXPANSION_PLAN.md` §5 and `Phlex\Shared\Plugin\ManifestType`:
 #### `events`
 
 An array of **manifest aliases**. Each alias is a dotted string of the
-form `phlex.<area>.<verb>(.<sub>)*` (regex
-`^phlex\.[a-z]+(?:\.[a-z]+)*$`). The canonical alias list lives in
+form `phlix.<area>.<verb>(.<sub>)*` (regex
+`^phlix\.[a-z]+(?:\.[a-z]+)*$`). The canonical alias list lives in
 [`docs/dev/event-reference.md`](../dev/event-reference.md). The A.4
 loader resolves these aliases to event FQCNs at install time.
 
@@ -102,9 +102,9 @@ only validates the format.
 ## Parsing and validating in PHP
 
 ```php
-use Phlex\Plugins\Manifest\ManifestSchema;
-use Phlex\Shared\Plugin\Manifest;
-use Phlex\Shared\Plugin\ManifestType;
+use Phlix\Plugins\Manifest\ManifestSchema;
+use Phlix\Shared\Plugin\Manifest;
+use Phlix\Shared\Plugin\ManifestType;
 use RuntimeException;
 
 try {
@@ -129,7 +129,7 @@ assert($manifest->manifestType() instanceof ManifestType);
 
 The `code` field on `ManifestValidationError` mirrors the JSON Schema
 constraint that failed (`required`, `pattern`, `enum`, `type`,
-`additionalProperties`, …), plus a Phlex-specific `unknown_field` code
+`additionalProperties`, …), plus a Phlix-specific `unknown_field` code
 for top-level keys that the schema does not allow.
 
 ## Authoring checklist
@@ -150,5 +150,5 @@ for top-level keys that the schema does not allow.
   plugin authoring guide (stub; expanded in A.7).
 - [`docs/dev/event-reference.md`](../dev/event-reference.md) — canonical
   alias → FQCN table for `events`.
-- [`PHLEX_EXPANSION_PLAN.md`](../../PHLEX_EXPANSION_PLAN.md) §5 — the
+- [`PHLIX_EXPANSION_PLAN.md`](../../PHLIX_EXPANSION_PLAN.md) §5 — the
   master plan that defines the manifest fields and the eleven types.

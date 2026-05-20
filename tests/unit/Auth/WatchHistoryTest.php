@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\WatchHistory;
+use Phlix\Auth\WatchHistory;
 use Workerman\MySQL\Connection;
 
 class WatchHistoryTest extends TestCase

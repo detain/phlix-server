@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Extras;
+namespace Phlix\Tests\Unit\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Extras\Extra;
+use Phlix\Media\Extras\Extra;
 
 class ExtraTest extends TestCase
 {

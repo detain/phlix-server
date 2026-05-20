@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * In-memory JWKS cache with TTL support.
@@ -10,7 +10,7 @@ namespace Phlex\Hub;
  * Caches JWK objects keyed by kid (key ID) with a configurable
  * time-to-live. Supports invalidation for key rotation scenarios.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class JwksCache

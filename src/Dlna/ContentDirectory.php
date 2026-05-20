@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * Content Directory Service for DLNA/UPnP Media Servers.
@@ -107,7 +107,7 @@ class ContentDirectory
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
 /**
  * AudiobookProgress value object representing per-user progress in an audiobook.
  *
  * Tracks position within a chapter, completed chapters, and overall completion percentage.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Immutable value object for audiobook playback progress
  * @since 0.18.0

@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgService;
-use Phlex\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
-use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
-use Phlex\LiveTv\Tuners\Iptv\IptvTunerDriver;
-use Phlex\LiveTv\Tuners\TunerDriverInterface;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgService;
+use Phlix\LiveTv\Epg\SchedulesDirect\SdEpgServiceFactory;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
+use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
+use Phlix\LiveTv\Tuners\Iptv\IptvTunerDriver;
+use Phlix\LiveTv\Tuners\TunerDriverInterface;
 use Workerman\MySQL\Connection;
 
 /**
@@ -44,7 +44,7 @@ use Workerman\MySQL\Connection;
  *               ERROR → IDLE
  * ```
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @see ChannelManager For channel CRUD operations
  * @see GuideManager For electronic program guide functionality

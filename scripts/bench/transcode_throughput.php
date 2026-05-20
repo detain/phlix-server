@@ -11,7 +11,7 @@ declare(strict_types=1);
  * N concurrent transcodes and measures time to first byte, frame rate,
  * concurrent process count, and CPU/GPU utilization.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @see config/ffmpeg.php for hwaccel profiles
  * @see config/hwaccel_profiles.php for encoder configurations
@@ -25,7 +25,7 @@ declare(strict_types=1);
  * v1.0 Pass Criterion: 5+ concurrent 1080p→720p hwaccel transcode from a 4-vCPU+GPU server
  */
 
-namespace Phlex\Scripts\Bench;
+namespace Phlix\Scripts\Bench;
 
 /**
  * Displays usage help for the benchmark script.

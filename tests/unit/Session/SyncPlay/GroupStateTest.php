@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Session\SyncPlay;
+namespace Phlix\Tests\Unit\Session\SyncPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Session\SyncPlay\GroupState;
+use Phlix\Session\SyncPlay\GroupState;
 
 class GroupStateTest extends TestCase
 {

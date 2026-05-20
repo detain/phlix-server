@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\NvencProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\VaapiProfile;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\SoftwareProfile;
 
 class HwaccelCommandBuilderTest extends TestCase
 {

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\Dto;
+namespace Phlix\Auth\Dto;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 
 /**
  * Helpers for narrowing untyped DB rows from the `users` and
@@ -14,7 +14,7 @@ use Phlex\Common\Util\RowMap;
  * lets PHPStan see a known shape at the call site rather than `mixed`
  * coming back from `Workerman\MySQL\Connection::query()`.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Static narrowing helpers for user-table rows.
  * @since Wave 5b-J

@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Hub\HubClient;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Hub\HubClient;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Serves the server's JWKS document at `/.well-known/jwks.json`.
@@ -15,7 +15,7 @@ use Phlex\Server\Http\Response;
  * so that the hub can verify JWTs signed by this server. The JWKS
  * document is self-hosted rather than proxied through the hub.
  *
- * @package Phlex\Server\Http\Controllers
+ * @package Phlix\Server\Http\Controllers
  * @since 0.11.0
  * @see HubClient::getPublicKeysJwk() For the JWK structure.
  */

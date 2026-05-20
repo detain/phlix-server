@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Extras;
+namespace Phlix\Tests\Unit\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Extras\Trailer;
+use Phlix\Media\Extras\Trailer;
 
 class TrailerTest extends TestCase
 {

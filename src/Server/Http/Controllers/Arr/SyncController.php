@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Arr;
+namespace Phlix\Server\Http\Controllers\Arr;
 
-use Phlex\Server\Arr\CustomFormatSyncer;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Arr\CustomFormatSyncer;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Handles TRaSH-Guides sync API endpoints.
@@ -14,7 +14,7 @@ use Phlex\Server\Http\Response;
  * Provides admin endpoints for triggering syncs, checking status,
  * and enabling/disabling auto-sync.
  *
- * @package Phlex\Server\Http\Controllers\Arr
+ * @package Phlix\Server\Http\Controllers\Arr
  * @since 0.12.0
  */
 class SyncController

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Detection;
+namespace Phlix\Media\Markers\Detection;
 
 /**
  * Result of the intro/outro detection for a show.

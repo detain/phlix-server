@@ -1,13 +1,13 @@
 # Auth Provider Plugins
 
-Phlex supports external authentication providers via a plugin-based
+Phlix supports external authentication providers via a plugin-based
 architecture. This allows integration with OIDC providers (Keycloak, Authelia,
 Authentik, Google, GitHub), LDAP directories, SAML IdPs, and passkey
 services without modifying the core authentication system.
 
 ## Overview
 
-Auth provider plugins implement the `Phlex\Shared\Auth\ProviderInterface`
+Auth provider plugins implement the `Phlix\Shared\Auth\ProviderInterface`
 contract. Each provider handles its own credential validation, token
 exchange, and user info retrieval. The core `AuthManager` coordinates
 the authentication flow and issues local session tokens.
@@ -62,7 +62,7 @@ new AuthResult(
 );
 ```
 
-## OIDC Provider Plugin (`phlex-plugin-oidc`)
+## OIDC Provider Plugin (`phlix-plugin-oidc`)
 
 The OIDC plugin supports any OIDC-compliant identity provider using the
 Authorization Code flow with PKCE.
@@ -77,7 +77,7 @@ Authorization Code flow with PKCE.
 
 ### Configuration
 
-1. Install `phlex-plugin-oidc` via the admin UI (Plugins → Install from URL)
+1. Install `phlix-plugin-oidc` via the admin UI (Plugins → Install from URL)
 2. Navigate to **Admin → Auth Providers → OIDC**
 3. Configure:
    - **Provider URL**: Base URL of your OIDC provider (e.g., `https://keycloak.example.com`)
@@ -91,20 +91,20 @@ Authorization Code flow with PKCE.
 Register the following callback URL with your OIDC provider:
 
 ```
-https://your-phlex-server/auth/oidc/callback
+https://your-phlix-server/auth/oidc/callback
 ```
 
 ### Keycloak Configuration
 
 1. Create a new Client in Keycloak with:
-   - Client ID: `phlex`
+   - Client ID: `phlix`
    - Client Protocol: `openid-connect`
    - Access Type: `confidential`
-   - Valid Redirect URIs: `https://your-phlex-server/auth/oidc/callback`
+   - Valid Redirect URIs: `https://your-phlix-server/auth/oidc/callback`
 2. Under Credentials, copy the Client Secret
-3. In Phlex admin:
+3. In Phlix admin:
    - Provider URL: `https://keycloak.example.com/realms/your-realm`
-   - Client ID: `phlex`
+   - Client ID: `phlix`
    - Client Secret: (from step 2)
 
 ### Authelia / Authentik Configuration
@@ -115,11 +115,11 @@ Both use the same OIDC protocol. In Authelia:
 identity_providers:
   oidc:
     clients:
-      - id: phlex
-        description: Phlex Media Server
+      - id: phlix
+        description: Phlix Media Server
         secret: your-client-secret
         redirect_uris:
-          - https://your-phlex-server/auth/oidc/callback
+          - https://your-phlix-server/auth/oidc/callback
         scopes:
           - openid
           - profile
@@ -133,8 +133,8 @@ Provider URL would be: `https://your-authelia.example.com`
 1. Create a project in Google Cloud Console
 2. Enable the Google+ API
 3. Create OAuth 2.0 credentials (Web application type)
-4. Add redirect URI: `https://your-phlex-server/auth/oidc/callback`
-5. In Phlex admin:
+4. Add redirect URI: `https://your-phlix-server/auth/oidc/callback`
+5. In Phlix admin:
    - Provider URL: `https://accounts.google.com`
    - Client ID: (from Google Console)
    - Client Secret: (from Google Console)
@@ -142,9 +142,9 @@ Provider URL would be: `https://your-authelia.example.com`
 ### GitHub OAuth App
 
 1. Create a new OAuth App in GitHub Settings
-2. Homepage URL: `https://your-phlex-server`
-3. Authorization callback URL: `https://your-phlex-server/auth/oidc/callback`
-4. In Phlex admin:
+2. Homepage URL: `https://your-phlix-server`
+3. Authorization callback URL: `https://your-phlix-server/auth/oidc/callback`
+4. In Phlix admin:
    - Provider URL: `https://github.com`
    - Client ID: (from GitHub)
    - Client Secret: (from GitHub)
@@ -152,11 +152,11 @@ Provider URL would be: `https://your-authelia.example.com`
 Note: GitHub is not a true OIDC provider but supports OAuth 2.0. The plugin
 will extract basic profile information from the `/userinfo` endpoint.
 
-## LDAP Provider Plugin (`phlex-plugin-ldap`)
+## LDAP Provider Plugin (`phlix-plugin-ldap`)
 
 The LDAP plugin supports authentication against OpenLDAP directories and
 Active Directory via the LDAP protocol (RFC 4510). Users bind with their
-LDAP credentials; the plugin maps LDAP attributes to Phlex user fields.
+LDAP credentials; the plugin maps LDAP attributes to Phlix user fields.
 
 ### Features
 
@@ -172,7 +172,7 @@ LDAP credentials; the plugin maps LDAP attributes to Phlex user fields.
 
 ### Configuration
 
-1. Install `phlex-plugin-ldap` via the admin UI (Plugins → Install from URL)
+1. Install `phlix-plugin-ldap` via the admin UI (Plugins → Install from URL)
 2. Navigate to **Admin → Auth Providers → LDAP**
 3. Configure:
    - **Host**: LDAP server hostname or IP
@@ -203,13 +203,13 @@ Recommended settings:
 - **Host**: Your AD domain controller
 - **Port**: 389 (or 636 for SSL)
 - **Base DN**: `DC=yourdomain,DC=com`
-- **Bind DN**: Service account (e.g., `CN=Phlex Service,OU=Service Accounts,DC=yourdomain,DC=com`)
+- **Bind DN**: Service account (e.g., `CN=Phlix Service,OU=Service Accounts,DC=yourdomain,DC=com`)
 - **User Filter**: `(&(objectClass=user)(sAMAccountName={{username}}))`
 - **Admin Group**: `CN=Domain Admins,CN=Users,DC=yourdomain,DC=com`
 
 ### User Attribute Mapping
 
-| LDAP Attribute | Phlex Field |
+| LDAP Attribute | Phlix Field |
 |----------------|-------------|
 | `uid` / `sAMAccountName` / `userPrincipalName` | `username` |
 | `mail` / `userPrincipalName` | `email` |
@@ -258,7 +258,7 @@ On subsequent logins, the existing local account is looked up by
 
 ## Passkeys / WebAuthn (Built-in)
 
-Phlex includes native passkey support via the WebAuthn/FIDO2 standard.
+Phlix includes native passkey support via the WebAuthn/FIDO2 standard.
 No plugin installation required — passkeys are available for all users.
 
 ### Features
@@ -295,9 +295,9 @@ Server-side RP configuration in `config/server.php`:
 
 ```php
 'webauthn' => [
-    'rp_id' => 'phlex.media',           // Default: registered domain
-    'rp_name' => 'Phlex Media Server',    // Default: server name
-    'rp_origin' => 'https://phlex.media',  // Must match actual origin
+    'rp_id' => 'phlix.media',           // Default: registered domain
+    'rp_name' => 'Phlix Media Server',    // Default: server name
+    'rp_origin' => 'https://phlix.media',  // Must match actual origin
     'attestation_required' => false,       // Allow any authenticator
 ],
 ```

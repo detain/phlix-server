@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Streaming;
+namespace Phlix\Tests\Unit\Media\Streaming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\QualitySelector;
+use Phlix\Media\Streaming\QualitySelector;
 
 class QualitySelectorTest extends TestCase
 {

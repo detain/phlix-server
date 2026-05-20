@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Auth\Dto\UserRow;
-use Phlex\Common\Util\RowMap;
+use Phlix\Auth\Dto\UserRow;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -15,7 +15,7 @@ use Workerman\MySQL\Connection;
  * management including user creation, retrieval, updates, password
  * verification, and user settings management.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Provides data access layer for user entities with support
  *              for authentication, profile management, and settings storage.
@@ -88,7 +88,7 @@ class UserRepository
      * Find a user by id, but only when the row's `is_admin` flag is
      * set. Returns `null` for unknown ids and for known-but-non-admin
      * users alike. Used by
-     * {@see \Phlex\Server\Http\Middleware\AdminMiddleware} to gate the
+     * {@see \Phlix\Server\Http\Middleware\AdminMiddleware} to gate the
      * `/api/v1/admin/*` JSON API in Step A.5.
      *
      * Security: callers MUST treat any non-null return as "this user
@@ -119,7 +119,7 @@ class UserRepository
 
     /**
      * Total number of rows in the `users` table. Used by
-     * {@see \Phlex\Auth\AuthManager::register()} to detect the very
+     * {@see \Phlix\Auth\AuthManager::register()} to detect the very
      * first registration on a fresh install and auto-promote that user
      * to admin (Step A.5 minimum-viable admin bootstrap).
      *

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\AirPlay;
+namespace Phlix\AirPlay;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * Manages AirPlay sessions for streaming audio to AirPlay 2 devices.
@@ -45,7 +45,7 @@ class AirPlayManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_airplay_manager_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_airplay_manager_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

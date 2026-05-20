@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\ChapterMarker;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
-use Phlex\Media\Markers\IntroMarker;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\MarkerSet;
-use Phlex\Media\Markers\OutroMarker;
-use Phlex\Media\Markers\SkipButtonSpec;
-use Phlex\Server\Http\Controllers\MediaItemController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\ChapterMarker;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\IntroMarker;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerSet;
+use Phlix\Media\Markers\OutroMarker;
+use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Server\Http\Controllers\MediaItemController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 use Workerman\MySQL\Connection;
 
 /**

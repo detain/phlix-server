@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers;
+namespace Phlix\Media\Markers;
 
 /**
  * Intro marker DTO representing a detected or stored intro segment.

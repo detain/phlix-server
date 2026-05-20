@@ -1,20 +1,20 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http;
+namespace Phlix\Tests\Unit\Server\Http;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Http\Response;
+use Phlix\Server\Http\Response;
 
 /**
  * Unit tests for Response class.
  *
- * @covers \Phlex\Server\Http\Response
+ * @covers \Phlix\Server\Http\Response
  */
 class ResponseTest extends TestCase
 {
     /**
-     * @covers \Phlex\Server\Http\Response::json
-     * @covers \Phlex\Server\Http\Response::status
+     * @covers \Phlix\Server\Http\Response::json
+     * @covers \Phlix\Server\Http\Response::status
      */
     public function testCanCreateJsonResponse(): void
     {
@@ -26,9 +26,9 @@ class ResponseTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Response::status
-     * @covers \Phlex\Server\Http\Response::header
-     * @covers \Phlex\Server\Http\Response::json
+     * @covers \Phlix\Server\Http\Response::status
+     * @covers \Phlix\Server\Http\Response::header
+     * @covers \Phlix\Server\Http\Response::json
      */
     public function testCanChainMethods(): void
     {
@@ -42,7 +42,7 @@ class ResponseTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Response::html
+     * @covers \Phlix\Server\Http\Response::html
      */
     public function testCanCreateHtmlResponse(): void
     {
@@ -52,7 +52,7 @@ class ResponseTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Response::redirect
+     * @covers \Phlix\Server\Http\Response::redirect
      */
     public function testCanRedirect(): void
     {
@@ -63,7 +63,7 @@ class ResponseTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Response::noContent
+     * @covers \Phlix\Server\Http\Response::noContent
      */
     public function testNoContentResponse(): void
     {

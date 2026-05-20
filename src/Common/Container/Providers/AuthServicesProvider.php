@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Auth\AuthManager;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Auth\JwtHandler;
-use Phlex\Auth\ProviderManager;
-use Phlex\Auth\UserProfileManager;
-use Phlex\Auth\UserRepository;
-use Phlex\Auth\WatchHistory;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Server\Http\Controllers\AuthProviderController;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\JwtHandler;
+use Phlix\Auth\ProviderManager;
+use Phlix\Auth\UserProfileManager;
+use Phlix\Auth\UserRepository;
+use Phlix\Auth\WatchHistory;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Server\Http\Controllers\AuthProviderController;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -29,9 +29,9 @@ use function DI\get;
  * "default-secret-change-me" sentinel from public/index.php to preserve
  * parity for local installs that never set the env var.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class AuthServicesProvider implements ServiceProviderInterface

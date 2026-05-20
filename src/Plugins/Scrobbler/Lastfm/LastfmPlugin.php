@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Plugins\Scrobbler\Lastfm;
 
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
-use Phlex\Shared\Plugin\LifecycleInterface;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -14,14 +14,14 @@ use Psr\Log\NullLogger;
 /**
  * Plugin entry class for the Last.fm scrobble integration.
  *
- * Implements the standard Phlex plugin {@see LifecycleInterface}: on
+ * Implements the standard Phlix plugin {@see LifecycleInterface}: on
  * `enable` it resolves dependencies from the container, builds a
  * {@see LastfmScrobbler}, and exposes it via
  * {@see self::subscribedEvents()} for the PSR-14 dispatcher to wire up.
  *
  * On `disable` the scrobbler is released so the next enable rebuilds it.
  *
- * @package Phlex\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 final class LastfmPlugin implements LifecycleInterface
@@ -151,11 +151,11 @@ final class LastfmPlugin implements LifecycleInterface
     {
         try {
             /** @var mixed $repoRaw */
-            $repoRaw = $container->get(\Phlex\Media\Library\ItemRepository::class);
+            $repoRaw = $container->get(\Phlix\Media\Library\ItemRepository::class);
         } catch (\Throwable) {
             $repoRaw = null;
         }
-        if (!$repoRaw instanceof \Phlex\Media\Library\ItemRepository) {
+        if (!$repoRaw instanceof \Phlix\Media\Library\ItemRepository) {
             return static fn (string $_id) => null;
         }
         $repo = $repoRaw;

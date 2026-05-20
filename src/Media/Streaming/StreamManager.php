@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Streaming\Dash\DashStreamer;
-use Phlex\Media\Streaming\Trickplay\TrickplayConfig;
-use Phlex\Media\Streaming\Trickplay\TrickplayController;
-use Phlex\Media\Streaming\Trickplay\TrickplayGenerator;
-use Phlex\Media\Streaming\Trickplay\TrickplayResult;
-use Phlex\Server\WebSocket\MessageHandler;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\Dash\DashStreamer;
+use Phlix\Media\Streaming\Trickplay\TrickplayConfig;
+use Phlix\Media\Streaming\Trickplay\TrickplayController;
+use Phlix\Media\Streaming\Trickplay\TrickplayGenerator;
+use Phlix\Media\Streaming\Trickplay\TrickplayResult;
+use Phlix\Server\WebSocket\MessageHandler;
 use Workerman\MySQL\Connection;
 
 /**
@@ -23,7 +23,7 @@ use Workerman\MySQL\Connection;
  * managing quality selection, and persisting playback progress to the database.
  * Handles both direct play and transcoded streaming scenarios.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Session manager for media playback with quality selection and state persistence
  * @see StreamState For playback state tracking

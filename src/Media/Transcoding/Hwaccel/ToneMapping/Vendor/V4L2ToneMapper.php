@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor;
+namespace Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor;
 
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapperInterface;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapperInterface;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
 
 /**
  * V4L2 (Video4Linux2) tone mapper.

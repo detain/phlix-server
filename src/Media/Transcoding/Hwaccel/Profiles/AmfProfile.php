@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\Profiles;
+namespace Phlix\Media\Transcoding\Hwaccel\Profiles;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 
 /**
  * AMD AMF (Advanced Media Framework) hardware encoder profile.

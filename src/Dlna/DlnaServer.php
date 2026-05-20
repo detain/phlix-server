@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 /**
@@ -19,7 +19,7 @@ use Workerman\MySQL\Connection;
 class DlnaServer
 {
     /** Server UDN prefix */
-    public const SERVER_UDN_PREFIX = 'uuid:phlex-server-';
+    public const SERVER_UDN_PREFIX = 'uuid:phlix-server-';
 
     /** Default HTTP port */
     public const DEFAULT_PORT = 8200;
@@ -102,7 +102,7 @@ class DlnaServer
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_server_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_server_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -245,8 +245,8 @@ class DlnaServer
             $this->port
         );
 
-        $device->setModelDescription('Phlex Media Server - DLNA/UPnP Media Server');
-        $device->setModelName('Phlex Media Server');
+        $device->setModelDescription('Phlix Media Server - DLNA/UPnP Media Server');
+        $device->setModelName('Phlix Media Server');
         $device->setModelNumber('1.0');
 
         // Add device icons

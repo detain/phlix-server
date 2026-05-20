@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Transcoding;
+namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 class FfmpegRunnerTest extends TestCase
 {

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Dvbt;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Dvbt;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDeviceScanner;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtSignalEngine;
-use Phlex\LiveTv\Tuners\Dvbt\DvbtTunerDriver;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDeviceScanner;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtSignalEngine;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtTunerDriver;
 
 class DvbtTunerDriverTest extends TestCase
 {
@@ -140,7 +140,7 @@ class DvbtTunerDriverTest extends TestCase
 
         // Use an HDHomeRunDevice which is not a DvbtDevice
         // The driver should throw InvalidArgumentException
-        $invalidDevice = new \Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice(
+        $invalidDevice = new \Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice(
             deviceId: '12345678',
             ipAddress: '192.168.1.100',
             tunerCount: 2,

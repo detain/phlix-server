@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Auth\AuthManager;
-use Phlex\Auth\WebAuthn\WebAuthnCredentialRepository;
-use Phlex\Auth\WebAuthn\WebAuthnManager;
-use Phlex\Auth\WebAuthn\WebAuthnSettings;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\Http\Router;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
+use Phlix\Auth\WebAuthn\WebAuthnSettings;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
 use Workerman\MySQL\Connection;
 
 final class WebAuthnController

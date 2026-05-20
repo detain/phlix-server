@@ -1,6 +1,6 @@
 <?php
 
-namespace Phlex\Common\Logger;
+namespace Phlix\Common\Logger;
 
 /**
  * Specialized logger for security and audit events.

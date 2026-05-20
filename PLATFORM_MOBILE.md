@@ -1,4 +1,4 @@
-# Phlex Media Server - Mobile Application (iOS & Android)
+# Phlix Media Server - Mobile Application (iOS & Android)
 
 **Document Version:** 1.0  
 **Platform:** iOS 15+ and Android 10+ (API 29+)  
@@ -65,7 +65,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Phlex Mobile App                          │
+│                    Phlix Mobile App                          │
 ├─────────────────────────────────────────────────────────────┤
 │  UI Layer (React Native)                                     │
 │  ├── Navigation (React Navigation)                          │
@@ -74,9 +74,9 @@
 │  └── State Management (Zustand)                             │
 ├─────────────────────────────────────────────────────────────┤
 │  Native Bridge / TurboModules                               │
-│  ├── PhlexPlayer (iOS: AVKit, Android: ExoPlayer)           │
-│  ├── PhlexDownloader (Background downloads)                 │
-│  └── PhlexMediaSession (Media controls, notifications)      │
+│  ├── PhlixPlayer (iOS: AVKit, Android: ExoPlayer)           │
+│  ├── PhlixDownloader (Background downloads)                 │
+│  └── PhlixMediaSession (Media controls, notifications)      │
 ├─────────────────────────────────────────────────────────────┤
 │  Services                                                    │
 │  ├── ApiClient (REST + WebSocket)                           │
@@ -150,10 +150,10 @@ npm install -g fastlane
 
 ```bash
 # Initialize React Native project
-npx @react-native-community/cli init PhlexMobile --version 0.76.0
+npx @react-native-community/cli init PhlixMobile --version 0.76.0
 
 # Navigate to project
-cd PhlexMobile
+cd PhlixMobile
 
 # Install core dependencies
 npm install \
@@ -195,9 +195,9 @@ cd ios && pod install && cd ..
 
 <!-- Permissions -->
 <key>NSAppleMusicUsageDescription</key>
-<string>Phlex needs access to your media library</string>
+<string>Phlix needs access to your media library</string>
 <key>NSLocalNetworkUsageDescription</key>
-<string>Phlex needs to discover media servers on your network</string>
+<string>Phlix needs to discover media servers on your network</string>
 <key>UIBackgroundModes</key>
 ```
 
@@ -223,12 +223,12 @@ cd ios && pod install && cd ..
 ## 3. Project Structure
 
 ```
-PhlexMobile/
+PhlixMobile/
 ├── src/
 │   ├── App.tsx                    # App entry point
 │   ├── api/
 │   │   ├── client.ts              # Base API client (Axios)
-│   │   ├── ApiClient.ts           # Phlex API wrapper
+│   │   ├── ApiClient.ts           # Phlix API wrapper
 │   │   ├── AuthManager.ts         # Authentication
 │   │   ├── SessionManager.ts      # Session handling
 │   │   ├── LibraryManager.ts      # Library browsing
@@ -289,8 +289,8 @@ PhlexMobile/
 │   │   ├── useDownload.ts         # Download hooks
 │   │   └── useMediaSession.ts     # Media session hooks
 │   ├── native/
-│   │   ├── PhlexPlayer.ts         # Native player module
-│   │   ├── PhlexDownloader.ts     # Native downloader
+│   │   ├── PhlixPlayer.ts         # Native player module
+│   │   ├── PhlixDownloader.ts     # Native downloader
 │   │   └── types.ts               # Native module types
 │   ├── utils/
 │   │   ├── formatters.ts          # Time, size formatters
@@ -302,13 +302,13 @@ PhlexMobile/
 │       └── navigation.ts          # Navigation types
 ├── ios/
 │   ├── LocalPods/
-│   │   └── PhlexPlayer/           # Native AVKit player
-│   ├── PhlexMobile/
+│   │   └── PhlixPlayer/           # Native AVKit player
+│   ├── PhlixMobile/
 │   │   ├── AppDelegate.mm
 │   │   ├── Info.plist
-│   │   └── PhlexMobile.entitlements
+│   │   └── PhlixMobile.entitlements
 ├── android/
-│   └── app/src/main/java/com/phlexmobile/
+│   └── app/src/main/java/com/phlixmobile/
 │       ├── player/                # ExoPlayer implementation
 │       ├── downloader/            # Download service
 │       └── MainApplication.kt
@@ -328,7 +328,7 @@ PhlexMobile/
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = 'https://api.phlex.app'; // Configure for self-hosted
+const BASE_URL = 'https://api.phlix.app'; // Configure for self-hosted
 
 class ApiClient {
   private client: AxiosInstance;
@@ -474,8 +474,8 @@ class AuthManager {
   async discoverServers(): Promise<Server[]> {
     // Use UDP broadcast on local network
     // Implementation via native module for UDP socket
-    const { PhlexDiscovery } = require('../native/PhlexDiscovery');
-    return PhlexDiscovery.discoverServers();
+    const { PhlixDiscovery } = require('../native/PhlixDiscovery');
+    return PhlixDiscovery.discoverServers();
   }
 
   // Login with username/password
@@ -784,19 +784,19 @@ export default playbackManager;
 ### 5.1 Native Player Bridge (iOS - AVKit)
 
 ```swift
-// ios/LocalPods/PhlexPlayer/PhlexPlayerView.swift
+// ios/LocalPods/PhlixPlayer/PhlixPlayerView.swift
 import AVKit
 import AVFoundation
 import React
 
-@objc(PhlexPlayerView)
-class PhlexPlayerView: RCTViewManager {
+@objc(PhlixPlayerView)
+class PhlixPlayerView: RCTViewManager {
     override func view() -> UIView! {
-        return PhlexPlayerViewWrapper()
+        return PhlixPlayerViewWrapper()
     }
 }
 
-class PhlexPlayerViewWrapper: UIView {
+class PhlixPlayerViewWrapper: UIView {
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var timeObserver: Any?
@@ -953,8 +953,8 @@ class PhlexPlayerViewWrapper: UIView {
 ### 5.2 Native Player Bridge (Android - ExoPlayer)
 
 ```kotlin
-// android/app/src/main/java/com/phlexmobile/player/PhlexPlayerView.kt
-package com.phlexmobile.player
+// android/app/src/main/java/com/phlixmobile/player/PhlixPlayerView.kt
+package com.phlixmobile.player
 
 import android.app.PictureInPictureParams
 import android.content.pm.PackageManager
@@ -969,7 +969,7 @@ import com.google.android.exoplayer2.audio.AudioSink
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector
 import com.google.android.exoplayer2.ui.PlayerView
 
-class PhlexPlayerView(reactContext: ReactApplicationContext) :
+class PhlixPlayerView(reactContext: ReactApplicationContext) :
     ReactViewManager(reactContext) {
     
     private var player: ExoPlayer? = null
@@ -979,7 +979,7 @@ class PhlexPlayerView(reactContext: ReactApplicationContext) :
     private var autoPlay: Boolean = true
     private var startPosition: Long = 0
     
-    override fun getName(): String = "PhlexPlayerView"
+    override fun getName(): String = "PhlixPlayerView"
     
     override fun createViewInstance(reactContext: ThemedReactContext): PlayerView {
         trackSelector = DefaultTrackSelector(reactContext)
@@ -1259,17 +1259,17 @@ const PlayerScreen: React.FC = () => {
   const handlePlay = () => {
     setIsPlaying(true);
     // Call native player play
-    PhlexPlayer.play();
+    PhlixPlayer.play();
   };
 
   const handlePause = () => {
     setIsPlaying(false);
-    PhlexPlayer.pause();
+    PhlixPlayer.pause();
   };
 
   const handleSeek = (position: number) => {
     setCurrentTime(position);
-    PhlexPlayer.seekTo(position);
+    PhlixPlayer.seekTo(position);
   };
 
   const handleProgress = (progress: { currentTime: number; duration: number }) => {
@@ -1292,7 +1292,7 @@ const PlayerScreen: React.FC = () => {
   };
 
   // Native player ref
-  const playerRef = useRef<PhlexPlayer>(null);
+  const playerRef = useRef<PhlixPlayer>(null);
 
   if (isLoading) {
     return (
@@ -1323,7 +1323,7 @@ const PlayerScreen: React.FC = () => {
         onPress={toggleControls}
         style={styles.playerWrapper}
       >
-        <PhlexPlayerView
+        <PhlixPlayerView
           ref={playerRef}
           style={styles.player}
           src={streamInfo?.url || ''}
@@ -2224,7 +2224,7 @@ export default MediaDetailScreen;
 import * as Keychain from 'react-native-keychain';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const SERVICE_NAME = 'com.phlex.mobile';
+const SERVICE_NAME = 'com.phlix.mobile';
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
 
@@ -2313,7 +2313,7 @@ class SecureStorage {
       const credentials = await Keychain.getGenericPassword({
         service: `${SERVICE_NAME}.refresh`,
         authenticationPrompt: {
-          title: 'Authenticate to access Phlex',
+          title: 'Authenticate to access Phlix',
           subtitle: 'Use biometric authentication',
           cancel: 'Cancel',
         },
@@ -2473,12 +2473,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 ### 8.1 Background Audio (iOS)
 
 ```swift
-// ios/LocalPods/PhlexAudioSession/PhlexAudioSession.swift
+// ios/LocalPods/PhlixAudioSession/PhlixAudioSession.swift
 import AVFoundation
 import MediaPlayer
 
-class PhlexAudioSession {
-    static let shared = PhlexAudioSession()
+class PhlixAudioSession {
+    static let shared = PhlixAudioSession()
     
     private let audioSession = AVAudioSession.sharedInstance()
     
@@ -2550,7 +2550,7 @@ class PhlexAudioSession {
         var nowPlayingInfo = [String: Any]()
         
         nowPlayingInfo[MPMediaItemPropertyTitle] = "Media Title"
-        nowPlayingInfo[MPMediaItemPropertyArtist] = "Phlex"
+        nowPlayingInfo[MPMediaItemPropertyArtist] = "Phlix"
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
         nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0
         nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = 0
@@ -2580,16 +2580,16 @@ class PhlexAudioSession {
     
     // MARK: - Command Handlers (to be connected to React Native)
     private func handlePlay() {
-        NotificationCenter.default.post(name: .phlexPlay, object: nil)
+        NotificationCenter.default.post(name: .phlixPlay, object: nil)
     }
     
     private func handlePause() {
-        NotificationCenter.default.post(name: .phlexPause, object: nil)
+        NotificationCenter.default.post(name: .phlixPause, object: nil)
     }
     
     private func handleSkipForward(_ interval: TimeInterval) {
         NotificationCenter.default.post(
-            name: .phlexSkipForward,
+            name: .phlixSkipForward,
             object: nil,
             userInfo: ["interval": interval]
         )
@@ -2597,7 +2597,7 @@ class PhlexAudioSession {
     
     private func handleSkipBackward(_ interval: TimeInterval) {
         NotificationCenter.default.post(
-            name: .phlexSkipBackward,
+            name: .phlixSkipBackward,
             object: nil,
             userInfo: ["interval": interval]
         )
@@ -2605,7 +2605,7 @@ class PhlexAudioSession {
     
     private func handleSeek(to position: TimeInterval) {
         NotificationCenter.default.post(
-            name: .phlexSeek,
+            name: .phlixSeek,
             object: nil,
             userInfo: ["position": position]
         )
@@ -2614,19 +2614,19 @@ class PhlexAudioSession {
 
 // Notification names
 extension Notification.Name {
-    static let phlexPlay = Notification.Name("phlexPlay")
-    static let phlexPause = Notification.Name("phlexPause")
-    static let phlexSkipForward = Notification.Name("phlexSkipForward")
-    static let phlexSkipBackward = Notification.Name("phlexSkipBackward")
-    static let phlexSeek = Notification.Name("phlexSeek")
+    static let phlixPlay = Notification.Name("phlixPlay")
+    static let phlixPause = Notification.Name("phlixPause")
+    static let phlixSkipForward = Notification.Name("phlixSkipForward")
+    static let phlixSkipBackward = Notification.Name("phlixSkipBackward")
+    static let phlixSeek = Notification.Name("phlixSeek")
 }
 ```
 
 ### 8.2 Background Audio (Android)
 
 ```kotlin
-// android/app/src/main/java/com/phlexmobile/player/PhlexMediaSessionManager.kt
-package com.phlexmobile.player
+// android/app/src/main/java/com/phlixmobile/player/PhlixMediaSessionManager.kt
+package com.phlixmobile.player
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -2640,17 +2640,17 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import com.facebook.react.bridge.ReactContext
-import com.phlexmobile.MainActivity
-import com.phlexmobile.R
+import com.phlixmobile.MainActivity
+import com.phlixmobile.R
 
-class PhlexMediaSessionManager(private val reactContext: ReactContext) {
+class PhlixMediaSessionManager(private val reactContext: ReactContext) {
     
     private var mediaSession: MediaSessionCompat? = null
     private val notificationManager: NotificationManager =
         reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     
     companion object {
-        const val CHANNEL_ID = "phlex_playback_channel"
+        const val CHANNEL_ID = "phlix_playback_channel"
         const val NOTIFICATION_ID = 1
     }
     
@@ -2663,7 +2663,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Phlex Playback",
+                "Phlix Playback",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Media playback controls"
@@ -2674,7 +2674,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
     }
     
     private fun setupMediaSession() {
-        mediaSession = MediaSessionCompat(reactContext, "PhlexMediaSession").apply {
+        mediaSession = MediaSessionCompat(reactContext, "PhlixMediaSession").apply {
             setFlags(
                 MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
@@ -2682,30 +2682,30 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
             
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
-                    sendBroadcast(Intent("com.phlex.PLAY"))
+                    sendBroadcast(Intent("com.phlix.PLAY"))
                 }
                 
                 override fun onPause() {
-                    sendBroadcast(Intent("com.phlex.PAUSE"))
+                    sendBroadcast(Intent("com.phlix.PAUSE"))
                 }
                 
                 override fun onSkipToNext() {
-                    sendBroadcast(Intent("com.phlex.SKIP_FORWARD"))
+                    sendBroadcast(Intent("com.phlix.SKIP_FORWARD"))
                 }
                 
                 override fun onSkipToPrevious() {
-                    sendBroadcast(Intent("com.phlex.SKIP_BACKWARD"))
+                    sendBroadcast(Intent("com.phlix.SKIP_BACKWARD"))
                 }
                 
                 override fun onSeekTo(pos: Long) {
-                    val intent = Intent("com.phlex.SEEK").apply {
+                    val intent = Intent("com.phlix.SEEK").apply {
                         putExtra("position", pos)
                     }
                     sendBroadcast(intent)
                 }
                 
                 override fun onStop() {
-                    sendBroadcast(Intent("com.phlex.STOP"))
+                    sendBroadcast(Intent("com.phlix.STOP"))
                 }
             })
             
@@ -2741,7 +2741,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
     fun updateMetadata(title: String, artist: String?, duration: Long) {
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist ?: "Phlex")
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist ?: "Phlix")
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
             .build()
         
@@ -2763,7 +2763,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
                 PendingIntent.getBroadcast(
                     reactContext,
                     0,
-                    Intent("com.phlex.PAUSE"),
+                    Intent("com.phlix.PAUSE"),
                     PendingIntent.FLAG_IMMUTABLE
                 )
             )
@@ -2774,7 +2774,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
                 PendingIntent.getBroadcast(
                     reactContext,
                     0,
-                    Intent("com.phlex.PLAY"),
+                    Intent("com.phlix.PLAY"),
                     PendingIntent.FLAG_IMMUTABLE
                 )
             )
@@ -2782,7 +2782,7 @@ class PhlexMediaSessionManager(private val reactContext: ReactContext) {
         
         val notification = NotificationCompat.Builder(reactContext, CHANNEL_ID)
             .setContentTitle(title)
-            .setContentText("Phlex")
+            .setContentText("Phlix")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(contentIntent)
             .addAction(android.R.drawable.ic_media_previous, "Previous", null)
@@ -2831,7 +2831,7 @@ interface DownloadTask {
   completedAt?: number;
 }
 
-const DOWNLOADS_KEY = 'phlex_downloads';
+const DOWNLOADS_KEY = 'phlix_downloads';
 
 class DownloadService {
   private downloads: Map<string, DownloadTask> = new Map();
@@ -2904,9 +2904,9 @@ class DownloadService {
 
     // Start native download
     if (Platform.OS === 'ios') {
-      PhlexDownloader.startDownload(taskId, streamInfo.url, task.localPath);
+      PhlixDownloader.startDownload(taskId, streamInfo.url, task.localPath);
     } else {
-      PhlexDownloader.startDownload(taskId, streamInfo.url, task.localPath);
+      PhlixDownloader.startDownload(taskId, streamInfo.url, task.localPath);
     }
 
     return taskId;
@@ -2916,7 +2916,7 @@ class DownloadService {
   async pauseDownload(taskId: string): Promise<void> {
     const task = this.downloads.get(taskId);
     if (task && task.status === 'downloading') {
-      PhlexDownloader.pauseDownload(taskId);
+      PhlixDownloader.pauseDownload(taskId);
       task.status = 'paused';
       this.downloads.set(taskId, task);
       await this.saveDownloads();
@@ -2928,7 +2928,7 @@ class DownloadService {
   async resumeDownload(taskId: string): Promise<void> {
     const task = this.downloads.get(taskId);
     if (task && task.status === 'paused') {
-      PhlexDownloader.resumeDownload(taskId);
+      PhlixDownloader.resumeDownload(taskId);
       task.status = 'downloading';
       this.downloads.set(taskId, task);
       await this.saveDownloads();
@@ -2940,7 +2940,7 @@ class DownloadService {
   async cancelDownload(taskId: string): Promise<void> {
     const task = this.downloads.get(taskId);
     if (task) {
-      PhlexDownloader.cancelDownload(taskId);
+      PhlixDownloader.cancelDownload(taskId);
       this.downloads.delete(taskId);
       await this.saveDownloads();
       
@@ -2960,9 +2960,9 @@ class DownloadService {
   private getLocalPath(item: MediaItem): string {
     const filename = `${item.id}_${item.name.replace(/[^a-z0-9]/gi, '_')}.mp4`;
     if (Platform.OS === 'ios') {
-      return `${NativeModules.PhlexDownloader?.documentsPath || ''}/${filename}`;
+      return `${NativeModules.PhlixDownloader?.documentsPath || ''}/${filename}`;
     }
-    return `/storage/emulated/0/Download/Phlex/${filename}`;
+    return `/storage/emulated/0/Download/Phlix/${filename}`;
   }
 
   // Get all downloads
@@ -3090,7 +3090,7 @@ class NotificationService {
     if (Platform.OS === 'android') {
       PushNotification.createChannel(
         {
-          channelId: 'phlex-general',
+          channelId: 'phlix-general',
           channelName: 'General',
           channelDescription: 'General notifications',
           importance: Importance.HIGH,
@@ -3101,7 +3101,7 @@ class NotificationService {
 
       PushNotification.createChannel(
         {
-          channelId: 'phlex-playback',
+          channelId: 'phlix-playback',
           channelName: 'Playback',
           channelDescription: 'Media playback notifications',
           importance: Importance.LOW,
@@ -3144,7 +3144,7 @@ class NotificationService {
         type: notification.type,
         ...notification.data,
       },
-      channelId: 'phlex-general',
+      channelId: 'phlix-general',
       importance: 'high',
       priority: 'high',
     });
@@ -3155,7 +3155,7 @@ class NotificationService {
     PushNotification.localNotification({
       title: title,
       message: isPlaying ? 'Now Playing' : 'Paused',
-      channelId: 'phlex-playback',
+      channelId: 'phlix-playback',
       importance: 'low',
       priority: 'low',
       ongoing: true,
@@ -3167,7 +3167,7 @@ class NotificationService {
 
   // Cancel playback notification
   cancelPlaybackNotification() {
-    PushNotification.cancelLocalNotification('phlex-playback');
+    PushNotification.cancelLocalNotification('phlix-playback');
   }
 
   // Handle library update notification
@@ -3221,7 +3221,7 @@ func application(_ application: UIApplication,
 }
 
 // PiP support in player
-extension PhlexPlayerView {
+extension PhlixPlayerView {
     func setupPictureInPicture() {
         if AVPictureInPictureController.isPictureInPictureSupported() {
             pipController = AVPictureInPictureController(playerLayer: playerLayer)
@@ -3465,8 +3465,8 @@ config = {
   configurations: {
     'ios.sim.debug': {
       type: 'ios.simulator',
-      binaryPath: join(__dirname, 'ios/build/Build/Products/Debug-iphonesimulator/PhlexMobile.app'),
-      build: 'xcodebuild -workspace ios/PhlexMobile.xcworkspace -scheme PhlexMobile -configuration Debug -sdk iphonesimulator -derivedDataPath ios/build',
+      binaryPath: join(__dirname, 'ios/build/Build/Products/Debug-iphonesimulator/PhlixMobile.app'),
+      build: 'xcodebuild -workspace ios/PhlixMobile.xcworkspace -scheme PhlixMobile -configuration Debug -sdk iphonesimulator -derivedDataPath ios/build',
       type: 'ios.simulator',
     },
   },
@@ -3512,15 +3512,15 @@ cd ios
 # Or use fastlane
 
 # Build for App Store
-xcodebuild -workspace PhlexMobile.xcworkspace \
-  -scheme PhlexMobile \
+xcodebuild -workspace PhlixMobile.xcworkspace \
+  -scheme PhlixMobile \
   -configuration Release \
-  -archivePath build/PhlexMobile.xcarchive \
+  -archivePath build/PhlixMobile.xcarchive \
   archive
 
 # Export for App Store Connect
 xcodebuild -exportArchive \
-  -archivePath build/PhlexMobile.xcarchive \
+  -archivePath build/PhlixMobile.xcarchive \
   -exportOptionsPlist ExportOptions.plist \
   -exportPath build/output
 
@@ -3537,7 +3537,7 @@ xcodebuild -exportArchive \
 **Required Info.plist Entries:**
 ```xml
 <key>CFBundleDisplayName</key>
-<string>Phlex</string>
+<string>Phlix</string>
 <key>LSRequiresIPhoneOS</key>
 <true/>
 <key>UILaunchStoryboardName</key>
@@ -3598,18 +3598,18 @@ platform :ios do
   desc "Build and deploy to App Store"
   lane :deploy do
     # Increment build number
-    increment_build_number(xcodeproj: "PhlexMobile.xcodeproj")
+    increment_build_number(xcodeproj: "PhlixMobile.xcodeproj")
     
     # Build
     build_app(
-      workspace: "PhlexMobile.xcworkspace",
-      scheme: "PhlexMobile",
+      workspace: "PhlixMobile.xcworkspace",
+      scheme: "PhlixMobile",
       configuration: "Release"
     )
     
     # Upload to App Store Connect
     upload_to_app_store(
-      app_identifier: "com.phlex.mobile",
+      app_identifier: "com.phlix.mobile",
       skip_binary_upload: false
     )
   end
@@ -3623,7 +3623,7 @@ platform :android do
     
     # Upload to Play Store
     upload_to_play_store(
-      package_name: "com.phlex.mobile",
+      package_name: "com.phlix.mobile",
       track: "production",
       json_key_data: ENV["PLAY_STORE_JSON_KEY"]
     )
@@ -3653,8 +3653,8 @@ end
 - [ ] Add TypeScript types
 
 ### Phase 3: Native Player Module
-- [ ] Create iOS PhlexPlayerView (AVKit)
-- [ ] Create Android PhlexPlayerView (ExoPlayer)
+- [ ] Create iOS PhlixPlayerView (AVKit)
+- [ ] Create Android PhlixPlayerView (ExoPlayer)
 - [ ] Implement playback controls
 - [ ] Add progress tracking
 - [ ] Handle errors gracefully
@@ -3785,11 +3785,11 @@ export interface AudioTrack {
 ### iOS Swift Integration
 
 ```swift
-// ios/LocalPods/PhlexPlayer/PhlexPlayerViewManager.swift
-@objc(PhlexPlayerViewManager)
-class PhlexPlayerViewManager: RCTViewManager {
+// ios/LocalPods/PhlixPlayer/PhlixPlayerViewManager.swift
+@objc(PhlixPlayerViewManager)
+class PhlixPlayerViewManager: RCTViewManager {
     override func view() -> UIView! {
-        return PhlexPlayerViewWrapper()
+        return PhlixPlayerViewWrapper()
     }
     
     override static func requiresMainQueueSetup() -> Bool {
@@ -3801,21 +3801,21 @@ class PhlexPlayerViewManager: RCTViewManager {
 ### Android Kotlin Integration
 
 ```kotlin
-// android/app/src/main/java/com/phlexmobile/player/PhlexPlayerPackage.kt
-package com.phlexmobile.player
+// android/app/src/main/java/com/phlixmobile/player/PhlixPlayerPackage.kt
+package com.phlixmobile.player
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 
-class PhlexPlayerPackage : ReactPackage {
+class PhlixPlayerPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
         return emptyList()
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
-        return listOf(PhlexPlayerView(reactContext))
+        return listOf(PhlixPlayerView(reactContext))
     }
 }
 ```

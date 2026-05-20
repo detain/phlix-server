@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Database;
+namespace Phlix\Common\Database;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 class QueryBuilder

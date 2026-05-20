@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\ChannelManager;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\ChannelManager;
 use Psr\Log\LoggerInterface;
 
 /**
  * Handles Schedules Direct lineup fetching and channel creation.
  *
- * Maps SD station data to Phlex channel records via ChannelManager.
+ * Maps SD station data to Phlix channel records via ChannelManager.
  *
  * @since 0.12.0
  */
@@ -20,7 +20,7 @@ class SdLineupHandler
     /** @var SdApiClient SD API client */
     private SdApiClient $client;
 
-    /** @var ChannelManager Phlex channel manager */
+    /** @var ChannelManager Phlix channel manager */
     private ChannelManager $channelManager;
 
     /** @var StructuredLogger|null Optional logger */
@@ -30,7 +30,7 @@ class SdLineupHandler
      * Creates a new SdLineupHandler instance.
      *
      * @param SdApiClient $client SD API client
-     * @param ChannelManager $channelManager Phlex channel manager
+     * @param ChannelManager $channelManager Phlix channel manager
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger
      */
     public function __construct(
@@ -58,7 +58,7 @@ class SdLineupHandler
     }
 
     /**
-     * Fetch the station list for a given lineup and register channels in Phlex.
+     * Fetch the station list for a given lineup and register channels in Phlix.
      *
      * Iterates through SD stations, maps each to channel creation data,
      * and persists via ChannelManager::createChannel().

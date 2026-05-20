@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Network;
+namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -13,7 +13,7 @@ use Psr\Log\NullLogger;
  * Tries automatic discovery (UPnP first, then NAT-PMP), falls back to manual
  * instructions, and persists the result to config/port-forward.json.
  *
- * @package Phlex\Network
+ * @package Phlix\Network
  * @since 0.11.0
  */
 class PortForwardService
@@ -160,7 +160,7 @@ Create a new port forwarding rule:
   External Port: {$this->port}
   Internal Port: {$this->port}
   Internal IP:  {$localIp}
-  Description:  Phlex Media Server
+  Description:  Phlix Media Server
 
 Save and apply the settings. Your router may require a reboot.
 
@@ -197,7 +197,7 @@ TEXT;
             ];
             $candidates[] = [
                 'type' => 'lan-mdns',
-                'url' => 'http://phlex.local:' . $this->port,
+                'url' => 'http://phlix.local:' . $this->port,
             ];
         }
 

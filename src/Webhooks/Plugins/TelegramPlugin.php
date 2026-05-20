@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks\Plugins;
+namespace Phlix\Webhooks\Plugins;
 
-use Phlex\Webhooks\WebhookEvent;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Webhooks\WebhookEvent;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
 
 /**
  * Telegram notification plugin using Bot API.
@@ -94,7 +94,7 @@ class TelegramPlugin extends AbstractNotificationPlugin
     {
         $title = $this->getTitleFromPayload($event->payload) ?: ucfirst(str_replace('.', ' ', $event->eventType));
 
-        $text = "*Phlex Media Server*\n";
+        $text = "*Phlix Media Server*\n";
         $text .= "_{$title}_\n\n";
         $text .= $this->formatMessage($event);
 
@@ -127,7 +127,7 @@ class TelegramPlugin extends AbstractNotificationPlugin
             return $this->config;
         }
 
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : self::DEFAULT_CONFIG_PATH;
         $configFile = $configPath . '/notifications.php';
 
         if (file_exists($configFile)) {
@@ -155,7 +155,7 @@ class TelegramPlugin extends AbstractNotificationPlugin
         return null;
     }
 
-    private function getLogger(): \Phlex\Common\Logger\StructuredLogger
+    private function getLogger(): \Phlix\Common\Logger\StructuredLogger
     {
         return LoggerFactory::get(LogChannels::APPLICATION);
     }

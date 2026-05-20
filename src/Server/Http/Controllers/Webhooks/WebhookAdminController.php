@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Webhooks;
+namespace Phlix\Server\Http\Controllers\Webhooks;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Webhooks\DispatchResult;
-use Phlex\Webhooks\WebhookDispatcher;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Webhooks\DispatchResult;
+use Phlix\Webhooks\WebhookDispatcher;
+use Phlix\Webhooks\WebhookEvent;
 use DateTimeImmutable;
 use InvalidArgumentException;
 

@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Repository;
+namespace Phlix\Tests\Unit\Plugins\Repository;
 
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\Repository\PluginRepository;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\Repository\PluginRepository;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
- * @covers \Phlex\Plugins\Repository\PluginRepository
- * @covers \Phlex\Plugins\InstalledPlugin
+ * @covers \Phlix\Plugins\Repository\PluginRepository
+ * @covers \Phlix\Plugins\InstalledPlugin
  */
 final class PluginRepositoryTest extends TestCase
 {
@@ -27,7 +27,7 @@ final class PluginRepositoryTest extends TestCase
 
     public function test_insert_returns_a_uuid_and_persists_row(): void
     {
-        $manifest = $this->buildManifest('phlex-plugin-foo');
+        $manifest = $this->buildManifest('phlix-plugin-foo');
 
         $this->db->expects($this->once())
             ->method('query')
@@ -35,7 +35,7 @@ final class PluginRepositoryTest extends TestCase
                 $this->stringContains('INSERT INTO plugins'),
                 $this->callback(function (array $params) {
                     return is_string($params[0]) && strlen($params[0]) === 36
-                        && $params[1] === 'phlex-plugin-foo'
+                        && $params[1] === 'phlix-plugin-foo'
                         && $params[5] === 0;
                 }),
             );
@@ -51,20 +51,20 @@ final class PluginRepositoryTest extends TestCase
 
     public function test_findByName_hydrates_installed_plugin(): void
     {
-        $manifest = $this->buildManifest('phlex-plugin-bar');
+        $manifest = $this->buildManifest('phlix-plugin-bar');
 
         $this->db->expects($this->once())
             ->method('query')
             ->with(
                 $this->stringContains('FROM plugins WHERE name = ?'),
-                ['phlex-plugin-bar'],
+                ['phlix-plugin-bar'],
             )
             ->willReturn([[
                 'id' => 'aaaa1111-bbbb-2222-cccc-333344445555',
-                'name' => 'phlex-plugin-bar',
+                'name' => 'phlix-plugin-bar',
                 'version' => '1.0.0',
                 'type' => 'notifier',
-                'entry' => 'Phlex\\Bar\\Plugin',
+                'entry' => 'Phlix\\Bar\\Plugin',
                 'enabled' => 1,
                 'installed_at' => '2026-05-01 10:00:00',
                 'settings_json' => '{"webhook":"https://example.test"}',
@@ -72,12 +72,12 @@ final class PluginRepositoryTest extends TestCase
             ]]);
 
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $installed = $repo->findByName('phlex-plugin-bar');
+        $installed = $repo->findByName('phlix-plugin-bar');
 
-        $this->assertSame('phlex-plugin-bar', $installed->manifest->name);
+        $this->assertSame('phlix-plugin-bar', $installed->manifest->name);
         $this->assertTrue($installed->enabled);
         $this->assertSame(['webhook' => 'https://example.test'], $installed->settings);
-        $this->assertSame('/tmp/plugins/phlex-plugin-bar', $installed->directory);
+        $this->assertSame('/tmp/plugins/phlix-plugin-bar', $installed->directory);
         $this->assertSame('aaaa1111-bbbb-2222-cccc-333344445555', $installed->id);
     }
 
@@ -87,21 +87,21 @@ final class PluginRepositoryTest extends TestCase
         $repo = new PluginRepository($this->db, '/tmp/plugins');
 
         $this->expectException(PluginNotFoundException::class);
-        $repo->findByName('phlex-plugin-missing');
+        $repo->findByName('phlix-plugin-missing');
     }
 
     public function test_existsByName_true_when_row_present(): void
     {
         $this->db->method('query')->willReturn([[1]]);
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $this->assertTrue($repo->existsByName('phlex-plugin-foo'));
+        $this->assertTrue($repo->existsByName('phlix-plugin-foo'));
     }
 
     public function test_existsByName_false_when_no_row(): void
     {
         $this->db->method('query')->willReturn([]);
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $this->assertFalse($repo->existsByName('phlex-plugin-foo'));
+        $this->assertFalse($repo->existsByName('phlix-plugin-foo'));
     }
 
     public function test_setEnabled_persists_flag(): void
@@ -110,11 +110,11 @@ final class PluginRepositoryTest extends TestCase
             ->method('query')
             ->with(
                 $this->stringContains('UPDATE plugins SET enabled = ?'),
-                [1, 'phlex-plugin-foo'],
+                [1, 'phlix-plugin-foo'],
             );
 
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $repo->setEnabled('phlex-plugin-foo', true);
+        $repo->setEnabled('phlix-plugin-foo', true);
     }
 
     public function test_updateSettings_writes_json_blob(): void
@@ -125,12 +125,12 @@ final class PluginRepositoryTest extends TestCase
                 $this->stringContains('UPDATE plugins SET settings_json = ?'),
                 $this->callback(function (array $params) {
                     return $params[0] === '{"api_key":"abc"}'
-                        && $params[1] === 'phlex-plugin-foo';
+                        && $params[1] === 'phlix-plugin-foo';
                 }),
             );
 
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $repo->updateSettings('phlex-plugin-foo', ['api_key' => 'abc']);
+        $repo->updateSettings('phlix-plugin-foo', ['api_key' => 'abc']);
     }
 
     public function test_delete_removes_row(): void
@@ -139,23 +139,23 @@ final class PluginRepositoryTest extends TestCase
             ->method('query')
             ->with(
                 'DELETE FROM plugins WHERE name = ?',
-                ['phlex-plugin-foo'],
+                ['phlix-plugin-foo'],
             );
 
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $repo->delete('phlex-plugin-foo');
+        $repo->delete('phlix-plugin-foo');
     }
 
     public function test_listAll_returns_hydrated_dtos(): void
     {
-        $manifest = $this->buildManifest('phlex-plugin-foo');
+        $manifest = $this->buildManifest('phlix-plugin-foo');
         $this->db->method('query')->willReturn([
             [
                 'id' => 'id-1',
-                'name' => 'phlex-plugin-foo',
+                'name' => 'phlix-plugin-foo',
                 'version' => '1.0.0',
                 'type' => 'notifier',
-                'entry' => 'Phlex\\Foo\\Plugin',
+                'entry' => 'Phlix\\Foo\\Plugin',
                 'enabled' => 0,
                 'installed_at' => '2026-01-01 00:00:00',
                 'settings_json' => null,
@@ -163,38 +163,38 @@ final class PluginRepositoryTest extends TestCase
             ],
             [
                 'id' => 'id-2',
-                'name' => 'phlex-plugin-bar',
+                'name' => 'phlix-plugin-bar',
                 'version' => '2.0.0',
                 'type' => 'scrobbler',
-                'entry' => 'Phlex\\Bar\\Plugin',
+                'entry' => 'Phlix\\Bar\\Plugin',
                 'enabled' => 1,
                 'installed_at' => '2026-01-02 00:00:00',
                 'settings_json' => '{}',
-                'manifest_json' => json_encode($this->buildManifest('phlex-plugin-bar')->toArray()),
+                'manifest_json' => json_encode($this->buildManifest('phlix-plugin-bar')->toArray()),
             ],
         ]);
 
         $repo = new PluginRepository($this->db, '/tmp/plugins');
         $all = $repo->listAll();
         $this->assertCount(2, $all);
-        $this->assertSame('phlex-plugin-foo', $all[0]->manifest->name);
+        $this->assertSame('phlix-plugin-foo', $all[0]->manifest->name);
         $this->assertFalse($all[0]->enabled);
         $this->assertTrue($all[1]->enabled);
     }
 
     public function test_listEnabled_filters_to_enabled_rows(): void
     {
-        $manifest = $this->buildManifest('phlex-plugin-on');
+        $manifest = $this->buildManifest('phlix-plugin-on');
         $this->db->expects($this->once())
             ->method('query')
             ->with($this->stringContains('WHERE enabled = 1'))
             ->willReturn([
                 [
                     'id' => 'enabled-id',
-                    'name' => 'phlex-plugin-on',
+                    'name' => 'phlix-plugin-on',
                     'version' => '1.0.0',
                     'type' => 'notifier',
-                    'entry' => 'Phlex\\On\\Plugin',
+                    'entry' => 'Phlix\\On\\Plugin',
                     'enabled' => 1,
                     'installed_at' => '2026-01-01 00:00:00',
                     'settings_json' => null,
@@ -209,7 +209,7 @@ final class PluginRepositoryTest extends TestCase
     public function test_directoryFor_joins_base_and_name(): void
     {
         $repo = new PluginRepository($this->db, '/tmp/plugins');
-        $this->assertSame('/tmp/plugins/phlex-plugin-x', $repo->directoryFor('phlex-plugin-x'));
+        $this->assertSame('/tmp/plugins/phlix-plugin-x', $repo->directoryFor('phlix-plugin-x'));
     }
 
     public function test_generateUuid_produces_rfc4122_v4_format(): void
@@ -226,9 +226,9 @@ final class PluginRepositoryTest extends TestCase
         return Manifest::fromArray([
             'name' => $name,
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Foo\\Plugin',
+            'entry' => 'Phlix\\Foo\\Plugin',
         ]);
     }
 }

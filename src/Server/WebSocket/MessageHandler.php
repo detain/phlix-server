@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 /**
  * Handles WebSocket message routing and event dispatching.
@@ -10,7 +10,7 @@ namespace Phlex\Server\WebSocket;
  * This class processes incoming WebSocket messages, routes them to
  * registered event handlers, and provides broadcasting capabilities.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Message handler for routing WebSocket events to registered callbacks.
  * @see Connection For connection representation

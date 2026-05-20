@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Hub\RelayConsumer;
+use Phlix\Hub\RelayConsumer;
 
 /**
  * "Play to" via relay tunnel for renderers behind NAT.
  *
  * Wraps the RelayConsumer to send AVTransport commands over the
  * relay tunnel when the renderer is not on the local network.
- * Used when the Phlex server is enrolled with the hub and needs
+ * Used when the Phlix server is enrolled with the hub and needs
  * to control a renderer that is only reachable through the relay.
  *
  * @since 0.12.0

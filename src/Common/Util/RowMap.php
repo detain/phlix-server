@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Util;
+namespace Phlix\Common\Util;
 
 /**
  * Helpers for safely narrowing untyped result-set rows into

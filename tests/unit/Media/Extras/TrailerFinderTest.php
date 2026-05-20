@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Extras;
+namespace Phlix\Tests\Unit\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Extras\TrailerFinder;
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 class TrailerFinderTest extends TestCase
 {

@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events;
+namespace Phlix\Tests\Unit\Common\Events;
 
 use Monolog\Level;
-use Phlex\Common\Events\StructuredLoggerPsrAdapter;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Events\StructuredLoggerPsrAdapter;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LogLevel;
 use ReflectionClass;
 use Stringable;
 
 /**
- * @covers \Phlex\Common\Events\StructuredLoggerPsrAdapter
+ * @covers \Phlix\Common\Events\StructuredLoggerPsrAdapter
  */
 final class StructuredLoggerPsrAdapterTest extends TestCase
 {

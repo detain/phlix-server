@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Theming;
+namespace Phlix\Tests\Unit\Theming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Theming\ThemeAudio;
-use Phlex\Theming\ThemeMedia;
-use Phlex\Theming\ThemeMediaRepository;
-use Phlex\Theming\ThemeVideo;
+use Phlix\Theming\ThemeAudio;
+use Phlix\Theming\ThemeMedia;
+use Phlix\Theming\ThemeMediaRepository;
+use Phlix\Theming\ThemeVideo;
 use Workerman\MySQL\Connection;
 
 class ThemeMediaRepositoryTest extends TestCase

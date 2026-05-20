@@ -28,14 +28,14 @@ Coverage outputs to `coverage.xml` (Clover) and `coverage-report/` (HTML), confi
 
 ## Architecture
 
-PHP 8.3+ media server on **Workerman 5.x**. PSR-4 autoload: `Phlex\` → `src/`, `Phlex\Tests\` → `tests/`. Single-process bootstrap in `public/index.php`; long-running worker bootstrap in `src/Server/Core/Application.php`.
+PHP 8.3+ media server on **Workerman 5.x**. PSR-4 autoload: `Phlix\` → `src/`, `Phlix\Tests\` → `tests/`. Single-process bootstrap in `public/index.php`; long-running worker bootstrap in `src/Server/Core/Application.php`.
 
 ### Layers
 
 - **`src/Server/Http/`** — `Request::fromGlobals()` → `Router::dispatch()` (supports `{param}` placeholders and `$router->group($prefix, $cb, [$middleware])`). Controllers in `Http/Controllers/` return chained `(new Response())->status(...)->json(...)`.
 - **`src/Server/WebSocket/`** — `WebSocketServer` wraps `Workerman\Worker`. `ConnectionPool` is a singleton (`getInstance()`). `MessageHandler->on($event, $cb)` registers handlers; event constants in `Events.php` (`WebSocketEvents::PLAYBACK_*`, `SYNCPLAY_*`, `AUTH_*`). Payload shape is always `['type' => $event, 'data' => $payload, 'timestamp' => time()]`.
 - **`src/Server/WebPortal/`** — `WebPortalRouter` serves portal JSON (`/api/v1/libraries`, etc.); `PageRenderer` instantiates `\Smarty`, sets template dir, assigns vars, fetches templates from `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`.
-- **`src/Auth/`** — `JwtHandler` (HS256, `iss=phlex`, 1h access / 7d refresh). `UserRepository` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager` orchestrates register/login/refresh and calls `AuditLogger`. `UserProfileManager` enforces ≤5 profiles per user, PINs (4 or 6 digits, Argon2ID-hashed), and rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory` marks complete at 90%.
+- **`src/Auth/`** — `JwtHandler` (HS256, `iss=phlix`, 1h access / 7d refresh). `UserRepository` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager` orchestrates register/login/refresh and calls `AuditLogger`. `UserProfileManager` enforces ≤5 profiles per user, PINs (4 or 6 digits, Argon2ID-hashed), and rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory` marks complete at 90%.
 - **`src/Media/`** — `Library/` (scanner parses `S01E02`, `(2020)`; `FolderWatcher` uses mtime checksum; `ItemRepository` hydrates `metadata_json`). `Metadata/` providers (`Tmdb`, `Tvdb`, `Fanart`, `LocalNfo`) implement `MetadataProviderInterface`; `MetadataManager` priority is `tmdb→local` for movies, `tvdb→fanart→local` for series, with 24h cache via `metadata_refreshed_at`. `Streaming/` (`HlsStreamer` master/variant `.m3u8` + `.ts`; `QualitySelector` profiles: generic, mobile-low, mobile-high, web, tv-4k). `Transcoding/` (`FfmpegRunner`, `EncodingHelper` CRF 23/28 libx264/libx265, config in `config/ffmpeg.php`).
 - **`src/Session/`** — `SessionManager` (device sessions), `PlaybackController` (continue-watching at <95%), `SyncPlay/` with `TimeSync` doing NTP-style weighted-mean offset over `OFFSET_SAMPLE_COUNT=5` samples.
 - **`src/LiveTv/`** (`ChannelManager`, `GuideManager`, `Recorder`, `LiveTvManager`) and **`src/Dlna/`** (`ContentDirectory`, `AvTransport`, `DlnaServer`, `DeviceRegistry`, `DlnaDevice`).
@@ -71,4 +71,4 @@ A pre-commit hook may sync agent configs via `caliber refresh`. Before committin
 
 ## Further reading
 
-`AGENTS.md` (module/class reference) · `docs/dev/DEVELOPER.md` · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/archive/SUPERVISOR_PLAN.md` · `docs/dev/PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
+`AGENTS.md` (module/class reference) · `docs/dev/DEVELOPER.md` · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/archive/SUPERVISOR_PLAN.md` · `docs/dev/PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.

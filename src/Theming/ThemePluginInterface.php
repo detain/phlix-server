@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
 /**
  * Marker interface for ui-theme plugin entry classes.
@@ -15,7 +15,7 @@ namespace Phlex\Theming;
  * this interface, though the ThemeRegistry::registerFromPlugin() method
  * reads the theme data directly from the manifest without instantiation.
  *
- * @package Phlex\Theming
+ * @package Phlix\Theming
  * @since 0.14.0
  */
 interface ThemePluginInterface

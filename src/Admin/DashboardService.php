@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
 use DateTime;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Streaming\StreamManager;
-use Phlex\Media\Streaming\StreamState;
-use Phlex\Session\SessionManager;
-use Phlex\Stats\StatsCollector;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\StreamManager;
+use Phlix\Media\Streaming\StreamState;
+use Phlix\Session\SessionManager;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 /**
@@ -23,7 +23,7 @@ use Workerman\MySQL\Connection;
  * - Storage usage summary by media type
  * - Recent activity feed (playback, library, auth events)
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Admin dashboard data aggregation service
  *

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Music;
+namespace Phlix\Media\Music;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Library\AudiobookLibraryManager;
-use Phlex\Media\Library\AudiobookProgressStore;
-use Phlex\Media\Library\AudiobookScanner;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Library\AudiobookLibraryManager;
+use Phlix\Media\Library\AudiobookProgressStore;
+use Phlix\Media\Library\AudiobookScanner;
+use Phlix\Media\Library\ItemRepository;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -19,7 +19,7 @@ use Workerman\MySQL\Connection;
  * scanning and metadata handling. It supports M4B, M4A, and MP3 formats
  * with chapter extraction from MP4 atoms or ID3v2 CMT2/CHAP frames.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Library type plugin for audiobook media with chapter awareness
  * @see AudiobookScanner For M4B chapter extraction and metadata harvesting
@@ -27,7 +27,7 @@ use Workerman\MySQL\Connection;
  * @see AudiobookProgressStore For per-user progress tracking
  * @since 0.18.0
  */
-final class AudiobookLibraryType implements \Phlex\Media\Library\LibraryTypeInterface
+final class AudiobookLibraryType implements \Phlix\Media\Library\LibraryTypeInterface
 {
     /** Library type identifier */
     public const TYPE = 'audiobook';

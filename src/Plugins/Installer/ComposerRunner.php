@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Installer;
+namespace Phlix\Plugins\Installer;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Exception\PluginInstallException;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Exception\PluginInstallException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
 
@@ -23,9 +23,9 @@ use Symfony\Component\Process\Process;
  * Composer is invoked via {@see Process}; stdout/stderr is captured
  * and logged on the `plugins` channel for postmortem. The default
  * timeout is 120 seconds, override via the
- * `PHLEX_PLUGINS_COMPOSER_TIMEOUT` env var or constructor argument.
+ * `PHLIX_PLUGINS_COMPOSER_TIMEOUT` env var or constructor argument.
  *
- * @package Phlex\Plugins\Installer
+ * @package Phlix\Plugins\Installer
  * @since 0.10.0
  */
 class ComposerRunner

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\ToneMapFilterChain;
 
 class ToneMapFilterChainTest extends TestCase
 {

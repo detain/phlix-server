@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlex\Dlna\LibraryBridge;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Streaming\HlsStreamer;
-use Phlex\Media\Streaming\QualitySelector;
+use Phlix\Dlna\LibraryBridge;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Media\Streaming\QualitySelector;
 
 /**
  * Tests for LibraryBridge class.

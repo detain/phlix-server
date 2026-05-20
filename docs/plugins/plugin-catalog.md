@@ -1,13 +1,13 @@
-# Phlex Plugin Catalog
+# Phlix Plugin Catalog
 
 > **Status:** This document lists officially maintained and community-
-> contributed plugins for the Phlex Media Server. Plugin installation
+> contributed plugins for the Phlix Media Server. Plugin installation
 > is documented in [install-from-catalog.md](./install-from-catalog.md)
 > and [install-from-url.md](./install-from-url.md).
 
-## Official Plugins (Maintained by Phlex)
+## Official Plugins (Maintained by Phlix)
 
-### phlex-plugin-oidc
+### phlix-plugin-oidc
 
 **Type:** `auth-provider` | **Version:** 1.0.0
 
@@ -15,7 +15,7 @@ OpenID Connect / OAuth2 authentication provider plugin. Adds SSO login
 via any OIDC-compliant identity provider (Keycloak, Authelia, Authentik,
 Google Workspace, GitHub OAuth).
 
-**Repository:** `detain/phlex-plugin-oidc` (bundled in `src/Plugins/Oidc/`)
+**Repository:** `detain/phlix-plugin-oidc` (bundled in `src/Plugins/Oidc/`)
 
 **Features:**
 - Authorization Code flow with PKCE support
@@ -28,11 +28,11 @@ Google Workspace, GitHub OAuth).
 **Manifest fields:**
 ```json
 {
-  "name": "phlex-plugin-oidc",
+  "name": "phlix-plugin-oidc",
   "version": "1.0.0",
-  "phlex_min_server_version": "0.11.0",
+  "phlix_min_server_version": "0.11.0",
   "type": "auth-provider",
-  "entry": "Phlex\\Plugins\\Oidc\\Plugin",
+  "entry": "Phlix\\Plugins\\Oidc\\Plugin",
   "settings": {
     "provider_url": { "type": "string", "required": true, "secret": false },
     "client_id": { "type": "string", "required": true, "secret": false },
@@ -46,7 +46,7 @@ Google Workspace, GitHub OAuth).
 1. Install the plugin from the admin UI
 2. Navigate to **Admin → Auth Providers → OIDC**
 3. Enter your OIDC provider's base URL, client ID, and client secret
-4. Register `https://your-phlex-server/auth/oidc/callback` as a redirect URI in your OIDC provider
+4. Register `https://your-phlix-server/auth/oidc/callback` as a redirect URI in your OIDC provider
 5. Save settings and enable the provider
 
 **Supported providers:**
@@ -59,7 +59,7 @@ Google Workspace, GitHub OAuth).
 
 ## Community Plugins
 
-Community plugins are not officially supported by Phlex. Use at
+Community plugins are not officially supported by Phlix. Use at
 your own risk.
 
 | Plugin | Type | Description |
@@ -88,7 +88,7 @@ Full `plugin.json` schema is documented in [manifest.md](./manifest.md).
 
 ## Security
 
-All plugins run with the same privileges as the Phlex server process.
+All plugins run with the same privileges as the Phlix server process.
 Only install plugins from trusted sources. Review the plugin's code
 before installing, especially if it requires network access or handles
 sensitive data.

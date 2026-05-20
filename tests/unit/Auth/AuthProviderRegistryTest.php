@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\AuthProviderNotFoundException;
-use Phlex\Auth\AuthProviderRegistry;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
+use Phlix\Auth\AuthProviderNotFoundException;
+use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
 
 /**
- * @covers \Phlex\Auth\AuthProviderRegistry
+ * @covers \Phlix\Auth\AuthProviderRegistry
  */
 final class AuthProviderRegistryTest extends TestCase
 {

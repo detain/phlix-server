@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
 use RuntimeException;
 
 /**
  * Thrown when a client exceeds the rate limit for authentication attempts.
  *
- * @package Phlex\Auth
- * @author Phlex Team
+ * @package Phlix\Auth
+ * @author Phlix Team
  * @version 1.0.0
  * @description Exception thrown when rate limit is exceeded on auth endpoints.
  */

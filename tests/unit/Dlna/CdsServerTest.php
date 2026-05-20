@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlex\Dlna\AvTransport;
-use Phlex\Dlna\CdsServer;
-use Phlex\Dlna\ContentDirectory;
-use Phlex\Dlna\DlnaDevice;
-use Phlex\Dlna\DlnaServer;
-use Phlex\Dlna\DeviceRegistry;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Dlna\AvTransport;
+use Phlix\Dlna\CdsServer;
+use Phlix\Dlna\ContentDirectory;
+use Phlix\Dlna\DlnaDevice;
+use Phlix\Dlna\DlnaServer;
+use Phlix\Dlna\DeviceRegistry;
+use Phlix\Media\Library\ItemRepository;
 
 /**
  * Tests for CdsServer class.
@@ -31,7 +31,7 @@ class CdsServerTest extends TestCase
 
         $this->dlnaServer = new DlnaServer(
             'test-cds-server',
-            'Phlex CDS Test Server',
+            'Phlix CDS Test Server',
             '192.168.1.100',
             8200,
             $this->itemRepositoryMock
@@ -50,8 +50,8 @@ class CdsServerTest extends TestCase
         $this->assertIsString($xml);
         $this->assertStringContainsString('<?xml', $xml);
         $this->assertStringContainsString('urn:schemas-upnp-org:device:MediaServer:1', $xml);
-        $this->assertStringContainsString('Phlex CDS Test Server', $xml);
-        $this->assertStringContainsString('uuid:phlex-server-test-cds-server', $xml);
+        $this->assertStringContainsString('Phlix CDS Test Server', $xml);
+        $this->assertStringContainsString('uuid:phlix-server-test-cds-server', $xml);
     }
 
     /**
@@ -209,7 +209,7 @@ class CdsServerTest extends TestCase
     {
         $udn = $this->cdsServer->getServerUdn();
 
-        $this->assertEquals('uuid:phlex-server-test-cds-server', $udn);
+        $this->assertEquals('uuid:phlix-server-test-cds-server', $udn);
     }
 
     /**

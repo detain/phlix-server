@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\MarkerSet;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerSet;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * HTTP controller for marker endpoints.

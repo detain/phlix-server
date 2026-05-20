@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Markers\Detection;
+namespace Phlix\Media\Markers\Detection;
 
 /**
  * File-based job queue for marker detection.
@@ -15,7 +15,7 @@ namespace Phlex\Media\Markers\Detection;
 final class MarkerCandidateStore
 {
     /** Queue directory path */
-    private const QUEUE_DIR = '/tmp/phlex_marker_jobs';
+    private const QUEUE_DIR = '/tmp/phlix_marker_jobs';
 
     /** Lock file extension */
     private const LOCK_EXT = '.lock';

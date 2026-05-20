@@ -1,7 +1,7 @@
 {
-    "name": "phlex-plugin-mystery",
+    "name": "phlix-plugin-mystery",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "totally-not-real",
-    "entry": "Phlex\\Plugins\\Mystery\\Plugin"
+    "entry": "Phlix\\Plugins\\Mystery\\Plugin"
 }

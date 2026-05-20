@@ -1,13 +1,13 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\MediaScanner;
-use Phlex\Media\Library\FolderWatcher;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Library\FolderWatcher;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
 class LibraryManagerTest extends TestCase

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
 /**
  * Immutable AST node representing a rule or rule-group in a smart playlist.

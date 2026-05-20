@@ -1,16 +1,16 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Markers\Detection;
+namespace Phlix\Tests\Unit\Media\Markers\Detection;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\FingerprintClusterer;
-use Phlex\Media\Markers\Detection\IntroDetectionJob;
-use Phlex\Media\Markers\Detection\IntroDetectionResult;
-use Phlex\Media\Markers\Detection\IntroMarkerCandidate;
-use Phlex\Media\Markers\Detection\OutroMarkerCandidate;
-use Phlex\Media\Markers\Fingerprinting\ChromaPrintInterface;
-use Phlex\Media\Markers\Fingerprinting\FingerprintRepository;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\FingerprintClusterer;
+use Phlix\Media\Markers\Detection\IntroDetectionJob;
+use Phlix\Media\Markers\Detection\IntroDetectionResult;
+use Phlix\Media\Markers\Detection\IntroMarkerCandidate;
+use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
+use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 

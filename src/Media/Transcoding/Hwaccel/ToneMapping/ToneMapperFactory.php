@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\ToneMapping;
+namespace Phlix\Media\Transcoding\Hwaccel\ToneMapping;
 
 /**
  * Factory for creating vendor-specific tone mapper instances.
@@ -16,13 +16,13 @@ final class ToneMapperFactory
 {
     /** @var array<string, class-string<HwaccelToneMapperInterface>> Tone mapper class map */
     private const TONEMAPPER_CLASSES = [
-        'nvenc' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\NvencToneMapper::class,
-        'vaapi' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VaapiToneMapper::class,
-        'qsv' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\QsvToneMapper::class,
-        'videotoolbox' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VideoToolboxToneMapper::class,
-        'amf' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\AmfToneMapper::class,
-        'v4l2' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\V4L2ToneMapper::class,
-        'software' => \Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\SoftwareToneMapper::class,
+        'nvenc' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\NvencToneMapper::class,
+        'vaapi' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VaapiToneMapper::class,
+        'qsv' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\QsvToneMapper::class,
+        'videotoolbox' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VideoToolboxToneMapper::class,
+        'amf' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\AmfToneMapper::class,
+        'v4l2' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\V4L2ToneMapper::class,
+        'software' => \Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\SoftwareToneMapper::class,
     ];
 
     /**

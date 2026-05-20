@@ -4,7 +4,7 @@
  * Handles audiobook playback with chapter navigation, position persistence,
  * and progress tracking every 10 seconds.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @since 0.18.0
  */

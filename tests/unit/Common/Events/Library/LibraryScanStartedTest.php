@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events\Library;
+namespace Phlix\Tests\Unit\Common\Events\Library;
 
-use Phlex\Shared\Events\Library\LibraryScanStarted;
+use Phlix\Shared\Events\Library\LibraryScanStarted;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Events\Library\LibraryScanStarted
+ * @covers \Phlix\Shared\Events\Library\LibraryScanStarted
  */
 final class LibraryScanStartedTest extends TestCase
 {

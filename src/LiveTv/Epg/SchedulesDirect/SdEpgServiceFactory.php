@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\ChannelManager;
-use Phlex\LiveTv\GuideManager;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\ChannelManager;
+use Phlix\LiveTv\GuideManager;
 use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
@@ -24,8 +24,8 @@ final class SdEpgServiceFactory
      * Build a fully-wired SdEpgService from configuration.
      *
      * @param array<string, mixed> $config The schedules_direct section from livetv.php config
-     * @param ChannelManager $channelManager Phlex channel manager
-     * @param GuideManager $guideManager Phlex guide manager
+     * @param ChannelManager $channelManager Phlix channel manager
+     * @param GuideManager $guideManager Phlix guide manager
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger
      * @return SdEpgService Configured service instance
      * @throws \RuntimeException If token cannot be obtained and auto-fetch is disabled
@@ -47,7 +47,7 @@ final class SdEpgServiceFactory
 
         $username = self::toString($config['username'] ?? '');
         $password = self::toString($config['password'] ?? '');
-        $tokenCachePath = self::toString($config['token_cache_path'] ?? '/var/phlex/sd_token.json');
+        $tokenCachePath = self::toString($config['token_cache_path'] ?? '/var/phlix/sd_token.json');
         $timeoutSecs = self::toInt($config['timeout_secs'] ?? 30);
 
         // Try to load cached token first

@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Server\WebPortal\PageRenderer;
-use Phlex\Session\PlaybackController;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Server\WebPortal\PageRenderer;
+use Phlix\Session\PlaybackController;
 use Psr\Container\ContainerInterface;
 
 use function DI\factory;
@@ -24,9 +24,9 @@ use function DI\factory;
  * with a default that points at `public/templates/` relative to the
  * project root so the stock bootstrap keeps working without extra config.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.1
  */
 final class WebPortalServicesProvider implements ServiceProviderInterface

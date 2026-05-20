@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Discovery\Ssdp;
+namespace Phlix\Discovery\Ssdp;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -221,7 +221,7 @@ class SsdpSocket
             "MAN: \"ssdp:discover\"\r\n" .
             "MX: {$cacheTimeout}\r\n" .
             "ST: {$st}\r\n" .
-            "USER-AGENT: Phlex/1.0\r\n" .
+            "USER-AGENT: Phlix/1.0\r\n" .
             "\r\n";
     }
 
@@ -236,7 +236,7 @@ class SsdpSocket
     private function buildNotifyMessage(string $nt, string $location, string $usn): string
     {
         $host = self::MULTICAST_ADDR . ':' . self::PORT;
-        $server = 'Phlex/1.0 UPnP/1.0';
+        $server = 'Phlix/1.0 UPnP/1.0';
         $cacheTimeout = 1800;
 
         return "NOTIFY * HTTP/1.1\r\n" .

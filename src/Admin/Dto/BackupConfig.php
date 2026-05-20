@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin\Dto;
+namespace Phlix\Admin\Dto;
 
 /**
  * Typed value object for the backup subsystem configuration.
  *
  * Replaces the legacy `array<string, mixed> $config` shape that
- * {@see \Phlex\Admin\BackupManager} used internally. Strong typing here
+ * {@see \Phlix\Admin\BackupManager} used internally. Strong typing here
  * means every consumer can use a property access (e.g. `$config->localPath`)
  * instead of `(string) ($this->config['local_path'] ?? '...')`.
  *
- * @package Phlex\Admin\Dto
+ * @package Phlix\Admin\Dto
  * @since 0.20.0
  */
 final class BackupConfig
@@ -50,7 +50,7 @@ final class BackupConfig
 
         return new self(
             enabled: self::asBool($raw['enabled'] ?? true),
-            localPath: self::asString($raw['local_path'] ?? '/var/phlex/backups'),
+            localPath: self::asString($raw['local_path'] ?? '/var/phlix/backups'),
             retentionCount: self::asInt($raw['retention_count'] ?? 5),
             autoBackupIntervalDays: self::asInt($raw['auto_backup_interval_days'] ?? 7),
             s3: S3Config::fromArray($s3Raw),

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Markers;
+namespace Phlix\Tests\Unit\Media\Markers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\PlaybackMarkerService;
-use Phlex\Media\Markers\MarkerSet;
-use Phlex\Media\Markers\IntroMarker;
-use Phlex\Media\Markers\OutroMarker;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\Markers\MarkerSet;
+use Phlix\Media\Markers\IntroMarker;
+use Phlix\Media\Markers\OutroMarker;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Workerman\MySQL\Connection;
 
 class PlaybackMarkerServiceTest extends TestCase

@@ -1,4 +1,4 @@
--- Phlex Media Server — Admin role flag on users (Step A.5)
+-- Phlix Media Server — Admin role flag on users (Step A.5)
 -- Adds a minimal `users.is_admin` column so the plugin admin UI
 -- (Phase A.5) and any subsequent privileged endpoints have a single
 -- gate to check. This is intentionally minimum-viable: a full RBAC

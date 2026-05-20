@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
 use Workerman\MySQL\Connection;
 
@@ -12,7 +12,7 @@ use Workerman\MySQL\Connection;
  * Library type plugins provide type-specific scanner and manager instances
  * for different media types (video, music, photos, books, audiobooks).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Interface for library type plugins
  * @see MusicLibraryType For the music library type implementation

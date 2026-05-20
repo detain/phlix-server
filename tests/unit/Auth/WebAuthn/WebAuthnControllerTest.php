@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth\WebAuthn;
+namespace Phlix\Tests\Unit\Auth\WebAuthn;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\AuthManager;
-use Phlex\Auth\WebAuthn\WebAuthnManager;
-use Phlex\Server\Http\Controllers\WebAuthnController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Auth\WebAuthn\WebAuthnCredential;
-use Phlex\Shared\Auth\AuthResult;
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
+use Phlix\Server\Http\Controllers\WebAuthnController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Auth\WebAuthn\WebAuthnCredential;
+use Phlix\Shared\Auth\AuthResult;
 use Workerman\MySQL\Connection;
 
 final class WebAuthnControllerTest extends TestCase

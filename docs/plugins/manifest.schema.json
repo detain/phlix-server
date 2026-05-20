@@ -1,22 +1,22 @@
 {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "https://phlex.tv/schemas/plugin-manifest.schema.json",
-    "title": "Phlex plugin manifest",
-    "description": "Schema for plugin.json files consumed by the Phlex plugin loader. See docs/plugins/manifest.md for the human-readable spec.",
+    "$id": "https://phlix.tv/schemas/plugin-manifest.schema.json",
+    "title": "Phlix plugin manifest",
+    "description": "Schema for plugin.json files consumed by the Phlix plugin loader. See docs/plugins/manifest.md for the human-readable spec.",
     "type": "object",
     "additionalProperties": false,
     "required": [
         "name",
         "version",
-        "phlex_min_server_version",
+        "phlix_min_server_version",
         "type",
         "entry"
     ],
     "properties": {
         "name": {
             "type": "string",
-            "description": "Globally unique kebab-case identifier; must start with 'phlex-plugin-'.",
-            "pattern": "^phlex-plugin-[a-z0-9][a-z0-9-]*$",
+            "description": "Globally unique kebab-case identifier; must start with 'phlix-plugin-'.",
+            "pattern": "^phlix-plugin-[a-z0-9][a-z0-9-]*$",
             "maxLength": 64
         },
         "version": {
@@ -24,9 +24,9 @@
             "description": "Semver version of the plugin itself.",
             "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.\\-]+)?$"
         },
-        "phlex_min_server_version": {
+        "phlix_min_server_version": {
             "type": "string",
-            "description": "Minimum Phlex server semver the plugin is compatible with.",
+            "description": "Minimum Phlix server semver the plugin is compatible with.",
             "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][A-Za-z0-9.\\-]+)?$"
         },
         "type": {
@@ -53,10 +53,10 @@
         },
         "events": {
             "type": "array",
-            "description": "Manifest aliases (e.g., 'phlex.playback.started') the plugin subscribes to. The loader (A.4) resolves aliases to event class FQCNs.",
+            "description": "Manifest aliases (e.g., 'phlix.playback.started') the plugin subscribes to. The loader (A.4) resolves aliases to event class FQCNs.",
             "items": {
                 "type": "string",
-                "pattern": "^phlex\\.[a-z]+(?:\\.[a-z]+)*$"
+                "pattern": "^phlix\\.[a-z]+(?:\\.[a-z]+)*$"
             },
             "uniqueItems": true
         },

@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\SkipButtonSpec;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Session\SessionManager;
-use Phlex\Session\PlaybackController;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Session\SessionManager;
+use Phlix\Session\PlaybackController;
 
 /**
  * Handles playback session-related HTTP requests.
@@ -17,7 +17,7 @@ use Phlex\Session\PlaybackController;
  * This controller manages playback sessions, progress tracking,
  * and watch history for authenticated users.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Session controller for playback management and progress tracking.
  * @see Request For request representation
@@ -243,7 +243,7 @@ class SessionController
         $skipButtonSpec = SkipButtonSpec::fromMarkerSet($markerSet)->toArray();
 
         $chapters = array_map(
-            static fn(\Phlex\Media\Markers\ChapterMarker $chapter): array => [
+            static fn(\Phlix\Media\Markers\ChapterMarker $chapter): array => [
                 'start_seconds' => $chapter->start_seconds,
                 'end_seconds' => $chapter->end_seconds,
                 'title' => $chapter->title,

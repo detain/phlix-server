@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -18,7 +18,7 @@ use Psr\Log\NullLogger;
  * Provides a clean interface for probing media files and running transcode
  * operations with proper process management and error handling.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description FFmpeg/FFprobe process execution with command building and error handling
  * @see https://ffmpeg.org/documentation.html

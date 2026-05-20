@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks;
+namespace Phlix\Webhooks;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 use Workerman\Timer;
 
@@ -180,7 +180,7 @@ class WebhookDispatcher
                 'method' => 'POST',
                 'header' => [
                     "Content-Type: application/json",
-                    "X-Phlex-Signature: {$signature}",
+                    "X-Phlix-Signature: {$signature}",
                 ],
                 'content' => $payload,
                 'timeout' => $timeout,
@@ -278,7 +278,7 @@ class WebhookDispatcher
      */
     private function getConfig(): array
     {
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : __DIR__ . '/../../config';
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../config';
         $configFile = $configPath . '/webhooks.php';
 
         if (file_exists($configFile)) {

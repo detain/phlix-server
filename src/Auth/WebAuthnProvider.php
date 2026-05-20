@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Auth\WebAuthn\WebAuthnManager;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Shared\Auth\UserInfo;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\UserInfo;
 
 final class WebAuthnProvider implements ProviderInterface
 {

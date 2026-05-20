@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
 use Jose\Component\Core\JWKSet;
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Shared\Auth\UserInfo;
-use Phlex\Plugins\Oidc\DiscoveryDocument;
-use Phlex\Plugins\Oidc\IdTokenValidator;
-use Phlex\Plugins\Oidc\OidcUserInfo;
-use Phlex\Plugins\Oidc\OidcValidationException;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\UserInfo;
+use Phlix\Plugins\Oidc\DiscoveryDocument;
+use Phlix\Plugins\Oidc\IdTokenValidator;
+use Phlix\Plugins\Oidc\OidcUserInfo;
+use Phlix\Plugins\Oidc\OidcValidationException;
 use RuntimeException;
 
 /**
@@ -21,7 +21,7 @@ use RuntimeException;
  * - Authorization Code flow: exchanges authorization code for tokens
  * - Direct API token: validates bearer token and fetches userinfo
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class OidcProvider implements ProviderInterface

@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Core;
+namespace Phlix\Tests\Unit\Server\Core;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Core\Application;
+use Phlix\Server\Core\Application;
 
 class ApplicationTest extends TestCase
 {

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
-use Phlex\Media\Library\MediaItem;
+use Phlix\Media\Library\MediaItem;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -18,7 +18,7 @@ use Psr\Log\NullLogger;
  * - Scrobble start/pause/stop calls
  * - Watched history sync (pull and push)
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 class TraktApi
@@ -272,7 +272,7 @@ class TraktApi
     }
 
     /**
-     * Get watched history for a user (for Trakt → Phlex sync).
+     * Get watched history for a user (for Trakt → Phlix sync).
      *
      * @param string $username Trakt username
      * @param int $page Page number (1-indexed)
@@ -312,7 +312,7 @@ class TraktApi
     }
 
     /**
-     * Add a media item to Trakt watched history (for Phlex → Trakt sync).
+     * Add a media item to Trakt watched history (for Phlix → Trakt sync).
      *
      * @param MediaItem $item Media item that was watched
      * @param \DateTimeImmutable $watchedAt When the item was watched

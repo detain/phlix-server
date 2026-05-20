@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
 /**
  * JWT token handler for creating and validating JSON Web Tokens.
@@ -11,23 +11,23 @@ namespace Phlex\Auth;
  * with support for access tokens and refresh tokens with configurable
  * TTLs and algorithms.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Handles JWT token creation, validation, and claims extraction
- *              for secure stateless authentication in the Phlex Media Server.
+ *              for secure stateless authentication in the Phlix Media Server.
  * @see AuthManager For high-level authentication operations
  *
  * JWT Token Structure:
  * --------------------
  * Access Token Claims:
- *   - iss: Issuer identifier ('phlex')
+ *   - iss: Issuer identifier ('phlix')
  *   - sub: User ID (subject)
  *   - iat: Issued at timestamp
  *   - exp: Expiration timestamp
  *   - type: Token type ('access')
  *
  * Refresh Token Claims:
- *   - iss: Issuer identifier ('phlex')
+ *   - iss: Issuer identifier ('phlix')
  *   - sub: User ID (subject)
  *   - iat: Issued at timestamp
  *   - exp: Expiration timestamp
@@ -101,7 +101,7 @@ class JwtHandler
     {
         $now = time();
         $payload = array_merge($claims, [
-            'iss' => 'phlex',
+            'iss' => 'phlix',
             'sub' => $userId,
             'iat' => $now,
             'exp' => $now + $this->ttl,
@@ -132,7 +132,7 @@ class JwtHandler
     {
         $now = time();
         $payload = [
-            'iss' => 'phlex',
+            'iss' => 'phlix',
             'sub' => $userId,
             'iat' => $now,
             'exp' => $now + $this->refreshTtl,
@@ -176,7 +176,7 @@ class JwtHandler
             }
 
             // Verify issuer
-            if (($payload['iss'] ?? '') !== 'phlex') {
+            if (($payload['iss'] ?? '') !== 'phlix') {
                 return null;
             }
 

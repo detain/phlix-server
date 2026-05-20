@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Theming;
+namespace Phlix\Tests\Unit\Theming;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Theming\Theme;
-use Phlex\Theming\ThemeRegistry;
+use Phlix\Theming\Theme;
+use Phlix\Theming\ThemeRegistry;
 use Workerman\MySQL\Connection;
 
 class ThemeRegistryTest extends TestCase
@@ -111,9 +111,9 @@ class ThemeRegistryTest extends TestCase
         // Register the default theme first
         $this->registry->registerBuiltIn(new Theme(
             id: ThemeRegistry::DEFAULT_THEME_ID,
-            name: 'Phlex Dark',
+            name: 'Phlix Dark',
             type: 'builtin',
-            cssUrl: '/assets/css/themes/phlex-dark.css',
+            cssUrl: '/assets/css/themes/phlix-dark.css',
             jsUrl: null,
             thumbnailUrl: null,
             version: '1.0.0',

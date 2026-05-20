@@ -1,13 +1,13 @@
 {
-    "name": "phlex-plugin-trakt",
+    "name": "phlix-plugin-trakt",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.14.0",
+    "phlix_min_server_version": "0.14.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Scrobbler\\Trakt\\TraktPlugin",
+    "entry": "Phlix\\Plugins\\Scrobbler\\Trakt\\TraktPlugin",
     "events": [
-        "phlex.playback.started",
-        "phlex.playback.stopped",
-        "phlex.playback.progress"
+        "phlix.playback.started",
+        "phlix.playback.stopped",
+        "phlix.playback.progress"
     ],
     "settings": {
         "enabled": {
@@ -43,7 +43,7 @@
         "sync_interval_minutes": {
             "type": "integer",
             "default": 30,
-            "description": "How often to sync Trakt history to Phlex (minutes)"
+            "description": "How often to sync Trakt history to Phlix (minutes)"
         },
         "scrobble_enabled": {
             "type": "boolean",

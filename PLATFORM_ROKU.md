@@ -1,4 +1,4 @@
-# Phlex Media Server - Roku Application
+# Phlix Media Server - Roku Application
 
 **Document Version:** 1.0  
 **Platform:** Roku  
@@ -65,8 +65,8 @@ Roku devices support:
 
 ```bash
 # Create project directory
-mkdir phlex-roku
-cd phlex-roku
+mkdir phlix-roku
+cd phlix-roku
 
 # Initialize git
 git init
@@ -107,7 +107,7 @@ mkdir -p tests
 
 ```json
 // manifest
-title=Phlex
+title=Phlix
 major_version=1
 minor_version=0
 build_version=1
@@ -130,7 +130,7 @@ ui_resolutions=hd
 ## 3. Project Structure
 
 ```
-phlex-roku/
+phlix-roku/
 ├── source/
 │   ├── main.brs              # Main entry point
 │   ├── lib/
@@ -142,7 +142,7 @@ phlex-roku/
 │   │   ├── TaskManager.brs   # Background tasks
 │   │   └── Utilities.brs     # Helper functions
 │   ├── components/
-│   │   ├── PhlexApp.brs      # Main app component
+│   │   ├── PhlixApp.brs      # Main app component
 │   │   ├── HomeScene.brs     # Home screen
 │   │   ├── LibraryScene.brs  # Library browser
 │   │   ├── DetailScene.brs   # Item detail
@@ -180,8 +180,8 @@ phlex-roku/
 ' source/lib/ApiClient.brs
 
 ' ===========================================
-' Phlex API Client for Roku
-' Handles all communication with Phlex Media Server
+' Phlix API Client for Roku
+' Handles all communication with Phlix Media Server
 ' ===========================================
 
 function ApiClient(baseUrl as String) as Object
@@ -267,16 +267,16 @@ function ApiClient(baseUrl as String) as Object
             
             ' Set headers
             http.AddHeader("Content-Type", "application/json")
-            http.AddHeader("X-Phlex-Device-ID", m.deviceId)
-            http.AddHeader("X-Phlex-Device-Name", m.deviceName)
-            http.AddHeader("X-Phlex-Device-Type", m.deviceType)
+            http.AddHeader("X-Phlix-Device-ID", m.deviceId)
+            http.AddHeader("X-Phlix-Device-Name", m.deviceName)
+            http.AddHeader("X-Phlix-Device-Type", m.deviceType)
             
             if m.token <> "" then
                 http.AddHeader("Authorization", "Bearer " + m.token)
             end if
             
             if m.sessionId <> "" then
-                http.AddHeader("X-Phlex-Session-ID", m.sessionId)
+                http.AddHeader("X-Phlix-Session-ID", m.sessionId)
             end if
             
             ' Prepare body
@@ -469,7 +469,7 @@ end function
 
 function Storage() as Object
     obj = {
-        registry: CreateObject("roRegistrySection", "phlex")
+        registry: CreateObject("roRegistrySection", "phlix")
         
         get: function(key as String) as String
             return m.registry.Read(key)
@@ -505,7 +505,7 @@ end function
 ' source/components/PlayerScene.brs
 
 ' ===========================================
-' Phlex Player Scene
+' Phlix Player Scene
 ' Handles video playback on Roku
 ' ===========================================
 
@@ -648,7 +648,7 @@ sub StopPlayback()
 end sub
 
 sub ReportProgress(positionTicks as Integer)
-    ' Report to Phlex server
+    ' Report to Phlix server
     api.reportProgress(positionTicks, not m.isPlaying)
 end sub
 
@@ -946,7 +946,7 @@ end sub
         <!-- Header -->
         <Rectangle height="100" width="1280" color="#1a1a2e">
             <Label height="60" width="400" translation="[40,20]" 
-                   text="Phlex" 
+                   text="Phlix" 
                    font="font:LargeBoldSystemFont" 
                    color="#FFFFFF" />
         </Rectangle>
@@ -1004,7 +1004,7 @@ end sub
 # Deploy to device
 curl -v -u rokudev:password -X POST \
     http://<roku-ip>:8060/install/app \
-    -F "archive=@phlex.zip" \
+    -F "archive=@phlix.zip" \
     -F "manifest=@manifest"
 
 # Or use BrightScript IDE
@@ -1034,7 +1034,7 @@ curl -v -u rokudev:password -X POST \
 
 ```bash
 # Create ZIP package
-zip -r phlex.zip manifest source images
+zip -r phlix.zip manifest source images
 
 # Or use makefile
 make package

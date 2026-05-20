@@ -6,7 +6,7 @@
     <aside class="sidebar admin-sidebar" id="sidebar">
         <div class="sidebar-header">
             <a href="/" class="logo">
-                <img src="/assets/images/logo.svg" alt="Phlex" height="32">
+                <img src="/assets/images/logo.svg" alt="Phlix" height="32">
             </a>
             <span class="sidebar-mode">Admin</span>
         </div>

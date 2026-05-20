@@ -2,22 +2,22 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Plugins\Exception\PluginEnableException;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Exception\PluginNotFoundException;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Shared\Plugin\ManifestValidationError;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Server\Http\Controllers\PluginAdminController;
-use Phlex\Server\Http\Request;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Plugins\Exception\PluginEnableException;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Exception\PluginNotFoundException;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Shared\Plugin\ManifestValidationError;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Server\Http\Controllers\PluginAdminController;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -26,7 +26,7 @@ use PHPUnit\Framework\TestCase;
  * {@see PluginLoader} is `final` so PHPUnit can't double it; tests use
  * Mockery (already a project dev-dep) to mock it.
  *
- * @covers \Phlex\Server\Http\Controllers\PluginAdminController
+ * @covers \Phlix\Server\Http\Controllers\PluginAdminController
  */
 final class PluginAdminControllerTest extends TestCase
 {
@@ -50,7 +50,7 @@ final class PluginAdminControllerTest extends TestCase
     {
         $this->loader->shouldReceive('listInstalled')
             ->once()
-            ->andReturn([$this->fixturePlugin('phlex-plugin-demo', enabled: true)]);
+            ->andReturn([$this->fixturePlugin('phlix-plugin-demo', enabled: true)]);
 
         $response = $this->controller->index($this->makeRequest('admin-1'), []);
 
@@ -58,7 +58,7 @@ final class PluginAdminControllerTest extends TestCase
         $body = $this->decode($response->body);
         $this->assertArrayHasKey('plugins', $body);
         $this->assertCount(1, $body['plugins']);
-        $this->assertSame('phlex-plugin-demo', $body['plugins'][0]['name']);
+        $this->assertSame('phlix-plugin-demo', $body['plugins'][0]['name']);
         $this->assertTrue($body['plugins'][0]['enabled']);
         $this->assertArrayHasKey('settings', $body['plugins'][0]);
     }
@@ -66,9 +66,9 @@ final class PluginAdminControllerTest extends TestCase
     public function test_install_returns_201_with_manifest_on_success(): void
     {
         $manifest = Manifest::fromArray([
-            'name' => 'phlex-plugin-demo',
+            'name' => 'phlix-plugin-demo',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]);
@@ -83,7 +83,7 @@ final class PluginAdminControllerTest extends TestCase
             ->with(
                 'admin-1',
                 'install',
-                'phlex-plugin-demo',
+                'phlix-plugin-demo',
                 Mockery::on(static function ($ctx): bool {
                     return is_array($ctx)
                         && ($ctx['source'] ?? null) === 'ui'
@@ -98,7 +98,7 @@ final class PluginAdminControllerTest extends TestCase
 
         $this->assertSame(201, $response->statusCode);
         $body = $this->decode($response->body);
-        $this->assertSame('phlex-plugin-demo', $body['plugin']['name']);
+        $this->assertSame('phlix-plugin-demo', $body['plugin']['name']);
         $this->assertSame('1.0.0', $body['plugin']['version']);
     }
 
@@ -152,21 +152,21 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_enable_returns_200_and_calls_loader(): void
     {
-        $this->loader->shouldReceive('enable')->once()->with('phlex-plugin-demo');
+        $this->loader->shouldReceive('enable')->once()->with('phlix-plugin-demo');
         $this->audit->shouldReceive('logPluginAction')
             ->once()
             ->with(
                 'admin-1',
                 'enable',
-                'phlex-plugin-demo',
+                'phlix-plugin-demo',
                 Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
             );
 
-        $response = $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
+        $response = $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(200, $response->statusCode);
         $body = $this->decode($response->body);
-        $this->assertSame('phlex-plugin-demo', $body['plugin']['name']);
+        $this->assertSame('phlix-plugin-demo', $body['plugin']['name']);
         $this->assertTrue($body['plugin']['enabled']);
     }
 
@@ -194,17 +194,17 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_disable_returns_200(): void
     {
-        $this->loader->shouldReceive('disable')->once()->with('phlex-plugin-demo');
+        $this->loader->shouldReceive('disable')->once()->with('phlix-plugin-demo');
         $this->audit->shouldReceive('logPluginAction')
             ->once()
             ->with(
                 'admin-1',
                 'disable',
-                'phlex-plugin-demo',
+                'phlix-plugin-demo',
                 Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
             );
 
-        $response = $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
+        $response = $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(200, $response->statusCode);
         $body = $this->decode($response->body);
@@ -224,17 +224,17 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_uninstall_returns_204(): void
     {
-        $this->loader->shouldReceive('uninstall')->once()->with('phlex-plugin-demo');
+        $this->loader->shouldReceive('uninstall')->once()->with('phlix-plugin-demo');
         $this->audit->shouldReceive('logPluginAction')
             ->once()
             ->with(
                 'admin-1',
                 'uninstall',
-                'phlex-plugin-demo',
+                'phlix-plugin-demo',
                 Mockery::on(static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui')
             );
 
-        $response = $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
+        $response = $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(204, $response->statusCode);
     }
@@ -253,9 +253,9 @@ final class PluginAdminControllerTest extends TestCase
     public function test_every_action_logs_to_audit_logger(): void
     {
         $this->loader->shouldReceive('install')->andReturn(Manifest::fromArray([
-            'name' => 'phlex-plugin-demo',
+            'name' => 'phlix-plugin-demo',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]));
@@ -269,9 +269,9 @@ final class PluginAdminControllerTest extends TestCase
             $this->makeRequest('admin-1', ['url' => 'https://example.com/plugin.json']),
             [],
         );
-        $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
-        $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
-        $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlex-plugin-demo']);
+        $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
+        $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
+        $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
     }
 
     public function test_action_routes_reject_empty_name(): void
@@ -281,7 +281,7 @@ final class PluginAdminControllerTest extends TestCase
         $this->loader->shouldNotReceive('uninstall');
 
         foreach (['enable', 'disable', 'uninstall'] as $action) {
-            /** @var \Phlex\Server\Http\Response $resp */
+            /** @var \Phlix\Server\Http\Response $resp */
             $resp = $this->controller->{$action}($this->makeRequest('admin-1'), ['name' => '   ']);
             $this->assertSame(400, $resp->statusCode, "action $action should reject blank name");
         }
@@ -291,7 +291,7 @@ final class PluginAdminControllerTest extends TestCase
     {
         $this->loader->shouldReceive('listInstalled')->andReturn([
             $this->fixturePlugin(
-                'phlex-plugin-secret',
+                'phlix-plugin-secret',
                 enabled: false,
                 settings: ['api_key' => 'topsecret', 'verbose' => true],
                 manifestSettings: [
@@ -323,7 +323,7 @@ final class PluginAdminControllerTest extends TestCase
             manifest: Manifest::fromArray([
                 'name' => $name,
                 'version' => '1.0.0',
-                'phlex_min_server_version' => '0.10.0',
+                'phlix_min_server_version' => '0.10.0',
                 'type' => 'metadata-provider',
                 'entry' => 'Demo\\Plugin',
                 'settings' => $manifestSettings,

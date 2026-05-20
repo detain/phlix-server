@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Recording;
+namespace Phlix\LiveTv\Recording;
 
-use Phlex\LiveTv\ComskipEdlParser;
-use Phlex\LiveTv\ComskipRunner;
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\LiveTv\ComskipEdlParser;
+use Phlix\LiveTv\ComskipRunner;
+use Phlix\Media\Markers\ChapterMarker;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;

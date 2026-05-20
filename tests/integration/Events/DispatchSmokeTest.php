@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Events;
+namespace Phlix\Tests\Integration\Events;
 
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ContainerFactory;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Session\PlaybackController;
+use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Session\PlaybackController;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -26,9 +26,9 @@ use function DI\factory;
  * Satisfies the §0.4 integration-boundary requirement for the events
  * subsystem.
  *
- * @covers \Phlex\Common\Events\EventDispatcherFactory
- * @covers \Phlex\Common\Events\ListenerRegistry
- * @covers \Phlex\Common\Container\Providers\EventServicesProvider
+ * @covers \Phlix\Common\Events\EventDispatcherFactory
+ * @covers \Phlix\Common\Events\ListenerRegistry
+ * @covers \Phlix\Common\Container\Providers\EventServicesProvider
  */
 final class DispatchSmokeTest extends TestCase
 {
@@ -41,7 +41,7 @@ final class DispatchSmokeTest extends TestCase
         parent::setUp();
         LoggerFactory::reset();
 
-        $this->tempDir = sys_get_temp_dir() . '/phlex_events_smoke_' . uniqid('', true);
+        $this->tempDir = sys_get_temp_dir() . '/phlix_events_smoke_' . uniqid('', true);
         mkdir($this->tempDir, 0775, true);
 
         $loggerConfig = "<?php\nreturn [\n"

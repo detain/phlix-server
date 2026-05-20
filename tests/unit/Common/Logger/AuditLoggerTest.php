@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Common\Logger;
+namespace Phlix\Tests\Unit\Common\Logger;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 class AuditLoggerTest extends TestCase
 {
@@ -14,7 +14,7 @@ class AuditLoggerTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tempDir = sys_get_temp_dir() . '/phlex_test_audit_' . uniqid();
+        $this->tempDir = sys_get_temp_dir() . '/phlix_test_audit_' . uniqid();
         mkdir($this->tempDir, 0755, true);
         
         $config = [
@@ -67,7 +67,7 @@ class AuditLoggerTest extends TestCase
         $this->auditLogger->logPluginAction(
             'user-42',
             'install',
-            'detain/phlex-plugin-example',
+            'detain/phlix-plugin-example',
             ['source' => 'https://example.test/plugin.zip']
         );
 
@@ -75,7 +75,7 @@ class AuditLoggerTest extends TestCase
         $logContents = (string) file_get_contents($this->tempDir . '/audit.log');
         $this->assertStringContainsString('"event":"plugin_action"', $logContents);
         $this->assertStringContainsString('"action":"install"', $logContents);
-        $this->assertStringContainsString('"plugin":"detain/phlex-plugin-example"', $logContents);
+        $this->assertStringContainsString('"plugin":"detain/phlix-plugin-example"', $logContents);
         $this->assertStringContainsString('"user_id":"user-42"', $logContents);
         $this->assertStringContainsString('"source":"https://example.test/plugin.zip"', $logContents);
         $this->assertStringContainsString('Plugin lifecycle action', $logContents);

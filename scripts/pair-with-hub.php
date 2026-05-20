@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Pair this server with a Phlex Hub instance.
+ * Pair this server with a Phlix Hub instance.
  *
  * Usage:
  *   php scripts/pair-with-hub.php <hub-url> <server-name>
@@ -23,11 +23,11 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\HttpClient;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\HttpClient;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
 
 if (($_SERVER['argc'] ?? 0) < 3) {
     fwrite(STDERR, "Usage: php scripts/pair-with-hub.php <hub-url> <server-name>\n");
@@ -72,7 +72,7 @@ while (true) {
         continue;
     }
 
-    if ($status->status === \Phlex\Hub\ClaimStatusResult::STATUS_CLAIMED) {
+    if ($status->status === \Phlix\Hub\ClaimStatusResult::STATUS_CLAIMED) {
         echo "Claimed! Server ID: {$status->serverId}\n";
 
         if ($status->enrollmentJwt && $status->hubJwksUrl && $status->serverId) {
@@ -95,7 +95,7 @@ while (true) {
         exit(0);
     }
 
-    if ($status->status === \Phlex\Hub\ClaimStatusResult::STATUS_EXPIRED) {
+    if ($status->status === \Phlix\Hub\ClaimStatusResult::STATUS_EXPIRED) {
         fwrite(STDERR, "ERROR: Claim code has expired. Please run the script again.\n");
         exit(1);
     }

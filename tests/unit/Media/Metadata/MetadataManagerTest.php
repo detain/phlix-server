@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata;
+namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\MetadataManager;
-use Phlex\Media\Metadata\MetadataProviderInterface;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Metadata\MetadataProviderInterface;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
 
 class MetadataManagerTest extends TestCase
 {

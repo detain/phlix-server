@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Network;
+namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Network\NatPmpClient;
+use Phlix\Network\NatPmpClient;
 use Psr\Log\NullLogger;
 
 class NatPmpClientTest extends TestCase

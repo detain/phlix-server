@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Admin;
+namespace Phlix\Tests\Unit\Admin;
 
 use DateTime;
 use PHPUnit\Framework\TestCase;
-use Phlex\Admin\NewsletterGenerator;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\MediaScanner;
-use Phlex\Media\Library\FolderWatcher;
-use Phlex\Stats\StatsCollector;
+use Phlix\Admin\NewsletterGenerator;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Library\FolderWatcher;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for NewsletterGenerator class.
  *
- * @covers \Phlex\Admin\NewsletterGenerator
+ * @covers \Phlix\Admin\NewsletterGenerator
  */
 class NewsletterGeneratorTest extends TestCase
 {
@@ -31,10 +31,10 @@ class NewsletterGeneratorTest extends TestCase
         $this->stats = new StatsCollector($this->db);
         $this->library = new LibraryManager(
             $this->db,
-            new MediaScanner($this->db, new \Phlex\Media\Library\ItemRepository($this->db)),
+            new MediaScanner($this->db, new \Phlix\Media\Library\ItemRepository($this->db)),
             new FolderWatcher()
         );
-        $this->templateDir = sys_get_temp_dir() . '/phlex_newsletter_test_templates';
+        $this->templateDir = sys_get_temp_dir() . '/phlix_newsletter_test_templates';
         if (!is_dir($this->templateDir)) {
             mkdir($this->templateDir, 0755, true);
         }

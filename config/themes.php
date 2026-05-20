@@ -5,19 +5,19 @@ declare(strict_types=1);
 /**
  * Theme configuration for built-in and user-overridden themes.
  *
- * This file defines the four built-in Phlex themes that ship with the
+ * This file defines the four built-in Phlix themes that ship with the
  * server. Plugin-provided themes are merged at runtime via ThemeRegistry.
  *
- * @package Phlex\Theming
+ * @package Phlix\Theming
  * @since 0.14.0
  */
 
 return [
     /**
-     * Built-in themes shipped with Phlex.
+     * Built-in themes shipped with Phlix.
      *
      * Each theme must have:
-     * - id: Unique identifier (e.g., 'phlex-dark')
+     * - id: Unique identifier (e.g., 'phlix-dark')
      * - name: Human-readable name
      * - css: URL or /assets path to the theme's CSS file
      * - js: Optional URL to a JS bundle (null if not needed)
@@ -26,35 +26,35 @@ return [
      */
     'builtin' => [
         'dark' => [
-            'id' => 'phlex-dark',
-            'name' => 'Phlex Dark',
-            'css' => '/assets/css/themes/phlex-dark.css',
+            'id' => 'phlix-dark',
+            'name' => 'Phlix Dark',
+            'css' => '/assets/css/themes/phlix-dark.css',
             'js' => null,
-            'thumb' => '/assets/images/themes/phlex-dark.png',
+            'thumb' => '/assets/images/themes/phlix-dark.png',
             'dark' => true,
         ],
         'light' => [
-            'id' => 'phlex-light',
-            'name' => 'Phlex Light',
-            'css' => '/assets/css/themes/phlex-light.css',
+            'id' => 'phlix-light',
+            'name' => 'Phlix Light',
+            'css' => '/assets/css/themes/phlix-light.css',
             'js' => null,
-            'thumb' => '/assets/images/themes/phlex-light.png',
+            'thumb' => '/assets/images/themes/phlix-light.png',
             'dark' => false,
         ],
         'amoled' => [
-            'id' => 'phlex-amoled',
-            'name' => 'Phlex AMOLED',
-            'css' => '/assets/css/themes/phlex-amoled.css',
+            'id' => 'phlix-amoled',
+            'name' => 'Phlix AMOLED',
+            'css' => '/assets/css/themes/phlix-amoled.css',
             'js' => null,
-            'thumb' => '/assets/images/themes/phlex-amoled.png',
+            'thumb' => '/assets/images/themes/phlix-amoled.png',
             'dark' => true,
         ],
         'contrast' => [
-            'id' => 'phlex-contrast',
-            'name' => 'Phlex High Contrast',
-            'css' => '/assets/css/themes/phlex-contrast.css',
+            'id' => 'phlix-contrast',
+            'name' => 'Phlix High Contrast',
+            'css' => '/assets/css/themes/phlix-contrast.css',
             'js' => null,
-            'thumb' => '/assets/images/themes/phlex-contrast.png',
+            'thumb' => '/assets/images/themes/phlix-contrast.png',
             'dark' => false,
         ],
     ],

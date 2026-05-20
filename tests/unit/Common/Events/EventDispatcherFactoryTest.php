@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Common\Events;
+namespace Phlix\Tests\Unit\Common\Events;
 
 use Crell\Tukio\DebugEventDispatcher;
 use Crell\Tukio\Dispatcher;
 use DI\ContainerBuilder;
-use Phlex\Common\Events\EventDispatcherFactory;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Events\EventDispatcherFactory;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\TestCase;
-use Phlex\Tests\Fixtures\Events\SampleEvent;
+use Phlix\Tests\Fixtures\Events\SampleEvent;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\Log\AbstractLogger;
@@ -21,7 +21,7 @@ use Stringable;
 /**
  * Unit tests for {@see EventDispatcherFactory}.
  *
- * @covers \Phlex\Common\Events\EventDispatcherFactory
+ * @covers \Phlix\Common\Events\EventDispatcherFactory
  */
 final class EventDispatcherFactoryTest extends TestCase
 {
@@ -189,7 +189,7 @@ final class EventDispatcherFactoryTest extends TestCase
         // fallback path resolves the events channel from disk.
         putenv(EventDispatcherFactory::DEBUG_ENV_VAR . '=true');
 
-        $tempDir = sys_get_temp_dir() . '/phlex_ed_factory_' . uniqid('', true);
+        $tempDir = sys_get_temp_dir() . '/phlix_ed_factory_' . uniqid('', true);
         mkdir($tempDir, 0775, true);
         $loggerConfigPath = $tempDir . '/logger.php';
         file_put_contents(
@@ -198,8 +198,8 @@ final class EventDispatcherFactoryTest extends TestCase
         );
 
         try {
-            \Phlex\Common\Logger\LoggerFactory::reset();
-            \Phlex\Common\Logger\LoggerFactory::init($loggerConfigPath);
+            \Phlix\Common\Logger\LoggerFactory::reset();
+            \Phlix\Common\Logger\LoggerFactory::init($loggerConfigPath);
 
             $builder = new ContainerBuilder();
             $builder->useAutowiring(true);
@@ -212,7 +212,7 @@ final class EventDispatcherFactoryTest extends TestCase
             $dispatcher = $factory($container);
             $this->assertInstanceOf(DebugEventDispatcher::class, $dispatcher);
         } finally {
-            \Phlex\Common\Logger\LoggerFactory::reset();
+            \Phlix\Common\Logger\LoggerFactory::reset();
             @unlink($loggerConfigPath);
             @rmdir($tempDir);
         }

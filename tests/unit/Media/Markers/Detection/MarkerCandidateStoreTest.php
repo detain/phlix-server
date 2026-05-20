@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Markers\Detection;
+namespace Phlix\Tests\Unit\Media\Markers\Detection;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\Detection\MarkerCandidateStore;
+use Phlix\Media\Markers\Detection\MarkerCandidateStore;
 
 class MarkerCandidateStoreTest extends TestCase
 {
@@ -12,7 +12,7 @@ class MarkerCandidateStoreTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->testQueueDir = sys_get_temp_dir() . '/phlex_test_marker_' . uniqid();
+        $this->testQueueDir = sys_get_temp_dir() . '/phlix_test_marker_' . uniqid();
         $this->store = new MarkerCandidateStore($this->testQueueDir);
     }
 

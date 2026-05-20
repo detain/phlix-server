@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Network;
+namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Network\UpnpIgdClient;
+use Phlix\Network\UpnpIgdClient;
 use Psr\Log\NullLogger;
 
 class UpnpIgdClientTest extends TestCase

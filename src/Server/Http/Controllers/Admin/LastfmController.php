@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Admin;
+namespace Phlix\Server\Http\Controllers\Admin;
 
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmApi;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmConfig;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Admin-side "Connect Last.fm" flow controller.
@@ -29,7 +29,7 @@ use Phlex\Server\Http\Response;
  *
  * Disconnect uses `POST /admin/lastfm/disconnect` to delete the row.
  *
- * @package Phlex\Server\Http\Controllers\Admin
+ * @package Phlix\Server\Http\Controllers\Admin
  * @since 0.15.0
  */
 final class LastfmController

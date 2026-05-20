@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Network\PortForwardService;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Network\PortForwardService;
 use Throwable;
 
 /**
@@ -20,7 +20,7 @@ use Throwable;
  *
  * Heartbeat loop is managed by a Workerman timer and runs every 60 seconds.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 class HubClient

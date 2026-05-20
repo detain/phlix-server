@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Network;
+namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -14,7 +14,7 @@ use Socket;
  * Implements SSDP M-SEARCH discovery and SOAP AddPortMapping / GetExternalIPAddress
  * actions to automatically configure port forwarding on compatible routers.
  *
- * @package Phlex\Network
+ * @package Phlix\Network
  * @since 0.11.0
  */
 class UpnpIgdClient
@@ -185,7 +185,7 @@ class UpnpIgdClient
             '<NewInternalPort>' . $internalPort . '</NewInternalPort>' .
             '<NewInternalClient>' . $internalIp . '</NewInternalClient>' .
             '<NewEnabled>1</NewEnabled>' .
-            '<NewPortMappingDescription>Phlex Media Server</NewPortMappingDescription>' .
+            '<NewPortMappingDescription>Phlix Media Server</NewPortMappingDescription>' .
             '<NewLeaseDuration>' . $leaseDuration . '</NewLeaseDuration>' .
             '</u:AddPortMapping>' .
             '</s:Body>' .

@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Hub;
+namespace Phlix\Tests\Unit\Hub;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Hub\ClaimInitiateResult;
-use Phlex\Hub\ClaimStatusResult;
-use Phlex\Hub\Ed25519KeyManager;
-use Phlex\Hub\HeartbeatResult;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\HubClientException;
-use Phlex\Hub\HttpClient;
-use Phlex\Hub\HttpClientInterface;
-use Phlex\Hub\HttpResponse;
-use Phlex\Hub\StoredEnrollment;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Hub\ClaimInitiateResult;
+use Phlix\Hub\ClaimStatusResult;
+use Phlix\Hub\Ed25519KeyManager;
+use Phlix\Hub\HeartbeatResult;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\HubClientException;
+use Phlix\Hub\HttpClient;
+use Phlix\Hub\HttpClientInterface;
+use Phlix\Hub\HttpResponse;
+use Phlix\Hub\StoredEnrollment;
+use Phlix\Common\Logger\StructuredLogger;
 
 class HubClientTest extends TestCase
 {
@@ -24,7 +24,7 @@ class HubClientTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-hub-client-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-hub-client-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
         $this->keyPath = $this->tmpDir . '/key.pem';
     }

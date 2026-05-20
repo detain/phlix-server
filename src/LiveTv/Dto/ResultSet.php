@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Dto;
+namespace Phlix\LiveTv\Dto;
 
 /**
  * Minimal abstract contract for a database query result used throughout the

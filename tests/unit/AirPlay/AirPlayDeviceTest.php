@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\AirPlay;
+namespace Phlix\Tests\Unit\AirPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\AirPlay\AirPlayDevice;
+use Phlix\AirPlay\AirPlayDevice;
 
 class AirPlayDeviceTest extends TestCase
 {

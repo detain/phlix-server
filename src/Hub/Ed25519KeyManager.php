@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 use InvalidArgumentException;
 use RuntimeException;
@@ -17,7 +17,7 @@ use RuntimeException;
  * Key ID format: ISO 8601 timestamp of the key's creation date.
  * This makes key IDs deterministic and sortable.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class Ed25519KeyManager

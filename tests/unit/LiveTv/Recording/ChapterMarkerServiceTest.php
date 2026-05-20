@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Recording\ChapterMarkerService;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\LiveTv\Recording\ChapterMarkerService;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\ChapterMarker;
 
 /**
  * @since 0.12.0

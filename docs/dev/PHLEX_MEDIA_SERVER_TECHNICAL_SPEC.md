@@ -1,4 +1,4 @@
-# Phlex Media Server - Comprehensive Technical Specification
+# Phlix Media Server - Comprehensive Technical Specification
 
 **Document Version:** 2.0  
 **Last Updated:** 2026-05-14  
@@ -74,7 +74,7 @@
 ### 1.3 Request Flow: Video Playback
 
 ```
-Client                    Phlex Server                    Components
+Client                    Phlix Server                    Components
   │                             │                              │
   │──── GET /Items/{id} ───────>│                              │
   │                             │──── Query DB ───────────────>│ Database
@@ -671,7 +671,7 @@ segment_0_120.ts
 ```php
 // src/Media/Transcoding/TranscodeProcess.php
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
 class TranscodeProcess
 {
@@ -833,11 +833,11 @@ class TranscodeProcess
 ```php
 // src/Media/Transcoding/TranscodeManager.php
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
-use Phlex\Common\Database\Connection;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Streaming\StreamState;
+use Phlix\Common\Database\Connection;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Streaming\StreamState;
 
 class TranscodeManager
 {
@@ -1190,7 +1190,7 @@ class TranscodeManager
 ```php
 // src/Media/Streaming/HlsStreamer.php
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 class HlsStreamer
 {
@@ -1358,7 +1358,7 @@ class HlsStreamer
 ```php
 // src/Media/Streaming/DirectStreamer.php
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 class DirectStreamer
 {
@@ -1477,7 +1477,7 @@ class DirectStreamer
 ```php
 // src/Media/Streaming/DeviceProfile.php
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 class DeviceProfile
 {
@@ -1834,11 +1834,11 @@ return [
 ```php
 // src/Session/SessionManager.php
 
-namespace Phlex\Session;
+namespace Phlix\Session;
 
-use Phlex\Common\Database\Connection;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Streaming\StreamManager;
+use Phlix\Common\Database\Connection;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Streaming\StreamManager;
 
 class SessionManager
 {
@@ -2129,7 +2129,7 @@ class SessionManager
 ```php
 // src/Session/Session.php
 
-namespace Phlex\Session;
+namespace Phlix\Session;
 
 class Session
 {
@@ -2665,9 +2665,9 @@ CREATE TABLE activity_log (
 ```php
 // src/Media/Transcoding/EncodingHelper.php
 
-namespace Phlex\Media\Transcoding;
+namespace Phlix\Media\Transcoding;
 
-use Phlex\Media\Streaming\DeviceProfile;
+use Phlix\Media\Streaming\DeviceProfile;
 
 class EncodingHelper
 {

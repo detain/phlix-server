@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Recording;
+namespace Phlix\LiveTv\Recording;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Markers\ChapterMarker;
 
 /**
  * Converts EDL commercial segments into HLS chapter markers.

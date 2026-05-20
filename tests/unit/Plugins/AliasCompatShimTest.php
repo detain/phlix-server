@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
@@ -10,8 +10,8 @@ use ReflectionClass;
 /**
  * Verifies that every `class_alias` entry registered by
  * `src/Plugins/AliasCompatShim.php` resolves to its corresponding
- * `Phlex\Shared\…` FQCN. Guarantees plugins that imported the
- * pre-0.11 FQCNs (e.g. `phlex-plugin-example` v0.1.0) keep working.
+ * `Phlix\Shared\…` FQCN. Guarantees plugins that imported the
+ * pre-0.11 FQCNs (e.g. `phlix-plugin-example` v0.1.0) keep working.
  *
  * @coversNothing
  */
@@ -24,68 +24,68 @@ final class AliasCompatShimTest extends TestCase
     {
         return [
             'AbstractEvent' => [
-                \Phlex\Common\Events\AbstractEvent::class,
-                \Phlex\Shared\Events\AbstractEvent::class,
+                \Phlix\Common\Events\AbstractEvent::class,
+                \Phlix\Shared\Events\AbstractEvent::class,
             ],
             'PlaybackStarted' => [
-                \Phlex\Common\Events\Playback\PlaybackStarted::class,
-                \Phlex\Shared\Events\Playback\PlaybackStarted::class,
+                \Phlix\Common\Events\Playback\PlaybackStarted::class,
+                \Phlix\Shared\Events\Playback\PlaybackStarted::class,
             ],
             'PlaybackPaused' => [
-                \Phlex\Common\Events\Playback\PlaybackPaused::class,
-                \Phlex\Shared\Events\Playback\PlaybackPaused::class,
+                \Phlix\Common\Events\Playback\PlaybackPaused::class,
+                \Phlix\Shared\Events\Playback\PlaybackPaused::class,
             ],
             'PlaybackResumed' => [
-                \Phlex\Common\Events\Playback\PlaybackResumed::class,
-                \Phlex\Shared\Events\Playback\PlaybackResumed::class,
+                \Phlix\Common\Events\Playback\PlaybackResumed::class,
+                \Phlix\Shared\Events\Playback\PlaybackResumed::class,
             ],
             'PlaybackStopped' => [
-                \Phlex\Common\Events\Playback\PlaybackStopped::class,
-                \Phlex\Shared\Events\Playback\PlaybackStopped::class,
+                \Phlix\Common\Events\Playback\PlaybackStopped::class,
+                \Phlix\Shared\Events\Playback\PlaybackStopped::class,
             ],
             'LibraryScanStarted' => [
-                \Phlex\Common\Events\Library\LibraryScanStarted::class,
-                \Phlex\Shared\Events\Library\LibraryScanStarted::class,
+                \Phlix\Common\Events\Library\LibraryScanStarted::class,
+                \Phlix\Shared\Events\Library\LibraryScanStarted::class,
             ],
             'LibraryScanCompleted' => [
-                \Phlex\Common\Events\Library\LibraryScanCompleted::class,
-                \Phlex\Shared\Events\Library\LibraryScanCompleted::class,
+                \Phlix\Common\Events\Library\LibraryScanCompleted::class,
+                \Phlix\Shared\Events\Library\LibraryScanCompleted::class,
             ],
             'MediaItemAdded' => [
-                \Phlex\Common\Events\Library\MediaItemAdded::class,
-                \Phlex\Shared\Events\Library\MediaItemAdded::class,
+                \Phlix\Common\Events\Library\MediaItemAdded::class,
+                \Phlix\Shared\Events\Library\MediaItemAdded::class,
             ],
             'MediaItemUpdated' => [
-                \Phlex\Common\Events\Library\MediaItemUpdated::class,
-                \Phlex\Shared\Events\Library\MediaItemUpdated::class,
+                \Phlix\Common\Events\Library\MediaItemUpdated::class,
+                \Phlix\Shared\Events\Library\MediaItemUpdated::class,
             ],
             'MediaItemRemoved' => [
-                \Phlex\Common\Events\Library\MediaItemRemoved::class,
-                \Phlex\Shared\Events\Library\MediaItemRemoved::class,
+                \Phlix\Common\Events\Library\MediaItemRemoved::class,
+                \Phlix\Shared\Events\Library\MediaItemRemoved::class,
             ],
             'UserCreated' => [
-                \Phlex\Common\Events\Auth\UserCreated::class,
-                \Phlex\Shared\Events\Auth\UserCreated::class,
+                \Phlix\Common\Events\Auth\UserCreated::class,
+                \Phlix\Shared\Events\Auth\UserCreated::class,
             ],
             'UserLoggedIn' => [
-                \Phlex\Common\Events\Auth\UserLoggedIn::class,
-                \Phlex\Shared\Events\Auth\UserLoggedIn::class,
+                \Phlix\Common\Events\Auth\UserLoggedIn::class,
+                \Phlix\Shared\Events\Auth\UserLoggedIn::class,
             ],
             'UserLoggedOut' => [
-                \Phlex\Common\Events\Auth\UserLoggedOut::class,
-                \Phlex\Shared\Events\Auth\UserLoggedOut::class,
+                \Phlix\Common\Events\Auth\UserLoggedOut::class,
+                \Phlix\Shared\Events\Auth\UserLoggedOut::class,
             ],
             'EventNameMap' => [
-                \Phlex\Plugins\EventNameMap::class,
-                \Phlex\Shared\Plugin\EventNameMap::class,
+                \Phlix\Plugins\EventNameMap::class,
+                \Phlix\Shared\Plugin\EventNameMap::class,
             ],
             'ManifestType' => [
-                \Phlex\Plugins\ManifestType::class,
-                \Phlex\Shared\Plugin\ManifestType::class,
+                \Phlix\Plugins\ManifestType::class,
+                \Phlix\Shared\Plugin\ManifestType::class,
             ],
             'ManifestValidationError' => [
-                \Phlex\Plugins\ManifestValidationError::class,
-                \Phlex\Shared\Plugin\ManifestValidationError::class,
+                \Phlix\Plugins\ManifestValidationError::class,
+                \Phlix\Shared\Plugin\ManifestValidationError::class,
             ],
         ];
     }
@@ -120,11 +120,11 @@ final class AliasCompatShimTest extends TestCase
     {
         $this->assertTrue(
             is_a(
-                \Phlex\Common\Events\Playback\PlaybackStarted::class,
-                \Phlex\Shared\Events\AbstractEvent::class,
+                \Phlix\Common\Events\Playback\PlaybackStarted::class,
+                \Phlix\Shared\Events\AbstractEvent::class,
                 true
             ),
-            'Aliased event classes must inherit Phlex\\Shared\\Events\\AbstractEvent.'
+            'Aliased event classes must inherit Phlix\\Shared\\Events\\AbstractEvent.'
         );
     }
 }

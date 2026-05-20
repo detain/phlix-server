@@ -9,7 +9,7 @@
 ## Overview
 
 The pairing protocol establishes a trust relationship between a self-hosted
-`phlex-server` instance and a `phlex-hub` instance. Once paired, the hub can:
+`phlix-server` instance and a `phlix-hub` instance. Once paired, the hub can:
 
 - Broker authentication so clients can access the server from anywhere
 - Provide relay connectivity when direct LAN access is unavailable
@@ -220,7 +220,7 @@ POST https://hub.example.com/api/v1/server-claims/new
 ### Request Headers
 
 ```
-Accept-Phlex-Protocol: v1
+Accept-Phlix-Protocol: v1
 Content-Type: application/json
 ```
 
@@ -351,7 +351,7 @@ The `enrollment_jwt` is signed by the hub with **its own Ed25519 key**.
 
 | Claim | Value | Description |
 |-------|-------|-------------|
-| `iss` | `phlex-hub` | Issuer identifier |
+| `iss` | `phlix-hub` | Issuer identifier |
 | `sub` | `server_id` | UUID assigned by hub |
 | `aud` | `server` | Audience: this token is for the server |
 | `exp` | `now + 7d` | 7-day validity — server must re-enroll before expiry |
@@ -380,7 +380,7 @@ The server stores this token and uses it to authenticate heartbeats.
 ```
 POST https://hub.example.com/api/v1/servers/{server_id}/heartbeat
 Authorization: Bearer <enrollment_jwt>
-Accept-Phlex-Protocol: v1
+Accept-Phlix-Protocol: v1
 Content-Type: application/json
 ```
 
@@ -483,13 +483,13 @@ issues a JWT that:
 
 1. Identifies the **user** (`sub: user_id`)
 2. Authorizes access to a **specific server** (`server_id` claim)
-3. Is **signed by the hub** (`iss: phlex-hub`)
+3. Is **signed by the hub** (`iss: phlix-hub`)
 
 ### Token Claims
 
 ```json
 {
-  "iss": "phlex-hub",
+  "iss": "phlix-hub",
   "sub": "user-uuid",
   "aud": "server",
   "exp": 1747434000,
@@ -508,7 +508,7 @@ issues a JWT that:
 2. Extracts the `kid` from the token header
 3. Looks up the matching key in the JWKS
 4. Validates the signature with EdDSA
-5. Validates `iss == 'phlex-hub'`
+5. Validates `iss == 'phlix-hub'`
 6. Validates `aud == 'server'`
 7. Validates `server_id` matches the server's own ID (prevents token
    from one server being used against another)
@@ -523,14 +523,14 @@ issues a JWT that:
 Every request and response on pairing-related endpoints carries:
 
 ```
-Accept-Phlex-Protocol: v1
+Accept-Phlix-Protocol: v1
 ```
 
 If the hub receives a request without this header or with an unexpected
 value, it returns:
 
 ```json
-{ "error": "HUB_PROTOCOL_UNSUPPORTED", "message": "Accept-Phlex-Protocol: v1 required" }
+{ "error": "HUB_PROTOCOL_UNSUPPORTED", "message": "Accept-Phlix-Protocol: v1 required" }
 ```
 
 ### Version Compatibility Matrix
@@ -623,7 +623,7 @@ See `plans/expansion/c.3-hub-registry.md` §3 for full schema details.
 
 ## 13. Cross-Reference
 
-- **Step C.2** implements `Phlex\Hub\HubClient` on the server side
+- **Step C.2** implements `Phlix\Hub\HubClient` on the server side
 - **Step C.3** implements the hub registry endpoints on the hub side
 - **Step C.4** implements the "My Servers" dashboard using registry data
 - **Step C.5** implements delegated auth (hub JWKS + user-session JWTs)
@@ -631,5 +631,5 @@ See `plans/expansion/c.3-hub-registry.md` §3 for full schema details.
 - **Step C.7** implements UPnP + port-forward helper
 - **Step C.8** implements public hostname claim
 - **Step C.9** implements shared libraries
-- **phlex-shared** provides: `ClaimRequest`, `ClaimResponse`,
+- **phlix-shared** provides: `ClaimRequest`, `ClaimResponse`,
   `ServerInfoDto`, `HeartbeatDto` DTOs shipped in B.3 v0.2.0

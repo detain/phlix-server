@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Fixtures\Container;
+namespace Phlix\Tests\Fixtures\Container;
 
 /**
  * Companion fixture for {@see CircularA}; PHP-DI must detect that A->B->A is

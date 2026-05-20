@@ -2,36 +2,36 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Core;
+namespace Phlix\Server\Core;
 
-use Phlex\Common\Container\ContainerFactory;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Hub\HubClient;
-use Phlex\Hub\HubApplication;
-use Phlex\Hub\RelayApplication;
-use Phlex\Discovery\DiscoveryServer;
-use Phlex\Server\Http\Controllers\HubJwksController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\Http\Router;
-use Phlex\Theming\ThemeMiddleware;
+use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Hub\HubClient;
+use Phlix\Hub\HubApplication;
+use Phlix\Hub\RelayApplication;
+use Phlix\Discovery\DiscoveryServer;
+use Phlix\Server\Http\Controllers\HubJwksController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
+use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
 /**
- * Main application entry point for the Phlex Media Server.
+ * Main application entry point for the Phlix Media Server.
  *
  * This class orchestrates HTTP request handling, middleware execution,
  * and route dispatching. It implements a singleton pattern to provide
  * global access to the application instance.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Core application class that bootstraps the server, loads routes, and handles requests.
- * @see \Phlex\Server\Http\Router For route configuration
- * @see \Phlex\Server\Http\Request For request handling
- * @see \Phlex\Server\Http\Response For response generation
+ * @see \Phlix\Server\Http\Router For route configuration
+ * @see \Phlix\Server\Http\Request For request handling
+ * @see \Phlix\Server\Http\Response For response generation
  */
 class Application
 {
@@ -100,7 +100,7 @@ class Application
      *
      * @example
      * ```php
-     * $app = Application::fromConfigPath('/etc/phlex/server.php');
+     * $app = Application::fromConfigPath('/etc/phlix/server.php');
      * $app->run();
      * ```
      */
@@ -187,7 +187,7 @@ class Application
             $serverConfig = $this->config['server'] ?? [];
             $serverName = is_array($serverConfig) && isset($serverConfig['name']) && is_string($serverConfig['name'])
                 ? $serverConfig['name']
-                : 'Phlex Media Server';
+                : 'Phlix Media Server';
 
             return (new Response())->json([
                 'server' => $serverName,
@@ -220,7 +220,7 @@ class Application
         // Placeholder for API routes - will be populated in later phases
         $this->router->get('/api/v1', function (Request $request): Response {
             return (new Response())->json([
-                'api' => 'Phlex Media Server',
+                'api' => 'Phlix Media Server',
                 'version' => 'v1',
                 'endpoints' => '/health, /system/info',
             ]);
@@ -271,7 +271,7 @@ class Application
         // Last.fm admin connect routes (G.3).
         $this->loadLastfmRoutes();
 
-        // Media request UI moved to phlex-hub in K.3 — no server routes here.
+        // Media request UI moved to phlix-hub in K.3 — no server routes here.
     }
 
     /**
@@ -287,16 +287,16 @@ class Application
     {
         try {
             $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
-            $config = \Phlex\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
+            $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
                 is_array($rawConfig) ? $rawConfig : []
             );
-            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
-            $sessions = new \Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
-            $api = new \Phlex\Plugins\Scrobbler\Lastfm\LastfmApi(
+            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
+            $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
                 $config->apiKey,
                 $config->sharedSecret,
             );
-            $controller = new \Phlex\Server\Http\Controllers\Admin\LastfmController(
+            $controller = new \Phlix\Server\Http\Controllers\Admin\LastfmController(
                 $config,
                 $sessions,
                 $api,
@@ -539,23 +539,23 @@ class Application
             $batchSize = self::intConfig($newsletterConfig, 'batch_size', 50);
             $templateDir = self::stringConfig($newsletterConfig, 'template_dir', 'public/templates');
 
-            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
+            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
 
-            $sender = new \Phlex\Admin\NewsletterSender(
+            $sender = new \Phlix\Admin\NewsletterSender(
                 $db,
-                \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA),
+                \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA),
                 array_merge($newsletterConfig, ['template_dir' => $templateDir])
             );
 
-            $generator = new \Phlex\Admin\NewsletterGenerator(
-                new \Phlex\Stats\StatsCollector($db),
-                new \Phlex\Media\Library\LibraryManager(
+            $generator = new \Phlix\Admin\NewsletterGenerator(
+                new \Phlix\Stats\StatsCollector($db),
+                new \Phlix\Media\Library\LibraryManager(
                     $db,
-                    new \Phlex\Media\Library\MediaScanner(
+                    new \Phlix\Media\Library\MediaScanner(
                         $db,
-                        new \Phlex\Media\Library\ItemRepository($db),
+                        new \Phlix\Media\Library\ItemRepository($db),
                     ),
-                    new \Phlex\Media\Library\FolderWatcher()
+                    new \Phlix\Media\Library\FolderWatcher()
                 ),
                 $db,
                 $templateDir,
@@ -564,7 +564,7 @@ class Application
 
             $this->registerNewsletterTimer($sender, $generator, $sendDay, $sendHour, $batchSize);
         } catch (\Throwable $e) {
-            $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA);
+            $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA);
             $logger->error('Failed to start newsletter timer', [
                 'error' => $e->getMessage(),
             ]);
@@ -604,8 +604,8 @@ class Application
     /**
      * Register the newsletter timer with Workerman.
      *
-     * @param \Phlex\Admin\NewsletterSender $sender Newsletter sender instance
-     * @param \Phlex\Admin\NewsletterGenerator $generator Newsletter generator instance
+     * @param \Phlix\Admin\NewsletterSender $sender Newsletter sender instance
+     * @param \Phlix\Admin\NewsletterGenerator $generator Newsletter generator instance
      * @param int $sendDay Day of week to send (0=Sunday)
      * @param int $sendHour Hour of day to send (0-23)
      * @param int $batchSize Number of emails per batch
@@ -613,13 +613,13 @@ class Application
      * @return void
      */
     private function registerNewsletterTimer(
-        \Phlex\Admin\NewsletterSender $sender,
-        \Phlex\Admin\NewsletterGenerator $generator,
+        \Phlix\Admin\NewsletterSender $sender,
+        \Phlix\Admin\NewsletterGenerator $generator,
         int $sendDay,
         int $sendHour,
         int $batchSize
     ): void {
-        $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::MEDIA);
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA);
 
         \Workerman\Timer::add(1, function () use ($sender, $generator, $sendDay, $sendHour, $batchSize, $logger): void {
             $now = new \DateTime();
@@ -697,15 +697,15 @@ class Application
         }
 
         try {
-            $db = \Phlex\Common\Database\ConnectionPool::getConnection('mysql');
-            $backupManager = new \Phlex\Admin\BackupManager(
+            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $backupManager = new \Phlix\Admin\BackupManager(
                 $db,
-                \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION)
+                \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION)
             );
 
             $this->registerBackupTimer($backupManager, $intervalDays);
         } catch (\Throwable $e) {
-            $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION);
+            $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
             $logger->error('Failed to start backup timer', [
                 'error' => $e->getMessage(),
             ]);
@@ -715,14 +715,14 @@ class Application
     /**
      * Register the backup timer with Workerman.
      *
-     * @param \Phlex\Admin\BackupManager $backupManager Backup manager instance
+     * @param \Phlix\Admin\BackupManager $backupManager Backup manager instance
      * @param int $intervalDays Backup interval in days
      *
      * @return void
      */
-    private function registerBackupTimer(\Phlex\Admin\BackupManager $backupManager, int $intervalDays): void
+    private function registerBackupTimer(\Phlix\Admin\BackupManager $backupManager, int $intervalDays): void
     {
-        $logger = \Phlex\Common\Logger\LoggerFactory::get(\Phlex\Common\Logger\LogChannels::APPLICATION);
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
 
         // Run daily to check if it's time for a backup
         \Workerman\Timer::add(86400, function () use ($backupManager, $intervalDays, $logger): void {
@@ -765,9 +765,9 @@ class Application
         if ($this->container === null) {
             return new HubJwksController(
                 new HubClient(
-                    new \Phlex\Hub\Ed25519KeyManager('config/hub-server-key.pem'),
-                    new \Phlex\Hub\HttpClient('https://hub.example.com'),
-                    new \Phlex\Common\Logger\StructuredLogger('hub', []),
+                    new \Phlix\Hub\Ed25519KeyManager('config/hub-server-key.pem'),
+                    new \Phlix\Hub\HttpClient('https://hub.example.com'),
+                    new \Phlix\Common\Logger\StructuredLogger('hub', []),
                     'config',
                 ),
             );
@@ -781,24 +781,24 @@ class Application
     /**
      * Returns a HubTokenController instance from the container.
      *
-     * @return \Phlex\Server\Http\Controllers\HubTokenController The controller instance.
+     * @return \Phlix\Server\Http\Controllers\HubTokenController The controller instance.
      */
-    private function getHubTokenController(): \Phlex\Server\Http\Controllers\HubTokenController
+    private function getHubTokenController(): \Phlix\Server\Http\Controllers\HubTokenController
     {
         if ($this->container === null) {
-            return new \Phlex\Server\Http\Controllers\HubTokenController(
-                new \Phlex\Hub\HubJwtValidator(
+            return new \Phlix\Server\Http\Controllers\HubTokenController(
+                new \Phlix\Hub\HubJwtValidator(
                     'https://hub.example.com/.well-known/jwks.json',
-                    new \Phlex\Hub\HttpClientFactory(),
+                    new \Phlix\Hub\HttpClientFactory(),
                     new \Psr\Log\NullLogger(),
                     'test-server-id',
                 ),
-                new \Phlex\Auth\JwtHandler('fallback-secret-for-tests'),
+                new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
             );
         }
 
-        /** @var \Phlex\Server\Http\Controllers\HubTokenController */
-        $controller = $this->container->get(\Phlex\Server\Http\Controllers\HubTokenController::class);
+        /** @var \Phlix\Server\Http\Controllers\HubTokenController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\HubTokenController::class);
         return $controller;
     }
 
@@ -821,30 +821,30 @@ class Application
         }
 
         try {
-            $cdsServer = $this->container->get(\Phlex\Dlna\CdsServer::class);
-            if (!$cdsServer instanceof \Phlex\Dlna\CdsServer) {
+            $cdsServer = $this->container->get(\Phlix\Dlna\CdsServer::class);
+            if (!$cdsServer instanceof \Phlix\Dlna\CdsServer) {
                 return;
             }
 
             // Device description endpoint
-            $deviceDescController = new \Phlex\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
+            $deviceDescController = new \Phlix\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
             $this->router->get('/description.xml', [$deviceDescController, 'handle']);
 
             // CDS control endpoint
-            $cdsControlController = new \Phlex\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
+            $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
             $this->router->post('/cds/control', [$cdsControlController, 'handle']);
 
             // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
-            $this->router->get('/scpd/{service}.xml', function (\Phlex\Server\Http\Request $request, array $params) use ($cdsServer): \Phlex\Server\Http\Response {
+            $this->router->get('/scpd/{service}.xml', function (\Phlix\Server\Http\Request $request, array $params) use ($cdsServer): \Phlix\Server\Http\Response {
                 $serviceRaw = $params['service'] ?? '';
                 $service = is_string($serviceRaw) ? $serviceRaw : '';
                 $scpdXml = $cdsServer->getScpdXml($service);
 
                 if ($scpdXml === null) {
-                    return (new \Phlex\Server\Http\Response())->status(404)->text('Service not found');
+                    return (new \Phlix\Server\Http\Response())->status(404)->text('Service not found');
                 }
 
-                return (new \Phlex\Server\Http\Response())
+                return (new \Phlix\Server\Http\Response())
                     ->header('Content-Type', 'application/xml; charset=utf-8')
                     ->header('Cache-Control', 'no-cache, must-revalidate')
                     ->text($scpdXml);
@@ -876,11 +876,11 @@ class Application
         }
 
         try {
-            $playToManager = $this->container->get(\Phlex\Dlna\PlayToManager::class);
-            if (!$playToManager instanceof \Phlex\Dlna\PlayToManager) {
+            $playToManager = $this->container->get(\Phlix\Dlna\PlayToManager::class);
+            if (!$playToManager instanceof \Phlix\Dlna\PlayToManager) {
                 return;
             }
-            $controller = new \Phlex\Server\Http\Controllers\Dlna\RendererListController($playToManager);
+            $controller = new \Phlix\Server\Http\Controllers\Dlna\RendererListController($playToManager);
 
             // List renderers
             $this->router->get('/api/v1/dlna/renderers', [$controller, 'listRenderers']);
@@ -927,11 +927,11 @@ class Application
         }
 
         try {
-            $castManager = $this->container->get(\Phlex\Chromecast\CastManager::class);
-            if (!$castManager instanceof \Phlex\Chromecast\CastManager) {
+            $castManager = $this->container->get(\Phlix\Chromecast\CastManager::class);
+            if (!$castManager instanceof \Phlix\Chromecast\CastManager) {
                 return;
             }
-            $controller = new \Phlex\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
+            $controller = new \Phlix\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
 
             // List discovered devices
             $this->router->get('/api/v1/cast/devices', [$controller, 'listDevices']);
@@ -973,11 +973,11 @@ class Application
         }
 
         try {
-            $rokuManager = $this->container->get(\Phlex\Roku\RokuManager::class);
-            if (!$rokuManager instanceof \Phlex\Roku\RokuManager) {
+            $rokuManager = $this->container->get(\Phlix\Roku\RokuManager::class);
+            if (!$rokuManager instanceof \Phlix\Roku\RokuManager) {
                 return;
             }
-            $controller = new \Phlex\Server\Http\Controllers\Roku\RokuController($rokuManager);
+            $controller = new \Phlix\Server\Http\Controllers\Roku\RokuController($rokuManager);
 
             // List discovered devices
             $this->router->get('/api/v1/roku/devices', [$controller, 'listDevices']);
@@ -1020,11 +1020,11 @@ class Application
         }
 
         try {
-            $airPlayManager = $this->container->get(\Phlex\AirPlay\AirPlayManager::class);
-            if (!$airPlayManager instanceof \Phlex\AirPlay\AirPlayManager) {
+            $airPlayManager = $this->container->get(\Phlix\AirPlay\AirPlayManager::class);
+            if (!$airPlayManager instanceof \Phlix\AirPlay\AirPlayManager) {
                 return;
             }
-            $controller = new \Phlex\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
+            $controller = new \Phlix\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
 
             // List discovered devices
             $this->router->get('/api/v1/airplay/devices', [$controller, 'listDevices']);
@@ -1047,111 +1047,111 @@ class Application
     /**
      * Returns a WebAuthnController instance.
      *
-     * @return \Phlex\Server\Http\Controllers\WebAuthnController The controller instance.
+     * @return \Phlix\Server\Http\Controllers\WebAuthnController The controller instance.
      */
-    private function getWebAuthnController(): \Phlex\Server\Http\Controllers\WebAuthnController
+    private function getWebAuthnController(): \Phlix\Server\Http\Controllers\WebAuthnController
     {
         if ($this->container === null) {
             $db = new \Workerman\MySQL\Connection(
                 '127.0.0.1',
                 3306,
-                'phlex',
+                'phlix',
                 'root',
                 'password'
             );
-            $userRepo = new \Phlex\Auth\UserRepository($db);
-            $credentialRepo = new \Phlex\Auth\WebAuthn\WebAuthnCredentialRepository($db);
-            $settings = new \Phlex\Auth\WebAuthn\WebAuthnSettings(
+            $userRepo = new \Phlix\Auth\UserRepository($db);
+            $credentialRepo = new \Phlix\Auth\WebAuthn\WebAuthnCredentialRepository($db);
+            $settings = new \Phlix\Auth\WebAuthn\WebAuthnSettings(
                 rpId: 'localhost',
-                rpName: 'Phlex Media Server',
+                rpName: 'Phlix Media Server',
                 rpOrigin: 'http://localhost:8080'
             );
-            $webauthnManager = new \Phlex\Auth\WebAuthn\WebAuthnManager(
+            $webauthnManager = new \Phlix\Auth\WebAuthn\WebAuthnManager(
                 $userRepo,
                 $db,
                 $credentialRepo,
                 $settings
             );
-            $auditLogger = new \Phlex\Common\Logger\AuditLogger(
-                new \Phlex\Common\Logger\StructuredLogger('audit', [])
+            $auditLogger = new \Phlix\Common\Logger\AuditLogger(
+                new \Phlix\Common\Logger\StructuredLogger('audit', [])
             );
-            $authManager = new \Phlex\Auth\AuthManager(
+            $authManager = new \Phlix\Auth\AuthManager(
                 $userRepo,
-                new \Phlex\Auth\JwtHandler('test-secret'),
+                new \Phlix\Auth\JwtHandler('test-secret'),
                 $auditLogger
             );
-            return new \Phlex\Server\Http\Controllers\WebAuthnController($webauthnManager, $authManager);
+            return new \Phlix\Server\Http\Controllers\WebAuthnController($webauthnManager, $authManager);
         }
 
-        /** @var \Phlex\Server\Http\Controllers\WebAuthnController */
-        $controller = $this->container->get(\Phlex\Server\Http\Controllers\WebAuthnController::class);
+        /** @var \Phlix\Server\Http\Controllers\WebAuthnController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\WebAuthnController::class);
         return $controller;
     }
 
     /**
      * Returns a MediaItemController instance.
      *
-     * @return \Phlex\Server\Http\Controllers\MediaItemController The controller instance.
+     * @return \Phlix\Server\Http\Controllers\MediaItemController The controller instance.
      */
-    private function getMediaItemController(): \Phlex\Server\Http\Controllers\MediaItemController
+    private function getMediaItemController(): \Phlix\Server\Http\Controllers\MediaItemController
     {
         if ($this->container === null) {
             $db = new \Workerman\MySQL\Connection(
                 '127.0.0.1',
                 3306,
-                'phlex',
+                'phlix',
                 'root',
                 'password'
             );
-            $itemRepository = new \Phlex\Media\Library\ItemRepository($db);
-            $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-            $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-            return new \Phlex\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
         }
 
-        /** @var \Phlex\Media\Library\ItemRepository */
-        $itemRepository = $this->container->get(\Phlex\Media\Library\ItemRepository::class);
-        $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-        $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-        return new \Phlex\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+        $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
     }
 
     /**
      * Returns a SessionController instance.
      *
-     * @return \Phlex\Server\Http\Controllers\SessionController The controller instance.
+     * @return \Phlix\Server\Http\Controllers\SessionController The controller instance.
      */
-    private function getSessionController(): \Phlex\Server\Http\Controllers\SessionController
+    private function getSessionController(): \Phlix\Server\Http\Controllers\SessionController
     {
         if ($this->container === null) {
             $db = new \Workerman\MySQL\Connection(
                 '127.0.0.1',
                 3306,
-                'phlex',
+                'phlix',
                 'root',
                 'password'
             );
-            $sessionManager = new \Phlex\Session\SessionManager($db);
-            $playbackController = new \Phlex\Session\PlaybackController($db, $sessionManager);
-            $itemRepository = new \Phlex\Media\Library\ItemRepository($db);
-            $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-            $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-            return new \Phlex\Server\Http\Controllers\SessionController(
+            $sessionManager = new \Phlix\Session\SessionManager($db);
+            $playbackController = new \Phlix\Session\PlaybackController($db, $sessionManager);
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            return new \Phlix\Server\Http\Controllers\SessionController(
                 $sessionManager,
                 $playbackController,
                 $markerService
             );
         }
 
-        /** @var \Phlex\Session\SessionManager */
-        $sessionManager = $this->container->get(\Phlex\Session\SessionManager::class);
-        /** @var \Phlex\Session\PlaybackController */
-        $playbackController = $this->container->get(\Phlex\Session\PlaybackController::class);
-        /** @var \Phlex\Media\Library\ItemRepository */
-        $itemRepository = $this->container->get(\Phlex\Media\Library\ItemRepository::class);
-        $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
-        $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-        return new \Phlex\Server\Http\Controllers\SessionController(
+        /** @var \Phlix\Session\SessionManager */
+        $sessionManager = $this->container->get(\Phlix\Session\SessionManager::class);
+        /** @var \Phlix\Session\PlaybackController */
+        $playbackController = $this->container->get(\Phlix\Session\PlaybackController::class);
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+        $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        return new \Phlix\Server\Http\Controllers\SessionController(
             $sessionManager,
             $playbackController,
             $markerService

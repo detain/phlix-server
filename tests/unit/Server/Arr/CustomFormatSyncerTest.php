@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Arr;
+namespace Phlix\Tests\Unit\Arr;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Arr\CustomFormatSyncer;
-use Phlex\Shared\Arr\RadarrClient;
-use Phlex\Shared\Arr\SyncResult;
-use Phlex\Shared\Arr\TrashGuidesProvider;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Server\Arr\CustomFormatSyncer;
+use Phlix\Shared\Arr\RadarrClient;
+use Phlix\Shared\Arr\SyncResult;
+use Phlix\Shared\Arr\TrashGuidesProvider;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 use DateTimeImmutable;
 
 /**
  * Unit tests for CustomFormatSyncer.
  *
- * @package Phlex\Tests\Unit\Arr
+ * @package Phlix\Tests\Unit\Arr
  * @since 0.12.0
  */
 class CustomFormatSyncerTest extends TestCase

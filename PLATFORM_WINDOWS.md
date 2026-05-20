@@ -1,4 +1,4 @@
-# Phlex Media Server - Windows Desktop Application
+# Phlix Media Server - Windows Desktop Application
 
 **Document Version:** 1.0  
 **Platform:** Windows 10/11  
@@ -63,8 +63,8 @@ Windows Desktop supports:
 
 ```bash
 # Create project directory
-mkdir phlex-windows
-cd phlex-windows
+mkdir phlix-windows
+cd phlix-windows
 
 # Initialize npm
 npm init -y
@@ -88,9 +88,9 @@ mkdir -p src/main src/renderer/components src/renderer/pages src/renderer/hooks 
 ```json
 // package.json
 {
-  "name": "phlex-windows",
+  "name": "phlix-windows",
   "version": "1.0.0",
-  "description": "Phlex Media Server Client for Windows",
+  "description": "Phlix Media Server Client for Windows",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
@@ -103,8 +103,8 @@ mkdir -p src/main src/renderer/components src/renderer/pages src/renderer/hooks 
     "package:store": "npm run build && electron-builder --win appx"
   },
   "build": {
-    "appId": "app.phlex.windows",
-    "productName": "Phlex",
+    "appId": "app.phlix.windows",
+    "productName": "Phlix",
     "directories": {
       "output": "release"
     },
@@ -127,10 +127,10 @@ mkdir -p src/main src/renderer/components src/renderer/pages src/renderer/hooks 
       "allowToChangeInstallationDirectory": true
     },
     "appx": {
-      "identityName": "Phlex",
-      "publisher": "CN=Phlex",
-      "publisherDisplayName": "Phlex",
-      "applicationId": "Phlex"
+      "identityName": "Phlix",
+      "publisher": "CN=Phlix",
+      "publisherDisplayName": "Phlix",
+      "applicationId": "Phlix"
     }
   }
 }
@@ -184,7 +184,7 @@ mkdir -p src/main src/renderer/components src/renderer/pages src/renderer/hooks 
 ## 3. Project Structure
 
 ```
-phlex-windows/
+phlix-windows/
 ├── src/
 │   ├── main/
 │   │   ├── index.ts           # Electron main process entry
@@ -305,9 +305,9 @@ class ApiClient {
       timeout: 30000,
       headers: {
         'Content-Type': 'application/json',
-        'X-Phlex-Device-ID': config.deviceId,
-        'X-Phlex-Device-Name': config.deviceName,
-        'X-Phlex-Device-Type': 'windows'
+        'X-Phlix-Device-ID': config.deviceId,
+        'X-Phlix-Device-Name': config.deviceName,
+        'X-Phlix-Device-Type': 'windows'
       }
     });
 
@@ -317,7 +317,7 @@ class ApiClient {
         config.headers.Authorization = `Bearer ${this.token}`;
       }
       if (this.sessionId) {
-        config.headers['X-Phlex-Session-ID'] = this.sessionId;
+        config.headers['X-Phlix-Session-ID'] = this.sessionId;
       }
       return config;
     });
@@ -539,7 +539,7 @@ class ApiClient {
 }
 
 export const api = new ApiClient({
-  baseUrl: import.meta.env.VITE_PHLEX_SERVER_URL || 'http://localhost:8096',
+  baseUrl: import.meta.env.VITE_PHLIX_SERVER_URL || 'http://localhost:8096',
   deviceId: '',
   deviceName: 'Windows Desktop'
 });
@@ -1096,7 +1096,7 @@ let tray: Tray | null = null;
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
 log.initialize();
-log.info('Phlex Windows starting...');
+log.info('Phlix Windows starting...');
 
 function createWindow(): void {
   log.info('Creating main window');
@@ -1157,7 +1157,7 @@ function createTray(): void {
   tray = new Tray(icon.resize({ width: 16, height: 16 }));
 
   const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show Phlex', click: () => mainWindow?.show() },
+    { label: 'Show Phlix', click: () => mainWindow?.show() },
     { type: 'separator' },
     { label: 'Play/Pause', click: () => mainWindow?.webContents.send('media-play-pause') },
     { label: 'Stop', click: () => mainWindow?.webContents.send('media-stop') },
@@ -1168,7 +1168,7 @@ function createTray(): void {
     }}
   ]);
 
-  tray.setToolTip('Phlex Media Server');
+  tray.setToolTip('Phlix Media Server');
   tray.setContextMenu(contextMenu);
 
   tray.on('click', () => {
@@ -1217,7 +1217,7 @@ function createMenu(): void {
     {
       label: 'Help',
       submenu: [
-        { label: 'About Phlex', click: () => showAbout() }
+        { label: 'About Phlix', click: () => showAbout() }
       ]
     }
   ];
@@ -1260,8 +1260,8 @@ function showAbout(): void {
   const { dialog } = require('electron');
   dialog.showMessageBox(mainWindow!, {
     type: 'info',
-    title: 'About Phlex',
-    message: 'Phlex Media Server',
+    title: 'About Phlix',
+    message: 'Phlix Media Server',
     detail: `Version ${app.getVersion()}\n\nA free media server for your home.`
   });
 }
@@ -1418,7 +1418,7 @@ describe('ApiClient', () => {
 
 import { test, expect } from '@playwright/test';
 
-test.describe('Phlex Windows App', () => {
+test.describe('Phlix Windows App', () => {
   test('should launch and show login screen', async ({ app }) => {
     await app.launch();
     await expect(app.locator('.login-form')).toBeVisible();

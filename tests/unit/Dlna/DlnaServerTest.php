@@ -1,11 +1,11 @@
 <?php
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlex\Dlna\DlnaServer;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Dlna\DlnaServer;
+use Phlix\Media\Library\ItemRepository;
 
 class DlnaServerTest extends TestCase
 {
@@ -17,7 +17,7 @@ class DlnaServerTest extends TestCase
         $this->itemRepositoryMock = $this->createMock(ItemRepository::class);
         $this->server = new DlnaServer(
             'test-server-001',
-            'Phlex Test Server',
+            'Phlix Test Server',
             '192.168.1.100',
             8200,
             $this->itemRepositoryMock
@@ -31,12 +31,12 @@ class DlnaServerTest extends TestCase
 
     public function testServerId(): void
     {
-        $this->assertEquals('uuid:phlex-server-test-server-001', $this->server->getServerUdn());
+        $this->assertEquals('uuid:phlix-server-test-server-001', $this->server->getServerUdn());
     }
 
     public function testServerFriendlyName(): void
     {
-        $this->assertEquals('Phlex Test Server', $this->server->getFriendlyName());
+        $this->assertEquals('Phlix Test Server', $this->server->getFriendlyName());
     }
 
     public function testServerBaseUrl(): void
@@ -53,8 +53,8 @@ class DlnaServerTest extends TestCase
     {
         $device = $this->server->getServerDevice();
 
-        $this->assertEquals('uuid:phlex-server-test-server-001', $device->getUdn());
-        $this->assertEquals('Phlex Test Server', $device->getFriendlyName());
+        $this->assertEquals('uuid:phlix-server-test-server-001', $device->getUdn());
+        $this->assertEquals('Phlix Test Server', $device->getFriendlyName());
         $this->assertEquals('192.168.1.100', $device->getBaseUrl());
     }
 
@@ -62,8 +62,8 @@ class DlnaServerTest extends TestCase
     {
         $xml = $this->server->getDeviceDescriptionXml();
 
-        $this->assertStringContainsString('uuid:phlex-server-test-server-001', $xml);
-        $this->assertStringContainsString('Phlex Test Server', $xml);
+        $this->assertStringContainsString('uuid:phlix-server-test-server-001', $xml);
+        $this->assertStringContainsString('Phlix Test Server', $xml);
         $this->assertStringContainsString('urn:schemas-upnp-org:device:MediaServer:1', $xml);
     }
 
@@ -215,21 +215,21 @@ class DlnaServerTest extends TestCase
     {
         $registry = $this->server->getDeviceRegistry();
 
-        $this->assertInstanceOf(\Phlex\Dlna\DeviceRegistry::class, $registry);
+        $this->assertInstanceOf(\Phlix\Dlna\DeviceRegistry::class, $registry);
     }
 
     public function testContentDirectory(): void
     {
         $contentDir = $this->server->getContentDirectory();
 
-        $this->assertInstanceOf(\Phlex\Dlna\ContentDirectory::class, $contentDir);
+        $this->assertInstanceOf(\Phlix\Dlna\ContentDirectory::class, $contentDir);
     }
 
     public function testAvTransport(): void
     {
         $avTransport = $this->server->getAvTransport();
 
-        $this->assertInstanceOf(\Phlex\Dlna\AvTransport::class, $avTransport);
+        $this->assertInstanceOf(\Phlix\Dlna\AvTransport::class, $avTransport);
     }
 
     public function testToArray(): void
@@ -238,7 +238,7 @@ class DlnaServerTest extends TestCase
 
         $this->assertIsArray($array);
         $this->assertEquals('test-server-001', $array['server_id']);
-        $this->assertEquals('Phlex Test Server', $array['friendly_name']);
+        $this->assertEquals('Phlix Test Server', $array['friendly_name']);
         $this->assertEquals('192.168.1.100', $array['base_url']);
         $this->assertEquals(8200, $array['port']);
         $this->assertFalse($array['is_running']);

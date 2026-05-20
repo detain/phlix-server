@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Lastfm;
+namespace Phlix\Tests\Unit\Plugins\Lastfm;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Lastfm\LastfmApiClient;
-use Phlex\Plugins\Lastfm\NowPlayingData;
-use Phlex\Plugins\Lastfm\ScrobbleData;
-use Phlex\Plugins\Lastfm\LastfmPluginNotConfiguredException;
-use Phlex\Plugins\Lastfm\LastfmScrobbleFailedException;
+use Phlix\Plugins\Lastfm\LastfmApiClient;
+use Phlix\Plugins\Lastfm\NowPlayingData;
+use Phlix\Plugins\Lastfm\ScrobbleData;
+use Phlix\Plugins\Lastfm\LastfmPluginNotConfiguredException;
+use Phlix\Plugins\Lastfm\LastfmScrobbleFailedException;
 use Psr\Log\NullLogger;
 
 /**
- * @covers \Phlex\Plugins\Lastfm\LastfmApiClient
+ * @covers \Phlix\Plugins\Lastfm\LastfmApiClient
  */
 final class LastfmApiClientTest extends TestCase
 {

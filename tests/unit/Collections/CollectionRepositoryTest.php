@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Collections;
+namespace Phlix\Tests\Unit\Collections;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Collections\Collection;
-use Phlex\Collections\CollectionRepository;
+use Phlix\Collections\Collection;
+use Phlix\Collections\CollectionRepository;
 use Workerman\MySQL\Connection;
 
 class CollectionRepositoryTest extends TestCase

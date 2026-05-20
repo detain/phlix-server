@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\Iptv;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
-use Phlex\LiveTv\Tuners\Iptv\IptvTunerDriver;
-use Phlex\LiveTv\Tuners\Iptv\M3UParser;
-use Phlex\LiveTv\Tuners\Iptv\M3UEntry;
-use Phlex\LiveTv\Tuners\Iptv\XmlTvParser;
-use Phlex\LiveTv\Tuners\Iptv\XmlTvProgramme;
+use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
+use Phlix\LiveTv\Tuners\Iptv\IptvTunerDriver;
+use Phlix\LiveTv\Tuners\Iptv\M3UParser;
+use Phlix\LiveTv\Tuners\Iptv\M3UEntry;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvParser;
+use Phlix\LiveTv\Tuners\Iptv\XmlTvProgramme;
 
 class IptvTunerDriverTest extends TestCase
 {

@@ -1,6 +1,6 @@
-# Phlex Reverse-Proxy Templates
+# Phlix Reverse-Proxy Templates
 
-This directory contains reverse-proxy configurations for nginx and Caddy to front Phlex Media Server.
+This directory contains reverse-proxy configurations for nginx and Caddy to front Phlix Media Server.
 
 ## Why a Reverse Proxy?
 
@@ -24,17 +24,17 @@ sudo bash reverse-proxy/install-nginx.sh
 
 1. Copy configuration:
 ```bash
-sudo cp reverse-proxy/nginx/phlex.conf /etc/nginx/sites-available/
+sudo cp reverse-proxy/nginx/phlix.conf /etc/nginx/sites-available/
 ```
 
-2. Edit `/etc/nginx/sites-available/phlex.conf`:
+2. Edit `/etc/nginx/sites-available/phlix.conf`:
    - Set `server_name` to your domain
    - Update SSL certificate paths
    - Update upstream backend address
 
 3. Enable and reload:
 ```bash
-sudo ln -s /etc/nginx/sites-available/phlex.conf /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/phlix.conf /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -43,7 +43,7 @@ sudo systemctl reload nginx
 
 For Let's Encrypt:
 ```bash
-sudo certbot --nginx -d phlex.example.com
+sudo certbot --nginx -d phlix.example.com
 ```
 
 ## Caddy
@@ -100,7 +100,7 @@ Both configs enable gzip compression for text-based responses.
 
 ## Media Streaming
 
-Phlex streams media in HLS (`.m3u8` + `.ts`) and DASH (`.mpd`) formats. The reverse-proxy configs optimize these:
+Phlix streams media in HLS (`.m3u8` + `.ts`) and DASH (`.mpd`) formats. The reverse-proxy configs optimize these:
 
 | Format | Cache | CORS |
 |--------|-------|------|
@@ -110,10 +110,10 @@ Phlex streams media in HLS (`.m3u8` + `.ts`) and DASH (`.mpd`) formats. The reve
 
 ## Backend Configuration
 
-Update the upstream backend address if Phlex is not running on localhost:8080:
+Update the upstream backend address if Phlix is not running on localhost:8080:
 
 ```
-upstream phlex_backend {
+upstream phlix_backend {
     server 192.168.1.100:8080;
 }
 ```
@@ -122,7 +122,7 @@ upstream phlex_backend {
 
 ### 502 Bad Gateway
 
-Check if Phlex is running:
+Check if Phlix is running:
 ```bash
 curl http://localhost:8080/health
 ```

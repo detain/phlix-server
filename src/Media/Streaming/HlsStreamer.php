@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 /**
  * HLS Streamer - Generates HLS playlists and manages segment files.
@@ -11,7 +11,7 @@ namespace Phlex\Media\Streaming;
  * for adaptive bitrate streaming and variant playlists for individual quality levels.
  * Manages segment file paths and content retrieval for video streaming.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description HLS playlist generator and segment manager for adaptive bitrate streaming
  * @see https://developer.apple.com/documentation/http-live-streaming

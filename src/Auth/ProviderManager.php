@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth;
+namespace Phlix\Auth;
 
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
 
 /**
  * Bridges {@see AuthManager} to the external provider system.
@@ -14,8 +14,8 @@ use Phlex\Shared\Auth\ProviderInterface;
  * username "alice@example.com") and delegates to either a registered external
  * provider or falls back to the standard password-based flow.
  *
- * @package Phlex\Auth
- * @author Phlex Team
+ * @package Phlix\Auth
+ * @author Phlix Team
  * @version 1.0.0
  * @description Provider-prefix resolution and auth delegation.
  *

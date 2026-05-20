@@ -1,31 +1,31 @@
 version: '3.8'
 
 services:
-  phlex:
-    image: ghcr.io/detain/phlex-server:latest
-    container_name: phlex-server
+  phlix:
+    image: ghcr.io/detain/phlix-server:latest
+    container_name: phlix-server
     ports:
       - "32400:80"
     environment:
-      - PHLEX_DATABASE_HOST=mysql
-      - PHLEX_DATABASE_PORT=3306
-      - PHLEX_DATABASE_NAME=phlex
-      - PHLEX_DATABASE_USER=phlex
-      - PHLEX_DATABASE_PASSWORD=${PHLEX_DB_PASSWORD}
-      - PHLEX_SECRET_KEY=${PHLEX_SECRET_KEY}
-      - PHLEX_LOG_LEVEL=info
+      - PHLIX_DATABASE_HOST=mysql
+      - PHLIX_DATABASE_PORT=3306
+      - PHLIX_DATABASE_NAME=phlix
+      - PHLIX_DATABASE_USER=phlix
+      - PHLIX_DATABASE_PASSWORD=${PHLIX_DB_PASSWORD}
+      - PHLIX_SECRET_KEY=${PHLIX_SECRET_KEY}
+      - PHLIX_LOG_LEVEL=info
     volumes:
-      - phlex_config:/var/phlex/config
-      - phlex_data:/var/phlex/data
-      - phlex_backups:/var/phlex/backups
-      - phlex_logs:/var/phlex/logs
+      - phlix_config:/var/phlix/config
+      - phlix_data:/var/phlix/data
+      - phlix_backups:/var/phlix/backups
+      - phlix_logs:/var/phlix/logs
       - media_library:/media:ro
     depends_on:
       mysql:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - phlex_network
+      - phlix_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
@@ -34,12 +34,12 @@ services:
 
   mysql:
     image: mysql:8.0
-    container_name: phlex-mysql
+    container_name: phlix-mysql
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: phlex
-      MYSQL_USER: phlex
-      MYSQL_PASSWORD: ${PHLEX_DB_PASSWORD}
+      MYSQL_DATABASE: phlix
+      MYSQL_USER: phlix
+      MYSQL_PASSWORD: ${PHLIX_DB_PASSWORD}
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -49,16 +49,16 @@ services:
       retries: 5
     restart: unless-stopped
     networks:
-      - phlex_network
+      - phlix_network
 
 volumes:
-  phlex_config:
-  phlex_data:
-  phlex_backups:
-  phlex_logs:
+  phlix_config:
+  phlix_data:
+  phlix_backups:
+  phlix_logs:
   media_library:
   mysql_data:
 
 networks:
-  phlex_network:
+  phlix_network:
     driver: bridge

@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -140,7 +140,7 @@ class HdHomeRunApiClient
             'http' => [
                 'timeout' => self::DEFAULT_TIMEOUT,
                 'method' => 'GET',
-                'user_agent' => 'Phlex/1.0',
+                'user_agent' => 'Phlix/1.0',
                 'ignore_errors' => true,
             ],
         ]);

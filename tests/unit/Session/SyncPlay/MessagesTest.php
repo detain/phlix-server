@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Session\SyncPlay;
+namespace Phlix\Tests\Unit\Session\SyncPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Session\SyncPlay\Messages;
+use Phlix\Session\SyncPlay\Messages;
 
 class MessagesTest extends TestCase
 {

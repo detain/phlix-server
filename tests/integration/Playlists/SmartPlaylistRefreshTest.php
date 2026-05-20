@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Playlists;
+namespace Phlix\Tests\Integration\Playlists;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Playlists\LibraryUpdated;
-use Phlex\Playlists\SmartPlaylist;
-use Phlex\Playlists\SmartPlaylistEngine;
-use Phlex\Playlists\SmartPlaylistRefreshHandler;
-use Phlex\Playlists\SmartPlaylistRepository;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Playlists\LibraryUpdated;
+use Phlix\Playlists\SmartPlaylist;
+use Phlix\Playlists\SmartPlaylistEngine;
+use Phlix\Playlists\SmartPlaylistRefreshHandler;
+use Phlix\Playlists\SmartPlaylistRepository;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 class SmartPlaylistRefreshTest extends TestCase

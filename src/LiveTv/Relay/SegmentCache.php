@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Relay;
+namespace Phlix\LiveTv\Relay;
 
 use Psr\Log\LoggerInterface;
 

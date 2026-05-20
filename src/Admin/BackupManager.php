@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
-use Phlex\Admin\Dto\BackupConfig;
-use Phlex\Admin\Dto\DbConnectionConfig;
-use Phlex\Admin\Dto\S3Config;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Admin\Dto\BackupConfig;
+use Phlix\Admin\Dto\DbConnectionConfig;
+use Phlix\Admin\Dto\S3Config;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Throwable;
 use Workerman\MySQL\Connection;
 
@@ -23,7 +23,7 @@ use Workerman\MySQL\Connection;
  * - User data files (data/)
  * - SSL certificates (if present)
  *
- * @package Phlex\Admin
+ * @package Phlix\Admin
  */
 class BackupManager
 {
@@ -53,7 +53,7 @@ class BackupManager
      */
     private function loadConfig(): BackupConfig
     {
-        $configPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
+        $configPath = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR : 'config';
         $path = $configPath . '/backup.php';
 
         if (!file_exists($path)) {
@@ -90,7 +90,7 @@ class BackupManager
             mkdir($localPath, 0755, true);
         }
 
-        $tempDir = sys_get_temp_dir() . '/phlex_backup_' . $backupId;
+        $tempDir = sys_get_temp_dir() . '/phlix_backup_' . $backupId;
         mkdir($tempDir, 0755, true);
 
         try {
@@ -258,7 +258,7 @@ class BackupManager
                 }
 
                 $s3Key = $this->getS3KeyFromPath($localPath);
-                $tempPath = sys_get_temp_dir() . '/phlex_restore_' . $backupId . '.tar.gz';
+                $tempPath = sys_get_temp_dir() . '/phlix_restore_' . $backupId . '.tar.gz';
 
                 if (!$s3Client->download($this->config->s3->bucket, $s3Key, $tempPath)) {
                     return RestoreResult::failure('S3 download failed', "Failed to download backup from S3: {$s3Key}");
@@ -281,7 +281,7 @@ class BackupManager
             }
 
             // Extract archive
-            $extractDir = sys_get_temp_dir() . '/phlex_restore_' . $backupId;
+            $extractDir = sys_get_temp_dir() . '/phlix_restore_' . $backupId;
             $this->extractTarArchive($localPath, $extractDir);
 
             // Run database import
@@ -296,7 +296,7 @@ class BackupManager
             // Cleanup
             $this->cleanupTempDir($extractDir);
             $originalPath = $this->rowString($backup, 'file_path');
-            if ($localPath !== $originalPath && str_contains($localPath, 'phlex_restore_')) {
+            if ($localPath !== $originalPath && str_contains($localPath, 'phlix_restore_')) {
                 @unlink($localPath);
             }
 
@@ -543,7 +543,7 @@ class BackupManager
      */
     private function backupConfigs(string $tempDir): void
     {
-        $configDir = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
+        $configDir = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR : 'config';
 
         if (!is_dir($configDir)) {
             return;
@@ -568,7 +568,7 @@ class BackupManager
      */
     private function restoreConfigs(string $extractDir): void
     {
-        $configDir = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR : 'config';
+        $configDir = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR : 'config';
         $backupConfigDir = $extractDir . '/config';
 
         if (!is_dir($backupConfigDir)) {
@@ -595,7 +595,7 @@ class BackupManager
      */
     private function backupDataFiles(string $tempDir): void
     {
-        $dataDir = defined('PHLEX_DATA_DIR') ? PHLEX_DATA_DIR : 'data';
+        $dataDir = defined('PHLIX_DATA_DIR') ? PHLIX_DATA_DIR : 'data';
 
         if (!is_dir($dataDir)) {
             return;
@@ -612,7 +612,7 @@ class BackupManager
      */
     private function backupSslCerts(string $tempDir): void
     {
-        $sslDirs = ['/etc/ssl/certs/phlex', '/etc/phlex/ssl', '/var/lib/phlex/ssl'];
+        $sslDirs = ['/etc/ssl/certs/phlix', '/etc/phlix/ssl', '/var/lib/phlix/ssl'];
 
         $backupDir = $tempDir . '/ssl';
         mkdir($backupDir, 0755, true);
@@ -748,7 +748,7 @@ class BackupManager
      */
     private function getDbConfig(): DbConnectionConfig
     {
-        $dbConfigPath = defined('PHLEX_CONFIG_DIR') ? PHLEX_CONFIG_DIR . '/database.php' : 'config/database.php';
+        $dbConfigPath = defined('PHLIX_CONFIG_DIR') ? PHLIX_CONFIG_DIR . '/database.php' : 'config/database.php';
 
         if (!file_exists($dbConfigPath)) {
             throw new \RuntimeException('Database config not found: ' . $dbConfigPath);

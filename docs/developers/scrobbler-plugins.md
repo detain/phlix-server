@@ -2,7 +2,7 @@
 
 ## Overview
 
-A scrobbler plugin integrates Phlex with external media tracking services (e.g., Last.fm, Trakt.tv) to submit playback data and synchronize watch history.
+A scrobbler plugin integrates Phlix with external media tracking services (e.g., Last.fm, Trakt.tv) to submit playback data and synchronize watch history.
 
 ## Plugin Type
 
@@ -14,9 +14,9 @@ Scrobbler plugins **must** subscribe to:
 
 | Event | Description | Typical Action |
 |-------|-------------|----------------|
-| `phlex.playback.started` | Playback began | Submit "start" scrobble |
-| `phlex.playback.stopped` | Playback ended | Submit "stop" scrobble |
-| `phlex.playback.progress` | Progress update (throttled ~30s) | Submit "pause" scrobble (Trakt) or ignore (Last.fm) |
+| `phlix.playback.started` | Playback began | Submit "start" scrobble |
+| `phlix.playback.stopped` | Playback ended | Submit "stop" scrobble |
+| `phlix.playback.progress` | Progress update (throttled ~30s) | Submit "pause" scrobble (Trakt) or ignore (Last.fm) |
 
 ## OAuth Flow
 
@@ -71,16 +71,16 @@ Scrobbler plugins should store these settings:
 
 ## Two-Way History Sync
 
-### Trakt → Phlex (Pull)
+### Trakt → Phlix (Pull)
 
 Run on a schedule (e.g., every 30 minutes via cron):
 
 1. Fetch watched history from Trakt API
 2. For each item, check local `watch_history` table
-3. If item is not ≥ 90% complete in Phlex, write an entry
+3. If item is not ≥ 90% complete in Phlix, write an entry
 
 ```php
-public function syncTraktToPhlex(string $profileId): int
+public function syncTraktToPhlix(string $profileId): int
 {
     $history = $this->api->getWatchedHistory($username, 1, 100, $accessToken);
     $written = 0;
@@ -107,12 +107,12 @@ public function syncTraktToPhlex(string $profileId): int
 }
 ```
 
-### Phlex → Trakt (Push)
+### Phlix → Trakt (Push)
 
 After `PlaybackStopped` with ≥ 90% completion:
 
 ```php
-public function syncPhlexToTrakt(string $profileId, string $mediaItemId, int $position, ?int $duration): bool
+public function syncPhlixToTrakt(string $profileId, string $mediaItemId, int $position, ?int $duration): bool
 {
     $entry = $this->watchHistory->getForMediaItem($profileId, $mediaItemId);
 
@@ -148,13 +148,13 @@ public function syncPhlexToTrakt(string $profileId, string $mediaItemId, int $po
 ## Entry Class Template
 
 ```php
-namespace Phlex\Plugins\Scrobbler\YourService;
+namespace Phlix\Plugins\Scrobbler\YourService;
 
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
-use Phlex\Shared\Events\Playback\PlaybackProgressUpdated;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Shared\Events\Playback\PlaybackProgressUpdated;
 use Psr\Container\ContainerInterface;
 
 final class YourPlugin implements LifecycleInterface
@@ -198,15 +198,15 @@ final class YourPlugin implements LifecycleInterface
 
 ```json
 {
-    "name": "phlex-plugin-yourservice",
+    "name": "phlix-plugin-yourservice",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.14.0",
+    "phlix_min_server_version": "0.14.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Scrobbler\\YourService\\YourPlugin",
+    "entry": "Phlix\\Plugins\\Scrobbler\\YourService\\YourPlugin",
     "events": [
-        "phlex.playback.started",
-        "phlex.playback.stopped",
-        "phlex.playback.progress"
+        "phlix.playback.started",
+        "phlix.playback.stopped",
+        "phlix.playback.progress"
     ],
     "settings": {
         "enabled": {

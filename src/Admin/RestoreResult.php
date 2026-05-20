@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
 /**
  * Result of a backup restore operation.
  *
- * @package Phlex\Admin
+ * @package Phlix\Admin
  */
 class RestoreResult
 {

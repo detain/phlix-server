@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Recording;
+namespace Phlix\LiveTv\Recording;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;

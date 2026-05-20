@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers;
+namespace Phlix\Server\Http\Controllers;
 
-use Phlex\Media\Extras\TrailerResolver;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Extras\TrailerResolver;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * ExtrasController handles API endpoints for media trailers and extras.

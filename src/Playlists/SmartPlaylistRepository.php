@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**

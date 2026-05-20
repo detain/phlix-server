@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session;
+namespace Phlix\Session;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -17,7 +17,7 @@ use Workerman\MySQL\Connection;
  * activity tracking, and cleanup of stale sessions. Sessions track which
  * devices a user has authenticated from and their last activity time.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Manages device sessions for multi-device support including
  *              session creation, tracking, and cleanup of stale sessions.
@@ -62,7 +62,7 @@ class SessionManager
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_session_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_session_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

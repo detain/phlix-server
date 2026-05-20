@@ -1,14 +1,14 @@
 {extends file="layouts/main.tpl"}
 
-{block name="title"}Login - Phlex{/block}
+{block name="title"}Login - Phlix{/block}
 
 {block name="main"}
 <div class="auth-page">
     <div class="auth-container">
         <div class="auth-header">
-            <img src="/assets/images/logo.svg" alt="Phlex" height="48">
+            <img src="/assets/images/logo.svg" alt="Phlix" height="48">
             <h1>Welcome back</h1>
-            <p>Sign in to your Phlex account</p>
+            <p>Sign in to your Phlix account</p>
         </div>
 
         <form class="auth-form" action="/auth/login" method="post">

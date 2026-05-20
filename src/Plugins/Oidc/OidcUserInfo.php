@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc;
+namespace Phlix\Plugins\Oidc;
 
-use Phlex\Shared\Auth\UserInfo as SharedUserInfo;
+use Phlix\Shared\Auth\UserInfo as SharedUserInfo;
 
 /**
  * OIDC-specific user information.
@@ -13,7 +13,7 @@ use Phlex\Shared\Auth\UserInfo as SharedUserInfo;
  * user info fields. Provides a toUserInfo() method to convert to
  * the shared UserInfo type.
  *
- * @package Phlex\Plugins\Oidc
+ * @package Phlix\Plugins\Oidc
  * @since 0.11.0
  */
 final class OidcUserInfo

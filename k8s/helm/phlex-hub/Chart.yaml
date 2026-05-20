@@ -1,18 +1,18 @@
 apiVersion: v2
-name: phlex-hub
-description: A Helm chart for Phlex Hub (relay + auth aggregator for Phlex Media Servers)
+name: phlix-hub
+description: A Helm chart for Phlix Hub (relay + auth aggregator for Phlix Media Servers)
 type: application
 # Chart version (Helm artifact version)
 version: 0.1.0
-# appVersion follows phlex-server's release cadence — keep majors in sync
+# appVersion follows phlix-server's release cadence — keep majors in sync
 appVersion: "1.0.0"
 keywords:
-  - phlex
+  - phlix
   - hub
   - relay
   - websocket
 maintainers:
-  - name: Phlex Team
+  - name: Phlix Team
     url: https://github.com/detain
 sources:
-  - https://github.com/detain/phlex-hub
+  - https://github.com/detain/phlix-hub

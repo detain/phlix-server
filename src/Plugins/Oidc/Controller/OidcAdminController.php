@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Oidc\Controller;
+namespace Phlix\Plugins\Oidc\Controller;
 
-use Phlex\Plugins\Oidc\Plugin;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Plugins\Oidc\Plugin;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Admin API controller for OIDC provider settings.
  *
  * Handles saving and loading OIDC configuration.
  *
- * @package Phlex\Plugins\Oidc\Controller
+ * @package Phlix\Plugins\Oidc\Controller
  * @since 0.11.0
  */
 final class OidcAdminController

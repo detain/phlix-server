@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Session;
+namespace Phlix\Tests\Unit\Session;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Session\SessionManager;
+use Phlix\Session\SessionManager;
 use Workerman\MySQL\Connection;
 
 class SessionManagerTest extends TestCase

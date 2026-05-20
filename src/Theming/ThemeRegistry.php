@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
 use Workerman\MySQL\Connection;
 
@@ -16,7 +16,7 @@ use Workerman\MySQL\Connection;
  * The registry also handles per-user theme preferences, storing the
  * active theme ID in user_profiles.active_theme_id.
  *
- * @package Phlex\Theming
+ * @package Phlix\Theming
  * @since 0.14.0
  */
 class ThemeRegistry
@@ -24,7 +24,7 @@ class ThemeRegistry
     /**
      * Default theme ID when no preference is set.
      */
-    public const DEFAULT_THEME_ID = 'phlex-dark';
+    public const DEFAULT_THEME_ID = 'phlix-dark';
 
     /**
      * @var array<string, Theme> Map of theme ID to Theme instance
@@ -143,7 +143,7 @@ class ThemeRegistry
      * Gets the active theme for a user.
      *
      * If the user has no active theme preference set, returns the default
-     * theme (phlex-dark). If the stored theme ID is no longer registered
+     * theme (phlix-dark). If the stored theme ID is no longer registered
      * (e.g., plugin was uninstalled), also falls back to the default.
      *
      * @param string $userId The user identifier
@@ -213,7 +213,7 @@ class ThemeRegistry
      * Registers all built-in themes from config/themes.php.
      *
      * This method is called during ThemeRegistry construction to register
-     * the four default Phlex themes (dark, light, amoled, contrast).
+     * the four default Phlix themes (dark, light, amoled, contrast).
      *
      * @return void
      *

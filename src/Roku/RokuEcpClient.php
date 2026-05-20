@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Roku;
+namespace Phlix\Roku;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * HTTP ECP client for Roku device control.

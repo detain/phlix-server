@@ -1,12 +1,12 @@
-# Phlex Media Server
+# Phlix Media Server
 
 A comprehensive media server platform built with PHP 8.3+, featuring real-time WebSocket communication, HTTP REST APIs, and support for multiple client platforms including Roku, Samsung Tizen, and Windows.
 
-> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlex` to [`github.com/detain/phlex-server`](https://github.com/detain/phlex-server) as part of the Phase B repo split (see `PHLEX_EXPANSION_PLAN.md`). Update existing local clones with `git remote set-url origin git@github.com:detain/phlex-server.git`. The old repo is being archived in step B.4b.
+> **Repository moved 2026-05-17:** this codebase migrated from `github.com/detain/phlix` to [`github.com/detain/phlix-server`](https://github.com/detain/phlix-server) as part of the Phase B repo split (see `PHLIX_EXPANSION_PLAN.md`). Update existing local clones with `git remote set-url origin git@github.com:detain/phlix-server.git`. The old repo is being archived in step B.4b.
 
 ## Overview
 
-Phlex Media Server provides a complete media management and streaming solution:
+Phlix Media Server provides a complete media management and streaming solution:
 
 - **Media Library Management**: Organize and browse media collections with automatic scanning
 - **User Authentication**: JWT-based auth with refresh tokens
@@ -72,17 +72,17 @@ public/
 - **Plugin system**: install / enable / disable / uninstall lifecycle,
   sandboxed per-plugin `vendor/` directories, signature-checked
   manifests, and PSR-14 event subscription via
-  `Phlex\Shared\Plugin\LifecycleInterface` (the
-  `Phlex\Plugins\Contract\LifecycleInterface` FQCN remains a
+  `Phlix\Shared\Plugin\LifecycleInterface` (the
+  `Phlix\Plugins\Contract\LifecycleInterface` FQCN remains a
   deprecated bridge through 0.11.x). **Plugin developer guide:**
   [`docs/plugins/developer-guide.md`](docs/plugins/developer-guide.md).
   Server-internals reference for contributors extending the loader:
   [`docs/dev/plugin-sdk.md`](docs/dev/plugin-sdk.md). Reference
-  plugin: [`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example).
-- **Shared interfaces / DTOs in `detain/phlex-shared`**: framework-neutral
-  Composer package shared with `phlex-hub`. `Phlex\Shared\Plugin\*`,
-  `Phlex\Shared\Events\*`, `Phlex\Shared\Auth\JwtClaims`, and
-  `Phlex\Shared\Hub\*` DTOs live there since `phlex-server` 0.11.0.
+  plugin: [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example).
+- **Shared interfaces / DTOs in `detain/phlix-shared`**: framework-neutral
+  Composer package shared with `phlix-hub`. `Phlix\Shared\Plugin\*`,
+  `Phlix\Shared\Events\*`, `Phlix\Shared\Auth\JwtClaims`, and
+  `Phlix\Shared\Hub\*` DTOs live there since `phlix-server` 0.11.0.
 
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty
@@ -139,8 +139,8 @@ public/
 
 ```bash
 # Clone the repository
-git clone https://github.com/detain/phlex-server.git
-cd phlex-server
+git clone https://github.com/detain/phlix-server.git
+cd phlix-server
 
 # Install dependencies
 composer install
@@ -164,7 +164,7 @@ Configuration is managed via PHP files in `config/`:
 // config/server.php
 return [
     'server' => [
-        'name' => 'Phlex Media Server',
+        'name' => 'Phlix Media Server',
         'host' => '0.0.0.0',
         'port' => 8080,
     ],
@@ -175,8 +175,8 @@ return [
     'database' => [
         'host' => '127.0.0.1',
         'port' => 3306,
-        'database' => 'phlex',
-        'username' => 'phlex',
+        'database' => 'phlix',
+        'username' => 'phlix',
         'password' => 'secure-password',
     ],
     'debug' => false,

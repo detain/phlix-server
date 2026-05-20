@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Subtitles;
+namespace Phlix\Tests\Unit\Media\Transcoding\Subtitles;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Subtitles\SubtitleFormat;
+use Phlix\Media\Transcoding\Subtitles\SubtitleFormat;
 
 class SubtitleFormatTest extends TestCase
 {

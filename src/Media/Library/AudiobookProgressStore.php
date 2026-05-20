@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Common\Util\RowMap;
+use Phlix\Common\Util\RowMap;
 use Workerman\MySQL\Connection;
 
 /**
@@ -13,7 +13,7 @@ use Workerman\MySQL\Connection;
  * Uses Workerman\MySQL\Connection for database access.
  * The completed_chapters array is stored as JSON.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Persists audiobook progress to the audiobook_progress table
  * @since 0.18.0

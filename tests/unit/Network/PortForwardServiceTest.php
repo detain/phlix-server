@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Network;
+namespace Phlix\Tests\Unit\Network;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Network\NatPmpClient;
-use Phlex\Network\PortForwardService;
-use Phlex\Network\StunClient;
-use Phlex\Network\UpnpIgdClient;
+use Phlix\Network\NatPmpClient;
+use Phlix\Network\PortForwardService;
+use Phlix\Network\StunClient;
+use Phlix\Network\UpnpIgdClient;
 use Psr\Log\NullLogger;
 
 class PortForwardServiceTest extends TestCase
@@ -17,7 +17,7 @@ class PortForwardServiceTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->tmpDir = sys_get_temp_dir() . '/phlex-pf-test-' . uniqid();
+        $this->tmpDir = sys_get_temp_dir() . '/phlix-pf-test-' . uniqid();
         mkdir($this->tmpDir, 0755, true);
     }
 

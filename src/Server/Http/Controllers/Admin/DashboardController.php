@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Admin;
+namespace Phlix\Server\Http\Controllers\Admin;
 
-use Phlex\Admin\DashboardService;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Admin\DashboardService;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Dashboard controller for admin API endpoints.
@@ -14,7 +14,7 @@ use Phlex\Server\Http\Response;
  * Provides JSON API endpoints for the admin dashboard data including
  * now playing, top users, top media, storage summary, and recent activity.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Admin dashboard API controller
  *

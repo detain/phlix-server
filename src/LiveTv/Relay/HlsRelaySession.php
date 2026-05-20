@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Relay;
+namespace Phlix\LiveTv\Relay;
 
 /**
  * Represents a single remote relay session for a live TV stream.

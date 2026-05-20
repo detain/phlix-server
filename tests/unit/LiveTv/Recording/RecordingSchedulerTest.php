@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Dto\ResultSet;
-use Phlex\LiveTv\LiveTvManager;
-use Phlex\LiveTv\Recorder;
-use Phlex\LiveTv\Recording\RecordingScheduler;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\Dto\ResultSet;
+use Phlix\LiveTv\LiveTvManager;
+use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
 class RecordingSchedulerTest extends TestCase

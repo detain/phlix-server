@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Network;
+namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -14,7 +14,7 @@ use Socket;
  * Sends a binding request to a STUN server and extracts the XOR-MAPPED-ADDRESS
  * from the response.
  *
- * @package Phlex\Network
+ * @package Phlix\Network
  * @since 0.11.0
  */
 class StunClient

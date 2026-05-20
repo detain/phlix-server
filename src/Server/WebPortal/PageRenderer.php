@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebPortal;
+namespace Phlix\Server\WebPortal;
 
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Session\PlaybackController;
-use Phlex\Theming\ThemeMediaRepository;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Session\PlaybackController;
+use Phlix\Theming\ThemeMediaRepository;
 
 /**
  * PageRenderer handles HTML page generation for the web portal.
@@ -19,7 +19,7 @@ use Phlex\Theming\ThemeMediaRepository;
  * It coordinates with library and playback services to fetch
  * the data needed for template rendering.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Renders HTML pages using Smarty templates
  *
@@ -225,7 +225,7 @@ class PageRenderer
      * Render an arbitrary Smarty template with the given variables and
      * return the resulting HTML as a string. Centralised so subordinate
      * page controllers (e.g.
-     * {@see \Phlex\Server\WebPortal\Controllers\PluginAdminPageController})
+     * {@see \Phlix\Server\WebPortal\Controllers\PluginAdminPageController})
      * don't each have to instantiate Smarty directly and so the
      * default-on `escape_html` policy is applied uniformly.
      *

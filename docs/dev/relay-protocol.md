@@ -8,7 +8,7 @@
 
 ## Overview
 
-The relay tunnel enables remote clients to reach a `phlex-server` instance that is behind a NAT or firewall without any port forwarding on the server side.
+The relay tunnel enables remote clients to reach a `phlix-server` instance that is behind a NAT or firewall without any port forwarding on the server side.
 
 The server opens a **persistent WSS connection** to the hub's relay endpoint. The hub multiplexes inbound HTTP requests from remote clients over this tunnel and proxies responses back.
 
@@ -24,7 +24,7 @@ This is the same pattern as `frp`, `ngrok`, or `cloudflared` but implemented in 
 Client (remote)                    Hub                       Server (behind NAT)
      |                              |                              |
      |  HTTPS request to           |                              |
-     |  https://<id>.phlex.media/* |                              |
+     |  https://<id>.phlix.media/* |                              |
      | ---------------------------->                              |
      |                              |  HTTP-over-WebSocket frame   |
      |                              | ---------------------------->
@@ -41,24 +41,24 @@ Client (remote)                    Hub                       Server (behind NAT)
 
 ### Server initiates
 
-1. Server starts `RelayApplication` if `PHLEX_RELAY_ENABLED=true` and `hub-enrollment.json` exists.
+1. Server starts `RelayApplication` if `PHLIX_RELAY_ENABLED=true` and `hub-enrollment.json` exists.
 2. `RelayConsumer` opens a WSS connection to `wss://hub.example.com/api/v1/servers/{server_id}/relay`.
 3. On connect, server sends a `REGISTER` frame with its enrollment JWT.
 4. Hub validates the JWT and associates the WebSocket connection with the server's `relay_session` DB record.
 
 ### Normal operation
 
-1. Hub receives an inbound HTTPS request for `https://<id>.phlex.media/api/v1/relay/...`.
+1. Hub receives an inbound HTTPS request for `https://<id>.phlix.media/api/v1/relay/...`.
 2. Hub routes the request to the correct server via the persistent WSS connection.
 3. Server receives the `HTTP_REQUEST` frame, dispatches it locally, and returns an `HTTP_RESPONSE` frame.
 4. Hub proxies the response back to the client.
 
 ### Keep-alive
 
-- Server sends a `PING` frame every `PHLEX_RELAY_PING_INTERVAL` seconds (default 30).
+- Server sends a `PING` frame every `PHLIX_RELAY_PING_INTERVAL` seconds (default 30).
 - Hub responds with a `PONG` frame.
-- If no `PONG` is received within `PHLEX_RELAY_PING_TIMEOUT` (default 10), the connection is considered dead.
-- Server auto-reconnects after `PHLEX_RELAY_RECONNECT_DELAY` seconds (default 5).
+- If no `PONG` is received within `PHLIX_RELAY_PING_TIMEOUT` (default 10), the connection is considered dead.
+- Server auto-reconnects after `PHLIX_RELAY_RECONNECT_DELAY` seconds (default 5).
 
 ---
 
@@ -139,7 +139,7 @@ Hub responds with a `TYPE_HTTP_RESPONSE` with `status = 200` on success, `401` i
 
 ## Server-side Components
 
-### `Phlex\Hub\RelayMessageFramer`
+### `Phlix\Hub\RelayMessageFramer`
 
 Frames and parses binary relay messages.
 
@@ -149,7 +149,7 @@ $bytes = $framer->frameRequest($seq, 'GET', '/api/v1/libraries', $headers, '');
 $frame = $framer->parse($bytes);  // => RelayFrame|null
 ```
 
-### `Phlex\Hub\RelayConsumer`
+### `Phlix\Hub\RelayConsumer`
 
 Maintains the WSS connection to the hub. Receives frames, dispatches locally via `Router`, and sends responses.
 
@@ -160,11 +160,11 @@ $consumer->stop();    // graceful shutdown
 $consumer->isConnected();
 ```
 
-### `Phlex\Hub\RelayApplication`
+### `Phlix\Hub\RelayApplication`
 
 Workerman Worker wrapper providing the timer context.
 
-### `Phlex\Hub\RelayConfig`
+### `Phlix\Hub\RelayConfig`
 
 Configuration from `config/relay.php` / environment variables.
 
@@ -174,7 +174,7 @@ Configuration from `config/relay.php` / environment variables.
 
 | Scenario                      | Behavior |
 | ----------------------------- | -------- |
-| Connection drop               | `RelayConsumer` schedules a reconnect after `PHLEX_RELAY_RECONNECT_DELAY` |
+| Connection drop               | `RelayConsumer` schedules a reconnect after `PHLIX_RELAY_RECONNECT_DELAY` |
 | Hub returns non-2xx on REGISTER | Connection closed, no reconnect |
 | Local router throws            | `RelayConsumer` returns HTTP 500 over the tunnel |
 | Incomplete binary frame        | Buffer retained until more data arrives |

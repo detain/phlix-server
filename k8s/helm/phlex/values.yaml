@@ -1,13 +1,13 @@
-# Default values for phlex.
+# Default values for phlix.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Number of phlex-server pods to run
+# Number of phlix-server pods to run
 replicaCount: 1
 
 image:
-  # Container image repository for phlex-server
-  repository: ghcr.io/detain/phlex-server
+  # Container image repository for phlix-server
+  repository: ghcr.io/detain/phlix-server
   # Pull policy: Always | IfNotPresent | Never
   pullPolicy: IfNotPresent
   # Image tag — defaults to .Chart.AppVersion if empty
@@ -15,7 +15,7 @@ image:
 
 # imagePullSecrets used when pulling from a private registry
 imagePullSecrets: []
-# Override the chart name (default: phlex)
+# Override the chart name (default: phlix)
 nameOverride: ""
 # Override the generated fully-qualified app name
 fullnameOverride: ""
@@ -46,14 +46,14 @@ ingress:
     # Allow large uploads for backup imports
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
   hosts:
-    - host: phlex.local
+    - host: phlix.local
       paths:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: phlex-tls
+    - secretName: phlix-tls
       hosts:
-        - phlex.local
+        - phlix.local
 
 # Container resource requests/limits
 resources:
@@ -61,7 +61,7 @@ resources:
     cpu: 2000m
     memory: 2Gi
   requests:
-    # Modest defaults — phlex-server is small until transcoding starts
+    # Modest defaults — phlix-server is small until transcoding starts
     cpu: 250m
     memory: 512Mi
 
@@ -101,8 +101,8 @@ persistence:
 mysql:
   enabled: true
   auth:
-    database: phlex
-    username: phlex
+    database: phlix
+    username: phlix
   primary:
     persistence:
       size: 10Gi
@@ -112,15 +112,15 @@ config:
   # MySQL host (defaults to the bundled subchart service)
   database_host: "{{ .Release.Name }}-mysql"
   database_port: 3306
-  database_name: phlex
-  database_user: phlex
+  database_name: phlix
+  database_user: phlix
   # Database password — set via --set or values file (required)
   database_password: ""
   # JWT signing secret — set via --set or values file (required)
   secret_key: ""
   # Logger verbosity: debug | info | warning | error
   log_level: info
-  # Phlex Hub URL (e.g. https://hub.phlex.tv) — leave empty to disable
+  # Phlix Hub URL (e.g. https://hub.phlix.tv) — leave empty to disable
   hub_url: ""
   # One-time pairing code from the hub UI
   hub_pairing_code: ""
@@ -129,7 +129,7 @@ config:
 hub:
   # Enable hub integration
   enabled: false
-  # JWT bearer issued by phlex-hub during enrollment
+  # JWT bearer issued by phlix-hub during enrollment
   enrollmentJwt: ""
   # Override the hub URL set in `config.hub_url` (optional)
   url: ""
@@ -149,7 +149,7 @@ hwAccel:
 
 # Extra environment variables for the container
 env: []
-# - name: PHLEX_FEATURE_FLAG
+# - name: PHLIX_FEATURE_FLAG
 #   value: "1"
 
 # Horizontal Pod Autoscaler

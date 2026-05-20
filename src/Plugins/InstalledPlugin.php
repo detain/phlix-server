@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins;
+namespace Phlix\Plugins;
 
 use DateTimeImmutable;
 
@@ -15,7 +15,7 @@ use DateTimeImmutable;
  * persisted settings). Callers mutate state via {@see PluginLoader},
  * never by reassigning fields on this DTO.
  *
- * @package Phlex\Plugins
+ * @package Phlix\Plugins
  * @since 0.10.0
  */
 final class InstalledPlugin

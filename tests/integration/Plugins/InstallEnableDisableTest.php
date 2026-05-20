@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Integration\Plugins;
+namespace Phlix\Tests\Integration\Plugins;
 
-use Phlex\Common\Container\ContainerFactory;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Plugins\Installer\HttpInstaller;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Plugins\Repository\PluginRepository;
-use Phlex\Plugins\Util\RecursiveDelete;
+use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Plugins\Installer\HttpInstaller;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Plugins\Repository\PluginRepository;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -43,7 +43,7 @@ final class InstallEnableDisableTest extends TestCase
         parent::setUp();
         LoggerFactory::reset();
 
-        $this->pluginsBaseDir = sys_get_temp_dir() . '/phlex_pl_int_' . uniqid('', true);
+        $this->pluginsBaseDir = sys_get_temp_dir() . '/phlix_pl_int_' . uniqid('', true);
         mkdir($this->pluginsBaseDir, 0775, true);
 
         // A throwaway logger config that points at the tmp dir.
@@ -117,17 +117,17 @@ final class InstallEnableDisableTest extends TestCase
 
         // 1. Install
         $manifest = $loader->installFromDirectory($fixtureSource);
-        $this->assertSame('phlex-plugin-fixture', $manifest->name);
+        $this->assertSame('phlix-plugin-fixture', $manifest->name);
 
-        $installedDir = $this->pluginsBaseDir . '/phlex-plugin-fixture';
+        $installedDir = $this->pluginsBaseDir . '/phlix-plugin-fixture';
         $this->assertDirectoryExists($installedDir);
         $this->assertFileExists($installedDir . '/vendor/autoload.php');
 
         // 2. Enable
-        $loader->enable('phlex-plugin-fixture');
+        $loader->enable('phlix-plugin-fixture');
 
         // 3. Dispatch one event — listener should fire.
-        $entryClass = 'Phlex\\Tests\\Fixtures\\Plugins\\FixturePlugin\\FixturePlugin';
+        $entryClass = 'Phlix\\Tests\\Fixtures\\Plugins\\FixturePlugin\\FixturePlugin';
         $this->assertTrue(class_exists($entryClass), 'Fixture plugin entry class must load.');
         $instance = $container->get($entryClass);
         $this->assertObjectHasProperty('playbackStartedCount', $instance);
@@ -136,13 +136,13 @@ final class InstallEnableDisableTest extends TestCase
         $this->assertSame(1, $instance->playbackStartedCount);
 
         // 4. Disable — listener should stop firing.
-        $loader->disable('phlex-plugin-fixture');
+        $loader->disable('phlix-plugin-fixture');
         $dispatcher->dispatch(new PlaybackStarted('sess', 'user', 'item', 'dev', 0));
         $this->assertSame(1, $instance->playbackStartedCount, 'Listener should be removed after disable.');
         $this->assertTrue($instance->onDisableCalled);
 
         // 5. Uninstall — directory disappears, DB row gone.
-        $loader->uninstall('phlex-plugin-fixture');
+        $loader->uninstall('phlix-plugin-fixture');
         $this->assertDirectoryDoesNotExist($installedDir);
         $this->assertCount(0, $loader->listInstalled());
     }

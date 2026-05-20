@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Installer;
+namespace Phlix\Tests\Unit\Plugins\Installer;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Installer\ComposerRunner;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Installer\ComposerRunner;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\Installer\ComposerRunner
+ * @covers \Phlix\Plugins\Installer\ComposerRunner
  */
 final class ComposerRunnerTest extends TestCase
 {
@@ -19,7 +19,7 @@ final class ComposerRunnerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->tmpDir = sys_get_temp_dir() . '/phlex_composerrun_' . uniqid('', true);
+        $this->tmpDir = sys_get_temp_dir() . '/phlix_composerrun_' . uniqid('', true);
         mkdir($this->tmpDir, 0775, true);
     }
 
@@ -65,7 +65,7 @@ final class ComposerRunnerTest extends TestCase
         }
         file_put_contents(
             $this->tmpDir . '/composer.json',
-            '{"name":"phlex/test-runner","autoload":{"psr-4":{"X\\\\":"src/"}}}',
+            '{"name":"phlix/test-runner","autoload":{"psr-4":{"X\\\\":"src/"}}}',
         );
         mkdir($this->tmpDir . '/src', 0775, true);
 

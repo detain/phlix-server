@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Playlists;
+namespace Phlix\Playlists;
 
-use Phlex\Collections\CollectionManager;
-use Phlex\Collections\CollectionRepository;
-use Phlex\Common\Events\ListenerRegistry;
+use Phlix\Collections\CollectionManager;
+use Phlix\Collections\CollectionRepository;
+use Phlix\Common\Events\ListenerRegistry;
 
 /**
  * Handles smart playlist re-evaluation when library content changes.

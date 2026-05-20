@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Ldap;
+namespace Phlix\Plugins\Ldap;
 
-use Phlex\Shared\Auth\AuthResult;
-use Phlex\Shared\Auth\ProviderInterface;
-use Phlex\Shared\Auth\UserInfo;
+use Phlix\Shared\Auth\AuthResult;
+use Phlix\Shared\Auth\ProviderInterface;
+use Phlix\Shared\Auth\UserInfo;
 
 final class LdapProvider implements ProviderInterface
 {

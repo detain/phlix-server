@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\Dlna;
+namespace Phlix\Server\Http\Controllers\Dlna;
 
-use Phlex\Dlna\PlayToManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Dlna\PlayToManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * HTTP controller for DLNA renderer discovery and AVTransport control.

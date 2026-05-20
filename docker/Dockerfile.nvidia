@@ -1,5 +1,5 @@
 # ============================================================================
-# Phlex Server — NVIDIA (CUDA) hardware acceleration build
+# Phlix Server — NVIDIA (CUDA) hardware acceleration build
 # ----------------------------------------------------------------------------
 # Path layout note: this variant inherits from `nvidia/cuda:*` (Ubuntu 22.04)
 # instead of the Alpine-based `php:8.3-fpm-alpine`. NVIDIA's CUDA runtime
@@ -39,14 +39,14 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-RUN mkdir -p /var/www/html /var/phlex/config /var/phlex/data /var/phlex/logs /var/phlex/backups \
-    && chown -R nobody:nogroup /var/www/html /var/phlex
+RUN mkdir -p /var/www/html /var/phlix/config /var/phlix/data /var/phlix/logs /var/phlix/backups \
+    && chown -R nobody:nogroup /var/www/html /var/phlix
 
 # Ubuntu PHP layout. Symlink to the Alpine canonical path so downstream tooling
 # can rely on a single location.
-COPY docker/php.ini /etc/php/8.3/fpm/conf.d/99-phlex.ini
+COPY docker/php.ini /etc/php/8.3/fpm/conf.d/99-phlix.ini
 RUN mkdir -p /usr/local/etc/php/conf.d \
-    && ln -sf /etc/php/8.3/fpm/conf.d/99-phlex.ini /usr/local/etc/php/conf.d/zz-phlex.ini
+    && ln -sf /etc/php/8.3/fpm/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
 
 COPY docker/nginx.conf /etc/nginx/sites-available/default
 RUN ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default

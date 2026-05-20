@@ -10,5 +10,5 @@ return [
         'enabled' => true,
         'discovery_timeout_secs' => 5,
     ],
-    'discovery_port' => 8200,  // Phlex server port for discovery responses
+    'discovery_port' => 8200,  // Phlix server port for discovery responses
 ];

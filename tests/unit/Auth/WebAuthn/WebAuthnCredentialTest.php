@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Auth\WebAuthn;
+namespace Phlix\Tests\Unit\Auth\WebAuthn;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\WebAuthn\WebAuthnCredential;
+use Phlix\Auth\WebAuthn\WebAuthnCredential;
 
 final class WebAuthnCredentialTest extends TestCase
 {

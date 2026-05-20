@@ -10,7 +10,7 @@ A passkey is a FIDO2/WebAuthn credential stored on your device or in a
 hardware security key. It consists of:
 
 - **Private key**: Stored securely on your device or hardware key
-- **Public key**: Stored on the Phlex server
+- **Public key**: Stored on the Phlix server
 
 When you authenticate, the server sends a challenge that your device signs
 with the private key. The server verifies the signature using the public key.
@@ -48,7 +48,7 @@ with the private key. The server verifies the signature using the public key.
 
 ## How to Register a Passkey
 
-1. Log in to Phlex with your existing username and password
+1. Log in to Phlix with your existing username and password
 2. Navigate to **Account Settings** → **Passkeys**
 3. Click **Register New Passkey**
 4. Follow your browser's prompts to confirm
@@ -58,7 +58,7 @@ with the private key. The server verifies the signature using the public key.
 
 ### On a Device with an Existing Passkey
 
-1. Go to the Phlex login page
+1. Go to the Phlix login page
 2. Enter your username
 3. When prompted, use your authenticator (Touch ID, Windows Hello, etc.)
 4. You're logged in!

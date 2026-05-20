@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Recording\RecordingDeduplicator;
+use Phlix\LiveTv\Recording\RecordingDeduplicator;
 use Workerman\MySQL\Connection;
 
 class RecordingDeduplicatorTest extends TestCase

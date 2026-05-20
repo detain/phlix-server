@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Session\SyncPlay;
+namespace Phlix\Session\SyncPlay;
 
 /**
  * TimeSync - Network time synchronization for synchronized playback
@@ -31,8 +31,8 @@ namespace Phlex\Session\SyncPlay;
  * - At least OFFSET_SAMPLE_COUNT samples have been collected
  * - The variance of recent offset samples is less than 50ms
  *
- * @author Phlex Development Team
- * @copyright 2024 Phlex Media Server
+ * @author Phlix Development Team
+ * @copyright 2024 Phlix Media Server
  * @license Proprietary
  *
  * @see SyncPlayManager For how TimeSync is used in group sync

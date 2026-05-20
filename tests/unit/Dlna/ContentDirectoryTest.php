@@ -1,11 +1,11 @@
 <?php
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\MockObject\MockObject;
-use Phlex\Dlna\ContentDirectory;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Dlna\ContentDirectory;
+use Phlix\Media\Library\ItemRepository;
 
 class ContentDirectoryTest extends TestCase
 {

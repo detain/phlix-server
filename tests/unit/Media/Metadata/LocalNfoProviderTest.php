@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Metadata;
+namespace Phlix\Tests\Unit\Media\Metadata;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Metadata\LocalNfoProvider;
-use Phlex\Common\Logger\LoggerFactory;
+use Phlix\Media\Metadata\LocalNfoProvider;
+use Phlix\Common\Logger\LoggerFactory;
 
 class LocalNfoProviderTest extends TestCase
 {
@@ -17,7 +17,7 @@ class LocalNfoProviderTest extends TestCase
     {
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
         $this->provider = new LocalNfoProvider('');
-        $this->testDir = sys_get_temp_dir() . '/phlex_nfo_test';
+        $this->testDir = sys_get_temp_dir() . '/phlix_nfo_test';
         
         if (!is_dir($this->testDir)) {
             mkdir($this->testDir, 0777, true);

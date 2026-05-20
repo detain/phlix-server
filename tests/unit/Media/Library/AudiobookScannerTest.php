@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\AudiobookScanner;
-use Phlex\Media\Library\ItemRepository;
+use Phlix\Media\Library\AudiobookScanner;
+use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 class AudiobookScannerTest extends TestCase
@@ -101,7 +101,7 @@ class AudiobookScannerTest extends TestCase
         $scanner = new AudiobookScanner($db, $itemRepo);
 
         // Create a temp directory with no audiobook files
-        $tempDir = sys_get_temp_dir() . '/phlex_test_audiobook_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_audiobook_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $items = [];

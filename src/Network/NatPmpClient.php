@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Network;
+namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -14,7 +14,7 @@ use Socket;
  * Communicates with the NAT-PMP gateway on UDP port 5350/5351 to
  * request port mappings without requiring SSDP discovery.
  *
- * @package Phlex\Network
+ * @package Phlix\Network
  * @since 0.11.0
  */
 class NatPmpClient

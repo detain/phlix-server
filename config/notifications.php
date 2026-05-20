@@ -55,7 +55,7 @@ return [
 
     'mqtt' => [
         'broker' => 'localhost:1883',
-        'topic' => 'phlex/events',
+        'topic' => 'phlix/events',
         'username' => '',
         'password' => '',
         'enabled' => false,

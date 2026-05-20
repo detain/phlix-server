@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Installer;
+namespace Phlix\Tests\Unit\Plugins\Installer;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Plugins\Exception\PluginInstallException;
-use Phlex\Plugins\Installer\HttpInstaller;
-use Phlex\Plugins\Util\RecursiveDelete;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Exception\PluginInstallException;
+use Phlix\Plugins\Installer\HttpInstaller;
+use Phlix\Plugins\Util\RecursiveDelete;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Plugins\Installer\HttpInstaller
+ * @covers \Phlix\Plugins\Installer\HttpInstaller
  */
 final class HttpInstallerTest extends TestCase
 {
@@ -22,7 +22,7 @@ final class HttpInstallerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $root = sys_get_temp_dir() . '/phlex_http_inst_' . uniqid('', true);
+        $root = sys_get_temp_dir() . '/phlix_http_inst_' . uniqid('', true);
         mkdir($root, 0775, true);
         $this->base = $root . '/var/plugins';
         $this->work = $root . '/work';
@@ -50,8 +50,8 @@ final class HttpInstallerTest extends TestCase
 
         [$manifest, $destination] = $this->installer()->installFromDirectory($source);
 
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
-        $this->assertSame($this->base . '/phlex-plugin-fromdir', $destination);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
+        $this->assertSame($this->base . '/phlix-plugin-fromdir', $destination);
         $this->assertFileExists($destination . '/plugin.json');
         $this->assertFileExists($destination . '/src/Plugin.php');
     }
@@ -59,7 +59,7 @@ final class HttpInstallerTest extends TestCase
     public function test_installFromDirectory_replaces_existing_install(): void
     {
         // Pre-stage an old version with a sentinel file.
-        $existing = $this->base . '/phlex-plugin-fromdir';
+        $existing = $this->base . '/phlix-plugin-fromdir';
         mkdir($existing, 0775, true);
         file_put_contents($existing . '/old-marker.txt', 'old');
 
@@ -119,7 +119,7 @@ final class HttpInstallerTest extends TestCase
         $zipPath = $this->makeZipFromDir($this->validPluginSource());
 
         [$manifest, $destination] = $this->installer()->install('file://' . $zipPath);
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
         $this->assertFileExists($destination . '/plugin.json');
     }
 
@@ -128,7 +128,7 @@ final class HttpInstallerTest extends TestCase
         $tarPath = $this->makeTarGzFromDir($this->validPluginSource());
         [$manifest, $destination] = $this->installer()->install('file://' . $tarPath);
 
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
         $this->assertFileExists($destination . '/plugin.json');
     }
 
@@ -141,14 +141,14 @@ final class HttpInstallerTest extends TestCase
         file_put_contents($stubPath, (string) json_encode($stub));
 
         [$manifest, $destination] = $this->installer()->install('file://' . $stubPath);
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
         $this->assertFileExists($destination . '/plugin.json');
     }
 
     public function test_install_rejects_stub_without_source_field(): void
     {
         $stubPath = $this->work . '/bad-stub.json';
-        file_put_contents($stubPath, '{"name":"phlex-plugin-foo"}');
+        file_put_contents($stubPath, '{"name":"phlix-plugin-foo"}');
 
         $this->expectException(PluginInstallException::class);
         $this->expectExceptionMessage('Stub plugin.json must contain a "source"');
@@ -174,7 +174,7 @@ final class HttpInstallerTest extends TestCase
 
     public function test_install_allows_http_when_env_set(): void
     {
-        putenv('PHLEX_PLUGINS_ALLOW_HTTP=1');
+        putenv('PHLIX_PLUGINS_ALLOW_HTTP=1');
         try {
             // We expect failure at the fetch step, NOT at the scheme guard.
             try {
@@ -184,7 +184,7 @@ final class HttpInstallerTest extends TestCase
                 $this->assertStringNotContainsString('Plain HTTP', $e->getMessage());
             }
         } finally {
-            putenv('PHLEX_PLUGINS_ALLOW_HTTP');
+            putenv('PHLIX_PLUGINS_ALLOW_HTTP');
         }
     }
 
@@ -194,7 +194,7 @@ final class HttpInstallerTest extends TestCase
         mkdir($source, 0775, true);
         $bad = $this->validManifest();
         // Pass schema validation but trip the second guard inside the installer.
-        $bad['name'] = 'phlex-plugin-../escape';
+        $bad['name'] = 'phlix-plugin-../escape';
         // Schema requires kebab-case prefix; this fails schema validation first,
         // so confirm the install rejects the manifest at all.
         file_put_contents($source . '/plugin.json', json_encode($bad));
@@ -206,7 +206,7 @@ final class HttpInstallerTest extends TestCase
     public function test_install_extracts_targz_with_single_root_folder(): void
     {
         // Many GitHub tarballs unpack to repo-sha/; ensure flattenSingleRoot kicks in.
-        $wrapperParent = sys_get_temp_dir() . '/phlex_wrapper_parent_' . uniqid('', true);
+        $wrapperParent = sys_get_temp_dir() . '/phlix_wrapper_parent_' . uniqid('', true);
         $wrapper = $wrapperParent . '/repo-abcdef';
         mkdir($wrapper, 0775, true);
         file_put_contents($wrapper . '/plugin.json', (string) json_encode($this->validManifest()));
@@ -214,7 +214,7 @@ final class HttpInstallerTest extends TestCase
         $tarPath = $this->makeTarGzFromDir($wrapperParent);
         [$manifest, $destination] = $this->installer()->install('file://' . $tarPath);
 
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
         $this->assertFileExists($destination . '/plugin.json');
     }
 
@@ -234,7 +234,7 @@ final class HttpInstallerTest extends TestCase
         rename($gzPath, $tgzPath);
 
         [$manifest, $destination] = $this->installer()->install('file://' . $tgzPath);
-        $this->assertSame('phlex-plugin-fromdir', $manifest->name);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
         $this->assertFileExists($destination . '/plugin.json');
     }
 
@@ -293,7 +293,7 @@ final class HttpInstallerTest extends TestCase
     {
         // Pre-stage an old version of the same plugin so we hit lines
         // 92-93 (is_dir($destination) -> RecursiveDelete::remove).
-        $existing = $this->base . '/phlex-plugin-fromdir';
+        $existing = $this->base . '/phlix-plugin-fromdir';
         mkdir($existing, 0775, true);
         file_put_contents($existing . '/stale-marker.txt', 'old');
 
@@ -313,7 +313,7 @@ final class HttpInstallerTest extends TestCase
                 'plugin source installed',
                 $this->callback(static function ($ctx): bool {
                     return is_array($ctx)
-                        && ($ctx['plugin'] ?? null) === 'phlex-plugin-fromdir'
+                        && ($ctx['plugin'] ?? null) === 'phlix-plugin-fromdir'
                         && is_string($ctx['destination'] ?? null);
                 })
             );
@@ -451,7 +451,7 @@ final class HttpInstallerTest extends TestCase
 
         // This name fails the kebab regex (uppercase chars) -> first guard catches it.
         try {
-            $method->invoke($installer, 'phlex-plugin-OK');
+            $method->invoke($installer, 'phlix-plugin-OK');
             $this->fail('Expected PluginInstallException from regex guard');
         } catch (PluginInstallException $e) {
             $this->assertStringContainsString('not a safe directory component', $e->getMessage());
@@ -493,7 +493,7 @@ final class HttpInstallerTest extends TestCase
             ->method('info')
             ->with(
                 'plugin staged from directory',
-                $this->callback(static fn ($ctx) => is_array($ctx) && ($ctx['plugin'] ?? null) === 'phlex-plugin-fromdir')
+                $this->callback(static fn ($ctx) => is_array($ctx) && ($ctx['plugin'] ?? null) === 'phlix-plugin-fromdir')
             );
 
         $source = $this->work . '/myplugin-info';
@@ -513,7 +513,7 @@ final class HttpInstallerTest extends TestCase
         mkdir($source, 0775, true);
         $bad = $this->validManifest();
         unset($bad['name']);
-        $bad['name'] = 'phlex-plugin-OK-AlPhA'; // uppercase -> schema rejects
+        $bad['name'] = 'phlix-plugin-OK-AlPhA'; // uppercase -> schema rejects
         file_put_contents($source . '/plugin.json', (string) json_encode($bad));
 
         $this->expectException(PluginInstallException::class);
@@ -534,11 +534,11 @@ final class HttpInstallerTest extends TestCase
     private function validManifest(): array
     {
         return [
-            'name' => 'phlex-plugin-fromdir',
+            'name' => 'phlix-plugin-fromdir',
             'version' => '1.0.0',
-            'phlex_min_server_version' => '0.10.0',
+            'phlix_min_server_version' => '0.10.0',
             'type' => 'notifier',
-            'entry' => 'Phlex\\Tests\\Plugin\\Entry',
+            'entry' => 'Phlix\\Tests\\Plugin\\Entry',
             'events' => [],
         ];
     }

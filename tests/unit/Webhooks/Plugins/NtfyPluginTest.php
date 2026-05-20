@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Webhooks\Plugins;
+namespace Phlix\Tests\Unit\Webhooks\Plugins;
 
 use DateTimeImmutable;
 use PHPUnit\Framework\TestCase;
-use Phlex\Webhooks\Plugins\NtfyPlugin;
-use Phlex\Webhooks\WebhookEvent;
+use Phlix\Webhooks\Plugins\NtfyPlugin;
+use Phlix\Webhooks\WebhookEvent;
 
 class NtfyPluginTest extends TestCase
 {

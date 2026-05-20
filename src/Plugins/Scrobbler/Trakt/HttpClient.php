@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 use Psr\Log\NullLogger;
 
 /**
  * HTTP client implementation for Trakt API requests.
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 class HttpClient implements HttpClientInterface
@@ -60,7 +60,7 @@ class HttpClient implements HttpClientInterface
         $ch = curl_init();
 
         $requestHeaders = [
-            'User-Agent: PhlexMediaServer/1.0',
+            'User-Agent: PhlixMediaServer/1.0',
             'Content-Type: application/json',
             'Accept: application/json',
         ];

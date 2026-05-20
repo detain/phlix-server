@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Markers\ChapterMarker;
-use Phlex\Media\Markers\IntroMarker;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\MarkerSet;
-use Phlex\Media\Markers\OutroMarker;
-use Phlex\Media\Markers\SkipButtonSpec;
-use Phlex\Server\Http\Controllers\SessionController;
-use Phlex\Server\Http\Request;
-use Phlex\Session\PlaybackController;
-use Phlex\Session\SessionManager;
+use Phlix\Media\Markers\ChapterMarker;
+use Phlix\Media\Markers\IntroMarker;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerSet;
+use Phlix\Media\Markers\OutroMarker;
+use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Server\Http\Controllers\SessionController;
+use Phlix\Server\Http\Request;
+use Phlix\Session\PlaybackController;
+use Phlix\Session\SessionManager;
 
 /**
  * Tests for SessionController marker handling via getProgress()

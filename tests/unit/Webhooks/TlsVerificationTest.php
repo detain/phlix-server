@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Webhooks;
+namespace Phlix\Tests\Unit\Webhooks;
 
-use Phlex\Webhooks\Plugins\AbstractNotificationPlugin;
-use Phlex\Webhooks\Plugins\ApprisePlugin;
-use Phlex\Webhooks\Plugins\DiscordPlugin;
-use Phlex\Webhooks\Plugins\MqttPlugin;
-use Phlex\Webhooks\Plugins\NtfyPlugin;
-use Phlex\Webhooks\Plugins\PushoverPlugin;
-use Phlex\Webhooks\Plugins\SlackPlugin;
-use Phlex\Webhooks\Plugins\TelegramPlugin;
-use Phlex\Webhooks\WebhookEvent;
-use Phlex\Webhooks\WebhookDispatcher;
+use Phlix\Webhooks\Plugins\AbstractNotificationPlugin;
+use Phlix\Webhooks\Plugins\ApprisePlugin;
+use Phlix\Webhooks\Plugins\DiscordPlugin;
+use Phlix\Webhooks\Plugins\MqttPlugin;
+use Phlix\Webhooks\Plugins\NtfyPlugin;
+use Phlix\Webhooks\Plugins\PushoverPlugin;
+use Phlix\Webhooks\Plugins\SlackPlugin;
+use Phlix\Webhooks\Plugins\TelegramPlugin;
+use Phlix\Webhooks\WebhookEvent;
+use Phlix\Webhooks\WebhookDispatcher;
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
@@ -22,7 +22,7 @@ use Workerman\MySQL\Connection;
  * Verifies that the webhook dispatcher and every notification plugin
  * build outbound stream contexts with TLS peer verification enabled.
  *
- * Without this, a MITM on the path between Phlex and Discord / Slack /
+ * Without this, a MITM on the path between Phlix and Discord / Slack /
  * Telegram / etc. could tamper with notification payloads in flight or
  * forge responses. See post-O.7 wave 1 security audit, findings L.1 + L.2.
  */
@@ -46,9 +46,9 @@ final class TlsVerificationTest extends TestCase
         $db = $this->createMock(Connection::class);
         $dispatcher = new WebhookDispatcher($db);
 
-        $ssl = $dispatcher->buildSslContextOptions(['ca_bundle' => '/etc/phlex/private-ca.crt']);
+        $ssl = $dispatcher->buildSslContextOptions(['ca_bundle' => '/etc/phlix/private-ca.crt']);
 
-        self::assertSame('/etc/phlex/private-ca.crt', $ssl['cafile']);
+        self::assertSame('/etc/phlix/private-ca.crt', $ssl['cafile']);
     }
 
     /**
@@ -93,9 +93,9 @@ final class TlsVerificationTest extends TestCase
 
         $method = new ReflectionMethod($plugin, 'buildSslContextOptions');
         $method->setAccessible(true);
-        $ssl = $method->invoke($plugin, ['ca_bundle' => '/etc/phlex/private-ca.crt']);
+        $ssl = $method->invoke($plugin, ['ca_bundle' => '/etc/phlix/private-ca.crt']);
 
-        self::assertSame('/etc/phlex/private-ca.crt', $ssl['cafile']);
+        self::assertSame('/etc/phlix/private-ca.crt', $ssl['cafile']);
     }
 
     public function test_abstract_notification_default_ca_bundle_constant(): void

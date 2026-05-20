@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\Tests\Unit\LiveTv\Tuners\HdHomeRun;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
 
 class HdHomeRunDiscoveryTest extends TestCase
 {

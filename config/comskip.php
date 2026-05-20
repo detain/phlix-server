@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Comskip post-processing configuration.
  *
  * Comskip is a third-party commercial detection tool. When installed on the
- * system, Phlex can automatically run it after Live TV recordings complete
+ * system, Phlix can automatically run it after Live TV recordings complete
  * to detect and store commercial break chapters.
  *
  * @since 0.12.0

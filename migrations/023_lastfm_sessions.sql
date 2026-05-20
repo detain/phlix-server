@@ -1,6 +1,6 @@
 -- Migration: 023_lastfm_sessions.sql
 -- Step G.3 (post-O.7 wave 4): per-user Last.fm session-key store.
--- Each row ties one Phlex user to one Last.fm session_key obtained
+-- Each row ties one Phlix user to one Last.fm session_key obtained
 -- via the auth.getSession handshake. Session keys do not expire
 -- unless the user revokes them in their Last.fm settings.
 

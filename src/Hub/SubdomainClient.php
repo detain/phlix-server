@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 
 /**
  * Client for managing server subdomain allocation with the hub.
@@ -12,7 +12,7 @@ use Phlex\Common\Logger\StructuredLogger;
  * Handles claiming a subdomain from the hub after enrollment and
  * storing the subdomain/TLS configuration locally.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 class SubdomainClient

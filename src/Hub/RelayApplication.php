@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Workerman\Worker;
 
 /**
@@ -13,7 +13,7 @@ use Workerman\Worker;
  * This worker runs alongside the main HTTP server worker and is
  * responsible for maintaining the persistent WSS tunnel to the hub.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class RelayApplication
@@ -58,7 +58,7 @@ final class RelayApplication
         }
 
         $this->worker = new Worker('text://0.0.0.0:0');
-        $this->worker->name = 'phlex-relay-tunnel';
+        $this->worker->name = 'phlix-relay-tunnel';
         $this->worker->count = 1;
         $this->worker->onWorkerStart = function (): void {
             $this->logger->info('RelayApplication worker started');

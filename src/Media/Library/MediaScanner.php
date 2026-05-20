@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
-use Phlex\Shared\Events\Library\LibraryScanCompleted;
-use Phlex\Shared\Events\Library\LibraryScanStarted;
-use Phlex\Shared\Events\Library\MediaItemAdded;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Media\Extras\TrailerFinder;
+use Phlix\Shared\Events\Library\LibraryScanCompleted;
+use Phlix\Shared\Events\Library\LibraryScanStarted;
+use Phlix\Shared\Events\Library\MediaItemAdded;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Extras\TrailerFinder;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
@@ -22,7 +22,7 @@ use SplFileInfo;
  * and creates media items in the repository. It handles deduplication by checking
  * if files have already been scanned.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Filesystem scanner for discovering and indexing media files
  * @see ItemRepository For media item persistence
@@ -88,7 +88,7 @@ class MediaScanner
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_media_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_media_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $config = [

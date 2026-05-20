@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Events;
+namespace Phlix\Common\Events;
 
 use Monolog\Level;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Log\AbstractLogger;
 use Psr\Log\LogLevel;
 use Stringable;
 
 /**
- * Adapts a Phlex {@see StructuredLogger} into a PSR-3
+ * Adapts a Phlix {@see StructuredLogger} into a PSR-3
  * {@see \Psr\Log\LoggerInterface}.
  *
- * The Phlex StructuredLogger wraps Monolog but does not directly
+ * The Phlix StructuredLogger wraps Monolog but does not directly
  * implement PSR-3 (its `log()` method takes a Monolog {@see Level}
  * rather than the PSR-3 string level). Tukio's
  * {@see \Crell\Tukio\DebugEventDispatcher} requires PSR-3, so this
@@ -23,13 +23,13 @@ use Stringable;
  * @internal Used only by {@see EventDispatcherFactory} to surface the
  *           events log channel as a PSR-3 logger.
  *
- * @package Phlex\Common\Events
+ * @package Phlix\Common\Events
  * @since 0.10.0
  */
 final class StructuredLoggerPsrAdapter extends AbstractLogger
 {
     /**
-     * @param StructuredLogger $delegate The underlying Phlex structured
+     * @param StructuredLogger $delegate The underlying Phlix structured
      *                                   logger that records will be
      *                                   forwarded to.
      */

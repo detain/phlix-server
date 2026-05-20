@@ -1,12 +1,12 @@
-# Phlex Server Docker Images
+# Phlix Server Docker Images
 
-This directory contains the three Dockerfile variants Phlex ships:
+This directory contains the three Dockerfile variants Phlix ships:
 
 | Variant | Base image | Purpose | PHP path layout |
 |---|---|---|---|
-| `Dockerfile` | `php:8.3-fpm-alpine` | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlex.ini` (Alpine canonical) |
-| `Dockerfile.nvidia` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/fpm/conf.d/99-phlex.ini` + symlink to Alpine path |
-| `Dockerfile.intel` | `ubuntu:22.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/fpm/conf.d/99-phlex.ini` + symlink to Alpine path |
+| `Dockerfile` | `php:8.3-fpm-alpine` | Default, software transcoding only | `/usr/local/etc/php/conf.d/zz-phlix.ini` (Alpine canonical) |
+| `Dockerfile.nvidia` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
+| `Dockerfile.intel` | `ubuntu:22.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
 
 ## Why the path layouts differ
 
@@ -26,7 +26,7 @@ To keep operator-facing paths consistent across all three variants, the HW-accel
 images symlink the Alpine-canonical path to their Debian-layout file:
 
 ```dockerfile
-ln -sf /etc/php/8.3/fpm/conf.d/99-phlex.ini /usr/local/etc/php/conf.d/zz-phlex.ini
+ln -sf /etc/php/8.3/fpm/conf.d/99-phlix.ini /usr/local/etc/php/conf.d/zz-phlix.ini
 ```
 
 This means tooling, documentation, and `docker exec` commands can target a
@@ -49,9 +49,9 @@ installed earlier in the Dockerfile and verified at container start).
 ## Building locally
 
 ```bash
-docker build -f docker/Dockerfile        -t phlex-server:latest .
-docker build -f docker/Dockerfile.nvidia -t phlex-server:nvidia .
-docker build -f docker/Dockerfile.intel  -t phlex-server:intel .
+docker build -f docker/Dockerfile        -t phlix-server:latest .
+docker build -f docker/Dockerfile.nvidia -t phlix-server:nvidia .
+docker build -f docker/Dockerfile.intel  -t phlix-server:intel .
 ```
 
 CI builds all three from `.github/workflows/docker.yml`.

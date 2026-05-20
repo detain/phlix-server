@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Admin;
+namespace Phlix\Tests\Unit\Admin;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Admin\DashboardService;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Streaming\StreamManager;
-use Phlex\Media\Streaming\StreamState;
-use Phlex\Session\SessionManager;
-use Phlex\Stats\StatsCollector;
+use Phlix\Admin\DashboardService;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Streaming\StreamManager;
+use Phlix\Media\Streaming\StreamState;
+use Phlix\Session\SessionManager;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 class DashboardServiceTest extends TestCase

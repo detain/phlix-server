@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Ldap;
+namespace Phlix\Plugins\Ldap;
 
-use Phlex\Shared\Auth\UserInfo as SharedUserInfo;
+use Phlix\Shared\Auth\UserInfo as SharedUserInfo;
 
 final class LdapUserInfo
 {

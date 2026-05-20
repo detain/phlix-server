@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Controllers;
+namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Media\Metadata\OpdsFeedBuilder;
-use Phlex\Server\Http\Controllers\BookController;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Metadata\OpdsFeedBuilder;
+use Phlix\Server\Http\Controllers\BookController;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * Unit tests for BookController.
  *
- * @covers \Phlex\Server\Http\Controllers\BookController
+ * @covers \Phlix\Server\Http\Controllers\BookController
  * @since 0.17.0
  */
 class BookControllerTest extends TestCase
@@ -152,7 +152,7 @@ class BookControllerTest extends TestCase
      */
     public function testDownloadBookReturnsFile(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         $bookPath = $tempDir . '/test.epub';

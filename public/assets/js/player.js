@@ -1,8 +1,8 @@
 /**
- * Phlex Media Server - Video Player
+ * Phlix Media Server - Video Player
  */
 
-class PhlexPlayer {
+class PhlixPlayer {
     constructor(videoElement) {
         this.video = videoElement;
         this.overlay = document.getElementById('player-overlay');
@@ -199,7 +199,7 @@ class PhlexPlayer {
 document.addEventListener('DOMContentLoaded', () => {
     const videoElement = document.getElementById('video-player');
     if (videoElement) {
-        const player = new PhlexPlayer(videoElement);
+        const player = new PhlixPlayer(videoElement);
 
         // Report progress periodically
         setInterval(() => {

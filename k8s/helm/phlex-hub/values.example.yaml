@@ -1,11 +1,11 @@
-# Annotated example values for a production phlex-hub deployment.
+# Annotated example values for a production phlix-hub deployment.
 # Copy to values-prod.yaml and customize, then:
-#   helm install phlex-hub k8s/helm/phlex-hub -f values-prod.yaml -n phlex-hub --create-namespace
+#   helm install phlix-hub k8s/helm/phlix-hub -f values-prod.yaml -n phlix-hub --create-namespace
 
 replicaCount: 3
 
 image:
-  repository: ghcr.io/detain/phlex-hub
+  repository: ghcr.io/detain/phlix-hub
   tag: "v1.0.0"
   pullPolicy: IfNotPresent
 
@@ -27,7 +27,7 @@ ingress:
         - path: /
           pathType: Prefix
   tls:
-    - secretName: phlex-hub-tls
+    - secretName: phlix-hub-tls
       hosts:
         - hub.example.com
 
@@ -51,10 +51,10 @@ mysql:
   enabled: false
 
 config:
-  database_host: "phlex-hub-mysql.db.svc.cluster.local"
+  database_host: "phlix-hub-mysql.db.svc.cluster.local"
   database_port: 3306
-  database_name: phlex_hub
-  database_user: phlex_hub
+  database_name: phlix_hub
+  database_user: phlix_hub
   database_password: "CHANGE_ME"
   secret_key: "openssl rand -hex 64"
   log_level: info

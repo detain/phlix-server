@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv;
+namespace Phlix\LiveTv;
 
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\Media\Markers\ChapterMarker;
 
 /**
  * Parser for Comskip EDL (Edit Decision List) files.

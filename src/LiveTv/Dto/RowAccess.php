@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Dto;
+namespace Phlix\LiveTv\Dto;
 
 /**
  * Static helpers for safely reading typed values out of an `array<string,

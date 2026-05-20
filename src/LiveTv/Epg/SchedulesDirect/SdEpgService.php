@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Epg\SchedulesDirect;
+namespace Phlix\LiveTv\Epg\SchedulesDirect;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\LiveTv\GuideManager;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\LiveTv\GuideManager;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -28,7 +28,7 @@ class SdEpgService
     /** @var SdProgramMapper SD program mapper */
     private SdProgramMapper $mapper;
 
-    /** @var GuideManager Phlex guide manager */
+    /** @var GuideManager Phlix guide manager */
     private GuideManager $guideManager;
 
     /** @var StructuredLogger|null Optional logger */
@@ -40,7 +40,7 @@ class SdEpgService
      * @param SdApiClient $client SD API client
      * @param SdLineupHandler $lineupHandler SD lineup/channel handler
      * @param SdProgramMapper $mapper SD program-to-guide mapper
-     * @param GuideManager $guideManager Phlex guide manager
+     * @param GuideManager $guideManager Phlix guide manager
      * @param StructuredLogger|LoggerInterface|null $logger Optional logger
      */
     public function __construct(

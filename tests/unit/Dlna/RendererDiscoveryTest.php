@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Ssdp\SsdpDevice;
-use Phlex\Discovery\Ssdp\SsdpDiscovery;
-use Phlex\Dlna\RendererDiscovery;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Ssdp\SsdpDevice;
+use Phlix\Discovery\Ssdp\SsdpDiscovery;
+use Phlix\Dlna\RendererDiscovery;
 
 class RendererDiscoveryTest extends TestCase
 {

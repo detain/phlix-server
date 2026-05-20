@@ -4,14 +4,14 @@
 declare(strict_types=1);
 
 /**
- * Phlex Streaming Benchmark - Concurrent Streams Test
+ * Phlix Streaming Benchmark - Concurrent Streams Test
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
- * @see https://github.com/detain/phlex-server
+ * @see https://github.com/detain/phlix-server
  */
 
-namespace Phlex\Scripts\Bench;
+namespace Phlix\Scripts\Bench;
 
 /**
  * Concurrent Streams Benchmark - Measures max concurrent direct-play streams.
@@ -21,7 +21,7 @@ namespace Phlex\Scripts\Bench;
  * the streaming endpoint and measures success rate, response times, and
  * resource utilization.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @see /api/v1/media/{id}/stream endpoint
  *

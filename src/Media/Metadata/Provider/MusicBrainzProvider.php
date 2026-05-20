@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata\Provider;
+namespace Phlix\Media\Metadata\Provider;
 
-use Phlex\Media\Metadata\MetadataHttpClient;
-use Phlex\Media\Metadata\MetadataProviderInterface;
+use Phlix\Media\Metadata\MetadataHttpClient;
+use Phlix\Media\Metadata\MetadataProviderInterface;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -15,7 +15,7 @@ use Psr\Log\LoggerInterface;
  * as retrieving detailed information about each. MusicBrainz is a public API
  * that requires a proper User-Agent header and enforces rate limiting (1 req/sec).
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @since 0.13.0
  * @see https://musicbrainz.org/doc/Development/XML_Web_Service/Version_2
@@ -40,12 +40,12 @@ class MusicBrainzProvider implements MetadataProviderInterface
      * Constructor for MusicBrainzProvider.
      *
      * @param MetadataHttpClient $http HTTP client for API requests
-     * @param string $userAgent User-agent string (e.g., 'Phlex/1.0 (https://phlex.media)')
+     * @param string $userAgent User-agent string (e.g., 'Phlix/1.0 (https://phlix.media)')
      * @param LoggerInterface|null $logger Optional logger instance
      */
     public function __construct(
         MetadataHttpClient $http,
-        string $userAgent = 'Phlex/1.0 (https://phlex.media)',
+        string $userAgent = 'Phlix/1.0 (https://phlix.media)',
         ?LoggerInterface $logger = null
     ) {
         $this->http = $http;

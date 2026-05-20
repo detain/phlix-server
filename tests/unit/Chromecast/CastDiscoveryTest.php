@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Chromecast;
+namespace Phlix\Tests\Unit\Chromecast;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Chromecast\CastDevice;
-use Phlex\Chromecast\CastDiscovery;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
+use Phlix\Chromecast\CastDevice;
+use Phlix\Chromecast\CastDiscovery;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
 
 class CastDiscoveryTest extends TestCase
 {

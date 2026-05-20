@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Roku;
+namespace Phlix\Roku;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
 
 /**
  * Discovers Roku devices on the network via mDNS.

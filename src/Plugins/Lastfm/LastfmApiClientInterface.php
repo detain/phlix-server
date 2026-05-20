@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 /**
  * Interface for the Last.fm API client.
@@ -10,7 +10,7 @@ namespace Phlex\Plugins\Lastfm;
  * Exists to allow test doubles and alternative implementations
  * without coupling to the concrete {@see LastfmApiClient}.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 interface LastfmApiClientInterface

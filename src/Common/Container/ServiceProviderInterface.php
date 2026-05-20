@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container;
+namespace Phlix\Common\Container;
 
 use DI\ContainerBuilder;
 
@@ -16,12 +16,12 @@ use DI\ContainerBuilder;
  * register() call receives the builder, and the provider mutates it by
  * adding definitions.
  *
- * @internal Phlex-internal API. Third-party plugins should depend on
+ * @internal Phlix-internal API. Third-party plugins should depend on
  *           {@see \Psr\Container\ContainerInterface} instead. The list
  *           of providers wired by {@see ContainerFactory} may change
  *           without notice.
  *
- * @package Phlex\Common\Container
+ * @package Phlix\Common\Container
  * @since 0.10.0
  */
 interface ServiceProviderInterface

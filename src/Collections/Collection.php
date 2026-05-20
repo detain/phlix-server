@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Collections;
+namespace Phlix\Collections;
 
 /**
  * Readonly entity representing a media collection.

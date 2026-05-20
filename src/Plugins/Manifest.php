@@ -2,39 +2,39 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins;
+namespace Phlix\Plugins;
 
-use Phlex\Plugins\Exception\InvalidManifestException;
-use Phlex\Plugins\Manifest\ManifestSchema;
-use Phlex\Shared\Plugin\ManifestValidationError;
+use Phlix\Plugins\Exception\InvalidManifestException;
+use Phlix\Plugins\Manifest\ManifestSchema;
+use Phlix\Shared\Plugin\ManifestValidationError;
 use RuntimeException;
 
 /**
  * Backwards-compatibility wrapper preserving the legacy
- * `Phlex\Plugins\Manifest` FQCN for one release.
+ * `Phlix\Plugins\Manifest` FQCN for one release.
  *
  * The DTO surface (readonly properties, `fromJson`, `fromArray`,
  * `toArray`, `manifestType`) has moved to
- * {@see \Phlex\Shared\Plugin\Manifest} in `detain/phlex-shared`. The
+ * {@see \Phlix\Shared\Plugin\Manifest} in `detain/phlix-shared`. The
  * `validate()` method has been extracted to
- * {@see \Phlex\Plugins\Manifest\ManifestSchema} because it depends on the
- * JSON Schema bundled with `phlex-server`.
+ * {@see \Phlix\Plugins\Manifest\ManifestSchema} because it depends on the
+ * JSON Schema bundled with `phlix-server`.
  *
  * Existing consumers that called `$manifest->validate()` still work via
  * this wrapper; new code should prefer the explicit collaborator:
  *
  *     $errors = (new ManifestSchema())->validate($manifest);
  *
- * @deprecated since 0.11.0 — use \Phlex\Shared\Plugin\Manifest for the
- *             value object and \Phlex\Plugins\Manifest\ManifestSchema
+ * @deprecated since 0.11.0 — use \Phlix\Shared\Plugin\Manifest for the
+ *             value object and \Phlix\Plugins\Manifest\ManifestSchema
  *             for validation. This wrapper will be removed in 0.12.0.
- * @see \Phlex\Shared\Plugin\Manifest
- * @see \Phlex\Plugins\Manifest\ManifestSchema
+ * @see \Phlix\Shared\Plugin\Manifest
+ * @see \Phlix\Plugins\Manifest\ManifestSchema
  *
- * @package Phlex\Plugins
+ * @package Phlix\Plugins
  * @since 0.10.0
  */
-final class Manifest extends \Phlex\Shared\Plugin\Manifest
+final class Manifest extends \Phlix\Shared\Plugin\Manifest
 {
     /**
      * Parse a JSON manifest, translating the shared package's

@@ -1,5 +1,5 @@
 /**
- * Phlex Media Server - Main Application
+ * Phlix Media Server - Main Application
  */
 
 // Initialize application when DOM is ready
@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function initializeApp() {
     // Initialize any global app state
-    console.log('Phlex Media Server initialized');
+    console.log('Phlix Media Server initialized');
 
     // Initialize tooltips
     initTooltips();
@@ -192,7 +192,7 @@ function throttle(func, limit) {
 }
 
 // Export for use in other scripts
-window.PhlexApp = {
+window.PhlixApp = {
     showToast,
     showSuccess,
     showError,

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Metadata;
+namespace Phlix\Media\Metadata;
 
 use SimpleXMLElement;
 
@@ -36,7 +36,7 @@ use SimpleXMLElement;
  * - posters: poster.jpg, cover.jpg, folder.jpg, movie.jpg, show.jpg, tvshow.jpg
  * - backdrops: fanart.jpg, backdrop.jpg, background.jpg, art.jpg
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Local NFO file parser for XBMC/Kodi format metadata
  * @see MetadataProviderInterface For provider contract

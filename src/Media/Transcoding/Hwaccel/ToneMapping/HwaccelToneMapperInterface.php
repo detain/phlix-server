@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\ToneMapping;
+namespace Phlix\Media\Transcoding\Hwaccel\ToneMapping;
 
 /**
  * Interface for hardware-specific tone mappers.

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Scrobbler\Trakt;
+namespace Phlix\Plugins\Scrobbler\Trakt;
 
 /**
  * Per-user settings for the Trakt scrobbler plugin.
@@ -11,7 +11,7 @@ namespace Phlex\Plugins\Scrobbler\Trakt;
  * Settings are serialized to JSON and stored in the plugins.settings_json
  * column, loaded via Plugin::configure() on enable.
  *
- * @package Phlex\Plugins\Scrobbler\Trakt
+ * @package Phlix\Plugins\Scrobbler\Trakt
  * @since 0.14.0
  */
 final class TraktSettings
@@ -21,7 +21,7 @@ final class TraktSettings
      * @param string|null $refreshToken OAuth refresh token (null when not authenticated)
      * @param int|null $expiresAt Unix timestamp when access token expires (null when not set)
      * @param bool $syncEnabled Whether two-way history sync is enabled
-     * @param int $syncIntervalMinutes How often to run Trakt→Phlex sync (in minutes)
+     * @param int $syncIntervalMinutes How often to run Trakt→Phlix sync (in minutes)
      * @param bool $scrobbleEnabled Whether scrobbling on playback events is enabled
      * @param string $username Trakt username for attribution
      */

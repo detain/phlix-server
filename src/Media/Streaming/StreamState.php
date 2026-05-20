@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Streaming;
+namespace Phlix\Media\Streaming;
 
 /**
  * Stream State - Tracks playback state for a streaming session.
@@ -11,7 +11,7 @@ namespace Phlex\Media\Streaming;
  * playback position, status, and streaming method details. Provides
  * convenience methods for time conversion and progress calculation.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Playback state container with position tracking and time conversion
  * @see StreamManager For stream lifecycle management

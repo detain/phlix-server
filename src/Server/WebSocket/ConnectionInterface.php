@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\WebSocket;
+namespace Phlix\Server\WebSocket;
 
 /**
  * Interface for WebSocket connections.
@@ -10,7 +10,7 @@ namespace Phlex\Server\WebSocket;
  * This interface defines the contract that all WebSocket connection
  * implementations must follow, enabling testing and flexibility.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @description Contract for WebSocket connection implementations.
  * @see Connection For the default implementation

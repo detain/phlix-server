@@ -10,7 +10,7 @@ declare(strict_types=1);
  * for a prolonged period (default 30 minutes) to detect memory leaks,
  * CPU creep, and other degradation over time.
  *
- * @author Phlex Media Server Team
+ * @author Phlix Media Server Team
  * @version 1.0.0
  * @see /api/v1/media/{id}/stream endpoint
  *
@@ -23,7 +23,7 @@ declare(strict_types=1);
  * v1.0 Pass Criterion: 50+ concurrent 1080p direct-play for 30 minutes
  */
 
-namespace Phlex\Scripts\Bench;
+namespace Phlix\Scripts\Bench;
 
 /**
  * Displays usage help for the benchmark script.

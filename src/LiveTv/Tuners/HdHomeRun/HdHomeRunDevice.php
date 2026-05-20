@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners\HdHomeRun;
+namespace Phlix\LiveTv\Tuners\HdHomeRun;
 
 /**
  * Immutable descriptor for a discovered HDHomeRun device.

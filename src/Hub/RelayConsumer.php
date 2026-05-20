@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
-use Phlex\Server\Http\Router;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Router;
 use Psr\Http\Message\RequestInterface;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
@@ -26,7 +26,7 @@ use Workerman\Timer;
  * 4. Sends the response back over the tunnel
  * 5. Auto-reconnects on connection drop
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.12.0
  */
 final class RelayConsumer

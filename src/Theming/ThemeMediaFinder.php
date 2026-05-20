@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Theming;
+namespace Phlix\Theming;
 
-use Phlex\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
  * ThemeMediaFinder scans the filesystem for library theme media files.

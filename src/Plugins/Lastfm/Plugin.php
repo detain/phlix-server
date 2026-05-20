@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Lastfm;
+namespace Phlix\Plugins\Lastfm;
 
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Plugins\Contract\LifecycleInterface;
-use Phlex\Session\SessionManager;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Plugins\Contract\LifecycleInterface;
+use Phlix\Session\SessionManager;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
 /**
@@ -25,7 +25,7 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
  *  - {@see LifecycleInterface} — plugin lifecycle (onEnable / onDisable).
  *  - {@see EventSubscriberInterface} — PSR-14 event subscriptions.
  *
- * @package Phlex\Plugins\Lastfm
+ * @package Phlix\Plugins\Lastfm
  * @since 0.15.0
  */
 final class Plugin implements LifecycleInterface, EventSubscriberInterface

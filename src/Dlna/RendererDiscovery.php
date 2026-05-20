@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Dlna;
+namespace Phlix\Dlna;
 
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Discovery\Ssdp\SsdpDiscovery;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Discovery\Ssdp\SsdpDiscovery;
 
 /**
  * Discovers DLNA MediaRenderer devices on the network via SSDP.
@@ -46,7 +46,7 @@ class RendererDiscovery
      */
     private function createDefaultLogger(): StructuredLogger
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_dlna_renderer_discovery_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_dlna_renderer_discovery_' . uniqid();
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }

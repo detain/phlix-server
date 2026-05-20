@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping\Vendor;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping\Vendor;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VaapiToneMapper;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\Vendor\VaapiToneMapper;
 
 class VaapiToneMapperTest extends TestCase
 {

@@ -16,7 +16,7 @@ return [
     /**
      * Local directory where backup archives are stored.
      */
-    'local_path' => '/var/phlex/backups',
+    'local_path' => '/var/phlix/backups',
 
     /**
      * Maximum number of backups to retain.

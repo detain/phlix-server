@@ -1,10 +1,10 @@
 <?php
 
-namespace Phlex\Tests\Unit\Media\Library;
+namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Library\PhotoScanner;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\PhotoScanner;
 use Workerman\MySQL\Connection;
 
 /**
@@ -174,7 +174,7 @@ class PhotoScannerTest extends TestCase
     public function testScanPhotoLibraryYieldsItems(): void
     {
         // Create temp directory with test photos
-        $tempDir = sys_get_temp_dir() . '/phlex_test_photos_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_photos_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create a minimal JPEG file
@@ -210,7 +210,7 @@ class PhotoScannerTest extends TestCase
 
     public function testScanPhotoLibrarySkipsHiddenFiles(): void
     {
-        $tempDir = sys_get_temp_dir() . '/phlex_test_photos_' . uniqid();
+        $tempDir = sys_get_temp_dir() . '/phlix_test_photos_' . uniqid();
         mkdir($tempDir, 0755, true);
 
         // Create visible and hidden files

@@ -60,7 +60,7 @@
         try {
             const response = await fetch('/api/v1/me/webauthn/credentials', {
                 headers: {
-                    'Authorization': 'Bearer ' + (window.PhlexApp ? window.PhlexApp.getToken() : '')
+                    'Authorization': 'Bearer ' + (window.PhlixApp ? window.PhlixApp.getToken() : '')
                 }
             });
 
@@ -118,7 +118,7 @@
             const response = await fetch('/api/v1/me/webauthn/credentials/' + encodeURIComponent(credentialId), {
                 method: 'DELETE',
                 headers: {
-                    'Authorization': 'Bearer ' + (window.PhlexApp ? window.PhlexApp.getToken() : '')
+                    'Authorization': 'Bearer ' + (window.PhlixApp ? window.PhlixApp.getToken() : '')
                 }
             });
 
@@ -142,7 +142,7 @@
             const response = await fetch('/api/v1/auth/webauthn/register/options', {
                 method: 'POST',
                 headers: {
-                    'Authorization': 'Bearer ' + (window.PhlexApp ? window.PhlexApp.getToken() : ''),
+                    'Authorization': 'Bearer ' + (window.PhlixApp ? window.PhlixApp.getToken() : ''),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({})
@@ -171,7 +171,7 @@
             const verifyResponse = await fetch('/api/v1/auth/webauthn/register/verify', {
                 method: 'POST',
                 headers: {
-                    'Authorization': 'Bearer ' + (window.PhlexApp ? window.PhlexApp.getToken() : ''),
+                    'Authorization': 'Bearer ' + (window.PhlixApp ? window.PhlixApp.getToken() : ''),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({

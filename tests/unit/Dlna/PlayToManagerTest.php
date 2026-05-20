@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Dlna;
+namespace Phlix\Tests\Unit\Dlna;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Dlna\PlayToManager;
-use Phlex\Dlna\RendererControlClient;
-use Phlex\Dlna\RendererDiscovery;
-use Phlex\Dlna\PlayToSession;
-use Phlex\Session\PlaybackController;
-use Phlex\Session\SessionManager;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Dlna\PlayToManager;
+use Phlix\Dlna\RendererControlClient;
+use Phlix\Dlna\RendererDiscovery;
+use Phlix\Dlna\PlayToSession;
+use Phlix\Session\PlaybackController;
+use Phlix\Session\SessionManager;
 
 class PlayToManagerTest extends TestCase
 {

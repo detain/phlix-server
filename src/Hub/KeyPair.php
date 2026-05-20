@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 use InvalidArgumentException;
 
@@ -13,7 +13,7 @@ use InvalidArgumentException;
  * The secret key is 64 bytes (libsodium expanded format) and the public
  * key is 32 bytes.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 final class KeyPair

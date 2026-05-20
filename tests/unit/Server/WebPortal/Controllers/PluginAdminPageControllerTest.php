@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\WebPortal\Controllers;
+namespace Phlix\Tests\Unit\Server\WebPortal\Controllers;
 
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
-use Phlex\Plugins\InstalledPlugin;
-use Phlex\Plugins\Manifest;
-use Phlex\Plugins\PluginLoader;
-use Phlex\Server\Http\Request;
-use Phlex\Server\WebPortal\Controllers\PluginAdminPageController;
+use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginLoader;
+use Phlix\Server\Http\Request;
+use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,7 +22,7 @@ use PHPUnit\Framework\TestCase;
  * unavailable. The remaining tests still exercise the loader-querying
  * logic and the "plugin not found" branch.
  *
- * @covers \Phlex\Server\WebPortal\Controllers\PluginAdminPageController
+ * @covers \Phlix\Server\WebPortal\Controllers\PluginAdminPageController
  */
 final class PluginAdminPageControllerTest extends TestCase
 {
@@ -74,7 +74,7 @@ final class PluginAdminPageControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
-        $this->assertStringContainsString('phlex-plugin-demo', $response->body);
+        $this->assertStringContainsString('phlix-plugin-demo', $response->body);
         // Ensure HTML escaping was applied (no raw template syntax leaked).
         $this->assertStringNotContainsString('{$plugin', $response->body);
     }
@@ -101,10 +101,10 @@ final class PluginAdminPageControllerTest extends TestCase
 
         $controller = new PluginAdminPageController($loader, $this->realTemplateDir());
 
-        $response = $controller->detail($this->makeRequest(), ['name' => 'phlex-plugin-demo']);
+        $response = $controller->detail($this->makeRequest(), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(200, $response->statusCode);
-        $this->assertStringContainsString('phlex-plugin-demo', $response->body);
+        $this->assertStringContainsString('phlix-plugin-demo', $response->body);
     }
 
     private function fixturePlugin(): InstalledPlugin
@@ -112,9 +112,9 @@ final class PluginAdminPageControllerTest extends TestCase
         return new InstalledPlugin(
             id: 'id-1',
             manifest: Manifest::fromArray([
-                'name' => 'phlex-plugin-demo',
+                'name' => 'phlix-plugin-demo',
                 'version' => '1.0.0',
-                'phlex_min_server_version' => '0.10.0',
+                'phlix_min_server_version' => '0.10.0',
                 'type' => 'metadata-provider',
                 'entry' => 'Demo\\Plugin',
                 'settings' => [
@@ -125,7 +125,7 @@ final class PluginAdminPageControllerTest extends TestCase
             enabled: true,
             installedAt: new DateTimeImmutable('2024-01-01 00:00:00'),
             settings: ['api_key' => 'topsecret', 'verbose' => false],
-            directory: '/tmp/phlex-plugin-demo',
+            directory: '/tmp/phlix-plugin-demo',
         );
     }
 
@@ -153,7 +153,7 @@ final class PluginAdminPageControllerTest extends TestCase
      */
     private function makeTemplateDir(): string
     {
-        return sys_get_temp_dir() . '/phlex_admin_no_smarty_' . uniqid('', true);
+        return sys_get_temp_dir() . '/phlix_admin_no_smarty_' . uniqid('', true);
     }
 
     /**

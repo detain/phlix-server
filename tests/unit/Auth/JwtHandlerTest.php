@@ -1,9 +1,9 @@
 <?php
 
-namespace Phlex\Tests\Unit\Auth;
+namespace Phlix\Tests\Unit\Auth;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Auth\JwtHandler;
+use Phlix\Auth\JwtHandler;
 
 class JwtHandlerTest extends TestCase
 {

@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\LiveTv\Recording;
+namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\ComskipEdlParser;
-use Phlex\LiveTv\ComskipRunner;
-use Phlex\LiveTv\Recording\ComskipIntegration;
-use Phlex\Media\Markers\ChapterMarker;
+use Phlix\LiveTv\ComskipEdlParser;
+use Phlix\LiveTv\ComskipRunner;
+use Phlix\LiveTv\Recording\ComskipIntegration;
+use Phlix\Media\Markers\ChapterMarker;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 

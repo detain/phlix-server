@@ -2,7 +2,7 @@
 
 > **Status:** stub. Step A.5 ships the admin UI on top of the loader,
 > but the canonical trusted-key allowlist lives in
-> `PHLEX_EXPANSION_PLAN.md` §10 risk #4 and is finalised in Phase C
+> `PHLIX_EXPANSION_PLAN.md` §10 risk #4 and is finalised in Phase C
 > alongside the hub.
 
 ## How the trust model works today
@@ -10,18 +10,18 @@
 1. Plugin authors sign their `plugin.json` by writing a `sha256:<hex>`
    string into the `signature` field. The signing procedure is
    documented in `docs/plugins/developer-guide.md`.
-2. The Phlex server's
-   {@see \Phlex\Plugins\Signature\SignatureVerifier} ships with an
+2. The Phlix server's
+   {@see \Phlix\Plugins\Signature\SignatureVerifier} ships with an
    empty allowlist. Operators populate the list at construction time
    via the container binding in
-   `Phlex\Common\Container\Providers\PluginsProvider` (the
+   `Phlix\Common\Container\Providers\PluginsProvider` (the
    `SignatureVerifier::class` definition).
 3. When a plugin is installed:
    - **Signed + on allowlist** → install proceeds.
    - **Signed + not on allowlist** → install fails fast.
    - **Unsigned, allowlist not enforced** → install proceeds with a
      warning in the `plugins` log channel.
-   - **Unsigned, `PHLEX_PLUGINS_REQUIRE_SIGNATURE=1`** → install fails.
+   - **Unsigned, `PHLIX_PLUGINS_REQUIRE_SIGNATURE=1`** → install fails.
 
 ## Adding your own trusted keys
 
@@ -31,11 +31,11 @@ bootstrap:
 
 ```php
 $builder->addDefinitions([
-    \Phlex\Plugins\Signature\SignatureVerifier::class => DI\factory(
-        static fn (): \Phlex\Plugins\Signature\SignatureVerifier =>
-            new \Phlex\Plugins\Signature\SignatureVerifier(
+    \Phlix\Plugins\Signature\SignatureVerifier::class => DI\factory(
+        static fn (): \Phlix\Plugins\Signature\SignatureVerifier =>
+            new \Phlix\Plugins\Signature\SignatureVerifier(
                 trustedDigests: [
-                    'sha256:abc123…', // phlex-plugin-lastfm@1.0.0
+                    'sha256:abc123…', // phlix-plugin-lastfm@1.0.0
                 ],
                 requireSignature: false,
             ),
@@ -47,20 +47,20 @@ $builder->addDefinitions([
 
 | Plugin                                                                          | Type                | Version | Signature status                  |
 | ------------------------------------------------------------------------------- | ------------------- | ------- | --------------------------------- |
-| [`detain/phlex-plugin-example`](https://github.com/detain/phlex-plugin-example) | `metadata-provider` | `0.1.0` | `unsigned (reference implementation)` |
+| [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example) | `metadata-provider` | `0.1.0` | `unsigned (reference implementation)` |
 
-`phlex-plugin-example` is the hello-world plugin Phlex publishes
+`phlix-plugin-example` is the hello-world plugin Phlix publishes
 alongside the loader as a working template. It deliberately ships
 **unsigned** — its purpose is to be forked and modified, so pinning
 its hash to the trusted-key allowlist would be misleading. Operators
 who want to install it must accept the unsigned-plugin warning logged
-to the `plugins` channel, or set `PHLEX_PLUGINS_REQUIRE_SIGNATURE=0`
+to the `plugins` channel, or set `PHLIX_PLUGINS_REQUIRE_SIGNATURE=0`
 (the default).
 
 ## What ships in Phase C
 
 - A curated allowlist published by the hub, signed with a long-lived
-  Phlex maintainers' key.
+  Phlix maintainers' key.
 - An operator UI under `/admin/plugins/trust` for inspecting,
   pinning, and revoking specific plugin signatures.
 - Automatic pin renewal when a known plugin publishes a new version

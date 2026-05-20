@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins;
+namespace Phlix\Tests\Unit\Plugins;
 
-use Phlex\Shared\Plugin\ManifestType;
+use Phlix\Shared\Plugin\ManifestType;
 use PHPUnit\Framework\TestCase;
 
 /**
- * @covers \Phlex\Shared\Plugin\ManifestType
+ * @covers \Phlix\Shared\Plugin\ManifestType
  */
 final class ManifestTypeTest extends TestCase
 {
     /**
-     * Mirror of the eleven values from PHLEX_EXPANSION_PLAN.md §5. If
+     * Mirror of the eleven values from PHLIX_EXPANSION_PLAN.md §5. If
      * either side drifts this test fails — that drift is intentional
      * friction.
      *

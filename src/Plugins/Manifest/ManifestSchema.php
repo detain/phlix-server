@@ -2,20 +2,20 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Manifest;
+namespace Phlix\Plugins\Manifest;
 
 use JsonSchema\Constraints\Constraint;
 use JsonSchema\Validator;
-use Phlex\Shared\Plugin\Manifest;
-use Phlex\Shared\Plugin\ManifestValidationError;
+use Phlix\Shared\Plugin\Manifest;
+use Phlix\Shared\Plugin\ManifestValidationError;
 use RuntimeException;
 
 /**
  * JSON-Schema validator for a {@see Manifest}.
  *
- * Extracted from the original `Phlex\Plugins\Manifest::validate()`
- * during Step B.3 of `PHLEX_EXPANSION_PLAN.md` so the framework-neutral
- * DTO portion can move to `detain/phlex-shared` while the validator
+ * Extracted from the original `Phlix\Plugins\Manifest::validate()`
+ * during Step B.3 of `PHLIX_EXPANSION_PLAN.md` so the framework-neutral
+ * DTO portion can move to `detain/phlix-shared` while the validator
  * (which depends on `justinrainbow/json-schema` and the bundled schema
  * file at `docs/plugins/manifest.schema.json`) stays here.
  *
@@ -23,7 +23,7 @@ use RuntimeException;
  * {@see self::validate()}; soft rules (`unknown_field`) and JSON Schema
  * results are merged into a single error list.
  *
- * @package Phlex\Plugins\Manifest
+ * @package Phlix\Plugins\Manifest
  * @since 0.11.0
  */
 final class ManifestSchema
@@ -96,7 +96,7 @@ final class ManifestSchema
         $schemaSource = @file_get_contents($schemaPath);
         if ($schemaSource === false) {
             throw new RuntimeException(
-                sprintf('Manifest schema not found at %s — Phlex install is broken.', $schemaPath),
+                sprintf('Manifest schema not found at %s — Phlix install is broken.', $schemaPath),
             );
         }
 

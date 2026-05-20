@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
 use Workerman\MySQL\Connection;
 
 /**
  * Unit tests for {@see LastfmSessionRepository}.
  *
- * @covers \Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository
+ * @covers \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository
  *
- * @package Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 final class LastfmSessionRepositoryTest extends TestCase

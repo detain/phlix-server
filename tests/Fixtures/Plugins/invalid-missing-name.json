@@ -1,6 +1,6 @@
 {
     "version": "1.0.0",
-    "phlex_min_server_version": "0.10.0",
+    "phlix_min_server_version": "0.10.0",
     "type": "scrobbler",
-    "entry": "Phlex\\Plugins\\Lastfm\\Plugin"
+    "entry": "Phlix\\Plugins\\Lastfm\\Plugin"
 }

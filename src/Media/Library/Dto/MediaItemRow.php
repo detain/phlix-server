@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library\Dto;
+namespace Phlix\Media\Library\Dto;
 
 /**
  * Typed value object representing a hydrated row from `media_items`.
@@ -11,7 +11,7 @@ namespace Phlex\Media\Library\Dto;
  * column already JSON-decoded into a typed array, so downstream callers
  * can operate on a known shape rather than mixed.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Strongly-typed media-item row from DB hydration
  */

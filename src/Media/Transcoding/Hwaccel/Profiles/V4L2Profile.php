@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Transcoding\Hwaccel\Profiles;
+namespace Phlix\Media\Transcoding\Hwaccel\Profiles;
 
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 
 /**
  * Video4Linux2 (V4L2) hardware encoder profile.

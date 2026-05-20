@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\WebAuthn;
+namespace Phlix\Auth\WebAuthn;
 
 final class WebAuthnCredential
 {

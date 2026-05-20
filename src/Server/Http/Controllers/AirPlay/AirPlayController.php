@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Server\Http\Controllers\AirPlay;
+namespace Phlix\Server\Http\Controllers\AirPlay;
 
-use Phlex\AirPlay\AirPlayManager;
-use Phlex\Server\Http\Request;
-use Phlex\Server\Http\Response;
+use Phlix\AirPlay\AirPlayManager;
+use Phlix\Server\Http\Request;
+use Phlix\Server\Http\Response;
 
 /**
  * HTTP controller for AirPlay 2 device control.

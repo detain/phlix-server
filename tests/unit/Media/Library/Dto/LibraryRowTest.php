@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Library\Dto;
+namespace Phlix\Tests\Unit\Media\Library\Dto;
 
-use Phlex\Media\Library\Dto\LibraryRow;
+use Phlix\Media\Library\Dto\LibraryRow;
 use PHPUnit\Framework\TestCase;
 
 /**

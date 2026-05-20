@@ -1,15 +1,15 @@
 # Documentation
 
-This directory contains local documentation for Phlex Media Server.
+This directory contains local documentation for Phlix Media Server.
 
-> **Note:** End-user and hub-admin documentation has moved to the dedicated [phlex-docs](https://github.com/detain/phlex-docs) repository.
+> **Note:** End-user and hub-admin documentation has moved to the dedicated [phlix-docs](https://github.com/detain/phlix-docs) repository.
 
 ## Local Documentation
 
 ### Developer Guides
 
 - [Developer Documentation](dev/DEVELOPER.md) — Comprehensive developer guide covering architecture, setup, and conventions
-- [Technical Specification](dev/PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md) — Detailed technical specification document
+- [Technical Specification](dev/PHLIX_MEDIA_SERVER_TECHNICAL_SPEC.md) — Detailed technical specification document
 
 ### Server Internals
 
@@ -48,9 +48,9 @@ This directory contains local documentation for Phlex Media Server.
 
 ## External Documentation
 
-- [Install guide](https://github.com/detain/phlex-docs/blob/master/docs/install/linux.md)
-- [First-run wizard](https://github.com/detain/phlex-docs/blob/master/docs/first-run.md)
-- [Hub Admin docs](https://github.com/detain/phlex-docs/tree/master/docs/hub-admin)
+- [Install guide](https://github.com/detain/phlix-docs/blob/master/docs/install/linux.md)
+- [First-run wizard](https://github.com/detain/phlix-docs/blob/master/docs/first-run.md)
+- [Hub Admin docs](https://github.com/detain/phlix-docs/tree/master/docs/hub-admin)
 
 ## Archived Material
 

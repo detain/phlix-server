@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Signature;
+namespace Phlix\Plugins\Signature;
 
-use Phlex\Plugins\Manifest;
+use Phlix\Plugins\Manifest;
 
 /**
  * Verifies the optional `signature` field of a {@see Manifest} against
  * a trusted-key allowlist AND against the on-disk content of the
  * staged plugin.
  *
- * **Scope for A.4 (per `PHLEX_EXPANSION_PLAN.md` §10 risk #4):**
+ * **Scope for A.4 (per `PHLIX_EXPANSION_PLAN.md` §10 risk #4):**
  * the verifier is built but the trusted-key allowlist defaults to
  * empty. Plugins without a signature are accepted with a warning (the
  * loader logs on the `plugins` channel). Plugins WITH a signature
@@ -35,7 +35,7 @@ use Phlex\Plugins\Manifest;
  * the format. The "content hash" we compare against is computed over
  * the bytes of `plugin.json` (the manifest the user actually signed).
  *
- * @package Phlex\Plugins\Signature
+ * @package Phlix\Plugins\Signature
  * @since 0.10.0
  */
 class SignatureVerifier
@@ -72,7 +72,7 @@ class SignatureVerifier
      *    the plugin is unsigned, or signing is required with an empty
      *    allowlist.
      *  - {@see self::RESULT_UNSIGNED} — manifest has no signature and the
-     *    operator has not enabled `PHLEX_PLUGINS_REQUIRE_SIGNATURE`.
+     *    operator has not enabled `PHLIX_PLUGINS_REQUIRE_SIGNATURE`.
      *
      * @param Manifest $manifest  Parsed manifest.
      * @param string   $directory Absolute path to the staged plugin

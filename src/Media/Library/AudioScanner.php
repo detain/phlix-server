@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Media\Library;
+namespace Phlix\Media\Library;
 
 /**
  * AudioScanner discovers and indexes audio files and harvests ID3/MP4 tags.
@@ -12,7 +12,7 @@ namespace Phlex\Media\Library;
  * and OGG (Vorbis comments) formats. It uses pure-PHP parsing for maximum
  * portability - no external dependencies like getID3 required.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @description Audio file scanner with ID3v2/MP4 tag harvesting
  * @see MediaScanner For base scanner functionality

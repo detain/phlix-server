@@ -1,14 +1,14 @@
 <?php
 
-namespace Phlex\Tests\Unit\LiveTv;
+namespace Phlix\Tests\Unit\LiveTv;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\LiveTv\ComskipRunner;
-use Phlex\LiveTv\ComskipEdlParser;
-use Phlex\LiveTv\ComskipPostProcessor;
-use Phlex\Media\Markers\ChapterMarker;
-use Phlex\Media\Markers\MarkerService;
-use Phlex\Media\Markers\MarkerSet;
+use Phlix\LiveTv\ComskipRunner;
+use Phlix\LiveTv\ComskipEdlParser;
+use Phlix\LiveTv\ComskipPostProcessor;
+use Phlix\Media\Markers\ChapterMarker;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerSet;
 use Psr\Log\NullLogger;
 
 /**

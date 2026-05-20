@@ -1,12 +1,12 @@
 # CLI Reference
 
-Command-line scripts available in the Phlex Media Server.
+Command-line scripts available in the Phlix Media Server.
 
 ## Hub / Pairing
 
 ### `php scripts/pair-with-hub.php <hub-url> <server-name>`
 
-Initiates pairing between this server and a Phlex Hub instance.
+Initiates pairing between this server and a Phlix Hub instance.
 
 **Arguments:**
 
@@ -48,7 +48,7 @@ Heartbeat loop has been started in the background.
 - `0` — Pairing completed successfully.
 - `1` — Error (network failure, invalid arguments, hub rejection).
 
-See `Phlex\Hub\HubClient` and `docs/dev/pairing-protocol.md`.
+See `Phlix\Hub\HubClient` and `docs/dev/pairing-protocol.md`.
 
 ## Port forwarding
 
@@ -79,7 +79,7 @@ Endpoint: 203.0.113.42:32400
 
 Hostname Candidates:
   [lan] http://192.168.1.100:32400
-  [lan-mdns] http://phlex.local:32400
+  [lan-mdns] http://phlix.local:32400
   [public] http://203.0.113.42:32400
 ```
 
@@ -104,10 +104,10 @@ External WAN IP: 203.0.113.42
 
 1. **UPnP-IGD** — Sends SSDP M-SEARCH to `239.255.255.250:1900` to discover
    a UPnP InternetGatewayDevice, then uses SOAP `AddPortMapping` to open the
-   port. See `Phlex\Network\UpnpIgdClient`.
+   port. See `Phlix\Network\UpnpIgdClient`.
 2. **NAT-PMP** — Falls back to Apple NAT-PMP (RFC 6886) on routers like
-   AirPort Extreme. See `Phlex\Network\NatPmpClient`.
+   AirPort Extreme. See `Phlix\Network\NatPmpClient`.
 3. **STUN** — Uses RFC 5389 STUN binding to discover the server's public
-   IP address and test port accessibility. See `Phlex\Network\StunClient`.
+   IP address and test port accessibility. See `Phlix\Network\StunClient`.
 
 **See also:** `docs/hub/remote-access.md`.

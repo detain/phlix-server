@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Streaming\Trickplay;
+namespace Phlix\Tests\Unit\Media\Streaming\Trickplay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Streaming\Trickplay\TrickplayController;
+use Phlix\Media\Streaming\Trickplay\TrickplayController;
 
 class TrickplayControllerTest extends TestCase
 {

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Common\Container\Providers;
+namespace Phlix\Common\Container\Providers;
 
 use Crell\Tukio\OrderedListenerProvider;
 use DI\ContainerBuilder;
-use Phlex\Common\Container\ServiceProviderInterface;
-use Phlex\Common\Events\EventDispatcherFactory;
-use Phlex\Common\Events\ListenerRegistry;
-use Phlex\Common\Logger\LogChannels;
-use Phlex\Common\Logger\LoggerFactory;
-use Phlex\Common\Logger\StructuredLogger;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Events\EventDispatcherFactory;
+use Phlix\Common\Events\ListenerRegistry;
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\EventDispatcher\ListenerProviderInterface;
@@ -32,20 +32,20 @@ use function DI\get;
  * - {@see EventDispatcherInterface} resolved through
  *   {@see EventDispatcherFactory}. The factory is an invokable class
  *   rather than a closure so the binding is safe to use under
- *   `PHLEX_CONTAINER_COMPILE=1` once the compiled container is enabled
+ *   `PHLIX_CONTAINER_COMPILE=1` once the compiled container is enabled
  *   in a future phase.
  * - {@see EventDispatcherFactory} as a singleton (autowired, no
  *   constructor parameters).
  * - An events-channel logger alias `logger.events` (Tukio's debug
- *   decorator writes here when `PHLEX_DEBUG_EVENTS=1`).
+ *   decorator writes here when `PHLIX_DEBUG_EVENTS=1`).
  *
  * Once registered, application services can simply type-hint
  * `Psr\EventDispatcher\EventDispatcherInterface` in their constructors;
  * PHP-DI will autowire the singleton instance.
  *
- * @internal Phlex-internal service provider.
+ * @internal Phlix-internal service provider.
  *
- * @package Phlex\Common\Container\Providers
+ * @package Phlix\Common\Container\Providers
  * @since 0.10.0
  */
 final class EventServicesProvider implements ServiceProviderInterface

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Roku;
+namespace Phlix\Roku;
 
 /**
  * Roku device descriptor.

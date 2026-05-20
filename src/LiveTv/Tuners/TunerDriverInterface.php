@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Tuners;
+namespace Phlix\LiveTv\Tuners;
 
-use Phlex\LiveTv\Tuners\Dvbt\DvbtDevice;
-use Phlex\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
-use Phlex\LiveTv\Tuners\Iptv\IptvDevice;
+use Phlix\LiveTv\Tuners\Dvbt\DvbtDevice;
+use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
+use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
 
 /**
  * Interface for tuner device drivers.

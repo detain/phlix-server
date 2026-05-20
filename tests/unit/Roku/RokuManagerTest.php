@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Roku;
+namespace Phlix\Tests\Unit\Roku;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Roku\RokuDevice;
-use Phlex\Roku\RokuDiscovery;
-use Phlex\Roku\RokuManager;
-use Phlex\Roku\RokuSession;
-use Phlex\Session\PlaybackController;
+use Phlix\Roku\RokuDevice;
+use Phlix\Roku\RokuDiscovery;
+use Phlix\Roku\RokuManager;
+use Phlix\Roku\RokuSession;
+use Phlix\Session\PlaybackController;
 use Workerman\MySQL\Connection;
 
 class RokuManagerTest extends TestCase
@@ -19,7 +19,7 @@ class RokuManagerTest extends TestCase
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturn([]);
 
-        $sessionManager = $this->createMock(\Phlex\Session\SessionManager::class);
+        $sessionManager = $this->createMock(\Phlix\Session\SessionManager::class);
 
         return new PlaybackController($db, $sessionManager);
     }

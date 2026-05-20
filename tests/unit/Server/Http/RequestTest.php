@@ -1,14 +1,14 @@
 <?php
 
-namespace Phlex\Tests\Unit\Server\Http;
+namespace Phlix\Tests\Unit\Server\Http;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Server\Http\Request;
+use Phlix\Server\Http\Request;
 
 /**
  * Unit tests for Request class.
  *
- * @covers \Phlex\Server\Http\Request
+ * @covers \Phlix\Server\Http\Request
  */
 class RequestTest extends TestCase
 {
@@ -27,7 +27,7 @@ class RequestTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Request::getBearerToken
+     * @covers \Phlix\Server\Http\Request::getBearerToken
      */
     public function testCanGetBearerToken(): void
     {
@@ -39,7 +39,7 @@ class RequestTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Request::getHeader
+     * @covers \Phlix\Server\Http\Request::getHeader
      */
     public function testGetHeaderReturnsNullWhenNotPresent(): void
     {
@@ -54,10 +54,10 @@ class RequestTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Request::isGet
-     * @covers \Phlex\Server\Http\Request::isPost
-     * @covers \Phlex\Server\Http\Request::isPut
-     * @covers \Phlex\Server\Http\Request::isDelete
+     * @covers \Phlix\Server\Http\Request::isGet
+     * @covers \Phlix\Server\Http\Request::isPost
+     * @covers \Phlix\Server\Http\Request::isPut
+     * @covers \Phlix\Server\Http\Request::isDelete
      */
     public function testIsMethods(): void
     {
@@ -73,7 +73,7 @@ class RequestTest extends TestCase
     }
 
     /**
-     * @covers \Phlex\Server\Http\Request::getClientIp
+     * @covers \Phlix\Server\Http\Request::getClientIp
      */
     public function testGetClientIpWithForwardedHeader(): void
     {

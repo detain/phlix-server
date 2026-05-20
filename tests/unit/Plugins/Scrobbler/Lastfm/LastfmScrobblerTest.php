@@ -2,21 +2,21 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm;
+namespace Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmApi;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmScrobbler;
-use Phlex\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
-use Phlex\Shared\Events\Playback\PlaybackStarted;
-use Phlex\Shared\Events\Playback\PlaybackStopped;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmScrobbler;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
+use Phlix\Shared\Events\Playback\PlaybackStarted;
+use Phlix\Shared\Events\Playback\PlaybackStopped;
 
 /**
  * Unit tests for {@see LastfmScrobbler}.
  *
- * @covers \Phlex\Plugins\Scrobbler\Lastfm\LastfmScrobbler
+ * @covers \Phlix\Plugins\Scrobbler\Lastfm\LastfmScrobbler
  *
- * @package Phlex\Tests\Unit\Plugins\Scrobbler\Lastfm
+ * @package Phlix\Tests\Unit\Plugins\Scrobbler\Lastfm
  * @since 0.15.0
  */
 final class LastfmScrobblerTest extends TestCase

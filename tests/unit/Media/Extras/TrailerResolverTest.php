@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Extras;
+namespace Phlix\Tests\Unit\Media\Extras;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Extras\ExtrasRepository;
-use Phlex\Media\Extras\Extra;
-use Phlex\Media\Extras\Trailer;
-use Phlex\Media\Extras\TrailerFinder;
-use Phlex\Media\Extras\TrailerResolver;
-use Phlex\Media\Library\ItemRepository;
-use Phlex\Media\Metadata\TmdbProvider;
+use Phlix\Media\Extras\ExtrasRepository;
+use Phlix\Media\Extras\Extra;
+use Phlix\Media\Extras\Trailer;
+use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\Extras\TrailerResolver;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TmdbProvider;
 
 class TrailerResolverTest extends TestCase
 {

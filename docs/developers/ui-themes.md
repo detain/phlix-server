@@ -1,10 +1,10 @@
 # UI Theme Plugin Guide
 
-This guide explains how to create a custom `ui-theme` plugin for the Phlex web portal.
+This guide explains how to create a custom `ui-theme` plugin for the Phlix web portal.
 
 ## Overview
 
-A `ui-theme` plugin is a declarative plugin type that provides custom CSS and optional JavaScript to restyle the Phlex web portal. Unlike other plugin types, ui-theme plugins do **not** subscribe to runtime events — they are purely asset bundles with a manifest.
+A `ui-theme` plugin is a declarative plugin type that provides custom CSS and optional JavaScript to restyle the Phlix web portal. Unlike other plugin types, ui-theme plugins do **not** subscribe to runtime events — they are purely asset bundles with a manifest.
 
 ## Manifest Structure
 
@@ -12,11 +12,11 @@ A ui-theme plugin requires a `plugin.json` manifest with the `ui-theme` type and
 
 ```json
 {
-    "name": "phlex-plugin-my-theme",
+    "name": "phlix-plugin-my-theme",
     "version": "1.0.0",
-    "phlex_min_server_version": "0.14.0",
+    "phlix_min_server_version": "0.14.0",
     "type": "ui-theme",
-    "entry": "Phlex\\Themes\\MyTheme\\Plugin",
+    "entry": "Phlix\\Themes\\MyTheme\\Plugin",
     "theme": {
         "id": "my-custom-theme",
         "name": "My Custom Theme",
@@ -42,16 +42,16 @@ A ui-theme plugin requires a `plugin.json` manifest with the `ui-theme` type and
 
 ## Entry Class
 
-The entry class must implement `Phlex\Theming\ThemePluginInterface`:
+The entry class must implement `Phlix\Theming\ThemePluginInterface`:
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-namespace Phlex\Themes\MyTheme;
+namespace Phlix\Themes\MyTheme;
 
-use Phlex\Theming\ThemePluginInterface;
+use Phlix\Theming\ThemePluginInterface;
 
 class Plugin implements ThemePluginInterface
 {
@@ -62,7 +62,7 @@ The entry class itself is not instantiated during normal operation — the Theme
 
 ## CSS Structure
 
-Your theme's CSS should define CSS custom properties (variables) to customize the Phlex appearance. The built-in themes use these variables:
+Your theme's CSS should define CSS custom properties (variables) to customize the Phlix appearance. The built-in themes use these variables:
 
 ### Core Variables
 
@@ -141,7 +141,7 @@ h1, h2, h3 { color: var(--text-primary); }
 ## Directory Structure
 
 ```
-phlex-plugin-my-theme/
+phlix-plugin-my-theme/
 ├── composer.json
 ├── plugin.json
 ├── src/

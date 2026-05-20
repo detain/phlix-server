@@ -5,7 +5,7 @@
  * Provides a complete audio player experience with play, pause,
  * seek, next/previous, shuffle, and repeat functionality.
  *
- * @author Phlex Development Team
+ * @author Phlix Development Team
  * @version 1.0.0
  * @since 0.14.0
  */
@@ -132,7 +132,7 @@
          */
         loadSettings() {
             try {
-                const settings = JSON.parse(localStorage.getItem('phlex_music_settings') || '{}');
+                const settings = JSON.parse(localStorage.getItem('phlix_music_settings') || '{}');
                 this.volume = settings.volume ?? 0.8;
                 this.shuffle = settings.shuffle ?? false;
                 this.repeat = settings.repeat ?? 'none';
@@ -147,7 +147,7 @@
          */
         saveSettings() {
             try {
-                localStorage.setItem('phlex_music_settings', JSON.stringify({
+                localStorage.setItem('phlix_music_settings', JSON.stringify({
                     volume: this.volume,
                     shuffle: this.shuffle,
                     repeat: this.repeat,
@@ -554,8 +554,8 @@
                 };
 
                 // Could send to server here if needed
-                if (window.PhlexApp && window.PhlexApp.Player) {
-                    window.PhlexApp.Player.reportProgress(progress);
+                if (window.PhlixApp && window.PhlixApp.Player) {
+                    window.PhlixApp.Player.reportProgress(progress);
                 }
             }, 30000); // Report every 30 seconds
         }
@@ -572,10 +572,10 @@
     }
 
     /**
-     * PhlexApp Music Namespace
+     * PhlixApp Music Namespace
      */
-    if (!window.PhlexApp) window.PhlexApp = {};
-    window.PhlexApp.Music = {
+    if (!window.PhlixApp) window.PhlixApp = {};
+    window.PhlixApp.Music = {
         player: window.MusicPlayer,
 
         /**

@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * TRaSH-Guides sync configuration.
  *
- * @package Phlex\Config
+ * @package Phlix\Config
  * @since 0.12.0
  */
 

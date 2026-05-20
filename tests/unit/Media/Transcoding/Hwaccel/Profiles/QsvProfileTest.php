@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel\Profiles;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel\Profiles;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\Profiles\QsvProfile;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\Profiles\QsvProfile;
 
 class QsvProfileTest extends TestCase
 {

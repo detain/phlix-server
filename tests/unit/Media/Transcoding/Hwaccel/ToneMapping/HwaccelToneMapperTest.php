@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping;
+namespace Phlix\Tests\Unit\Media\Transcoding\Hwaccel\ToneMapping;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlex\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
-use Phlex\Media\Transcoding\Hwaccel\ToneMapping\ToneMapperFactory;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HdrMetadata;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\HwaccelToneMapper;
+use Phlix\Media\Transcoding\Hwaccel\ToneMapping\ToneMapperFactory;
 
 class HwaccelToneMapperTest extends TestCase
 {

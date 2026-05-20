@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Webhooks\Plugins;
+namespace Phlix\Webhooks\Plugins;
 
-use Phlex\Webhooks\WebhookEvent;
-use Phlex\Webhooks\WebhookPluginInterface;
+use Phlix\Webhooks\WebhookEvent;
+use Phlix\Webhooks\WebhookPluginInterface;
 
 /**
  * Abstract base class for notification plugins.
@@ -114,7 +114,7 @@ abstract class AbstractNotificationPlugin implements WebhookPluginInterface
      * (Discord, Slack, Telegram, …) and MUST verify the peer certificate
      * chain. The CA bundle path is overridable via the notifications
      * config (`<provider>.ca_bundle` or top-level `ca_bundle`) so admins
-     * can point Phlex at a private CA. Defaults to the standard Debian
+     * can point Phlix at a private CA. Defaults to the standard Debian
      * system bundle.
      *
      * @param array<string, mixed> $providerConfig Per-provider config slice
@@ -142,7 +142,7 @@ abstract class AbstractNotificationPlugin implements WebhookPluginInterface
      */
     private function resolveDefaultCaBundle(): string
     {
-        $configPath = defined('PHLEX_CONFIG_PATH') ? PHLEX_CONFIG_PATH : __DIR__ . '/../../../config';
+        $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../../config';
         $configFile = $configPath . '/notifications.php';
         if (file_exists($configFile)) {
             /** @var array<string, mixed> $config */

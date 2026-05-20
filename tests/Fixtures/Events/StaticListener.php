@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Fixtures\Events;
+namespace Phlix\Tests\Fixtures\Events;
 
 /**
  * Static-method fixture for the array-callable hash branch in
- * {@see \Phlex\Common\Events\ListenerRegistry::callableHash()}.
+ * {@see \Phlix\Common\Events\ListenerRegistry::callableHash()}.
  *
  * @internal
  */

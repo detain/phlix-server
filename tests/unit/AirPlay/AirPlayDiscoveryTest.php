@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\AirPlay;
+namespace Phlix\Tests\Unit\AirPlay;
 
 use PHPUnit\Framework\TestCase;
-use Phlex\AirPlay\AirPlayDevice;
-use Phlex\AirPlay\AirPlayDiscovery;
-use Phlex\Discovery\Mdns\MdnsDiscovery;
-use Phlex\Discovery\Mdns\MdnsService;
+use Phlix\AirPlay\AirPlayDevice;
+use Phlix\AirPlay\AirPlayDiscovery;
+use Phlix\Discovery\Mdns\MdnsDiscovery;
+use Phlix\Discovery\Mdns\MdnsService;
 
 class AirPlayDiscoveryTest extends TestCase
 {

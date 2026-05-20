@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\LiveTv\Dto;
+namespace Phlix\LiveTv\Dto;
 
 use Workerman\MySQL\Connection;
 
@@ -12,7 +12,7 @@ use Workerman\MySQL\Connection;
  * {@see Connection::query()} is typed `mixed`; the LiveTv module treats
  * the returned object as a row cursor with a `num_rows` property and a
  * `fetch()` method. These helpers centralise the `instanceof
- * \Phlex\LiveTv\Dto\ResultSet` narrowing so PHPStan can verify the
+ * \Phlix\LiveTv\Dto\ResultSet` narrowing so PHPStan can verify the
  * accesses without inline casts or ignore-pragma directives.
  *
  * Test mocks `extends ResultSet`; production callers that hand us a

@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Tests\Unit\Server\Http\Middleware;
+namespace Phlix\Tests\Unit\Server\Http\Middleware;
 
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\AuditLogger;
-use Phlex\Server\Http\Middleware\AdminMiddleware;
-use Phlex\Server\Http\Request;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\AuditLogger;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Request;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Unit tests for {@see AdminMiddleware} (Step A.5).
  *
- * @covers \Phlex\Server\Http\Middleware\AdminMiddleware
+ * @covers \Phlix\Server\Http\Middleware\AdminMiddleware
  */
 final class AdminMiddlewareTest extends TestCase
 {

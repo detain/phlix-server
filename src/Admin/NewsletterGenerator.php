@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Admin;
+namespace Phlix\Admin;
 
 use DateTimeInterface;
 use Smarty;
-use Phlex\Media\Library\LibraryManager;
-use Phlex\Stats\StatsCollector;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 /**
@@ -16,7 +16,7 @@ use Workerman\MySQL\Connection;
  * This class aggregates watch statistics, new media items, and top media
  * into a personalized HTML email using Smarty templates.
  *
- * @author Phlex Team
+ * @author Phlix Team
  * @version 1.0.0
  * @description Generates weekly newsletter email content
  */
@@ -60,9 +60,9 @@ class NewsletterGenerator
         $this->config = array_merge([
             'active_user_days' => 30,
             'top_media_limit' => 5,
-            'subject_template' => 'Your Phlex Weekly Watch Report',
-            'from_email' => 'phlex@example.com',
-            'from_name' => 'Phlex Media Server',
+            'subject_template' => 'Your Phlix Weekly Watch Report',
+            'from_email' => 'phlix@example.com',
+            'from_name' => 'Phlix Media Server',
         ], $config);
     }
 
@@ -285,9 +285,9 @@ class NewsletterGenerator
      */
     private function renderSubject(Smarty $smarty): string
     {
-        $template = $this->config['subject_template'] ?? 'Your Phlex Weekly Watch Report';
+        $template = $this->config['subject_template'] ?? 'Your Phlix Weekly Watch Report';
         $smarty->assign('week_start', $smarty->getTemplateVars('week_start'));
-        return is_string($template) ? $template : 'Your Phlex Weekly Watch Report';
+        return is_string($template) ? $template : 'Your Phlix Weekly Watch Report';
     }
 
     /**
@@ -333,7 +333,7 @@ class NewsletterGenerator
     ): string {
         $hours = round($watchTimeMinutes / 60, 1);
 
-        $text = "Your Phlex Weekly Watch Report\n";
+        $text = "Your Phlix Weekly Watch Report\n";
         $text .= str_repeat('=', 40) . "\n\n";
         $text .= "Watch Time: {$hours} hours\n";
         $text .= "New Items Added: {$newItemsCount}\n\n";
@@ -347,7 +347,7 @@ class NewsletterGenerator
         }
 
         $text .= "\n---\n";
-        $text .= "Sent by Phlex Media Server\n";
+        $text .= "Sent by Phlix Media Server\n";
 
         return $text;
     }

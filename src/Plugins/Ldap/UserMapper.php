@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Plugins\Ldap;
+namespace Phlix\Plugins\Ldap;
 
 use RuntimeException;
 

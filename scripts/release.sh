@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Release script for Phlex
+# Release script for Phlix
 # Usage: ./scripts/release.sh [patch|minor|major] [--dry-run]
 
 TYPE="${1:-patch}"
@@ -56,13 +56,13 @@ fi
 sed -i "s/\"version\": \"$VERSION\"/\"version\": \"$NEW_VERSION\"/" composer.json
 
 # Update Helm chart
-if [ -f "k8s/helm/phlex/Chart.yaml" ]; then
-    sed -i "s/^version:.*/version: $NEW_VERSION/" k8s/helm/phlex/Chart.yaml
-    sed -i "s/^appVersion:.*/appVersion: \"$NEW_VERSION\"/" k8s/helm/phlex/Chart.yaml
+if [ -f "k8s/helm/phlix/Chart.yaml" ]; then
+    sed -i "s/^version:.*/version: $NEW_VERSION/" k8s/helm/phlix/Chart.yaml
+    sed -i "s/^appVersion:.*/appVersion: \"$NEW_VERSION\"/" k8s/helm/phlix/Chart.yaml
 fi
 
 # Commit changes
-git add composer.json k8s/helm/phlex/Chart.yaml
+git add composer.json k8s/helm/phlix/Chart.yaml
 git commit -m "Release v$NEW_VERSION"
 
 # Create tag

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Hub;
+namespace Phlix\Hub;
 
 /**
  * Interface for hub JWT validation.
@@ -10,7 +10,7 @@ namespace Phlex\Hub;
  * Allows interchangeable implementations for production use
  * (HubJwtValidator) and testing scenarios.
  *
- * @package Phlex\Hub
+ * @package Phlix\Hub
  * @since 0.11.0
  */
 interface HubJwtValidatorInterface

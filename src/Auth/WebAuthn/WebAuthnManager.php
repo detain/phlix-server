@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Phlex\Auth\WebAuthn;
+namespace Phlix\Auth\WebAuthn;
 
-use Phlex\Auth\UserRepository;
-use Phlex\Common\Logger\StructuredLogger;
-use Phlex\Shared\Auth\AuthResult;
+use Phlix\Auth\UserRepository;
+use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Shared\Auth\AuthResult;
 use Webauthn\PublicKeyCredentialDescriptor;
 use Webauthn\PublicKeyCredentialParameters;
 use Webauthn\PublicKeyCredentialUserEntity;

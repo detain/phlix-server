@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlex\Server\Http\Controllers;
 
+use Phlex\Media\Markers\MarkerService;
+use Phlex\Media\Markers\SkipButtonSpec;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Session\SessionManager;
@@ -31,18 +33,24 @@ class SessionController
     /** @var PlaybackController Handles playback progress tracking */
     private PlaybackController $playbackController;
 
+    /** @var MarkerService Handles marker data for media items */
+    private MarkerService $markerService;
+
     /**
      * Creates a new SessionController instance.
      *
      * @param SessionManager $sessionManager The session manager
      * @param PlaybackController $playbackController The playback controller
+     * @param MarkerService $markerService The marker service for intro/outro/chapter data
      */
     public function __construct(
         SessionManager $sessionManager,
-        PlaybackController $playbackController
+        PlaybackController $playbackController,
+        MarkerService $markerService
     ) {
         $this->sessionManager = $sessionManager;
         $this->playbackController = $playbackController;
+        $this->markerService = $markerService;
     }
 
     /**
@@ -144,7 +152,7 @@ class SessionController
      *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters with 'id' for session ID
-     * @return Response JSON response with progress state
+     * @return Response JSON response with progress state and marker data
      */
     public function getProgress(Request $request, array $params): Response
     {
@@ -165,7 +173,90 @@ class SessionController
             return (new Response())->json(['progress' => null]);
         }
 
-        return (new Response())->json(['progress' => $state]);
+        $mediaItemId = $state['media_item_id'] ?? null;
+        if (!is_string($mediaItemId)) {
+            $mediaItemId = null;
+        }
+
+        $markers = $this->buildMarkerData($mediaItemId);
+
+        return (new Response())->json([
+            'progress' => $state,
+            'intro_marker' => $markers['intro_marker'],
+            'outro_marker' => $markers['outro_marker'],
+            'skip_button_spec' => $markers['skip_button_spec'],
+            'chapters' => $markers['chapters'],
+        ]);
+    }
+
+    /**
+     * Build marker data array for a media item.
+     *
+     * @param string|null $mediaItemId The media item ID
+     *
+     * @return array{
+     *     intro_marker: array{start_seconds: int, end_seconds: int}|null,
+     *     outro_marker: array{start_seconds: int, end_seconds: int}|null,
+     *     skip_button_spec: array{
+     *         skip_intro_start: int|null,
+     *         skip_intro_end: int|null,
+     *         skip_outro_start: int|null,
+     *         skip_outro_end: int|null
+     *     },
+     *     chapters: array<int, array{start_seconds: int, end_seconds: int, title?: string|null}>
+     * }
+     */
+    private function buildMarkerData(?string $mediaItemId): array
+    {
+        if ($mediaItemId === null) {
+            return [
+                'intro_marker' => null,
+                'outro_marker' => null,
+                'skip_button_spec' => [
+                    'skip_intro_start' => null,
+                    'skip_intro_end' => null,
+                    'skip_outro_start' => null,
+                    'skip_outro_end' => null,
+                ],
+                'chapters' => [],
+            ];
+        }
+
+        $markerSet = $this->markerService->getMarkers($mediaItemId);
+
+        $introMarker = null;
+        if ($markerSet->intro !== null) {
+            $introMarker = [
+                'start_seconds' => $markerSet->intro->start_seconds,
+                'end_seconds' => $markerSet->intro->end_seconds,
+            ];
+        }
+
+        $outroMarker = null;
+        if ($markerSet->outro !== null) {
+            $outroMarker = [
+                'start_seconds' => $markerSet->outro->start_seconds,
+                'end_seconds' => $markerSet->outro->end_seconds,
+            ];
+        }
+
+        $skipButtonSpec = SkipButtonSpec::fromMarkerSet($markerSet)->toArray();
+
+        $chapters = array_map(
+            static fn(\Phlex\Media\Markers\ChapterMarker $chapter): array => [
+                'start_seconds' => $chapter->start_seconds,
+                'end_seconds' => $chapter->end_seconds,
+                'title' => $chapter->title,
+            ],
+            $markerSet->chapters
+        );
+
+        return [
+            'intro_marker' => $introMarker,
+            'outro_marker' => $outroMarker,
+            'skip_button_spec' => $skipButtonSpec,
+            'chapters' => $chapters,
+        ];
     }
 
     /**

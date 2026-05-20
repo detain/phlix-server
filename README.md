@@ -65,19 +65,19 @@ public/
 
 ### Foundation
 - **PSR-11 DI container (PHP-DI 7)**: auto-wired services with provider-based
-  composition; see `docs/dev/architecture-server.md`
+  composition; see [phlix-docs / dev / architecture-server](https://detain.github.io/phlix-docs/dev/architecture-server).
 - **PSR-14 event dispatcher (Tukio)**: playback, library-scan, and auth
   lifecycle events with typed `readonly` DTOs. Plugins subscribe by event
-  class FQCN; see `docs/dev/event-reference.md`.
+  class FQCN; see [phlix-docs / dev / event-reference](https://detain.github.io/phlix-docs/dev/event-reference).
 - **Plugin system**: install / enable / disable / uninstall lifecycle,
   sandboxed per-plugin `vendor/` directories, signature-checked
   manifests, and PSR-14 event subscription via
   `Phlix\Shared\Plugin\LifecycleInterface` (the
   `Phlix\Plugins\Contract\LifecycleInterface` FQCN remains a
   deprecated bridge through 0.11.x). **Plugin developer guide:**
-  [`docs/plugins/developer-guide.md`](docs/plugins/developer-guide.md).
+  [phlix-docs / plugins / developer-guide](https://detain.github.io/phlix-docs/plugins/developer-guide).
   Server-internals reference for contributors extending the loader:
-  [`docs/dev/plugin-sdk.md`](docs/dev/plugin-sdk.md). Reference
+  [phlix-docs / dev / plugin-sdk](https://detain.github.io/phlix-docs/dev/plugin-sdk). Reference
   plugin: [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example).
 - **Shared interfaces / DTOs in `detain/phlix-shared`**: framework-neutral
   Composer package shared with `phlix-hub`. `Phlix\Shared\Plugin\*`,

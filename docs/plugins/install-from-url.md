@@ -96,4 +96,5 @@ curl -sS https://phlix.example.com/api/v1/admin/plugins \
 - **Every install / enable / disable / uninstall is audit-logged.**
   Entries land in the `AUTH` log channel with the actor user id and
   the action name (`plugin.install.ui`, etc.). See
-  `docs/dev/architecture-server.md` for log paths.
+  [phlix-docs / dev / architecture-server](https://detain.github.io/phlix-docs/dev/architecture-server)
+  for log paths.

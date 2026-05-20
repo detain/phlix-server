@@ -14,7 +14,7 @@ that consumes it.
 
 | Variable               | Default | Description |
 | ---------------------- | ------- | ----------- |
-| `PHLIX_DEBUG_EVENTS`   | `0`     | When truthy (`1`, `true`, `yes`, `on`) wraps the PSR-14 dispatcher in Tukio's `DebugEventDispatcher`, which logs every dispatched event class at debug level on the `events` channel (`.logs/events.log`). Useful for tracing plugin behaviour; leave off in production. See `Phlix\Common\Events\EventDispatcherFactory` and `docs/dev/event-reference.md`. |
+| `PHLIX_DEBUG_EVENTS`   | `0`     | When truthy (`1`, `true`, `yes`, `on`) wraps the PSR-14 dispatcher in Tukio's `DebugEventDispatcher`, which logs every dispatched event class at debug level on the `events` channel (`.logs/events.log`). Useful for tracing plugin behaviour; leave off in production. See `Phlix\Common\Events\EventDispatcherFactory` and [phlix-docs / dev / event-reference](https://detain.github.io/phlix-docs/dev/event-reference). |
 
 ## Plugins
 

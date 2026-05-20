@@ -7,14 +7,18 @@ namespace Phlex\Server\Http\Controllers;
 use Phlex\Server\Http\Request;
 use Phlex\Server\Http\Response;
 use Phlex\Media\Library\ItemRepository;
+use Phlex\Media\Markers\MarkerService;
+use Phlex\Media\Markers\SkipButtonSpec;
 
 class MediaItemController
 {
     private ItemRepository $itemRepository;
+    private MarkerService $markerService;
 
-    public function __construct(ItemRepository $itemRepository)
+    public function __construct(ItemRepository $itemRepository, MarkerService $markerService)
     {
         $this->itemRepository = $itemRepository;
+        $this->markerService = $markerService;
     }
 
     /**
@@ -112,5 +116,48 @@ class MediaItemController
         $this->itemRepository->delete($params['id']);
 
         return (new Response())->json(['message' => 'Item deleted successfully']);
+    }
+
+    /**
+     * Get playback info including markers and skip-spec for a media item.
+     *
+     * @param array<string, string> $params
+     */
+    public function getPlaybackInfo(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $markers = $this->markerService->getMarkers($itemId);
+        $skipSpec = SkipButtonSpec::fromMarkerSet($markers);
+
+        $introMarker = $markers->intro !== null
+            ? ['start_seconds' => $markers->intro->start_seconds, 'end_seconds' => $markers->intro->end_seconds]
+            : null;
+
+        $outroMarker = $markers->outro !== null
+            ? ['start_seconds' => $markers->outro->start_seconds, 'end_seconds' => $markers->outro->end_seconds]
+            : null;
+
+        $chapters = [];
+        foreach ($markers->chapters as $chapter) {
+            $chapters[] = [
+                'start_seconds' => $chapter->start_seconds,
+                'end_seconds' => $chapter->end_seconds,
+                'title' => $chapter->title,
+            ];
+        }
+
+        return (new Response())->json([
+            'item_id' => $itemId,
+            'intro_marker' => $introMarker,
+            'outro_marker' => $outroMarker,
+            'chapters' => $chapters,
+            'skip_button_spec' => $skipSpec->toArray(),
+        ]);
     }
 }

@@ -648,6 +648,23 @@ class Router
     }
 
     /**
+     * Registers the media item API routes.
+     *
+     * GET /api/v1/media/{id}/playback-info — playback info with markers and skip-spec
+     *
+     * @param string $controllerClass The MediaItemController class name
+     * @return self
+     *
+     * @since 0.19.0
+     */
+    public function mediaItems(string $controllerClass): self
+    {
+        $this->get('/api/v1/media/{id}/playback-info', [$controllerClass, 'getPlaybackInfo']);
+
+        return $this;
+    }
+
+    /**
      * Registers the theme media API and streaming routes.
      *
      * GET    /api/v1/libraries/{id}/theme-media         — get theme media for a library

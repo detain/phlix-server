@@ -232,6 +232,10 @@ class Application
             return $controller->handle($request, $params);
         });
 
+        // Media item playback-info endpoint
+        $mediaItemController = $this->getMediaItemController();
+        $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
+
         // WebAuthn / Passkey endpoints
         $webauthn = $this->getWebAuthnController();
         $this->router->post('/api/v1/auth/webauthn/register/options', [$webauthn, 'startRegistration']);
@@ -1074,5 +1078,33 @@ class Application
         /** @var \Phlex\Server\Http\Controllers\WebAuthnController */
         $controller = $this->container->get(\Phlex\Server\Http\Controllers\WebAuthnController::class);
         return $controller;
+    }
+
+    /**
+     * Returns a MediaItemController instance.
+     *
+     * @return \Phlex\Server\Http\Controllers\MediaItemController The controller instance.
+     */
+    private function getMediaItemController(): \Phlex\Server\Http\Controllers\MediaItemController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlex',
+                'root',
+                'password'
+            );
+            $itemRepository = new \Phlex\Media\Library\ItemRepository($db);
+            $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+            $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            return new \Phlex\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+        }
+
+        /** @var \Phlex\Media\Library\ItemRepository */
+        $itemRepository = $this->container->get(\Phlex\Media\Library\ItemRepository::class);
+        $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+        $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        return new \Phlex\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
     }
 }

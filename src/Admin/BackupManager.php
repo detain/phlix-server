@@ -7,6 +7,7 @@ namespace Phlex\Admin;
 use Phlex\Admin\Dto\BackupConfig;
 use Phlex\Admin\Dto\DbConnectionConfig;
 use Phlex\Admin\Dto\S3Config;
+use Phlex\Common\Logger\AuditLogger;
 use Phlex\Common\Logger\LogChannels;
 use Phlex\Common\Logger\LoggerFactory;
 use Phlex\Common\Logger\StructuredLogger;
@@ -30,16 +31,20 @@ class BackupManager
 
     private ?StructuredLogger $logger;
 
+    private ?AuditLogger $auditLogger;
+
     private BackupConfig $config;
 
     /**
      * @param Connection $db Database connection
      * @param StructuredLogger|null $logger Optional logger for operations
+     * @param AuditLogger|null $auditLogger Optional audit logger for security events
      */
-    public function __construct(Connection $db, ?StructuredLogger $logger = null)
+    public function __construct(Connection $db, ?StructuredLogger $logger = null, ?AuditLogger $auditLogger = null)
     {
         $this->db = $db;
         $this->logger = $logger;
+        $this->auditLogger = $auditLogger;
         $this->config = $this->loadConfig();
     }
 
@@ -129,6 +134,8 @@ class BackupManager
                 'size_bytes' => $sizeBytes,
                 'checksum_sha256' => $checksum,
             ]);
+
+            $this->auditLogger?->logDataExport('system', 'backup_create', $sizeBytes);
 
             return [
                 'backup_id' => $backupId,
@@ -295,6 +302,8 @@ class BackupManager
 
             $logger?->info('Backup restored successfully', ['backup_id' => $backupId]);
 
+            $this->auditLogger?->logDataExport('system', 'backup_restore', 1);
+
             return RestoreResult::success("Backup '{$backupId}' restored successfully");
         } catch (Throwable $e) {
             $logger?->error('Backup restore failed', [
@@ -360,6 +369,8 @@ class BackupManager
             'backup_id' => $backupId,
             's3_path' => $s3Path,
         ]);
+
+        $this->auditLogger?->logDataExport('system', 'backup_upload_s3', 1);
 
         return true;
     }

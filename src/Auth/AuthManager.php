@@ -148,7 +148,8 @@ class AuthManager
      */
     private function getClientIp(): string
     {
-        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+        return is_string($ip) ? $ip : '127.0.0.1';
     }
 
     /**

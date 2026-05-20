@@ -32,4 +32,3 @@ templates_c/
 .claude/hooks/caliber-session-freshness.sh
 
 # Transient supervisor handoff docs (Wave-N work notes, intentionally untracked)
-HANDOFF_*.md

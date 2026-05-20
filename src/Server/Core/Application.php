@@ -236,6 +236,14 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // Session management endpoints
+        $sessionController = $this->getSessionController();
+        $this->router->get('/api/v1/sessions/{id}/progress', [$sessionController, 'getProgress']);
+        $this->router->post('/api/v1/sessions/{id}/progress', [$sessionController, 'reportProgress']);
+        $this->router->get('/api/v1/me/continue-watching', [$sessionController, 'getContinueWatching']);
+        $this->router->get('/api/v1/me/sessions', [$sessionController, 'listSessions']);
+        $this->router->delete('/api/v1/sessions/{id}', [$sessionController, 'endSession']);
+
         // WebAuthn / Passkey endpoints
         $webauthn = $this->getWebAuthnController();
         $this->router->post('/api/v1/auth/webauthn/register/options', [$webauthn, 'startRegistration']);
@@ -1106,5 +1114,47 @@ class Application
         $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlex\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+    }
+
+    /**
+     * Returns a SessionController instance.
+     *
+     * @return \Phlex\Server\Http\Controllers\SessionController The controller instance.
+     */
+    private function getSessionController(): \Phlex\Server\Http\Controllers\SessionController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlex',
+                'root',
+                'password'
+            );
+            $sessionManager = new \Phlex\Session\SessionManager($db);
+            $playbackController = new \Phlex\Session\PlaybackController($db, $sessionManager);
+            $itemRepository = new \Phlex\Media\Library\ItemRepository($db);
+            $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+            $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            return new \Phlex\Server\Http\Controllers\SessionController(
+                $sessionManager,
+                $playbackController,
+                $markerService
+            );
+        }
+
+        /** @var \Phlex\Session\SessionManager */
+        $sessionManager = $this->container->get(\Phlex\Session\SessionManager::class);
+        /** @var \Phlex\Session\PlaybackController */
+        $playbackController = $this->container->get(\Phlex\Session\PlaybackController::class);
+        /** @var \Phlex\Media\Library\ItemRepository */
+        $itemRepository = $this->container->get(\Phlex\Media\Library\ItemRepository::class);
+        $markerCandidateRepository = new \Phlex\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+        $markerService = new \Phlex\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+        return new \Phlex\Server\Http\Controllers\SessionController(
+            $sessionManager,
+            $playbackController,
+            $markerService
+        );
     }
 }

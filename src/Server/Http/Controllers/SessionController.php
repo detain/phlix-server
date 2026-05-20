@@ -105,6 +105,16 @@ class SessionController
     public function reportProgress(Request $request, array $params): Response
     {
         $sessionId = $params['id'] ?? '';
+        $session = $this->sessionManager->getSession($sessionId);
+
+        if (!$session) {
+            return (new Response())->status(404)->json(['error' => 'Session not found']);
+        }
+
+        if ($session['user_id'] !== ($request->userId ?? '')) {
+            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+        }
+
         $data = $request->body;
 
         $mediaItemId = $data['media_item_id'] ?? null;
@@ -139,6 +149,16 @@ class SessionController
     public function getProgress(Request $request, array $params): Response
     {
         $sessionId = $params['id'] ?? '';
+        $session = $this->sessionManager->getSession($sessionId);
+
+        if (!$session) {
+            return (new Response())->status(404)->json(['error' => 'Session not found']);
+        }
+
+        if ($session['user_id'] !== ($request->userId ?? '')) {
+            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+        }
+
         $state = $this->playbackController->getPlaybackState($sessionId);
 
         if (!$state) {

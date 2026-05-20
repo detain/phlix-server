@@ -69,7 +69,7 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 - WebSocket payload shape: `['type' => $event, 'data' => $payload, 'timestamp' => time()]`
 - Tests mock `Workerman\MySQL\Connection` with `$this->createMock(Connection::class)` + `willReturn([['col' => 'val']])`
 - Smarty templates use `{extends}` / `{block}` / `{include file="partials/media_card.tpl"}`
-- Each step in `plans/phase-N/step-N.M-*.md` ends with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`
+- Each step in `docs/archive/plans/phase-N/step-N.M-*.md` ends with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`
 
 ## CI
 
@@ -77,7 +77,7 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 
 ## Reference docs
 
-`README.md` · `DEVELOPER.md` · `SUPERVISOR_PLAN.md` (phase orchestration) · `IMPLEMENTATION_PLAN.md` · `PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `plans/phase-{1..7}/`.
+`README.md` · `docs/dev/DEVELOPER.md` · `docs/archive/SUPERVISOR_PLAN.md` (phase orchestration) · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/dev/PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.
 
 <!-- caliber:managed:pre-commit -->
 ## Before Committing

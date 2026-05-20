@@ -63,7 +63,7 @@ Tests mock the DB with `$this->createMock(Workerman\MySQL\Connection::class)` an
 - PSR-12, `declare(strict_types=1);`, namespaces mirror directories.
 - Logging always via `LoggerFactory::get(LogChannels::HTTP)` — do not instantiate `new Logger` directly.
 - Smarty templates use `{extends}` / `{block}` / `{include file="partials/media_card.tpl"}`.
-- Plan steps under `plans/phase-N/step-N.M-*.md` finish with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`.
+- Plan steps under `docs/archive/plans/phase-N/step-N.M-*.md` finish with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`.
 
 ## Caliber (pre-commit)
 
@@ -71,4 +71,4 @@ A pre-commit hook may sync agent configs via `caliber refresh`. Before committin
 
 ## Further reading
 
-`AGENTS.md` (module/class reference) · `DEVELOPER.md` · `IMPLEMENTATION_PLAN.md` · `SUPERVISOR_PLAN.md` · `PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `plans/phase-{1..7}/`.
+`AGENTS.md` (module/class reference) · `docs/dev/DEVELOPER.md` · `docs/archive/IMPLEMENTATION_PLAN.md` · `docs/archive/SUPERVISOR_PLAN.md` · `docs/dev/PHLEX_MEDIA_SERVER_TECHNICAL_SPEC.md` · `PLATFORM_{ROKU,SAMSUNG_TIZEN,WINDOWS,MOBILE}.md` · per-phase plans under `docs/archive/plans/phase-{1..7}/`.

@@ -10,7 +10,7 @@
 
 | # | Criterion | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | All 3 repos tagged v1.0.0 on detain/* | ⏳ IN PROGRESS | Tags pending |
+| 1 | All 3 repos tagged v1.0.0 on detain/* | ✅ YES | Pushed 2026-05-19 per git tag verification |
 | 2 | All 3 repos have description + 19 topics | ✅ YES | Verified via gh api |
 | 3 | All 4 clients have hub-mode shipped | ✅ YES | M.1-M.7 merged per Wave 6 handoff |
 | 4 | ≥3 plugins published (Last.fm, Discord, OIDC) | ⚠️ PARTIAL | Last.fm ✅, Example ✅; Discord/OIDC pending verification |
@@ -41,9 +41,9 @@
 - [x] phlex-shared CHANGELOG.md — v1.0.0 section added
 
 ### Tag creation
-- [ ] phlex-server v1.0.0 tag pushed
-- [ ] phlex-hub v1.0.0 tag pushed
-- [ ] phlex-shared v1.0.0 tag pushed
+- [x] phlex-server v1.0.0 tag pushed (2026-05-19)
+- [x] phlex-hub v1.0.0 tag pushed (2026-05-19)
+- [x] phlex-shared v1.0.0 tag pushed (2026-05-19)
 
 ### Docker images
 - [x] Verified ghcr.io/detain/phlex-server exists with recent multi-arch builds

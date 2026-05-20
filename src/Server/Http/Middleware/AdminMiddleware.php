@@ -36,7 +36,7 @@ use Phlix\Server\Http\Response;
  * authenticated via the Authorization Bearer header (JWT). Browsers do
  * not auto-attach Authorization headers across origins, so a CSRF
  * token is intentionally NOT required — see also
- * `docs/plugins/install-from-url.md`.
+ * https://detain.github.io/phlix-docs/plugins/install-from-url
  *
  * @package Phlix\Server\Http\Middleware
  * @since   0.10.0 (Step A.5)

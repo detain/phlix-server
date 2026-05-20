@@ -13,17 +13,18 @@ End-user, hub-admin, client, plugin, and reference documentation lives in the de
 ### Brand
 - [`brand/`](brand/) — Phlix brand identity kits, logo concepts, SVG/UI prompts. Sourced by [`phlix-website`](https://github.com/detain/phlix-website).
 
-### Plugins (server-side install flows)
-- [Install from catalog](plugins/install-from-catalog.md)
-- [Install from URL](plugins/install-from-url.md)
+### Runtime assets
+- [`plugins/manifest.schema.json`](plugins/manifest.schema.json) — JSON-Schema loaded at runtime by `src/Plugins/Manifest/ManifestSchema.php` via `SCHEMA_RELATIVE_PATH`. Kept here, not in phlix-docs, because the server reads it from disk. The phlix-docs copy is published documentation only.
 
-The plugin developer guide, manifest schema, trusted-plugin list, auth-provider catalog, and full plugin catalog now live in [`phlix-docs`](https://detain.github.io/phlix-docs/plugins/).
+### Plugins, API, environment, install flows
+Now live in [`phlix-docs`](https://github.com/detain/phlix-docs):
 
-### Reference (server-side)
-- [API Reference](reference/api.md) — server-internal API notes
-- [Environment Variables](reference/env-vars.md) — server-side env reference
-
-CLI, skip-button protocol, webauthn API, admin-plugins API, and hub JWKS schema reference all live in [`phlix-docs`](https://detain.github.io/phlix-docs/reference/).
+- [Install from catalog](https://detain.github.io/phlix-docs/plugins/install-from-catalog)
+- [Install from URL](https://detain.github.io/phlix-docs/plugins/install-from-url)
+- [Plugin developer guide](https://detain.github.io/phlix-docs/plugins/developer-guide), [manifest](https://detain.github.io/phlix-docs/plugins/manifest), [plugin catalog](https://detain.github.io/phlix-docs/plugins/plugin-catalog), [trusted-plugin list](https://detain.github.io/phlix-docs/plugins/trusted-plugin-list), [auth-provider plugins](https://detain.github.io/phlix-docs/plugins/auth-providers)
+- [API reference](https://detain.github.io/phlix-docs/reference/api)
+- [Environment variables](https://detain.github.io/phlix-docs/reference/env-vars)
+- [CLI](https://detain.github.io/phlix-docs/reference/cli), [skip-button protocol](https://detain.github.io/phlix-docs/reference/skip-button-protocol), [webauthn API](https://detain.github.io/phlix-docs/reference/api/auth-webauthn), [admin-plugins API](https://detain.github.io/phlix-docs/reference/api/admin-plugins), [hub JWKS schema](https://detain.github.io/phlix-docs/reference/api/hub-jwks)
 
 ### Archived material
 - [`archive/`](archive/) — old planning documents and superseded material

@@ -364,4 +364,63 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertEquals(['year' => 2020, 'director' => 'Test Director'], $result['metadata']);
     }
+
+    public function testFindShowsWithUnfingerprintedEpisodesReturnsDistinctShowIds(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            ['show_id' => 'show-1'],
+            ['show_id' => 'show-2'],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
+
+        $this->assertIsArray($result);
+        $this->assertCount(2, $result);
+        $this->assertEquals('show-1', $result[0]);
+        $this->assertEquals('show-2', $result[1]);
+    }
+
+    public function testFindShowsWithUnfingerprintedEpisodesReturnsEmptyWhenNoUnfingerprintedEpisodes(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
+
+        $this->assertIsArray($result);
+        $this->assertEmpty($result);
+    }
+
+    public function testFindShowsWithUnfingerprintedEpisodesReturnsEmptyWhenDbReturnsNonArray(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(null);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
+
+        $this->assertIsArray($result);
+        $this->assertEmpty($result);
+    }
+
+    public function testFindShowsWithUnfingerprintedEpisodesRespectsLimit(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // Verify the query uses the limit parameter
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('LIMIT ?'),
+                $this->callback(function ($params) {
+                    return is_array($params) && ($params[0] ?? null) === 10;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->findShowsWithUnfingerprintedEpisodes(10);
+    }
 }

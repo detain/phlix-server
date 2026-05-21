@@ -12,6 +12,7 @@ RUN apk add --no-cache \
     oniguruma-dev \
     libpng-dev \
     curl \
+    libcurl-dev \
     bash \
     tar \
     gzip \

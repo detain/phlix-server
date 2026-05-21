@@ -16,6 +16,8 @@ RUN apk add --no-cache \
     bash \
     tar \
     gzip \
+    unzip \
+    7zip \
     # Build tools for extensions
     cmake \
     autoconf \

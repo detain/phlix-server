@@ -10,7 +10,7 @@ class ApplicationTest extends TestCase
     public function testApplicationCanBeInstantiated(): void
     {
         $configPath = __DIR__ . '/../../../../config/server.php';
-        $app = new Application($configPath);
+        $app = Application::fromConfigPath($configPath);
 
         $this->assertInstanceOf(Application::class, $app);
     }

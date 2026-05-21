@@ -51,7 +51,7 @@ class HlsController
         // In real implementation, this would read from cache or generate on-demand
         $segments = [];
         for ($i = 0; $i < 120; $i++) {
-            $segments[] = ['duration' => 6];
+            $segments[] = ['duration' => 6.0];
         }
 
         $playlist = $this->hlsStreamer->generateVariantPlaylist($jobId, $variantIndex, $segments, 6);

@@ -115,7 +115,7 @@ class DeviceRegistry
 
         try {
             $this->sendSsdpSearch($timeout);
-            $this->discoveryTimestamps['last'] = time();
+            $this->discoveryTimestamps['last'] = (float) time();
 
             // Clean up stale devices
             $this->removeStaleDevices();
@@ -315,7 +315,7 @@ class DeviceRegistry
 
         if ($device !== null) {
             $this->devices[$usn] = $device;
-            $this->discoveryTimestamps[$usn] = time() + $maxAge;
+            $this->discoveryTimestamps[$usn] = (float) (time() + $maxAge);
 
             $this->logger->info('Discovered device', [
                 'udn' => $device->getUdn(),
@@ -520,7 +520,7 @@ class DeviceRegistry
     public function registerDevice(DlnaDevice $device): void
     {
         $this->devices[$device->getUdn()] = $device;
-        $this->discoveryTimestamps[$device->getUdn()] = time();
+        $this->discoveryTimestamps[$device->getUdn()] = (float) time();
 
         $this->logger->info('Device registered manually', [
             'udn' => $device->getUdn(),

@@ -1,10 +1,10 @@
 # ============================================================================
 # Phlix Server — NVIDIA (CUDA) hardware acceleration build
 # ----------------------------------------------------------------------------
-# Path layout note: this variant inherits from `nvidia/cuda:*` (Ubuntu 22.04)
+# Path layout note: this variant inherits from `nvidia/cuda:*` (Ubuntu 24.04)
 # instead of the Alpine-based `php:8.3-fpm-alpine`. NVIDIA's CUDA runtime
-# requires a glibc-based distribution, so the official php:* image cannot be
-# used as the base. As a consequence:
+# requires a glibc-based distribution, so the official php:* image cannot
+# be used as the base. As a consequence:
 #
 #   * PHP config lives under `/etc/php/8.3/fpm/` (Debian/Ubuntu layout),
 #     not `/usr/local/etc/php/conf.d/` (Alpine layout used by `Dockerfile`).
@@ -14,20 +14,19 @@
 #
 # Rationale recorded in: docker/README.md
 # ============================================================================
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.0-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    php8.3-fpm \
-    php8.3-cli \
-    php8.3-mysql \
-    php8.3-zip \
-    php8.3-gd \
-    php8.3-json \
-    php8.3-fileinfo \
-    php8.3-bcmath \
-    php8.3-xml \
+    php-fpm \
+    php-cli \
+    php-mysql \
+    php-zip \
+    php-gd \
+    php-fileinfo \
+    php-bcmath \
+    php-xml \
     nginx \
     supervisor \
     ffmpeg \

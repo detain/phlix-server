@@ -2,7 +2,6 @@
     "name": "detain/phlix-server",
     "type": "project",
     "license": "proprietary",
-    "version": "1.0.0",
     "repositories": [
         {
             "type": "vcs",

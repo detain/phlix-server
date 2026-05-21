@@ -126,7 +126,7 @@ class HlsStreamer
         $playlist .= "#EXT-X-PLAYLIST-TYPE:VOD\n";
 
         foreach ($segments as $i => $segment) {
-            $duration = $segment['duration'] ?? $targetDuration;
+            $duration = (float) ($segment['duration'] ?? $targetDuration);
             $playlist .= "#EXTINF:{$duration},\n";
             $playlist .= "segment_{$variantIndex}_" . sprintf('%03d', $i) . ".ts\n";
         }

@@ -44,6 +44,7 @@ RUN apk add --no-cache \
         pcntl \
         posix \
         bcmath \
+        sockets \
     && rm -rf /var/cache/apk/* /tmp/pear
 
 # Build and install swoole

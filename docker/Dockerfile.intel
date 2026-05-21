@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     ffmpeg \
     intel-media-va-driver-non-free \
-    curl \
+    libcurl4-openssl-dev \
     bash \
     tar \
     gzip \

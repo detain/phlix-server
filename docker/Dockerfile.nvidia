@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
     nginx \
     supervisor \
     ffmpeg \
-    curl \
+    libcurl4-openssl-dev \
     bash \
     tar \
     gzip \

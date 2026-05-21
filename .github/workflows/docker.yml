@@ -10,7 +10,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   docker:
@@ -36,14 +35,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -51,7 +50,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -61,7 +60,7 @@ jobs:
             type=sha,prefix=
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -90,7 +89,7 @@ jobs:
 
     steps:
       - name: Checkout phlix-hub repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: detain/phlix-hub
           ref: master
@@ -105,11 +104,11 @@ jobs:
           fi
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -122,7 +121,7 @@ jobs:
           echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push phlix-hub
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: phlix-hub
           file: phlix-hub/Dockerfile

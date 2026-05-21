@@ -8,7 +8,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ghcr.io/detain/phlix-server
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   verify-chart-version:
@@ -18,7 +17,7 @@ jobs:
       version: ${{ steps.version.outputs.VERSION }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get version from tag
         id: version
@@ -60,10 +59,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: v3.14.0
 
@@ -80,7 +79,7 @@ jobs:
           ls -la dist/charts/
 
       - name: Upload chart artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helm-charts
           path: dist/charts/*.tgz
@@ -96,7 +95,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -105,7 +104,7 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Download chart artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: helm-charts
           path: dist/charts
@@ -123,7 +122,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Phlix Server ${{ github.ref_name }}

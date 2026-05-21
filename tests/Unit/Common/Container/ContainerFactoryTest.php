@@ -8,12 +8,14 @@ use DI\ContainerBuilder;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Common\Container\Providers\EventServicesProvider;
 use Phlix\Common\Container\Providers\MediaServicesProvider;
 use Phlix\Common\Container\Providers\PluginsProvider;
 use Phlix\Common\Container\Providers\SessionServicesProvider;
+use Phlix\Common\Container\Providers\ThemingServicesProvider;
 use Phlix\Common\Container\Providers\WebPortalServicesProvider;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Logger\LoggerFactory;
@@ -241,7 +243,7 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(9, $providers);
+        $this->assertCount(11, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
@@ -250,7 +252,9 @@ final class ContainerFactoryTest extends TestCase
         $this->assertInstanceOf(\Phlix\Common\Container\Providers\NetworkServicesProvider::class, $providers[5]);
         $this->assertInstanceOf(SessionServicesProvider::class, $providers[6]);
         $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[7]);
-        $this->assertInstanceOf(PluginsProvider::class, $providers[8]);
+        $this->assertInstanceOf(AdminServicesProvider::class, $providers[8]);
+        $this->assertInstanceOf(PluginsProvider::class, $providers[9]);
+        $this->assertInstanceOf(ThemingServicesProvider::class, $providers[10]);
     }
 
     public function test_resolves_hls_streamer_with_config_overrides(): void

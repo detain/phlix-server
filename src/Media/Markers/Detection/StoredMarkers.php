@@ -12,24 +12,24 @@ namespace Phlix\Media\Markers\Detection;
 final class StoredMarkers
 {
     /**
-     * @param string|null                $intro_start_seconds Intro start time or null
-     * @param string|null                $intro_end_seconds   Intro end time or null
-     * @param string|null                $intro_fingerprint   Intro fingerprint or null
-     * @param int|null                   $intro_confidence    Intro confidence or null
-     * @param string|null                $outro_start_seconds Outro start time or null
-     * @param string|null                $outro_end_seconds   Outro end time or null
-     * @param string|null                $outro_fingerprint  Outro fingerprint or null
-     * @param int|null                   $outro_confidence    Outro confidence or null
+     * @param int|null    $intro_start_seconds Intro start time in seconds or null
+     * @param int|null    $intro_end_seconds   Intro end time in seconds or null
+     * @param string|null $intro_fingerprint   Intro fingerprint or null
+     * @param int|null    $intro_confidence    Intro confidence or null
+     * @param int|null    $outro_start_seconds Outro start time in seconds or null
+     * @param int|null    $outro_end_seconds   Outro end time in seconds or null
+     * @param string|null $outro_fingerprint   Outro fingerprint or null
+     * @param int|null    $outro_confidence    Outro confidence or null
      *
      * @since 0.12.0
      */
     public function __construct(
-        public readonly ?string $intro_start_seconds,
-        public readonly ?string $intro_end_seconds,
+        public readonly ?int $intro_start_seconds,
+        public readonly ?int $intro_end_seconds,
         public readonly ?string $intro_fingerprint,
         public readonly ?int $intro_confidence,
-        public readonly ?string $outro_start_seconds,
-        public readonly ?string $outro_end_seconds,
+        public readonly ?int $outro_start_seconds,
+        public readonly ?int $outro_end_seconds,
         public readonly ?string $outro_fingerprint,
         public readonly ?int $outro_confidence,
     ) {
@@ -63,15 +63,15 @@ final class StoredMarkers
         $outroConfidence = null;
 
         if ($introCandidate !== null) {
-            $introStartSeconds = is_string($introCandidate['start_seconds'] ?? null) ? $introCandidate['start_seconds'] : null;
-            $introEndSeconds = is_string($introCandidate['end_seconds'] ?? null) ? $introCandidate['end_seconds'] : null;
+            $introStartSeconds = is_int($introCandidate['start_seconds'] ?? null) ? $introCandidate['start_seconds'] : null;
+            $introEndSeconds = is_int($introCandidate['end_seconds'] ?? null) ? $introCandidate['end_seconds'] : null;
             $introFingerprint = is_string($introCandidate['fingerprint'] ?? null) ? $introCandidate['fingerprint'] : null;
             $introConfidence = is_int($introCandidate['confidence'] ?? null) ? $introCandidate['confidence'] : null;
         }
 
         if ($outroCandidate !== null) {
-            $outroStartSeconds = is_string($outroCandidate['start_seconds'] ?? null) ? $outroCandidate['start_seconds'] : null;
-            $outroEndSeconds = is_string($outroCandidate['end_seconds'] ?? null) ? $outroCandidate['end_seconds'] : null;
+            $outroStartSeconds = is_int($outroCandidate['start_seconds'] ?? null) ? $outroCandidate['start_seconds'] : null;
+            $outroEndSeconds = is_int($outroCandidate['end_seconds'] ?? null) ? $outroCandidate['end_seconds'] : null;
             $outroFingerprint = is_string($outroCandidate['fingerprint'] ?? null) ? $outroCandidate['fingerprint'] : null;
             $outroConfidence = is_int($outroCandidate['confidence'] ?? null) ? $outroCandidate['confidence'] : null;
         }

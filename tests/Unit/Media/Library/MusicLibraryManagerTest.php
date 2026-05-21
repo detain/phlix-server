@@ -305,7 +305,7 @@ class MusicLibraryManagerTest extends TestCase
         $libraryId = 'test-lib-albums';
 
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params) {
+            ->willReturnCallback(function ($sql, $params) use ($libraryId) {
                 if (strpos($sql, 'SELECT') !== false && strpos($sql, 'media_items') !== false) {
                     return [
                         [
@@ -346,7 +346,7 @@ class MusicLibraryManagerTest extends TestCase
         $libraryId = 'test-lib-tracks';
 
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params) {
+            ->willReturnCallback(function ($sql, $params) use ($libraryId) {
                 if (strpos($sql, 'SELECT') !== false && strpos($sql, 'media_items') !== false) {
                     return [
                         [

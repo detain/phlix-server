@@ -53,7 +53,11 @@ class AuthController
         $email = $data['email'] ?? null;
         $password = $data['password'] ?? null;
 
-        if (!is_string($username) || $username === '' || !is_string($email) || $email === '' || !is_string($password) || $password === '') {
+        if (
+            !is_string($username) || $username === ''
+            || !is_string($email) || $email === ''
+            || !is_string($password) || $password === ''
+        ) {
             return (new Response())->status(400)->json([
                 'error' => 'Missing required fields: username, email, password',
             ]);

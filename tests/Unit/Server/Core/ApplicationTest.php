@@ -3,6 +3,7 @@
 namespace Phlix\Tests\Unit\Server\Core;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Common\Database\ConnectionPool;
 use Phlix\Server\Core\Application;
 
 class ApplicationTest extends TestCase
@@ -17,6 +18,13 @@ class ApplicationTest extends TestCase
         if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
             $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application boot smoke test.');
         }
+
+        // ConnectionPool keeps process-wide static state. If another test in
+        // the suite already initialised it (e.g. via the prod
+        // config/database.php with user "phlix"), our temp config below
+        // would be ignored and the pool would reuse those creds. Reset the
+        // statics so this test starts from a clean slate.
+        $this->resetConnectionPool();
 
         // Application::fromConfigPath() expects the same shape that
         // public/index.php builds: server config + paths to the db and
@@ -40,6 +48,19 @@ class ApplicationTest extends TestCase
         }
     }
 
+    private function resetConnectionPool(): void
+    {
+        $ref = new \ReflectionClass(ConnectionPool::class);
+        foreach (['instance' => null, 'connections' => [], 'configPath' => ''] as $prop => $value) {
+            if (!$ref->hasProperty($prop)) {
+                continue;
+            }
+            $p = $ref->getProperty($prop);
+            $p->setAccessible(true);
+            $p->setValue(null, $value);
+        }
+    }
+
     private function isMysqlReachable(string $host, int $port): bool
     {
         $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
@@ -53,14 +74,16 @@ class ApplicationTest extends TestCase
     private function writeTempDbConfig(): string
     {
         $path = tempnam(sys_get_temp_dir(), 'phlix-db-test-');
+        // Honour the env credentials phpunit.xml exports so the CI workflow
+        // (which uses a non-root DB user) can connect.
         file_put_contents($path, "<?php\nreturn " . var_export([
             'connections' => [
                 'mysql' => [
-                    'host'     => '127.0.0.1',
-                    'port'     => 3306,
-                    'username' => 'root',
-                    'password' => '',
-                    'database' => 'phlix_test',
+                    'host'     => getenv('DB_HOST') ?: '127.0.0.1',
+                    'port'     => (int) (getenv('DB_PORT') ?: 3306),
+                    'username' => getenv('DB_USER') ?: 'root',
+                    'password' => getenv('DB_PASSWORD') ?: '',
+                    'database' => getenv('DB_DATABASE') ?: 'phlix_test',
                 ],
             ],
         ], true) . ';');

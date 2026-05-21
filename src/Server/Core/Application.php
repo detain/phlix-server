@@ -835,7 +835,10 @@ class Application
             $this->router->post('/cds/control', [$cdsControlController, 'handle']);
 
             // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
-            $this->router->get('/scpd/{service}.xml', function (\Phlix\Server\Http\Request $request, array $params) use ($cdsServer): \Phlix\Server\Http\Response {
+            $this->router->get('/scpd/{service}.xml', function (
+                \Phlix\Server\Http\Request $request,
+                array $params
+            ) use ($cdsServer): \Phlix\Server\Http\Response {
                 $serviceRaw = $params['service'] ?? '';
                 $service = is_string($serviceRaw) ? $serviceRaw : '';
                 $scpdXml = $cdsServer->getScpdXml($service);

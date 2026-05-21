@@ -105,7 +105,8 @@ final class StatsController
      * Get storage usage snapshots.
      *
      * `GET /api/v1/admin/stats/storage` →
-     * `200 { "data": [{id, recorded_at, library_id, media_type, item_count, total_bytes, transcode_cache_bytes}, ...] }`
+     * `200 { "data": [{id, recorded_at, library_id, media_type, item_count,
+     *                  total_bytes, transcode_cache_bytes}, ...] }`
      *
      * @param Request              $request The HTTP request (unused)
      * @param array<string,string> $params  Path parameters (unused)

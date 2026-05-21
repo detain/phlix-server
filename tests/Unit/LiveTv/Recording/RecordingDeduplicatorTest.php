@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\LiveTv\Recording;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Recording\RecordingDeduplicator;
 use Workerman\MySQL\Connection;
 
@@ -48,9 +49,12 @@ class RecordingDeduplicatorTest extends TestCase
 
     public function testIsDuplicateReturnsTrueForExisting(): void
     {
-        $mockResult = new class {
-            public $num_rows = 1;
-            public function fetch() { return ['recording_id' => 'rec_existing']; }
+        $mockResult = new class extends ResultSet {
+            public int $num_rows = 1;
+            public function fetch(): array|false
+            {
+                return ['recording_id' => 'rec_existing'];
+            }
         };
 
         $this->mockDb->expects($this->once())

@@ -32,6 +32,7 @@ RUN apk add --no-cache \
     brotli-dev \
     zstd-dev \
     nghttp2-dev \
+    postgresql-dev \
     && docker-php-ext-install \
         pdo \
         pdo_mysql \

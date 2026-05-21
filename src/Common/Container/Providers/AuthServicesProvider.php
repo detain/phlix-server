@@ -12,8 +12,12 @@ use Phlix\Auth\ProviderManager;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
+use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
+use Phlix\Auth\WebAuthn\WebAuthnManager;
+use Phlix\Auth\WebAuthn\WebAuthnSettings;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Server\Http\Controllers\WebAuthnController;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -84,6 +88,19 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.auth'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('db', get(\Workerman\MySQL\Connection::class)),
+
+            // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
+            // Without this factory, php-di would try to autowire string scalars
+            // and fail with "Parameter $rpId of __construct() has no value defined".
+            WebAuthnSettings::class => factory(
+                static function () use ($appConfig): WebAuthnSettings {
+                    $cfg = is_array($appConfig['webauthn'] ?? null) ? $appConfig['webauthn'] : [];
+                    return WebAuthnSettings::fromConfig($cfg);
+                }
+            ),
+            WebAuthnCredentialRepository::class => autowire(),
+            WebAuthnManager::class => autowire(),
+            WebAuthnController::class => autowire(),
         ]);
     }
 }

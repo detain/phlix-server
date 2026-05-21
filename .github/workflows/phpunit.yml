@@ -88,7 +88,11 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
-          fail_ci_if_error: true
+          # Non-blocking: Codecov upload is informational. A repo not
+          # yet activated in the Codecov UI returns "Repository not
+          # found" — that should not fail the test workflow. Activate
+          # at https://app.codecov.io to flip this on later.
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
   test-server:

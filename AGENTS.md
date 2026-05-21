@@ -29,6 +29,19 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 
 **Auth** (`src/Auth/`): `JwtHandler.php` HS256, 1h access / 7d refresh, `iss=phlix`. `UserRepository.php` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager.php` orchestrates register/login/refresh, calls `AuditLogger`. `UserProfileManager.php` enforces up to 5 profiles, PIN (4 or 6 digits, Argon2ID), rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory.php` tracks 90% completion threshold.
 
+**Auth DI bindings** (`src/Common/Container/Providers/AuthServicesProvider.php`): the **only** place WebAuthn services are wired into the container. `WebAuthnSettings` is a `factory()` that reads `$appConfig['webauthn']` and calls `WebAuthnSettings::fromConfig()`; `WebAuthnCredentialRepository`, `WebAuthnManager`, and `WebAuthnController` are `autowire()`d off it. Without this provider, php-di tries to autowire `WebAuthnSettings`'s three `string` ctor params (`rpId`/`rpName`/`rpOrigin`) and fails Application boot with `"Parameter \$rpId of __construct() has no value defined or guessable"`. `WebAuthnSettings::fromConfig()` applies defaults (`localhost` / `Phlix Media Server` / `https://localhost` / `attestation_required = false`) so every `webauthn` config key is optional. When you add a new WebAuthn-touching controller or service, register it here — not in some new provider.
+
+**`webauthn` config shape** (under `$appConfig`, e.g. `config/server.php`):
+
+```php
+'webauthn' => [
+    'rp_id'                => 'phlix.example.com',  // string, default 'localhost'
+    'rp_name'              => 'Phlix Media Server', // string, default 'Phlix Media Server'
+    'rp_origin'            => 'https://phlix.example.com', // string, default 'https://localhost'
+    'attestation_required' => false,                // bool, default false
+],
+```
+
 **Media** (`src/Media/`):
 - `Library/`: `LibraryManager.php` · `MediaScanner.php` (parses `S01E02`, `(2020)`) · `FolderWatcher.php` (mtime checksum) · `ItemRepository.php` (hydrates `metadata_json`)
 - `Metadata/`: `MetadataManager.php` priority `tmdb→local` (movie), `tvdb→fanart→local` (series); 24h cache via `metadata_refreshed_at`. Providers: `TmdbProvider.php`, `TvdbProvider.php`, `FanartProvider.php`, `LocalNfoProvider.php` — all implement `MetadataProviderInterface.php`. Shared client: `MetadataHttpClient.php`.
@@ -38,6 +51,10 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 **Session** (`src/Session/`): `SessionManager.php` device sessions · `PlaybackController.php` continue-watching (<95%) · `SyncPlay/` group state, `TimeSync.php` NTP-style with `OFFSET_SAMPLE_COUNT=5`, weighted-mean offset.
 
 **Other modules**: `src/LiveTv/` (`ChannelManager`, `GuideManager`, `Recorder`, `LiveTvManager`) · `src/Dlna/` (`ContentDirectory`, `AvTransport`, `DlnaServer`, `DeviceRegistry`, `DlnaDevice`).
+
+**Theming** (`src/Theming/`): `ThemeMiddleware.php` is **post-render** — it runs `str_replace()` over the already-rendered HTML body looking for the literal strings `{$theme_css|raw}` and `{$theme_js|raw}`. Those are NOT Smarty variables; `|raw` is Twig syntax and Smarty has no equivalent modifier. In `public/templates/layouts/base.tpl` both markers MUST be wrapped in `{literal}…{/literal}` so Smarty emits them verbatim and ThemeMiddleware can find them. If you "fix" them to look like real Smarty (`{$theme_css}` etc.) Smarty will undef-warn and the theme will silently fail to load.
+
+**Marker detection types** (`src/Media/Markers/`): every writer (`IntroMarkerCandidate`, `OutroMarkerCandidate`, and the `INT UNSIGNED` DB columns) types `start_seconds` / `end_seconds` as `int`. `Detection\StoredMarkers` is read-side and must validate with `is_int()` — a previous `is_string()` check made `hasIntro()` / `hasOutro()` always return false on real production data. Both properties are `?int`. Do not "loosen" them to accept strings without changing every writer too.
 
 **Common** (`src/Common/`):
 - `Database/`: `ConnectionPool.php` (static `init()`/`getConnection('mysql')`), `QueryBuilder.php`
@@ -74,6 +91,12 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 ## CI
 
 `.github/workflows/phpunit.yml` and `.github/workflows/coding-standards.yml` run on push. Coverage HTML in `coverage-report/`, Clover at `coverage.xml`.
+
+**Test DB credentials.** `phpunit.xml` exports `DB_HOST=127.0.0.1`, `DB_DATABASE=phlix_test`, `DB_USER=root`, `DB_PASSWORD=root` — those must match the workflow's `services: mysql:8.0` container, which sets `MYSQL_ROOT_PASSWORD=root` and `MYSQL_DATABASE=phlix_test`. `tests/Integration/Server/Core/ApplicationTest.php`'s `writeTempDbConfig()` reads those env vars when building the temp `config/database.php` for the smoke-boot test, so if you change either side (the workflow service or `phpunit.xml`) you MUST update the other in the same commit or CI fails with `Access denied for user 'root'@... (using password: NO)`.
+
+**Coverage threshold.** `phpunit.yml` enforces a minimum statement-coverage percentage computed from the Clover XML (`/coverage/project/metrics/@statements` and `@coveredstatements`) — NOT Cobertura's `@line-rate`, which PHPUnit does not emit and which silently returns 0 if you re-introduce it. Current floor is `MIN_COVERAGE=40` (just below the actual ~50%). Bump it as coverage grows; never set it above current coverage or every PR turns red.
+
+**Codecov.** `CODECOV_TOKEN` is provisioned on every repo, but uploads are non-blocking (`fail_ci_if_error: false`) until someone clicks through at <https://app.codecov.io> to flip the repo's `activated: true` flag. The Codecov v2 API does **not** expose programmatic repo activation (PATCH/PUT/POST on the repo endpoint return 405/404), so this step cannot be scripted — don't re-investigate.
 
 ## Reference docs
 

@@ -2320,6 +2320,32 @@ class ResponseTest extends TestCase
 ./vendor/bin/phpunit --filter testCanCreate
 ```
 
+### The `network` test group
+
+`phpunit.xml` declares a `<groups><exclude><group>network</group></exclude></groups>`
+filter. Any test that issues real HTTP/UDP/SSDP traffic to a LAN host
+(HDHomeRun discovery, DLNA play-to/renderer control, etc.) is tagged
+`@group network` and **does not run by default** — including in CI.
+
+Current members of the group:
+
+- `tests/Unit/Dlna/PlayToManagerTest.php`
+- `tests/Unit/Dlna/RendererControlClientTest.php`
+- `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunDiscoveryTest.php`
+
+To opt in (typically only useful on a machine that actually has a
+HDHomeRun tuner / a DLNA renderer on the LAN):
+
+```bash
+./vendor/bin/phpunit --group network
+```
+
+**Convention for new tests:** if a test attempts to open a socket to a
+real device, broadcast on the LAN, or hit a URL that is not a
+`PHPUnit\Framework\MockObject` or a localhost stub, add
+`@group network` to its docblock so it does not break CI on machines
+without the matching hardware.
+
 ### Continuous Integration
 
 GitHub Actions workflows run on every push:
@@ -2329,6 +2355,76 @@ GitHub Actions workflows run on every push:
 3. **PHPStan**: Level 9 static analysis
 4. **Psalm**: Additional static analysis
 5. **Security Audit**: Checks for known vulnerabilities
+
+#### Test database credentials
+
+`phpunit.xml` declares the DB env vars the test suite uses, and they
+**must** stay in lockstep with the `services: mysql:8.0` container in
+`.github/workflows/phpunit.yml`:
+
+| `phpunit.xml` `<env>` | Workflow service value |
+| --- | --- |
+| `DB_HOST=127.0.0.1` | `mysql` service, port-forwarded to 3306 on the runner |
+| `DB_PORT=3306` | `--health-cmd` waits for 3306 |
+| `DB_DATABASE=phlix_test` | `MYSQL_DATABASE=phlix_test` |
+| `DB_USER=root` | mysql's built-in root user |
+| `DB_PASSWORD=root` | `MYSQL_ROOT_PASSWORD=root` |
+
+`tests/Integration/Server/Core/ApplicationTest.php`'s
+`writeTempDbConfig()` reads those env vars when generating a temporary
+`config/database.php` for the application-boot smoke test. If you change
+either side without updating the other, CI fails with
+`Access denied for user 'root'@'172.18.0.1' (using password: NO)` once
+the connection actually fires.
+
+#### Coverage threshold
+
+The "Check minimum coverage threshold" step in `phpunit.yml` parses
+Clover XML, not Cobertura. PHPUnit's `--coverage-clover` writes:
+
+```xml
+<coverage>
+  <project>
+    <metrics statements="12345" coveredstatements="6789" .../>
+  </project>
+</coverage>
+```
+
+The bash uses:
+
+```bash
+STMTS=$(xmllint --xpath "string(/coverage/project/metrics/@statements)" coverage.xml)
+COVERED=$(xmllint --xpath "string(/coverage/project/metrics/@coveredstatements)" coverage.xml)
+PCT=$(echo "scale=2; $COVERED * 100 / $STMTS" | bc)
+```
+
+**Do not** swap that back to `@line-rate` — that is Cobertura syntax,
+PHPUnit doesn't emit it, the xpath returns the empty string, bash coerces
+to `0`, and the workflow fails "Coverage 0% is below minimum N%" while
+PHPUnit's own summary reports the real number.
+
+Current floor is `MIN_COVERAGE=40` (just below the ~50% actual). Bump it
+upward as coverage grows; never set it above current coverage or every PR
+turns red.
+
+#### Codecov
+
+The "Upload coverage to Codecov" step is gated on `env.CODECOV_TOKEN != ''`
+(step `if`-expressions cannot read the `secrets` context — use
+`env.CODECOV_TOKEN` after exporting the secret into the step's `env:`
+block). The token is provisioned org-wide via the helper script at
+`../set-codecov-token.sh`.
+
+The upload itself is **non-blocking** — `fail_ci_if_error: false`.
+Codecov's API requires the repo be `activated: true` in the Codecov UI,
+and until someone manually syncs at <https://app.codecov.io>, every upload
+returns "Repository not found" with a non-zero exit. Letting that fail CI
+would block unrelated PRs on a one-time UI action that has no API.
+
+The Codecov v2 REST API explicitly does not expose programmatic repo
+activation: `PATCH`, `PUT`, and `POST` against
+`/api/v2/{service}/{owner}/repos/{repo}/` all return 404/405. Do not
+re-investigate; the only path forward is the UI click-through.
 
 ---
 

@@ -80,9 +80,6 @@ RUN git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv \
     && echo "extension=uv.so" > /usr/local/etc/php/conf.d/docker-php-ext-uv.ini \
     && cd / && rm -rf /tmp/php-uv
 
-# Enable all extensions
-RUN phpenmod -v ALL -s ALL
-
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # PHP overrides (Alpine layout — official php:* image uses /usr/local/etc/php/conf.d/)

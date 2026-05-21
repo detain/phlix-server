@@ -33,6 +33,8 @@ RUN apk add --no-cache \
     zstd-dev \
     nghttp2-dev \
     postgresql-dev \
+    sqlite-dev \
+    c-ares-dev \
     && docker-php-ext-install \
         pdo \
         pdo_mysql \

@@ -60,7 +60,7 @@ jobs:
             type=sha,prefix=
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -68,8 +68,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }},mode=max
           build-args: |
             PHP_VERSION=8.3
             PHLIX_VERSION=${{ github.ref_name }}
@@ -121,12 +121,12 @@ jobs:
           echo "tags=${{ env.REGISTRY }}/detain/phlix-hub:latest,${{ env.REGISTRY }}/detain/phlix-hub:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push phlix-hub
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: phlix-hub
           file: phlix-hub/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.hubmeta.outputs.tags }}
-          cache-from: type=gha,scope=phlix-hub
-          cache-to: type=gha,mode=max,scope=phlix-hub
+          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:latest
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:latest,mode=max

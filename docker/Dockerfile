@@ -35,6 +35,8 @@ RUN apk add --no-cache \
     postgresql-dev \
     sqlite-dev \
     c-ares-dev \
+    liburing-dev \
+    libssh2-dev \
     && docker-php-ext-install \
         pdo \
         pdo_mysql \
@@ -58,13 +60,16 @@ RUN git clone --depth=1 https://github.com/swoole/swoole-src.git /tmp/swoole \
         --enable-swoole-curl \
         --enable-cares \
         --enable-swoole-pgsql \
-        --enable-swoole-curl \
         --with-openssl-dir=/usr \
         --with-nghttp2-dir=/usr \
         --enable-swoole-sqlite \
         --enable-swoole-coro-time \
         --enable-zstd \
         --enable-brotli \
+        --enable-iouring \
+        --enable-uring-socket \
+        --with-swoole-ssh2 \
+        --enable-swoole-ftp \
     && make -j$(nproc) \
     && make install \
     && echo "extension=swoole.so" > /usr/local/etc/php/conf.d/docker-php-ext-swoole.ini \
@@ -94,11 +99,14 @@ RUN mkdir -p /var/www/html /var/phlix/{config,data,logs,backups} \
 
 WORKDIR /var/www/html
 
+# Composer install in two stages so the vendor layer caches across builds —
+# only invalidated when composer.{json,lock} change, not on every source edit.
+COPY composer.json composer.lock /var/www/html/
+RUN composer install --no-dev --prefer-dist --no-scripts --no-autoloader --ignore-platform-reqs
+
 COPY . /var/www/html/
 
-# Composer install — DO NOT silence with `|| true`; a failure here means a
-# broken image and we want CI to surface it.
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
+RUN composer dump-autoload --no-dev --optimize
 
 EXPOSE 80 443
 

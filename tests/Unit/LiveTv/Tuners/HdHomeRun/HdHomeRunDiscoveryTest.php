@@ -8,6 +8,13 @@ use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDevice;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
 
+/**
+ * @group network
+ *
+ * Issues real SSDP M-SEARCH UDP broadcasts and tries to fetch device
+ * description XMLs. Excluded from the default Unit run; opt in with
+ * `--group network` against a real LAN.
+ */
 class HdHomeRunDiscoveryTest extends TestCase
 {
     public function testDiscoverReturnsArrayOfDevices(): void

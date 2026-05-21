@@ -13,6 +13,17 @@ use Phlix\Dlna\PlayToSession;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
 
+/**
+ * @group network
+ *
+ * These tests construct PlayToManager with real (192.168.x) renderer URLs
+ * and exercise the production code path that instantiates a real
+ * RendererControlClient and issues HTTP SOAP requests. Without a stub
+ * server they block on TCP connect for the full kernel timeout (~30s
+ * each), which dominates the suite runtime. Excluded from the default
+ * Unit run; opt in with `--group network` to exercise locally against
+ * a real DLNA renderer.
+ */
 class PlayToManagerTest extends TestCase
 {
     private RendererDiscovery $rendererDiscoveryMock;

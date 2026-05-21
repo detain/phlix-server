@@ -8,6 +8,15 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Dlna\RendererControlClient;
 
+/**
+ * @group network
+ *
+ * Every test below issues a real SOAP request to a hardcoded LAN
+ * address (192.168.1.100). Without that host present the requests
+ * block on TCP connect for the full kernel timeout each, dominating
+ * the suite runtime. Excluded from the default Unit run; opt in with
+ * `--group network` against a real renderer.
+ */
 class RendererControlClientTest extends TestCase
 {
     private StructuredLogger $logger;

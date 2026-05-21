@@ -74,7 +74,9 @@ jobs:
           echo "Coverage check passed!"
 
       - name: Upload coverage to Codecov
-        if: secrets.CODECOV_TOKEN != ''
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         uses: codecov/codecov-action@v4
         with:
           files: ./coverage.xml

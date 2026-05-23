@@ -308,6 +308,12 @@ class Application
         // Streaming routes for HLS and DASH (1.6e).
         $this->loadStreamingRoutes();
 
+        // Media-type routes: music, books, audiobooks, photos (1.6f).
+        $this->loadMusicRoutes();
+        $this->loadBookRoutes();
+        $this->loadAudiobookRoutes();
+        $this->loadPhotoRoutes();
+
         // Media request UI moved to phlix-hub in K.3 — no server routes here.
     }
 
@@ -447,6 +453,106 @@ class Application
         $this->router->get('/dash/{job_id}/{set_id}/segment_{segment_number}.m4s', [$dashController, 'getSegment']);
         // GET /dash/{job_id}/manifest — JSON with manifest URL info
         $this->router->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
+    }
+
+    /**
+     * Registers music library API routes.
+     *
+     * Wires endpoints for:
+     * - MusicController: listArtists, getArtist, listAlbums, getAlbum,
+     *   listTracks, getTrack, nowPlaying (7 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadMusicRoutes(): void
+    {
+        $controller = $this->getMusicController();
+
+        // Music library browsing routes
+        $this->router->get('/music/artists', [$controller, 'listArtists']);
+        $this->router->get('/music/artists/{mbid}', [$controller, 'getArtist']);
+        $this->router->get('/music/albums', [$controller, 'listAlbums']);
+        $this->router->get('/music/albums/{mbid}', [$controller, 'getAlbum']);
+        $this->router->get('/music/tracks', [$controller, 'listTracks']);
+        $this->router->get('/music/tracks/{id}', [$controller, 'getTrack']);
+
+        // Now playing for the current session
+        $this->router->get('/music/now-playing', [$controller, 'nowPlaying']);
+    }
+
+    /**
+     * Registers book library and OPDS feed API routes.
+     *
+     * Wires endpoints for:
+     * - BookController: opdsRoot, opdsLibraries, opdsLibraryBooks,
+     *   opdsBookCover, listBooks, getBook, readBook, getCover,
+     *   downloadBook (9 routes)
+     *
+     * @since 0.17.0
+     */
+    private function loadBookRoutes(): void
+    {
+        $controller = $this->getBookController();
+
+        // OPDS 1.2 feed endpoints
+        $this->router->get('/opds/v1.2', [$controller, 'opdsRoot']);
+        $this->router->get('/opds/v1.2/libraries', [$controller, 'opdsLibraries']);
+        $this->router->get('/opds/v1.2/libraries/{id}', [$controller, 'opdsLibraryBooks']);
+        $this->router->get('/opds/v1.2/books/{id}/cover', [$controller, 'opdsBookCover']);
+
+        // Book web portal endpoints
+        $this->router->get('/books', [$controller, 'listBooks']);
+        $this->router->get('/books/{id}', [$controller, 'getBook']);
+        $this->router->get('/books/{id}/read', [$controller, 'readBook']);
+        $this->router->get('/books/{id}/cover', [$controller, 'getCover']);
+        $this->router->get('/books/{id}/download', [$controller, 'downloadBook']);
+    }
+
+    /**
+     * Registers audiobook library API routes.
+     *
+     * Wires endpoints for:
+     * - AudiobookController: listAudiobooks, getAudiobook, getChapters,
+     *   getProgress, saveProgress, readAudiobook, streamAudiobook (7 routes)
+     *
+     * @since 0.18.0
+     */
+    private function loadAudiobookRoutes(): void
+    {
+        $controller = $this->getAudiobookController();
+
+        // Audiobook library browsing and playback routes
+        $this->router->get('/audiobooks', [$controller, 'listAudiobooks']);
+        $this->router->get('/audiobooks/{id}', [$controller, 'getAudiobook']);
+        $this->router->get('/audiobooks/{id}/chapters', [$controller, 'getChapters']);
+        $this->router->get('/audiobooks/{id}/progress', [$controller, 'getProgress']);
+        $this->router->post('/audiobooks/{id}/progress', [$controller, 'saveProgress']);
+        $this->router->get('/audiobooks/{id}/read', [$controller, 'readAudiobook']);
+        $this->router->get('/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
+    }
+
+    /**
+     * Registers photo library API routes.
+     *
+     * Wires endpoints for:
+     * - PhotoController: listAlbums, getAlbum, listPhotos, getPhoto,
+     *   getThumbnail, slideshow (6 routes)
+     *
+     * @since 0.16.0
+     */
+    private function loadPhotoRoutes(): void
+    {
+        $controller = $this->getPhotoController();
+
+        // Photo album and photo browsing routes
+        $this->router->get('/photo/albums', [$controller, 'listAlbums']);
+        $this->router->get('/photo/albums/{id}', [$controller, 'getAlbum']);
+        $this->router->get('/photo/photos', [$controller, 'listPhotos']);
+        $this->router->get('/photo/photos/{id}', [$controller, 'getPhoto']);
+        $this->router->get('/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
+
+        // Slideshow endpoint
+        $this->router->get('/photo/slideshow', [$controller, 'slideshow']);
     }
 
     /**
@@ -1604,5 +1710,155 @@ class Application
 
         $dashStreamer = new \Phlix\Media\Streaming\Dash\DashStreamer($segmentDir, $baseUrl);
         return new \Phlix\Server\Http\Controllers\DashController($dashStreamer);
+    }
+
+    /**
+     * Returns a MusicController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\MusicController The controller instance.
+     */
+    private function getMusicController(): \Phlix\Server\Http\Controllers\MusicController
+    {
+        $db = $this->createDatabaseConnection();
+        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $libraryManager = new \Phlix\Media\Library\LibraryManager(
+            $db,
+            new \Phlix\Media\Library\MediaScanner(
+                $db,
+                $itemRepo
+            ),
+            new \Phlix\Media\Library\FolderWatcher()
+        );
+        $sessionManager = new \Phlix\Session\SessionManager($db);
+        $audioScanner = new \Phlix\Media\Library\AudioScanner($db, $itemRepo);
+        $metadataManager = new \Phlix\Media\Metadata\MetadataManager(
+            $db,
+            $itemRepo
+        );
+        $musicManager = new \Phlix\Media\Library\MusicLibraryManager(
+            $audioScanner,
+            $metadataManager,
+            $itemRepo,
+            $db
+        );
+
+        return new \Phlix\Server\Http\Controllers\MusicController(
+            $musicManager,
+            $libraryManager,
+            $sessionManager
+        );
+    }
+
+    /**
+     * Returns a BookController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\BookController The controller instance.
+     */
+    private function getBookController(): \Phlix\Server\Http\Controllers\BookController
+    {
+        $db = $this->createDatabaseConnection();
+        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $libraryManager = new \Phlix\Media\Library\LibraryManager(
+            $db,
+            new \Phlix\Media\Library\MediaScanner(
+                $db,
+                $itemRepo
+            ),
+            new \Phlix\Media\Library\FolderWatcher()
+        );
+        $opdsBuilder = new \Phlix\Media\Metadata\OpdsFeedBuilder($itemRepo, 'http://localhost:8080');
+
+        return new \Phlix\Server\Http\Controllers\BookController(
+            $itemRepo,
+            $libraryManager,
+            $opdsBuilder
+        );
+    }
+
+    /**
+     * Returns an AudiobookController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\AudiobookController The controller instance.
+     */
+    private function getAudiobookController(): \Phlix\Server\Http\Controllers\AudiobookController
+    {
+        $db = $this->createDatabaseConnection();
+        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $audioScanner = new \Phlix\Media\Library\AudiobookScanner($db, $itemRepo);
+        $progressStore = new \Phlix\Media\Library\AudiobookProgressStore($db);
+        $libraryManager = new \Phlix\Media\Library\AudiobookLibraryManager(
+            $audioScanner,
+            $itemRepo,
+            $progressStore
+        );
+
+        return new \Phlix\Server\Http\Controllers\AudiobookController(
+            $itemRepo,
+            $libraryManager
+        );
+    }
+
+    /**
+     * Returns a PhotoController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\PhotoController The controller instance.
+     */
+    private function getPhotoController(): \Phlix\Server\Http\Controllers\PhotoController
+    {
+        $db = $this->createDatabaseConnection();
+        $itemRepo = new \Phlix\Media\Library\ItemRepository($db);
+        $photoScanner = new \Phlix\Media\Library\PhotoScanner($db, $itemRepo);
+        $photoManager = new \Phlix\Media\Library\PhotoLibraryManager(
+            $photoScanner,
+            $itemRepo
+        );
+        $exifProvider = new \Phlix\Media\Metadata\ExifProvider($itemRepo);
+
+        return new \Phlix\Server\Http\Controllers\PhotoController(
+            $itemRepo,
+            $photoManager,
+            $exifProvider
+        );
+    }
+
+    /**
+     * Creates a database connection using config from the application.
+     *
+     * When a container is present, uses the connection pool which respects
+     * the database configuration. Falls back to Workerman\MySQL\Connection
+     * with default credentials when no container is available.
+     *
+     * @return \Workerman\MySQL\Connection The database connection
+     */
+    private function createDatabaseConnection(): \Workerman\MySQL\Connection
+    {
+        if ($this->container !== null) {
+            try {
+                return \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            } catch (\Throwable) {
+                // Fall back to direct connection if pool not initialized
+            }
+        }
+
+        // Fallback for when container is not available (legacy test helpers)
+        $host = '127.0.0.1';
+        $port = 3306;
+        $user = 'root';
+        $password = '';
+        $database = 'phlix';
+
+        // Try to read from app config if available
+        if (isset($this->config['database'])) {
+            $dbConfig = $this->config['database'];
+            if (is_array($dbConfig)) {
+                $host = is_string($dbConfig['host'] ?? null) ? $dbConfig['host'] : $host;
+                $port = is_int($dbConfig['port'] ?? null) ? $dbConfig['port'] : $port;
+                $user = is_string($dbConfig['username'] ?? null) ? $dbConfig['username'] : $user;
+                $password = is_string($dbConfig['password'] ?? null) ? $dbConfig['password'] : $password;
+                $database = is_string($dbConfig['database'] ?? null) ? $dbConfig['database'] : $database;
+            }
+        }
+
+        return new \Workerman\MySQL\Connection($host, $port, $user, $password, $database);
     }
 }

@@ -47,7 +47,9 @@ final class SyncControllerTest extends TestCase
             syncedAt: new DateTimeImmutable()
         );
 
-        $response = $this->controller->triggerSync(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->triggerSync($request, []);
 
         self::assertSame(200, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -60,12 +62,14 @@ final class SyncControllerTest extends TestCase
     {
         $this->syncer->syncException = new \RuntimeException('Network error');
 
-        $response = $this->controller->triggerSync(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->triggerSync($request, []);
 
         self::assertSame(500, $response->statusCode);
         $body = $this->decodeBody($response->body);
         self::assertFalse($body['success']);
-        self::assertStringContainsString('Sync failed:', $body['error']);
+        self::assertSame('Sync failed', $body['error']);
     }
 
     public function test_getSyncStatus_returns_status_info(): void
@@ -73,7 +77,9 @@ final class SyncControllerTest extends TestCase
         $this->syncer->lastSyncTime = 1700000000;
         $this->syncer->enabled = true;
 
-        $response = $this->controller->getSyncStatus(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->getSyncStatus($request, []);
 
         self::assertSame(200, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -87,7 +93,9 @@ final class SyncControllerTest extends TestCase
         $this->syncer->lastSyncTime = null;
         $this->syncer->enabled = false;
 
-        $response = $this->controller->getSyncStatus(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->getSyncStatus($request, []);
 
         self::assertSame(200, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -99,6 +107,7 @@ final class SyncControllerTest extends TestCase
     public function test_setEnabled_with_true_enables_sync(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = ['enabled' => true];
 
         $response = $this->controller->setEnabled($request, []);
@@ -114,6 +123,7 @@ final class SyncControllerTest extends TestCase
     public function test_setEnabled_with_false_disables_sync(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = ['enabled' => false];
 
         $response = $this->controller->setEnabled($request, []);
@@ -129,6 +139,7 @@ final class SyncControllerTest extends TestCase
     public function test_setEnabled_without_enabled_field_returns_400(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = [];
 
         $response = $this->controller->setEnabled($request, []);

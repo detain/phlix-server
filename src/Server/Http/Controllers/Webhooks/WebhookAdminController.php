@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Webhooks;
 
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Webhooks\DispatchResult;
@@ -14,9 +15,59 @@ use InvalidArgumentException;
 
 class WebhookAdminController
 {
+    private ?AdminMiddleware $adminMiddleware = null;
+
     public function __construct(
         private readonly WebhookDispatcher $dispatcher,
     ) {
+    }
+
+    /**
+     * Set the admin middleware (used for admin-only operations).
+     */
+    public function setAdminMiddleware(AdminMiddleware $middleware): void
+    {
+        $this->adminMiddleware = $middleware;
+    }
+
+    /**
+     * Require authentication for the request.
+     */
+    private function requireAuth(Request $request): ?Response
+    {
+        $userId = $request->userId;
+        if ($userId === null || $userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code' => 'auth.required',
+            ]);
+        }
+        return null;
+    }
+
+    /**
+     * Require admin access for the request.
+     */
+    private function requireAdmin(Request $request): ?Response
+    {
+        // First require auth
+        $authResponse = $this->requireAuth($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        // Then check admin status
+        if ($this->adminMiddleware !== null) {
+            $status = $this->adminMiddleware->checkAccess($request);
+            if ($status !== null) {
+                return (new Response())->status($status)->json([
+                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+                ]);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -24,6 +75,11 @@ class WebhookAdminController
      */
     public function index(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $webhooks = $this->dispatcher->listWebhooks();
 
         return (new Response())->json(['webhooks' => $webhooks]);
@@ -34,6 +90,11 @@ class WebhookAdminController
      */
     public function create(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $data = $request->body;
 
         $nameRaw = $data['name'] ?? null;
@@ -98,6 +159,11 @@ class WebhookAdminController
      */
     public function delete(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $id = $params['id'] ?? null;
 
         if (!is_string($id) || $id === '') {
@@ -108,7 +174,7 @@ class WebhookAdminController
 
         $this->dispatcher->unregister($id);
 
-        return (new Response())->status(204)->json([]);
+        return (new Response())->status(204);
     }
 
     /**
@@ -116,6 +182,11 @@ class WebhookAdminController
      */
     public function test(Request $request, array $params): Response
     {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
         $id = $params['id'] ?? null;
 
         if (!is_string($id) || $id === '') {

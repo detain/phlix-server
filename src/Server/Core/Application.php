@@ -1903,7 +1903,16 @@ class Application
     {
         $db = $this->createDatabaseConnection();
         $dispatcher = new \Phlix\Webhooks\WebhookDispatcher($db);
-        return new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController($dispatcher);
+        $controller = new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController($dispatcher);
+
+        // Wire admin middleware if available
+        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
     }
 
     /**
@@ -1941,7 +1950,16 @@ class Application
             $logger
         );
 
-        return new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
+        $controller = new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
+
+        // Wire admin middleware if available
+        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
     }
 
     /**

@@ -43,7 +43,9 @@ final class WebhookAdminControllerTest extends TestCase
             ['id' => 'webhook-1', 'name' => 'Test Webhook', 'url' => 'https://example.com/hook'],
         ];
 
-        $response = $this->controller->index(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->index($request, []);
 
         self::assertSame(200, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -55,6 +57,7 @@ final class WebhookAdminControllerTest extends TestCase
     public function test_create_with_valid_data_returns_201(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = [
             'name' => 'New Webhook',
             'url' => 'https://example.com/hook',
@@ -74,6 +77,7 @@ final class WebhookAdminControllerTest extends TestCase
     public function test_create_with_missing_fields_returns_400(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = ['name' => 'Incomplete'];
 
         $response = $this->controller->create($request, []);
@@ -86,6 +90,7 @@ final class WebhookAdminControllerTest extends TestCase
     public function test_create_with_invalid_url_returns_400(): void
     {
         $request = new Request();
+        $request->userId = 'admin-1';
         $request->body = [
             'name' => 'Bad URL',
             'url' => 'not-a-valid-url',
@@ -106,14 +111,18 @@ final class WebhookAdminControllerTest extends TestCase
             ['id' => 'webhook-to-delete', 'name' => 'Delete Me'],
         ];
 
-        $response = $this->controller->delete(new Request(), ['id' => 'webhook-to-delete']);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->delete($request, ['id' => 'webhook-to-delete']);
 
         self::assertSame(204, $response->statusCode);
     }
 
     public function test_delete_with_missing_id_returns_400(): void
     {
-        $response = $this->controller->delete(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->delete($request, []);
 
         self::assertSame(400, $response->statusCode);
     }
@@ -121,7 +130,9 @@ final class WebhookAdminControllerTest extends TestCase
     public function test_delete_with_nonexistent_id_succeeds(): void
     {
         // delete should not fail even if webhook doesn't exist
-        $response = $this->controller->delete(new Request(), ['id' => 'nonexistent']);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->delete($request, ['id' => 'nonexistent']);
 
         self::assertSame(204, $response->statusCode);
     }
@@ -133,7 +144,9 @@ final class WebhookAdminControllerTest extends TestCase
         ];
         $this->dispatcher->dispatchResult = new DispatchResult(1, 0, []);
 
-        $response = $this->controller->test(new Request(), ['id' => 'webhook-1']);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->test($request, ['id' => 'webhook-1']);
 
         self::assertSame(200, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -144,7 +157,9 @@ final class WebhookAdminControllerTest extends TestCase
 
     public function test_test_with_nonexistent_webhook_id_returns_404(): void
     {
-        $response = $this->controller->test(new Request(), ['id' => 'nonexistent']);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->test($request, ['id' => 'nonexistent']);
 
         self::assertSame(404, $response->statusCode);
         $body = $this->decodeBody($response->body);
@@ -153,7 +168,9 @@ final class WebhookAdminControllerTest extends TestCase
 
     public function test_test_with_missing_webhook_id_returns_400(): void
     {
-        $response = $this->controller->test(new Request(), []);
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $response = $this->controller->test($request, []);
 
         self::assertSame(400, $response->statusCode);
     }

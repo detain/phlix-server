@@ -37,7 +37,7 @@ class HlsController
         return (new Response())
             ->header('Content-Type', 'application/vnd.apple.mpegurl')
             ->header('Cache-Control', 'public, max-age=60')
-            ->text($playlist);
+            ->body($playlist);
     }
 
     /**
@@ -59,7 +59,7 @@ class HlsController
         return (new Response())
             ->header('Content-Type', 'application/vnd.apple.mpegurl')
             ->header('Cache-Control', 'public, max-age=60')
-            ->text($playlist);
+            ->body($playlist);
     }
 
     /**

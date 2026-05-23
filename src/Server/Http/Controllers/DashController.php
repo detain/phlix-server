@@ -68,7 +68,7 @@ class DashController
         return (new Response())
             ->header('Content-Type', 'application/dash+xml')
             ->header('Cache-Control', 'public, max-age=60')
-            ->text($mpd);
+            ->body($mpd);
     }
 
     /**
@@ -110,7 +110,7 @@ class DashController
         return (new Response())
             ->header('Content-Type', 'application/dash+xml')
             ->header('Cache-Control', 'public, max-age=60')
-            ->text($mpd);
+            ->body($mpd);
     }
 
     /**

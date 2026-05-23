@@ -305,6 +305,9 @@ class Application
         // Collection management routes (1.6d).
         $this->loadCollectionRoutes();
 
+        // Streaming routes for HLS and DASH (1.6e).
+        $this->loadStreamingRoutes();
+
         // Media request UI moved to phlix-hub in K.3 — no server routes here.
     }
 
@@ -409,6 +412,41 @@ class Application
 
         // Library-scoped collections
         $this->router->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
+    }
+
+    /**
+     * Registers HLS and DASH streaming API routes.
+     *
+     * Wires endpoints for:
+     * - HlsController: getMasterPlaylist, getVariantPlaylist, getSegment, getPlaylist (4 routes)
+     * - DashController: getMasterManifest, getAdaptationSetManifest, getSegment, getManifest (4 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadStreamingRoutes(): void
+    {
+        $hlsController = $this->getHlsController();
+        $dashController = $this->getDashController();
+
+        // HLS streaming routes
+        // GET /hls/{job_id}/master.m3u8 — master playlist with variant streams
+        $this->router->get('/hls/{job_id}/master.m3u8', [$hlsController, 'getMasterPlaylist']);
+        // GET /hls/{job_id}/{variant_index}/playlist.m3u8 — variant playlist for specific quality
+        $this->router->get('/hls/{job_id}/{variant_index}/playlist.m3u8', [$hlsController, 'getVariantPlaylist']);
+        // GET /hls/{job_id}/{variant_index}/{segment_number}.ts — individual segment file
+        $this->router->get('/hls/{job_id}/{variant_index}/{segment_number}.ts', [$hlsController, 'getSegment']);
+        // GET /hls/{job_id}/playlist — JSON with playlist URL info
+        $this->router->get('/hls/{job_id}/playlist', [$hlsController, 'getPlaylist']);
+
+        // DASH streaming routes
+        // GET /dash/{job_id}/manifest.mpd — master manifest (MPD format)
+        $this->router->get('/dash/{job_id}/manifest.mpd', [$dashController, 'getMasterManifest']);
+        // GET /dash/{job_id}/{set_id}/manifest.mpd — adaptation set manifest
+        $this->router->get('/dash/{job_id}/{set_id}/manifest.mpd', [$dashController, 'getAdaptationSetManifest']);
+        // GET /dash/{job_id}/{set_id}/segment_{segment_number}.m4s — segment file (M4S container)
+        $this->router->get('/dash/{job_id}/{set_id}/segment_{segment_number}.m4s', [$dashController, 'getSegment']);
+        // GET /dash/{job_id}/manifest — JSON with manifest URL info
+        $this->router->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
     }
 
     /**
@@ -1515,5 +1553,56 @@ class Application
         /** @var \Phlix\Collections\CollectionManager */
         $collectionManager = $this->container->get(\Phlix\Collections\CollectionManager::class);
         return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager);
+    }
+
+    /**
+     * Returns an HlsController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\HlsController The controller instance.
+     */
+    private function getHlsController(): \Phlix\Server\Http\Controllers\HlsController
+    {
+        if ($this->container === null) {
+            $segmentDir = sys_get_temp_dir() . '/phlix_hls';
+            $baseUrl = 'http://localhost:8096';
+            $hlsStreamer = new \Phlix\Media\Streaming\HlsStreamer(
+                $segmentDir,
+                $baseUrl,
+                new \Phlix\Media\Streaming\QualitySelector()
+            );
+            return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer);
+        }
+
+        /** @var \Phlix\Media\Streaming\HlsStreamer */
+        $hlsStreamer = $this->container->get(\Phlix\Media\Streaming\HlsStreamer::class);
+        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer);
+    }
+
+    /**
+     * Returns a DashController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\DashController The controller instance.
+     */
+    private function getDashController(): \Phlix\Server\Http\Controllers\DashController
+    {
+        if ($this->container === null) {
+            $segmentDir = sys_get_temp_dir() . '/phlix_dash';
+            $baseUrl = 'http://localhost:8096';
+            $dashStreamer = new \Phlix\Media\Streaming\Dash\DashStreamer($segmentDir, $baseUrl);
+            return new \Phlix\Server\Http\Controllers\DashController($dashStreamer);
+        }
+
+        // DashStreamer is not registered in the container, so we instantiate manually
+        // Use same config pattern as HlsStreamer (segment_dir, base_url from $appConfig['hls'])
+        $hlsConfigRaw = $this->config['hls'] ?? null;
+        /** @var array<string, mixed> $hlsConfig */
+        $hlsConfig = is_array($hlsConfigRaw) ? $hlsConfigRaw : [];
+        $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
+        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_dash';
+        $baseUrlRaw = $hlsConfig['base_url'] ?? null;
+        $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
+
+        $dashStreamer = new \Phlix\Media\Streaming\Dash\DashStreamer($segmentDir, $baseUrl);
+        return new \Phlix\Server\Http\Controllers\DashController($dashStreamer);
     }
 }

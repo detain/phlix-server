@@ -14,7 +14,7 @@ use Phlix\Media\Library\ItemRepository;
  *
  * @since 0.14.0
  */
-final class SmartPlaylistEngine
+class SmartPlaylistEngine
 {
     public function __construct(
         private readonly ItemRepository $itemRepository,

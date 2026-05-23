@@ -10,6 +10,9 @@ use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
@@ -116,6 +119,17 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     $container->get(ItemRepository::class)
                 );
             }),
+
+            // Marker services
+            MarkerCandidateRepository::class => autowire()
+                ->constructorParameter('itemRepo', get(ItemRepository::class)),
+
+            MarkerService::class => autowire()
+                ->constructorParameter('item_repo', get(ItemRepository::class))
+                ->constructorParameter('candidate_repo', get(MarkerCandidateRepository::class)),
+
+            PlaybackMarkerService::class => autowire()
+                ->constructorParameter('marker_service', get(MarkerService::class)),
         ]);
     }
 }

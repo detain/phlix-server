@@ -32,6 +32,7 @@ use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\PageRenderer;
+use Phlix\Server\WebPortal\WebPortalRouter;
 
 /**
  * Initialize configuration paths and build the PSR-11 container.
@@ -78,7 +79,7 @@ $request = Request::fromGlobals();
 $token = $request->getBearerToken();
 if ($token) {
     $auth = $authManager->validateAccessToken($token);
-    if ($auth) {
+    if (is_array($auth) && is_string($auth['user_id'] ?? null)) {
         $request->userId = $auth['user_id'];
     }
 }
@@ -113,13 +114,23 @@ if (str_starts_with($path, '/api/v1/admin/')) {
      * API routes
      *
      * API endpoints are handled by WebPortalRouter and return JSON.
-     * This implementation currently returns a placeholder message.
-     * Full API implementation is in WebPortalRouter.
+     * Routes include:
+     * - GET /api/v1/libraries - List all libraries with item counts
+     * - GET /api/v1/libraries/{id} - Get single library details
+     * - GET /api/v1/libraries/{id}/items - Get items in a library
+     * - GET /api/v1/media/{id} - Get media item details with streams
+     * - GET /api/v1/media/{id}/playback - Get playback information
+     * - GET /api/v1/users/me/continue-watching - Get continue watching list
+     * - GET /api/v1/users/me/recently-watched - Get recently watched items
+     * - GET /api/v1/users/me/settings - Get user settings
+     * - PUT /api/v1/users/me/settings - Update user settings
      *
      * @see \Phlix\Server\WebPortal\WebPortalRouter For complete API handling
      */
-    header('Content-Type: application/json');
-    echo json_encode(['message' => 'API endpoint - implement in Step 5.2']);
+    /** @var WebPortalRouter $webPortalRouter */
+    $webPortalRouter = $container->get(WebPortalRouter::class);
+    $response = $webPortalRouter->dispatch($request);
+    $response->send();
 } else {
     /**
      * Page routes

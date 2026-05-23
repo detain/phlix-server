@@ -315,6 +315,78 @@ class Application
         $this->loadPhotoRoutes();
 
         // Media request UI moved to phlix-hub in K.3 — no server routes here.
+
+        // Webhook admin integration routes (1.6g).
+        $this->loadWebhookAdminRoutes();
+
+        // ARR/Sync integration routes (1.6g).
+        $this->loadArrSyncRoutes();
+
+        // Trakt.tv OAuth integration routes (1.6g).
+        $this->loadTraktRoutes();
+    }
+
+    /**
+     * Registers webhook admin integration API routes.
+     *
+     * Wires endpoints for:
+     * - WebhookAdminController: index, create, delete, test (4 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadWebhookAdminRoutes(): void
+    {
+        $controller = $this->getWebhookAdminController();
+
+        // Webhook admin CRUD routes
+        // GET /api/v1/admin/webhooks — list all webhooks
+        $this->router->get('/api/v1/admin/webhooks', [$controller, 'index']);
+        // POST /api/v1/admin/webhooks — create a new webhook
+        $this->router->post('/api/v1/admin/webhooks', [$controller, 'create']);
+        // DELETE /api/v1/admin/webhooks/{id} — delete a webhook
+        $this->router->delete('/api/v1/admin/webhooks/{id}', [$controller, 'delete']);
+        // POST /api/v1/admin/webhooks/{id}/test — test a webhook
+        $this->router->post('/api/v1/admin/webhooks/{id}/test', [$controller, 'test']);
+    }
+
+    /**
+     * Registers TRaSH-Guides ARR sync API routes.
+     *
+     * Wires endpoints for:
+     * - SyncController: triggerSync, getSyncStatus, setEnabled (3 routes)
+     *
+     * @since 0.12.0
+     */
+    private function loadArrSyncRoutes(): void
+    {
+        $controller = $this->getArrSyncController();
+
+        // TRaSH-Guides sync endpoints
+        // POST /api/v1/admin/sync/trash-guides — trigger a full sync
+        $this->router->post('/api/v1/admin/sync/trash-guides', [$controller, 'triggerSync']);
+        // GET /api/v1/admin/sync/status — get sync status
+        $this->router->get('/api/v1/admin/sync/status', [$controller, 'getSyncStatus']);
+        // PUT /api/v1/admin/sync/enable — enable/disable auto-sync
+        $this->router->put('/api/v1/admin/sync/enable', [$controller, 'setEnabled']);
+    }
+
+    /**
+     * Registers Trakt.tv OAuth integration routes.
+     *
+     * Wires endpoints for:
+     * - TraktOAuthController: authorize, callback (2 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadTraktRoutes(): void
+    {
+        $controller = $this->getTraktOAuthController();
+
+        // Trakt OAuth flow endpoints
+        // GET /api/v1/oauth/trakt — initiate OAuth flow (redirect to Trakt)
+        $this->router->get('/api/v1/oauth/trakt', [$controller, 'authorize']);
+        // GET /api/v1/oauth/trakt/callback — OAuth callback handler
+        $this->router->get('/api/v1/oauth/trakt/callback', [$controller, 'callback']);
     }
 
     /**
@@ -1819,6 +1891,79 @@ class Application
             $itemRepo,
             $photoManager,
             $exifProvider
+        );
+    }
+
+    /**
+     * Returns a WebhookAdminController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController The controller instance.
+     */
+    private function getWebhookAdminController(): \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController
+    {
+        $db = $this->createDatabaseConnection();
+        $dispatcher = new \Phlix\Webhooks\WebhookDispatcher($db);
+        return new \Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController($dispatcher);
+    }
+
+    /**
+     * Returns an Arr\SyncController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\Arr\SyncController The controller instance.
+     */
+    private function getArrSyncController(): \Phlix\Server\Http\Controllers\Arr\SyncController
+    {
+        $db = $this->createDatabaseConnection();
+
+        // Load ARR/Radarr configuration
+        $arrConfigRaw = [];
+        $configDirRaw = $this->config['_config_dir'] ?? 'config';
+        $arrConfigFile = is_string($configDirRaw) ? $configDirRaw : 'config';
+        $arrConfigFile .= '/arr.php';
+        if (file_exists($arrConfigFile)) {
+            /** @var mixed $arrConfigRaw */
+            $arrConfigRaw = include $arrConfigFile;
+        }
+        /** @var array<string, mixed> $arrConfig */
+        $arrConfig = is_array($arrConfigRaw) ? $arrConfigRaw : [];
+
+        $radarrUrl = is_string($arrConfig['radarr_url'] ?? null) ? $arrConfig['radarr_url'] : '';
+        $radarrApiKey = is_string($arrConfig['radarr_api_key'] ?? null) ? $arrConfig['radarr_api_key'] : '';
+
+        $radarrClient = new \Phlix\Shared\Arr\RadarrClient($radarrUrl, $radarrApiKey);
+        $provider = new \Phlix\Shared\Arr\TrashGuidesProvider();
+        $logger = new \Phlix\Common\Logger\StructuredLogger('arr-sync', []);
+
+        $syncer = new \Phlix\Server\Arr\CustomFormatSyncer(
+            $radarrClient,
+            $provider,
+            $db,
+            $logger
+        );
+
+        return new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
+    }
+
+    /**
+     * Returns a TraktOAuthController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\TraktOAuthController The controller instance.
+     */
+    private function getTraktOAuthController(): \Phlix\Server\Http\Controllers\TraktOAuthController
+    {
+        $logger = null;
+        if ($this->container !== null) {
+            try {
+                /** @var \Psr\Log\LoggerInterface */
+                $logger = $this->container->get(\Psr\Log\LoggerInterface::class);
+            } catch (\Throwable) {
+                // Logger not available — use null
+            }
+        }
+
+        return new \Phlix\Server\Http\Controllers\TraktOAuthController(
+            logger: $logger,
+            stateStore: null
         );
     }
 

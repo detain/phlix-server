@@ -26,6 +26,7 @@ class CustomFormatSyncer
     private ?StructuredLogger $logger;
     private bool $enabled = true;
     private ?int $lastSyncTime = null;
+    private bool $lastSyncTimeLoaded = false;
 
     /**
      * Creates a new CustomFormatSyncer instance.
@@ -42,7 +43,9 @@ class CustomFormatSyncer
         ?StructuredLogger $logger = null,
     ) {
         $this->logger = $logger;
-        $this->loadLastSyncTime();
+        // lastSyncTime is loaded lazily on first call to getLastSyncTime()
+        // to avoid database I/O in the constructor which causes issues
+        // when the database schema isn't ready yet.
     }
 
     /**
@@ -255,6 +258,10 @@ class CustomFormatSyncer
      */
     public function getLastSyncTime(): ?int
     {
+        if (!$this->lastSyncTimeLoaded) {
+            $this->lastSyncTimeLoaded = true;
+            $this->loadLastSyncTime();
+        }
         return $this->lastSyncTime;
     }
 

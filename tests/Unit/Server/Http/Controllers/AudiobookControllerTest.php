@@ -228,4 +228,168 @@ class AudiobookControllerTest extends TestCase
 
         $this->assertEquals(401, $response->statusCode);
     }
+
+    public function testStreamAudiobookReturnsRawBinaryNotBase64(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $originalContent = 'raw audio binary data';
+        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
+        file_put_contents($tempFile, $originalContent);
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $request = new Request();
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(200, $response->statusCode);
+        $this->assertEquals($originalContent, $response->body);
+        // Ensure it's NOT base64 encoded
+        $this->assertNotEquals(base64_encode($originalContent), $response->body);
+
+        unlink($tempFile);
+    }
+
+    public function testStreamAudiobookSetsCorrectMimeType(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
+        file_put_contents($tempFile, 'audio content');
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $request = new Request();
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(200, $response->statusCode);
+        $this->assertArrayHasKey('Content-Type', $response->headers);
+        $this->assertEquals('audio/mp4', $response->headers['Content-Type']);
+
+        unlink($tempFile);
+    }
+
+    public function testStreamAudiobookSupportsRangeRequests(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $originalContent = '0123456789ABCDEF'; // 16 bytes
+        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
+        file_put_contents($tempFile, $originalContent);
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        // Request bytes 5-10 (partial content)
+        $request = new Request();
+        $request->headers['Range'] = 'bytes=5-10';
+
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(206, $response->statusCode); // Partial content
+        $this->assertEquals('56789A', $response->body); // bytes 5-10
+        $this->assertArrayHasKey('Content-Range', $response->headers);
+        $this->assertEquals('bytes 5-10/16', $response->headers['Content-Range']);
+
+        unlink($tempFile);
+    }
+
+    public function testStreamAudiobookAcceptRangesHeader(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.mp3';
+        file_put_contents($tempFile, 'audio content');
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $request = new Request();
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(200, $response->statusCode);
+        $this->assertArrayHasKey('Accept-Ranges', $response->headers);
+        $this->assertEquals('bytes', $response->headers['Accept-Ranges']);
+        $this->assertEquals('audio/mpeg', $response->headers['Content-Type']);
+
+        unlink($tempFile);
+    }
+
+    public function testStreamAudiobookReturns416ForUnsatisfiableRange(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
+        file_put_contents($tempFile, 'short content');
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        // Request range beyond file size
+        $request = new Request();
+        $request->headers['Range'] = 'bytes=100-200';
+
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(416, $response->statusCode);
+
+        unlink($tempFile);
+    }
 }

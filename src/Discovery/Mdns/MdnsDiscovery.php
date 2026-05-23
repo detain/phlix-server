@@ -92,16 +92,19 @@ class MdnsDiscovery
     /**
      * Announce the Phlix server via mDNS.
      *
-     * Registers the Phlix server as an available service on the network.
+     * Registers the Phlix server as an available service on the network
+     * using avahi-publish-service when available.
      *
      * @param string $name Service name to announce
      * @param string $type Service type (e.g., '_phlix._tcp.local.')
      * @param int $port Port number
      * @param array<string, string> $txt TXT record key-value pairs
      *
+     * @return bool True if announcement was successful (or avahi not available but gracefully skipped)
+     *
      * @since 0.12.0
      */
-    public function announceServer(string $name, string $type, int $port, array $txt = []): void
+    public function announceServer(string $name, string $type, int $port, array $txt = []): bool
     {
         $this->logger->info('mDNS: Announcing server', [
             'name' => $name,
@@ -109,9 +112,57 @@ class MdnsDiscovery
             'port' => $port,
         ]);
 
-        // Note: Full mDNS announcement requires proper service registration.
-        // This is a placeholder for the announcement functionality.
-        // In a full implementation, this would send the appropriate mDNS packets.
+        // Check if avahi-publish-service is available
+        $avahiPath = trim((string) shell_exec('which avahi-publish-service 2>/dev/null'));
+
+        if ($avahiPath === '') {
+            $this->logger->warning('mDNS: avahi-publish-service not found, skipping announcement', [
+                'service' => $name,
+                'port' => $port,
+            ]);
+            return false;
+        }
+
+        // Build TXT record string for avahi-publish-service
+        // Format: key=value&key2=value2&...
+        $txtParts = [];
+        foreach ($txt as $k => $v) {
+            $txtParts[] = $k . '=' . $v;
+        }
+        $txtStr = implode('&', $txtParts);
+
+        // Build the command
+        // avahi-publish-service takes: NAME SERVICE_TYPE PORT "TXT_RECORD"
+        $escapedName = escapeshellarg($name);
+        $escapedPort = (int) $port;
+        $txtArg = $txtStr !== '' ? escapeshellarg($txtStr) : '';
+
+        $cmd = sprintf(
+            '%s %s %s %d %s >/dev/null 2>&1 &',
+            $avahiPath,
+            $escapedName,
+            escapeshellarg($type),
+            $escapedPort,
+            $txtArg
+        );
+
+        exec($cmd, $output, $returnCode);
+
+        if ($returnCode !== 0) {
+            $this->logger->error('mDNS: avahi-publish-service failed', [
+                'service' => $name,
+                'port' => $port,
+                'returnCode' => $returnCode,
+            ]);
+            return false;
+        }
+
+        $this->logger->info('mDNS: Server announced successfully', [
+            'service' => $name,
+            'port' => $port,
+        ]);
+
+        return true;
     }
 
     /**

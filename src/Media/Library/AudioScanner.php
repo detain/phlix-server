@@ -729,15 +729,31 @@ class AudioScanner extends MediaScanner
 
                 fseek($handle, $blockLength, SEEK_CUR);
             }
+
+            // Duration extraction from FLAC streaminfo - rewind and read STREAMINFO
+            // block (always first) to get sample_rate and total_samples for duration.
+            rewind($handle);
+            $duration = null;
+
+            $marker = fread($handle, 4);
+            if ($marker === 'fLaC') {
+                $header = fread($handle, 4);
+                if ($header !== false && strlen($header) >= 4 && (ord($header[0]) & 0x7F) === 0) {
+                    $blockLength = (ord($header[1]) << 16) | (ord($header[2]) << 8) | ord($header[3]);
+                    if ($blockLength >= 18) {
+                        $data = fread($handle, 18);
+                        if ($data !== false && strlen($data) >= 18) {
+                            $duration = $this->parseFlacDurationFromData($data);
+                        }
+                    }
+                }
+            }
+
+            if ($duration !== null) {
+                $tags['duration_secs'] = $duration;
+            }
         } finally {
             fclose($handle);
-        }
-
-        // Duration extraction from FLAC streaminfo - parse STREAMINFO block
-        // to get sample_rate and total_samples for duration calculation.
-        $duration = $this->getFlacDuration($path);
-        if ($duration !== null) {
-            $tags['duration_secs'] = $duration;
         }
 
         return $tags;
@@ -843,6 +859,50 @@ class AudioScanner extends MediaScanner
     }
 
     /**
+     * Parses FLAC STREAMINFO data to extract duration.
+     *
+     * STREAMINFO block data layout (bytes 0-33 of STREAMINFO block):
+     * - Bytes 0-1: minimum block size (in samples)
+     * - Bytes 2-3: maximum block size (in samples)
+     * - Bytes 4-6: sample rate (20 bits), channels (4 bits), bps (3 bits), reserved (1 bit)
+     * - Bytes 7-10: total samples (36 bits)
+     *
+     * Duration is calculated as: total_samples / sample_rate
+     *
+     * @param string $data 18 bytes of STREAMINFO data (bytes 4-21 of STREAMINFO block)
+     * @return int|null Duration in seconds, or null if it could not be determined
+     */
+    private function parseFlacDurationFromData(string $data): ?int
+    {
+        if (strlen($data) < 18) {
+            return null;
+        }
+
+        // Sample rate: bytes 4-7 (first 20 bits), big-endian
+        // Bits layout: [sample_rate:20][channels:4][bits_per_sample:4][reserved:4]
+        $sampleRate = ((ord($data[4]) << 12) | (ord($data[5]) << 4) | (ord($data[6]) >> 4)) & 0xFFFFF;
+
+        if ($sampleRate === 0 || $sampleRate > 655350) { // Invalid sample rate range
+            return null;
+        }
+
+        // Total samples: bytes 7-10 (36 bits total)
+        // byte 7: lower 4 bits contain total_samples[32:35]
+        // bytes 8-10: lower 24 bits contain total_samples[8:31]
+        $totalSamplesHigh = ord($data[7]) & 0xF;
+        $totalSamplesLow = (ord($data[8]) << 16) | (ord($data[9]) << 8) | ord($data[10]);
+        $totalSamples = ($totalSamplesHigh << 24) | $totalSamplesLow;
+
+        // If total_samples is 0, we can't calculate duration
+        if ($totalSamples === 0) {
+            return null;
+        }
+
+        // Duration in seconds (as int for sub-second accuracy, floored)
+        return (int) floor($totalSamples / $sampleRate);
+    }
+
+    /**
      * Gets duration of a FLAC file by reading the STREAMINFO block.
      *
      * The STREAMINFO block contains:
@@ -892,28 +952,7 @@ class AudioScanner extends MediaScanner
                 return null;
             }
 
-            // Sample rate: bytes 4-7 (first 20 bits), big-endian
-            // Bits layout: [sample_rate:20][channels:4][bits_per_sample:4][reserved:4]
-            $sampleRate = ((ord($data[4]) << 12) | (ord($data[5]) << 4) | (ord($data[6]) >> 4)) & 0xFFFFF;
-
-            if ($sampleRate === 0 || $sampleRate > 655350) { // Invalid sample rate range
-                return null;
-            }
-
-            // Total samples: bytes 7-10 (36 bits total)
-            // byte 7: upper 4 bits contain total_samples[32:35]
-            // bytes 8-10: lower 24 bits contain total_samples[8:31]
-            $totalSamplesHigh = ord($data[7]) & 0xF;
-            $totalSamplesLow = (ord($data[8]) << 16) | (ord($data[9]) << 8) | ord($data[10]);
-            $totalSamples = ($totalSamplesHigh << 24) | $totalSamplesLow;
-
-            // If total_samples is 0, we can't calculate duration
-            if ($totalSamples === 0) {
-                return null;
-            }
-
-            // Duration in seconds (as int for sub-second accuracy, floored)
-            return (int) floor($totalSamples / $sampleRate);
+            return $this->parseFlacDurationFromData($data);
         } finally {
             fclose($handle);
         }

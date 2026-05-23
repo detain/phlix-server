@@ -412,4 +412,119 @@ class AudioScannerTest extends TestCase
         unlink($filePath);
         rmdir($tempDir);
     }
+
+    /**
+     * @test
+     */
+    public function testGetFlacDurationWithValidFlacReturnsInt(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create a FLAC file with 10 second duration at 44100 Hz
+        $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 10);
+        file_put_contents($filePath, $flacData);
+
+        $duration = $this->invokePrivateGetFlacDuration($filePath);
+
+        $this->assertIsInt($duration);
+        $this->assertEquals(10, $duration);
+
+        unlink($filePath);
+        rmdir($tempDir);
+    }
+
+    /**
+     * @test
+     */
+    public function testGetFlacDurationWithInvalidSampleRateReturnsNull(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create FLAC with sample rate 0 (invalid)
+        $flacData = $this->createFlacFileWithDuration(0, 2, 16, 10);
+        file_put_contents($filePath, $flacData);
+
+        $duration = $this->invokePrivateGetFlacDuration($filePath);
+
+        $this->assertNull($duration);
+
+        unlink($filePath);
+        rmdir($tempDir);
+    }
+
+    /**
+     * @test
+     */
+    public function testGetFlacDurationWithZeroTotalSamplesReturnsNull(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create FLAC with zero total samples
+        $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 0);
+        file_put_contents($filePath, $flacData);
+
+        $duration = $this->invokePrivateGetFlacDuration($filePath);
+
+        $this->assertNull($duration);
+
+        unlink($filePath);
+        rmdir($tempDir);
+    }
+
+    /**
+     * @test
+     */
+    public function testGetFlacDurationWithStreaminfoNotFirstBlockReturnsNull(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create a FLAC file where STREAMINFO is not the first block
+        // Start with fLaC marker
+        $data = 'fLaC';
+
+        // Add a PADDING block first (block type 1), not STREAMINFO (type 0)
+        $data .= chr(0x80 | 1); // Last block + type 1 (PADDING)
+        $data .= chr(0x00);
+        $data .= chr(0x00);
+        $data .= chr(10); // 10 bytes of padding
+        $data .= str_repeat("\x00", 10);
+
+        // Then add STREAMINFO block (type 0)
+        $data .= chr(0x80 | 0); // Last block + type 0 (STREAMINFO)
+        $data .= chr(0x00);
+        $data .= chr(0x00);
+        $data .= chr(34);
+        $data .= str_repeat("\x00", 34);
+
+        file_put_contents($filePath, $data);
+
+        $duration = $this->invokePrivateGetFlacDuration($filePath);
+
+        $this->assertNull($duration);
+
+        unlink($filePath);
+        rmdir($tempDir);
+    }
+
+    /**
+     * Invokes the private getFlacDuration method using reflection.
+     */
+    private function invokePrivateGetFlacDuration(string $path): ?int
+    {
+        $reflection = new \ReflectionMethod($this->scanner, 'getFlacDuration');
+        $reflection->setAccessible(true);
+        return $reflection->invoke($this->scanner, $path);
+    }
 }

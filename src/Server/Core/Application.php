@@ -299,6 +299,9 @@ class Application
         // Last.fm admin connect routes (G.3).
         $this->loadLastfmRoutes();
 
+        // Library management and theme media routes (1.6b).
+        $this->loadLibraryRoutes();
+
         // Media request UI moved to phlix-hub in K.3 — no server routes here.
     }
 
@@ -336,6 +339,41 @@ class Application
         } catch (\Throwable) {
             // Last.fm not configured — silent ignore (e.g. DB not ready).
         }
+    }
+
+    /**
+     * Registers library management and theme media API routes.
+     *
+     * Wires endpoints for:
+     * - LibraryController: index, show, create, update, delete, scan, rescan (7 routes)
+     * - ThemeMediaController: getThemeMedia, scanThemeMedia, deleteThemeMedia (3 routes)
+     * - ThemeMediaStreamController: streamAudio, streamVideo (2 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadLibraryRoutes(): void
+    {
+        $libraryController = $this->getLibraryController();
+        $themeMediaController = $this->getThemeMediaController();
+        $themeMediaStreamController = $this->getThemeMediaStreamController();
+
+        // Library CRUD routes
+        $this->router->get('/api/v1/libraries', [$libraryController, 'index']);
+        $this->router->get('/api/v1/libraries/{id}', [$libraryController, 'show']);
+        $this->router->post('/api/v1/libraries', [$libraryController, 'create']);
+        $this->router->put('/api/v1/libraries/{id}', [$libraryController, 'update']);
+        $this->router->delete('/api/v1/libraries/{id}', [$libraryController, 'delete']);
+        $this->router->post('/api/v1/libraries/{id}/scan', [$libraryController, 'scan']);
+        $this->router->post('/api/v1/libraries/{id}/rescan', [$libraryController, 'rescan']);
+
+        // Theme media routes
+        $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);
+        $this->router->post('/api/v1/libraries/{id}/theme-media/scan', [$themeMediaController, 'scanThemeMedia']);
+        $this->router->delete('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'deleteThemeMedia']);
+
+        // Theme media streaming routes
+        $this->router->get('/stream/theme-media/{libraryId}/audio', [$themeMediaStreamController, 'streamAudio']);
+        $this->router->get('/stream/theme-media/{libraryId}/video', [$themeMediaStreamController, 'streamVideo']);
     }
 
     /**
@@ -1298,5 +1336,114 @@ class Application
             $playbackController,
             $markerService
         );
+    }
+
+    /**
+     * Returns a LibraryController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\LibraryController The controller instance.
+     */
+    private function getLibraryController(): \Phlix\Server\Http\Controllers\LibraryController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $libraryManager = new \Phlix\Media\Library\LibraryManager(
+                $db,
+                new \Phlix\Media\Library\MediaScanner(
+                    $db,
+                    new \Phlix\Media\Library\ItemRepository($db)
+                ),
+                new \Phlix\Media\Library\FolderWatcher()
+            );
+            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager);
+        }
+
+        /** @var \Phlix\Media\Library\LibraryManager */
+        $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
+        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager);
+
+        // Wire admin middleware if available
+        if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
+    }
+
+    /**
+     * Returns a ThemeMediaController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\ThemeMediaController The controller instance.
+     */
+    private function getThemeMediaController(): \Phlix\Server\Http\Controllers\ThemeMediaController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $themeMediaRepository = new \Phlix\Theming\ThemeMediaRepository($db);
+            $themeMediaFinder = new \Phlix\Theming\ThemeMediaFinder();
+            $libraryManager = new \Phlix\Media\Library\LibraryManager(
+                $db,
+                new \Phlix\Media\Library\MediaScanner(
+                    $db,
+                    new \Phlix\Media\Library\ItemRepository($db)
+                ),
+                new \Phlix\Media\Library\FolderWatcher()
+            );
+            return new \Phlix\Server\Http\Controllers\ThemeMediaController(
+                $themeMediaRepository,
+                $themeMediaFinder,
+                $libraryManager
+            );
+        }
+
+        /** @var \Phlix\Theming\ThemeMediaRepository */
+        $themeMediaRepository = $this->container->get(\Phlix\Theming\ThemeMediaRepository::class);
+        /** @var \Phlix\Theming\ThemeMediaFinder */
+        $themeMediaFinder = $this->container->get(\Phlix\Theming\ThemeMediaFinder::class);
+        /** @var \Phlix\Media\Library\LibraryManager */
+        $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
+        return new \Phlix\Server\Http\Controllers\ThemeMediaController(
+            $themeMediaRepository,
+            $themeMediaFinder,
+            $libraryManager
+        );
+    }
+
+    /**
+     * Returns a ThemeMediaStreamController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\ThemeMediaStreamController The controller instance.
+     */
+    private function getThemeMediaStreamController(): \Phlix\Server\Http\Controllers\ThemeMediaStreamController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $themeMediaRepository = new \Phlix\Theming\ThemeMediaRepository($db);
+            return new \Phlix\Server\Http\Controllers\ThemeMediaStreamController($themeMediaRepository);
+        }
+
+        /** @var \Phlix\Theming\ThemeMediaRepository */
+        $themeMediaRepository = $this->container->get(\Phlix\Theming\ThemeMediaRepository::class);
+        return new \Phlix\Server\Http\Controllers\ThemeMediaStreamController($themeMediaRepository);
     }
 }

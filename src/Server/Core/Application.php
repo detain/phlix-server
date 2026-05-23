@@ -249,6 +249,21 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // Marker endpoints — intro/outro/chapter markers used by the player's
+        // "skip intro" / "skip outro" UI and bulk per-show export.
+        $markerController = $this->getMarkerController();
+        $this->router->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
+        $this->router->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
+        $this->router->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
+        $this->router->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
+
+        // Extras endpoints — trailers and other extras (featurettes,
+        // behind-the-scenes, interviews) for a media item.
+        $extrasController = $this->getExtrasController();
+        $this->router->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
+        $this->router->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
+        $this->router->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+
         // Session management endpoints
         $sessionController = $this->getSessionController();
         $this->router->get('/api/v1/sessions/{id}/progress', [$sessionController, 'getProgress']);
@@ -1165,6 +1180,82 @@ class Application
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+    }
+
+    /**
+     * Returns a MarkerController instance.
+     *
+     * Falls back to a hand-wired instance only when no PSR-11 container is
+     * present (legacy test helpers); production always resolves through DI
+     * so PHP-DI can autowire the controller and its dependencies
+     * (ItemRepository, MarkerCandidateRepository, MarkerService).
+     *
+     * @return \Phlix\Server\Http\Controllers\MarkerController The controller instance.
+     */
+    private function getMarkerController(): \Phlix\Server\Http\Controllers\MarkerController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
+            $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
+            return new \Phlix\Server\Http\Controllers\MarkerController($markerService);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\MarkerController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\MarkerController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns an ExtrasController instance.
+     *
+     * Falls back to a hand-wired instance only when no PSR-11 container is
+     * present (legacy test helpers); production always resolves through DI
+     * so PHP-DI can autowire the controller, TrailerResolver, and the
+     * TmdbProvider factory (which reads the API key from $appConfig['tmdb']
+     * or the TMDB_API_KEY environment variable — see MediaServicesProvider).
+     *
+     * @return \Phlix\Server\Http\Controllers\ExtrasController The controller instance.
+     */
+    private function getExtrasController(): \Phlix\Server\Http\Controllers\ExtrasController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $tmdbConfigRaw = @include __DIR__ . '/../../../config/tmdb.php';
+            $tmdbApiKey = is_array($tmdbConfigRaw)
+                && isset($tmdbConfigRaw['api_key'])
+                && is_string($tmdbConfigRaw['api_key'])
+                ? $tmdbConfigRaw['api_key']
+                : (getenv('TMDB_API_KEY') ?: '');
+            $tmdb = new \Phlix\Media\Metadata\TmdbProvider($tmdbApiKey);
+            $extrasRepo = new \Phlix\Media\Extras\ExtrasRepository($db);
+            $trailerFinder = new \Phlix\Media\Extras\TrailerFinder();
+            $trailerResolver = new \Phlix\Media\Extras\TrailerResolver(
+                $itemRepository,
+                $tmdb,
+                $extrasRepo,
+                $trailerFinder
+            );
+            return new \Phlix\Server\Http\Controllers\ExtrasController($trailerResolver);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\ExtrasController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\ExtrasController::class);
+        return $controller;
     }
 
     /**

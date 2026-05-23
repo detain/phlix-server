@@ -11,6 +11,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Playlists\SmartPlaylistController;
@@ -57,8 +58,23 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $baseUrlRaw = $hlsConfig['base_url'] ?? null;
         $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
 
+        // TMDB API key — prefer $appConfig['tmdb']['api_key'] (loaded by the
+        // bootstrap from config/tmdb.php when available), otherwise fall back
+        // to the TMDB_API_KEY environment variable. An empty key is harmless:
+        // TrailerResolver consults the local extras cache before any HTTP
+        // call, so the trailers endpoints stay live even without a key.
+        $tmdbConfig = is_array($appConfig['tmdb'] ?? null) ? $appConfig['tmdb'] : [];
+        $tmdbApiKeyRaw = $tmdbConfig['api_key'] ?? null;
+        $tmdbApiKey = is_string($tmdbApiKeyRaw) && $tmdbApiKeyRaw !== ''
+            ? $tmdbApiKeyRaw
+            : ((string)(getenv('TMDB_API_KEY') ?: ''));
+
         $builder->addDefinitions([
             ItemRepository::class => autowire(),
+
+            TmdbProvider::class => factory(static function () use ($tmdbApiKey): TmdbProvider {
+                return new TmdbProvider($tmdbApiKey);
+            }),
 
             FolderWatcher::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))

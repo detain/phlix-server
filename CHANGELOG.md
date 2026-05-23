@@ -11,6 +11,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 - Wired four previously-defined-but-orphaned `AuthController` endpoints into `Application::loadApiRoutes()` (Section 1.6a). Each handler existed on the controller but had no route, so requests 404'd: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `GET /api/v1/auth/me`. The `me` endpoint relies on `$request->userId` being populated by upstream auth middleware (same convention as `/api/v1/me/continue-watching`).
 - Replaced the stale `// Placeholder for API routes - will be populated in later phases` comment at the top of `Application::loadApiRoutes()` — the method already wires ~40 routes today. New comment describes the actual API surface (auth, sessions, media, WebAuthn, DLNA/Chromecast/AirPlay/Roku, admin) and points readers at `src/Server/Http/Controllers/`.
+- Wired four previously-defined-but-orphaned `MarkerController` endpoints into `Application::loadApiRoutes()` (Section 1.6c). The handlers existed but had no route, so requests 404'd: `GET /api/v1/media/{id}/markers`, `GET /api/v1/media/{id}/markers/intro`, `GET /api/v1/media/{id}/markers/outro`, `GET /api/v1/shows/{id}/markers/bulk`. Resolves the controller from the PSR-11 container with a hand-wired fallback (matches the `getAuthController()` pattern).
+- Wired three previously-defined-but-orphaned `ExtrasController` endpoints into `Application::loadApiRoutes()` (Section 1.6c). The handlers existed but had no route, so requests 404'd: `GET /api/v1/media/{id}/extras`, `GET /api/v1/media/{id}/trailers`, `GET /api/v1/media/{id}/extras/other`. Resolves the controller from the PSR-11 container with a hand-wired fallback (matches the `getAuthController()` pattern); `MediaServicesProvider` now binds `TmdbProvider` to a factory that reads the API key from `$appConfig['tmdb']['api_key']` or the `TMDB_API_KEY` env var.
+- Added `config/tmdb.php` with a `getenv('TMDB_API_KEY')` default so operators can enable TMDB lookups without code changes.
+- **Operator action required:** Set `TMDB_API_KEY` environment variable
+  to enable trailer fetching via the new ExtrasController routes.
+  Without it, /api/v1/media/{id}/trailers and related endpoints
+  return no results from TMDB (local extras cache still works).
 
 ### Added (post-O.7 wave 4, G.3)
 

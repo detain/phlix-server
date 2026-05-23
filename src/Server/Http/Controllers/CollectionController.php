@@ -65,7 +65,7 @@ final class CollectionController
      */
     public function create(Request $request, array $params): Response
     {
-        $body = $request->jsonPayload ?? [];
+        $body = $request->body;
 
         $name = $body['name'] ?? null;
         if (!is_string($name) || trim($name) === '') {
@@ -154,7 +154,7 @@ final class CollectionController
             return (new Response())->status(404)->json(['error' => 'Collection not found']);
         }
 
-        $body = $request->jsonPayload ?? [];
+        $body = $request->body;
 
         $name = $existing->name;
         if (isset($body['name']) && is_string($body['name']) && trim($body['name']) !== '') {
@@ -306,7 +306,7 @@ final class CollectionController
             return (new Response())->status(404)->json(['error' => 'Collection not found']);
         }
 
-        $body = $request->jsonPayload ?? [];
+        $body = $request->body;
         $mediaItemIds = $body['media_item_ids'] ?? null;
 
         if (!is_array($mediaItemIds) || empty($mediaItemIds)) {

@@ -302,6 +302,9 @@ class Application
         // Library management and theme media routes (1.6b).
         $this->loadLibraryRoutes();
 
+        // Collection management routes (1.6d).
+        $this->loadCollectionRoutes();
+
         // Media request UI moved to phlix-hub in K.3 — no server routes here.
     }
 
@@ -374,6 +377,38 @@ class Application
         // Theme media streaming routes
         $this->router->get('/stream/theme-media/{libraryId}/audio', [$themeMediaStreamController, 'streamAudio']);
         $this->router->get('/stream/theme-media/{libraryId}/video', [$themeMediaStreamController, 'streamVideo']);
+    }
+
+    /**
+     * Registers collection management API routes.
+     *
+     * Wires endpoints for:
+     * - CollectionController: index, create, show, update, delete,
+     *   addItem, removeItem, bulkAdd, refresh, forLibrary (10 routes)
+     *
+     * @since 0.14.0
+     */
+    private function loadCollectionRoutes(): void
+    {
+        $controller = $this->getCollectionController();
+
+        // Collection CRUD routes
+        $this->router->get('/api/v1/collections', [$controller, 'index']);
+        $this->router->post('/api/v1/collections', [$controller, 'create']);
+        $this->router->get('/api/v1/collections/{id}', [$controller, 'show']);
+        $this->router->put('/api/v1/collections/{id}', [$controller, 'update']);
+        $this->router->delete('/api/v1/collections/{id}', [$controller, 'delete']);
+
+        // Collection item management
+        $this->router->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
+        $this->router->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
+
+        // Bulk operations and smart collection refresh
+        $this->router->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
+        $this->router->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
+
+        // Library-scoped collections
+        $this->router->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
     }
 
     /**
@@ -1445,5 +1480,40 @@ class Application
         /** @var \Phlix\Theming\ThemeMediaRepository */
         $themeMediaRepository = $this->container->get(\Phlix\Theming\ThemeMediaRepository::class);
         return new \Phlix\Server\Http\Controllers\ThemeMediaStreamController($themeMediaRepository);
+    }
+
+    /**
+     * Returns a CollectionController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\CollectionController The controller instance.
+     */
+    private function getCollectionController(): \Phlix\Server\Http\Controllers\CollectionController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $collectionRepo = new \Phlix\Collections\CollectionRepository($db);
+            $collectionItemRepo = new \Phlix\Collections\CollectionItemRepository($db);
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            $smartPlaylistRepo = new \Phlix\Playlists\SmartPlaylistRepository($db);
+            $smartPlaylistEngine = new \Phlix\Playlists\SmartPlaylistEngine($itemRepository);
+            $collectionManager = new \Phlix\Collections\CollectionManager(
+                $collectionRepo,
+                $collectionItemRepo,
+                $smartPlaylistEngine,
+                $smartPlaylistRepo,
+                $itemRepository
+            );
+            return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager);
+        }
+
+        /** @var \Phlix\Collections\CollectionManager */
+        $collectionManager = $this->container->get(\Phlix\Collections\CollectionManager::class);
+        return new \Phlix\Server\Http\Controllers\CollectionController($collectionManager);
     }
 }

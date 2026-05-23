@@ -18,7 +18,7 @@ use Phlix\Playlists\SmartPlaylistRepository;
  *
  * @since 0.14.0
  */
-final class CollectionManager
+class CollectionManager
 {
     public function __construct(
         private readonly CollectionRepository $repo,

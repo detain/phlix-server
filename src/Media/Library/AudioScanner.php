@@ -733,10 +733,12 @@ class AudioScanner extends MediaScanner
             fclose($handle);
         }
 
-        // Duration extraction from FLAC streaminfo requires a seektable read
-        // or full decode; {@see getFlacDuration()} is currently a stub kept
-        // for symmetry with the MP3 path.
-        $this->getFlacDuration($path);
+        // Duration extraction from FLAC streaminfo - parse STREAMINFO block
+        // to get sample_rate and total_samples for duration calculation.
+        $duration = $this->getFlacDuration($path);
+        if ($duration !== null) {
+            $tags['duration_secs'] = $duration;
+        }
 
         return $tags;
     }
@@ -841,19 +843,20 @@ class AudioScanner extends MediaScanner
     }
 
     /**
-     * Gets duration of a FLAC file by reading the streaminfo block.
+     * Gets duration of a FLAC file by reading the STREAMINFO block.
      *
-     * Current implementation only validates that the streaminfo header is
-     * present; computing duration requires reading the seektable or doing a
-     * full decode, neither of which is implemented yet. The method therefore
-     * always returns null and is kept for parity with {@see getMp3Duration()}.
+     * The STREAMINFO block contains:
+     * - Bits 0-31: sample_rate (32 bits unsigned, but only first 20 bits used)
+     * - Bits 32-63: total_samples (36 bits unsigned)
+     *
+     * Duration is calculated as: total_samples / sample_rate
      *
      * @param string $path Path to the FLAC file
-     * @return null Duration could not be determined.
+     * @return int|null Duration in seconds, or null if it could not be determined
      */
-    private function getFlacDuration(string $path): null
+    private function getFlacDuration(string $path): ?int
     {
-        $handle = fopen($path, 'rb');
+        $handle = @fopen($path, 'rb');
         if ($handle === false) {
             return null;
         }
@@ -865,20 +868,52 @@ class AudioScanner extends MediaScanner
                 return null;
             }
 
-            // Read first metadata block (streaminfo) to ensure file is parseable.
-            $headerByte = fread($handle, 1);
-            if ($headerByte === false || $headerByte === '') {
+            // Read metadata block header (4 bytes)
+            $header = fread($handle, 4);
+            if ($header === false || strlen($header) < 4) {
                 return null;
             }
 
-            $blockType = ord($headerByte) & 0x7F;
+            // First metadata block should be STREAMINFO (block type = 0)
+            $blockType = ord($header[0]) & 0x7F;
             if ($blockType !== 0) {
-                return null; // First block should be streaminfo
+                return null;
             }
 
-            // Duration computation requires reading the seektable or doing a
-            // full decode; both are out of scope here.
-            return null;
+            // Block length is 3 bytes (big-endian)
+            $blockLength = (ord($header[1]) << 16) | (ord($header[2]) << 8) | ord($header[3]);
+            if ($blockLength < 18) { // STREAMINFO min length is 34 bytes, but we only need first 11
+                return null;
+            }
+
+            // Read STREAMINFO data (need at least bytes 4-11 for duration)
+            $data = fread($handle, 18);
+            if ($data === false || strlen($data) < 18) {
+                return null;
+            }
+
+            // Sample rate: bytes 4-7 (first 20 bits), big-endian
+            // Bits layout: [sample_rate:20][channels:4][bits_per_sample:4][reserved:4]
+            $sampleRate = ((ord($data[4]) << 12) | (ord($data[5]) << 4) | (ord($data[6]) >> 4)) & 0xFFFFF;
+
+            if ($sampleRate === 0 || $sampleRate > 655350) { // Invalid sample rate range
+                return null;
+            }
+
+            // Total samples: bytes 7-10 (36 bits total)
+            // byte 7: upper 4 bits contain total_samples[32:35]
+            // bytes 8-10: lower 24 bits contain total_samples[8:31]
+            $totalSamplesHigh = ord($data[7]) & 0xF;
+            $totalSamplesLow = (ord($data[8]) << 16) | (ord($data[9]) << 8) | ord($data[10]);
+            $totalSamples = ($totalSamplesHigh << 24) | $totalSamplesLow;
+
+            // If total_samples is 0, we can't calculate duration
+            if ($totalSamples === 0) {
+                return null;
+            }
+
+            // Duration in seconds (as int for sub-second accuracy, floored)
+            return (int) floor($totalSamples / $sampleRate);
         } finally {
             fclose($handle);
         }

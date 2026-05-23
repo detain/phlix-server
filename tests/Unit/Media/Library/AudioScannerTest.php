@@ -198,6 +198,78 @@ class AudioScannerTest extends TestCase
     }
 
     /**
+     * Creates a FLAC file with valid STREAMINFO for duration testing.
+     *
+     * The parsing formula in getFlacDuration reads:
+     *   sampleRate = ((data[4] << 12) | (data[5] << 4) | (data[6] >> 4)) & 0xFFFFF
+     *   totalSamples = ((data[7] & 0xF) << 24) | (data[8] << 16) | (data[9] << 8) | data[10]
+     *
+     * So we need to place:
+     * - sample_rate[16:23] at STREAMINFO byte 4
+     * - sample_rate[8:15] at STREAMINFO byte 5
+     * - sample_rate[0:3] in upper nibble of STREAMINFO byte 6
+     * - total_samples[32:35] in lower nibble of STREAMINFO byte 7
+     * - total_samples[0:31] at STREAMINFO bytes 8-10 (big-endian)
+     *
+     * Duration = total_samples / sample_rate
+     *
+     * @param int $sampleRate Sample rate in Hz (default 44100)
+     * @param int $channels Number of channels (default 2)
+     * @param int $bitsPerSample Bits per sample (default 16)
+     * @param int $durationSecs Duration in seconds (default 10)
+     */
+    private function createFlacFileWithDuration(
+        int $sampleRate = 44100,
+        int $channels = 2,
+        int $bitsPerSample = 16,
+        int $durationSecs = 10
+    ): string {
+        $totalSamples = $sampleRate * $durationSecs;
+
+        // fLaC marker
+        $data = 'fLaC';
+
+        // STREAMINFO block header (4 bytes)
+        $data .= chr(0x80); // Last block + type 0 (STREAMINFO)
+        $data .= chr(0x00);
+        $data .= chr(0x00);
+        $data .= chr(34);
+
+        // Build 34 bytes of STREAMINFO data
+        $info = '';
+
+        // Bytes 0-1: min block size (4096)
+        $info .= pack('n', 4096);
+
+        // Bytes 2-3: max block size (4096)
+        $info .= pack('n', 4096);
+
+        // Bytes 4-6: sample rate (20 bits)
+        // For 44100 Hz (0x0AC44): byte4=0x0A, byte5=0xC4, byte6 upper nibble=0x4
+        $sampleRate20 = $sampleRate & 0xFFFFF;
+        $info .= chr(($sampleRate20 >> 12) & 0xFF);  // byte4: sample_rate[16:23]
+        $info .= chr(($sampleRate20 >> 4) & 0xFF);   // byte5: sample_rate[8:15]
+        $info .= chr(($sampleRate20 & 0x0F) << 4);   // byte6: sample_rate[0:3] in upper nibble
+
+        // Bytes 7-10: total samples (36 bits)
+        // byte7 lower nibble: total_samples[32:35]
+        // bytes 8-10: total_samples[0:31] in BIG-ENDIAN order
+        $totalSamplesLow = $totalSamples & 0xFFFFFFFF;
+        $totalSamplesHigh = ($totalSamples >> 32) & 0xF;
+        $info .= chr($totalSamplesHigh & 0xF);  // byte7: total_samples[32:35] in lower nibble
+        $info .= chr(($totalSamplesLow >> 16) & 0xFF);  // byte8: total_samples[16:23]
+        $info .= chr(($totalSamplesLow >> 8) & 0xFF);   // byte9: total_samples[8:15]
+        $info .= chr($totalSamplesLow & 0xFF);         // byte10: total_samples[0:7]
+
+        // Bytes 11-33: rest of STREAMINFO (set to 0)
+        $info .= str_repeat("\x00", 23);
+
+        $data .= $info;
+
+        return $data;
+    }
+
+    /**
      * Creates a minimal MP3 file with ID3v2 header for testing.
      */
     private function createMinimalMp3File(): string
@@ -289,5 +361,55 @@ class AudioScannerTest extends TestCase
         } catch (\Throwable $e) {
             $this->fail("harvestTags threw an exception: " . $e->getMessage());
         }
+    }
+
+    /**
+     * @test
+     */
+    public function testHarvestTagsFlacWithDuration(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create a FLAC file with 10 second duration at 44100 Hz
+        $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 10);
+        file_put_contents($filePath, $flacData);
+
+        $tags = $this->scanner->harvestTags($filePath);
+
+        // Should return array with duration_secs
+        $this->assertIsArray($tags);
+        $this->assertArrayHasKey('duration_secs', $tags);
+        $this->assertEquals(10, $tags['duration_secs']);
+
+        unlink($filePath);
+        rmdir($tempDir);
+    }
+
+    /**
+     * @test
+     */
+    public function testHarvestTagsFlacWithZeroTotalSamplesReturnsNoDuration(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_test_' . uniqid();
+        mkdir($tempDir, 0755, true);
+
+        $filePath = $tempDir . '/test.flac';
+
+        // Create a FLAC file with zero total samples (unknown duration)
+        $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 0);
+        file_put_contents($filePath, $flacData);
+
+        $tags = $this->scanner->harvestTags($filePath);
+
+        // Should return array without duration_secs (or duration is null/0)
+        $this->assertIsArray($tags);
+        // When total_samples is 0, duration cannot be calculated
+        $this->assertArrayNotHasKey('duration_secs', $tags);
+
+        unlink($filePath);
+        rmdir($tempDir);
     }
 }

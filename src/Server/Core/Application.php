@@ -536,7 +536,7 @@ class Application
      *
      * Wires endpoints for:
      * - PhotoController: listAlbums, getAlbum, listPhotos, getPhoto,
-     *   getThumbnail, slideshow (6 routes)
+     *   getThumbnail, getFull, slideshow (7 routes)
      *
      * @since 0.16.0
      */
@@ -550,6 +550,7 @@ class Application
         $this->router->get('/photo/photos', [$controller, 'listPhotos']);
         $this->router->get('/photo/photos/{id}', [$controller, 'getPhoto']);
         $this->router->get('/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
+        $this->router->get('/photo/photos/{id}/full', [$controller, 'getFull']);
 
         // Slideshow endpoint
         $this->router->get('/photo/slideshow', [$controller, 'slideshow']);

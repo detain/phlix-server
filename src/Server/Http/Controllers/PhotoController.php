@@ -300,6 +300,115 @@ class PhotoController
     }
 
     /**
+     * Gets the full-resolution photo image.
+     *
+     * GET /photo/photos/{id}/full
+     *
+     * Serves the full-size photo file directly with proper Content-Type.
+     * Supports Range requests for seeking.
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters including 'id'
+     * @return Response Image response with full photo or error
+     *
+     * @since 0.16.0
+     */
+    public function getFull(Request $request, array $params): Response
+    {
+        $photoId = $params['id'] ?? null;
+
+        if ($photoId === null) {
+            return (new Response())->status(400)->json([
+                'error' => 'photo id is required',
+            ]);
+        }
+
+        $item = $this->itemRepo->findById($photoId);
+
+        if ($item === null || $item['type'] !== 'photo') {
+            return (new Response())->status(404)->json([
+                'error' => 'Photo not found',
+            ]);
+        }
+
+        /** @var string */
+        $path = $item['path'];
+
+        if (!file_exists($path)) {
+            return (new Response())->status(404)->json([
+                'error' => 'Photo file not found',
+            ]);
+        }
+
+        $fileSize = filesize($path);
+        if ($fileSize === false) {
+            return (new Response())->status(500)->json([
+                'error' => 'Failed to read photo file',
+            ]);
+        }
+
+        // Determine MIME type
+        $imageInfo = @getimagesize($path);
+        $mimeType = $imageInfo !== false ? $imageInfo['mime'] : 'image/jpeg';
+
+        // Handle Range requests for seeking
+        $rangeHeader = $request->headers['Range'] ?? null;
+        $start = 0;
+        $end = $fileSize - 1;
+
+        if ($rangeHeader !== null && is_string($rangeHeader)) {
+            // Parse Range header (e.g., "bytes=1024-2048")
+            if (preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $matches)) {
+                $start = (int) $matches[1];
+                $end = $matches[2] !== '' ? (int) $matches[2] : $fileSize - 1;
+
+                if ($start > $end || $start >= $fileSize) {
+                    return (new Response())
+                        ->status(416)
+                        ->header('Content-Range', "bytes */{$fileSize}")
+                        ->json(['error' => 'Range not satisfiable']);
+                }
+            }
+        }
+
+        // Open file and seek to start position
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            return (new Response())->status(500)->json(['error' => 'Failed to open file']);
+        }
+
+        if (fseek($handle, $start) === -1) {
+            fclose($handle);
+            return (new Response())->status(500)->json(['error' => 'Failed to seek file']);
+        }
+
+        $length = $end - $start + 1;
+        if ($length < 1) {
+            fclose($handle);
+            return (new Response())->status(416)->json(['error' => 'Invalid range length']);
+        }
+        /** @var positive-int $length */
+        $content = fread($handle, $length);
+        fclose($handle);
+
+        if ($content === false) {
+            return (new Response())->status(500)->json(['error' => 'Failed to read file']);
+        }
+
+        $response = (new Response())
+            ->status($rangeHeader !== null ? 206 : 200)
+            ->header('Content-Type', $mimeType)
+            ->header('Content-Length', (string)strlen($content))
+            ->header('Accept-Ranges', 'bytes');
+
+        if ($rangeHeader !== null) {
+            $response->header('Content-Range', "bytes {$start}-{$end}/{$fileSize}");
+        }
+
+        return $response->body($content);
+    }
+
+    /**
      * Gets photos for slideshow presentation.
      *
      * GET /photo/slideshow?album_id=xxx&interval=5

@@ -318,7 +318,8 @@ class BookController
         return (new Response())
             ->header('Content-Type', $mimeType)
             ->header('Cache-Control', 'public, max-age=86400')
-            ->text(base64_encode($content));
+            ->header('Content-Length', (string)strlen($content))
+            ->body($content);
     }
 
     /**
@@ -372,6 +373,6 @@ class BookController
             ->header('Content-Type', $mimeType)
             ->header('Content-Disposition', 'attachment; filename="' . $filename . '"')
             ->header('Content-Length', (string)strlen($content))
-            ->text(base64_encode($content));
+            ->body($content);
     }
 }

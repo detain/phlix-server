@@ -344,6 +344,8 @@ class AudiobookController
      * GET /audiobooks/{id}/stream?chapter=N&offset=MS
      *
      * Supports resuming in-chapter with chapter index and millisecond offset.
+     * Supports HTTP Range requests for seeking within the file.
+     * Streams file directly without base64 encoding.
      *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Route parameters including 'id'
@@ -369,6 +371,11 @@ class AudiobookController
 
         if (empty($path) || !file_exists($path)) {
             return (new Response())->status(404)->json(['error' => 'File not found']);
+        }
+
+        $fileSize = filesize($path);
+        if ($fileSize === false) {
+            return (new Response())->status(500)->json(['error' => 'Failed to get file size']);
         }
 
         $chapterParam = $request->query['chapter'] ?? null;
@@ -398,7 +405,6 @@ class AudiobookController
             $durationMsRaw = $metadata['duration_ms'] ?? null;
             $durationMs = is_int($durationMsRaw) || is_float($durationMsRaw) ? $durationMsRaw : 0;
             if ($durationMs > 0) {
-                $fileSize = filesize($path) ?: 0;
                 $byteOffset = (int)(($seekMs / $durationMs) * $fileSize);
             }
         }
@@ -411,33 +417,60 @@ class AudiobookController
             default => 'application/octet-stream',
         };
 
-        // Read file and serve
+        // Handle Range requests for seeking
+        $rangeHeader = $request->headers['Range'] ?? null;
+        $start = $byteOffset;
+        $end = $fileSize - 1;
+
+        if ($rangeHeader !== null && is_string($rangeHeader)) {
+            // Parse Range header (e.g., "bytes=1024-2048" or "bytes=1024-")
+            if (preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $matches)) {
+                $start = (int) $matches[1];
+                $end = $matches[2] !== '' ? (int) $matches[2] : $fileSize - 1;
+
+                if ($start > $end || $start >= $fileSize) {
+                    return (new Response())
+                        ->status(416)
+                        ->header('Content-Range', "bytes */{$fileSize}")
+                        ->json(['error' => 'Range not satisfiable']);
+                }
+            }
+        }
+
+        // Open file and seek to start position
         $handle = fopen($path, 'rb');
         if ($handle === false) {
             return (new Response())->status(500)->json(['error' => 'Failed to open file']);
         }
 
-        fseek($handle, $byteOffset);
-        $content = '';
-        while (!feof($handle)) {
-            $chunk = fread($handle, 65536);
-            if ($chunk === false) {
-                break;
-            }
-            $content .= $chunk;
+        if (fseek($handle, $start) === -1) {
+            fclose($handle);
+            return (new Response())->status(500)->json(['error' => 'Failed to seek file']);
         }
+
+        $length = $end - $start + 1;
+        if ($length < 1) {
+            fclose($handle);
+            return (new Response())->status(416)->json(['error' => 'Invalid range length']);
+        }
+        /** @var positive-int $length */
+        $content = fread($handle, $length);
         fclose($handle);
 
-        if ($content === '' && $byteOffset > 0) {
-            return (new Response())->status(416)->json(['error' => 'Range not satisfiable']);
+        if ($content === false) {
+            return (new Response())->status(500)->json(['error' => 'Failed to read file']);
         }
 
-        $contentLength = strlen($content);
-
-        return (new Response())
+        $response = (new Response())
+            ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
-            ->header('Content-Length', (string)$contentLength)
-            ->header('Accept-Ranges', 'bytes')
-            ->text(base64_encode($content));
+            ->header('Content-Length', (string)strlen($content))
+            ->header('Accept-Ranges', 'bytes');
+
+        if ($rangeHeader !== null) {
+            $response->header('Content-Range', "bytes {$start}-{$end}/{$fileSize}");
+        }
+
+        return $response->body($content);
     }
 }

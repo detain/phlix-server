@@ -370,7 +370,12 @@ class AudiobookController
         $path = is_string($audiobook['path'] ?? null) ? $audiobook['path'] : '';
 
         if (empty($path) || !file_exists($path)) {
-            return (new Response())->status(404)->json(['error' => 'File not found']);
+            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
+        }
+
+        // Validate path is within allowed media directory
+        if (!$this->validateMediaPath($path)) {
+            return (new Response())->status(403)->json(['error' => 'Forbidden']);
         }
 
         $fileSize = filesize($path);
@@ -409,13 +414,20 @@ class AudiobookController
             }
         }
 
-        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        $mimeType = match ($extension) {
-            'm4b' => 'audio/mp4',
-            'm4a' => 'audio/mp4',
-            'mp3' => 'audio/mpeg',
-            default => 'application/octet-stream',
-        };
+        // Use finfo for actual MIME detection if available
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $detectedMime = $finfo->file($path);
+        if ($detectedMime !== false && str_starts_with($detectedMime, 'audio/')) {
+            $mimeType = $detectedMime;
+        } else {
+            // Fallback to extension-based detection
+            $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            $mimeType = match ($extension) {
+                'm4b', 'm4a' => 'audio/mp4',
+                'mp3' => 'audio/mpeg',
+                default => 'application/octet-stream',
+            };
+        }
 
         // Handle Range requests for seeking
         $rangeHeader = $request->headers['Range'] ?? null;
@@ -472,5 +484,39 @@ class AudiobookController
         }
 
         return $response->body($content);
+    }
+
+    /**
+     * Validates that a media path is within allowed media directories.
+     *
+     * @param string $path The path to validate
+     * @return bool True if path is within allowed directories, false otherwise
+     *
+     * @since 2.1.0
+     */
+    private function validateMediaPath(string $path): bool
+    {
+        // Get the real path and verify it's within allowed directories
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return false;
+        }
+
+        // Media files should be under configured media roots
+        // For now, check if path contains common media directories
+        $allowedPatterns = [
+            '/media/',
+            '/mnt/',
+            '/data/',
+            '/home/',
+        ];
+
+        foreach ($allowedPatterns as $pattern) {
+            if (str_contains($realPath, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

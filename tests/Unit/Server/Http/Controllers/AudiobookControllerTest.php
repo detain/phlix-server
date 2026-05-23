@@ -11,6 +11,8 @@ use Phlix\Server\Http\Request;
 
 class AudiobookControllerTest extends TestCase
 {
+    private ?string $testMediaDir = null;
+
     private function createMockItemRepo(): ItemRepository
     {
         return $this->createMock(ItemRepository::class);
@@ -19,6 +21,38 @@ class AudiobookControllerTest extends TestCase
     private function createMockLibraryManager(): AudiobookLibraryManager
     {
         return $this->createMock(AudiobookLibraryManager::class);
+    }
+
+    /**
+     * Creates a test audio file in an allowed media directory.
+     * This ensures the file path passes validateMediaPath() security checks.
+     */
+    private function createTestAudioFile(string $filename, string $content): string
+    {
+        if ($this->testMediaDir === null) {
+            $this->testMediaDir = '/home/my/test_media_' . uniqid();
+            mkdir($this->testMediaDir, 0755, true);
+        }
+
+        $path = $this->testMediaDir . '/' . $filename;
+        file_put_contents($path, $content);
+
+        return $path;
+    }
+
+    protected function tearDown(): void
+    {
+        parent::tearDown();
+
+        // Clean up test media directory
+        if ($this->testMediaDir !== null && is_dir($this->testMediaDir)) {
+            $files = glob($this->testMediaDir . '/*');
+            foreach ($files as $file) {
+                unlink($file);
+            }
+            rmdir($this->testMediaDir);
+            $this->testMediaDir = null;
+        }
     }
 
     public function testCanCreateAudiobookController(): void
@@ -167,8 +201,7 @@ class AudiobookControllerTest extends TestCase
         $itemRepo = $this->createMockItemRepo();
         $libraryManager = $this->createMockLibraryManager();
 
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
-        file_put_contents($tempFile, 'fake audio content');
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', 'fake audio content');
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -195,9 +228,6 @@ class AudiobookControllerTest extends TestCase
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
 
         $this->assertEquals(200, $response->statusCode);
-
-        // Clean up
-        unlink($tempFile);
     }
 
     public function testGetAudiobookReturns404ForNonExistent(): void
@@ -235,8 +265,7 @@ class AudiobookControllerTest extends TestCase
         $libraryManager = $this->createMockLibraryManager();
 
         $originalContent = 'raw audio binary data';
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
-        file_put_contents($tempFile, $originalContent);
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', $originalContent);
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -258,8 +287,6 @@ class AudiobookControllerTest extends TestCase
         $this->assertEquals($originalContent, $response->body);
         // Ensure it's NOT base64 encoded
         $this->assertNotEquals(base64_encode($originalContent), $response->body);
-
-        unlink($tempFile);
     }
 
     public function testStreamAudiobookSetsCorrectMimeType(): void
@@ -267,8 +294,7 @@ class AudiobookControllerTest extends TestCase
         $itemRepo = $this->createMockItemRepo();
         $libraryManager = $this->createMockLibraryManager();
 
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
-        file_put_contents($tempFile, 'audio content');
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', 'audio content');
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -289,8 +315,6 @@ class AudiobookControllerTest extends TestCase
         $this->assertEquals(200, $response->statusCode);
         $this->assertArrayHasKey('Content-Type', $response->headers);
         $this->assertEquals('audio/mp4', $response->headers['Content-Type']);
-
-        unlink($tempFile);
     }
 
     public function testStreamAudiobookSupportsRangeRequests(): void
@@ -299,8 +323,7 @@ class AudiobookControllerTest extends TestCase
         $libraryManager = $this->createMockLibraryManager();
 
         $originalContent = '0123456789ABCDEF'; // 16 bytes
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
-        file_put_contents($tempFile, $originalContent);
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', $originalContent);
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -325,8 +348,6 @@ class AudiobookControllerTest extends TestCase
         $this->assertEquals('56789A', $response->body); // bytes 5-10
         $this->assertArrayHasKey('Content-Range', $response->headers);
         $this->assertEquals('bytes 5-10/16', $response->headers['Content-Range']);
-
-        unlink($tempFile);
     }
 
     public function testStreamAudiobookAcceptRangesHeader(): void
@@ -334,8 +355,7 @@ class AudiobookControllerTest extends TestCase
         $itemRepo = $this->createMockItemRepo();
         $libraryManager = $this->createMockLibraryManager();
 
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.mp3';
-        file_put_contents($tempFile, 'audio content');
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.mp3', 'audio content');
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -357,8 +377,6 @@ class AudiobookControllerTest extends TestCase
         $this->assertArrayHasKey('Accept-Ranges', $response->headers);
         $this->assertEquals('bytes', $response->headers['Accept-Ranges']);
         $this->assertEquals('audio/mpeg', $response->headers['Content-Type']);
-
-        unlink($tempFile);
     }
 
     public function testStreamAudiobookReturns416ForUnsatisfiableRange(): void
@@ -366,8 +384,7 @@ class AudiobookControllerTest extends TestCase
         $itemRepo = $this->createMockItemRepo();
         $libraryManager = $this->createMockLibraryManager();
 
-        $tempFile = sys_get_temp_dir() . '/test_audiobook_' . uniqid() . '.m4b';
-        file_put_contents($tempFile, 'short content');
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', 'short content');
 
         $itemRepo->method('findById')->willReturn([
             'id' => 'audiobook-123',
@@ -389,7 +406,5 @@ class AudiobookControllerTest extends TestCase
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
 
         $this->assertEquals(416, $response->statusCode);
-
-        unlink($tempFile);
     }
 }

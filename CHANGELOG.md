@@ -7,6 +7,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Wired four previously-defined-but-orphaned `AuthController` endpoints into `Application::loadApiRoutes()` (Section 1.6a). Each handler existed on the controller but had no route, so requests 404'd: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `GET /api/v1/auth/me`. The `me` endpoint relies on `$request->userId` being populated by upstream auth middleware (same convention as `/api/v1/me/continue-watching`).
+- Replaced the stale `// Placeholder for API routes - will be populated in later phases` comment at the top of `Application::loadApiRoutes()` — the method already wires ~40 routes today. New comment describes the actual API surface (auth, sessions, media, WebAuthn, DLNA/Chromecast/AirPlay/Roku, admin) and points readers at `src/Server/Http/Controllers/`.
+
 ### Added (post-O.7 wave 4, G.3)
 
 - Last.fm scrobble plugin (`src/Plugins/Scrobbler/Lastfm/`):

@@ -210,14 +210,17 @@ class Application
     /**
      * Loads API v1 routes.
      *
-     * Placeholder method for future API endpoint registration.
-     * Override in subclasses to add additional API routes.
+     * Registers the user-facing JSON API surface: authentication, sessions,
+     * media playback, WebAuthn, DLNA renderer control, Chromecast, AirPlay,
+     * Roku, and admin integrations. Override in subclasses to add additional
+     * API routes.
      *
      * @return void
      */
     private function loadApiRoutes(): void
     {
-        // Placeholder for API routes - will be populated in later phases
+        // API routes. Wire new routes here following the existing pattern;
+        // controller responsibilities live under src/Server/Http/Controllers/.
         $this->router->get('/api/v1', function (Request $request): Response {
             return (new Response())->json([
                 'api' => 'Phlix Media Server',
@@ -225,6 +228,16 @@ class Application
                 'endpoints' => '/health, /system/info',
             ]);
         });
+
+        // Username/password authentication endpoints. The controller validates
+        // input and delegates to AuthManager; `me` enforces 401 internally by
+        // checking $request->userId (set by upstream auth middleware), matching
+        // the pattern used by /api/v1/me/continue-watching on SessionController.
+        $authController = $this->getAuthController();
+        $this->router->post('/api/v1/auth/register', [$authController, 'register']);
+        $this->router->post('/api/v1/auth/login', [$authController, 'login']);
+        $this->router->post('/api/v1/auth/refresh', [$authController, 'refresh']);
+        $this->router->get('/api/v1/auth/me', [$authController, 'me']);
 
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
@@ -775,6 +788,41 @@ class Application
 
         /** @var HubJwksController */
         $controller = $this->container->get(HubJwksController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns an AuthController instance from the container.
+     *
+     * Falls back to a hand-wired instance only when no PSR-11 container is
+     * present (legacy test helpers); production always resolves through DI.
+     *
+     * @return \Phlix\Server\Http\Controllers\AuthController The controller instance.
+     */
+    private function getAuthController(): \Phlix\Server\Http\Controllers\AuthController
+    {
+        if ($this->container === null) {
+            $db = new \Workerman\MySQL\Connection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $userRepo = new \Phlix\Auth\UserRepository($db);
+            $auditLogger = new \Phlix\Common\Logger\AuditLogger(
+                new \Phlix\Common\Logger\StructuredLogger('audit', [])
+            );
+            $authManager = new \Phlix\Auth\AuthManager(
+                $userRepo,
+                new \Phlix\Auth\JwtHandler('fallback-secret-for-tests'),
+                $auditLogger
+            );
+            return new \Phlix\Server\Http\Controllers\AuthController($authManager);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\AuthController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\AuthController::class);
         return $controller;
     }
 

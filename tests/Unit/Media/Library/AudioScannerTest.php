@@ -427,7 +427,7 @@ class AudioScannerTest extends TestCase
         $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 10);
         file_put_contents($filePath, $flacData);
 
-        $duration = $this->invokePrivateGetFlacDuration($filePath);
+        $duration = $this->invokePrivateGetFlacDurationFromHandle($filePath);
 
         $this->assertIsInt($duration);
         $this->assertEquals(10, $duration);
@@ -450,7 +450,7 @@ class AudioScannerTest extends TestCase
         $flacData = $this->createFlacFileWithDuration(0, 2, 16, 10);
         file_put_contents($filePath, $flacData);
 
-        $duration = $this->invokePrivateGetFlacDuration($filePath);
+        $duration = $this->invokePrivateGetFlacDurationFromHandle($filePath);
 
         $this->assertNull($duration);
 
@@ -472,7 +472,7 @@ class AudioScannerTest extends TestCase
         $flacData = $this->createFlacFileWithDuration(44100, 2, 16, 0);
         file_put_contents($filePath, $flacData);
 
-        $duration = $this->invokePrivateGetFlacDuration($filePath);
+        $duration = $this->invokePrivateGetFlacDurationFromHandle($filePath);
 
         $this->assertNull($duration);
 
@@ -510,7 +510,7 @@ class AudioScannerTest extends TestCase
 
         file_put_contents($filePath, $data);
 
-        $duration = $this->invokePrivateGetFlacDuration($filePath);
+        $duration = $this->invokePrivateGetFlacDurationFromHandle($filePath);
 
         $this->assertNull($duration);
 
@@ -519,12 +519,21 @@ class AudioScannerTest extends TestCase
     }
 
     /**
-     * Invokes the private getFlacDuration method using reflection.
+     * Invokes the private getFlacDurationFromHandle method using reflection.
      */
-    private function invokePrivateGetFlacDuration(string $path): ?int
+    private function invokePrivateGetFlacDurationFromHandle(string $path): ?int
     {
-        $reflection = new \ReflectionMethod($this->scanner, 'getFlacDuration');
-        $reflection->setAccessible(true);
-        return $reflection->invoke($this->scanner, $path);
+        $handle = fopen($path, 'rb');
+        if ($handle === false) {
+            return null;
+        }
+
+        try {
+            $reflection = new \ReflectionMethod($this->scanner, 'getFlacDurationFromHandle');
+            $reflection->setAccessible(true);
+            return $reflection->invoke($this->scanner, $handle);
+        } finally {
+            fclose($handle);
+        }
     }
 }

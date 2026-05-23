@@ -733,22 +733,7 @@ class AudioScanner extends MediaScanner
             // Duration extraction from FLAC streaminfo - rewind and read STREAMINFO
             // block (always first) to get sample_rate and total_samples for duration.
             rewind($handle);
-            $duration = null;
-
-            $marker = fread($handle, 4);
-            if ($marker === 'fLaC') {
-                $header = fread($handle, 4);
-                if ($header !== false && strlen($header) >= 4 && (ord($header[0]) & 0x7F) === 0) {
-                    $blockLength = (ord($header[1]) << 16) | (ord($header[2]) << 8) | ord($header[3]);
-                    if ($blockLength >= 18) {
-                        $data = fread($handle, 18);
-                        if ($data !== false && strlen($data) >= 18) {
-                            $duration = $this->parseFlacDurationFromData($data);
-                        }
-                    }
-                }
-            }
-
+            $duration = $this->getFlacDurationFromHandle($handle);
             if ($duration !== null) {
                 $tags['duration_secs'] = $duration;
             }
@@ -903,6 +888,50 @@ class AudioScanner extends MediaScanner
     }
 
     /**
+     * Gets duration of a FLAC file from an open file handle.
+     *
+     * Reads the STREAMINFO block (always first metadata block) to extract
+     * sample_rate and total_samples, then calculates duration.
+     *
+     * @param resource $handle Open file handle to FLAC file (must be readable)
+     * @return int|null Duration in seconds, or null if it could not be determined
+     */
+    private function getFlacDurationFromHandle($handle): ?int
+    {
+        // Read 'fLaC' marker
+        $marker = fread($handle, 4);
+        if ($marker !== 'fLaC') {
+            return null;
+        }
+
+        // Read metadata block header (4 bytes)
+        $header = fread($handle, 4);
+        if ($header === false || strlen($header) < 4) {
+            return null;
+        }
+
+        // First metadata block should be STREAMINFO (block type = 0)
+        $blockType = ord($header[0]) & 0x7F;
+        if ($blockType !== 0) {
+            return null;
+        }
+
+        // Block length is 3 bytes (big-endian)
+        $blockLength = (ord($header[1]) << 16) | (ord($header[2]) << 8) | ord($header[3]);
+        if ($blockLength < 18) { // STREAMINFO min length is 34 bytes, but we only need first 11
+            return null;
+        }
+
+        // Read STREAMINFO data (need at least bytes 4-11 for duration)
+        $data = fread($handle, 18);
+        if ($data === false || strlen($data) < 18) {
+            return null;
+        }
+
+        return $this->parseFlacDurationFromData($data);
+    }
+
+    /**
      * Gets duration of a FLAC file by reading the STREAMINFO block.
      *
      * The STREAMINFO block contains:
@@ -914,50 +943,6 @@ class AudioScanner extends MediaScanner
      * @param string $path Path to the FLAC file
      * @return int|null Duration in seconds, or null if it could not be determined
      */
-    private function getFlacDuration(string $path): ?int
-    {
-        $handle = @fopen($path, 'rb');
-        if ($handle === false) {
-            return null;
-        }
-
-        try {
-            // Read 'fLaC' marker
-            $marker = fread($handle, 4);
-            if ($marker !== 'fLaC') {
-                return null;
-            }
-
-            // Read metadata block header (4 bytes)
-            $header = fread($handle, 4);
-            if ($header === false || strlen($header) < 4) {
-                return null;
-            }
-
-            // First metadata block should be STREAMINFO (block type = 0)
-            $blockType = ord($header[0]) & 0x7F;
-            if ($blockType !== 0) {
-                return null;
-            }
-
-            // Block length is 3 bytes (big-endian)
-            $blockLength = (ord($header[1]) << 16) | (ord($header[2]) << 8) | ord($header[3]);
-            if ($blockLength < 18) { // STREAMINFO min length is 34 bytes, but we only need first 11
-                return null;
-            }
-
-            // Read STREAMINFO data (need at least bytes 4-11 for duration)
-            $data = fread($handle, 18);
-            if ($data === false || strlen($data) < 18) {
-                return null;
-            }
-
-            return $this->parseFlacDurationFromData($data);
-        } finally {
-            fclose($handle);
-        }
-    }
-
     /**
      * Harvests tags from an M4A/AAC file (MP4 container).
      *

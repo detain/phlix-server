@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Hub;
 
+use Phlix\Shared\Relay\RelayFrameType;
+
 /**
  * Immutable parsed relay frame from the wire.
  *
@@ -13,7 +15,7 @@ namespace Phlix\Hub;
 final class RelayFrame
 {
     /**
-     * @param int                                      $type    Frame type (TYPE_HTTP_REQUEST, etc.).
+     * @param int                                      $type    Frame type (TYPE_HTTP_REQUEST, etc.) or RelayFrameType value.
      * @param int                                      $seq     32-bit unsigned sequence number.
      * @param array<string, mixed>|array<string, mixed> $payload Decoded JSON payload.
      */
@@ -70,5 +72,53 @@ final class RelayFrame
     public function isPong(): bool
     {
         return $this->type === RelayMessageFramer::TYPE_PONG;
+    }
+
+    /**
+     * Returns true if this is a CLIENT_CONNECT frame (new multiplexed protocol).
+     *
+     * @return bool
+     *
+     * @since 0.12.0
+     */
+    public function isClientConnect(): bool
+    {
+        return $this->type === RelayFrameType::CLIENT_CONNECT->value;
+    }
+
+    /**
+     * Returns true if this is a CLIENT_DISCONNECT frame (new multiplexed protocol).
+     *
+     * @return bool
+     *
+     * @since 0.12.0
+     */
+    public function isClientDisconnect(): bool
+    {
+        return $this->type === RelayFrameType::CLIENT_DISCONNECT->value;
+    }
+
+    /**
+     * Returns true if this is a DATA frame (new multiplexed protocol).
+     *
+     * @return bool
+     *
+     * @since 0.12.0
+     */
+    public function isData(): bool
+    {
+        return $this->type === RelayFrameType::DATA->value;
+    }
+
+    /**
+     * Returns true if this is a HEARTBEAT frame (new multiplexed protocol).
+     *
+     * @return bool
+     *
+     * @since 0.12.0
+     */
+    public function isHeartbeat(): bool
+    {
+        return $this->type === RelayFrameType::HEARTBEAT->value;
     }
 }

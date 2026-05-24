@@ -113,12 +113,13 @@ class HlsSegmentPrefetcherTest extends TestCase
 
     /**
      * @group workerman
+     * @group integration
      */
     public function testStartPrefetchDoesNotThrow(): void
     {
         // Skip if Workerman Timer is not available
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $sessionId = 'test-session-123';
@@ -141,11 +142,12 @@ class HlsSegmentPrefetcherTest extends TestCase
 
     /**
      * @group workerman
+     * @group integration
      */
     public function testStartAndStopPrefetch(): void
     {
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $sessionId = 'session-stop-test';
@@ -159,11 +161,12 @@ class HlsSegmentPrefetcherTest extends TestCase
 
     /**
      * @group workerman
+     * @group integration
      */
     public function testMultipleStartPrefetchReplacesPrevious(): void
     {
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $sessionId = 'session-multi-start';

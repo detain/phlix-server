@@ -16,12 +16,15 @@ class ChromaPrintFfiTest extends TestCase
         $this->assertIsBool($result);
     }
 
+    /**
+     * @group integration
+     */
     public function testFingerprintThrowsWhenFileNotFound(): void
     {
         $chromaprint = new ChromaPrintFfi();
 
         if (!$chromaprint->isAvailable()) {
-            $this->markTestSkipped('FFI is not available on this system');
+            $this->markTestSkipped('FFI is not available on this system - run in docker-compose with FFI extension');
         }
 
         $this->expectException(ChromaPrintFingerprintFailedException::class);

@@ -18,11 +18,14 @@ class BackupManagerTest extends TestCase
         $this->backupManager = new BackupManager($this->db);
     }
 
+    /**
+     * @group integration
+     */
     public function testCreateBackupGeneratesIdAndPath(): void
     {
         // This test requires a real filesystem and mysqldump, so we skip it in unit tests.
         // The method structure is tested via integration tests.
-        $this->markTestSkipped('createBackup requires actual filesystem and mysqldump - use integration tests');
+        $this->markTestSkipped('createBackup requires actual filesystem and mysqldump - run in docker-compose for integration testing');
     }
 
     public function testListBackupsReturnsAllBackupsSorted(): void

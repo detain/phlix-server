@@ -59,6 +59,9 @@ final class PluginAdminPageControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
+    /**
+     * @group integration
+     */
     public function test_index_renders_template_when_smarty_available(): void
     {
         $this->skipWithoutSmarty();
@@ -79,6 +82,9 @@ final class PluginAdminPageControllerTest extends TestCase
         $this->assertStringNotContainsString('{$plugin', $response->body);
     }
 
+    /**
+     * @group integration
+     */
     public function test_install_renders_form_when_smarty_available(): void
     {
         $this->skipWithoutSmarty();
@@ -92,6 +98,9 @@ final class PluginAdminPageControllerTest extends TestCase
         $this->assertStringContainsString('/api/v1/admin/plugins/install', $response->body);
     }
 
+    /**
+     * @group integration
+     */
     public function test_detail_renders_template_when_smarty_available(): void
     {
         $this->skipWithoutSmarty();
@@ -168,7 +177,7 @@ final class PluginAdminPageControllerTest extends TestCase
     private function skipWithoutSmarty(): void
     {
         if (!class_exists('Smarty')) {
-            $this->markTestSkipped('Smarty runtime class not available; skipping render test.');
+            $this->markTestSkipped('Smarty runtime class not available; skipping render test. Run in docker-compose for integration testing.');
         }
     }
 }

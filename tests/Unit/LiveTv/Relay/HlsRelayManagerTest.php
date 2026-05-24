@@ -93,12 +93,13 @@ class HlsRelayManagerTest extends TestCase
 
     /**
      * @group workerman
+     * @group integration
      */
     public function testStartRelaySessionCreatesTuneRequest(): void
     {
         // Skip if Workerman Timer not available
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $channelId = 'channel-123';
@@ -137,11 +138,12 @@ class HlsRelayManagerTest extends TestCase
 
     /**
      * @group workerman
+     * @group integration
      */
     public function testStartRelaySessionStoresInDb(): void
     {
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $channelId = 'channel-abc';
@@ -327,12 +329,13 @@ class HlsRelayManagerTest extends TestCase
      * buffered bytes are released back to PHP's memory pool.
      *
      * @group workerman
+     * @group integration
      * @since Wave 2 (post-O.7)
      */
     public function testStopRelaySessionDropsPerSessionSegmentCache(): void
     {
         if (!$this->isTimerAvailable()) {
-            $this->markTestSkipped('Workerman Timer not available in this environment');
+            $this->markTestSkipped('Workerman Timer not available in this environment - run in docker-compose');
         }
 
         $channelId = 'channel-cache-teardown';

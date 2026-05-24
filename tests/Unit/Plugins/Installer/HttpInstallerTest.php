@@ -322,6 +322,9 @@ final class HttpInstallerTest extends TestCase
         $this->installer()->install('file://' . $zipPath);
     }
 
+    /**
+     * @group integration
+     */
     public function test_install_throws_when_destination_rename_fails_due_to_read_only_base(): void
     {
         // Make pluginsBaseDir exist but be read-only so the final
@@ -332,7 +335,7 @@ final class HttpInstallerTest extends TestCase
         // Skip when running as root: chmod is ignored.
         if (posix_geteuid() === 0) {
             chmod($readOnlyBase, 0775);
-            $this->markTestSkipped('Cannot enforce read-only directory as root.');
+            $this->markTestSkipped('Cannot enforce read-only directory as root - run in docker-compose as non-root user for integration testing.');
         }
 
         try {
@@ -458,6 +461,9 @@ final class HttpInstallerTest extends TestCase
         }
     }
 
+    /**
+     * @group integration
+     */
     public function test_installFromDirectory_throws_when_subdir_mkdir_fails(): void
     {
         // pluginsBaseDir is a dir, but read-only -> ensureBaseDir() returns
@@ -467,7 +473,7 @@ final class HttpInstallerTest extends TestCase
         chmod($readOnlyBase, 0500);
         if (posix_geteuid() === 0) {
             chmod($readOnlyBase, 0775);
-            $this->markTestSkipped('Cannot enforce read-only directory as root.');
+            $this->markTestSkipped('Cannot enforce read-only directory as root - run in docker-compose as non-root user for integration testing.');
         }
 
         try {

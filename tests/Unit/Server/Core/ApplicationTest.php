@@ -8,6 +8,9 @@ use Phlix\Server\Core\Application;
 
 class ApplicationTest extends TestCase
 {
+    /**
+     * @group integration
+     */
     public function testApplicationCanBeInstantiated(): void
     {
         // Application's constructor eagerly resolves controllers
@@ -16,7 +19,7 @@ class ApplicationTest extends TestCase
         // CI provides one as a service container; skip locally when
         // the host doesn't.
         if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
-            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application boot smoke test.');
+            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application boot smoke test. Run in docker-compose for integration testing.');
         }
 
         // ConnectionPool keeps process-wide static state. If another test in

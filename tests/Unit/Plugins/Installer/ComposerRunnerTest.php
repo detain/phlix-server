@@ -58,10 +58,13 @@ final class ComposerRunnerTest extends TestCase
         $runner->install($this->tmpDir);
     }
 
+    /**
+     * @group integration
+     */
     public function test_install_succeeds_on_minimal_composer_json(): void
     {
         if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {
-            $this->markTestSkipped('composer binary not available on PATH');
+            $this->markTestSkipped('composer binary not available on PATH - run in docker-compose for integration testing');
         }
         file_put_contents(
             $this->tmpDir . '/composer.json',

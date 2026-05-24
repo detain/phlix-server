@@ -70,10 +70,13 @@ final class InstallEnableDisableTest extends TestCase
         }
     }
 
+    /**
+     * @group integration
+     */
     public function test_full_lifecycle_with_fixture_plugin(): void
     {
         if (trim((string) shell_exec('which composer 2>/dev/null')) === '') {
-            $this->markTestSkipped('composer binary not available on PATH');
+            $this->markTestSkipped('composer binary not available on PATH - run in docker-compose for integration testing');
         }
 
         $fixtureSource = realpath(__DIR__ . '/../../Fixtures/Plugins/fixture-plugin');

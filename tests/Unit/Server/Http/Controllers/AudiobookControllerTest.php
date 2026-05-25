@@ -379,6 +379,130 @@ class AudiobookControllerTest extends TestCase
         $this->assertEquals('audio/mpeg', $response->headers['Content-Type']);
     }
 
+    public function testStreamAudiobookRejectsPathTraversalEscapingRoot(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        // Create a real file OUTSIDE any allowed media root (system temp dir,
+        // which is not under /home, /mnt, /media or /data).
+        $outsideDir = sys_get_temp_dir() . '/phlix_outside_' . uniqid();
+        mkdir($outsideDir, 0755, true);
+        $secretFile = $outsideDir . '/secret.m4b';
+        file_put_contents($secretFile, 'should never be served');
+
+        // Build a traversal path that *contains* "/home/" as a substring but
+        // resolves (via realpath) to the file outside the allowed roots. This is
+        // exactly the bypass the old str_contains() allowlist permitted.
+        $traversalPath = '/home/my/../../..' . $secretFile;
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-evil',
+            'name' => 'Evil',
+            'type' => 'audiobook',
+            'path' => $traversalPath,
+            'metadata' => ['duration_ms' => 1000, 'chapters' => []],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $request = new Request();
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-evil']);
+
+        // realpath() resolves $traversalPath to $secretFile (outside allowed
+        // roots), so validateMediaPath() must reject it.
+        $this->assertContains(
+            $response->statusCode,
+            [403, 404],
+            'Traversal escaping the allowed roots must be rejected (403), '
+                . 'or 404 if the resolved path is not reachable at all.'
+        );
+        $this->assertNotEquals(200, $response->statusCode);
+        $this->assertNotEquals(206, $response->statusCode);
+        $this->assertStringNotContainsString('should never be served', $response->body);
+
+        unlink($secretFile);
+        rmdir($outsideDir);
+    }
+
+    public function testStreamAudiobookReturnsCompleteFileWithoutRange(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        // Build a fixture larger than the controller's STREAM_CHUNK_BYTES
+        // (256 KiB) so a chunk-loop or any per-read cap that truncated the body
+        // would be caught here. ~300 KiB of deterministic bytes.
+        $originalContent = str_repeat('PhlixAudiobookChunk', 16000); // 19 * 16000 = 304000 bytes
+        $expectedSize = strlen($originalContent);
+        $this->assertGreaterThan(256 * 1024, $expectedSize, 'Fixture must exceed the stream chunk size');
+
+        $tempFile = $this->createTestAudioFile('test_audiobook_full_' . uniqid() . '.m4b', $originalContent);
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        // No Range header => must return the COMPLETE file.
+        $request = new Request();
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(200, $response->statusCode);
+        // Content-Length must equal the full file size...
+        $this->assertEquals((string) $expectedSize, $response->headers['Content-Length'] ?? '');
+        // ...and the body must actually contain that many bytes (no truncation).
+        $this->assertEquals($expectedSize, strlen($response->body));
+        $this->assertEquals($originalContent, $response->body);
+    }
+
+    public function testStreamAudiobookServesFullRequestedRangeLargerThanChunk(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        // Fixture larger than STREAM_CHUNK_BYTES; request a range that also
+        // exceeds it, to prove ranged requests are not silently shrunk.
+        $originalContent = str_repeat('R', 600 * 1024); // 600 KiB
+        $fileSize = strlen($originalContent);
+        $tempFile = $this->createTestAudioFile('test_audiobook_range_' . uniqid() . '.m4b', $originalContent);
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $start = 1000;
+        $end = $fileSize - 1; // request to EOF, a range > chunk size
+        $request = new Request();
+        $request->headers['Range'] = "bytes={$start}-{$end}";
+
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $expectedLength = $end - $start + 1;
+        $this->assertEquals(206, $response->statusCode);
+        $this->assertEquals((string) $expectedLength, $response->headers['Content-Length'] ?? '');
+        $this->assertEquals($expectedLength, strlen($response->body));
+        $this->assertEquals("bytes {$start}-{$end}/{$fileSize}", $response->headers['Content-Range'] ?? '');
+        $this->assertEquals(substr($originalContent, $start), $response->body);
+    }
+
     public function testStreamAudiobookReturns416ForUnsatisfiableRange(): void
     {
         $itemRepo = $this->createMockItemRepo();

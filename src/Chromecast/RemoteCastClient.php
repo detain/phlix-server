@@ -16,21 +16,25 @@ use Phlix\Hub\RelayConsumer;
  */
 class RemoteCastClient
 {
-    /** @var RelayConsumer Relay consumer for tunnel communication */
-    private RelayConsumer $relay;
-
     /** @var string Target device ID */
     private string $deviceId;
 
     /**
-     * @param RelayConsumer $relay Relay consumer for tunnel communication
+     * @param RelayConsumer $relay Relay consumer for tunnel communication.
+     *        Accepted to preserve the constructor contract for when the hub
+     *        relay tunnel becomes operational, but not yet used — see
+     *        {@see self::sendRelayCommand()}.
      * @param string $deviceId Target Chromecast device ID
      *
      * @since 0.12.0
      */
     public function __construct(RelayConsumer $relay, string $deviceId)
     {
-        $this->relay = $relay;
+        // The relay tunnel feature this client depends on is not operational
+        // yet, so the relay consumer is intentionally not stored. The parameter
+        // remains so the public API does not change once support lands.
+        unset($relay);
+
         $this->deviceId = $deviceId;
     }
 
@@ -132,31 +136,26 @@ class RemoteCastClient
     /**
      * Send a command via relay tunnel.
      *
-     * This is a placeholder implementation. Full relay support for
-     * Chromecast would require registering a mount handler with the
-     * relay consumer and implementing the Cast protocol over the tunnel.
+     * Forwarding Cast protocol commands over the relay tunnel depends on a
+     * hub relay-tunnel feature that does not exist yet. Until that lands,
+     * this method fails loudly instead of silently reporting success while
+     * doing nothing — callers must surface a clear error to the user.
      *
      * @param string $command Command name
      * @param array<string, mixed> $params Command parameters
      *
-     * @return array<string, mixed> Empty response (not implemented)
+     * @return array<string, mixed> Never returns — always throws
+     *
+     * @throws \RuntimeException Always, because relay casting is not operational
      *
      * @since 0.12.0
      */
     private function sendRelayCommand(string $command, array $params): array
     {
-        // Build the relay path for cast commands
-        $path = '/relay/cast/' . $command;
+        unset($command, $params);
 
-        // Register mount handler for cast relay
-        $this->relay->registerMount($path, function (string $relayPath) use ($command, $params): string {
-            // This is a placeholder - actual implementation would
-            // forward Cast protocol commands over the relay tunnel
-            $encoded = json_encode(['command' => $command, 'params' => $params]);
-            return is_string($encoded) ? $encoded : '{"error":"encoding failed"}';
-        });
-
-        // Return empty response for now
-        return [];
+        throw new \RuntimeException(
+            'Chromecast over relay requires the hub relay tunnel, which is not yet operational'
+        );
     }
 }

@@ -7,6 +7,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -97,6 +98,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $authManager = $c->get(AuthManager::class);
                     /** @var PlaybackMarkerService $playbackMarkerService */
                     $playbackMarkerService = $c->get(PlaybackMarkerService::class);
+                    /** @var UserRepository $userRepository */
+                    $userRepository = $c->get(UserRepository::class);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -105,6 +108,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $playbackController,
                         $authManager,
                         $playbackMarkerService,
+                        $userRepository,
                     );
                 }
             ),

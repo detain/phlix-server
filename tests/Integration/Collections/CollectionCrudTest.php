@@ -87,7 +87,13 @@ class CollectionCrudTest extends TestCase
             }
 
             if (strpos($sql, 'SELECT 1 FROM collection_items') !== false) {
-                return [['1' => 1]];
+                // existsInCollection($collectionId, $mediaItemId): media-1 and
+                // media-2 are already in the collection; everything else is new.
+                $mediaItemId = $params[1] ?? null;
+                if (in_array($mediaItemId, ['media-1', 'media-2'], true)) {
+                    return [['1' => 1]];
+                }
+                return [];
             }
 
             return [];
@@ -100,7 +106,10 @@ class CollectionCrudTest extends TestCase
         // Create mock dependencies
         $itemRepository = $this->createMock(ItemRepository::class);
         $engine = new SmartPlaylistEngine($itemRepository); // Use real engine with mock dependency
-        $playlistRepo = $this->createMock(SmartPlaylistRepository::class);
+        // SmartPlaylistRepository is final and cannot be mocked; this lifecycle
+        // never resolves a smart playlist (all collections use smartPlaylistId=null),
+        // so a real instance over the mock connection is sufficient.
+        $playlistRepo = new SmartPlaylistRepository($db);
         $mediaItemRepo = $this->createMock(ItemRepository::class);
 
         $mediaItemRepo->method('findById')->willReturnMap([

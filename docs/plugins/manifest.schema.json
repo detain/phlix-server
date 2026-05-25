@@ -1,0 +1,104 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://phlix.dev/schemas/plugins/manifest.schema.json",
+    "title": "Phlix Plugin Manifest",
+    "description": "Schema for a Phlix plugin `plugin.json` manifest. Validated by Phlix\\Plugins\\Manifest\\ManifestSchema. Unknown top-level fields are reported separately as soft `unknown_field` warnings by the manifest DTO, so this schema permits additional properties.",
+    "type": "object",
+    "additionalProperties": true,
+    "required": [
+        "name",
+        "version",
+        "phlix_min_server_version",
+        "type",
+        "entry"
+    ],
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Plugin identifier, kebab-case, prefixed `phlix-plugin-`.",
+            "pattern": "^phlix-plugin-[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "version": {
+            "type": "string",
+            "description": "Plugin semantic version.",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "phlix_min_server_version": {
+            "type": "string",
+            "description": "Minimum Phlix server semantic version required by this plugin.",
+            "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "type": {
+            "type": "string",
+            "description": "Plugin category. Mirrors Phlix\\Shared\\Plugin\\ManifestType.",
+            "enum": [
+                "metadata-provider",
+                "subtitle-provider",
+                "auth-provider",
+                "library-type",
+                "notifier",
+                "scrobbler",
+                "tuner",
+                "transcoder-hook",
+                "ui-theme",
+                "arr-integration",
+                "analytics-sink"
+            ]
+        },
+        "entry": {
+            "type": "string",
+            "description": "Fully-qualified entry-class name (PSR-4, backslash-separated namespace). Each segment must be a StudlyCase identifier beginning with an uppercase letter.",
+            "pattern": "^[A-Z][A-Za-z0-9_]*(\\\\[A-Z][A-Za-z0-9_]*)+$"
+        },
+        "events": {
+            "type": "array",
+            "description": "Event aliases the plugin subscribes to, e.g. `phlix.playback.started`.",
+            "items": {
+                "type": "string",
+                "pattern": "^phlix\\.[a-z0-9]+(\\.[a-z0-9]+)+$"
+            }
+        },
+        "settings": {
+            "type": "object",
+            "description": "Settings schema keyed by setting name.",
+            "additionalProperties": {
+                "type": "object",
+                "required": [
+                    "type"
+                ],
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "string",
+                            "int",
+                            "integer",
+                            "float",
+                            "number",
+                            "bool",
+                            "boolean",
+                            "array",
+                            "object"
+                        ]
+                    },
+                    "required": {
+                        "type": "boolean"
+                    },
+                    "secret": {
+                        "type": "boolean"
+                    },
+                    "default": {}
+                },
+                "additionalProperties": true
+            }
+        },
+        "signature": {
+            "description": "Detached `sha256:<hex>` signature, or null when the plugin is unsigned.",
+            "type": [
+                "string",
+                "null"
+            ],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+    }
+}

@@ -29,6 +29,26 @@ use Phlix\Server\Http\Response;
  */
 class AudiobookController
 {
+    /**
+     * Size of each bounded read while assembling the response body.
+     *
+     * The framework {@see Response} only supports a fully-materialised string
+     * body and {@see Response::send()} emits it with a single `echo`, so there
+     * is no streamed/chunked-write primitive to hand off a file handle to. We
+     * therefore still buffer the served bytes, but we read them in bounded
+     * chunks (rather than one huge `fread()`) and we serve EXACTLY what the
+     * client asked for: the whole file for a plain GET and the full requested
+     * range for a Range request. We must never silently truncate, because a
+     * short body with a full-size Content-Length makes clients hang, and a
+     * short Content-Length silently corrupts the download.
+     *
+     * TODO: stream without buffering once Response supports a file/callable
+     * body (e.g. a Workerman chunked-write response or readfile/fpassthru in
+     * the emit path). Until then correctness (complete bytes) takes priority
+     * over the memory cost of buffering a large body.
+     */
+    private const STREAM_CHUNK_BYTES = 256 * 1024; // 256 KiB
+
     /** @var ItemRepository Repository for media item access */
     private ItemRepository $itemRepo;
 
@@ -465,18 +485,42 @@ class AudiobookController
             fclose($handle);
             return (new Response())->status(416)->json(['error' => 'Invalid range length']);
         }
-        /** @var positive-int $length */
-        $content = fread($handle, $length);
+
+        // Read the full requested length in bounded chunks rather than a single
+        // large fread(). This keeps per-iteration memory at STREAM_CHUNK_BYTES
+        // while still serving EXACTLY what was asked for: the whole file for a
+        // plain GET, or the complete requested range for a Range request. We
+        // never cap/shrink the served bytes here — a truncated body either
+        // hangs the client (Content-Length too large) or corrupts the download
+        // (Content-Length too small).
+        $content = '';
+        $remaining = $length;
+        while ($remaining > 0) {
+            $chunkSize = (int) min(self::STREAM_CHUNK_BYTES, $remaining);
+            /** @var positive-int $chunkSize */
+            $chunk = fread($handle, $chunkSize);
+            if ($chunk === false) {
+                fclose($handle);
+                return (new Response())->status(500)->json(['error' => 'Failed to read file']);
+            }
+            if ($chunk === '') {
+                // Reached EOF earlier than expected; stop and serve what we have.
+                break;
+            }
+            $content .= $chunk;
+            $remaining -= strlen($chunk);
+        }
         fclose($handle);
 
-        if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read file']);
-        }
+        // The actual number of bytes read may be shorter than $length if EOF was
+        // hit; reflect the true served range in the headers.
+        $served = strlen($content);
+        $end = $start + max(0, $served - 1);
 
         $response = (new Response())
             ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
-            ->header('Content-Length', (string)strlen($content))
+            ->header('Content-Length', (string) $served)
             ->header('Accept-Ranges', 'bytes');
 
         if ($rangeHeader !== null) {
@@ -496,23 +540,33 @@ class AudiobookController
      */
     private function validateMediaPath(string $path): bool
     {
-        // Get the real path and verify it's within allowed directories
+        // Resolve symlinks and `../` segments to a canonical absolute path.
+        // realpath() returns false for non-existent paths, which also rejects
+        // any traversal target that does not actually resolve to a real file.
         $realPath = realpath($path);
         if ($realPath === false) {
             return false;
         }
 
-        // Media files should be under configured media roots
-        // For now, check if path contains common media directories
-        $allowedPatterns = [
+        // Media files must live UNDER one of the allowed roots. We compare with
+        // str_starts_with() against the canonical real path (not str_contains),
+        // so a path that merely *contains* an allowed segment somewhere in the
+        // middle (e.g. "/etc/passwd" reached via "/home/../etc/passwd", or
+        // "/var/www/home/secrets") cannot escape the allowed roots.
+        //
+        // NOTE: there is currently no configured library-root list available to
+        // this controller; until one is wired in, we fall back to the well-known
+        // mount prefixes. Each prefix ends with a trailing slash so "/home/" can
+        // never match a sibling directory such as "/home-backup/".
+        $allowedRoots = [
             '/media/',
             '/mnt/',
             '/data/',
             '/home/',
         ];
 
-        foreach ($allowedPatterns as $pattern) {
-            if (str_contains($realPath, $pattern)) {
+        foreach ($allowedRoots as $root) {
+            if (str_starts_with($realPath . '/', $root)) {
                 return true;
             }
         }

@@ -54,7 +54,10 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Run PHPUnit tests
-        run: ./vendor/bin/phpunit --testsuite Unit --coverage-clover coverage.xml --coverage-html coverage-report
+        # Run the full suite (Unit + Integration). This job provisions a MySQL
+        # service container, so Integration tests that probe 127.0.0.1:3306
+        # execute for real here; they self-skip only when no DB is reachable.
+        run: ./vendor/bin/phpunit --coverage-clover coverage.xml --coverage-html coverage-report
 
       - name: Check minimum coverage threshold
         run: |

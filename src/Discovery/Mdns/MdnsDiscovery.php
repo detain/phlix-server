@@ -123,28 +123,11 @@ class MdnsDiscovery
             return false;
         }
 
-        // Build TXT record string for avahi-publish-service
-        // Format: key=value&key2=value2&...
-        $txtParts = [];
-        foreach ($txt as $k => $v) {
-            $txtParts[] = $k . '=' . $v;
-        }
-        $txtStr = implode('&', $txtParts);
-
-        // Build the command
-        // avahi-publish-service takes: NAME SERVICE_TYPE PORT "TXT_RECORD"
-        $escapedName = escapeshellarg($name);
-        $escapedPort = (int) $port;
-        $txtArg = $txtStr !== '' ? escapeshellarg($txtStr) : '';
-
-        $cmd = sprintf(
-            '%s %s %s %d %s >/dev/null 2>&1 &',
-            $avahiPath,
-            $escapedName,
-            escapeshellarg($type),
-            $escapedPort,
-            $txtArg
-        );
+        // Build the command. avahi-publish-service takes each TXT record as a
+        // SEPARATE trailing argument of the form `key=value`, so we must NOT
+        // join them into one string — that would corrupt any value containing
+        // `&` or `=`. Each argument is escaped individually below.
+        $cmd = $this->buildAnnounceCommand($avahiPath, $name, $type, $port, $txt);
 
         exec($cmd, $output, $returnCode);
 
@@ -163,6 +146,65 @@ class MdnsDiscovery
         ]);
 
         return true;
+    }
+
+    /**
+     * Build the ordered argument list for `avahi-publish-service`.
+     *
+     * Layout: NAME SERVICE_TYPE PORT [key=value]... — where each TXT record is
+     * its own element. Keeping the TXT pairs as discrete arguments (rather than
+     * one `&`-joined blob) is what makes values containing `&` or `=` safe;
+     * avahi receives `version=1.0&beta=2` as a single intact TXT record instead
+     * of two corrupted ones.
+     *
+     * @param string                $name Service instance name
+     * @param string                $type Service type
+     * @param int                   $port Port number
+     * @param array<string, string> $txt  TXT record key/value pairs
+     *
+     * @return list<string> Ordered, un-escaped argument values
+     *
+     * @internal Exposed (private) for unit testing via reflection.
+     */
+    private function buildAnnounceArgs(string $name, string $type, int $port, array $txt): array
+    {
+        $args = [$name, $type, (string) $port];
+
+        foreach ($txt as $key => $value) {
+            $args[] = $key . '=' . $value;
+        }
+
+        return $args;
+    }
+
+    /**
+     * Build the full shell command string for `avahi-publish-service`.
+     *
+     * Every argument (including each individual `key=value` TXT record) is
+     * escaped separately with {@see escapeshellarg()} before being joined,
+     * preserving values that contain shell metacharacters or `&`/`=`.
+     *
+     * @param string                $avahiPath Absolute path to avahi-publish-service
+     * @param string                $name      Service instance name
+     * @param string                $type      Service type
+     * @param int                   $port      Port number
+     * @param array<string, string> $txt       TXT record key/value pairs
+     *
+     * @return string Shell command (backgrounded, output discarded)
+     */
+    private function buildAnnounceCommand(
+        string $avahiPath,
+        string $name,
+        string $type,
+        int $port,
+        array $txt
+    ): string {
+        $parts = [escapeshellarg($avahiPath)];
+        foreach ($this->buildAnnounceArgs($name, $type, $port, $txt) as $arg) {
+            $parts[] = escapeshellarg($arg);
+        }
+
+        return implode(' ', $parts) . ' >/dev/null 2>&1 &';
     }
 
     /**

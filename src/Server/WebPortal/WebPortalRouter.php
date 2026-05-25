@@ -13,6 +13,7 @@ use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\UserRepository;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -47,6 +48,9 @@ class WebPortalRouter
     /** @var PlaybackMarkerService Provides skip-button specs for playback */
     private PlaybackMarkerService $playbackMarkerService;
 
+    /** @var UserRepository|null Persists/reads user settings; null when not wired */
+    private ?UserRepository $userRepository;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -59,6 +63,8 @@ class WebPortalRouter
      * @param PlaybackController $playbackController Handles playback state tracking
      * @param AuthManager $authManager Handles authentication operations
      * @param PlaybackMarkerService $playbackMarkerService Provides skip-button specs
+     * @param UserRepository|null $userRepository Persists user settings (optional;
+     *        when null the settings endpoints respond 503 instead of faking success)
      *
      * @example
      * ```php
@@ -68,7 +74,8 @@ class WebPortalRouter
      *     $sessionManager,
      *     $playbackController,
      *     $authManager,
-     *     $playbackMarkerService
+     *     $playbackMarkerService,
+     *     $userRepository
      * );
      * ```
      */
@@ -78,7 +85,8 @@ class WebPortalRouter
         SessionManager $sessionManager,
         PlaybackController $playbackController,
         AuthManager $authManager,
-        PlaybackMarkerService $playbackMarkerService
+        PlaybackMarkerService $playbackMarkerService,
+        ?UserRepository $userRepository = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -88,6 +96,7 @@ class WebPortalRouter
         $this->itemRepository = $itemRepository;
         $this->playbackController = $playbackController;
         $this->playbackMarkerService = $playbackMarkerService;
+        $this->userRepository = $userRepository;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -126,20 +135,6 @@ class WebPortalRouter
         // Settings routes
         $this->router->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
         $this->router->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
-
-        // Music routes (web portal)
-        $this->router->get('/music', [$this, 'getMusicIndex']);
-        $this->router->get('/music/artists', [$this, 'getMusicArtists']);
-        $this->router->get('/music/artists/{mbid}', [$this, 'getMusicArtist']);
-        $this->router->get('/music/albums', [$this, 'getMusicAlbums']);
-        $this->router->get('/music/albums/{mbid}', [$this, 'getMusicAlbum']);
-        $this->router->get('/music/tracks', [$this, 'getMusicTracks']);
-        $this->router->get('/music/player', [$this, 'getMusicPlayer']);
-
-        // Books routes (web portal)
-        $this->router->get('/books', [$this, 'getBooksIndex']);
-        $this->router->get('/books/{id}', [$this, 'getBook']);
-        $this->router->get('/books/{id}/read', [$this, 'getBookReader']);
     }
 
     /**
@@ -501,14 +496,25 @@ class WebPortalRouter
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        // Get from database
-        $settings = [
+        // Sensible defaults applied when a user has never saved settings (or when
+        // no persistence layer is wired). Persisted values override these.
+        $defaults = [
             'max_streams' => 3,
             'max_bitrate' => 100000000,
             'preferred_audio_language' => 'en',
             'preferred_subtitle_language' => 'en',
             'subtitle_mode' => 'only_foreign',
         ];
+
+        $settings = $defaults;
+        if ($this->userRepository !== null) {
+            $stored = $this->userRepository->getSettings($userId);
+            if ($stored !== null) {
+                // Drop internal columns the client doesn't need.
+                unset($stored['user_id']);
+                $settings = array_merge($defaults, $stored);
+            }
+        }
 
         return (new Response())->json(['settings' => $settings]);
     }
@@ -542,229 +548,70 @@ class WebPortalRouter
             return (new Response())->status(401)->json(['error' => 'Unauthorized']);
         }
 
-        // Update in database
+        $settings = $this->extractSettingsPayload($request);
+        if ($settings === null) {
+            return (new Response())->status(400)->json(['error' => 'Invalid settings payload']);
+        }
+
+        if ($this->userRepository === null) {
+            // No persistence layer wired; cannot honestly claim success.
+            return (new Response())->status(503)->json([
+                'error' => 'Settings persistence is not configured on this server',
+            ]);
+        }
+
+        $this->userRepository->updateSettings($userId, $settings);
+
         return (new Response())->json(['message' => 'Settings updated']);
     }
 
     /**
-     * Gets the music library index page.
+     * Extracts a sanitized settings payload from the request body.
      *
-     * GET /music
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with music library overview
-     *
-     * @since 0.14.0
-     */
-    public function getMusicIndex(Request $request, array $params): Response
-    {
-        $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
-
-        return (new Response())->json([
-            'music_libraries' => $musicLibraries,
-        ]);
-    }
-
-    /**
-     * Gets all music artists.
-     *
-     * GET /music/artists
+     * Only known, whitelisted keys are forwarded to the repository; unknown
+     * keys are ignored. Returns null if the body is present but not decodable
+     * as a JSON object.
      *
      * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with artists list
      *
-     * @since 0.14.0
+     * @return array<string, mixed>|null Sanitized settings, or null on malformed body
      */
-    public function getMusicArtists(Request $request, array $params): Response
+    private function extractSettingsPayload(Request $request): ?array
     {
-        $libraries = $this->libraryManager->getAllLibraries();
-        $musicLibraries = array_filter($libraries, fn($lib) => $lib['type'] === 'music');
-
-        $allArtists = [];
-        foreach ($musicLibraries as $library) {
-            // Artists are fetched via API client using /music/artists endpoint
-        }
-
-        return (new Response())->json(['artists' => $allArtists]);
-    }
-
-    /**
-     * Gets a specific artist.
-     *
-     * GET /music/artists/{mbid}
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with artist details
-     *
-     * @since 0.14.0
-     */
-    public function getMusicArtist(Request $request, array $params): Response
-    {
-        return (new Response())->json(['artist' => null]);
-    }
-
-    /**
-     * Gets all music albums.
-     *
-     * GET /music/albums
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with albums list
-     *
-     * @since 0.14.0
-     */
-    public function getMusicAlbums(Request $request, array $params): Response
-    {
-        return (new Response())->json(['albums' => []]);
-    }
-
-    /**
-     * Gets a specific album.
-     *
-     * GET /music/albums/{mbid}
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with album details
-     *
-     * @since 0.14.0
-     */
-    public function getMusicAlbum(Request $request, array $params): Response
-    {
-        return (new Response())->json(['album' => null]);
-    }
-
-    /**
-     * Gets all music tracks.
-     *
-     * GET /music/tracks
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with tracks list
-     *
-     * @since 0.14.0
-     */
-    public function getMusicTracks(Request $request, array $params): Response
-    {
-        return (new Response())->json(['tracks' => []]);
-    }
-
-    /**
-     * Gets the music player page.
-     *
-     * GET /music/player
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with player state
-     *
-     * @since 0.14.0
-     */
-    public function getMusicPlayer(Request $request, array $params): Response
-    {
-        return (new Response())->json(['player' => []]);
-    }
-
-    /**
-     * Gets the books library index page.
-     *
-     * GET /books
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters
-     * @return Response JSON response with books library overview
-     *
-     * @since 0.17.0
-     */
-    public function getBooksIndex(Request $request, array $params): Response
-    {
-        $libraries = $this->libraryManager->getAllLibraries();
-        $bookLibraries = array_filter($libraries, fn($lib) => ($lib['type'] ?? '') === 'book');
-
-        // Get book count for each library
-        $booksCount = [];
-        foreach ($bookLibraries as $library) {
-            $libraryId = $library['id'] ?? null;
-            if (!is_string($libraryId) && !is_numeric($libraryId)) {
-                continue;
+        // For a JSON PUT, Request::fromGlobals() decodes the request body into
+        // $request->body (an array) and keeps the raw JSON in $request->rawBody.
+        // The decoded body is the source of truth; only fall back to decoding
+        // rawBody ourselves if body came through empty but raw bytes exist.
+        $decoded = $request->body;
+        if ($decoded === [] && $request->rawBody !== '') {
+            $fromRaw = json_decode($request->rawBody, true);
+            if (!is_array($fromRaw)) {
+                return null;
             }
-            $libraryId = (string) $libraryId;
-            $items = $this->itemRepository->getByLibrary($libraryId, 10000, 0);
-            $books = array_filter($items, fn($item) => ($item['type'] ?? '') === 'book');
-            $booksCount[$libraryId] = count($books);
+            $decoded = $fromRaw;
         }
 
-        return (new Response())->json([
-            'book_libraries' => array_values($bookLibraries),
-            'books_count' => $booksCount,
-        ]);
-    }
-
-    /**
-     * Gets a specific book.
-     *
-     * GET /books/{id}
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters including 'id'
-     * @return Response JSON response with book details
-     *
-     * @since 0.17.0
-     */
-    public function getBook(Request $request, array $params): Response
-    {
-        $bookId = $params['id'] ?? null;
-
-        if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+        if ($decoded === []) {
+            return [];
         }
 
-        $book = $this->itemRepository->findById($bookId);
+        $allowed = [
+            'max_streams',
+            'max_bitrate',
+            'preferred_audio_language',
+            'preferred_subtitle_language',
+            'subtitle_mode',
+            'default_content_rating',
+            'transcoding_preferences',
+        ];
 
-        if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
+        $settings = [];
+        foreach ($allowed as $key) {
+            if (array_key_exists($key, $decoded)) {
+                $settings[$key] = $decoded[$key];
+            }
         }
 
-        return (new Response())->json(['book' => $book]);
-    }
-
-    /**
-     * Gets the book reader page.
-     *
-     * GET /books/{id}/read
-     *
-     * @param Request $request The HTTP request
-     * @param array<string, string> $params Route parameters including 'id'
-     * @return Response JSON response with reader info
-     *
-     * @since 0.17.0
-     */
-    public function getBookReader(Request $request, array $params): Response
-    {
-        $bookId = $params['id'] ?? null;
-
-        if ($bookId === null) {
-            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
-        }
-
-        $book = $this->itemRepository->findById($bookId);
-
-        if ($book === null || ($book['type'] ?? '') !== 'book') {
-            return (new Response())->status(404)->json(['error' => 'Book not found']);
-        }
-
-        return (new Response())->json([
-            'reader' => [
-                'book_id' => $bookId,
-                'name' => $book['name'],
-                'type' => $book['type'],
-            ],
-        ]);
+        return $settings;
     }
 }

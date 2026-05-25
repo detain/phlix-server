@@ -177,7 +177,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
   - `CastApiClient` — HTTP/JSON Cast protocol client with connect(), launchApp(), loadMedia(), sendMediaCommand(), getMediaStatus()
   - `CastSession` — active Chromecast session with play/pause/stop/seek, position polling every 5 seconds via Workerman Timer
   - `CastManager` — manages multiple cast sessions, creates sessions, launches app, loads media
-  - `RemoteCastClient` — cast via relay tunnel (RelayConsumer) for Chromecast behind NAT
+  - `RemoteCastClient` — cast via relay tunnel (RelayConsumer) for Chromecast behind NAT (in progress / not operational — depends on a hub relay-tunnel feature that does not exist yet; the client throws `RuntimeException` rather than silently faking success)
   - `ChromecastController` — HTTP API endpoints:
     - GET /api/v1/cast/devices — list discovered Chromecast devices
     - POST /api/v1/cast/devices/{id}/cast — start casting

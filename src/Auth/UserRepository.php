@@ -368,7 +368,13 @@ class UserRepository
      */
     public function updateSettings(string $userId, array $settings): void
     {
-        $sets = [];
+        // Build a parallel column list and bound-value list. We keep the column
+        // names and the placeholders separate so the INSERT and the UPDATE
+        // clause are both well-formed — the previous implementation reused
+        // "col = ?" fragments as INSERT column names, producing invalid SQL like
+        // `INSERT INTO user_settings (user_id, max_streams = ?, ...)` that threw
+        // on a user's first-ever save.
+        $columns = [];
         $values = [];
 
         $allowedFields = [
@@ -382,40 +388,36 @@ class UserRepository
 
         foreach ($allowedFields as $field) {
             if (isset($settings[$field])) {
-                $sets[] = "{$field} = ?";
+                $columns[] = $field;
                 $values[] = $settings[$field];
             }
         }
 
         if (isset($settings['transcoding_preferences']) && is_array($settings['transcoding_preferences'])) {
-            $sets[] = 'transcoding_preferences = ?';
+            $columns[] = 'transcoding_preferences';
             $values[] = json_encode($settings['transcoding_preferences']);
         }
 
-        if (empty($sets)) {
+        if ($columns === []) {
             return;
         }
 
-        $values[] = $userId;
-
-        // Check if settings row exists
-        $existing = $this->db->query(
-            "SELECT 1 FROM user_settings WHERE user_id = ?",
-            [$userId]
+        // Upsert in a single statement (user_id is the PRIMARY KEY), matching the
+        // INSERT ... ON DUPLICATE KEY UPDATE convention used elsewhere in this
+        // codebase (e.g. AudiobookProgressStore). On a new row the VALUES() are
+        // inserted; on an existing row only the supplied columns are updated.
+        $insertColumns = array_merge(['user_id'], $columns);
+        $placeholders = implode(', ', array_fill(0, count($insertColumns), '?'));
+        $updateClause = implode(
+            ', ',
+            array_map(static fn (string $col): string => "{$col} = VALUES({$col})", $columns)
         );
 
-        if (empty($existing)) {
-            // Create settings row
-            $this->db->query(
-                "INSERT INTO user_settings (user_id, " . implode(', ', $sets) . ") VALUES (?" . str_repeat(', ?', count($sets)) . ")",
-                array_merge([$userId], $values)
-            );
-        } else {
-            $this->db->query(
-                "UPDATE user_settings SET " . implode(', ', $sets) . " WHERE user_id = ?",
-                $values
-            );
-        }
+        $sql = 'INSERT INTO user_settings (' . implode(', ', $insertColumns) . ')'
+            . ' VALUES (' . $placeholders . ')'
+            . ' ON DUPLICATE KEY UPDATE ' . $updateClause;
+
+        $this->db->query($sql, array_merge([$userId], $values));
     }
 
     /**

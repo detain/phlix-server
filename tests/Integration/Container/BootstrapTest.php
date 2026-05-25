@@ -73,6 +73,16 @@ final class BootstrapTest extends TestCase
 
     public function test_container_resolves_application_with_mocked_connection(): void
     {
+        // The Application constructor eagerly resolves controller factories
+        // (e.g. getMusicController -> createDatabaseConnection), which build a
+        // real Workerman\MySQL\Connection that connects in its constructor —
+        // bypassing the container-bound mock below. So this smoke test still
+        // needs a reachable MySQL. CI provides one as a service container;
+        // skip locally when the host doesn't.
+        if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
+            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application bootstrap test. Run in docker-compose for integration testing.');
+        }
+
         $mockConnection = $this->createMock(Connection::class);
 
         $providers = ContainerFactory::defaultProviders();
@@ -108,9 +118,26 @@ final class BootstrapTest extends TestCase
 
     public function test_fromConfigPath_constructs_application(): void
     {
+        // fromConfigPath wires the real DB stack; the Application constructor
+        // eagerly resolves controller factories that open a live connection.
+        // Needs a reachable MySQL (CI service container); skip otherwise.
+        if (!$this->isMysqlReachable('127.0.0.1', 3306)) {
+            $this->markTestSkipped('No MySQL on 127.0.0.1:3306 — skipping Application bootstrap test. Run in docker-compose for integration testing.');
+        }
+
         // We can't supply a mock connection through fromConfigPath, but we
         // can verify it doesn't blow up before lazy-resolving the DB.
         $app = Application::fromConfigPath($this->serverConfigPath);
         $this->assertNotNull($app->getContainer());
+    }
+
+    private function isMysqlReachable(string $host, int $port): bool
+    {
+        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
+        if ($sock === false) {
+            return false;
+        }
+        fclose($sock);
+        return true;
     }
 }

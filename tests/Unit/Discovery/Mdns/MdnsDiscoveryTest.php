@@ -142,4 +142,92 @@ class MdnsDiscoveryTest extends TestCase
 
         $this->assertIsBool($result);
     }
+
+    /**
+     * Each TXT pair must be emitted as its own discrete argument, so values
+     * containing `&` / `=` are preserved intact rather than corrupted by being
+     * joined into one `&`-delimited string and escaped once.
+     */
+    public function testBuildAnnounceArgsKeepsEachTxtPairSeparate(): void
+    {
+        $socket = $this->createMock(MdnsSocket::class);
+        $discovery = new MdnsDiscovery($socket, null);
+
+        $args = $this->invokePrivate($discovery, 'buildAnnounceArgs', [
+            'Phlix._phlix._tcp.local.',
+            '_phlix._tcp.local.',
+            8200,
+            [
+                'serverId' => 'a&b=c',          // contains both & and =
+                'friendlyName' => 'Phlix Home',
+            ],
+        ]);
+
+        $this->assertSame(
+            [
+                'Phlix._phlix._tcp.local.',
+                '_phlix._tcp.local.',
+                '8200',
+                'serverId=a&b=c',     // value kept whole, NOT split on & or =
+                'friendlyName=Phlix Home',
+            ],
+            $args
+        );
+    }
+
+    public function testBuildAnnounceCommandEscapesEachArgumentIndividually(): void
+    {
+        $socket = $this->createMock(MdnsSocket::class);
+        $discovery = new MdnsDiscovery($socket, null);
+
+        $cmd = $this->invokePrivate($discovery, 'buildAnnounceCommand', [
+            '/usr/bin/avahi-publish-service',
+            'Phlix Server',
+            '_phlix._tcp.local.',
+            8200,
+            ['serverId' => 'a&b=c; rm -rf /'],
+        ]);
+
+        $this->assertIsString($cmd);
+        // The whole TXT pair must survive as a single shell-escaped token,
+        // including the metacharacters, so it cannot break out of its argument.
+        $this->assertStringContainsString(
+            escapeshellarg('serverId=a&b=c; rm -rf /'),
+            $cmd
+        );
+        // The injected command separator must be inside the quoted argument,
+        // never executed: there is exactly one trailing background separator.
+        $this->assertStringEndsWith(' >/dev/null 2>&1 &', $cmd);
+    }
+
+    public function testBuildAnnounceArgsWithNoTxtRecords(): void
+    {
+        $socket = $this->createMock(MdnsSocket::class);
+        $discovery = new MdnsDiscovery($socket, null);
+
+        $args = $this->invokePrivate($discovery, 'buildAnnounceArgs', [
+            'Phlix._phlix._tcp.local.',
+            '_phlix._tcp.local.',
+            8200,
+            [],
+        ]);
+
+        $this->assertSame(
+            ['Phlix._phlix._tcp.local.', '_phlix._tcp.local.', '8200'],
+            $args
+        );
+    }
+
+    /**
+     * @param array<int, mixed> $args
+     *
+     * @return mixed
+     */
+    private function invokePrivate(MdnsDiscovery $object, string $method, array $args)
+    {
+        $ref = new \ReflectionMethod(MdnsDiscovery::class, $method);
+        $ref->setAccessible(true);
+
+        return $ref->invokeArgs($object, $args);
+    }
 }

@@ -8,14 +8,28 @@ use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserRepository;
+use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\MusicLibraryManager;
+use Phlix\Media\Library\PhotoLibraryManager;
+use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\Metadata\ExifProvider;
+use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Metadata\OpdsFeedBuilder;
+use Phlix\Server\Http\Controllers\BookController;
+use Phlix\Server\Http\Controllers\PhotoController;
+use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
+use Phlix\Server\WebPortal\Controllers\BookPageController;
+use Phlix\Server\WebPortal\Controllers\MusicPageController;
+use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
 use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
 
 use function DI\factory;
 
@@ -109,6 +123,99 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $authManager,
                         $playbackMarkerService,
                         $userRepository,
+                    );
+                }
+            ),
+
+            MusicPageController::class => factory(
+                static function (ContainerInterface $c) use ($templateDir): MusicPageController {
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+                    /** @var MetadataManager $metadataManager */
+                    $metadataManager = $c->get(MetadataManager::class);
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
+
+                    $musicManager = new MusicLibraryManager(
+                        new AudioScanner($db, $itemRepository),
+                        $metadataManager,
+                        $itemRepository,
+                        $db,
+                    );
+
+                    return new MusicPageController($musicManager, $libraryManager, $templateDir);
+                }
+            ),
+
+            BookPageController::class => factory(
+                static function (ContainerInterface $c) use ($templateDir): BookPageController {
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
+
+                    return new BookPageController($itemRepository, $libraryManager, $templateDir);
+                }
+            ),
+
+            AudiobookPageController::class => factory(
+                static function (ContainerInterface $c) use ($templateDir): AudiobookPageController {
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
+
+                    return new AudiobookPageController($itemRepository, $libraryManager, $templateDir);
+                }
+            ),
+
+            PhotoPageController::class => factory(
+                static function (ContainerInterface $c) use ($templateDir): PhotoPageController {
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
+
+                    return new PhotoPageController(
+                        $itemRepository,
+                        new PhotoLibraryManager(new PhotoScanner($db, $itemRepository), $itemRepository),
+                        new ExifProvider($itemRepository),
+                        $libraryManager,
+                        $templateDir,
+                    );
+                }
+            ),
+
+            BookController::class => factory(
+                static function (ContainerInterface $c): BookController {
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
+
+                    return new BookController(
+                        $itemRepository,
+                        $libraryManager,
+                        new OpdsFeedBuilder($itemRepository, 'http://localhost:8080'),
+                    );
+                }
+            ),
+
+            PhotoController::class => factory(
+                static function (ContainerInterface $c): PhotoController {
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var ItemRepository $itemRepository */
+                    $itemRepository = $c->get(ItemRepository::class);
+
+                    return new PhotoController(
+                        $itemRepository,
+                        new PhotoLibraryManager(new PhotoScanner($db, $itemRepository), $itemRepository),
+                        new ExifProvider($itemRepository),
                     );
                 }
             ),

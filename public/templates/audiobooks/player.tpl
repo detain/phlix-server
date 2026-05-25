@@ -5,7 +5,7 @@
  *}
 {extends file="layouts/player.tpl"}
 
-{block name="player-content"}
+{block name="main"}
 <div class="audiobook-player" data-audiobook-id="{$audiobook.id}">
     <div class="player-layout">
         <div class="player-main">

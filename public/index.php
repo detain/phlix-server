@@ -29,7 +29,13 @@ use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
+use Phlix\Server\Http\Controllers\BookController;
+use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Routes\AdminRoutes;
+use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
+use Phlix\Server\WebPortal\Controllers\BookPageController;
+use Phlix\Server\WebPortal\Controllers\MusicPageController;
+use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
@@ -202,6 +208,104 @@ if (str_starts_with($path, '/api/v1/admin/')) {
                 ->html('<h1>403 — administrator privileges required</h1>');
         } else {
             $response = $renderer->renderDashboard($request);
+        }
+    } elseif (str_starts_with($path, '/music')) {
+        /**
+         * Music portal pages: albums (default), album detail, artists,
+         * artist detail, all-tracks, and the standalone player.
+         */
+        /** @var MusicPageController $music */
+        $music = $container->get(MusicPageController::class);
+        if ($path === '/music' || $path === '/music/albums') {
+            $response = $music->albums($request, []);
+        } elseif (preg_match('#^/music/albums/(?P<name>.+)$#', $path, $m) === 1) {
+            $response = $music->album($request, ['name' => urldecode($m['name'])]);
+        } elseif ($path === '/music/artists') {
+            $response = $music->artists($request, []);
+        } elseif (preg_match('#^/music/artists/(?P<name>.+)$#', $path, $m) === 1) {
+            $response = $music->artist($request, ['name' => urldecode($m['name'])]);
+        } elseif ($path === '/music/tracks') {
+            $response = $music->tracks($request, []);
+        } elseif ($path === '/music/player') {
+            $response = $music->player($request, []);
+        } else {
+            $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        }
+    } elseif (str_starts_with($path, '/books')) {
+        /**
+         * Book portal pages plus the cover/download file routes (served by
+         * the JSON {@see BookController} so the page links resolve locally).
+         */
+        if (preg_match('#^/books/(?P<id>[^/]+)/cover$#', $path, $m) === 1) {
+            /** @var BookController $bookApi */
+            $bookApi = $container->get(BookController::class);
+            $response = $bookApi->getCover($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/books/(?P<id>[^/]+)/download$#', $path, $m) === 1) {
+            /** @var BookController $bookApi */
+            $bookApi = $container->get(BookController::class);
+            $response = $bookApi->downloadBook($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/books/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
+            /** @var BookPageController $bookPage */
+            $bookPage = $container->get(BookPageController::class);
+            $response = $bookPage->reader($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/books/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            /** @var BookPageController $bookPage */
+            $bookPage = $container->get(BookPageController::class);
+            $response = $bookPage->detail($request, ['id' => $m['id']]);
+        } elseif ($path === '/books') {
+            /** @var BookPageController $bookPage */
+            $bookPage = $container->get(BookPageController::class);
+            $response = $bookPage->index($request, []);
+        } else {
+            $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        }
+    } elseif (str_starts_with($path, '/audiobooks')) {
+        /**
+         * Audiobook portal pages: library grid, detail (with chapters), and
+         * the player. Streaming/progress stay on the JSON API.
+         */
+        /** @var AudiobookPageController $audiobook */
+        $audiobook = $container->get(AudiobookPageController::class);
+        if ($path === '/audiobooks') {
+            $response = $audiobook->index($request, []);
+        } elseif (preg_match('#^/audiobooks/(?P<id>[^/]+)/read$#', $path, $m) === 1) {
+            $response = $audiobook->player($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/audiobooks/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            $response = $audiobook->detail($request, ['id' => $m['id']]);
+        } else {
+            $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
+        }
+    } elseif (str_starts_with($path, '/photo')) {
+        /**
+         * Photo portal pages plus the thumbnail/full image routes (served by
+         * the JSON {@see PhotoController} so the page <img> links resolve).
+         */
+        if (preg_match('#^/photo/photos/(?P<id>[^/]+)/thumbnail$#', $path, $m) === 1) {
+            /** @var PhotoController $photoApi */
+            $photoApi = $container->get(PhotoController::class);
+            $response = $photoApi->getThumbnail($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/photo/photos/(?P<id>[^/]+)/full$#', $path, $m) === 1) {
+            /** @var PhotoController $photoApi */
+            $photoApi = $container->get(PhotoController::class);
+            $response = $photoApi->getFull($request, ['id' => $m['id']]);
+        } elseif ($path === '/photo/albums') {
+            /** @var PhotoPageController $photoPage */
+            $photoPage = $container->get(PhotoPageController::class);
+            $response = $photoPage->albums($request, []);
+        } elseif (preg_match('#^/photo/album/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            /** @var PhotoPageController $photoPage */
+            $photoPage = $container->get(PhotoPageController::class);
+            $response = $photoPage->album($request, ['id' => $m['id']]);
+        } elseif (preg_match('#^/photo/photo/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            /** @var PhotoPageController $photoPage */
+            $photoPage = $container->get(PhotoPageController::class);
+            $response = $photoPage->photo($request, ['id' => $m['id']]);
+        } elseif ($path === '/photo/slideshow') {
+            /** @var PhotoPageController $photoPage */
+            $photoPage = $container->get(PhotoPageController::class);
+            $response = $photoPage->slideshow($request, []);
+        } else {
+            $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }
     } else {
         http_response_code(404);

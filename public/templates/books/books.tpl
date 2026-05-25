@@ -7,7 +7,7 @@
  *}
 {extends file="layouts/main.tpl"}
 
-{block name="content"}
+{block name="main"}
 <div class="books-page">
     <header class="books-header">
         <h1>Books</h1>

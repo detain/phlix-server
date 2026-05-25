@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="body"}
+{block name="main"}
 <div class="photo-page">
     <div class="page-header">
         <h1>Photo Albums</h1>

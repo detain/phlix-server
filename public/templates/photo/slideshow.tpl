@@ -1,6 +1,6 @@
 {extends file="layouts/player.tpl"}
 
-{block name="body"}
+{block name="main"}
 <div class="slideshow-page" data-interval="{$interval}">
     <div class="slideshow-container">
         <img id="slideshow-image" src="" alt="Slideshow">

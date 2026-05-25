@@ -48,7 +48,7 @@
                     <span class="track-name">{$track.name}</span>
                     <span class="track-album">{$track.metadata.album|default:''}</span>
                 </div>
-                <span class="track-duration">{$track.metadata.duration_secs|自己不做了:00}</span>
+                <span class="track-duration">{$track.metadata.duration_secs|default:'0:00'}</span>
             </div>
             {/foreach}
         </div>

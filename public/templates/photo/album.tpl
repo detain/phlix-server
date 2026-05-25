@@ -1,6 +1,6 @@
 {extends file="layouts/main.tpl"}
 
-{block name="body"}
+{block name="main"}
 <div class="photo-page album-page">
     <div class="page-header">
         <a href="/photo/albums" class="back-link">← Back to Albums</a>

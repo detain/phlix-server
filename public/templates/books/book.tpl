@@ -8,7 +8,7 @@
  *}
 {extends file="layouts/main.tpl"}
 
-{block name="content"}
+{block name="main"}
 <div class="book-detail">
     <div class="book-detail-container">
         <div class="book-cover-section">

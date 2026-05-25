@@ -9,7 +9,7 @@
  *}
 {extends file="layouts/player.tpl"}
 
-{block name="content"}
+{block name="main"}
 <div class="reader-page" data-book-id="{$book.id}">
     <div class="reader-toolbar">
         <a href="/books/{$book.id}" class="reader-back">

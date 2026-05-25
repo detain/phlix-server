@@ -7,7 +7,7 @@
  *}
 {extends file="layouts/main.tpl"}
 
-{block name="content"}
+{block name="main"}
 <div class="audiobook-detail">
     <div class="audiobook-detail-container">
         <div class="audiobook-cover-section">
@@ -44,7 +44,7 @@
                 {if !empty($audiobook.metadata.duration_ms)}
                 <div class="metadata-item">
                     <span class="metadata-label">Duration:</span>
-                    <span class="metadata-value">{$audiobook.metadata.duration_ms / 1000|date_format:"%H:%M:%S"}</span>
+                    <span class="metadata-value">{($audiobook.metadata.duration_ms / 1000)|date_format:"%H:%M:%S"}</span>
                 </div>
                 {/if}
 

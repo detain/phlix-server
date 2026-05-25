@@ -31,7 +31,7 @@
             <span class="track-album">{$track.album|default:'Unknown Album'}</span>
             <span class="track-duration">
                 {if $track.duration_secs}
-                    {math equation="floor(duration / 60)"}:{(duration % 60)|sprintf:"%02d"}
+                    {($track.duration_secs - $track.duration_secs % 60) / 60}:{($track.duration_secs % 60)|string_format:"%02d"}
                 {/if}
             </span>
             <button class="play-track-btn" title="Play">▶</button>
@@ -44,7 +44,7 @@
         {if $offset > 0}
             <a href="?offset={$offset - $limit}&limit={$limit}" class="pagination-prev">Previous</a>
         {/if}
-        <span class="pagination-info">Showing {$offset + 1} - {min($offset + $limit, $total)} of {$total}</span>
+        <span class="pagination-info">Showing {$offset + 1} - {if $offset + $limit < $total}{$offset + $limit}{else}{$total}{/if} of {$total}</span>
         {if $offset + $limit < $total}
             <a href="?offset={$offset + $limit}&limit={$limit}" class="pagination-next">Next</a>
         {/if}

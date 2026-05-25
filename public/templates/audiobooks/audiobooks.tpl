@@ -7,7 +7,7 @@
  *}
 {extends file="layouts/main.tpl"}
 
-{block name="content"}
+{block name="main"}
 <div class="audiobooks-page">
     <header class="audiobooks-header">
         <h1>Audiobooks</h1>

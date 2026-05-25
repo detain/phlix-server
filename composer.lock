@@ -413,11 +413,11 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "0.5.0",
+            "version": "0.5.1",
             "dist": {
                 "type": "path",
                 "url": "../phlix-shared",
-                "reference": "be8fc050c8eada4a7c5503136a596da19adad106"
+                "reference": "482becf7ab583eba1ea7c725d627fcf4cf7c8a28"
             },
             "require": {
                 "ext-curl": "*",

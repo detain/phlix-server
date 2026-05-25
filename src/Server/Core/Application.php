@@ -541,15 +541,15 @@ class Application
         $controller = $this->getMusicController();
 
         // Music library browsing routes
-        $this->router->get('/music/artists', [$controller, 'listArtists']);
-        $this->router->get('/music/artists/{mbid}', [$controller, 'getArtist']);
-        $this->router->get('/music/albums', [$controller, 'listAlbums']);
-        $this->router->get('/music/albums/{mbid}', [$controller, 'getAlbum']);
-        $this->router->get('/music/tracks', [$controller, 'listTracks']);
-        $this->router->get('/music/tracks/{id}', [$controller, 'getTrack']);
+        $this->router->get('/api/v1/music/artists', [$controller, 'listArtists']);
+        $this->router->get('/api/v1/music/artists/{mbid}', [$controller, 'getArtist']);
+        $this->router->get('/api/v1/music/albums', [$controller, 'listAlbums']);
+        $this->router->get('/api/v1/music/albums/{mbid}', [$controller, 'getAlbum']);
+        $this->router->get('/api/v1/music/tracks', [$controller, 'listTracks']);
+        $this->router->get('/api/v1/music/tracks/{id}', [$controller, 'getTrack']);
 
         // Now playing for the current session
-        $this->router->get('/music/now-playing', [$controller, 'nowPlaying']);
+        $this->router->get('/api/v1/music/now-playing', [$controller, 'nowPlaying']);
     }
 
     /**
@@ -573,11 +573,11 @@ class Application
         $this->router->get('/opds/v1.2/books/{id}/cover', [$controller, 'opdsBookCover']);
 
         // Book web portal endpoints
-        $this->router->get('/books', [$controller, 'listBooks']);
-        $this->router->get('/books/{id}', [$controller, 'getBook']);
-        $this->router->get('/books/{id}/read', [$controller, 'readBook']);
-        $this->router->get('/books/{id}/cover', [$controller, 'getCover']);
-        $this->router->get('/books/{id}/download', [$controller, 'downloadBook']);
+        $this->router->get('/api/v1/books', [$controller, 'listBooks']);
+        $this->router->get('/api/v1/books/{id}', [$controller, 'getBook']);
+        $this->router->get('/api/v1/books/{id}/read', [$controller, 'readBook']);
+        $this->router->get('/api/v1/books/{id}/cover', [$controller, 'getCover']);
+        $this->router->get('/api/v1/books/{id}/download', [$controller, 'downloadBook']);
     }
 
     /**
@@ -594,13 +594,13 @@ class Application
         $controller = $this->getAudiobookController();
 
         // Audiobook library browsing and playback routes
-        $this->router->get('/audiobooks', [$controller, 'listAudiobooks']);
-        $this->router->get('/audiobooks/{id}', [$controller, 'getAudiobook']);
-        $this->router->get('/audiobooks/{id}/chapters', [$controller, 'getChapters']);
-        $this->router->get('/audiobooks/{id}/progress', [$controller, 'getProgress']);
-        $this->router->post('/audiobooks/{id}/progress', [$controller, 'saveProgress']);
-        $this->router->get('/audiobooks/{id}/read', [$controller, 'readAudiobook']);
-        $this->router->get('/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
+        $this->router->get('/api/v1/audiobooks', [$controller, 'listAudiobooks']);
+        $this->router->get('/api/v1/audiobooks/{id}', [$controller, 'getAudiobook']);
+        $this->router->get('/api/v1/audiobooks/{id}/chapters', [$controller, 'getChapters']);
+        $this->router->get('/api/v1/audiobooks/{id}/progress', [$controller, 'getProgress']);
+        $this->router->post('/api/v1/audiobooks/{id}/progress', [$controller, 'saveProgress']);
+        $this->router->get('/api/v1/audiobooks/{id}/read', [$controller, 'readAudiobook']);
+        $this->router->get('/api/v1/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
     }
 
     /**
@@ -617,15 +617,15 @@ class Application
         $controller = $this->getPhotoController();
 
         // Photo album and photo browsing routes
-        $this->router->get('/photo/albums', [$controller, 'listAlbums']);
-        $this->router->get('/photo/albums/{id}', [$controller, 'getAlbum']);
-        $this->router->get('/photo/photos', [$controller, 'listPhotos']);
-        $this->router->get('/photo/photos/{id}', [$controller, 'getPhoto']);
-        $this->router->get('/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
-        $this->router->get('/photo/photos/{id}/full', [$controller, 'getFull']);
+        $this->router->get('/api/v1/photo/albums', [$controller, 'listAlbums']);
+        $this->router->get('/api/v1/photo/albums/{id}', [$controller, 'getAlbum']);
+        $this->router->get('/api/v1/photo/photos', [$controller, 'listPhotos']);
+        $this->router->get('/api/v1/photo/photos/{id}', [$controller, 'getPhoto']);
+        $this->router->get('/api/v1/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
+        $this->router->get('/api/v1/photo/photos/{id}/full', [$controller, 'getFull']);
 
         // Slideshow endpoint
-        $this->router->get('/photo/slideshow', [$controller, 'slideshow']);
+        $this->router->get('/api/v1/photo/slideshow', [$controller, 'slideshow']);
     }
 
     /**

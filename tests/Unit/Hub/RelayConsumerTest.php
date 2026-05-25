@@ -223,6 +223,7 @@ class RelayConsumerTest extends TestCase
             'client_id' => 'client-1',
             'session_id' => 'sess-1',
         ], JSON_THROW_ON_ERROR);
+        // seq carries the per-client channel id (1).
         $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $payload));
 
         $this->assertCount(1, $this->locals);
@@ -237,10 +238,25 @@ class RelayConsumerTest extends TestCase
         $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
         $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
 
+        // DATA carries the SAME channel id (1) as the CLIENT_CONNECT.
         $raw = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
-        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 2, $raw));
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 1, $raw));
 
         $this->assertSame([$raw], $this->local(0)->sent, 'raw bytes should be written verbatim to local conn');
+    }
+
+    public function test_data_for_unknown_channel_is_dropped(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
+
+        // DATA for a channel that was never opened (7) must NOT reach channel 1.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 7, 'stray bytes'));
+
+        $this->assertSame([], $this->local(0)->sent, 'DATA for an unknown channel must be dropped');
     }
 
     public function test_local_response_bytes_round_trip_back_as_data_frames(): void
@@ -249,7 +265,7 @@ class RelayConsumerTest extends TestCase
         $this->activate($consumer);
 
         $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
-        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 5, $connect));
 
         $hubSentBefore = count($this->hub->sent);
 
@@ -262,6 +278,8 @@ class RelayConsumerTest extends TestCase
         $this->assertInstanceOf(RelayFrame::class, $frame);
         $this->assertSame(RelayFrameType::DATA, $frame->type);
         $this->assertSame($response, $frame->payload);
+        // Response DATA must be tagged with the originating channel id (5).
+        $this->assertSame(5, $frame->channelId(), 'response DATA must carry the originating channel id');
     }
 
     public function test_large_local_response_is_chunked_to_max_payload(): void
@@ -285,6 +303,7 @@ class RelayConsumerTest extends TestCase
             $frame = $this->codec->decode($bytes);
             $this->assertInstanceOf(RelayFrame::class, $frame);
             $this->assertSame(RelayFrameType::DATA, $frame->type);
+            $this->assertSame(1, $frame->channelId(), 'each chunk keeps the owning channel id');
             $this->assertLessThanOrEqual(65535, strlen($frame->payload));
             $reassembled .= $frame->payload;
         }
@@ -300,10 +319,112 @@ class RelayConsumerTest extends TestCase
         $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
         $local = $this->local(0);
 
+        // CLIENT_DISCONNECT carries the SAME channel id (1).
         $disconnect = json_encode(['client_id' => 'client-1'], JSON_THROW_ON_ERROR);
-        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_DISCONNECT, 2, $disconnect));
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_DISCONNECT, 1, $disconnect));
 
         $this->assertTrue($local->closed, 'local connection should be closed on CLIENT_DISCONNECT');
+    }
+
+    // ---- Concurrent multi-client isolation (relay-mux) ----
+
+    public function test_two_channels_route_data_independently(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        // Two clients connect on channels 1 and 2.
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'client-1', 'session_id' => 's1'], JSON_THROW_ON_ERROR),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            2,
+            json_encode(['client_id' => 'client-2', 'session_id' => 's2'], JSON_THROW_ON_ERROR),
+        ));
+
+        $this->assertCount(2, $this->locals, 'each channel gets its own local connection');
+        $local1 = $this->local(0);
+        $local2 = $this->local(1);
+
+        // DATA for channel 1 must reach ONLY local 1; channel 2 ONLY local 2.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 1, 'for-one'));
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 2, 'for-two'));
+
+        $this->assertSame(['for-one'], $local1->sent, 'channel 1 bytes only to local 1');
+        $this->assertSame(['for-two'], $local2->sent, 'channel 2 bytes only to local 2');
+    }
+
+    public function test_responses_are_tagged_with_their_own_channel(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'client-1', 'session_id' => 's1'], JSON_THROW_ON_ERROR),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            2,
+            json_encode(['client_id' => 'client-2', 'session_id' => 's2'], JSON_THROW_ON_ERROR),
+        ));
+        $local1 = $this->local(0);
+        $local2 = $this->local(1);
+
+        $before = count($this->hub->sent);
+        $local2->fireMessage('resp-two');
+        $local1->fireMessage('resp-one');
+
+        $frames = array_slice($this->hub->sent, $before);
+        $this->assertCount(2, $frames);
+
+        $f2 = $this->codec->decode($frames[0]);
+        $f1 = $this->codec->decode($frames[1]);
+        $this->assertInstanceOf(RelayFrame::class, $f2);
+        $this->assertInstanceOf(RelayFrame::class, $f1);
+        $this->assertSame(2, $f2->channelId());
+        $this->assertSame('resp-two', $f2->payload);
+        $this->assertSame(1, $f1->channelId());
+        $this->assertSame('resp-one', $f1->payload);
+    }
+
+    public function test_disconnecting_one_channel_leaves_the_other_active(): void
+    {
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'client-1', 'session_id' => 's1'], JSON_THROW_ON_ERROR),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            2,
+            json_encode(['client_id' => 'client-2', 'session_id' => 's2'], JSON_THROW_ON_ERROR),
+        ));
+        $local1 = $this->local(0);
+        $local2 = $this->local(1);
+
+        // Disconnect channel 1 only.
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_DISCONNECT,
+            1,
+            json_encode(['client_id' => 'client-1'], JSON_THROW_ON_ERROR),
+        ));
+
+        $this->assertTrue($local1->closed, 'channel 1 local conn is closed');
+        $this->assertFalse($local2->closed, 'channel 2 local conn is unaffected');
+
+        // Channel 2 still routes; channel 1 DATA is now dropped.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 2, 'still-here'));
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::DATA, 1, 'should-drop'));
+
+        $this->assertSame(['still-here'], $local2->sent, 'channel 2 keeps working after channel 1 leaves');
     }
 
     public function test_heartbeat_frame_is_answered_with_heartbeat(): void
@@ -351,7 +472,8 @@ class RelayConsumerTest extends TestCase
 
         $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
         $f1 = $this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect);
-        $f2 = $this->codec->encode(RelayFrameType::DATA, 2, 'abc');
+        // DATA carries the same channel id (1) as the CLIENT_CONNECT.
+        $f2 = $this->codec->encode(RelayFrameType::DATA, 1, 'abc');
 
         // Both frames arrive in a single WS message (buffer must split them).
         $this->hub->fireMessage($f1 . $f2);

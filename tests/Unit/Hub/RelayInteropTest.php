@@ -237,16 +237,16 @@ final class RelayInteropTest extends TestCase
         $hub->fireMessage($this->hubHelloAck('relay-session-1', 'tunnel-1'));
         self::assertTrue($consumer->isActive(), 'server must enter binary mode on hub HELLO_ACK bytes');
 
-        // --- CLIENT_CONNECT (hub → server): hub's exact binary frame. -------
+        // --- CLIENT_CONNECT (hub → server): channel id 1 in the seq field. --
         $hub->fireMessage($this->hubClientConnect(1, 'client-1', 'sess-1'));
         self::assertCount(1, $locals);
         $local = $locals['local-0'];
         self::assertInstanceOf(InteropFakeConnection::class, $local);
         self::assertTrue($local->connected);
 
-        // --- DATA (hub → server): client request bytes, piped verbatim. -----
+        // --- DATA (hub → server): channel 1 bytes, piped verbatim. ----------
         $request = "GET /hls/abc/index.m3u8 HTTP/1.1\r\nHost: relay\r\n\r\n";
-        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 2, $request));
+        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 1, $request));
         self::assertSame([$request], $local->sent, 'hub DATA payload must reach local conn verbatim');
 
         // --- response DATA (server → hub): local listener replies. ----------
@@ -255,17 +255,101 @@ final class RelayInteropTest extends TestCase
         $local->fireMessage($response);
 
         // The server framed the response into a DATA frame whose bytes the hub
-        // would decode. Verify with an INDEPENDENT hub-style decode.
+        // would decode. Verify with an INDEPENDENT hub-style decode, and that it
+        // is tagged with the originating channel id (1).
         self::assertCount($hubSentBefore + 1, $hub->sent);
         $responseFrameBytes = $hub->sent[$hubSentBefore];
         $decoded = $this->hubStyleDecode($responseFrameBytes);
         self::assertNotNull($decoded);
         self::assertSame(RelayFrameType::DATA, $decoded['type']);
         self::assertSame($response, $decoded['payload']);
+        self::assertSame(1, $decoded['seq'], 'response DATA must carry the originating channel id');
 
-        // --- CLIENT_DISCONNECT (hub → server): hub's exact binary frame. ----
-        $hub->fireMessage($this->hubClientDisconnect(3, 'client-1'));
+        // --- CLIENT_DISCONNECT (hub → server): channel id 1. ----------------
+        $hub->fireMessage($this->hubClientDisconnect(1, 'client-1'));
         self::assertTrue($local->closed, 'hub CLIENT_DISCONNECT must close the local conn');
+    }
+
+    // ============================================================
+    // 4. Concurrent multi-client isolation through the consumer
+    //    (channels 1 and 2 do not cross-talk)
+    // ============================================================
+
+    public function test_consumer_isolates_two_concurrent_channels(): void
+    {
+        $hub = new InteropFakeConnection('ws://hub.example.com:8802');
+        /** @var \ArrayObject<string, InteropFakeConnection> $locals */
+        $locals = new \ArrayObject();
+
+        $enrollment = new StoredEnrollment(
+            enrollmentJwt: 'test-jwt',
+            hubJwksUrl: 'https://hub.example.com/.well-known/jwks.json',
+            serverId: 'server-uuid-123',
+            hubBaseUrl: 'https://hub.example.com',
+            enrolledAt: time(),
+        );
+        $hubClient = $this->createMock(HubClient::class);
+        $hubClient->method('loadEnrollment')->willReturn($enrollment);
+
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $hubClient,
+            new StructuredLogger('relay-interop', []),
+            'server-uuid-123',
+            hubConnectionFactory: static fn (string $url): AsyncTcpConnection => $hub,
+            localConnectionFactory: static function (string $url) use ($locals): AsyncTcpConnection {
+                $conn = new InteropFakeConnection($url);
+                $locals['local-' . $locals->count()] = $conn;
+                return $conn;
+            },
+        );
+
+        $consumer->start();
+        $hub->fireConnect();
+        $hub->fireMessage($this->hubHelloAck('relay-session-1', 'tunnel-1'));
+
+        // Two clients connect on channels 1 and 2 (the hub's exact CC frames).
+        $hub->fireMessage($this->hubClientConnect(1, 'client-1', 'sess-1'));
+        $hub->fireMessage($this->hubClientConnect(2, 'client-2', 'sess-2'));
+        self::assertCount(2, $locals);
+        $local1 = $locals['local-0'];
+        $local2 = $locals['local-1'];
+        self::assertInstanceOf(InteropFakeConnection::class, $local1);
+        self::assertInstanceOf(InteropFakeConnection::class, $local2);
+
+        // Channel-1 request reaches only local 1; channel-2 only local 2.
+        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 1, 'req-one'));
+        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 2, 'req-two'));
+        self::assertSame(['req-one'], $local1->sent);
+        self::assertSame(['req-two'], $local2->sent);
+
+        // Each local response is tagged back with its own channel id.
+        $before = count($hub->sent);
+        $local1->fireMessage('resp-one');
+        $local2->fireMessage('resp-two');
+        $frames = array_slice($hub->sent, $before);
+        self::assertCount(2, $frames);
+        $d1 = $this->hubStyleDecode($frames[0]);
+        $d2 = $this->hubStyleDecode($frames[1]);
+        self::assertNotNull($d1);
+        self::assertNotNull($d2);
+        self::assertSame(1, $d1['seq']);
+        self::assertSame('resp-one', $d1['payload']);
+        self::assertSame(2, $d2['seq']);
+        self::assertSame('resp-two', $d2['payload']);
+
+        // Disconnect channel 1; channel 2 keeps working, channel-1 DATA drops.
+        $hub->fireMessage($this->hubClientDisconnect(1, 'client-1'));
+        self::assertTrue($local1->closed);
+        self::assertFalse($local2->closed);
+
+        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 2, 'more-two'));
+        $hub->fireMessage($this->hubEncode(RelayFrameType::DATA, 1, 'orphan'));
+        self::assertSame(['req-two', 'more-two'], $local2->sent);
     }
 
     /**

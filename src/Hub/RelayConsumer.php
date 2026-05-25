@@ -12,7 +12,6 @@ use Workerman\Connection\AsyncTcpConnection;
 use Workerman\Connection\ConnectionInterface;
 use Workerman\Timer;
 
-use function array_key_last;
 use function is_array;
 use function is_string;
 use function json_decode;
@@ -33,28 +32,30 @@ use function substr;
  *      enter binary frame mode. A missing/garbage ack closes + reconnects.
  *   4. In binary mode, decode {@see RelayFrameType} frames and:
  *        - CLIENT_CONNECT: open an AsyncTcpConnection to this server's own
- *          local HTTP listener (default 127.0.0.1:8096) for that client_id,
- *          remembering the client_id -> local connection mapping.
- *        - DATA: write the raw bytes verbatim to the client's local
- *          connection. Local response bytes are wrapped back into DATA frames
- *          (chunked to <= 65535) and sent to the hub.
- *        - CLIENT_DISCONNECT: close + forget that client's local connection.
+ *          local HTTP listener (default 127.0.0.1:8096) for the frame's
+ *          per-client CHANNEL id, remembering the channel -> local connection
+ *          mapping.
+ *        - DATA: write the raw bytes verbatim to the local connection for the
+ *          frame's channel id. Local response bytes are wrapped back into DATA
+ *          frames (chunked to <= 65535), each TAGGED with that channel id, and
+ *          sent to the hub.
+ *        - CLIENT_DISCONNECT: close + forget the channel's local connection.
  *        - HEARTBEAT: reply with a HEARTBEAT frame and track liveness.
  *        - DISCONNECTED / ERROR: log; tunnel-level errors trigger reconnect.
  *
  * Raw-byte piping (rather than re-parsing HTTP) is the protocol-correct match:
  * the hub forwards opaque client bytes, so the server forwards them opaque too.
  *
- * KNOWN LIMITATION (single active client per tunnel)
- * --------------------------------------------------
- * The hub currently BROADCASTS server->client DATA to ALL clients, and DATA
- * frames carry NO client_id. As a result the protocol reliably supports only
- * ONE active client stream per tunnel; concurrent clients would cross-talk on
- * the return path. Server->hub DATA frames are therefore routed back without a
- * client_id and the server maps inbound DATA to its single live local
- * connection. True per-client response demultiplexing requires a coordinated
- * hub + shared + server protocol change (adding client_id to DATA frames).
- * See the {@see TODO(relay-mux)} markers below.
+ * MULTI-CLIENT CHANNEL DEMULTIPLEXING
+ * -----------------------------------
+ * Each remote client is assigned a stable uint32 CHANNEL id by the hub at
+ * CLIENT_CONNECT time, carried in the frame's `seq` field
+ * ({@see RelayFrame::channelId()}). Every client-scoped frame (CLIENT_CONNECT,
+ * CLIENT_DISCONNECT, DATA) carries the channel id, so multiple concurrent
+ * clients are fully isolated: inbound DATA is routed to the local connection
+ * for its channel, and that connection's response bytes are tagged with the
+ * same channel on the way back. A DATA frame for an unknown/closed channel is
+ * dropped and logged. HEARTBEAT frames are tunnel-scoped (channel 0).
  *
  * @package Phlix\Hub
  * @since 0.5.0
@@ -100,26 +101,19 @@ final class RelayConsumer
     /** @var int|null */
     private ?int $heartbeatTimer = null;
 
-    /** @var int Sequence number for outbound binary frames. */
-    private int $seq = 0;
-
     /** @var string Buffered incoming binary data awaiting frame boundaries. */
     private string $recvBuffer = '';
 
     /**
-     * Local HTTP connections keyed by client_id.
+     * Local HTTP connections keyed by per-client CHANNEL id.
      *
-     * @var array<string, AsyncTcpConnection>
+     * The channel id is the uint32 the hub assigns at CLIENT_CONNECT and carries
+     * in every client-scoped frame's `seq` field. This map is the inverse of the
+     * hub's channel→client map and is how concurrent clients stay isolated.
+     *
+     * @var array<int, AsyncTcpConnection>
      */
     private array $localConnections = [];
-
-    /**
-     * Most recently opened client_id, used to route inbound DATA frames back
-     * to the local connection (see "known limitation" — DATA has no client_id).
-     *
-     * @var string|null
-     */
-    private ?string $activeClientId = null;
 
     /**
      * Factory that opens the outbound hub WS connection.
@@ -407,7 +401,6 @@ final class RelayConsumer
         }
 
         $this->state = self::STATE_ACTIVE;
-        $this->seq = 0;
 
         $this->logger->info('RelayConsumer: tunnel active', [
             'relay_session_id' => is_string($ack['relay_session_id'] ?? null) ? $ack['relay_session_id'] : null,
@@ -473,7 +466,11 @@ final class RelayConsumer
     /**
      * Handle a CLIENT_CONNECT frame: open a local HTTP connection for the client.
      *
-     * @param RelayFrame $frame CLIENT_CONNECT frame; payload is {client_id, session_id}.
+     * The frame's channel id ({@see RelayFrame::channelId()}) is the routing key
+     * for this client's subsequent DATA frames; the JSON {client_id, session_id}
+     * payload is observability only.
+     *
+     * @param RelayFrame $frame CLIENT_CONNECT frame; channel id in seq, payload {client_id, session_id}.
      *
      * @return void
      *
@@ -481,15 +478,19 @@ final class RelayConsumer
      */
     private function onClientConnect(RelayFrame $frame): void
     {
+        $channelId = $frame->channelId();
         $payload = $this->decodeJsonPayload($frame->payload);
         $clientId = is_string($payload['client_id'] ?? null) ? $payload['client_id'] : '';
 
-        if ($clientId === '') {
-            $this->logger->warning('RelayConsumer: CLIENT_CONNECT missing client_id');
+        if ($channelId <= 0) {
+            $this->logger->warning('RelayConsumer: CLIENT_CONNECT with invalid channel', [
+                'channel_id' => $channelId,
+                'client_id' => $clientId,
+            ]);
             return;
         }
 
-        if (isset($this->localConnections[$clientId])) {
+        if (isset($this->localConnections[$channelId])) {
             // Already connected — ignore duplicate.
             return;
         }
@@ -497,40 +498,37 @@ final class RelayConsumer
         $localUrl = $this->config->buildLocalHttpUrl();
         $local = $this->openLocalConnection($localUrl);
 
-        $local->onMessage = function (ConnectionInterface $conn, string $data) use ($clientId): void {
-            $this->onLocalData($clientId, $data);
+        $local->onMessage = function (ConnectionInterface $conn, string $data) use ($channelId): void {
+            $this->onLocalData($channelId, $data);
         };
 
-        $local->onClose = function (ConnectionInterface $conn) use ($clientId): void {
-            $this->onLocalClose($clientId);
+        $local->onClose = function (ConnectionInterface $conn) use ($channelId): void {
+            $this->onLocalClose($channelId);
         };
 
-        $local->onError = function (ConnectionInterface $conn, int $code, string $msg) use ($clientId): void {
-            $this->logger->warning('RelayConsumer: local connection error', [
-                'client_id' => $clientId,
+        $errorContext = ['channel_id' => $channelId, 'client_id' => $clientId];
+        $local->onError = function (ConnectionInterface $conn, int $code, string $msg) use ($errorContext): void {
+            $this->logger->warning('RelayConsumer: local connection error', $errorContext + [
                 'code' => $code,
                 'message' => $msg,
             ]);
         };
 
-        $this->localConnections[$clientId] = $local;
-        // TODO(relay-mux): the hub does not tag DATA frames with client_id, so we
-        // track the most-recent client to route inbound DATA. Multi-client demux
-        // needs a protocol change adding client_id to DATA frames.
-        $this->activeClientId = $clientId;
+        $this->localConnections[$channelId] = $local;
 
         $local->connect();
 
         $this->logger->info('RelayConsumer: client connected', [
+            'channel_id' => $channelId,
             'client_id' => $clientId,
             'local_url' => $localUrl,
         ]);
     }
 
     /**
-     * Handle a CLIENT_DISCONNECT frame: close + forget the client's local conn.
+     * Handle a CLIENT_DISCONNECT frame: close + forget the channel's local conn.
      *
-     * @param RelayFrame $frame CLIENT_DISCONNECT frame; payload is {client_id}.
+     * @param RelayFrame $frame CLIENT_DISCONNECT frame; channel id in seq, payload {client_id}.
      *
      * @return void
      *
@@ -538,24 +536,30 @@ final class RelayConsumer
      */
     private function onClientDisconnect(RelayFrame $frame): void
     {
+        $channelId = $frame->channelId();
         $payload = $this->decodeJsonPayload($frame->payload);
         $clientId = is_string($payload['client_id'] ?? null) ? $payload['client_id'] : '';
 
-        if ($clientId === '') {
+        if ($channelId <= 0) {
             return;
         }
 
-        $this->closeLocalConnection($clientId);
+        $this->closeLocalConnection($channelId);
 
         $this->logger->info('RelayConsumer: client disconnected', [
+            'channel_id' => $channelId,
             'client_id' => $clientId,
         ]);
     }
 
     /**
-     * Handle a DATA frame from the hub: pipe raw bytes to the local connection.
+     * Handle a DATA frame from the hub: pipe raw bytes to the channel's local conn.
      *
-     * @param RelayFrame $frame DATA frame; payload is raw client bytes verbatim.
+     * The frame's channel id ({@see RelayFrame::channelId()}) selects exactly one
+     * local connection. A DATA frame for an unknown/closed channel is dropped and
+     * logged — this keeps concurrent clients isolated.
+     *
+     * @param RelayFrame $frame DATA frame; channel id in seq, payload raw client bytes.
      *
      * @return void
      *
@@ -563,16 +567,17 @@ final class RelayConsumer
      */
     private function onData(RelayFrame $frame): void
     {
-        // TODO(relay-mux): DATA frames carry no client_id, so route to the
-        // single active client connection. True multi-client support requires
-        // client_id on DATA frames (hub + shared + server change).
-        $clientId = $this->activeClientId;
-        if ($clientId === null || !isset($this->localConnections[$clientId])) {
-            $this->logger->warning('RelayConsumer: DATA with no active local connection');
+        $channelId = $frame->channelId();
+        $local = $this->localConnections[$channelId] ?? null;
+        if ($local === null) {
+            $this->logger->warning('RelayConsumer: DATA for unknown/closed channel, dropping', [
+                'channel_id' => $channelId,
+                'payload_len' => strlen($frame->payload),
+            ]);
             return;
         }
 
-        $this->localConnections[$clientId]->send($frame->payload, true);
+        $local->send($frame->payload, true);
     }
 
     /**
@@ -626,18 +631,20 @@ final class RelayConsumer
     /**
      * Handle response bytes emitted by a client's local connection.
      *
-     * Wraps them into DATA frames (chunked to <= 65535) and sends to the hub.
+     * Wraps them into DATA frames (chunked to <= 65535), each tagged with the
+     * owning channel id so the hub routes them back to the correct client, and
+     * sends to the hub.
      *
-     * @param string $clientId Owning client_id.
-     * @param string $data     Raw response bytes from the local listener.
+     * @param int    $channelId Owning channel id.
+     * @param string $data      Raw response bytes from the local listener.
      *
      * @return void
      *
      * @since 0.5.0
      */
-    private function onLocalData(string $clientId, string $data): void
+    private function onLocalData(int $channelId, string $data): void
     {
-        if (!isset($this->localConnections[$clientId])) {
+        if (!isset($this->localConnections[$channelId])) {
             return;
         }
 
@@ -647,7 +654,7 @@ final class RelayConsumer
 
         do {
             $chunk = substr($data, $offset, $maxChunk);
-            $this->sendFrame(RelayFrameType::DATA, $chunk);
+            $this->sendDataFrame($channelId, $chunk);
             $offset += $maxChunk;
         } while ($offset < $length);
     }
@@ -655,21 +662,18 @@ final class RelayConsumer
     /**
      * Handle a local connection close: forget it.
      *
-     * @param string $clientId Owning client_id.
+     * @param int $channelId Owning channel id.
      *
      * @return void
      *
      * @since 0.5.0
      */
-    private function onLocalClose(string $clientId): void
+    private function onLocalClose(int $channelId): void
     {
-        if (isset($this->localConnections[$clientId])) {
-            unset($this->localConnections[$clientId]);
-            if ($this->activeClientId === $clientId) {
-                $this->activeClientId = array_key_last($this->localConnections);
-            }
+        if (isset($this->localConnections[$channelId])) {
+            unset($this->localConnections[$channelId]);
             $this->logger->info('RelayConsumer: local connection closed', [
-                'client_id' => $clientId,
+                'channel_id' => $channelId,
             ]);
         }
     }
@@ -693,25 +697,22 @@ final class RelayConsumer
     }
 
     /**
-     * Close and forget a single client's local connection.
+     * Close and forget a single channel's local connection.
      *
-     * @param string $clientId Owning client_id.
+     * @param int $channelId Owning channel id.
      *
      * @return void
      *
      * @since 0.5.0
      */
-    private function closeLocalConnection(string $clientId): void
+    private function closeLocalConnection(int $channelId): void
     {
-        $conn = $this->localConnections[$clientId] ?? null;
+        $conn = $this->localConnections[$channelId] ?? null;
         if ($conn === null) {
             return;
         }
 
-        unset($this->localConnections[$clientId]);
-        if ($this->activeClientId === $clientId) {
-            $this->activeClientId = array_key_last($this->localConnections);
-        }
+        unset($this->localConnections[$channelId]);
         $conn->close();
     }
 
@@ -728,11 +729,13 @@ final class RelayConsumer
             $conn->close();
         }
         $this->localConnections = [];
-        $this->activeClientId = null;
     }
 
     /**
-     * Encode and send a binary frame to the hub.
+     * Encode and send a tunnel-scoped binary frame (channel 0) to the hub.
+     *
+     * Used for HEARTBEAT and other non-client-scoped frames. Client-scoped DATA
+     * uses {@see sendDataFrame()} so the channel id is preserved.
      *
      * @param RelayFrameType $type    Frame type.
      * @param string         $payload Raw payload bytes (<= 65535).
@@ -747,7 +750,31 @@ final class RelayConsumer
             return;
         }
 
-        $encoded = $this->codec->encode($type, $this->nextSeq(), $payload);
+        // Tunnel-scoped frames carry no channel — channel id 0.
+        $encoded = $this->codec->encode($type, 0, $payload);
+        $this->connection->send($encoded);
+    }
+
+    /**
+     * Encode and send a DATA frame tagged with the owning channel id.
+     *
+     * The channel id travels in the frame's `seq` field so the hub routes the
+     * response back to the correct client.
+     *
+     * @param int    $channelId Owning channel id.
+     * @param string $payload   Raw payload bytes (<= 65535).
+     *
+     * @return void
+     *
+     * @since 0.5.0
+     */
+    private function sendDataFrame(int $channelId, string $payload): void
+    {
+        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
+            return;
+        }
+
+        $encoded = $this->codec->encode(RelayFrameType::DATA, $channelId, $payload);
         $this->connection->send($encoded);
     }
 
@@ -862,19 +889,6 @@ final class RelayConsumer
                 'error' => $e->getMessage(),
             ]);
         }
-    }
-
-    /**
-     * Return the next 32-bit unsigned sequence number.
-     *
-     * @return int
-     *
-     * @since 0.5.0
-     */
-    private function nextSeq(): int
-    {
-        $this->seq = ($this->seq + 1) & 0xFFFFFFFF;
-        return $this->seq;
     }
 
     /**

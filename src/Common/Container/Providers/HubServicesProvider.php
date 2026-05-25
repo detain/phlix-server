@@ -7,6 +7,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Auth\JwtHandler;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Hub\Ed25519KeyManager;
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\HubClient;
@@ -23,6 +24,7 @@ use Phlix\Hub\RelayMessageFramer;
 use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Controllers\HubTokenController;
 use Phlix\Server\Http\Middleware\HubJwtMiddleware;
+use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 
 use function DI\autowire;
@@ -122,9 +124,31 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             RelayMessageFramer::class => autowire(),
 
-            RelayConsumer::class => autowire()
-                ->constructorParameter('logger', get('logger.hub'))
-                ->constructorParameter('config', get(RelayConfig::class)),
+            RelayConsumer::class => factory(
+                static function (ContainerInterface $c): RelayConsumer {
+                    $config = $c->get(RelayConfig::class);
+                    $hubClient = $c->get(HubClient::class);
+                    $logger = $c->get('logger.hub');
+
+                    if (
+                        !$config instanceof RelayConfig
+                        || !$hubClient instanceof HubClient
+                        || !$logger instanceof StructuredLogger
+                    ) {
+                        throw new \RuntimeException('RelayConsumer dependencies misconfigured');
+                    }
+
+                    $enrollment = $hubClient->loadEnrollment();
+                    $serverId = $enrollment !== null ? $enrollment->serverId : '';
+
+                    return new RelayConsumer(
+                        $config,
+                        $hubClient,
+                        $logger,
+                        $serverId,
+                    );
+                }
+            ),
 
             RelayApplication::class => autowire()
                 ->constructorParameter('logger', get('logger.hub'))

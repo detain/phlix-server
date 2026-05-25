@@ -14,7 +14,7 @@ use Workerman\Worker;
  * responsible for maintaining the persistent WSS tunnel to the hub.
  *
  * @package Phlix\Hub
- * @since 0.12.0
+ * @since 0.5.0
  */
 final class RelayApplication
 {
@@ -49,7 +49,7 @@ final class RelayApplication
      *
      * @return void
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function start(): void
     {
@@ -80,7 +80,7 @@ final class RelayApplication
      *
      * @return void
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function stop(): void
     {
@@ -105,7 +105,7 @@ final class RelayApplication
      *
      * @return bool True if running.
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function isRunning(): bool
     {

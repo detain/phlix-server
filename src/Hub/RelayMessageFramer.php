@@ -22,7 +22,7 @@ use Phlix\Shared\Relay\RelayWireCodecInterface;
  * WS upgrade (before binary mode is entered).
  *
  * @package Phlix\Hub
- * @since 0.12.0
+ * @since 0.5.0
  */
 final class RelayMessageFramer implements RelayWireCodecInterface
 {
@@ -37,7 +37,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      *
      * @throws InvalidArgumentException If payload exceeds 65535 bytes.
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function encode(RelayFrameType $type, int $seq, string $payload): string
     {
@@ -65,7 +65,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      *
      * @return string JSON text frame (not binary-encoded).
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function encodeHello(string $enrollmentJwt, string $serverId): string
     {
@@ -86,7 +86,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      *
      * @return string JSON text frame (not binary-encoded).
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function encodeHelloAck(string $relaySessionId, string $tunnelId): string
     {
@@ -109,7 +109,7 @@ final class RelayMessageFramer implements RelayWireCodecInterface
      *
      * @return SharedRelayFrame|null Parsed frame, or null if data is incomplete.
      *
-     * @since 0.12.0
+     * @since 0.5.0
      */
     public function decode(string $bytes): ?SharedRelayFrame
     {
@@ -145,190 +145,5 @@ final class RelayMessageFramer implements RelayWireCodecInterface
         $payload = substr($bytes, $payloadStart, $len);
 
         return new SharedRelayFrame($type, $seq, $payload);
-    }
-
-    // -------------------------------------------------------------------------
-    // Backward-compatibility methods for the old C.6 HTTP-proxy-over-WS protocol
-    // These will be removed when RelayConsumer is updated in Phase 0.6
-    // -------------------------------------------------------------------------
-
-    /**
-     * @deprecated Use encode() with RelayFrameType constants instead.
-     */
-    public const TYPE_HTTP_REQUEST = 1;
-
-    /**
-     * @deprecated Use encode() with RelayFrameType constants instead.
-     */
-    public const TYPE_HTTP_RESPONSE = 2;
-
-    /**
-     * @deprecated Use encode() with RelayFrameType constants instead.
-     */
-    public const TYPE_PING = 3;
-
-    /**
-     * @deprecated Use encode() with RelayFrameType constants instead.
-     */
-    public const TYPE_PONG = 4;
-
-    /**
-     * Frame an HTTP request for transmission over the tunnel (old C.6 protocol).
-     *
-     * @deprecated Use encode() with RelayFrameType::DATA instead.
-     *
-     * @param int    $seq      32-bit unsigned sequence number.
-     * @param string $method   HTTP method (GET, POST, etc.).
-     * @param string $path     HTTP request path.
-     * @param array<string, string> $headers HTTP headers as key=>value.
-     * @param string $body     HTTP request body.
-     *
-     * @return string Binary-encoded frame.
-     *
-     * @since 0.12.0
-     */
-    public function frameRequest(int $seq, string $method, string $path, array $headers, string $body): string
-    {
-        $payload = json_encode([
-            'seq' => $seq,
-            'method' => $method,
-            'path' => $path,
-            'headers' => $headers,
-            'body' => $body,
-        ], JSON_THROW_ON_ERROR);
-
-        return $this->buildFrameLegacy(self::TYPE_HTTP_REQUEST, $seq, $payload);
-    }
-
-    /**
-     * Frame an HTTP response for transmission over the tunnel (old C.6 protocol).
-     *
-     * @deprecated Use encode() with RelayFrameType::DATA instead.
-     *
-     * @param int    $seq          32-bit unsigned sequence number (matches request).
-     * @param int    $statusCode   HTTP status code.
-     * @param array<string, string> $headers HTTP headers as key=>value.
-     * @param string $body         HTTP response body.
-     *
-     * @return string Binary-encoded frame.
-     *
-     * @since 0.12.0
-     */
-    public function frameResponse(int $seq, int $statusCode, array $headers, string $body): string
-    {
-        $payload = json_encode([
-            'seq' => $seq,
-            'status' => $statusCode,
-            'headers' => $headers,
-            'body' => $body,
-        ], JSON_THROW_ON_ERROR);
-
-        return $this->buildFrameLegacy(self::TYPE_HTTP_RESPONSE, $seq, $payload);
-    }
-
-    /**
-     * Frame a PING keep-alive frame (old C.6 protocol).
-     *
-     * @deprecated Use encode() with RelayFrameType::HEARTBEAT instead.
-     *
-     * @param int $seq 32-bit unsigned sequence number.
-     *
-     * @return string Binary-encoded frame.
-     *
-     * @since 0.12.0
-     */
-    public function framePing(int $seq): string
-    {
-        $payload = json_encode(['seq' => $seq], JSON_THROW_ON_ERROR);
-        return $this->buildFrameLegacy(self::TYPE_PING, $seq, $payload);
-    }
-
-    /**
-     * Frame a PONG keep-alive ack frame (old C.6 protocol).
-     *
-     * @deprecated Use encode() with RelayFrameType::HEARTBEAT instead.
-     *
-     * @param int $seq 32-bit unsigned sequence number (matches ping).
-     *
-     * @return string Binary-encoded frame.
-     *
-     * @since 0.12.0
-     */
-    public function framePong(int $seq): string
-    {
-        $payload = json_encode(['seq' => $seq], JSON_THROW_ON_ERROR);
-        return $this->buildFrameLegacy(self::TYPE_PONG, $seq, $payload);
-    }
-
-    /**
-     * Parse a binary frame from the wire (old C.6 protocol).
-     *
-     * @deprecated Use decode() for the new multiplexed protocol.
-     *
-     * @param string $data Raw bytes from the WebSocket connection.
-     *
-     * @return RelayFrame|null Parsed frame, or null if the data is incomplete.
-     *
-     * @since 0.12.0
-     */
-    public function parse(string $data): ?RelayFrame
-    {
-        if (strlen($data) < 9) {
-            return null;
-        }
-
-        $type = unpack('Ctype', $data);
-        if ($type === false) {
-            return null;
-        }
-        $type = $type['type'];
-
-        $seqData = substr($data, 1, 4);
-        $seqUnpacked = unpack('Nseq', $seqData);
-        if ($seqUnpacked === false) {
-            return null;
-        }
-        $seq = $seqUnpacked['seq'];
-
-        $lenData = substr($data, 5, 4);
-        $lenUnpacked = unpack('Nlen', $lenData);
-        if ($lenUnpacked === false) {
-            return null;
-        }
-        $len = $lenUnpacked['len'];
-
-        $payloadStart = 9;
-        if (strlen($data) < $payloadStart + $len) {
-            return null;
-        }
-
-        $payloadBytes = substr($data, $payloadStart, $len);
-        /** @var array<string, mixed> $payload */
-        $payload = json_decode($payloadBytes, true, 512, JSON_THROW_ON_ERROR);
-
-        return new RelayFrame($type, $seq, $payload);
-    }
-
-    /**
-     * Build a binary frame (old C.6 protocol).
-     *
-     * @deprecated Internal use only. Use encode() for the new protocol.
-     *
-     * @param int    $type    Frame type constant.
-     * @param int    $seq     32-bit unsigned sequence number.
-     * @param string $payload JSON payload string.
-     *
-     * @return string Binary frame.
-     */
-    private function buildFrameLegacy(int $type, int $seq, string $payload): string
-    {
-        $len = strlen($payload);
-
-        $result  = pack('C', $type);
-        $result .= pack('N', $seq);
-        $result .= pack('N', $len);
-        $result .= $payload;
-
-        return $result;
     }
 }

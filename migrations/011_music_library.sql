@@ -25,17 +25,17 @@ DEALLOCATE PREPARE stmt;
 
 -- Add index on library_id + type for efficient music queries
 -- This helps when querying for all tracks in a music library
-CREATE INDEX IF NOT EXISTS idx_media_items_library_type
+CREATE INDEX idx_media_items_library_type
 ON media_items (library_id, type);
 
 -- Add index on metadata_json for artist/album queries
 -- Uses JSON functions for partial matching
-CREATE INDEX IF NOT EXISTS idx_media_items_metadata_artist
+CREATE INDEX idx_media_items_metadata_artist
 ON media_items ((CAST(metadata_json->>'$.artist' AS CHAR(255))));
 
-CREATE INDEX IF NOT EXISTS idx_media_items_metadata_album
+CREATE INDEX idx_media_items_metadata_album
 ON media_items ((CAST(metadata_json->>'$.album' AS CHAR(255))));
 
 -- Add index for genre queries
-CREATE INDEX IF NOT EXISTS idx_media_items_metadata_genre
+CREATE INDEX idx_media_items_metadata_genre
 ON media_items ((CAST(metadata_json->>'$.genre' AS CHAR(255))));

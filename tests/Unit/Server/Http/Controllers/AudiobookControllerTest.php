@@ -26,11 +26,24 @@ class AudiobookControllerTest extends TestCase
     /**
      * Creates a test audio file in an allowed media directory.
      * This ensures the file path passes validateMediaPath() security checks.
+     *
+     * validateMediaPath() requires the resolved path to live under one of
+     * the well-known roots: /media/, /mnt/, /data/, /home/. We use the
+     * current user's HOME so the test works on any host: dev workstations
+     * (HOME=/home/<user>) and GitHub Actions runners (HOME=/home/runner)
+     * both satisfy the /home/ prefix.
      */
     private function createTestAudioFile(string $filename, string $content): string
     {
         if ($this->testMediaDir === null) {
-            $this->testMediaDir = '/home/my/test_media_' . uniqid();
+            $home = getenv('HOME');
+            if ($home === false || $home === '' || !str_starts_with($home, '/home/')) {
+                $this->markTestSkipped(
+                    'HOME (' . ($home === false ? '<unset>' : $home) . ') is not under /home/, '
+                    . 'so the test cannot satisfy validateMediaPath()\'s allowed roots.'
+                );
+            }
+            $this->testMediaDir = rtrim($home, '/') . '/test_media_' . uniqid();
             mkdir($this->testMediaDir, 0755, true);
         }
 

@@ -27,6 +27,12 @@ class ConnectionPool
     public static function getConnection(string $name = 'mysql'): Connection
     {
         if (!isset(self::$connections[$name])) {
+            if (self::$configPath === '' || !is_file(self::$configPath)) {
+                throw new \RuntimeException(
+                    'ConnectionPool has no database config path — call ConnectionPool::init($path) '
+                    . 'or set `db_config_path` in the app config before resolving Connection.'
+                );
+            }
             $config = include self::$configPath;
             if (!is_array($config) || !isset($config['connections']) || !is_array($config['connections'])) {
                 throw new \RuntimeException('Invalid database config at ' . self::$configPath);

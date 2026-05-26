@@ -1997,6 +1997,19 @@ class Application
     private function createDatabaseConnection(): \Workerman\MySQL\Connection
     {
         if ($this->container !== null) {
+            // Prefer an explicit container binding (tests bind a mock here;
+            // production code paths reach the same Connection via the
+            // CoreServicesProvider factory). Only fall back to the
+            // ConnectionPool / hardcoded defaults if the container has no
+            // such binding configured.
+            try {
+                $bound = $this->container->get(\Workerman\MySQL\Connection::class);
+                if ($bound instanceof \Workerman\MySQL\Connection) {
+                    return $bound;
+                }
+            } catch (\Throwable) {
+                // Container has no Connection binding; continue to pool.
+            }
             try {
                 return \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
             } catch (\Throwable) {

@@ -51,10 +51,18 @@ final class BootstrapTest extends TestCase
         $this->loggerConfigPath = $this->tempDir . '/logger.php';
         file_put_contents($this->loggerConfigPath, $loggerConfig);
 
+        // Point db_config_path at the real config/database.php so the
+        // CoreServicesProvider's Connection factory can initialise the
+        // ConnectionPool. The config file is fully env-driven, so the
+        // phpunit.xml <env> block (DB_USER=root / DB_DATABASE=phlix_test
+        // / DB_PASSWORD=root) provides the actual credentials used to
+        // talk to CI's MySQL service container.
+        $dbConfigPath = dirname(__DIR__, 3) . '/config/database.php';
+
         $serverConfig = "<?php\nreturn [\n"
             . "    'server' => ['name' => 'Test Server'],\n"
             . "    'logger_config_path' => " . var_export($this->loggerConfigPath, true) . ",\n"
-            . "    'db_config_path' => null,\n"
+            . "    'db_config_path' => " . var_export($dbConfigPath, true) . ",\n"
             . "];\n";
         $this->serverConfigPath = $this->tempDir . '/server.php';
         file_put_contents($this->serverConfigPath, $serverConfig);

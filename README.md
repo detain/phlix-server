@@ -161,6 +161,29 @@ terminal (with sensible defaults), and runs **fully unattended** when piped or g
 `sudo bash scripts/install.sh --help` for every flag. Default ports: HTTP on `:8096` behind
 HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
 
+### Install flags
+
+`sudo bash scripts/install.sh --help` lists every option. The most useful:
+
+| Flag | Effect |
+|---|---|
+| `--domain HOST` | Public hostname for the server (enables TLS when paired with `--admin-email`) |
+| `--admin-email EMAIL` | Email registered with Let's Encrypt |
+| `--db-name`, `--db-user`, `--db-pass`, `--db-host`, `--db-port` | MySQL identity (random password if `--db-pass` omitted). Note: `config/database.php` hardcodes host/port/db/user; only the password is env-driven. |
+| `--http-port PORT` | HTTP listen port (default `8096`) |
+| `--tmdb-api-key KEY` | TMDB API key for metadata (optional, recorded in `/etc/phlix/env`) |
+| `--hub-url URL` | `PHLIX_HUB_URL` for hub relay (optional) |
+| `--service-user USER` | System user to run as (default `phlix` — dedicated system account, created if missing) |
+| `--branch NAME` | Git branch or tag to install (default `master`) |
+| `--repo URL` | Git repository URL (default `detain/phlix-server`) |
+| `--tls` / `--no-tls` | Force or skip Let's Encrypt + HAProxy TLS |
+| `--no-proxy` | Skip the managed HAProxy entirely (use your own reverse proxy) |
+| `--update` | Pull new code + run migrations on an existing install (preserves env + secrets) |
+| `--uninstall` | Remove the install — interactive prompts before each destructive step |
+| `--purge` | With `--uninstall`, also drop the DB, delete the Let's Encrypt cert, wipe `/var/phlix`, and remove the dedicated system user |
+| `-y`, `--non-interactive` | Never prompt; use defaults/flags |
+| `--interactive` | Force prompts even when piped |
+
 ### Updating an existing install
 
 The same `scripts/install.sh` updates an in-place install **without rotating any secrets**. It
@@ -202,14 +225,28 @@ a fully unattended teardown:
 sudo bash /var/www/phlix/scripts/install.sh --uninstall --purge -y
 ```
 
-What it removes when present: the `phlix-server` systemd unit, HAProxy config (restored from
-the `/etc/haproxy/haproxy.cfg.phlix-server.bak` snapshot taken at install), the combined
-PEM under `/etc/haproxy/certs/`, the certbot deploy hook + monthly cron, optionally the
-Let's Encrypt cert, optionally the MySQL DB + user, the install dir (`/var/www/phlix` by
-default), optionally `/var/phlix`, `/var/log/phlix`, `/var/run/phlix`, and finally
-`/etc/phlix/env`. System packages (`php-*`, `mysql-server`, `ffmpeg`, `haproxy`, `certbot`)
-and the `phlix` system user are left in place — `sudo apt remove` / `sudo userdel phlix` to
-get rid of them.
+What it removes when present:
+
+1. The `phlix-server` systemd unit (`stop`, `disable`, remove file, `daemon-reload`).
+2. HAProxy fragment at `/etc/haproxy/phlix-managed/phlix-server.cfg.fragment`, and
+   `/etc/haproxy/haproxy.cfg` is rebuilt. If phlix-hub is still installed, its frontend +
+   backend stay. If phlix-server was the last Phlix project, the pre-Phlix snapshot at
+   `/etc/haproxy/haproxy.cfg.pre-phlix.bak` is restored (or `haproxy.cfg` is removed and
+   haproxy is stopped + disabled if no snapshot exists).
+3. The combined PEM at `/etc/haproxy/certs/<domain>.pem`.
+4. `/etc/cron.d/phlix-server-certbot` and the certbot deploy hook.
+5. The Let's Encrypt cert via `certbot delete` — only with `--purge` or interactive confirm.
+6. The MySQL database + user — only with `--purge` or interactive confirm.
+7. The install dir (`/var/www/phlix` by default; system paths refused).
+8. `/var/phlix` (config, library cache, backups) — only with `--purge` or interactive confirm.
+9. `/var/log/phlix` and `/var/run/phlix`.
+10. `/etc/phlix/env` (env file).
+11. The dedicated system user `phlix` via `userdel` — only with `--purge` or interactive
+    confirm. Refuses to touch shared OS accounts (`www-data`, `root`, etc.). Cross-detects
+    phlix-hub's systemd unit and refuses to remove a user that's still being used by it.
+
+System packages (`php-*`, `mysql-server`, `ffmpeg`, `haproxy`, `certbot`) and `ufw` rules are
+left in place — `sudo apt remove …` / `sudo ufw delete …` to remove them.
 
 ### Running alongside phlix-hub on the same server
 

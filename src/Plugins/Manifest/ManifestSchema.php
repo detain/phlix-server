@@ -16,8 +16,14 @@ use RuntimeException;
  * Extracted from the original `Phlix\Plugins\Manifest::validate()`
  * during Step B.3 of `PHLIX_EXPANSION_PLAN.md` so the framework-neutral
  * DTO portion can move to `detain/phlix-shared` while the validator
- * (which depends on `justinrainbow/json-schema` and the bundled schema
- * file at `docs/plugins/manifest.schema.json`) stays here.
+ * (which depends on `justinrainbow/json-schema`) stays here.
+ *
+ * As of phlix-shared v0.6.0 the schema file itself also lives in the
+ * shared package — `vendor/detain/phlix-shared/schemas/manifest.schema.json`
+ * — so the canonical copy is versioned alongside the
+ * {@see Phlix\Shared\Plugin\Manifest} DTO it validates. The legacy
+ * in-tree location (`docs/plugins/manifest.schema.json`) is still
+ * accepted as a fallback so older composer installs don't break.
  *
  * Run validation by constructing a `ManifestSchema` and calling
  * {@see self::validate()}; soft rules (`unknown_field`) and JSON Schema
@@ -29,11 +35,15 @@ use RuntimeException;
 final class ManifestSchema
 {
     /**
-     * Absolute filesystem path to the JSON Schema shipped with the
-     * project. Resolved at call time rather than baked at class-load
-     * time so the project root can move under tests.
+     * Candidate filesystem paths to the JSON Schema, relative to the
+     * project root. Checked in order; the first readable one wins.
      */
-    private const SCHEMA_RELATIVE_PATH = '/docs/plugins/manifest.schema.json';
+    private const SCHEMA_RELATIVE_PATHS = [
+        // Canonical: bundled with detain/phlix-shared >= 0.6.0.
+        '/vendor/detain/phlix-shared/schemas/manifest.schema.json',
+        // Legacy: in-tree copy (kept so existing checkouts don't break).
+        '/docs/plugins/manifest.schema.json',
+    ];
 
     /**
      * Validate the manifest against the bundled JSON Schema and a small
@@ -93,10 +103,20 @@ final class ManifestSchema
     private static function loadSchema(): mixed
     {
         $schemaPath = self::resolveSchemaPath();
+        if ($schemaPath === null) {
+            $root = dirname(__DIR__, 3);
+            $checked = array_map(static fn (string $rel): string => $root . $rel, self::SCHEMA_RELATIVE_PATHS);
+            throw new RuntimeException(
+                sprintf(
+                    'Manifest schema not found — looked in: %s. Run composer install (the schema ships with detain/phlix-shared).',
+                    implode(', ', $checked),
+                ),
+            );
+        }
         $schemaSource = @file_get_contents($schemaPath);
         if ($schemaSource === false) {
             throw new RuntimeException(
-                sprintf('Manifest schema not found at %s — Phlix install is broken.', $schemaPath),
+                sprintf('Manifest schema not readable at %s — Phlix install is broken.', $schemaPath),
             );
         }
 
@@ -104,14 +124,22 @@ final class ManifestSchema
     }
 
     /**
-     * @return string Absolute path to the bundled schema file.
+     * Resolve the first existing schema path from {@see self::SCHEMA_RELATIVE_PATHS}.
+     *
+     * @return string|null Absolute path to the bundled schema file, or
+     *                     null when none of the candidates exist.
      */
-    private static function resolveSchemaPath(): string
+    private static function resolveSchemaPath(): ?string
     {
         // src/Plugins/Manifest/ManifestSchema.php -> project root is three dirs up.
         $root = dirname(__DIR__, 3);
-
-        return $root . self::SCHEMA_RELATIVE_PATH;
+        foreach (self::SCHEMA_RELATIVE_PATHS as $relative) {
+            $absolute = $root . $relative;
+            if (is_file($absolute)) {
+                return $absolute;
+            }
+        }
+        return null;
     }
 
     /**

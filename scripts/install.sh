@@ -199,6 +199,29 @@ confirm() {
 rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
+# Parse the User= line from a systemd unit. Empty when missing.
+phlix_systemd_unit_user() {
+  [ -f "$1" ] || { printf ''; return; }
+  awk -F= '/^User=/{print $2; exit}' "$1" 2>/dev/null
+}
+
+# True when the other Phlix service is installed AND its systemd unit's
+# User= matches the supplied name.
+phlix_other_service_uses_user() {
+  local our_user="$1" other_service="$2"
+  local other_user
+  other_user="$(phlix_systemd_unit_user "$other_service")"
+  [ -n "$other_user" ] && [ "$other_user" = "$our_user" ]
+}
+
+# True when a username looks like a dedicated Phlix-created system account.
+phlix_user_is_dedicated() {
+  case "$1" in
+    phlix|phlix-hub|phlix-server) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------------------
 # Shared HAProxy management
 #
@@ -518,6 +541,16 @@ do_uninstall() {
     fi
   fi
 
+  # Detect the actual service user from the systemd unit (falling back to
+  # the current default).
+  local svc_user=""
+  if [ -n "$svc" ]; then
+    svc_user="$(phlix_systemd_unit_user "$svc")"
+  fi
+  [ -n "$svc_user" ] || svc_user="$SERVICE_USER"
+  local svc_user_present="no"
+  id -u "$svc_user" >/dev/null 2>&1 && svc_user_present="yes" && found=1
+
   if [ "$found" -eq 0 ]; then
     info "No Phlix Media Server artefacts found — nothing to uninstall."
     return 0
@@ -530,6 +563,15 @@ do_uninstall() {
   [ -n "$instdir" ]              && info " - install directory    : $instdir"
   [ -n "$data_root" ]            && info " - data directory       : $data_root"
   [ -n "$log_dir" ]              && info " - log directory        : $log_dir"
+  if [ "$svc_user_present" = "yes" ]; then
+    if phlix_other_service_uses_user "$svc_user" /etc/systemd/system/phlix-hub.service; then
+      info " - service user         : $svc_user (shared with phlix-hub — will NOT be removed)"
+    elif ! phlix_user_is_dedicated "$svc_user"; then
+      info " - service user         : $svc_user (shared OS account — will NOT be removed)"
+    else
+      info " - service user         : $svc_user (dedicated; removable with --purge or interactive confirm)"
+    fi
+  fi
   [ "$has_db" = "yes" ]          && info " - MySQL database       : ${U_DB_NAME} (user '${U_DB_USER}'@'${U_DB_HOST}')"
   if [ -n "$hap_fragment" ]; then
     if [ "$hap_other_fragments" = "yes" ]; then
@@ -578,12 +620,32 @@ do_uninstall() {
     fi
   fi
 
+  # Opt-in to system-user removal. Only offered when the user is dedicated
+  # (phlix / phlix-hub / phlix-server) AND the other Phlix project isn't
+  # also using it.
+  local drop_user="no"
+  if [ "$svc_user_present" = "yes" ] \
+     && phlix_user_is_dedicated "$svc_user" \
+     && ! phlix_other_service_uses_user "$svc_user" /etc/systemd/system/phlix-hub.service; then
+    if [ "$PURGE" = "yes" ]; then
+      drop_user="yes"
+    elif [ "$ASSUME_YES" != "yes" ] && [ "$INTERACTIVE" = "yes" ] && [ -e /dev/tty ]; then
+      confirm "Delete the dedicated system user '$svc_user'?" \
+        && drop_user="yes"
+    fi
+  fi
+
   [ "$has_db" = "yes" ] && { [ "$drop_db"     = "yes" ] && info "Will DROP database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}'." \
                                                        || info "Will KEEP MySQL database and user."; }
   [ -n "$data_root" ]   && { [ "$drop_data"   = "yes" ] && info "Will DELETE data directory '$data_root'." \
                                                        || info "Will KEEP data directory '$data_root'."; }
   [ -n "$le_dir" ]      && { [ "$revoke_cert" = "yes" ] && info "Will DELETE Let's Encrypt certificate '${U_DOMAIN}'." \
                                                        || info "Will KEEP Let's Encrypt certificate '${U_DOMAIN}'."; }
+  if [ "$svc_user_present" = "yes" ] && phlix_user_is_dedicated "$svc_user" \
+     && ! phlix_other_service_uses_user "$svc_user" /etc/systemd/system/phlix-hub.service; then
+    [ "$drop_user" = "yes" ] && info "Will DELETE system user '$svc_user'." \
+                             || info "Will KEEP system user '$svc_user'."
+  fi
   echo
 
   # Final gate. Piped/non-interactive runs require explicit -y.
@@ -672,24 +734,32 @@ SQL
   [ -n "$log_dir" ] && { log "Removing log directory $log_dir"; rm -rf "$log_dir"; }
   [ -n "$run_dir" ] && rm -rf "$run_dir"
 
-  # 9. Env file last — we read DB creds out of it earlier.
+  # 9. Env file (before user removal — chown depends on user existing).
   [ -n "$envf" ] && { log "Removing environment file $envf"; rm -f "$envf"; }
   # Remove /etc/phlix/ if it's now empty.
   if [ -n "$envdir" ] && [ -d "$envdir" ]; then
     rmdir "$envdir" 2>/dev/null || true
   fi
 
+  # 10. System user (after every owned artefact is gone).
+  if [ "$drop_user" = "yes" ]; then
+    log "Removing system user '$svc_user'"
+    userdel "$svc_user" >/dev/null 2>&1 \
+      || warn "userdel '$svc_user' failed — remove it manually with 'sudo userdel $svc_user'."
+  fi
+
   echo
   log "Phlix Media Server uninstallation complete."
   info "System packages (PHP, MySQL, HAProxy, certbot, ffmpeg) were left installed."
   info "Remove them with 'sudo apt remove ...' if you no longer need them."
-  info "The '$SERVICE_USER' system user was left in place — 'sudo userdel $SERVICE_USER' to remove."
-  [ "$has_db" = "yes" ]   && [ "$drop_db"     != "yes" ] \
+  [ "$has_db" = "yes" ]            && [ "$drop_db"     != "yes" ] \
     && info "MySQL database '${U_DB_NAME}' and user '${U_DB_USER}'@'${U_DB_HOST}' were preserved."
-  [ -n "$data_root" ]     && [ "$drop_data"   != "yes" ] \
+  [ -n "$data_root" ]              && [ "$drop_data"   != "yes" ] \
     && info "Data directory '$data_root' was preserved."
-  [ -n "$le_dir" ]        && [ "$revoke_cert" != "yes" ] \
+  [ -n "$le_dir" ]                 && [ "$revoke_cert" != "yes" ] \
     && info "Let's Encrypt certificate '${U_DOMAIN}' was preserved at $le_dir."
+  [ "$svc_user_present" = "yes" ]  && [ "$drop_user"   != "yes" ] && phlix_user_is_dedicated "$svc_user" \
+    && info "System user '$svc_user' was preserved."
 }
 
 if [ "$ACTION" = "uninstall" ]; then

@@ -4,18 +4,15 @@
     "license": "proprietary",
     "repositories": [
         {
-            "type": "path",
-            "url": "../phlix-shared",
-            "options": {
-                "symlink": true
-            }
+            "type": "vcs",
+            "url": "https://github.com/detain/phlix-shared.git"
         }
     ],
     "require": {
         "php": ">=8.3",
         "ext-ldap": "*",
         "crell/tukio": "^2.0",
-        "detain/phlix-shared": "^0.5.0",
+        "detain/phlix-shared": "^0.6.0",
         "directorytree/ldaprecord": "^3.0",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",

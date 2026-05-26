@@ -137,6 +137,144 @@ public/
 
 ## Installation
 
+### One-line install (Ubuntu/Debian)
+
+On a fresh Ubuntu/Debian host, [`scripts/install.sh`](scripts/install.sh) does the whole thing:
+system packages (PHP 8.3+, MySQL, ffmpeg), a dedicated `phlix` system user, MySQL database +
+user, application code, env file at `/etc/phlix/env`, generated `PHLIX_SECRET_KEY`, database
+migrations, a systemd `phlix-server` service, and an HAProxy reverse proxy with an
+auto-renewing Let's Encrypt certificate.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash
+```
+
+Provision HTTPS in the same run by passing your domain and a Let's Encrypt contact email:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+  | sudo bash -s -- --domain phlix.example.com --admin-email you@example.com
+```
+
+The script prompts for the install path, database user/password, and hostname when run in a
+terminal (with sensible defaults), and runs **fully unattended** when piped or given `-y`. Run
+`sudo bash scripts/install.sh --help` for every flag. Default ports: HTTP on `:8096` behind
+HAProxy on `:80`/`:443`; DLNA discovery on `1900/udp`.
+
+### Updating an existing install
+
+The same `scripts/install.sh` updates an in-place install **without rotating any secrets**. It
+reads the existing `/etc/phlix/env` (so `DB_PASSWORD` and `PHLIX_SECRET_KEY` are preserved),
+pulls the latest code, refreshes Composer dependencies, runs migrations, and restarts the
+service:
+
+```bash
+sudo bash /var/www/phlix/scripts/install.sh --update -y
+```
+
+Pin to a specific tag or branch with `--branch`:
+
+```bash
+sudo bash /var/www/phlix/scripts/install.sh --update --branch v0.2.0 -y
+```
+
+`--update` discovers the install path from the systemd unit's `WorkingDirectory`, fetches code
+as the install dir owner (so it doesn't trip Git's CVE-2022-24765 dubious-ownership check),
+runs `composer install --no-dev --optimize-autoloader`, clears `templates_c/`, runs
+`scripts/run-migrations.php`, restarts `phlix-server`, and curl-checks `/health`. It
+deliberately leaves the env file, MySQL grants, HAProxy config, and Let's Encrypt cert alone.
+
+### Uninstalling
+
+`scripts/install.sh --uninstall` removes an existing install. It is **interactive by default**
+and prompts separately before each destructive step. The MySQL database, the `/var/phlix` data
+directory, and the Let's Encrypt certificate are **kept** unless you opt in:
+
+```bash
+sudo bash /var/www/phlix/scripts/install.sh --uninstall
+```
+
+Add `--purge` to also drop the database (and user), wipe `/var/phlix` (config, library cache,
+backups), and delete the Let's Encrypt certificate via `certbot delete`. Combine with `-y` for
+a fully unattended teardown:
+
+```bash
+sudo bash /var/www/phlix/scripts/install.sh --uninstall --purge -y
+```
+
+What it removes when present: the `phlix-server` systemd unit, HAProxy config (restored from
+the `/etc/haproxy/haproxy.cfg.phlix-server.bak` snapshot taken at install), the combined
+PEM under `/etc/haproxy/certs/`, the certbot deploy hook + monthly cron, optionally the
+Let's Encrypt cert, optionally the MySQL DB + user, the install dir (`/var/www/phlix` by
+default), optionally `/var/phlix`, `/var/log/phlix`, `/var/run/phlix`, and finally
+`/etc/phlix/env`. System packages (`php-*`, `mysql-server`, `ffmpeg`, `haproxy`, `certbot`)
+and the `phlix` system user are left in place — `sudo apt remove` / `sudo userdel phlix` to
+get rid of them.
+
+### Running alongside phlix-hub on the same server
+
+Both installers can share a single HAProxy instance — they auto-merge into one
+`/etc/haproxy/haproxy.cfg`. Just run both installers normally; the second one detects the
+first's fragment and rebuilds a combined config that routes by `Host:` header.
+
+```bash
+# 1. Install phlix-hub first (with TLS).
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-hub/master/scripts/install.sh \
+  | sudo bash -s -- --domain hub.example.com --admin-email you@example.com -y
+
+# 2. Install phlix-server, also with TLS, on a different hostname.
+curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh \
+  | sudo bash -s -- --domain phlix.example.com --admin-email you@example.com -y
+```
+
+After both finish, `/etc/haproxy/haproxy.cfg` looks like:
+
+```haproxy
+# phlix-managed: rebuilt by phlix install scripts — do not edit
+...
+frontend fe_https
+    bind :443 ssl crt /etc/haproxy/certs/
+    http-request set-header X-Forwarded-Proto https
+
+    # --- phlix-hub ---
+    acl is_phlix_hub_host hdr(host) -i hub.example.com
+    use_backend be_hub_client_relay if is_phlix_hub_host { path_beg /client/ }
+    use_backend be_hub if is_phlix_hub_host
+
+    # --- phlix-server ---
+    acl is_phlix_server_host hdr(host) -i phlix.example.com
+    use_backend be_phlix_server if is_phlix_server_host
+    ...
+```
+
+**How the merge works.** Each install drops a fragment at
+`/etc/haproxy/phlix-managed/<project>.cfg.fragment` with `fe_http`, `fe_https`, and `backends`
+sections. A rebuilder function then assembles the final `haproxy.cfg` from every fragment it
+finds. HAProxy's `crt /etc/haproxy/certs/` directive auto-loads every `.pem` in that directory
+and picks the right one per SNI hostname.
+
+The first install snapshots any pre-Phlix `haproxy.cfg` to
+`/etc/haproxy/haproxy.cfg.pre-phlix.bak`.
+
+**Uninstall behaviour**: `--uninstall` removes only that project's fragment and rebuilds. If
+other Phlix projects remain, their frontend stays untouched. When the **last** Phlix project
+is uninstalled, the rebuilder restores the pre-Phlix snapshot (or removes `haproxy.cfg`
+outright if there was no pre-Phlix config) and stops/disables `haproxy`.
+
+The **hub server-tunnel port** (`:8802`) is a separate listener — servers connect to that port
+directly. Open it on the firewall but don't put it behind the HAProxy 80/443 frontend.
+
+If you'd rather use your own reverse proxy (nginx, Caddy, Traefik, etc.) instead of the
+managed HAProxy, pass `--no-proxy` to either install script. Each service then listens on its
+own port (8096 for phlix-server, 8800 for phlix-hub) and you point your proxy at those.
+
+Everything else is already namespaced: env files (`/etc/phlix-hub.env` vs `/etc/phlix/env`),
+systemd units (`phlix-hub.service` vs `phlix-server.service`), install dirs (`/opt/phlix-hub`
+vs `/var/www/phlix`), service users (`www-data` vs `phlix`), MySQL DBs (`phlix_hub` vs
+`phlix`), backend ports (8800/8802/8803 vs 8096), and certbot artefacts.
+
+### Manual install (from source)
+
 ```bash
 # Clone the repository
 git clone https://github.com/detain/phlix-server.git
@@ -145,15 +283,11 @@ cd phlix-server
 # Install dependencies
 composer install
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your database and service credentials
+# Run database migrations (reads config/database.php; password from DB_PASSWORD env var)
+DB_PASSWORD=your_strong_password php scripts/run-migrations.php
 
-# Run database migrations
-php scripts/migrate.php
-
-# Start the development server
-php start.php server
+# Start the server (HTTP + WebSocket on port 8096 from config/server.php)
+php public/index.php start
 ```
 
 ## Configuration

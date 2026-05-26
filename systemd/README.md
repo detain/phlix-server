@@ -1,119 +1,133 @@
 # Phlix systemd Service
 
-This directory contains systemd unit files for running Phlix Media Server as a system service.
+This directory contains the systemd unit file for running Phlix Media Server
+as a system service.
 
 ## Installation
 
-Run the installer script as root:
+For a fresh end-to-end install (apt packages, MySQL DB+user, code clone,
+composer install, env file, HAProxy + TLS), use the top-level installer:
+
+```bash
+sudo bash scripts/install.sh
+```
+
+If the rest of the host is already set up and you only want the systemd unit
+registered, use the minimal installer:
 
 ```bash
 sudo bash install/systemd.sh
 ```
 
-Or manually:
+Or do it by hand:
 
 ```bash
-# Copy service files
-sudo cp systemd/*.service /etc/systemd/system/
-sudo cp systemd/*.timer /etc/systemd/system/
+# Install the unit
+sudo cp systemd/phlix-server.service /etc/systemd/system/
 
 # Reload systemd
 sudo systemctl daemon-reload
 
 # Enable and start
-sudo systemctl enable phlix-server
-sudo systemctl start phlix-server
+sudo systemctl enable --now phlix-server
 ```
 
-## Services
+## Units
 
 ### phlix-server.service
 
-Main application service. Runs the Workerman HTTP/WebSocket server.
-
-### phlix-server.timer
-
-Timer for periodic tasks (statistics collection, etc.)
-
-### phlix-hub.service
-
-Hub relay service for remote access (when using phlix-hub).
-
-### phlix-backup.service / phlix-backup.timer
-
-Automated backup service. Runs weekly by default.
+The main long-running service. Runs the Workerman HTTP + WebSocket worker
+on the port configured in `config/server.php` (default `8096`).
 
 ## Configuration
 
-Edit `/etc/phlix/env` to configure environment variables:
+Edit `/etc/phlix/env` to configure environment variables. The systemd unit
+loads it via `EnvironmentFile=`:
 
-```
-PHLIX_DATABASE_HOST=localhost
-PHLIX_DATABASE_PORT=3306
-PHLIX_DATABASE_NAME=phlix
-PHLIX_DATABASE_USER=phlix
-PHLIX_DATABASE_PASSWORD=your_secure_password
-PHLIX_SECRET_KEY=your_secret_key_here
+```ini
+# Only DB_PASSWORD is read by config/database.php (host/port/db/user are
+# hardcoded to 127.0.0.1:3306 / phlix / phlix).
+DB_PASSWORD=your_strong_password
+
+# 32-byte hex secret (openssl rand -hex 32)
+PHLIX_SECRET_KEY=...
+
 PHLIX_LOG_LEVEL=info
+PHLIX_ENV=production
+
+# Optional integrations
+#TMDB_API_KEY=
+#PHLIX_HUB_URL=
+#PHLIX_RELAY_ENABLED=1
 ```
 
-## Security
+Permissions:
 
-The service files include security hardening:
+```bash
+sudo chmod 640 /etc/phlix/env
+sudo chown root:phlix /etc/phlix/env
+```
 
-- `NoNewPrivileges=true` - Prevent privilege escalation
-- `PrivateTmp=true` - Use private /tmp
-- `ProtectSystem=strict` - Restrict filesystem access
-- `ProtectHome=true` - Hide home directories
-- `RestrictNamespaces=true` - Restrict Linux namespaces
-- `LockPersonality=true` - Lock personality flags
-- `RemoveIPC=true` - Remove IPC on stop
+## Security hardening
+
+The unit applies several sandbox directives:
+
+- `NoNewPrivileges=true` — block setuid / capability escalation
+- `PrivateTmp=true` — private `/tmp`
+- `ProtectSystem=strict` — read-only filesystem outside `ReadWritePaths`
+- `ProtectHome=true` — hide `/home`, `/root`, `/run/user`
+- `ReadWritePaths` — only `/var/phlix`, `/var/log/phlix`, `/var/run/phlix`,
+  and the install dir's `.logs/` + `templates_c/` are writable
+- `RestrictNamespaces=true`, `LockPersonality=true`, `RemoveIPC=true`
+- `RuntimeDirectory=phlix` — systemd creates and chowns `/run/phlix` on
+  each start (for the PID file at `config/server.php` `pid_file`)
 
 ## Troubleshooting
 
-View logs:
 ```bash
-journalctl -u phlix-server -f
-```
-
-Restart after config change:
-```bash
-sudo systemctl restart phlix-server
-```
-
-Check service status:
-```bash
+# Status / logs
 sudo systemctl status phlix-server
-```
+journalctl -u phlix-server -f
 
-Check failed services:
-```bash
+# Restart after a config or env change
+sudo systemctl restart phlix-server
+
+# Failed units across the host
 sudo systemctl --failed
 ```
 
-## Backup
+Common failure causes:
 
-The backup timer runs weekly. To run a backup manually:
-
-```bash
-sudo systemctl start phlix-backup
-```
-
-List backups:
-```bash
-ls /var/phlix/backups/
-```
+- `ExecStart` missing the trailing `start` argument (`public/index.php start`)
+  — Workerman prints help and exits.
+- `DB_PASSWORD` empty or wrong in `/etc/phlix/env`.
+- `/var/run/phlix` not writable — the unit's `RuntimeDirectory=phlix`
+  directive handles this; don't override it without arranging the dir manually.
 
 ## Upgrading
 
-1. Stop the service:
-   ```bash
-   sudo systemctl stop phlix-server
-   ```
+If you used `scripts/install.sh`, run `scripts/install.sh --update -y` and
+it will handle git fetch, composer, migrations, and a clean restart. For a
+manual upgrade:
 
-2. Update the application files
+```bash
+sudo systemctl stop phlix-server
+# update /var/www/phlix (git pull, composer install --no-dev, …)
+sudo systemctl start phlix-server
+```
 
-3. Restart:
-   ```bash
-   sudo systemctl start phlix-server
-   ```
+## Removed units
+
+Earlier revisions of the repo shipped four additional units that were
+non-functional and have been removed:
+
+- `phlix-server.timer` — activated the long-running `phlix-server.service`
+  (Type=simple, already restarted by `Restart=on-failure`), so the timer
+  was a no-op. A real scheduled-tasks runner doesn't exist yet; revive
+  this if/when one lands.
+- `phlix-backup.service` + `phlix-backup.timer` — referenced
+  `scripts/backup.php`, which doesn't exist. Restore alongside a real
+  backup script.
+- `phlix-hub.service` — was a duplicate of the unit shipped by the
+  separate `phlix-hub` repo (with a different user and env-file path).
+  Install phlix-hub via its own `scripts/install.sh` instead.

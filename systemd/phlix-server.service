@@ -30,10 +30,16 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/phlix /var/log/phlix /run
+# Writable paths: /var/phlix (data), /var/log/phlix (logs),
+# /var/run/phlix (pid_file in config/server.php), and the install dir's
+# .logs/ + templates_c/ (stdout log + Smarty compile cache).
+ReadWritePaths=/var/phlix /var/log/phlix /var/run/phlix /var/www/phlix/.logs /var/www/phlix/templates_c
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true
+# Have systemd create + chown /run/phlix on each start.
+RuntimeDirectory=phlix
+RuntimeDirectoryMode=0755
 
 [Install]
 WantedBy=multi-user.target

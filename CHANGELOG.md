@@ -10,10 +10,12 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 ### Added
 
 - **Coroutine runtime enabled (step 0.2).** `start.php` and `public/index.php` now set `Worker::$eventLoop = \Workerman\Events\Swoole::class` before any `Worker` instantiation, and call `Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL)` in the master process to enable full coroutine I/O. The code degrades gracefully with a `E_USER_WARNING` when ext-swoole is not yet available.
+- **Coroutine micro-bench (step 0.2b).** Added `scripts/bench/coroutine_bench.php` — a small, dependency-free smoke-test that fires N coroutines through `SWOOLE_HOOK_ALL`-hooked `time_nanosleep()` and asserts wall-clock ≤ 1.5× a single-unit run (so concurrent requests demonstrably do not serialize). Exits 0 on pass, 1 on fail, 2 if `ext-swoole` is absent. Local run: serial ≈ 100 ms, concurrent N=4 ≈ 102 ms (≈3.9× speedup over the serialized ≈ 400 ms baseline). The pre-existing `scripts/bench/concurrent_streams.php` still works but needs a live HLS endpoint + media-id and is not CI-friendly.
 
 ### Changed
 
 - **Upgraded to Webman 2.2 / Workerman 5.1.** Pinned `workerman/workerman` to `~5.1` and `workerman/webman-framework` to `~2.2` as a prerequisite for coroutine support (step 0.2). No other changes — routing, controllers, and DI wiring remain unchanged.
+- **Coroutine-safe per-request state via `support\Context` (step 0.2b).** Audited `src/Server/` for `protected|private|public static $`, `global $`, and `$GLOBALS[…]` carrying per-request data; the audit found **zero offenders** (only PHP's built-in `global $http_response_header;` for `file_get_contents()` exists, outside `src/Server/`). Introduced `Phlix\Server\Http\RequestContext` — a thin typed wrapper around `support\Context` — as the canonical place to publish and read per-request data (today: the authenticated user-id). `AdminMiddleware` now publishes `$request->userId` into the coroutine-local context on a successful admin gate so downstream services can read it without re-passing the `Request`, and explicitly does NOT publish anything on 401/403 paths. New `tests/Unit/Server/Coroutine/ContextIsolationTest.php` proves per-fiber isolation and exercises the `ext-swoole` graceful-fallback branch under a captured error handler. Documented end-to-end in `phlix-docs/docs/dev/coroutine-runtime.md` (eventLoop, hooks, no-static-state rule, `exit`/`die`/`sleep()` ban, contributor checklist).
 
 ### Added
 

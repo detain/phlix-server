@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Middleware;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 
 /**
@@ -31,6 +32,14 @@ use Phlix\Server\Http\Response;
  * implicitly — controllers in `Phlix\Server\Http\Controllers\Admin`
  * can re-use `UserRepository::findAdminById()` if they need the row
  * itself.
+ *
+ * On success, the middleware also publishes the authenticated user-id
+ * into the coroutine-local request context via
+ * {@see RequestContext::setUserId()} so downstream services can read
+ * it without re-receiving the {@see Request}. This is the canonical
+ * coroutine-safe replacement for the static/global pattern under the
+ * Workerman 5 + Swoole eventLoop runtime introduced in step 0.2; see
+ * `phlix-docs/dev/coroutine-runtime.md` for the no-static-state rule.
  *
  * Note on CSRF: the routes this middleware protects are JSON APIs
  * authenticated via the Authorization Bearer header (JWT). Browsers do
@@ -118,6 +127,16 @@ final class AdminMiddleware
             $this->audit->logPermissionDenied($userId, 'admin', 'access');
             return 403;
         }
+
+        // Publish the authenticated user-id into the coroutine-local
+        // request context so downstream admin controllers / services can
+        // read it without re-passing the Request object. This is the
+        // canonical replacement for the static/global pattern that
+        // resident-memory workers cannot use safely under coroutines.
+        // See {@see RequestContext} for the wrapper rationale and
+        // step 0.2b in `phlix-docs/dev/coroutine-runtime.md` for the
+        // no-static-state rule.
+        RequestContext::setUserId($userId);
 
         return null;
     }

@@ -8,7 +8,9 @@ use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestContext;
 use PHPUnit\Framework\TestCase;
+use support\Context;
 
 /**
  * Unit tests for {@see AdminMiddleware} (Step A.5).
@@ -17,6 +19,15 @@ use PHPUnit\Framework\TestCase;
  */
 final class AdminMiddlewareTest extends TestCase
 {
+    /**
+     * Ensure a clean coroutine-local context between tests so the
+     * Context-publication assertions don't see leakage from prior runs.
+     */
+    protected function setUp(): void
+    {
+        Context::destroy();
+    }
+
     public function test_passes_through_admin_user(): void
     {
         $users = $this->createMock(UserRepository::class);
@@ -131,6 +142,56 @@ final class AdminMiddlewareTest extends TestCase
 
         $middleware = new AdminMiddleware($users, $audit);
         $this->assertSame(403, $middleware->checkAccess($this->makeRequest('user-x')));
+    }
+
+    /**
+     * On a successful admin gate, the middleware publishes the
+     * authenticated user-id into the coroutine-local request context
+     * (step 0.2b). Downstream services read it via
+     * {@see RequestContext::getUserId()} instead of relying on
+     * static/global state, which is unsafe under the Workerman 5 +
+     * Swoole coroutine runtime.
+     */
+    public function test_publishes_user_id_to_request_context_on_admin_pass(): void
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->with('admin-7')
+            ->willReturn(['id' => 'admin-7', 'is_admin' => 1]);
+        $audit = $this->createMock(AuditLogger::class);
+
+        $middleware = new AdminMiddleware($users, $audit);
+
+        $this->assertNull(RequestContext::getUserId(), 'baseline: no user-id in context');
+
+        $middleware->checkAccess($this->makeRequest('admin-7'));
+
+        $this->assertSame('admin-7', RequestContext::getUserId());
+        $this->assertTrue(RequestContext::hasUserId());
+    }
+
+    /**
+     * Conversely, when the admin gate REJECTS the request (401 or 403)
+     * the middleware MUST NOT publish a user-id — otherwise a rejected
+     * non-admin could observe their own user-id leaking into a
+     * downstream service that defensively reads the context.
+     */
+    public function test_does_not_publish_user_id_on_401_or_403(): void
+    {
+        $users = $this->createMock(UserRepository::class);
+        $users->method('findAdminById')->with('not-admin')->willReturn(null);
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->expects($this->once())->method('logPermissionDenied');
+
+        $middleware = new AdminMiddleware($users, $audit);
+
+        // 403 path
+        $this->assertSame(403, $middleware->checkAccess($this->makeRequest('not-admin')));
+        $this->assertNull(RequestContext::getUserId(), 'no user-id published on 403');
+        $this->assertFalse(RequestContext::hasUserId());
+
+        // 401 path
+        $this->assertSame(401, $middleware->checkAccess($this->makeRequest(null)));
+        $this->assertNull(RequestContext::getUserId(), 'no user-id published on 401');
     }
 
     private function makeRequest(?string $userId): Request

@@ -1031,11 +1031,20 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 log "Configuring MySQL database and user"
 systemctl enable --now mysql >/dev/null 2>&1 || systemctl enable --now mysqld >/dev/null 2>&1 || true
 # Runs as root via the local socket. Idempotent.
+#
+# Create grants for BOTH '${DB_HOST}' (the TCP target) and 'localhost'
+# (what MySQL reports when reverse-DNS resolves 127.0.0.1 → localhost via
+# /etc/hosts, which is the default Ubuntu behaviour). Without the
+# 'localhost' grant, PDO connections fail with "Access denied for user
+# 'phlix'@'localhost'" even though the configured host is 127.0.0.1.
 mysql <<SQL
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';
-ALTER USER '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';
+ALTER  USER             '${DB_USER}'@'${DB_HOST}' IDENTIFIED BY '${DB_PASS}';
 GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${DB_HOST}';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+ALTER  USER             '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, REFERENCES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 SQL
 

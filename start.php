@@ -71,6 +71,15 @@ if (isset($workerCfg['pid_file']) && is_string($workerCfg['pid_file'])) {
     @mkdir(dirname($workerCfg['pid_file']), 0775, true);
     Worker::$pidFile = $workerCfg['pid_file'];
 }
+// Workerman's default log file is `workerman.log` in the current
+// directory; under `ProtectSystem=strict` the install dir is read-only,
+// so writes there fail with EROFS. Point it at the same log tree the
+// service unit already opens via ReadWritePaths.
+$workerLogFile = is_string($workerCfg['log_file'] ?? null)
+    ? $workerCfg['log_file']
+    : (is_dir('/var/log/phlix') ? '/var/log/phlix/workerman.log' : __DIR__ . '/.logs/workerman.log');
+@mkdir(dirname($workerLogFile), 0775, true);
+Worker::$logFile = $workerLogFile;
 
 // -----------------------------------------------------------------------------
 // 3. HTTP worker — serves public/ + dispatches dynamic requests via HttpHandler

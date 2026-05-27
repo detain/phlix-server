@@ -27,11 +27,22 @@ use Workerman\MySQL\Connection;
 final class PhlixMySQLConnection extends Connection
 {
     /**
-     * @param array<int|string, mixed>|string $parray
+     * Signature matches the parent's declared docblock (`@param array`).
+     * Workerman's execute() defaults `$parameters = ""` and forwards the
+     * string straight into bindMore(); the parent then no-ops on
+     * non-array input. We mirror that escape hatch here so the parent
+     * call stays type-safe for PHPStan.
+     *
+     * @param array<int|string, mixed> $parray
      */
     public function bindMore($parray): void
     {
-        if (is_array($parray) && $parray !== [] && array_is_list($parray)) {
+        if (!is_array($parray)) {
+            // Defensive: keep the no-op behaviour the parent has when
+            // execute() forwards its empty-string default.
+            return;
+        }
+        if ($parray !== [] && array_is_list($parray)) {
             // re-key [0=>'a', 1=>'b'] → [1=>'a', 2=>'b']
             $parray = array_combine(range(1, count($parray)), $parray);
         }

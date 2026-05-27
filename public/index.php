@@ -41,6 +41,7 @@ use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Routes\AdminRoutes;
+use Phlix\Server\WebPortal\Controllers\AdminAppController;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
 use Phlix\Server\WebPortal\Controllers\MusicPageController;
@@ -218,6 +219,20 @@ if (str_starts_with($path, '/api/v1/admin/')) {
         } else {
             $response = $renderer->renderDashboard($request);
         }
+    } elseif ($path === '/admin' || str_starts_with($path, '/admin/')) {
+        // Client-side admin SPA shell (Step 0.4). Placed AFTER the
+        // specific `/admin/plugins` and `/admin/dashboard` SSR branches so
+        // those keep winning; this is the catch-all for every other
+        // `/admin` + `/admin/*` deep link, serving the built bundle's
+        // index.html so client-side routing works on reload. Reuses the
+        // same AdminMiddleware gate as the JSON API; a failed gate (401 or
+        // 403) redirects the browser to /login (single mapping lives in
+        // AdminAppController::gateRedirect()).
+        /** @var AdminMiddleware $adminMiddleware */
+        $adminMiddleware = $container->get(AdminMiddleware::class);
+        $adminApp = new AdminAppController(__DIR__);
+        $redirect = $adminApp->gateRedirect($adminMiddleware->checkAccess($request));
+        $response = $redirect ?? $adminApp->shell($request, []);
     } elseif (str_starts_with($path, '/music')) {
         /**
          * Music portal pages: albums (default), album detail, artists,

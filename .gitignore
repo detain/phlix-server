@@ -31,4 +31,13 @@ templates_c/
 .claude/hooks/caliber-freshness-notify.sh
 .claude/hooks/caliber-session-freshness.sh
 
+# Admin SPA (admin-ui/) — see step 0.4. Build-output decision: the built
+# bundle in public/assets/admin/ IS committed (so the production server has
+# no Node build dependency at runtime), but the local dev artifacts are not.
+admin-ui/node_modules/
+admin-ui/coverage/
+admin-ui/.vite/
+admin-ui/*.tsbuildinfo
+# NB: public/assets/admin/ (the built bundle) is intentionally NOT ignored.
+
 # Transient supervisor handoff docs (Wave-N work notes, intentionally untracked)

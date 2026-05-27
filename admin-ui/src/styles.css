@@ -1,0 +1,201 @@
+/* Minimal admin SPA styles — scaffold only. Phase-1 may replace with a
+   design system; kept dependency-free here so the bundle stays small. */
+
+:root {
+  --admin-bg: #11151c;
+  --admin-panel: #1b212b;
+  --admin-fg: #e6eaf0;
+  --admin-muted: #8a93a3;
+  --admin-accent: #4a8cff;
+  --admin-error: #ff5d5d;
+  --admin-success: #3ecf8e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--admin-bg);
+  color: var(--admin-fg);
+}
+
+.admin-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  color: var(--admin-muted);
+}
+
+.admin-shell {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  background: var(--admin-panel);
+  padding: 1rem;
+  border-right: 1px solid #000;
+}
+
+.admin-nav__brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-bottom: 1.5rem;
+}
+
+.admin-nav__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+
+.admin-nav__link {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  color: var(--admin-fg);
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.admin-nav__link.is-active {
+  background: var(--admin-accent);
+  color: #fff;
+}
+
+.admin-nav__footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid #000;
+  padding-top: 1rem;
+}
+
+.admin-nav__user {
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+}
+
+.admin-shell__main {
+  padding: 2rem;
+}
+
+.page__hint {
+  color: var(--admin-muted);
+}
+
+.toast-region {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 1000;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--admin-panel);
+  border-left: 4px solid var(--admin-accent);
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+}
+
+.toast--error {
+  border-left-color: var(--admin-error);
+}
+
+.toast--success {
+  border-left-color: var(--admin-success);
+}
+
+.toast__close,
+.modal__close {
+  background: none;
+  border: none;
+  color: var(--admin-muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.modal {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  min-width: 360px;
+  max-width: 90vw;
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  border-bottom: 1px solid #000;
+}
+
+.modal__title {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal__body {
+  padding: 1rem;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #000;
+}
+
+.data-table__empty {
+  color: var(--admin-muted);
+  text-align: center;
+}
+
+.form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.form__input {
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #000;
+  background: var(--admin-bg);
+  color: var(--admin-fg);
+}
+
+.form__fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+}

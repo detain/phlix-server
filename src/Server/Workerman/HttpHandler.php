@@ -15,6 +15,7 @@ use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\WebPortal\Controllers\AdminAppController;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
 use Phlix\Server\WebPortal\Controllers\MusicPageController;
@@ -265,6 +266,9 @@ final class HttpHandler
         if ($path === '/admin/dashboard') {
             return $this->dispatchAdminDashboard($renderer, $request);
         }
+        if ($path === '/admin' || str_starts_with($path, '/admin/')) {
+            return $this->dispatchAdminApp($request);
+        }
         if (str_starts_with($path, '/music')) {
             return $this->dispatchMusic($request, $path);
         }
@@ -318,6 +322,23 @@ final class HttpHandler
             return (new Response())->status(403)->html('<h1>403 — administrator privileges required</h1>');
         }
         return $renderer->renderDashboard($request);
+    }
+
+    /**
+     * Serve the client-side admin SPA shell for `/admin` + `/admin/*`
+     * (Step 0.4). Reached only AFTER the specific `/admin/plugins` and
+     * `/admin/dashboard` SSR branches, so those keep winning. Reuses the
+     * same {@see AdminMiddleware} gate as the JSON API; a failed gate (401
+     * or 403) redirects to `/login` via
+     * {@see AdminAppController::gateRedirect()}.
+     */
+    private function dispatchAdminApp(Request $request): Response
+    {
+        /** @var AdminMiddleware $admin */
+        $admin = $this->container->get(AdminMiddleware::class);
+        $app = new AdminAppController($this->publicRoot);
+        $redirect = $app->gateRedirect($admin->checkAccess($request));
+        return $redirect ?? $app->shell($request, []);
     }
 
     private function dispatchMusic(Request $request, string $path): Response

@@ -436,6 +436,30 @@ This project follows PSR-12 coding standards and uses static analysis tools:
 ./vendor/bin/psalm
 ```
 
+### Admin SPA (admin-ui)
+
+The admin console is a **React + TypeScript + Vite** single-page app. Its source lives in
+`admin-ui/`; the production build is emitted into `public/assets/admin/` and **committed to the
+repo**, so the running Workerman server has **no Node build dependency at runtime** (it just serves
+the static shell + bundle). `admin-ui/node_modules/` is gitignored.
+
+The SPA mounts at `/admin` and `/admin/*`, served by `AdminAppController` (returns the built
+`index.html` shell; 503 if the bundle is missing) and gated by the existing `AdminMiddleware` — a
+non-admin (401/403) is redirected (302) to `/login`. Its typed `ApiClient` reuses the same JWT
+mechanism as `public/assets/js/api-client.js` (`access_token`/`refresh_token` in `localStorage`,
+Bearer header, single retry on 401 via `POST /auth/refresh`).
+
+```bash
+cd admin-ui
+npm install          # one-time / on dependency changes
+npm run build        # tsc + vite build → ../public/assets/admin/ (commit the result)
+npm run test         # Vitest unit/component tests
+npm run dev          # Vite dev server (HMR) for local development
+```
+
+When you change anything under `admin-ui/src/`, re-run `npm run build` and commit the refreshed
+`public/assets/admin/` bundle along with your source changes.
+
 ### Git Workflow
 
 1. Create a feature branch: `git checkout -b feature/my-feature`

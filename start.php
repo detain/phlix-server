@@ -51,7 +51,17 @@ use Workerman\Worker;
 // -----------------------------------------------------------------------------
 
 if (extension_loaded('swoole')) {
-    Worker::$eventLoop = \Workerman\Events\Swoole::class;
+    // NOTE: the canonical Workerman 5 static property is
+    // `Worker::$eventLoopClass`, not `Worker::$eventLoop` (which is an
+    // *instance* property used to override the eventLoop on a single
+    // Worker). Setting the static here, before any Worker is created,
+    // makes Swoole the default eventLoop driver for ALL workers in
+    // this process. The original 0.2a PR shipped the wrong identifier
+    // (`Worker::$eventLoop = ...`), which raised
+    // `Access to undeclared static property` on every `php start.php
+    // <subcommand>` invocation. Caught by the cumulative-pass review
+    // after 0.2c shipped its hub mirror.
+    Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
     \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
 } else {
     trigger_error('Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.', E_USER_WARNING);

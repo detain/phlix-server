@@ -1,6 +1,23 @@
 version: '3.8'
 
 services:
+  # Shared base image (OS packages + PHP + compiled Swoole/UV + Composer). It is
+  # slow to build because it compiles the PHP extensions from source, so build
+  # it ONCE and reuse it. The phlix service FROMs the tag produced here, so a
+  # locally-built base is picked up automatically:
+  #
+  #   docker compose build phlix-base   # slow, but only when extensions change
+  #   docker compose build phlix        # fast — reuses the base, no recompile
+  #
+  # Alternatively pull the published base instead of building it:
+  #   docker pull ghcr.io/detain/phlix-base:latest
+  phlix-base:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.base
+    image: ghcr.io/detain/phlix-base:latest
+    profiles: ["build"]
+
   phlix:
     build:
       context: .

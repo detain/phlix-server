@@ -8,6 +8,41 @@ This directory contains the three Dockerfile variants Phlix ships:
 | `Dockerfile.nvidia` | `nvidia/cuda:12.4.0-runtime-ubuntu22.04` | NVIDIA NVENC/NVDEC HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
 | `Dockerfile.intel` | `ubuntu:22.04` | Intel QuickSync / VAAPI HW accel | `/etc/php/8.3/fpm/conf.d/99-phlix.ini` + symlink to Alpine path |
 
+## Base image (shared)
+
+The slow part of the default Alpine build is compiling **Swoole** and **php-uv**
+from source. That work — plus the OS packages, PHP, and Composer — now lives in
+a separate **base image**, `docker/Dockerfile.base`, published as
+`ghcr.io/detain/phlix-base`. The default `Dockerfile` (and the Hub repo's
+`Dockerfile`) only carry the cheap application layers and start with:
+
+```dockerfile
+ARG PHLIX_BASE_IMAGE=ghcr.io/detain/phlix-base:latest
+FROM ${PHLIX_BASE_IMAGE}
+```
+
+**Why:** editing the application Dockerfile (nginx/php config, composer steps,
+source copy) no longer recompiles Swoole/UV — Docker pulls the prebuilt base
+instead. The same base is reused by both **phlix-server** and **phlix-hub**, so
+the extensions are compiled once instead of once per image.
+
+**Who builds it:** the `docker-base` job in `.github/workflows/docker.yml`
+builds and pushes the base (multi-arch). It runs on every workflow run but the
+Swoole/UV compile layers are cached (GHA + registry), so it is a fast cache hit
+unless `Dockerfile.base` actually changes. The `phlix-server` and `phlix-hub`
+build jobs `needs: docker-base`, so the base is always fresh before they pull
+it. The hub image is built by *this* (server) repo's workflow, so the base lives
+here even though hub consumes it.
+
+> The `ghcr.io/detain/phlix-base` package should be **public** (or readable by
+> the workflow's `GITHUB_TOKEN`) so pull-request builds can pull it — PR runs
+> build the base but do not push it, and fall back to the last published
+> `:latest`.
+
+> Scope note: only the Alpine `Dockerfile` uses the base image. `Dockerfile.nvidia`
+> and `Dockerfile.intel` install PHP from apt and do **not** compile Swoole/UV,
+> so they have no slow-compile problem and are left unchanged.
+
 ## Why the path layouts differ
 
 The default image inherits from Docker's official `php:8.3-fpm-alpine`, which
@@ -106,11 +141,29 @@ perf benefit there.
 
 ## Building locally
 
+The default image needs the base image present. Either pull the published base
+or build it once (the slow step — only needed when `Dockerfile.base` changes):
+
+```bash
+# Option A — pull the published base
+docker pull ghcr.io/detain/phlix-base:latest
+
+# Option B — build the base locally (compiles Swoole + UV, slow)
+docker build -f docker/Dockerfile.base -t ghcr.io/detain/phlix-base:latest .
+```
+
+Then the application images build fast (no recompile):
+
 ```bash
 docker build -f docker/Dockerfile        -t phlix-server:latest .
 docker build -f docker/Dockerfile.nvidia -t phlix-server:nvidia .
 docker build -f docker/Dockerfile.intel  -t phlix-server:intel .
 ```
+
+To build against a base other than `ghcr.io/detain/phlix-base:latest`, pass
+`--build-arg PHLIX_BASE_IMAGE=<ref>`. `docker compose` users can run
+`docker compose build phlix-base` then `docker compose build phlix`.
+(`Dockerfile.nvidia` / `Dockerfile.intel` do not use the base image.)
 
 CI builds all three from `.github/workflows/docker.yml`. Build cache
 uses both GitHub-Actions storage **and** the registry image itself:

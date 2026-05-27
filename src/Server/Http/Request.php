@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Workerman\Connection\TcpConnection;
+use Workerman\Protocols\Http\Request as WorkermanRequest;
+
 /**
  * Represents an HTTP request in the Phlix Media Server.
  *
@@ -122,6 +125,85 @@ class Request
         $request->bearerToken = $request->getBearerToken();
 
         return $request;
+    }
+
+    /**
+     * Build a Request from a Workerman HTTP request (long-running daemon mode).
+     *
+     * Mirrors {@see self::fromGlobals()} but pulls everything from the
+     * Workerman request object rather than PHP superglobals. Optionally
+     * accepts the TcpConnection so remote-IP/port get populated.
+     */
+    public static function fromWorkerman(WorkermanRequest $wr, ?TcpConnection $conn = null): self
+    {
+        $request = new self();
+        $request->method = $wr->method();
+        $request->path = $wr->path();
+
+        $queryString = parse_url($wr->uri(), PHP_URL_QUERY);
+        $request->queryString = is_string($queryString) ? $queryString : '';
+
+        $request->headers = self::collectHeadersFromWorkerman($wr);
+        $request->query = self::collectArrayFromWorkerman($wr->get());
+        $request->files = self::collectArrayFromWorkerman($wr->file());
+
+        $rawBody = $wr->rawBody();
+        $request->rawBody = $rawBody;
+        $contentType = $request->getHeader('Content-Type') ?? '';
+        if (str_contains($contentType, 'application/json')) {
+            $decoded = json_decode($rawBody, true);
+            $request->body = is_array($decoded) ? self::stringKeyedArray($decoded) : [];
+        } else {
+            $request->body = self::collectArrayFromWorkerman($wr->post());
+        }
+
+        $request->remoteIp = $conn?->getRemoteIp() ?? '0.0.0.0';
+        $request->remotePort = $conn?->getRemotePort() ?? 0;
+        $request->protocol = $wr->protocolVersion() !== ''
+            ? 'HTTP/' . $wr->protocolVersion()
+            : 'HTTP/1.1';
+        $request->bearerToken = $request->getBearerToken();
+
+        return $request;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function collectHeadersFromWorkerman(WorkermanRequest $wr): array
+    {
+        $out = [];
+        $raw = $wr->header();
+        if (!is_array($raw)) {
+            return $out;
+        }
+        /** @var mixed $value */
+        foreach ($raw as $key => $value) {
+            if (is_string($key) && is_string($value)) {
+                // Match parseHeaders()'s upper-case convention so getHeader()
+                // case-insensitive lookups work the same way under both modes.
+                $out[strtoupper(str_replace('_', '-', $key))] = $value;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function collectArrayFromWorkerman(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        /** @var mixed $value */
+        foreach ($raw as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
     }
 
     /**

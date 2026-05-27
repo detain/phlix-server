@@ -1112,7 +1112,10 @@ Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_PATH}
 EnvironmentFile=${ENV_FILE}
 Environment="PHLIX_ENV=production"
-ExecStart=/usr/bin/php ${INSTALL_PATH}/public/index.php start
+# Workerman daemon — start.php is the root-level bootstrap (mirrors
+# webman's pattern: thin entry → boot HTTP/WebSocket workers from
+# config). public/ remains the document root for static assets.
+ExecStart=/usr/bin/php ${INSTALL_PATH}/start.php start
 ExecReload=/bin/kill -SIGUSR1 \$MAINPID
 ExecStop=/bin/kill -SIGTERM \$MAINPID
 Restart=on-failure

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Workerman\Protocols\Http\Response as WorkermanResponse;
+
 /**
  * Represents an HTTP response in the Phlix Media Server.
  *
@@ -318,6 +320,15 @@ class Response
 
         // Send body
         echo $this->body;
+    }
+
+    /**
+     * Convert to a Workerman HTTP response — used when this server runs
+     * as a long-running Workerman worker (see {@see \Phlix\Server\Core\Application::boot()}).
+     */
+    public function toWorkermanResponse(): WorkermanResponse
+    {
+        return new WorkermanResponse($this->statusCode, $this->headers, $this->body);
     }
 
     /**

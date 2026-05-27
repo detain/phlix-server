@@ -37,41 +37,56 @@ use Workerman\Protocols\Http\Request as WorkermanRequest;
  */
 class Request
 {
+    /**
+     * Typed-property defaults: tests routinely build a Request via
+     * `new Request()` and only set the few fields they care about. We
+     * default every public field to a safe empty value so accessing
+     * unset properties returns the obvious "no data" answer instead of
+     * throwing under PHP 7.4+'s typed-property uninitialised guard.
+     *
+     * Production callers use fromGlobals() / fromWorkerman() which
+     * overwrite every field, so defaults have no observable effect
+     * outside the test stub path.
+     */
+
     /** @var string The HTTP method (GET, POST, PUT, DELETE, etc.) */
-    public string $method;
+    public string $method = 'GET';
 
     /** @var string The request URI path (without query string) */
-    public string $path;
+    public string $path = '/';
 
     /** @var string The raw query string portion of the URI */
-    public string $queryString;
+    public string $queryString = '';
 
     /** @var array<string, string> All HTTP headers as key-value pairs */
-    public array $headers;
+    public array $headers = [];
 
     /** @var array<string, mixed> Query parameters from the URL */
-    public array $query;
+    public array $query = [];
 
     /** @var array<string, mixed> Parsed request body (JSON decoded) */
-    public array $body;
+    public array $body = [];
 
     /** @var string Raw request body (not JSON decoded, for SOAP/XML requests) */
-    public string $rawBody;
+    public string $rawBody = '';
 
     /** @var array<string, mixed> Uploaded files */
-    public array $files;
+    public array $files = [];
 
     /** @var string Client IP address */
-    public string $remoteIp;
+    public string $remoteIp = '0.0.0.0';
 
     /** @var int Client port number */
-    public int $remotePort;
+    public int $remotePort = 0;
 
     /** @var string HTTP protocol version */
-    public string $protocol;
+    public string $protocol = 'HTTP/1.1';
 
     /** @var string|null Extracted Bearer token from Authorization header */
     public ?string $bearerToken = null;
+
+    /** @var array<string, string> Parsed `Cookie` header (name → raw value) */
+    public array $cookies = [];
 
     /** @var string|null Authenticated user ID (set by auth middleware) */
     public ?string $userId = null;
@@ -123,6 +138,7 @@ class Request
         $request->remotePort = is_numeric($remotePort) ? (int)$remotePort : 0;
         $request->protocol = self::serverString('SERVER_PROTOCOL', 'HTTP/1.1');
         $request->bearerToken = $request->getBearerToken();
+        $request->cookies = self::stringStringArray($_COOKIE);
 
         return $request;
     }
@@ -163,6 +179,9 @@ class Request
             ? 'HTTP/' . $wr->protocolVersion()
             : 'HTTP/1.1';
         $request->bearerToken = $request->getBearerToken();
+
+        $rawCookies = $wr->cookie();
+        $request->cookies = is_array($rawCookies) ? self::stringStringArray($rawCookies) : [];
 
         return $request;
     }
@@ -243,6 +262,26 @@ class Request
     }
 
     /**
+     * Narrow a mixed iterable down to `array<string, string>`, dropping
+     * any entries whose key or value isn't a string. Used for cookies,
+     * which PHP / Workerman both surface as string-keyed arrays but
+     * with loose value typing.
+     *
+     * @param array<array-key, mixed> $input
+     * @return array<string, string>
+     */
+    private static function stringStringArray(array $input): array
+    {
+        $out = [];
+        foreach ($input as $key => $value) {
+            if (is_string($key) && is_string($value)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Parses HTTP headers from PHP $_SERVER superglobal.
      *
      * Extracts all HTTP_* headers and also handles Content-Type and
@@ -291,6 +330,19 @@ class Request
         $key = 'HTTP_' . $normalized;
         $value = $_SERVER[$key] ?? null;
         return is_string($value) ? $value : null;
+    }
+
+    /**
+     * Returns a cookie value by name, or null when the cookie isn't set.
+     *
+     * @param string $name The cookie name (case-sensitive — RFC 6265).
+     *
+     * @return string|null The raw (URL-decoded by the runtime) value,
+     *                     or null if the request didn't carry it.
+     */
+    public function getCookie(string $name): ?string
+    {
+        return $this->cookies[$name] ?? null;
     }
 
     /**

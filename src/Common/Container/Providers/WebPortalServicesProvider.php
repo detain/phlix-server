@@ -89,12 +89,26 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     /** @var PlaybackController $playbackController */
                     $playbackController = $c->get(PlaybackController::class);
 
-                    return new PageRenderer(
+                    $renderer = new PageRenderer(
                         $templateDir,
                         $libraryManager,
                         $itemRepository,
                         $playbackController,
                     );
+
+                    // Wire AuthManager + UserRepository so renderHome()
+                    // can gate on auth (redirect to /login when no
+                    // session) and trigger the first-run wizard
+                    // (redirect to /auth/register when no users
+                    // exist), and so the greeting can show the real
+                    // display name instead of hard-coded "User".
+                    /** @var AuthManager $authManager */
+                    $authManager = $c->get(AuthManager::class);
+                    /** @var UserRepository $userRepository */
+                    $userRepository = $c->get(UserRepository::class);
+                    $renderer->setAuthServices($authManager, $userRepository);
+
+                    return $renderer;
                 }
             ),
 

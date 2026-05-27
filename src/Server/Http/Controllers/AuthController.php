@@ -24,6 +24,20 @@ use InvalidArgumentException;
  */
 class AuthController
 {
+    /**
+     * Cookie name that stores the access token for the browser flow.
+     * Long-lived clients (CLI, mobile, Roku) keep using bearer tokens
+     * in the Authorization header instead.
+     */
+    public const SESSION_COOKIE = 'phlix_session';
+
+    /**
+     * Cookie name that stores the refresh token. Separate from the
+     * access cookie so the access token can be rotated without losing
+     * the refresh credential.
+     */
+    public const REFRESH_COOKIE = 'phlix_refresh';
+
     /** @var AuthManager The authentication manager instance */
     private AuthManager $authManager;
 
@@ -53,20 +67,29 @@ class AuthController
         $email = $data['email'] ?? null;
         $password = $data['password'] ?? null;
 
+        $isBrowser = $this->isBrowserRequest($request);
+
         if (
             !is_string($username) || $username === ''
             || !is_string($email) || $email === ''
             || !is_string($password) || $password === ''
         ) {
-            return (new Response())->status(400)->json([
-                'error' => 'Missing required fields: username, email, password',
-            ]);
+            $msg = 'Missing required fields: username, email, password';
+            return $isBrowser
+                ? (new Response())->redirect('/auth/register?error=' . rawurlencode($msg))
+                : (new Response())->status(400)->json(['error' => $msg]);
         }
 
         try {
             $result = $this->authManager->register($username, $email, $password);
+            if ($isBrowser) {
+                return $this->browserAuthResponse($result, '/');
+            }
             return (new Response())->status(201)->json($result);
         } catch (InvalidArgumentException $e) {
+            if ($isBrowser) {
+                return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
+            }
             return (new Response())->status(400)->json(['error' => $e->getMessage()]);
         }
     }
@@ -87,18 +110,27 @@ class AuthController
         $username = $data['username'] ?? null;
         $password = $data['password'] ?? null;
 
+        $isBrowser = $this->isBrowserRequest($request);
+
         if (!is_string($username) || $username === '' || !is_string($password) || $password === '') {
-            return (new Response())->status(400)->json([
-                'error' => 'Missing required fields: username, password',
-            ]);
+            $msg = 'Missing required fields: username, password';
+            return $isBrowser
+                ? (new Response())->redirect('/login?error=' . rawurlencode($msg))
+                : (new Response())->status(400)->json(['error' => $msg]);
         }
 
         $deviceId = $request->getHeader('X-Device-Id') ?? 'unknown';
 
         try {
             $result = $this->authManager->login($username, $password, $deviceId);
+            if ($isBrowser) {
+                return $this->browserAuthResponse($result, '/');
+            }
             return (new Response())->json($result);
         } catch (InvalidArgumentException $e) {
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+            }
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
         }
     }
@@ -153,5 +185,87 @@ class AuthController
         }
 
         return (new Response())->json(['user' => $user]);
+    }
+
+    /**
+     * Browser-form logout: clear session cookies and redirect to /login.
+     *
+     * The JSON API equivalent is just "drop your stored token" client
+     * side; we don't currently revoke refresh tokens server-side (that
+     * lives in SessionManager and will move into AuthManager in a
+     * later phase per the buildAuthResponse() docstring).
+     *
+     * @param Request $request The HTTP request.
+     * @param array<string, string> $params Path parameters (unused).
+     *
+     * @return Response 302 redirect with cleared cookies.
+     */
+    public function logout(Request $request, array $params): Response
+    {
+        return (new Response())
+            ->clearCookie(self::SESSION_COOKIE)
+            ->clearCookie(self::REFRESH_COOKIE)
+            ->redirect('/login');
+    }
+
+    /**
+     * Detect whether a request came from a browser form submit (vs.
+     * a JSON API client). The route alias under `/auth/*` is the
+     * canonical browser entry; `Content-Type: application/x-www-form-urlencoded`
+     * is the secondary signal for clients that POST to the API path
+     * with a form body.
+     */
+    private function isBrowserRequest(Request $request): bool
+    {
+        if (str_starts_with($request->path, '/auth/')) {
+            return true;
+        }
+        $contentType = $request->getHeader('Content-Type') ?? '';
+        return str_contains($contentType, 'application/x-www-form-urlencoded')
+            || str_contains($contentType, 'multipart/form-data');
+    }
+
+    /**
+     * Build a 302 redirect response that persists the access + refresh
+     * tokens as HttpOnly cookies so subsequent page navigations are
+     * automatically authenticated. Used after a successful browser
+     * register or login.
+     *
+     * The access cookie expires alongside the JWT (Max-Age = expires_in
+     * from {@see AuthManager::buildAuthResponse()}); the refresh cookie
+     * gets a 7-day lifetime to match JwtHandler's refresh token TTL.
+     *
+     * @param array<string, mixed> $authResponse The shape returned by
+     *        AuthManager (access_token, refresh_token, expires_in, user).
+     * @param string $redirectTo Where to send the browser next.
+     */
+    private function browserAuthResponse(array $authResponse, string $redirectTo): Response
+    {
+        $access = is_string($authResponse['access_token'] ?? null) ? $authResponse['access_token'] : '';
+        $refresh = is_string($authResponse['refresh_token'] ?? null) ? $authResponse['refresh_token'] : '';
+        $expiresIn = is_int($authResponse['expires_in'] ?? null) ? $authResponse['expires_in'] : 3600;
+
+        $response = (new Response())->redirect($redirectTo);
+        if ($access !== '') {
+            // HttpOnly so XSS can't read it; SameSite=Lax so top-level
+            // navigations from /login still carry it.
+            $response->cookie(
+                self::SESSION_COOKIE,
+                $access,
+                maxAge: $expiresIn,
+                httpOnly: true,
+                sameSite: 'Lax',
+            );
+        }
+        if ($refresh !== '') {
+            $response->cookie(
+                self::REFRESH_COOKIE,
+                $refresh,
+                maxAge: 7 * 24 * 3600,
+                httpOnly: true,
+                sameSite: 'Lax',
+            );
+        }
+        return $response;
     }
 }

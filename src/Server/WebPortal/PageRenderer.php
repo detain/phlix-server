@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal;
 
+use Phlix\Auth\AuthManager;
+use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\LibraryManager;
@@ -44,6 +46,21 @@ class PageRenderer
     private ?ThemeMediaRepository $themeMediaRepository = null;
 
     /**
+     * @var AuthManager|null Used by {@see renderHome()} to look up the
+     *      signed-in user's profile so the greeting shows their real
+     *      display name. Optional so existing tests that construct
+     *      PageRenderer with just the four positional args keep working.
+     */
+    private ?AuthManager $authManager = null;
+
+    /**
+     * @var UserRepository|null Used by {@see renderHome()} for the
+     *      first-run wizard check (`countUsers() === 0` → redirect to
+     *      /auth/register). Optional for the same reason as $authManager.
+     */
+    private ?UserRepository $userRepository = null;
+
+    /**
      * Constructs a new PageRenderer instance.
      *
      * @param string $templateDir Absolute path to the Smarty template directory
@@ -71,6 +88,26 @@ class PageRenderer
         $this->libraryManager = $libraryManager;
         $this->itemRepository = $itemRepository;
         $this->playbackController = $playbackController;
+    }
+
+    /**
+     * Wire AuthManager + UserRepository for the auth-aware home page.
+     *
+     * Optional setter — the four-arg constructor stays backwards
+     * compatible with the existing tests, and renderHome() degrades
+     * to "no auth gate, no first-run wizard" when these aren't set.
+     *
+     * @param AuthManager $authManager Looks up user by ID for the
+     *        greeting shown on /.
+     * @param UserRepository $userRepository Used to detect the
+     *        "no users yet" first-run case.
+     *
+     * @since 0.15.0
+     */
+    public function setAuthServices(AuthManager $authManager, UserRepository $userRepository): void
+    {
+        $this->authManager = $authManager;
+        $this->userRepository = $userRepository;
     }
 
     /**
@@ -112,6 +149,20 @@ class PageRenderer
     {
         $userId = $request->userId ?? null;
 
+        // First-run wizard: if the install has no users at all, take
+        // the browser to the registration page so the first account is
+        // created (and per AuthManager::register, that account is
+        // automatically promoted to admin).
+        if ($this->userRepository !== null && $userId === null) {
+            if ($this->userRepository->countUsers() === 0) {
+                return (new Response())->redirect('/auth/register');
+            }
+            // Users exist but the current request is unauthenticated —
+            // bounce to the login page rather than leaking the library
+            // index to anyone who hits /.
+            return (new Response())->redirect('/login');
+        }
+
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
 
@@ -133,18 +184,65 @@ class PageRenderer
         );
 
         $continueWatching = [];
-        if ($userId) {
+        $displayName = 'User';
+        if (is_string($userId) && $userId !== '') {
             $continueWatching = $this->playbackController->getContinueWatching($userId, 10);
+
+            if ($this->authManager !== null) {
+                $user = $this->authManager->getUser($userId);
+                if (is_array($user)) {
+                    $candidate = $user['display_name'] ?? $user['username'] ?? null;
+                    if (is_string($candidate) && $candidate !== '') {
+                        $displayName = $candidate;
+                    }
+                }
+            }
         }
 
         // Assign variables
         $template->assign('current_page', 'home');
-        $template->assign('user', ['display_name' => 'User']);
+        $template->assign('user', ['display_name' => $displayName]);
         $template->assign('libraries', $librariesWithItems);
         $template->assign('recently_added', $recentlyAdded);
         $template->assign('continue_watching', $continueWatching);
 
         $html = $template->fetch('home/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
+     * Renders the registration page (browser-side form).
+     *
+     * The first user to register on a fresh install is promoted to
+     * admin automatically by {@see AuthManager::register()}; subsequent
+     * registrations create non-admin accounts. The form posts to
+     * `/auth/register` which {@see AuthController::register} handles,
+     * setting the session cookie and redirecting to / on success.
+     *
+     * @param Request $request The HTTP request.
+     *
+     * @return Response HTML response with the rendered registration page.
+     */
+    public function renderRegister(Request $request): Response
+    {
+        // Surface the optional `?error=` query param that the
+        // browser-form auth handler bounces back with.
+        $rawError = $request->query['error'] ?? '';
+        $error = is_string($rawError) ? $rawError : '';
+
+        // Decide between "you're the first user, you get admin"
+        // copy vs. the standard signup copy.
+        $isFirstUser = $this->userRepository !== null
+            && $this->userRepository->countUsers() === 0;
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'register');
+        $template->assign('error', $error);
+        $template->assign('is_first_user', $isFirstUser);
+
+        $html = $template->fetch('auth/register.tpl');
 
         return (new Response())->html($html);
     }
@@ -213,8 +311,13 @@ class PageRenderer
      */
     public function renderLogin(Request $request): Response
     {
+        $rawError = $request->query['error'] ?? '';
+        $error = is_string($rawError) ? $rawError : '';
+
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'login');
+        $template->assign('error', $error);
 
         $html = $template->fetch('auth/login.tpl');
 

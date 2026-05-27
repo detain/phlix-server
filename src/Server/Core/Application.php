@@ -244,12 +244,15 @@ class Application
         // endpoints. The Smarty templates under public/templates/auth/
         // post form-encoded data to `/auth/login` and `/auth/register`
         // without the `/api/v1` prefix — without these aliases the
-        // browser flow 404s. The handlers are identical: AuthController
-        // reads `$request->body` which is populated for both JSON and
-        // application/x-www-form-urlencoded bodies by Request::fromXxx.
+        // browser flow 404s. AuthController detects these path-prefixed
+        // hits via isBrowserRequest() and replies with a 302 + session
+        // cookies instead of a JSON token blob.
         $this->router->post('/auth/register', [$authController, 'register']);
         $this->router->post('/auth/login', [$authController, 'login']);
         $this->router->post('/auth/refresh', [$authController, 'refresh']);
+        // GET so a plain `<a href="/auth/logout">` works without JS.
+        $this->router->get('/auth/logout', [$authController, 'logout']);
+        $this->router->post('/auth/logout', [$authController, 'logout']);
 
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {

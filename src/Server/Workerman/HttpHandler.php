@@ -9,6 +9,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Core\Application;
+use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
@@ -72,7 +73,21 @@ final class HttpHandler
             // public/index.php used to do). Application's router has no
             // global auth middleware — controllers check $request->userId
             // themselves — so we populate it here before dispatch.
+            //
+            // Browser sessions arrive as a `phlix_session` HttpOnly
+            // cookie rather than an Authorization header — set by
+            // {@see AuthController::browserAuthResponse()} on login. We
+            // fall back to it here so subsequent page navigations show
+            // the user as authenticated without needing client-side JS
+            // to attach a header.
             $token = $request->getBearerToken();
+            if ($token === null || $token === '') {
+                $cookieToken = $request->getCookie(AuthController::SESSION_COOKIE);
+                if (is_string($cookieToken) && $cookieToken !== '') {
+                    $token = $cookieToken;
+                    $request->bearerToken = $cookieToken;
+                }
+            }
             if ($token !== null && $token !== '') {
                 $auth = $this->authManager->validateAccessToken($token);
                 if (is_array($auth) && is_string($auth['user_id'] ?? null)) {
@@ -228,6 +243,9 @@ final class HttpHandler
         }
         if ($path === '/login') {
             return $renderer->renderLogin($request);
+        }
+        if ($path === '/register' || $path === '/auth/register') {
+            return $renderer->renderRegister($request);
         }
         if ($path === '/library' || $path === '/library/') {
             return $renderer->renderLibrariesOverview($request);

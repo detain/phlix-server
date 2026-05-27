@@ -11,6 +11,10 @@
             <p>Sign in to your Phlix account</p>
         </div>
 
+        {if $error}
+            <div class="auth-error" role="alert">{$error|escape:'html'}</div>
+        {/if}
+
         <form class="auth-form" action="/auth/login" method="post">
             <div class="form-group">
                 <label for="username">Username or Email</label>

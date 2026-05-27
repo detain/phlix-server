@@ -30,6 +30,20 @@ class Response
     /** @var array<string, string> Response headers as key-value pairs */
     public array $headers = [];
 
+    /**
+     * @var list<array{
+     *     name: string,
+     *     value: string,
+     *     maxAge: int|null,
+     *     path: string,
+     *     domain: string,
+     *     secure: bool,
+     *     httpOnly: bool,
+     *     sameSite: string,
+     * }>
+     */
+    public array $cookies = [];
+
     /** @var string The response body content */
     public string $body = '';
 
@@ -235,6 +249,64 @@ class Response
     }
 
     /**
+     * Queue a Set-Cookie header on this response.
+     *
+     * The cookie is buffered until {@see send()} / {@see toWorkermanResponse()}
+     * runs, so the call chains cleanly with `->json()` / `->html()` /
+     * `->redirect()`. Pass `maxAge` in seconds; null omits Max-Age. To
+     * delete a cookie, send the same name with an empty value and
+     * `maxAge: 0`.
+     *
+     * @param string $name      Cookie name (RFC 6265).
+     * @param string $value     Cookie value; URL-encoded by the encoder
+     *                          on output.
+     * @param int|null $maxAge  Lifetime in seconds; null = session cookie.
+     * @param string $path      Default `/` so it applies site-wide.
+     * @param string $domain    Default empty (host-only).
+     * @param bool $secure      Send only over HTTPS.
+     * @param bool $httpOnly    Block JS access via document.cookie.
+     * @param string $sameSite  `Strict`, `Lax`, or `None`. Empty omits.
+     *
+     * @return self For method chaining.
+     */
+    public function cookie(
+        string $name,
+        string $value = '',
+        ?int $maxAge = null,
+        string $path = '/',
+        string $domain = '',
+        bool $secure = false,
+        bool $httpOnly = true,
+        string $sameSite = 'Lax',
+    ): self {
+        $this->cookies[] = [
+            'name' => $name,
+            'value' => $value,
+            'maxAge' => $maxAge,
+            'path' => $path,
+            'domain' => $domain,
+            'secure' => $secure,
+            'httpOnly' => $httpOnly,
+            'sameSite' => $sameSite,
+        ];
+        return $this;
+    }
+
+    /**
+     * Convenience: clear a cookie by setting it empty with Max-Age=0.
+     *
+     * @param string $name   Cookie name to clear.
+     * @param string $path   Must match the path used when setting it.
+     * @param string $domain Must match the domain used when setting it.
+     *
+     * @return self For method chaining.
+     */
+    public function clearCookie(string $name, string $path = '/', string $domain = ''): self
+    {
+        return $this->cookie($name, '', 0, $path, $domain);
+    }
+
+    /**
      * Creates a redirect response.
      *
      * @param string $url The URL to redirect to
@@ -318,6 +390,29 @@ class Response
             header("$name: $value");
         }
 
+        // Send queued cookies. setcookie() emits one Set-Cookie header
+        // per call; PHP itself handles URL-encoding the value.
+        foreach ($this->cookies as $cookie) {
+            /** @var array{expires?: int, path?: string, domain?: string, secure?: bool, httponly?: bool, samesite?: 'Lax'|'Strict'|'None'} $options */
+            $options = [
+                'path'     => $cookie['path'],
+                'domain'   => $cookie['domain'],
+                'secure'   => $cookie['secure'],
+                'httponly' => $cookie['httpOnly'],
+            ];
+            if ($cookie['maxAge'] !== null) {
+                $options['expires'] = $cookie['maxAge'] === 0 ? 0 : time() + $cookie['maxAge'];
+            }
+            // setcookie()'s `samesite` only accepts the canonical
+            // values; normalise here so PHPStan accepts the union and
+            // we don't pass through whatever string the caller stored.
+            $sameSite = $cookie['sameSite'];
+            if ($sameSite === 'Lax' || $sameSite === 'Strict' || $sameSite === 'None') {
+                $options['samesite'] = $sameSite;
+            }
+            setcookie($cookie['name'], $cookie['value'], $options);
+        }
+
         // Send body
         echo $this->body;
     }
@@ -328,7 +423,25 @@ class Response
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
-        return new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+        $wr = new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+
+        // Workerman's Response::cookie() builds a proper Set-Cookie
+        // header and supports stacking multiple cookies — match the
+        // semantics of PHP's setcookie() in CGI mode.
+        foreach ($this->cookies as $cookie) {
+            $wr->cookie(
+                $cookie['name'],
+                $cookie['value'],
+                $cookie['maxAge'],
+                $cookie['path'],
+                $cookie['domain'],
+                $cookie['secure'],
+                $cookie['httpOnly'],
+                $cookie['sameSite'],
+            );
+        }
+
+        return $wr;
     }
 
     /**

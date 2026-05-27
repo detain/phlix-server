@@ -864,7 +864,17 @@ do_update() {
   # HAProxy layout, convert it now. Idempotent on subsequent updates.
   phlix_haproxy_migrate_if_needed_server
 
-  # 5. Restart the service. We don't touch the env file or the systemd unit.
+  # 4c. Migrate the systemd unit if it's pre-`start.php`. Older installs
+  # had `ExecStart=… public/index.php start`; the new entry point is
+  # start.php at the repo root. Touches only the ExecStart line so any
+  # operator customisation elsewhere in the unit is preserved.
+  if [ -f "$SERVICE_FILE" ] && grep -q 'public/index\.php start' "$SERVICE_FILE" 2>/dev/null; then
+    log "Migrating systemd unit ExecStart to start.php"
+    sed -i 's|public/index\.php start|start.php start|' "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 5. Restart the service. We don't touch the env file.
   if [ -f "$SERVICE_FILE" ]; then
     log "Restarting $SERVICE_NAME service"
     systemctl daemon-reload >/dev/null 2>&1 || true

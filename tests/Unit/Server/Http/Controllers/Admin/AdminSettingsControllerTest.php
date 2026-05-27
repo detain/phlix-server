@@ -29,12 +29,81 @@ final class AdminSettingsControllerTest extends TestCase
         return $request;
     }
 
+    public function testAllowedKeysAreDerivedFromSharedSchemaWithExpectedTypes(): void
+    {
+        // Lock-in: the schema-derived allow-list must equal the exact 15
+        // dotted-key → internal-type map the former ALLOWED_KEYS const declared
+        // (step 0.7 sources it from detain/phlix-shared's
+        // server-settings.schema.json). A mismatch means the vendored schema
+        // is missing, drifted, or mistranslated — all of which would silently
+        // change GET/PUT behaviour, so this test fails loudly instead.
+        $expected = [
+            'hwaccel.enabled'                           => 'bool',
+            'hwaccel.prefer_hardware'                   => 'bool',
+            'hwaccel.probe_timeout'                     => 'int',
+            'tmdb.api_key'                              => 'string',
+            'marker_detection.similarity_threshold'     => 'float',
+            'marker_detection.intro_max_duration'       => 'int',
+            'subtitles.enabled'                         => 'bool',
+            'subtitles.default_language'                => 'string',
+            'subtitles.burn_in_by_default'              => 'bool',
+            'discovery.discovery_port'                  => 'int',
+            'trickplay.enabled'                         => 'bool',
+            'trickplay.interval_seconds'                => 'int',
+            'newsletter.enabled'                        => 'bool',
+            'newsletter.send_hour'                      => 'int',
+            'port-forward.port_forwarding.upnp_enabled' => 'bool',
+        ];
+
+        $actual = AdminSettingsController::allowedKeys();
+
+        $this->assertCount(15, $actual);
+        $this->assertEquals($expected, $actual);
+    }
+
+    /**
+     * Lock the JSON-Schema → internal type-mapping contract used by the
+     * schema-derived allow-list. The shared server-settings.schema.json today
+     * only declares boolean/integer/number/string, so the `array`/`object` →
+     * `json` arm and the `default` → null arm of the private static
+     * AdminSettingsController::mapSchemaType() (controller line 172 + the
+     * default arm) are NOT exercised by the schema as it stands. This test
+     * invokes mapSchemaType() directly via reflection and asserts the full
+     * mapping table so the contract is locked in even before the schema grows
+     * an array/object property.
+     */
+    public function testMapSchemaTypeMapsAllJsonSchemaTypesToInternalVocabulary(): void
+    {
+        $method = new \ReflectionMethod(AdminSettingsController::class, 'mapSchemaType');
+        $method->setAccessible(true);
+
+        // [JSON-Schema type => expected internal type (null = no equivalent)]
+        $expected = [
+            'boolean' => 'bool',
+            'integer' => 'int',
+            'number'  => 'float',
+            'string'  => 'string',
+            'array'   => 'json',
+            'object'  => 'json',
+            'null'    => null,
+            'weird'   => null,
+        ];
+
+        foreach ($expected as $jsonType => $internal) {
+            $this->assertSame(
+                $internal,
+                $method->invoke(null, $jsonType),
+                sprintf('mapSchemaType(%s) should map to %s', $jsonType, var_export($internal, true)),
+            );
+        }
+    }
+
     public function testIndexReturnsEffectiveValuesAndOverriddenKeys(): void
     {
         $repo = $this->createMock(SettingsRepository::class);
         $repo->expects($this->once())
             ->method('getEffectiveMany')
-            ->with(array_keys(AdminSettingsController::ALLOWED_KEYS))
+            ->with(array_keys(AdminSettingsController::allowedKeys()))
             ->willReturn([
                 'values'     => ['hwaccel.enabled' => false, 'tmdb.api_key' => ''],
                 'overridden' => ['hwaccel.enabled'],

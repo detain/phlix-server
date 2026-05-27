@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Controllers\Admin;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Shared\Schema\SchemaPaths;
 use Throwable;
 
 /**
@@ -19,14 +20,26 @@ use Throwable;
  *     overrides via {@see SettingsRepository}. Persisted overrides survive a
  *     restart because the DB is the persistent store.
  *
+ * The editable-settings allow-list (dotted key → internal type) is the single
+ * source of truth for PUT validation and the GET `types` map. As of Step 0.7
+ * it is **derived from the shared `server-settings.schema.json`** bundled in
+ * `detain/phlix-shared` (located via {@see SchemaPaths::serverSettings()}) so
+ * the server and the admin SPA render/validate from one schema; the prior
+ * hardcoded `ALLOWED_KEYS` constant (and its `0.7:` seam) is gone. The
+ * JSON-Schema `type` of each property is mapped to the internal vocabulary
+ * (`boolean→bool`, `integer→int`, `number→float`, `string→string`,
+ * `array`/`object→json`); the resulting map preserves the exact key/type set
+ * the constant declared, so GET/PUT behaviour is unchanged.
+ *
  * Route group is gated by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * (registered in {@see \Phlix\Server\Http\Routes\AdminRoutes}); non-admin
  * callers receive a JSON 401/403 from the middleware. This controller assumes
  * it only runs for authenticated admins.
  *
  * Resident-memory rules: no `exit`/`die`, no blocking `sleep()`, no request
- * data parked in `static`/`global`. The allow-list constant below is
- * shared/immutable config data, not request state, so it is safe.
+ * data parked in `static`/`global`. The cached allow-list ({@see $allowedKeys})
+ * is shared/immutable config data loaded once from the schema, not request
+ * state, so the static cache is safe under the resident-memory model.
  *
  * @package Phlix\Server\Http\Controllers\Admin
  * @since   0.5 (Server-wide settings store)
@@ -34,53 +47,18 @@ use Throwable;
 final class AdminSettingsController
 {
     /**
-     * Typed allow-list of editable server settings: dotted key → value type
-     * (string|int|bool|float|json). This is the inline validation source for
-     * PUT while step 0.7's shared JSON schema is still `todo`.
+     * Lazily-loaded cache of the schema-derived allow-list: dotted key →
+     * internal type. Populated once by {@see loadAllowedKeysFromSchema()} on
+     * the first {@see allowedKeys()} call and reused thereafter.
      *
-     * Keys are a curated, representative slice of the Phase-1.3 setting
-     * groups (transcoding/hwaccel, metadata providers + API keys, marker
-     * detection, subtitles, discovery, trickplay, newsletter, port-forward/
-     * UPnP). The dotted key names the `config/<file>.php` default it
-     * overrides (see {@see SettingsRepository}).
+     * This is immutable config data (the schema is shipped read-only in the
+     * vendored package), NOT per-request state, so caching it in a static is
+     * resident-memory-safe — it does not grow per request and is identical
+     * for every caller.
      *
-     * 0.7: replace/back this map with the shared `server-settings.schema.json`
-     * once that step lands; PUT validation should then defer to the schema.
-     *
-     * @var array<string, string>
+     * @var array<string, string>|null
      */
-    public const ALLOWED_KEYS = [
-        // Transcoding / hardware acceleration (config/hwaccel.php).
-        'hwaccel.enabled'                          => 'bool',
-        'hwaccel.prefer_hardware'                  => 'bool',
-        'hwaccel.probe_timeout'                    => 'int',
-
-        // Metadata providers + API keys (config/tmdb.php).
-        'tmdb.api_key'                             => 'string',
-
-        // Marker detection (config/marker_detection.php).
-        'marker_detection.similarity_threshold'    => 'float',
-        'marker_detection.intro_max_duration'      => 'int',
-
-        // Subtitles (config/subtitles.php).
-        'subtitles.enabled'                        => 'bool',
-        'subtitles.default_language'               => 'string',
-        'subtitles.burn_in_by_default'             => 'bool',
-
-        // Discovery (config/discovery.php).
-        'discovery.discovery_port'                 => 'int',
-
-        // Trickplay (config/trickplay.php).
-        'trickplay.enabled'                        => 'bool',
-        'trickplay.interval_seconds'               => 'int',
-
-        // Newsletter (config/newsletter.php).
-        'newsletter.enabled'                       => 'bool',
-        'newsletter.send_hour'                     => 'int',
-
-        // Port-forward / UPnP (config/port-forward.php).
-        'port-forward.port_forwarding.upnp_enabled' => 'bool',
-    ];
+    private static ?array $allowedKeys = null;
 
     /** @var SettingsRepository Server-settings store. */
     private SettingsRepository $settings;
@@ -93,6 +71,107 @@ final class AdminSettingsController
     public function __construct(SettingsRepository $settings)
     {
         $this->settings = $settings;
+    }
+
+    /**
+     * Typed allow-list of editable server settings: dotted key → internal
+     * value type (`bool|int|float|string|json`).
+     *
+     * This is the public accessor that replaces the former `ALLOWED_KEYS`
+     * constant. The map is derived from the shared
+     * `server-settings.schema.json` and cached in {@see $allowedKeys} after
+     * the first call (the schema is immutable config, so the static cache is
+     * resident-memory-safe). It is both the PUT validation source and the GET
+     * `types` map.
+     *
+     * @return array<string, string> Dotted setting key → internal type.
+     *
+     * @since 0.7 (derived from the shared server-settings schema)
+     */
+    public static function allowedKeys(): array
+    {
+        if (self::$allowedKeys === null) {
+            self::$allowedKeys = self::loadAllowedKeysFromSchema();
+        }
+
+        return self::$allowedKeys;
+    }
+
+    /**
+     * Read and decode the shared `server-settings.schema.json`, projecting its
+     * `properties` into the internal dotted-key → type allow-list.
+     *
+     * Each property whose JSON-Schema `type` maps to a known internal type
+     * (see {@see mapSchemaType()}) contributes one entry. Properties without a
+     * usable `type` are skipped.
+     *
+     * Fail-safe: any unreadable, unparseable, or structurally-unexpected
+     * schema (missing file, non-JSON, no `properties` object) yields an empty
+     * allow-list `[]` rather than an exception — a degraded but non-crashing
+     * state. The lock-in unit test and CI catch a genuinely broken/missing
+     * vendored schema loudly, so this never silently masks a real defect.
+     *
+     * @return array<string, string> Dotted setting key → internal type.
+     */
+    private static function loadAllowedKeysFromSchema(): array
+    {
+        $path = SchemaPaths::serverSettings();
+        $raw  = is_file($path) ? file_get_contents($path) : false;
+        if ($raw === false) {
+            return [];
+        }
+
+        $decoded = json_decode((string) $raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        if (!isset($decoded['properties']) || !is_array($decoded['properties'])) {
+            return [];
+        }
+
+        /** @var array<string, string> $map */
+        $map = [];
+        foreach ($decoded['properties'] as $key => $def) {
+            if (!is_string($key) || !is_array($def)) {
+                continue;
+            }
+
+            if (!isset($def['type']) || !is_string($def['type'])) {
+                continue;
+            }
+
+            $internal = self::mapSchemaType($def['type']);
+            if ($internal !== null) {
+                $map[$key] = $internal;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Map a JSON-Schema `type` to the controller's internal type vocabulary.
+     *
+     * The internal vocabulary (`bool|int|float|string|json`) is exactly what
+     * {@see valueMatchesType()} and {@see coerce()} understand, so this mapping
+     * reproduces the key/type set the former `ALLOWED_KEYS` constant declared.
+     *
+     * @param string $jsonType The JSON-Schema `type` keyword.
+     *
+     * @return string|null The internal type, or null when the JSON type has no
+     *                      internal equivalent (such properties are skipped).
+     */
+    private static function mapSchemaType(string $jsonType): ?string
+    {
+        return match ($jsonType) {
+            'boolean' => 'bool',
+            'integer' => 'int',
+            'number'  => 'float',
+            'string'  => 'string',
+            'array', 'object' => 'json',
+            default   => null,
+        };
     }
 
     /**
@@ -111,15 +190,16 @@ final class AdminSettingsController
     public function index(Request $request, array $params): Response
     {
         try {
-            $keys   = array_keys(self::ALLOWED_KEYS);
-            $merged = $this->settings->getEffectiveMany($keys);
+            $allowed = self::allowedKeys();
+            $keys    = array_keys($allowed);
+            $merged  = $this->settings->getEffectiveMany($keys);
 
             return (new Response())->json([
                 'success' => true,
                 'data'    => [
                     'settings'   => $merged['values'],
                     'overridden' => $merged['overridden'],
-                    'types'      => self::ALLOWED_KEYS,
+                    'types'      => $allowed,
                 ],
             ]);
         } catch (Throwable $e) {
@@ -162,15 +242,16 @@ final class AdminSettingsController
                 ]);
             }
 
+            $allowed   = self::allowedKeys();
             $errors    = [];
             $validated = [];
             foreach ($settings as $key => $value) {
-                if (!is_string($key) || !isset(self::ALLOWED_KEYS[$key])) {
+                if (!is_string($key) || !isset($allowed[$key])) {
                     $errors[(string) $key] = 'Unknown setting key.';
                     continue;
                 }
 
-                $type = self::ALLOWED_KEYS[$key];
+                $type = $allowed[$key];
                 if (!self::valueMatchesType($value, $type)) {
                     $errors[$key] = sprintf('Expected type %s.', $type);
                     continue;
@@ -191,7 +272,7 @@ final class AdminSettingsController
                 $this->settings->set($key, $entry['value'], $entry['type']);
             }
 
-            $merged = $this->settings->getEffectiveMany(array_keys(self::ALLOWED_KEYS));
+            $merged = $this->settings->getEffectiveMany(array_keys($allowed));
 
             return (new Response())->json([
                 'success' => true,

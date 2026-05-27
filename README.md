@@ -152,6 +152,11 @@ user, application code, env file at `/etc/phlix/env`, generated `PHLIX_SECRET_KE
 migrations, a systemd `phlix-server` service, and an HAProxy reverse proxy with an
 auto-renewing Let's Encrypt certificate.
 
+> The installer also compiles the **Swoole + php-uv** extensions from source (the coroutine
+> runtime Workerman uses), idempotently skipping the build when they already load, and runs a
+> `disable_functions` preflight — see
+> [Swoole & php-uv on Linux](https://detain.github.io/phlix-docs/install/linux#swoole-php-uv-coroutine-runtime).
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/detain/phlix-server/master/scripts/install.sh | sudo bash
 ```

@@ -199,6 +199,175 @@ confirm() {
 rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
+# ---------------------------------------------------------------------------
+# Swoole + php-uv (compiled from source)
+#
+# Workerman's coroutine event loop (and the runtime feature-detect added in
+# step 0.2) wants the Swoole and php-uv extensions. The Docker images build
+# both from source with a specific Swoole ./configure flag set — see
+# docker/Dockerfile.base and docker/README.md ("Swoole build flags"). On bare
+# metal (apt-based Debian/Ubuntu) we mirror that exact build here.
+#
+# These functions are idempotent: if `php -m` already lists the extension we
+# skip the (slow) recompile entirely, so re-running install.sh is a no-op for
+# the extensions on a box that already has them.
+# ---------------------------------------------------------------------------
+
+# Debian -dev packages mirroring the Alpine set in docker/Dockerfile.base.
+# php-dev (version-matched below) provides phpize; the rest are the C library
+# headers each Swoole ./configure flag links against.
+PHLIX_SWOOLE_BUILD_PKGS="build-essential autoconf pkg-config git \
+libssl-dev libuv1-dev libbrotli-dev libzstd-dev libnghttp2-dev \
+libpq-dev libsqlite3-dev libc-ares-dev liburing-dev libssh2-1-dev"
+
+# Resolve PHP's conf.d directory (Debian layout: /etc/php/X.Y/<sapi>/conf.d).
+# Falls back to the CLI scan dir reported by `php --ini`.
+phlix_php_confd_dir() {
+  local d
+  d="$(php -r 'echo (string) (PHP_CONFIG_FILE_SCAN_DIR ?: "");' 2>/dev/null)"
+  if [ -z "$d" ]; then
+    d="$(php --ini 2>/dev/null | awk -F': *' '/Scan for additional .ini files in/{print $2; exit}')"
+  fi
+  printf '%s' "$d"
+}
+
+# Install the -dev packages needed to compile Swoole + php-uv. Picks the
+# version-matched phpX.Y-dev (for phpize) and falls back to php-dev.
+phlix_install_ext_build_deps() {
+  local php_mm phpdev_pkg
+  php_mm="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null)"
+  phpdev_pkg="php-dev"
+  if [ -n "$php_mm" ] && apt-cache show "php${php_mm}-dev" >/dev/null 2>&1; then
+    phpdev_pkg="php${php_mm}-dev"
+  fi
+  log "Installing Swoole/UV build dependencies ($phpdev_pkg + C library headers)"
+  # Refresh the apt index first: this is only reached when an extension is
+  # actually missing (so it never fires on the common already-loaded re-run),
+  # and the --update path has no earlier global apt-get update — a stale/empty
+  # cache would otherwise 404 the -dev packages on a clean box.
+  apt-get update -y >/dev/null
+  # shellcheck disable=SC2086
+  apt-get install -y $phpdev_pkg $PHLIX_SWOOLE_BUILD_PKGS >/dev/null
+}
+
+# Build + install Swoole from source with the canonical flag set, then write
+# the conf.d ini. No-op if Swoole is already loaded.
+phlix_build_swoole() {
+  if php -m 2>/dev/null | grep -qi '^swoole$'; then
+    info "Swoole already loaded — skipping build."
+    return 0
+  fi
+  local confd tmp
+  confd="$(phlix_php_confd_dir)"
+  [ -n "$confd" ] || die "Could not determine PHP conf.d directory for Swoole."
+  tmp="$(mktemp -d)"
+  log "Building Swoole from source (this can take several minutes)"
+  git clone --depth=1 https://github.com/swoole/swoole-src.git "$tmp/swoole"
+  (
+    cd "$tmp/swoole"
+    phpize
+    # Flags copied verbatim from docker/Dockerfile.base — do not change here;
+    # change them there (the source of truth) and re-sync. --enable-iouring /
+    # --enable-uring-socket build on any kernel but only activate at RUNTIME on
+    # Linux kernel >= 5.6; older kernels silently fall back to epoll.
+    ./configure \
+      --enable-swoole \
+      --enable-sockets \
+      --enable-mysqlnd \
+      --enable-swoole-curl \
+      --enable-cares \
+      --enable-swoole-pgsql \
+      --with-openssl-dir=/usr \
+      --with-nghttp2-dir=/usr \
+      --enable-swoole-sqlite \
+      --enable-swoole-coro-time \
+      --enable-zstd \
+      --enable-brotli \
+      --enable-iouring \
+      --enable-uring-socket \
+      --with-swoole-ssh2 \
+      --enable-swoole-ftp
+    make -j"$(nproc)"
+    make install
+  )
+  echo "extension=swoole.so" > "$confd/zz-swoole.ini"
+  rm -rf "$tmp"
+  php -m 2>/dev/null | grep -qi '^swoole$' \
+    && info "Swoole installed and loaded." \
+    || die "Swoole built but is not loading — check $confd/zz-swoole.ini and 'php -m'."
+}
+
+# Build + install php-uv from source, then write the conf.d ini. No-op if uv
+# is already loaded.
+phlix_build_uv() {
+  if php -m 2>/dev/null | grep -qi '^uv$'; then
+    info "php-uv already loaded — skipping build."
+    return 0
+  fi
+  local confd tmp
+  confd="$(phlix_php_confd_dir)"
+  [ -n "$confd" ] || die "Could not determine PHP conf.d directory for php-uv."
+  tmp="$(mktemp -d)"
+  log "Building php-uv from source"
+  git clone --depth=1 https://github.com/bwoebi/php-uv.git "$tmp/php-uv"
+  (
+    cd "$tmp/php-uv"
+    phpize
+    ./configure --with-uv
+    make -j"$(nproc)"
+    make install
+  )
+  echo "extension=uv.so" > "$confd/zz-uv.ini"
+  rm -rf "$tmp"
+  php -m 2>/dev/null | grep -qi '^uv$' \
+    && info "php-uv installed and loaded." \
+    || die "php-uv built but is not loading — check $confd/zz-uv.ini and 'php -m'."
+}
+
+# Idempotent entry point: only installs build deps + compiles when at least
+# one extension is missing. Safe to call on every run.
+phlix_install_swoole_uv() {
+  local need_swoole="no" need_uv="no"
+  php -m 2>/dev/null | grep -qi '^swoole$' || need_swoole="yes"
+  php -m 2>/dev/null | grep -qi '^uv$'     || need_uv="yes"
+
+  if [ "$need_swoole" = "no" ] && [ "$need_uv" = "no" ]; then
+    info "Swoole and php-uv already loaded — nothing to build."
+    return 0
+  fi
+
+  phlix_install_ext_build_deps
+  [ "$need_swoole" = "yes" ] && phlix_build_swoole
+  [ "$need_uv" = "yes" ]     && phlix_build_uv
+}
+
+# Preflight: Workerman needs process-control / posix / socket primitives that
+# some hardened php.ini setups disable. Fail loudly (and early) if any are
+# listed in disable_functions so the operator gets an actionable message
+# instead of a cryptic runtime crash.
+phlix_check_disabled_functions() {
+  local disabled missing="" fn
+  disabled="$(php -r 'echo (string) ini_get("disable_functions");' 2>/dev/null)"
+  # Normalise to a comma/space-delimited haystack for word matching.
+  for fn in pcntl_fork pcntl_wait pcntl_signal pcntl_alarm pcntl_async_signals \
+            posix_getpid posix_kill posix_setuid posix_setgid \
+            proc_open proc_close proc_get_status proc_terminate \
+            exec shell_exec \
+            stream_socket_server stream_socket_client stream_socket_accept; do
+    case ",${disabled//[[:space:]]/}," in
+      *",${fn},"*) missing="${missing:+$missing }$fn" ;;
+    esac
+  done
+  if [ -n "$missing" ]; then
+    die "PHP disable_functions blocks functions Workerman requires: ${missing}.
+    Remove them from the 'disable_functions' directive in your php.ini
+    (and php-fpm pool config if present) before installing Phlix.
+    Workerman needs pcntl_*, posix_*, proc_*, exec/shell_exec and
+    stream_socket_* to fork workers and manage sockets."
+  fi
+  info "disable_functions preflight passed (no required functions disabled)."
+}
+
 # Parse the User= line from a systemd unit. Empty when missing.
 phlix_systemd_unit_user() {
   [ -f "$1" ] || { printf ''; return; }
@@ -840,6 +1009,14 @@ do_update() {
   log "Updating PHP dependencies"
   ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
 
+  # 2b. Re-assert the Workerman preflight and ensure Swoole + php-uv are
+  # present (repairs an install that pre-dates them). Idempotent no-op when
+  # both extensions already load.
+  log "Checking PHP disable_functions for Workerman compatibility"
+  phlix_check_disabled_functions
+  log "Ensuring Swoole + php-uv extensions are installed"
+  phlix_install_swoole_uv
+
   # 3. Clear Smarty compile cache so templates pick up changes immediately.
   if [ -d "$INSTALL_PATH/templates_c" ]; then
     log "Clearing Smarty compile cache"
@@ -991,6 +1168,16 @@ if ! command -v composer >/dev/null 2>&1; then
   php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer >/dev/null
   rm -f /tmp/composer-setup.php
 fi
+
+# Workerman runtime preflight: make sure the process-control / socket
+# functions it relies on are not disabled in php.ini.
+log "Checking PHP disable_functions for Workerman compatibility"
+phlix_check_disabled_functions
+
+# Swoole + php-uv — compile from source with the canonical flag set
+# (docker/Dockerfile.base). Idempotent: skipped if already loaded.
+log "Ensuring Swoole + php-uv extensions are installed"
+phlix_install_swoole_uv
 
 # ---------------------------------------------------------------------------
 # 2. Service user + directories

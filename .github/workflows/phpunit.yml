@@ -33,8 +33,18 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo
+          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole
           coverage: xdebug
+
+      - name: Build and enable php-uv
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
+          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
+
+      - name: Verify swoole + uv loaded
+        run: php -m | grep -iE '^(swoole|uv)$'
 
       - name: Install ffmpeg
         run: sudo apt-get install -y --no-install-recommends ffmpeg
@@ -110,8 +120,18 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix
+          extensions: json, pcntl, posix, swoole
           coverage: xdebug
+
+      - name: Build and enable php-uv
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
+          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
+
+      - name: Verify swoole + uv loaded
+        run: php -m | grep -iE '^(swoole|uv)$'
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist

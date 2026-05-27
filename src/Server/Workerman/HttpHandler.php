@@ -84,11 +84,12 @@ final class HttpHandler
 
             // Run dispatch through ThemeMiddleware so the
             // `{$theme_css|raw}` / `{$theme_js|raw}` placeholders that
-            // `public/templates/layouts/base.tpl` emits via `{literal}`
-            // wrapping (Smarty 4 has no `|raw` modifier — the wrap is
-            // intentional so Smarty leaves the marker verbatim for a
-            // post-render `str_replace` pass) get substituted with the
-            // active theme's CSS/JS link tags.
+            // `public/templates/layouts/base.tpl` emits get substituted
+            // with the active theme's CSS/JS link tags. Smarty escapes
+            // output by default; `|raw` was the convention for marking
+            // a value as not-to-be-escaped. Here the whole marker is
+            // wrapped in `{literal}` so Smarty leaves it verbatim and
+            // this middleware can do a post-render `str_replace` pass.
             /** @var ThemeMiddleware $theme */
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));

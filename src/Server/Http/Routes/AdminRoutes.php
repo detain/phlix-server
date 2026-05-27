@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Routes;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
+use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -37,6 +38,7 @@ use Psr\Container\ContainerInterface;
  *  - `DELETE /api/v1/admin/plugins/{name}`           → uninstall
  *  - `GET    /api/v1/admin/settings`                 → effective settings
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
+ *  - `GET    /api/v1/admin/fs/browse`                → list subdirectories
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -137,6 +139,11 @@ final class AdminRoutes
 
                 $r->get('/settings', [$settingsController, 'index']);
                 $r->put('/settings', [$settingsController, 'update']);
+
+                // Filesystem browse for the library path picker (Step 0.6).
+                /** @var FsBrowseController $fsBrowseController */
+                $fsBrowseController = $container->get(FsBrowseController::class);
+                $r->get('/fs/browse', [$fsBrowseController, 'browse']);
             },
             [$adminMiddleware],
         );

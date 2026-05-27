@@ -384,6 +384,7 @@ return [
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
+| GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |
 
 ### WebSocket Events
 

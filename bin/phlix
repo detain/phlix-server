@@ -12,14 +12,39 @@ declare(strict_types=1);
  * application (which extends Symfony's Console Application) and runs it.
  *
  * This is a one-shot CLI process — NOT the resident Workerman worker — so it
- * does not set up the Swoole event loop. The database connection is resolved
- * lazily (only when a command that needs it actually runs), so commands like
- * `php bin/phlix list` work with no database available.
+ * does not set up the Swoole event loop. Both the DI container AND the database
+ * connection are resolved LAZILY (only when a command that needs them actually
+ * runs), so commands like `php bin/phlix list` work with no database available:
+ *  - The `migrate` command takes a {@see MigrationRunner} whose connection
+ *    provider is only invoked inside `run()`.
+ *  - Every other command takes a per-service factory that calls
+ *    `$containerProvider()` — a memoizing closure that builds the PHP-DI
+ *    container on first use. `list` never calls a factory, so it never builds
+ *    the container and never touches the database.
  */
 
+use Phlix\Admin\BackupManager;
+use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Database\MigrationRunner;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Console\Commands\BackupCreateCommand;
+use Phlix\Console\Commands\BackupListCommand;
+use Phlix\Console\Commands\HwaccelProbeCommand;
+use Phlix\Console\Commands\LibraryListCommand;
+use Phlix\Console\Commands\LibraryScanCommand;
 use Phlix\Console\Commands\MigrateCommand;
+use Phlix\Console\Commands\PluginDisableCommand;
+use Phlix\Console\Commands\PluginEnableCommand;
+use Phlix\Console\Commands\PluginInstallCommand;
+use Phlix\Console\Commands\PluginListCommand;
+use Phlix\Console\Commands\PluginUninstallCommand;
+use Phlix\Console\Commands\UserResetPasswordCommand;
+use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelProbe;
+use Phlix\Auth\UserRepository;
+use Phlix\Plugins\PluginLoader;
+use Psr\Container\ContainerInterface;
 use Webman\Console\Command;
 
 define('BASE_PATH', dirname(__DIR__));
@@ -32,6 +57,37 @@ require BASE_PATH . '/vendor/autoload.php';
 // called (inside MigrationRunner::run()).
 ConnectionPool::init(BASE_PATH . '/config/database.php');
 
+// Assemble the application config exactly as start.php does (autoload + config
+// keys), MINUS the Swoole/worker bootstrap. This array is captured by the lazy
+// container provider below and only consumed when a command builds the
+// container.
+/** @var array<string, mixed> $config */
+$config = include BASE_PATH . '/config/server.php';
+$config['db_config_path']     = BASE_PATH . '/config/database.php';
+$config['logger_config_path'] = BASE_PATH . '/config/logger.php';
+$config['web_portal']         = array_merge(
+    is_array($config['web_portal'] ?? null) ? $config['web_portal'] : [],
+    ['template_dir' => BASE_PATH . '/public/templates']
+);
+
+// Lazy, memoizing DI-container provider. Building the PHP-DI container itself
+// does not open a database connection, but resolving a service MAY (the
+// Workerman MySQL connection connects in its constructor), so we defer ALL
+// container work — including LoggerFactory::init() — until a command actually
+// asks for a service. `php bin/phlix list` never calls this closure.
+$container = null;
+$containerProvider = static function () use (&$container, $config): ContainerInterface {
+    if ($container === null) {
+        $loggerConfig = $config['logger_config_path'] ?? null;
+        if (is_string($loggerConfig)) {
+            LoggerFactory::init($loggerConfig);
+        }
+        $container = ContainerFactory::create($config);
+    }
+
+    return $container;
+};
+
 /** @var callable(): \Workerman\MySQL\Connection $connectionProvider */
 $connectionProvider = static fn(): \Workerman\MySQL\Connection => ConnectionPool::getConnection('mysql');
 
@@ -39,6 +95,35 @@ $runner = new MigrationRunner($connectionProvider, BASE_PATH . '/migrations');
 
 $cli = new Command();
 $cli->setName('Phlix Server CLI');
+
+// 0.8a — migration command (lazy connection, no container).
 $cli->add(new MigrateCommand($runner));
+
+// 0.8b — thin wrapper commands. Each resolves its backing service from the
+// lazily-built container only when the command runs.
+$cli->add(new LibraryListCommand(static fn(): LibraryManager => $containerProvider()->get(LibraryManager::class)));
+$cli->add(new LibraryScanCommand(static fn(): LibraryManager => $containerProvider()->get(LibraryManager::class)));
+$cli->add(new PluginListCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new PluginEnableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new PluginDisableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new PluginInstallCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new PluginUninstallCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new BackupCreateCommand(static fn(): BackupManager => $containerProvider()->get(BackupManager::class)));
+$cli->add(new BackupListCommand(static fn(): BackupManager => $containerProvider()->get(BackupManager::class)));
+// HwaccelProbe is NOT container-autowirable (its ctor takes a bare scalar
+// `$ffmpeg_path` and no provider registers it), so build it directly from
+// config/ffmpeg.php — exactly as HwaccelRegistry does. Lazy: only runs when
+// `hwaccel:probe` executes, needs neither the container nor a database.
+$cli->add(new HwaccelProbeCommand(static function (): HwaccelProbe {
+    /** @var mixed $ffmpegConfig */
+    $ffmpegConfig = include BASE_PATH . '/config/ffmpeg.php';
+    $ffmpegPath = is_array($ffmpegConfig) && isset($ffmpegConfig['ffmpeg_path'])
+        && is_string($ffmpegConfig['ffmpeg_path'])
+        ? $ffmpegConfig['ffmpeg_path']
+        : 'ffmpeg';
+
+    return new HwaccelProbe($ffmpegPath);
+}));
+$cli->add(new UserResetPasswordCommand(static fn(): UserRepository => $containerProvider()->get(UserRepository::class)));
 
 exit($cli->run());

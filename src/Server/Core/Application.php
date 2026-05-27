@@ -1107,7 +1107,7 @@ class Application
     private function getAuthController(): \Phlix\Server\Http\Controllers\AuthController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1408,7 +1408,7 @@ class Application
     private function getWebAuthnController(): \Phlix\Server\Http\Controllers\WebAuthnController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1452,7 +1452,7 @@ class Application
     private function getMediaItemController(): \Phlix\Server\Http\Controllers\MediaItemController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1485,7 +1485,7 @@ class Application
     private function getMarkerController(): \Phlix\Server\Http\Controllers\MarkerController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1517,7 +1517,7 @@ class Application
     private function getExtrasController(): \Phlix\Server\Http\Controllers\ExtrasController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1556,7 +1556,7 @@ class Application
     private function getSessionController(): \Phlix\Server\Http\Controllers\SessionController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1598,7 +1598,7 @@ class Application
     private function getLibraryController(): \Phlix\Server\Http\Controllers\LibraryController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1638,7 +1638,7 @@ class Application
     private function getThemeMediaController(): \Phlix\Server\Http\Controllers\ThemeMediaController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1683,7 +1683,7 @@ class Application
     private function getThemeMediaStreamController(): \Phlix\Server\Http\Controllers\ThemeMediaStreamController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -1707,7 +1707,7 @@ class Application
     private function getCollectionController(): \Phlix\Server\Http\Controllers\CollectionController
     {
         if ($this->container === null) {
-            $db = new \Workerman\MySQL\Connection(
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
                 '127.0.0.1',
                 3306,
                 'phlix',
@@ -2036,6 +2036,6 @@ class Application
             }
         }
 
-        return new \Workerman\MySQL\Connection($host, $port, $user, $password, $database);
+        return new \Phlix\Common\Database\PhlixMySQLConnection($host, $port, $user, $password, $database);
     }
 }

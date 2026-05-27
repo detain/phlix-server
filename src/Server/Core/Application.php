@@ -15,6 +15,7 @@ use Phlix\Server\Http\Controllers\HubJwksController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
+use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -239,6 +240,17 @@ class Application
         $this->router->post('/api/v1/auth/refresh', [$authController, 'refresh']);
         $this->router->get('/api/v1/auth/me', [$authController, 'me']);
 
+        // Browser-form aliases for the login / register / refresh
+        // endpoints. The Smarty templates under public/templates/auth/
+        // post form-encoded data to `/auth/login` and `/auth/register`
+        // without the `/api/v1` prefix — without these aliases the
+        // browser flow 404s. The handlers are identical: AuthController
+        // reads `$request->body` which is populated for both JSON and
+        // application/x-www-form-urlencoded bodies by Request::fromXxx.
+        $this->router->post('/auth/register', [$authController, 'register']);
+        $this->router->post('/auth/login', [$authController, 'login']);
+        $this->router->post('/auth/refresh', [$authController, 'refresh']);
+
         // Hub JWT exchange endpoint
         $this->router->post('/api/v1/auth/hub-token', function (Request $request, array $params): Response {
             $controller = $this->getHubTokenController();
@@ -324,6 +336,15 @@ class Application
 
         // Trakt.tv OAuth integration routes (1.6g).
         $this->loadTraktRoutes();
+
+        // Typed admin router (plugin admin, auth providers, OIDC/LDAP
+        // config, stats). These were previously only wired in
+        // public/index.php as a separate `Router` instance gated by
+        // AdminMiddleware; registering them on the main router unifies
+        // the dispatch path so HttpHandler doesn't need a second router.
+        if ($this->container !== null) {
+            AdminRoutes::register($this->router, $this->container);
+        }
     }
 
     /**
@@ -652,6 +673,46 @@ class Application
     {
         $this->middleware[] = $middleware;
         return $this;
+    }
+
+    /**
+     * Dispatch a Request through the registered middleware chain and
+     * router, returning the resulting Response.
+     *
+     * Unlike {@see run()} this method does not read from PHP globals,
+     * does not start the hub/relay/discovery/newsletter/backup timers,
+     * and does not call `$response->send()`. It exists so the Workerman
+     * entrypoint ({@see \Phlix\Server\Workerman\HttpHandler}) can reuse
+     * the fully-populated router + middleware stack this class builds
+     * during construction, instead of duplicating every route
+     * registration.
+     *
+     * The caller is responsible for converting the Workerman request
+     * into a {@see Request} (via {@see Request::fromWorkerman()}) and
+     * sending the response back over the connection.
+     *
+     * @param Request $request The HTTP request to dispatch.
+     *
+     * @return Response The response produced by the matching route's
+     *                   handler (or the middleware chain).
+     *
+     * @since 0.15.0
+     */
+    public function dispatch(Request $request): Response
+    {
+        $finalHandler = function (Request $request): Response {
+            return $this->router->dispatch($request);
+        };
+
+        $handler = $finalHandler;
+        foreach (array_reverse($this->middleware) as $currentHandler) {
+            $nextHandler = $handler;
+            $handler = static function (Request $request) use ($currentHandler, $nextHandler): Response {
+                return $currentHandler($request, $nextHandler);
+            };
+        }
+
+        return $handler($request);
     }
 
     /**

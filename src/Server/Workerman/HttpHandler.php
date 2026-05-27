@@ -8,20 +8,18 @@ use Phlix\Auth\AuthManager;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
-use Phlix\Server\Http\Router;
-use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
 use Phlix\Server\WebPortal\Controllers\MusicPageController;
 use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\PageRenderer;
-use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -48,15 +46,12 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  */
 final class HttpHandler
 {
-    private readonly Router $adminRouter;
-
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly AuthManager $authManager,
         private readonly string $publicRoot,
+        private readonly Application $application,
     ) {
-        $this->adminRouter = new Router();
-        AdminRoutes::register($this->adminRouter, $this->container);
     }
 
     /**
@@ -73,7 +68,10 @@ final class HttpHandler
 
             $request = Request::fromWorkerman($wr, $connection);
 
-            // Bearer-token auth (mirror public/index.php)
+            // Bearer-token auth (mirrors the inline check that
+            // public/index.php used to do). Application's router has no
+            // global auth middleware — controllers check $request->userId
+            // themselves — so we populate it here before dispatch.
             $token = $request->getBearerToken();
             if ($token !== null && $token !== '') {
                 $auth = $this->authManager->validateAccessToken($token);
@@ -82,14 +80,24 @@ final class HttpHandler
                 }
             }
 
-            // Run dispatch through ThemeMiddleware so the
-            // `{$theme_css|raw}` / `{$theme_js|raw}` placeholders that
-            // `public/templates/layouts/base.tpl` emits get substituted
-            // with the active theme's CSS/JS link tags. Smarty escapes
-            // output by default; `|raw` was the convention for marking
-            // a value as not-to-be-escaped. Here the whole marker is
-            // wrapped in `{literal}` so Smarty leaves it verbatim and
-            // this middleware can do a post-render `str_replace` pass.
+            // 1) Try the fully-populated Application router first. It
+            //    owns every /api/*, /health, /system/info, /.well-known,
+            //    /hls/, /dash/, /stream/, /opds/, and the browser-form
+            //    auth aliases (/auth/login, /auth/register, /auth/refresh).
+            //    Its constructor wires ThemeMiddleware into the middleware
+            //    chain, so HTML responses produced by routes here already
+            //    have `{$theme_css|raw}` / `{$theme_js|raw}` substituted.
+            $appResponse = $this->application->dispatch($request);
+            if ($appResponse->statusCode !== 404) {
+                $connection->send($appResponse->toWorkermanResponse());
+                return;
+            }
+
+            // 2) Fall through to the page-rendering routes (home, login,
+            //    library, search, settings, admin SSR pages, /music,
+            //    /books, /audiobooks, /photo). These aren't in
+            //    Application's router so we have to dispatch and apply
+            //    ThemeMiddleware ourselves.
             /** @var ThemeMiddleware $theme */
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
@@ -201,26 +209,16 @@ final class HttpHandler
     }
 
     /**
-     * Dispatch a dynamic request to the right router/controller.
-     *
-     * Mirrors the routing chain in {@see public/index.php}. Kept in
-     * sync by convention — when a new top-level route is added there,
-     * add it here too (or extract the chain into a shared helper).
+     * Dispatch the page-rendering routes that aren't registered on the
+     * {@see Application} router. The Application router owns every
+     * `/api/*`, `/health`, `/.well-known`, `/hls/*`, `/dash/*`,
+     * `/stream/*`, `/opds/*` and the browser-form `/auth/login` style
+     * aliases — `__invoke()` tries it first. Anything that 404s there
+     * falls through to here.
      */
     private function dispatch(Request $request): Response
     {
         $path = $request->path;
-
-        // Admin JSON API
-        if (str_starts_with($path, '/api/v1/admin/')) {
-            return $this->adminRouter->dispatch($request);
-        }
-        // Other JSON API
-        if (str_starts_with($path, '/api/')) {
-            /** @var WebPortalRouter $api */
-            $api = $this->container->get(WebPortalRouter::class);
-            return $api->dispatch($request);
-        }
 
         /** @var PageRenderer $renderer */
         $renderer = $this->container->get(PageRenderer::class);

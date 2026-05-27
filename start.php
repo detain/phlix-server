@@ -40,6 +40,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Server\Core\Application;
 use Phlix\Server\Workerman\HttpHandler;
 use Workerman\Worker;
 
@@ -116,7 +117,16 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     $container = ContainerFactory::create($config);
     /** @var AuthManager $authManager */
     $authManager = $container->get(AuthManager::class);
-    $w->onMessage = new HttpHandler($container, $authManager, $publicRoot);
+
+    // Build the full route table + middleware chain once per worker.
+    // {@see Application::__construct()} only registers routes/middleware
+    // — it does NOT call boot() or run() and therefore does not start
+    // hub/relay/discovery/newsletter/backup timers. The hub heartbeat
+    // and relay tunnels still need their own one-shot startup; that's
+    // wired below outside this closure so it runs once per worker too.
+    $application = new Application($container, $config);
+
+    $w->onMessage = new HttpHandler($container, $authManager, $publicRoot, $application);
 };
 
 // -----------------------------------------------------------------------------

@@ -222,6 +222,111 @@ class PageRenderer
     }
 
     /**
+     * Renders the top-level "all libraries" overview page.
+     *
+     * No library ID is supplied — the user is shown every library on the
+     * server so they can pick one. This pairs with `renderLibrary()`
+     * which renders a specific library by ID.
+     *
+     * Reuses `library/index.tpl` by feeding it a synthetic library
+     * record (`{name: "All Libraries"}`) and the first 100 items
+     * aggregated across every library.
+     *
+     * @param Request $request The HTTP request (unused).
+     *
+     * @return Response HTML response with the rendered libraries overview.
+     */
+    public function renderLibrariesOverview(Request $request): Response
+    {
+        $libraries = $this->libraryManager->getAllLibraries();
+
+        // Aggregate a flat item list across libraries so the grid has
+        // something to render even before the user drills in.
+        $items = [];
+        foreach ($libraries as $library) {
+            $libId = is_string($library['id'] ?? null) ? $library['id'] : '';
+            if ($libId === '') {
+                continue;
+            }
+            $libItems = $this->itemRepository->getByLibrary($libId, 20, 0);
+            foreach ($libItems as $item) {
+                $items[] = $item;
+            }
+            if (count($items) >= 100) {
+                break;
+            }
+        }
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'library');
+        $template->assign('library', ['name' => 'All Libraries']);
+        $template->assign('libraries', $libraries);
+        $template->assign('items', array_slice($items, 0, 100));
+
+        $html = $template->fetch('library/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
+     * Renders the search page.
+     *
+     * A query parameter `q` may be supplied; when present it filters
+     * items via `ItemRepository::search()`. When absent, a blank search
+     * page is rendered.
+     *
+     * @param Request $request The HTTP request; query string may include `q`.
+     *
+     * @return Response HTML response with the rendered search page.
+     */
+    public function renderSearch(Request $request): Response
+    {
+        $rawQuery = $request->query['q'] ?? '';
+        $query = is_string($rawQuery) ? trim($rawQuery) : '';
+
+        $results = [];
+        if ($query !== '') {
+            /** @var array<int, array<string, mixed>> $results */
+            $results = $this->itemRepository->search($query, 50);
+        }
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'search');
+        $template->assign('query', $query);
+        $template->assign('results', $results);
+
+        $html = $template->fetch('search/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
+     * Renders the settings page.
+     *
+     * Currently a thin shell — the existing settings UI lives under the
+     * admin dashboard and the API endpoints in
+     * {@see WebPortalRouter::getUserSettings()}. This page hosts the
+     * client-side settings form which talks to those endpoints.
+     *
+     * @param Request $request The HTTP request.
+     *
+     * @return Response HTML response with the rendered settings page.
+     */
+    public function renderSettings(Request $request): Response
+    {
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'settings');
+        $template->assign('user', ['display_name' => 'User']);
+
+        $html = $template->fetch('settings/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
      * Render an arbitrary Smarty template with the given variables and
      * return the resulting HTML as a string. Centralised so subordinate
      * page controllers (e.g.

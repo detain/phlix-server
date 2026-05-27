@@ -22,6 +22,7 @@ use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
+use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
 use Workerman\Connection\TcpConnection;
@@ -81,7 +82,16 @@ final class HttpHandler
                 }
             }
 
-            $response = $this->dispatch($request);
+            // Run dispatch through ThemeMiddleware so the
+            // `{$theme_css|raw}` / `{$theme_js|raw}` placeholders that
+            // `public/templates/layouts/base.tpl` emits via `{literal}`
+            // wrapping (Smarty 4 has no `|raw` modifier — the wrap is
+            // intentional so Smarty leaves the marker verbatim for a
+            // post-render `str_replace` pass) get substituted with the
+            // active theme's CSS/JS link tags.
+            /** @var ThemeMiddleware $theme */
+            $theme = $this->container->get(ThemeMiddleware::class);
+            $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
             $connection->send($response->toWorkermanResponse());
         } catch (Throwable $e) {
             LoggerFactory::get(LogChannels::HTTP)->error(
@@ -128,12 +138,65 @@ final class HttpHandler
         if (strtolower((string) pathinfo($real, PATHINFO_EXTENSION)) === 'php') {
             return null;
         }
-        $mime = function_exists('mime_content_type') ? (mime_content_type($real) ?: null) : null;
-        $mime ??= 'application/octet-stream';
-
-        $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
+        $resp = new WorkermanResponse(200, ['Content-Type' => self::mimeFor($real)]);
         $resp->withFile($real);
         return $resp;
+    }
+
+    /**
+     * Best-guess Content-Type for a file we're about to serve.
+     *
+     * Extension first — `mime_content_type()` sniffs file content via
+     * libmagic and returns `text/plain` for any text format, so CSS, JS,
+     * SVG, and JSON would all be mis-typed by the browser if we trusted
+     * it. For everything not in the explicit map, fall back to libmagic
+     * (good for images / archives) and finally to a safe binary default.
+     */
+    private static function mimeFor(string $path): string
+    {
+        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        $byExt = [
+            'css'   => 'text/css; charset=utf-8',
+            'js'    => 'application/javascript; charset=utf-8',
+            'mjs'   => 'application/javascript; charset=utf-8',
+            'json'  => 'application/json; charset=utf-8',
+            'map'   => 'application/json; charset=utf-8',
+            'html'  => 'text/html; charset=utf-8',
+            'htm'   => 'text/html; charset=utf-8',
+            'txt'   => 'text/plain; charset=utf-8',
+            'xml'   => 'application/xml; charset=utf-8',
+            'svg'   => 'image/svg+xml',
+            'webmanifest' => 'application/manifest+json',
+            'ico'   => 'image/x-icon',
+            'png'   => 'image/png',
+            'jpg'   => 'image/jpeg',
+            'jpeg'  => 'image/jpeg',
+            'gif'   => 'image/gif',
+            'webp'  => 'image/webp',
+            'avif'  => 'image/avif',
+            'woff'  => 'font/woff',
+            'woff2' => 'font/woff2',
+            'ttf'   => 'font/ttf',
+            'otf'   => 'font/otf',
+            'eot'   => 'application/vnd.ms-fontobject',
+            'mp3'   => 'audio/mpeg',
+            'm4a'   => 'audio/mp4',
+            'ogg'   => 'audio/ogg',
+            'mp4'   => 'video/mp4',
+            'webm'  => 'video/webm',
+            'pdf'   => 'application/pdf',
+            'wasm'  => 'application/wasm',
+        ];
+        if (isset($byExt[$ext])) {
+            return $byExt[$ext];
+        }
+        if (function_exists('mime_content_type')) {
+            $detected = mime_content_type($path);
+            if (is_string($detected) && $detected !== '') {
+                return $detected;
+            }
+        }
+        return 'application/octet-stream';
     }
 
     /**
@@ -166,6 +229,18 @@ final class HttpHandler
         }
         if ($path === '/login') {
             return $renderer->renderLogin($request);
+        }
+        if ($path === '/library' || $path === '/library/') {
+            return $renderer->renderLibrariesOverview($request);
+        }
+        if (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            return $renderer->renderLibrary($request, ['id' => $m['id']]);
+        }
+        if ($path === '/search') {
+            return $renderer->renderSearch($request);
+        }
+        if ($path === '/settings') {
+            return $renderer->renderSettings($request);
         }
         if (str_starts_with($path, '/admin/plugins')) {
             return $this->dispatchAdminPlugins($renderer, $request, $path);

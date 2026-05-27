@@ -1,0 +1,44 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Phlix Server CLI entrypoint.
+ *
+ * `webman/console` only auto-discovers commands from `app/command`, which this
+ * repo does not have, so this shim explicitly registers our
+ * `Phlix\Console\Commands\*` instances on a `Webman\Console\Command`
+ * application (which extends Symfony's Console Application) and runs it.
+ *
+ * This is a one-shot CLI process — NOT the resident Workerman worker — so it
+ * does not set up the Swoole event loop. The database connection is resolved
+ * lazily (only when a command that needs it actually runs), so commands like
+ * `php bin/phlix list` work with no database available.
+ */
+
+use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Database\MigrationRunner;
+use Phlix\Console\Commands\MigrateCommand;
+use Webman\Console\Command;
+
+define('BASE_PATH', dirname(__DIR__));
+
+require BASE_PATH . '/vendor/autoload.php';
+
+// Register the database config path. ConnectionPool::init() only stores the
+// path — it does NOT open a socket — so this is safe even with no DB. The
+// actual connection is opened lazily, the first time getConnection() is
+// called (inside MigrationRunner::run()).
+ConnectionPool::init(BASE_PATH . '/config/database.php');
+
+/** @var callable(): \Workerman\MySQL\Connection $connectionProvider */
+$connectionProvider = static fn(): \Workerman\MySQL\Connection => ConnectionPool::getConnection('mysql');
+
+$runner = new MigrationRunner($connectionProvider, BASE_PATH . '/migrations');
+
+$cli = new Command();
+$cli->setName('Phlix Server CLI');
+$cli->add(new MigrateCommand($runner));
+
+exit($cli->run());

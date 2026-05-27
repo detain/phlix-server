@@ -333,7 +333,7 @@ cd phlix-server
 composer install
 
 # Run database migrations (reads config/database.php; password from DB_PASSWORD env var)
-DB_PASSWORD=your_strong_password php scripts/run-migrations.php
+DB_PASSWORD=your_strong_password php bin/phlix migrate    # or: php scripts/run-migrations.php
 
 # Start the server (HTTP + WebSocket on port 8096 from config/server.php)
 php public/index.php start
@@ -438,6 +438,17 @@ This project follows PSR-12 coding standards and uses static analysis tools:
 ./vendor/bin/phpstan analyze src/ --level=9
 ./vendor/bin/psalm
 ```
+
+### CLI
+
+Administrative tasks are exposed through the `bin/phlix` command-line tool (built on `webman/console` / Symfony Console):
+
+```bash
+php bin/phlix list       # list every available command
+php bin/phlix migrate    # apply migrations/*.sql against config/database.php
+```
+
+`php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service, applying every `migrations/*.sql` file on each run (idempotent; no tracking table). More commands are added in later steps.
 
 ### Admin SPA (admin-ui)
 

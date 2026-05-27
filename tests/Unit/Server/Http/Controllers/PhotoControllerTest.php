@@ -331,6 +331,61 @@ class PhotoControllerTest extends TestCase
         }
     }
 
+    /**
+     * Regression: a Range header stored UNDER THE UPPER-CASE "RANGE" key —
+     * the way Request::parseHeaders() / collectHeadersFromWorkerman() actually
+     * store it in production — must still drive the 206 partial-content path.
+     *
+     * Before the fix, getFull() read $request->headers['Range'] (mixed case)
+     * directly, which never matched the upper-cased stored key, so real range
+     * requests silently fell through to a full 200. The fix reads via
+     * Request::getHeader('Range'), which is case-insensitive.
+     */
+    public function testGetFullHonorsUpperCaseRangeHeaderKey(): void
+    {
+        $tempDir = sys_get_temp_dir();
+        $testFile = $tempDir . '/test_full_uc_' . uniqid() . '.jpg';
+
+        $minimalJpeg = base64_decode(
+            '/9j/4AAQSkZJRgABAQEAeAB4AAD/4QCmRXhpZgAATU0AKgAAAAgABAEaAAUAAAABAAAAPgEbAAUAAAABAAAARgEoAAMAAAABAAIAAAExAAIAAAAQAAAATgAAAAAAAAB4AAAAAQAAAHgAAAAB'
+            . 'AAEAAQAAAAMAAAAgAAAABD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMCwsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkU'
+            . 'DQ4NFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAE'
+            . 'AAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAB//2Q=='
+        );
+
+        file_put_contents($testFile, $minimalJpeg);
+
+        try {
+            // Mirror production storage: parseHeaders() upper-cases header keys,
+            // so the Range header lives under "RANGE", not "Range".
+            $request = new Request();
+            $request->headers = ['RANGE' => 'bytes=0-99'];
+            $params = ['id' => 'photo-123'];
+
+            $this->db->method('query')->willReturn([
+                [
+                    'id' => 'photo-123',
+                    'name' => 'Test',
+                    'type' => 'photo',
+                    'library_id' => 'lib-1',
+                    'path' => $testFile,
+                    'metadata_json' => '{}',
+                ],
+            ]);
+
+            $response = $this->controller->getFull($request, $params);
+
+            $this->assertEquals(206, $response->statusCode); // Partial content, not 200
+            $this->assertEquals('image/jpeg', $response->headers['Content-Type']);
+            $this->assertEquals('bytes 0-99/390', $response->headers['Content-Range']);
+            $this->assertEquals(100, strlen($response->body));
+        } finally {
+            if (file_exists($testFile)) {
+                unlink($testFile);
+            }
+        }
+    }
+
     public function testGetFullReturnsFullPhotoWithoutRange(): void
     {
         // Create a temporary image file

@@ -363,6 +363,50 @@ class AudiobookControllerTest extends TestCase
         $this->assertEquals('bytes 5-10/16', $response->headers['Content-Range']);
     }
 
+    /**
+     * Regression: a Range header stored UNDER THE UPPER-CASE "RANGE" key —
+     * the way Request::parseHeaders() / collectHeadersFromWorkerman() actually
+     * store it in production — must still drive the 206 partial-content path.
+     *
+     * Before the fix, streamAudiobook() read $request->headers['Range'] (mixed
+     * case) directly, which never matched the upper-cased stored key, so real
+     * range requests silently fell through to a full 200. The fix reads via
+     * Request::getHeader('Range'), which is case-insensitive.
+     */
+    public function testStreamAudiobookHonorsUpperCaseRangeHeaderKey(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+
+        $originalContent = '0123456789ABCDEF'; // 16 bytes
+        $tempFile = $this->createTestAudioFile('test_audiobook_' . uniqid() . '.m4b', $originalContent);
+
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => $tempFile,
+            'metadata' => [
+                'duration_ms' => 600000,
+                'chapters' => [],
+            ],
+        ]);
+
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        // Mirror production storage: parseHeaders() upper-cases header keys,
+        // so the Range header lives under "RANGE", not "Range".
+        $request = new Request();
+        $request->headers['RANGE'] = 'bytes=5-10';
+
+        $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+
+        $this->assertEquals(206, $response->statusCode); // Partial content, not 200
+        $this->assertEquals('56789A', $response->body); // bytes 5-10
+        $this->assertArrayHasKey('Content-Range', $response->headers);
+        $this->assertEquals('bytes 5-10/16', $response->headers['Content-Range']);
+    }
+
     public function testStreamAudiobookAcceptRangesHeader(): void
     {
         $itemRepo = $this->createMockItemRepo();

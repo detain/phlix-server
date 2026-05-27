@@ -1732,11 +1732,20 @@ class Application
         $themeMediaFinder = $this->container->get(\Phlix\Theming\ThemeMediaFinder::class);
         /** @var \Phlix\Media\Library\LibraryManager */
         $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
-        return new \Phlix\Server\Http\Controllers\ThemeMediaController(
+        $controller = new \Phlix\Server\Http\Controllers\ThemeMediaController(
             $themeMediaRepository,
             $themeMediaFinder,
             $libraryManager
         );
+
+        // Wire admin middleware if available
+        if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
     }
 
     /**

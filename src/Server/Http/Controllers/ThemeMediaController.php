@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Theming\ThemeMediaFinder;
@@ -21,6 +22,14 @@ use Phlix\Theming\ThemeMediaRepository;
 class ThemeMediaController
 {
     /**
+     * Admin gate for mutation endpoints (scan/delete). Wired by
+     * {@see \Phlix\Server\Core\Application::getThemeMediaController()} when an
+     * {@see AdminMiddleware} is available in the container; left null otherwise
+     * (e.g. in unit tests that exercise the happy path without auth).
+     */
+    private ?AdminMiddleware $adminMiddleware = null;
+
+    /**
      * @param ThemeMediaRepository $repository Theme media repository for caching
      * @param ThemeMediaFinder $finder Theme media finder for filesystem scanning
      * @param LibraryManager $libraryManager Library manager for library data
@@ -32,6 +41,16 @@ class ThemeMediaController
         private readonly ThemeMediaFinder $finder,
         private readonly LibraryManager $libraryManager
     ) {
+    }
+
+    /**
+     * Set the admin middleware (used for admin-only operations).
+     *
+     * @param AdminMiddleware $middleware The admin gate to enforce on mutations.
+     */
+    public function setAdminMiddleware(AdminMiddleware $middleware): void
+    {
+        $this->adminMiddleware = $middleware;
     }
 
     /**
@@ -99,6 +118,16 @@ class ThemeMediaController
      */
     public function scanThemeMedia(Request $request, array $params): Response
     {
+        if ($this->adminMiddleware !== null) {
+            $status = $this->adminMiddleware->checkAccess($request);
+            if ($status !== null) {
+                return (new Response())->status($status)->json([
+                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+                ]);
+            }
+        }
+
         $libraryId = $params['id'] ?? '';
 
         if (empty($libraryId)) {
@@ -170,6 +199,16 @@ class ThemeMediaController
      */
     public function deleteThemeMedia(Request $request, array $params): Response
     {
+        if ($this->adminMiddleware !== null) {
+            $status = $this->adminMiddleware->checkAccess($request);
+            if ($status !== null) {
+                return (new Response())->status($status)->json([
+                    'error' => $status === 401 ? 'Unauthorized' : 'Forbidden',
+                    'code' => $status === 401 ? 'auth.required' : 'auth.not_admin',
+                ]);
+            }
+        }
+
         $libraryId = $params['id'] ?? '';
 
         if (empty($libraryId)) {

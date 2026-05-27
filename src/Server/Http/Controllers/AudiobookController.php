@@ -449,12 +449,16 @@ class AudiobookController
             };
         }
 
-        // Handle Range requests for seeking
-        $rangeHeader = $request->headers['Range'] ?? null;
+        // Handle Range requests for seeking.
+        // Read via getHeader() (case-insensitive) rather than the raw
+        // $request->headers['Range'] array access: parseHeaders() stores
+        // header keys upper-cased (e.g. "RANGE"), so a mixed-case lookup
+        // never matched and range requests silently fell through to 200.
+        $rangeHeader = $request->getHeader('Range');
         $start = $byteOffset;
         $end = $fileSize - 1;
 
-        if ($rangeHeader !== null && is_string($rangeHeader)) {
+        if ($rangeHeader !== null) {
             // Parse Range header (e.g., "bytes=1024-2048" or "bytes=1024-")
             if (preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $matches)) {
                 $start = (int) $matches[1];

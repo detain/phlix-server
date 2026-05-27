@@ -1,20 +1,24 @@
 -- Step I.5: LiveTV DVR Scheduled & Series Recordings
 -- Adds series recording rules and deduplication support
 
--- Add new columns to livetv_recordings for series rules and padding
-ALTER TABLE livetv_recordings
-    ADD COLUMN series_rule_id CHAR(36) NULL AFTER status,
-    ADD COLUMN duplicate_group CHAR(36) NULL,
-    ADD COLUMN pre_padding_seconds INT NOT NULL DEFAULT 60,
-    ADD COLUMN post_padding_seconds INT NOT NULL DEFAULT 60,
-    ADD COLUMN scheduled_by_rule CHAR(36) NULL,
-    ADD INDEX idx_series_rule_id (series_rule_id),
-    ADD INDEX idx_duplicate_group (duplicate_group),
-    ADD INDEX idx_scheduled_by_rule (scheduled_by_rule),
-    ADD INDEX idx_status_start_time (status, start_time);
+-- Add new columns to livetv_recordings for series rules and padding.
+-- Split into one-clause-per-statement so that on a re-run (where 012a
+-- already created the table with all of these columns), each "duplicate"
+-- ALTER fails independently. A combined ALTER is atomic — the first
+-- duplicate would abort and silently skip later clauses, which would
+-- mask any genuinely-new column added to this migration in the future.
+ALTER TABLE livetv_recordings ADD COLUMN series_rule_id CHAR(36) NULL AFTER status;
+ALTER TABLE livetv_recordings ADD COLUMN duplicate_group CHAR(36) NULL;
+ALTER TABLE livetv_recordings ADD COLUMN pre_padding_seconds INT NOT NULL DEFAULT 60;
+ALTER TABLE livetv_recordings ADD COLUMN post_padding_seconds INT NOT NULL DEFAULT 60;
+ALTER TABLE livetv_recordings ADD COLUMN scheduled_by_rule CHAR(36) NULL;
+ALTER TABLE livetv_recordings ADD INDEX idx_series_rule_id (series_rule_id);
+ALTER TABLE livetv_recordings ADD INDEX idx_duplicate_group (duplicate_group);
+ALTER TABLE livetv_recordings ADD INDEX idx_scheduled_by_rule (scheduled_by_rule);
+ALTER TABLE livetv_recordings ADD INDEX idx_status_start_time (status, start_time);
 
 -- Create table for series recording rules
-CREATE TABLE livetv_series_rules (
+CREATE TABLE IF NOT EXISTS livetv_series_rules (
     rule_id CHAR(36) PRIMARY KEY,
     series_id VARCHAR(255) NOT NULL,
     channel_id CHAR(36) NULL,

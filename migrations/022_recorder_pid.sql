@@ -8,6 +8,7 @@
 --
 -- `failure_reason` is stored in the existing `error_message` column.
 
-ALTER TABLE livetv_recordings
-    ADD COLUMN pid INT NULL AFTER status,
-    ADD INDEX idx_pid (pid);
+-- One ALTER per clause so re-runs (where 012a already added these)
+-- fail independently per duplicate rather than aborting the whole batch.
+ALTER TABLE livetv_recordings ADD COLUMN pid INT NULL AFTER status;
+ALTER TABLE livetv_recordings ADD INDEX idx_pid (pid);

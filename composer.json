@@ -27,8 +27,8 @@
         "web-token/jwt-framework": "^3.0",
         "workerman/mysql": "^1.0",
         "workerman/redis": "^2.0",
-        "workerman/webman-framework": "^2.0",
-        "workerman/workerman": "^5.0"
+        "workerman/webman-framework": "~2.2",
+        "workerman/workerman": "~5.1"
     },
     "require-dev": {
         "mockery/mockery": "^1.6",

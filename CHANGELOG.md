@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **Upgraded to Webman 2.2 / Workerman 5.1.** Pinned `workerman/workerman` to `~5.1` and `workerman/webman-framework` to `~2.2` as a prerequisite for coroutine support (step 0.2). No other changes — routing, controllers, and DI wiring remain unchanged.
+
 ### Added
 
 - **Web-portal HTML pages for music, books, audiobooks, and photos.** The Smarty templates under `public/templates/{music,books,audiobooks,photo}/` existed but were never wired to a page route — only `home`, `library`, `auth`, and the admin dashboard rendered. Four SSR controllers now back them (`MusicPageController`, `BookPageController`, `AudiobookPageController`, `PhotoPageController` in `src/Server/WebPortal/Controllers/`), rendering via `PageRenderer::renderTemplate()` and sourcing data from the same managers as the JSON API. `public/index.php` routes the page paths:

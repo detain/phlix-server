@@ -19,6 +19,15 @@
 
 declare(strict_types=1);
 
+// -----------------------------------------------------------------------------
+// Enable Swoole coroutine hooks for the current process/thread.
+// This allows blocking I/O to yield in coroutine contexts.
+// Degrades gracefully when ext-swoole is not yet available.
+// -----------------------------------------------------------------------------
+if (extension_loaded('swoole')) {
+    \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
+}
+
 // Load Composer autoloader
 require_once __DIR__ . '/../vendor/autoload.php';
 

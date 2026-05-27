@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- **Coroutine runtime enabled (step 0.2).** `start.php` and `public/index.php` now set `Worker::$eventLoop = \Workerman\Events\Swoole::class` before any `Worker` instantiation, and call `Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL)` in the master process to enable full coroutine I/O. The code degrades gracefully with a `E_USER_WARNING` when ext-swoole is not yet available.
+
 ### Changed
 
 - **Upgraded to Webman 2.2 / Workerman 5.1.** Pinned `workerman/workerman` to `~5.1` and `workerman/webman-framework` to `~2.2` as a prerequisite for coroutine support (step 0.2). No other changes — routing, controllers, and DI wiring remain unchanged.

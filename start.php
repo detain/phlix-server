@@ -45,6 +45,21 @@ use Phlix\Server\Workerman\HttpHandler;
 use Workerman\Worker;
 
 // -----------------------------------------------------------------------------
+// 0. Coroutine runtime — set Swoole as the eventLoop driver and enable
+//    coroutine hooks in the master process before any Worker is instantiated.
+//    Degrades gracefully with a warning if ext-swoole is not yet available.
+// -----------------------------------------------------------------------------
+
+if (extension_loaded('swoole')) {
+    Worker::$eventLoop = \Workerman\Events\Swoole::class;
+    \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
+} else {
+    trigger_error('Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.', E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
+// 2. Per-process configuration that the Workerman master needs
+// -----------------------------------------------------------------------------
 // 1. Configuration
 // -----------------------------------------------------------------------------
 

@@ -382,6 +382,8 @@ return [
 | DELETE | `/api/v1/sessions/{id}` | End a session |
 | POST | `/api/v1/sessions/{id}/progress` | Report playback progress |
 | GET | `/api/v1/sessions/{id}/progress` | Get playback state |
+| GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
+| PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
 
 ### WebSocket Events
 

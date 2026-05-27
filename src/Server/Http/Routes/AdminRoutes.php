@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Routes;
 
+use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -34,6 +35,8 @@ use Psr\Container\ContainerInterface;
  *  - `POST   /api/v1/admin/plugins/{name}/enable`    → enable
  *  - `POST   /api/v1/admin/plugins/{name}/disable`   → disable
  *  - `DELETE /api/v1/admin/plugins/{name}`           → uninstall
+ *  - `GET    /api/v1/admin/settings`                 → effective settings
+ *  - `PUT    /api/v1/admin/settings`                 → persist overrides
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -127,6 +130,13 @@ final class AdminRoutes
                 $r->post('/backup/{id}/upload-s3', [$backupController, 'uploadS3']);
                 $r->get('/backup/schedule', [$backupController, 'getSchedule']);
                 $r->put('/backup/schedule', [$backupController, 'updateSchedule']);
+
+                // Server-wide settings store (Step 0.5).
+                /** @var AdminSettingsController $settingsController */
+                $settingsController = $container->get(AdminSettingsController::class);
+
+                $r->get('/settings', [$settingsController, 'index']);
+                $r->put('/settings', [$settingsController, 'update']);
             },
             [$adminMiddleware],
         );

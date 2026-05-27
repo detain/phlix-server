@@ -18,6 +18,8 @@ use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
+use Phlix\Admin\SettingsRepository;
+use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
@@ -30,6 +32,7 @@ use Phlix\Server\Http\Routes\AdminRoutes;
 use Phlix\Stats\StatsCollector;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
 
 /**
  * End-to-end exercise of the /api/v1/admin/plugins routes (Step A.5).
@@ -68,6 +71,9 @@ final class AdminRoutesTest extends TestCase
         $statsController     = new StatsController(new FakeStatsCollector());
         $dashboardController = new DashboardController(FakeDashboardService::make());
         $backupController    = new BackupController(FakeBackupManager::make());
+        $settingsController  = new AdminSettingsController(
+            new SettingsRepository($this->createMock(Connection::class)),
+        );
 
         $container = new class (
             $this->loader,
@@ -76,6 +82,7 @@ final class AdminRoutesTest extends TestCase
             $statsController,
             $dashboardController,
             $backupController,
+            $settingsController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -87,6 +94,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly StatsController $statsController,
                 private readonly DashboardController $dashboardController,
                 private readonly BackupController $backupController,
+                private readonly AdminSettingsController $settingsController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -122,6 +130,7 @@ final class AdminRoutesTest extends TestCase
                     StatsController::class     => $this->statsController,
                     DashboardController::class => $this->dashboardController,
                     BackupController::class    => $this->backupController,
+                    AdminSettingsController::class => $this->settingsController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -137,6 +146,7 @@ final class AdminRoutesTest extends TestCase
                     StatsController::class,
                     DashboardController::class,
                     BackupController::class,
+                    AdminSettingsController::class,
                 ], true);
             }
         };

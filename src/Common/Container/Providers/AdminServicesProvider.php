@@ -7,7 +7,9 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -57,6 +59,10 @@ final class AdminServicesProvider implements ServiceProviderInterface
 
             BackupManager::class    => autowire(),
             BackupController::class => autowire(),
+
+            // Server-wide settings store + admin API (Step 0.5).
+            SettingsRepository::class      => autowire(),
+            AdminSettingsController::class => autowire(),
         ]);
     }
 }

@@ -2,6 +2,7 @@
 
 [![PHPUnit](https://github.com/detain/phlix-server/actions/workflows/phpunit.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/phpunit.yml)
 [![Coding Standards](https://github.com/detain/phlix-server/actions/workflows/coding-standards.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/coding-standards.yml)
+[![Admin UI](https://github.com/detain/phlix-server/actions/workflows/admin-ui.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/admin-ui.yml)
 [![codecov](https://codecov.io/gh/detain/phlix-server/graph/badge.svg)](https://codecov.io/gh/detain/phlix-server)
 [![PHP](https://img.shields.io/badge/PHP-8.3%2B-777bb4?logo=php&logoColor=white)](https://www.php.net/)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%209-brightgreen)](https://phpstan.org/)
@@ -473,6 +474,10 @@ npm run dev          # Vite dev server (HMR) for local development
 
 When you change anything under `admin-ui/src/`, re-run `npm run build` and commit the refreshed
 `public/assets/admin/` bundle along with your source changes.
+
+CI runs the SPA build + Vitest suite on any change under `admin-ui/` via the **Admin UI** GitHub
+Actions workflow (`.github/workflows/admin-ui.yml`): `npm ci → npm run build → npm run test` on
+push/PR to `master`/`main`/`develop` (path-filtered, so PHP-only changes don't trigger it).
 
 ### Git Workflow
 

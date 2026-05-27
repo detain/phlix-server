@@ -63,10 +63,24 @@ jobs:
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Apply database migrations
+        # Apply every migration to the MySQL service DB so real-DB Integration
+        # tests run against the actual schema (table defs, foreign keys, bound
+        # LIMIT queries) instead of a hand-rolled simulation. Idempotent: the
+        # runner downgrades duplicate-column/key errors to notes.
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: phlix_test
+          DB_USER: root
+          DB_PASSWORD: root
+        run: php scripts/run-migrations.php
+
       - name: Run PHPUnit tests
         # Run the full suite (Unit + Integration). This job provisions a MySQL
-        # service container, so Integration tests that probe 127.0.0.1:3306
-        # execute for real here; they self-skip only when no DB is reachable.
+        # service container AND applies migrations (step above), so Integration
+        # tests that probe 127.0.0.1:3306 execute for real here against the live
+        # schema; they self-skip only when no DB is reachable (e.g. locally).
         run: ./vendor/bin/phpunit --coverage-clover coverage.xml --coverage-html coverage-report
 
       - name: Check minimum coverage threshold

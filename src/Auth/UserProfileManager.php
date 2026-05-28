@@ -815,6 +815,12 @@ class UserProfileManager
             'updated_at' => $row['updated_at'] ?? null,
         ];
 
+        // Compute numeric rating (0-6) to match TS Profile interface (1.2c contract)
+        if (isset($row['content_rating'])) {
+            $order = array_search($row['content_rating'], self::RATING_ORDER, true);
+            $profile['rating'] = $order !== false ? (int)$order - 1 : 6; // default UNRATED(6)
+        }
+
         // Settings
         if (isset($row['content_rating'])) {
             $maxDaily = $row['max_daily_watch_time'] ?? 0;

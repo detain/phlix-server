@@ -223,13 +223,31 @@ final class AdminProfileControllerTest extends TestCase
 
     public function testGetHappyPath(): void
     {
-        $profile = ['id' => 'prof_1', 'user_id' => '1', 'name' => 'Alice'];
+        // findByIdWithSettings calls hydrateProfile() which computes 'rating' from content_rating
+        // PG-13 -> RATING_ORDER['PG-13']=3 -> ts_rating = 3-1 = 2
+        $hydratedProfile = [
+            'id' => 'prof_1',
+            'user_id' => '1',
+            'name' => 'Alice',
+            'avatar_url' => null,
+            'is_active' => false,
+            'is_admin' => false,
+            'created_at' => null,
+            'updated_at' => null,
+            'rating' => 2, // computed: RATING_ORDER['PG-13']=3, ts_rating=3-1=2
+            'settings' => [
+                'content_rating' => 'PG-13',
+                'pin_required_for_admin' => false,
+                'max_daily_watch_time' => 0,
+                'allow_unrated' => true,
+            ],
+        ];
 
         $profileManager = $this->createMock(UserProfileManager::class);
         $profileManager->expects($this->once())
-            ->method('findById')
+            ->method('findByIdWithSettings')
             ->with('1')
-            ->willReturn($profile);
+            ->willReturn($hydratedProfile);
 
         $userRepo = $this->createMock(UserRepository::class);
 
@@ -241,13 +259,14 @@ final class AdminProfileControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('profile', $body);
         $this->assertSame('Alice', $body['profile']['name']);
+        $this->assertSame(2, $body['profile']['rating']); // PG-13 = ts index 2
     }
 
     public function testGetNotFound(): void
     {
         $profileManager = $this->createMock(UserProfileManager::class);
         $profileManager->expects($this->once())
-            ->method('findById')
+            ->method('findByIdWithSettings')
             ->with('999')
             ->willReturn(null);
 

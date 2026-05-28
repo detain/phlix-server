@@ -142,7 +142,7 @@ final class AdminProfileController
      */
     public function get(int $profileId): Response
     {
-        $profile = $this->profileManager->findById((string) $profileId);
+        $profile = $this->profileManager->findByIdWithSettings((string) $profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }

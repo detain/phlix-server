@@ -534,3 +534,137 @@ body {
   font-size: 0.8rem;
   margin-top: 0.2rem;
 }
+
+/* --- Webhooks page (1.4a) --- */
+
+.webhook-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.webhook-events-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  background: var(--admin-accent);
+  color: #fff;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+.webhook-secret-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.webhook-secret-row .form__input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.webhook-eventsfieldset {
+  border: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+
+.webhook-eventsfieldset > .form__label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.webhook-events-category {
+  margin-bottom: 0.75rem;
+}
+
+.webhook-events-category__label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--admin-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+  margin-left: 0;
+}
+
+.webhook-event-id {
+  font-size: 0.7rem;
+  color: var(--admin-muted);
+  margin-left: 0.5rem;
+  font-family: monospace;
+}
+
+.form__label--checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--admin-fg);
+}
+
+.form__label--checkbox .form__checkbox {
+  margin-right: 0;
+}
+
+/* Test result modal */
+.webhook-test-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.webhook-test-result--ok {
+  background: rgba(62, 207, 142, 0.1);
+  border: 1px solid var(--admin-success);
+}
+
+.webhook-test-result--fail {
+  background: rgba(255, 93, 93, 0.1);
+  border: 1px solid var(--admin-error);
+}
+
+.webhook-test-result__icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.webhook-test-result--ok .webhook-test-result__icon {
+  color: var(--admin-success);
+}
+
+.webhook-test-result--fail .webhook-test-result__icon {
+  color: var(--admin-error);
+}
+
+.webhook-test-result__body {
+  flex: 1;
+}
+
+.webhook-test-result__status {
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+}
+
+.webhook-test-result__message {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 0.9rem;
+}
+
+.btn--danger {
+  background: var(--admin-error);
+  color: #fff;
+  border: 1px solid var(--admin-error);
+}
+
+.btn--danger:hover {
+  opacity: 0.85;
+}

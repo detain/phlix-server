@@ -354,7 +354,7 @@ class Application
      * Registers webhook admin integration API routes.
      *
      * Wires endpoints for:
-     * - WebhookAdminController: index, create, delete, test (4 routes)
+     * - WebhookAdminController: index, create, update, delete, test (5 routes)
      *
      * @since 0.14.0
      */
@@ -367,6 +367,8 @@ class Application
         $this->router->get('/api/v1/admin/webhooks', [$controller, 'index']);
         // POST /api/v1/admin/webhooks — create a new webhook
         $this->router->post('/api/v1/admin/webhooks', [$controller, 'create']);
+        // PUT /api/v1/admin/webhooks/{id} — update a webhook
+        $this->router->put('/api/v1/admin/webhooks/{id}', [$controller, 'update']);
         // DELETE /api/v1/admin/webhooks/{id} — delete a webhook
         $this->router->delete('/api/v1/admin/webhooks/{id}', [$controller, 'delete']);
         // POST /api/v1/admin/webhooks/{id}/test — test a webhook

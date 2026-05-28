@@ -180,6 +180,51 @@ class WebhookAdminController
     /**
      * @param array<string, string> $params Path parameters (id).
      */
+    public function update(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $id = $params['id'] ?? null;
+        if (!is_string($id) || $id === '') {
+            return (new Response())->status(400)->json(['error' => 'Missing webhook ID']);
+        }
+
+        $data = $request->body;
+        $updateData = [];
+        if (isset($data['name'])) {
+            $updateData['name'] = $data['name'];
+        }
+        if (isset($data['url'])) {
+            $updateData['url'] = $data['url'];
+        }
+        if (isset($data['events'])) {
+            $updateData['events'] = $data['events'];
+        }
+
+        if ($updateData === []) {
+            return (new Response())->status(400)->json(['error' => 'No fields to update']);
+        }
+
+        $this->dispatcher->update($id, $updateData);
+
+        $webhooks = $this->dispatcher->listWebhooks();
+        $webhook = null;
+        foreach ($webhooks as $w) {
+            if (isset($w['id']) && $w['id'] === $id) {
+                $webhook = $w;
+                break;
+            }
+        }
+
+        return (new Response())->json(['webhook' => $webhook]);
+    }
+
+    /**
+     * @param array<string, string> $params Path parameters (id).
+     */
     public function test(Request $request, array $params): Response
     {
         $authResponse = $this->requireAdmin($request);

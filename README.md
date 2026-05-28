@@ -503,9 +503,22 @@ as a password field with Show/Hide toggle. Overridden keys (DB-persisted vs. con
 default) display a "custom" badge. A sticky Save button fires `PUT /api/v1/admin/settings`;
 dirty-state gating keeps the button disabled when no fields have changed.
 
+The **Webhooks** page at `/admin/webhooks` (step 1.4a) provides full CRUD for webhook
+subscriptions plus a per-webhook test trigger. It consumes the five endpoint contract in
+`WebhookAdminController` (GET list, POST create, PUT update, DELETE remove, POST test).
+The `PUT /api/v1/admin/webhooks/{id}` route, plus the backing `WebhookDispatcher::update()`
+and `WebhookAdminController::update()` PHP methods, were added in this step to support
+edit-in-place (the controller already had index/create/delete/test before 1.4a).
+The event multi-select shows 7 subscribable events grouped into 5 categories
+(Playback, Library, Downloads, Recordings, Alerts); `webhook.test` is internal-only.
+Secret is write-only — GET never returns it; the edit form shows an empty field with
+"(unchanged)" placeholder and omits `secret` from the PUT payload when blank, so the
+server retains the stored value. Coverage: 97.29% on `webhooks.ts`, 89.74% on
+`WebhooksPage.tsx`.
+
 Full operator + contributor docs live in the
-[phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/server-settings.md`
-and `docs/dev/admin-spa.md`).
+[phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/integrations.md`,
+`docs/admin/server-settings.md`, and `docs/dev/admin-spa.md`).
 
 ### Git Workflow
 

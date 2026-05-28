@@ -61,6 +61,40 @@ class WebhookDispatcher
         return true;
     }
 
+    /**
+     * @param array<string, mixed> $updateData keys: name, url, events (optional)
+     */
+    public function update(string $webhookId, array $updateData): bool
+    {
+        $sets = [];
+        $params = [];
+        if (isset($updateData['name'])) {
+            $sets[] = 'name = ?';
+            $params[] = $updateData['name'];
+        }
+        if (isset($updateData['url'])) {
+            $sets[] = 'url = ?';
+            $params[] = $updateData['url'];
+        }
+        if (isset($updateData['events'])) {
+            $sets[] = 'events_json = ?';
+            $params[] = json_encode($updateData['events'], JSON_THROW_ON_ERROR);
+        }
+        if ($sets === []) {
+            return false;
+        }
+        $params[] = $webhookId;
+        $this->db->query(
+            "UPDATE webhooks SET " . implode(', ', $sets) . " WHERE id = ?",
+            $params
+        );
+        $this->getLogger()->info('Webhook updated', [
+            'webhook_id' => $webhookId,
+            'fields' => array_keys($updateData),
+        ]);
+        return true;
+    }
+
     public function dispatch(WebhookEvent $event): DispatchResult
     {
         $webhooks = $this->getMatchingWebhooks($event->eventType);

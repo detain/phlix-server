@@ -900,3 +900,89 @@ body {
   display: flex;
   gap: 0.5rem;
 }
+
+/* Backup page (1.5) */
+
+.page--backup {
+  max-width: 1000px;
+}
+
+.page--backup .page__section {
+  margin-bottom: 3rem;
+}
+
+.page--backup .page__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+}
+
+.page--backup .page__header h1,
+.page--backup .page__header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+/* Schedule card */
+.schedule-card {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  padding: 1.5rem;
+  border: 1px solid #000;
+  max-width: 480px;
+}
+
+.schedule-card__info {
+  margin-bottom: 1.5rem;
+}
+
+.schedule-card__info p {
+  margin: 0;
+  color: var(--admin-fg);
+}
+
+/* Action buttons in table */
+.action-buttons {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge--success {
+  background: rgba(62, 207, 142, 0.15);
+  color: var(--admin-success);
+  border: 1px solid var(--admin-success);
+}
+
+.badge--muted {
+  background: rgba(138, 147, 163, 0.15);
+  color: var(--admin-muted);
+  border: 1px solid var(--admin-muted);
+}
+
+/* Form row for schedule */
+.form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+/* Text utilities */
+.text-muted {
+  color: var(--admin-muted);
+  font-size: 0.875em;
+}

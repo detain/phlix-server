@@ -343,6 +343,9 @@ class Application
         // Services admin routes (Trakt/Last.fm status + disconnect) (1.4c).
         $this->loadServicesRoutes();
 
+        // Backup admin routes (1.5).
+        $this->loadBackupRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -453,6 +456,72 @@ class Application
             );
         } catch (\Throwable) {
             // Services not configured — silent ignore
+        }
+    }
+
+    /**
+     * Registers backup administration JSON API routes (1.5).
+     *
+     * Wires endpoints for create, list, delete, restore, S3 upload, and
+     * schedule management. These routes are gated by AdminMiddleware.
+     *
+     * @since 1.5
+     */
+    private function loadBackupRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+            $this->router->group(
+                '/api/v1/admin/backup',
+                function (Router $r): void {
+                    $controller = $this->getBackupController();
+
+                    // GET /api/v1/admin/backup/list — list all backups
+                    $r->get('/list', [$controller, 'list']);
+                    // POST /api/v1/admin/backup/create — create a new backup
+                    $r->post('/create', [$controller, 'create']);
+                    // DELETE /api/v1/admin/backup/{id} — delete a backup
+                    $r->delete('/{id}', [$controller, 'delete']);
+                    // POST /api/v1/admin/backup/{id}/restore — restore from backup
+                    $r->post('/{id}/restore', [$controller, 'restore']);
+                    // POST /api/v1/admin/backup/{id}/upload-s3 — upload backup to S3
+                    $r->post('/{id}/upload-s3', [$controller, 'uploadS3']);
+                    // GET /api/v1/admin/backup/schedule — get schedule settings
+                    $r->get('/schedule', [$controller, 'getSchedule']);
+                    // PUT /api/v1/admin/backup/schedule — update schedule settings
+                    $r->put('/schedule', [$controller, 'updateSchedule']);
+                },
+                [$adminMiddleware],
+            );
+        } catch (\Throwable) {
+            // Backup not configured — silent ignore
+        }
+    }
+
+    /**
+     * Returns a BackupController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\Admin\BackupController The controller instance.
+     */
+    private function getBackupController(): \Phlix\Server\Http\Controllers\Admin\BackupController
+    {
+        if ($this->container === null) {
+            return \Phlix\Server\Http\Controllers\Admin\BackupController::createDefault();
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Controllers\Admin\BackupController */
+            $controller = $this->container->get(\Phlix\Server\Http\Controllers\Admin\BackupController::class);
+            return $controller;
+        } catch (\Throwable) {
+            // Fall back to manual construction
+            return \Phlix\Server\Http\Controllers\Admin\BackupController::createDefault();
         }
     }
 

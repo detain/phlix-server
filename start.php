@@ -162,6 +162,51 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
+// 4b. Managed worker processes (1.1b).
+//
+// This app is hand-rolled (no Webman `support\App::run()`), so config/process.php
+// is NOT auto-consumed by the framework — we read it here and spawn each enabled
+// entry as a sibling Worker under the same Worker::runAll() process group, so
+// `php start.php start` supervises HTTP + workers together (reload-able as one
+// group). Additive + guarded: a failure building any worker must NOT take down
+// the HTTP workers (they are separate processes), so the spawn loop is wrapped
+// in try/catch and the per-worker container is built inside onWorkerStart (it
+// cannot be built before fork).
+// -----------------------------------------------------------------------------
+
+try {
+    /** @var mixed $processCfgRaw */
+    $processCfgRaw = @include __DIR__ . '/config/process.php';
+    $processCfg = is_array($processCfgRaw) ? $processCfgRaw : [];
+
+    $scanCfgRaw = $processCfg['library-scan'] ?? null;
+    $scanCfg = is_array($scanCfgRaw) ? $scanCfgRaw : [];
+
+    if (!empty($scanCfg['enabled'])) {
+        $scanCount = isset($scanCfg['count']) && is_int($scanCfg['count']) && $scanCfg['count'] > 0
+            ? $scanCfg['count']
+            : 1;
+        $scanPollSeconds = isset($scanCfg['poll_seconds']) && is_int($scanCfg['poll_seconds']) && $scanCfg['poll_seconds'] > 0
+            ? $scanCfg['poll_seconds']
+            : 5;
+
+        $scanWorker = new Worker();
+        $scanWorker->count = $scanCount;
+        $scanWorker->name = 'phlix-library-scan';
+        $scanWorker->onWorkerStart = static function (Worker $w) use ($config, $scanPollSeconds): void {
+            // Built inside the fork so each child owns its long-lived state.
+            $container = ContainerFactory::create($config);
+            /** @var \Phlix\Media\Library\LibraryScanWorker $libraryScanWorker */
+            $libraryScanWorker = $container->get(\Phlix\Media\Library\LibraryScanWorker::class);
+            $libraryScanWorker->start($scanPollSeconds);
+        };
+    }
+} catch (\Throwable $e) {
+    // A misconfigured worker must not stop the HTTP server from booting.
+    trigger_error('Failed to set up managed worker processes: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 5. Run
 // -----------------------------------------------------------------------------
 

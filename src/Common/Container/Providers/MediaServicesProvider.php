@@ -9,6 +9,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
@@ -94,6 +95,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // Scan-job data layer (Step 1.1a). Its only ctor dependency is the
             // Workerman MySQL Connection, already resolvable in this provider.
             ScanJobRepository::class => autowire(),
+
+            // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository
+            // + LibraryManager — are both autowired above; the optional
+            // StructuredLogger defaults to the MEDIA channel.
+            LibraryScanWorker::class => autowire(),
 
             MetadataManager::class => autowire(),
 

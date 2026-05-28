@@ -453,7 +453,8 @@ class Application
      * Registers library management and theme media API routes.
      *
      * Wires endpoints for:
-     * - LibraryController: index, show, create, update, delete, scan, rescan (7 routes)
+     * - LibraryController: index, show, create, update, delete, scan, rescan,
+     *   scanStatus, scanHistory (9 routes)
      * - ThemeMediaController: getThemeMedia, scanThemeMedia, deleteThemeMedia (3 routes)
      * - ThemeMediaStreamController: streamAudio, streamVideo (2 routes)
      *
@@ -473,6 +474,14 @@ class Application
         $this->router->delete('/api/v1/libraries/{id}', [$libraryController, 'delete']);
         $this->router->post('/api/v1/libraries/{id}/scan', [$libraryController, 'scan']);
         $this->router->post('/api/v1/libraries/{id}/rescan', [$libraryController, 'rescan']);
+
+        // Async scan progress routes (1.1b). The Router compiles {id} to the
+        // `[^/]+` capture group and anchors the pattern with `#^...$#`, so the
+        // 2-segment `{id}` (show) route cannot match these 3-segment literal
+        // paths and vice-versa — no shadowing in either direction regardless of
+        // registration order.
+        $this->router->get('/api/v1/libraries/{id}/scan-status', [$libraryController, 'scanStatus']);
+        $this->router->get('/api/v1/libraries/{id}/scan-history', [$libraryController, 'scanHistory']);
 
         // Theme media routes
         $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);
@@ -1677,12 +1686,15 @@ class Application
                 ),
                 new \Phlix\Media\Library\FolderWatcher()
             );
-            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager);
+            $scanJobs = new \Phlix\Media\Library\ScanJobRepository($db);
+            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs);
         }
 
         /** @var \Phlix\Media\Library\LibraryManager */
         $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
-        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager);
+        /** @var \Phlix\Media\Library\ScanJobRepository */
+        $scanJobs = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
+        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs);
 
         // Wire admin middleware if available
         if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {

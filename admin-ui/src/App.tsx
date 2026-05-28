@@ -15,6 +15,7 @@ import { Route, Routes } from 'react-router-dom';
 import { useAdminGuard, type RedirectFn } from './auth/useAdminGuard';
 import { AdminNav } from './nav/AdminNav';
 import { BackupPage } from './pages/BackupPage';
+import { CastDevicesPage } from './pages/CastDevicesPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { LibrariesPage } from './pages/LibrariesPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -63,6 +64,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/webhooks" element={<WebhooksPage client={client} />} />
             <Route path="/integrations" element={<IntegrationsPage client={client} />} />
             <Route path="/services" element={<ServicesPage client={client} />} />
+            <Route path="/cast-devices" element={<CastDevicesPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

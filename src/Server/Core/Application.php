@@ -1182,6 +1182,19 @@ class Application
     }
 
     /**
+     * Returns an AdminProfileController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\Admin\AdminProfileController The controller instance.
+     */
+    private function getAdminProfileController(): \Phlix\Server\Http\Controllers\Admin\AdminProfileController
+    {
+        $db = $this->createDatabaseConnection();
+        $profileManager = new \Phlix\Auth\UserProfileManager($db);
+        $userRepository = new \Phlix\Auth\UserRepository($db);
+        return new \Phlix\Server\Http\Controllers\Admin\AdminProfileController($profileManager, $userRepository);
+    }
+
+    /**
      * Returns an AuthController instance from the container.
      *
      * Falls back to a hand-wired instance only when no PSR-11 container is

@@ -6,6 +6,7 @@ namespace Phlix\Tests\Integration\Plugins;
 
 use DateTimeImmutable;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -19,6 +20,7 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -78,6 +80,8 @@ final class AdminRoutesTest extends TestCase
         );
         $fsBrowseController  = new FsBrowseController([sys_get_temp_dir()]);
         $adminUserController  = new AdminUserController($this->users);
+        $profileManager = new FakeUserProfileManager();
+        $adminProfileController = new AdminProfileController($profileManager, $this->users);
 
         $container = new class (
             $this->loader,
@@ -89,6 +93,8 @@ final class AdminRoutesTest extends TestCase
             $settingsController,
             $fsBrowseController,
             $adminUserController,
+            $profileManager,
+            $adminProfileController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -103,6 +109,8 @@ final class AdminRoutesTest extends TestCase
                 private readonly AdminSettingsController $settingsController,
                 private readonly FsBrowseController $fsBrowseController,
                 private readonly AdminUserController $adminUserController,
+                private readonly FakeUserProfileManager $profileManager,
+                private readonly AdminProfileController $adminProfileController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -141,6 +149,8 @@ final class AdminRoutesTest extends TestCase
                     AdminSettingsController::class => $this->settingsController,
                     FsBrowseController::class => $this->fsBrowseController,
                     AdminUserController::class => $this->adminUserController,
+                    UserProfileManager::class => $this->profileManager,
+                    AdminProfileController::class => $this->adminProfileController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -159,6 +169,8 @@ final class AdminRoutesTest extends TestCase
                     AdminSettingsController::class,
                     FsBrowseController::class,
                     AdminUserController::class,
+                    UserProfileManager::class,
+                    AdminProfileController::class,
                 ], true);
             }
         };
@@ -416,6 +428,62 @@ final class FakePluginLoader extends PluginLoader
     public function listInstalled(): array
     {
         return $this->installed;
+    }
+}
+
+/**
+ * In-memory profile store for AdminProfileController.
+ *
+ * @internal
+ */
+final class FakeUserProfileManager extends UserProfileManager
+{
+    /** @var array<string, array<string, mixed>> profileId => profile */
+    private array $profiles = [];
+
+    public function __construct()
+    {
+        // Skip parent constructor; no DB connection needed.
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function findById(string $profileId): ?array
+    {
+        return $this->profiles[$profileId] ?? null;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function findByUserId(string $userId): array
+    {
+        return array_values(array_filter(
+            $this->profiles,
+            static fn (array $p): bool => ($p['user_id'] ?? '') === $userId,
+        ));
+    }
+
+    public function create(string $userId, array $data): string
+    {
+        return 'fake-profile-id';
+    }
+
+    public function update(string $profileId, array $data): void
+    {
+    }
+
+    public function delete(string $profileId): void
+    {
+    }
+
+    public function setPin(string $profileId, string $pin): void
+    {
+    }
+
+    public function removePin(string $profileId): void
+    {
     }
 }
 

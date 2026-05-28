@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Routes;
 
+use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -157,6 +158,18 @@ final class AdminRoutes
                 $r->delete('/users/{id}', [$adminUserController, 'delete']);
                 $r->post('/users/{id}/set-admin', [$adminUserController, 'setAdmin']);
                 $r->post('/users/{id}/reset-password', [$adminUserController, 'resetPassword']);
+
+                // Admin profile management (Step 1.2b).
+                /** @var AdminProfileController $adminProfileController */
+                $adminProfileController = $container->get(AdminProfileController::class);
+
+                $r->get('/users/{userId}/profiles', [$adminProfileController, 'listForUser']);
+                $r->post('/users/{userId}/profiles', [$adminProfileController, 'createForUser']);
+                $r->get('/profiles/{id}', [$adminProfileController, 'get']);
+                $r->put('/profiles/{id}', [$adminProfileController, 'update']);
+                $r->delete('/profiles/{id}', [$adminProfileController, 'delete']);
+                $r->post('/profiles/{id}/pin', [$adminProfileController, 'setPin']);
+                $r->delete('/profiles/{id}/pin', [$adminProfileController, 'deletePin']);
             },
             [$adminMiddleware],
         );

@@ -268,7 +268,8 @@ describe('BackupPage', () => {
       ]);
 
       await screen.findByText('Scheduled backups');
-      const intervalInput = screen.getByLabelText(/Backup interval/);
+      // Backup interval input (unused — confirming element presence)
+      screen.getByLabelText(/Backup interval/);
       // Change value to trigger dirty state if needed, then submit
       const saveBtn = screen.getByRole('button', { name: 'Save schedule' });
       saveBtn.click();

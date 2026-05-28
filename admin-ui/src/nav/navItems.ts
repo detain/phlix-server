@@ -22,4 +22,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/integrations', label: 'Integrations' },
   { path: '/services', label: 'Services' },
   { path: '/backup', label: 'Backup' },
+  { path: '/cast-devices', label: 'Cast Devices' },
 ] as const;

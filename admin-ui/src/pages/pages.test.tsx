@@ -30,13 +30,14 @@ describe('NotFoundPage', () => {
 });
 
 describe('NAV_ITEMS', () => {
-  it('includes the Dashboard, Libraries, Users, Settings and Webhooks routes', () => {
+  it('includes the Dashboard, Libraries, Users, Settings, Webhooks and Integrations routes', () => {
     expect(NAV_ITEMS).toEqual([
       { path: '/', label: 'Dashboard' },
       { path: '/libraries', label: 'Libraries' },
       { path: '/users', label: 'Users' },
       { path: '/settings', label: 'Settings' },
       { path: '/webhooks', label: 'Webhooks' },
+      { path: '/integrations', label: 'Integrations' },
     ]);
   });
 });

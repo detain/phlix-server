@@ -19,4 +19,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/users', label: 'Users' },
   { path: '/settings', label: 'Settings' },
   { path: '/webhooks', label: 'Webhooks' },
+  { path: '/integrations', label: 'Integrations' },
 ] as const;

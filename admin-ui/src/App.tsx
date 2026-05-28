@@ -20,6 +20,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { WebhooksPage } from './pages/WebhooksPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
+import { ServicesPage } from './pages/ServicesPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ToastProvider } from './components/Toast';
 import type { ApiClient } from './api/client';
@@ -59,6 +60,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/users" element={<UsersPage client={client} />} />
             <Route path="/webhooks" element={<WebhooksPage client={client} />} />
             <Route path="/integrations" element={<IntegrationsPage client={client} />} />
+            <Route path="/services" element={<ServicesPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

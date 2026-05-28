@@ -843,3 +843,60 @@ body {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
+
+/* --- Services page (1.4c) --- */
+
+.page--services {
+  max-width: 860px;
+}
+
+.services__section {
+  margin-bottom: 2.5rem;
+}
+
+.services__section-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.services__section-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.services__card {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  padding: 1.25rem;
+  border: 1px solid #000;
+}
+
+.services__empty {
+  color: var(--admin-muted);
+  margin: 0;
+}
+
+.services__dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1rem;
+}
+
+.services__dl dt {
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+}
+
+.services__dl dd {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.services__card-actions {
+  display: flex;
+  gap: 0.5rem;
+}

@@ -340,6 +340,9 @@ class Application
         // Trakt.tv OAuth integration routes (1.6g).
         $this->loadTraktRoutes();
 
+        // Services admin routes (Trakt/Last.fm status + disconnect) (1.4c).
+        $this->loadServicesRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -413,6 +416,68 @@ class Application
         $this->router->get('/api/v1/oauth/trakt', [$controller, 'authorize']);
         // GET /api/v1/oauth/trakt/callback — OAuth callback handler
         $this->router->get('/api/v1/oauth/trakt/callback', [$controller, 'callback']);
+    }
+
+    /**
+     * Registers the admin-side services JSON API routes (1.4c).
+     *
+     * Wires endpoints for Trakt and Last.fm status/disconnect.
+     * These routes are gated by AdminMiddleware.
+     *
+     * @since 1.4c
+     */
+    private function loadServicesRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+            $this->router->group(
+                '/api/v1/admin/services',
+                function (Router $r): void {
+                    // Trakt status + disconnect
+                    $traktController = $this->getTraktOAuthController();
+                    $r->get('/trakt/status', [$traktController, 'status']);
+                    $r->post('/trakt/disconnect', [$traktController, 'disconnect']);
+
+                    // Last.fm status + disconnect
+                    $lastfmController = $this->getLastfmController();
+                    $r->get('/lastfm/status', [$lastfmController, 'status']);
+                    $r->post('/lastfm/disconnect', [$lastfmController, 'apiDisconnect']);
+                },
+                [$adminMiddleware],
+            );
+        } catch (\Throwable) {
+            // Services not configured — silent ignore
+        }
+    }
+
+    /**
+     * Returns the LastfmController instance (manually wired).
+     *
+     * @return \Phlix\Server\Http\Controllers\Admin\LastfmController
+     */
+    private function getLastfmController(): \Phlix\Server\Http\Controllers\Admin\LastfmController
+    {
+        $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
+        $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
+            is_array($rawConfig) ? $rawConfig : []
+        );
+        $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+        $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
+        $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
+            $config->apiKey,
+            $config->sharedSecret,
+        );
+        return new \Phlix\Server\Http\Controllers\Admin\LastfmController(
+            $config,
+            $sessions,
+            $api,
+        );
     }
 
     /**

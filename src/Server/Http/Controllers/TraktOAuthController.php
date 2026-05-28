@@ -214,4 +214,61 @@ final class TraktOAuthController
 
         return [];
     }
+
+    /**
+     * `GET /api/v1/admin/services/trakt/status` — JSON status for the SPA.
+     *
+     * Checks whether OAuth tokens are present in the config file.
+     *
+     * @param Request $request
+     * @param array<string, string> $params
+     *
+     * @return Response
+     *
+     * @since 1.4c
+     */
+    public function status(Request $request, array $params): Response
+    {
+        $config = $this->loadConfig();
+
+        $accessToken = is_string($config['access_token'] ?? null) ? $config['access_token'] : null;
+        $refreshToken = is_string($config['refresh_token'] ?? null) ? $config['refresh_token'] : null;
+        $username = is_string($config['username'] ?? null) ? $config['username'] : null;
+
+        $connected = $accessToken !== null && $refreshToken !== null;
+
+        return (new Response())->json([
+            'connected' => $connected,
+            'username'  => $connected ? $username : null,
+        ]);
+    }
+
+    /**
+     * `POST /api/v1/admin/services/trakt/disconnect` — clear stored tokens.
+     *
+     * @param Request $request
+     * @param array<string, string> $params
+     *
+     * @return Response
+     *
+     * @since 1.4c
+     */
+    public function disconnect(Request $request, array $params): Response
+    {
+        $configFile = dirname(__DIR__, 7) . '/config/scrobblers/trakt.php';
+
+        if (is_file($configFile)) {
+            $config = @include $configFile;
+            if (is_array($config)) {
+                $config['access_token'] = null;
+                $config['refresh_token'] = null;
+                $config['username'] = null;
+                @file_put_contents($configFile, '<?php return ' . var_export($config, true) . ';');
+            }
+        }
+
+        return (new Response())->json([
+            'message' => 'Disconnected',
+        ]);
+    }
 }

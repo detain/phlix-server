@@ -6,6 +6,7 @@ namespace Phlix\Media\Markers\Detection;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use Workerman\Timer;
 
 /**
  * Background worker that processes the marker detection queue.
@@ -123,7 +124,7 @@ class BackgroundDetectorWorker
             $processed = $this->runOnce();
 
             if (!$processed) {
-                sleep($sleepSeconds);
+                Timer::sleep((float)$sleepSeconds);
             }
         }
     }

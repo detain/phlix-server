@@ -479,6 +479,16 @@ CI runs the SPA build + Vitest suite on any change under `admin-ui/` via the **A
 Actions workflow (`.github/workflows/admin-ui.yml`): `npm ci → npm run build → npm run test` on
 push/PR to `master`/`main`/`develop` (path-filtered, so PHP-only changes don't trigger it).
 
+The first feature page on top of the scaffold is the **Libraries** page at `/admin/libraries`
+(step 1.1c): list / add / edit / delete libraries, a `PathPicker` driving the 0.6
+`GET /api/v1/admin/fs/browse` endpoint, per-row Scan / Rescan buttons that hit the **async** 1.1b
+scan API (`POST /api/v1/libraries/{id}/scan|rescan` → 202 `{job_id, status: "queued"}`), live
+**coarse** lifecycle status by polling `GET .../scan-status` every 2 s (polling stops on
+`completed` / `failed`), and a per-library scan-history modal. No backend changes — the page
+consumes only contracts already shipped by 0.6 and 1.1b. Full operator + contributor docs live in
+the [phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/library-management.md`
+and `docs/dev/admin-spa.md`).
+
 ### Git Workflow
 
 1. Create a feature branch: `git checkout -b feature/my-feature`

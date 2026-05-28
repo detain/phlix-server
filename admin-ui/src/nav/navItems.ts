@@ -15,4 +15,5 @@ export interface NavItem {
 
 export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/', label: 'Dashboard' },
+  { path: '/libraries', label: 'Libraries' },
 ] as const;

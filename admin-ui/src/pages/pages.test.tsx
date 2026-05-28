@@ -30,7 +30,10 @@ describe('NotFoundPage', () => {
 });
 
 describe('NAV_ITEMS', () => {
-  it('contains exactly the Dashboard route for the 0.4 scaffold', () => {
-    expect(NAV_ITEMS).toEqual([{ path: '/', label: 'Dashboard' }]);
+  it('includes the Dashboard and Libraries routes', () => {
+    expect(NAV_ITEMS).toEqual([
+      { path: '/', label: 'Dashboard' },
+      { path: '/libraries', label: 'Libraries' },
+    ]);
   });
 });

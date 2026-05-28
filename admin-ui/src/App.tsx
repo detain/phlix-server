@@ -15,6 +15,7 @@ import { Route, Routes } from 'react-router-dom';
 import { useAdminGuard, type RedirectFn } from './auth/useAdminGuard';
 import { AdminNav } from './nav/AdminNav';
 import { DashboardPage } from './pages/DashboardPage';
+import { LibrariesPage } from './pages/LibrariesPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { ToastProvider } from './components/Toast';
 import type { ApiClient } from './api/client';
@@ -49,6 +50,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
         <main className="admin-shell__main">
           <Routes>
             <Route path="/" element={<DashboardPage user={user} />} />
+            <Route path="/libraries" element={<LibrariesPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

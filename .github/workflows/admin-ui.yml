@@ -35,7 +35,7 @@ jobs:
           cache-dependency-path: admin-ui/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --include=dev
         working-directory: admin-ui
 
       - name: Build SPA (tsc --noEmit && vite build)

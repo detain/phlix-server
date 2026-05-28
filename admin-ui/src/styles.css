@@ -296,3 +296,88 @@ body {
   justify-content: space-between;
   gap: 0.5rem;
 }
+
+/* --- Users page (1.2c) --- */
+
+.admin-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.admin-badge--admin {
+  background: var(--admin-accent);
+  color: #fff;
+}
+
+.admin-badge--user {
+  background: var(--admin-bg);
+  color: var(--admin-muted);
+}
+
+.user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.rating-badge {
+  font-weight: 600;
+}
+
+.pin-indicator {
+  font-size: 0.8rem;
+  color: var(--admin-muted);
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.password-reset-display {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.password-reset-display input {
+  flex: 1;
+}
+
+.copy-btn {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--admin-accent);
+  background: transparent;
+  color: var(--admin-accent);
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  background: var(--admin-accent);
+  color: #fff;
+}
+
+.profiles-toolbar {
+  margin-bottom: 0.75rem;
+}
+
+.profile-form-inline {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #000;
+}
+
+.profile-form-inline h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  color: var(--admin-muted);
+}
+
+.form__checkbox {
+  margin-right: 0.35rem;
+}

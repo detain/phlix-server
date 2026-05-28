@@ -386,6 +386,13 @@ return [
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |
+| GET | `/api/v1/admin/users` | List all users — admin-only |
+| GET | `/api/v1/admin/users/{id}` | Get a specific user — admin-only |
+| POST | `/api/v1/admin/users` | Create a new user — admin-only |
+| PUT | `/api/v1/admin/users/{id}` | Update a user (username, email, password) — admin-only |
+| DELETE | `/api/v1/admin/users/{id}` | Delete a user — admin-only |
+| POST | `/api/v1/admin/users/{id}/set-admin` | Promote or demote a user — admin-only |
+| POST | `/api/v1/admin/users/{id}/reset-password` | Reset a user's password (returns new password) — admin-only |
 
 ### WebSocket Events
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Routes;
 
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
@@ -144,6 +145,18 @@ final class AdminRoutes
                 /** @var FsBrowseController $fsBrowseController */
                 $fsBrowseController = $container->get(FsBrowseController::class);
                 $r->get('/fs/browse', [$fsBrowseController, 'browse']);
+
+                // Admin user management (Step 1.2a).
+                /** @var AdminUserController $adminUserController */
+                $adminUserController = $container->get(AdminUserController::class);
+
+                $r->get('/users', [$adminUserController, 'list']);
+                $r->get('/users/{id}', [$adminUserController, 'get']);
+                $r->post('/users', [$adminUserController, 'create']);
+                $r->put('/users/{id}', [$adminUserController, 'update']);
+                $r->delete('/users/{id}', [$adminUserController, 'delete']);
+                $r->post('/users/{id}/set-admin', [$adminUserController, 'setAdmin']);
+                $r->post('/users/{id}/reset-password', [$adminUserController, 'resetPassword']);
             },
             [$adminMiddleware],
         );

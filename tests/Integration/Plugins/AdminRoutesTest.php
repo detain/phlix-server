@@ -20,6 +20,7 @@ use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
@@ -76,6 +77,7 @@ final class AdminRoutesTest extends TestCase
             new SettingsRepository($this->createMock(Connection::class)),
         );
         $fsBrowseController  = new FsBrowseController([sys_get_temp_dir()]);
+        $adminUserController  = new AdminUserController($this->users);
 
         $container = new class (
             $this->loader,
@@ -86,6 +88,7 @@ final class AdminRoutesTest extends TestCase
             $backupController,
             $settingsController,
             $fsBrowseController,
+            $adminUserController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -99,6 +102,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly BackupController $backupController,
                 private readonly AdminSettingsController $settingsController,
                 private readonly FsBrowseController $fsBrowseController,
+                private readonly AdminUserController $adminUserController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -136,6 +140,7 @@ final class AdminRoutesTest extends TestCase
                     BackupController::class    => $this->backupController,
                     AdminSettingsController::class => $this->settingsController,
                     FsBrowseController::class => $this->fsBrowseController,
+                    AdminUserController::class => $this->adminUserController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -153,6 +158,7 @@ final class AdminRoutesTest extends TestCase
                     BackupController::class,
                     AdminSettingsController::class,
                     FsBrowseController::class,
+                    AdminUserController::class,
                 ], true);
             }
         };

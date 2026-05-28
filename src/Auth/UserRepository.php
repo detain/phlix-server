@@ -118,19 +118,58 @@ class UserRepository
     }
 
     /**
-     * Total number of rows in the `users` table. Used by
-     * {@see \Phlix\Auth\AuthManager::register()} to detect the very
+     * Total number of rows in the `users` table, optionally filtered by a predicate.
+     *
+     * Used by {@see \Phlix\Auth\AuthManager::register()} to detect the very
      * first registration on a fresh install and auto-promote that user
      * to admin (Step A.5 minimum-viable admin bootstrap).
+     *
+     * @param string $predicate Optional SQL WHERE clause (e.g. "is_admin = 1").
+     *                           SECURITY: The predicate is appended directly to
+     *                           the COUNT query after "WHERE " — callers MUST pass
+     *                           ONLY hardcoded, internal literals (no user input).
+     *                           In practice only 'is_admin = 1' is ever passed from
+     *                           AdminUserController::countAdmins().
      *
      * @return int Total user count (>= 0).
      *
      * @since 0.10.0 (Step A.5)
      */
-    public function countUsers(): int
+    public function countUsers(string $predicate = ''): int
     {
-        $row = UserRow::firstFromMixed($this->db->query("SELECT COUNT(*) AS c FROM users"));
+        $sql = 'SELECT COUNT(*) AS c FROM users';
+        if ($predicate !== '') {
+            $sql .= ' WHERE ' . $predicate;
+        }
+        $row = UserRow::firstFromMixed($this->db->query($sql));
         return UserRow::int($row, 'c', 0);
+    }
+
+    /**
+     * Return all users.
+     *
+     * @return array<int, array<string, mixed>> Array of user rows
+     */
+    public function findAll(): array
+    {
+        $result = $this->db->query('SELECT * FROM users');
+        if (!is_array($result)) {
+            return [];
+        }
+        /** @var array<int, array<string, mixed>> */
+        return $result;
+    }
+
+    /**
+     * Delete a user by ID.
+     *
+     * @param string $id User UUID to delete
+     *
+     * @return void
+     */
+    public function delete(string $id): void
+    {
+        $this->db->query('DELETE FROM users WHERE id = ?', [$id]);
     }
 
     /**
@@ -510,12 +549,19 @@ class UserRepository
      * }
      * ```
      */
-    public function emailExists(string $email): bool
+    public function emailExists(string $email, ?int $excludeId = null): bool
     {
-        $result = $this->db->query(
-            "SELECT 1 FROM users WHERE email = ?",
-            [$email]
-        );
+        if ($excludeId !== null) {
+            $result = $this->db->query(
+                'SELECT 1 FROM users WHERE email = ? AND id != ?',
+                [$email, $excludeId]
+            );
+        } else {
+            $result = $this->db->query(
+                'SELECT 1 FROM users WHERE email = ?',
+                [$email]
+            );
+        }
         return !empty($result);
     }
 

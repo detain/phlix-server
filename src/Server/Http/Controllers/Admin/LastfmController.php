@@ -151,4 +151,51 @@ final class LastfmController
         $this->sessions->delete($userId);
         return (new Response())->status(302)->header('Location', '/admin/lastfm');
     }
+
+    /**
+     * `GET /api/v1/admin/services/lastfm/status` — JSON status for the SPA.
+     *
+     * @param array<string, string> $params Path parameters (unused).
+     */
+    public function status(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code'  => 'auth.required',
+            ]);
+        }
+
+        $session = $this->sessions->findByUserId($userId);
+        $username = $session !== null ? ($this->config->username ?: $userId) : null;
+
+        return (new Response())->json([
+            'connected'   => $session !== null,
+            'username'    => $username,
+            'api_key_set' => $this->config->isUsable(),
+        ]);
+    }
+
+    /**
+     * `POST /api/v1/admin/services/lastfm/disconnect` — JSON disconnect for SPA.
+     *
+     * @param array<string, string> $params Path parameters (unused).
+     */
+    public function apiDisconnect(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json([
+                'error' => 'Unauthorized',
+                'code'  => 'auth.required',
+            ]);
+        }
+
+        $this->sessions->delete($userId);
+
+        return (new Response())->json([
+            'message' => 'Disconnected',
+        ]);
+    }
 }

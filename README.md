@@ -492,8 +492,19 @@ The first feature page on top of the scaffold is the **Libraries** page at `/adm
 scan API (`POST /api/v1/libraries/{id}/scan|rescan` → 202 `{job_id, status: "queued"}`), live
 **coarse** lifecycle status by polling `GET .../scan-status` every 2 s (polling stops on
 `completed` / `failed`), and a per-library scan-history modal. No backend changes — the page
-consumes only contracts already shipped by 0.6 and 1.1b. Full operator + contributor docs live in
-the [phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/library-management.md`
+consumes only contracts already shipped by 0.6 and 1.1b.
+
+The **Settings** page at `/admin/settings` (step 1.3) renders all 15 server-setting
+keys across 8 tabbed groups (Transcoding, Metadata, Markers, Subtitles, Discovery,
+Trickplay, Newsletter, Port Forward). It consumes the 0.5 GET/PUT `/api/v1/admin/settings`
+contract — **no new endpoints were added**. Bool keys render as toggle switches;
+numeric keys render as number inputs with `min`/`max` constraints; `tmdb.api_key` renders
+as a password field with Show/Hide toggle. Overridden keys (DB-persisted vs. config-file
+default) display a "custom" badge. A sticky Save button fires `PUT /api/v1/admin/settings`;
+dirty-state gating keeps the button disabled when no fields have changed.
+
+Full operator + contributor docs live in the
+[phlix-docs](https://github.com/detain/phlix-docs) site (`docs/admin/server-settings.md`
 and `docs/dev/admin-spa.md`).
 
 ### Git Workflow

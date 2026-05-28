@@ -30,11 +30,12 @@ describe('NotFoundPage', () => {
 });
 
 describe('NAV_ITEMS', () => {
-  it('includes the Dashboard, Libraries and Users routes', () => {
+  it('includes the Dashboard, Libraries, Users and Settings routes', () => {
     expect(NAV_ITEMS).toEqual([
       { path: '/', label: 'Dashboard' },
       { path: '/libraries', label: 'Libraries' },
       { path: '/users', label: 'Users' },
+      { path: '/settings', label: 'Settings' },
     ]);
   });
 });

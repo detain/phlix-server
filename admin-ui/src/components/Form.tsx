@@ -35,9 +35,13 @@ export interface FieldProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
-  type?: 'text' | 'email' | 'password' | 'url' | 'number';
+  type?: 'text' | 'email' | 'password' | 'url' | 'number' | 'switch';
   placeholder?: string;
   required?: boolean;
+  /** Minimum value for type="number" inputs (HTML min attribute). */
+  min?: number;
+  /** Maximum value for type="number" inputs (HTML max attribute). */
+  max?: number;
 }
 
 export function Field({
@@ -48,7 +52,27 @@ export function Field({
   type = 'text',
   placeholder,
   required = false,
+  min,
+  max,
 }: FieldProps): JSX.Element {
+  if (type === 'switch') {
+    return (
+      <div className="form__field">
+        <label className="form__label form__label--switch" htmlFor={id}>
+          <input
+            id={id}
+            className="form__switch"
+            type="checkbox"
+            checked={value === 'true' || value === '1'}
+            onChange={(e) => onChange(e.target.checked ? 'true' : 'false')}
+          />
+          {' '}{label}
+          {required ? <span aria-hidden="true"> *</span> : null}
+        </label>
+      </div>
+    );
+  }
+
   return (
     <div className="form__field">
       <label className="form__label" htmlFor={id}>
@@ -62,6 +86,8 @@ export function Field({
         value={value}
         placeholder={placeholder}
         required={required}
+        min={min}
+        max={max}
         onChange={(e) => onChange(e.target.value)}
       />
     </div>

@@ -381,3 +381,156 @@ body {
 .form__checkbox {
   margin-right: 0.35rem;
 }
+
+/* --- Settings page (1.3) --- */
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid #000;
+  padding-bottom: 0.5rem;
+}
+
+.settings-tab {
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: color 0.15s, background 0.15s;
+}
+
+.settings-tab:hover {
+  color: var(--admin-fg);
+  background: var(--admin-bg);
+}
+
+.settings-tab--active {
+  color: var(--admin-fg);
+  background: var(--admin-panel);
+  border-color: #000;
+  border-bottom-color: var(--admin-panel);
+}
+
+.settings-panel {
+  min-height: 200px;
+}
+
+.settings-empty {
+  color: var(--admin-muted);
+  text-align: center;
+  padding: 2rem;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  position: relative;
+}
+
+.settings-field--password {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.settings-field--password .form__field {
+  flex: 1;
+  min-width: 200px;
+}
+
+.password-toggle {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--admin-accent);
+  background: transparent;
+  color: var(--admin-accent);
+  cursor: pointer;
+  font-size: 0.85rem;
+  margin-top: 1.6rem;
+}
+
+.password-toggle:hover {
+  background: var(--admin-accent);
+  color: #fff;
+}
+
+/* Switch toggle (for bool fields) */
+.form__switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--admin-bg);
+  border: 1px solid var(--admin-muted);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.form__switch::after {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--admin-muted);
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.form__switch:checked {
+  background: var(--admin-accent);
+  border-color: var(--admin-accent);
+}
+
+.form__switch:checked::after {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+.form__label--switch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+/* Overridden "custom" badge */
+.overridden-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--admin-accent);
+  color: #fff;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+/* Sticky save area */
+.settings-save {
+  position: sticky;
+  bottom: 0;
+  background: var(--admin-panel);
+  padding: 1rem 0;
+  margin-top: 1rem;
+  border-top: 1px solid #000;
+}
+
+.form__error {
+  color: var(--admin-error);
+  font-size: 0.8rem;
+  margin-top: 0.2rem;
+}

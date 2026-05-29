@@ -1544,3 +1544,67 @@ body {
     width: 100%;
   }
 }
+
+/* --- DLNA Server page (2.2) --- */
+
+.page--dlna-server .page__header {
+  margin-bottom: 1.5rem;
+}
+
+.dlna-server-card {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  border: 1px solid #000;
+  padding: 1.5rem;
+  max-width: 520px;
+}
+
+.dlna-server-card__status {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.dlna-server-card__indicator {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.dlna-server-card__label {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.dlna-server-card__details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 1rem;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.dlna-server-card__details dt {
+  color: var(--admin-muted);
+}
+
+.dlna-server-card__details dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.dlna-server-card__actions {
+  margin-top: 1rem;
+}
+
+.dlna-server-card__not-configured {
+  color: var(--admin-muted);
+  margin: 0;
+}
+
+.page__note {
+  font-size: 0.85rem;
+  color: var(--admin-muted);
+  margin-top: 1rem;
+  max-width: 520px;
+}

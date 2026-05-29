@@ -346,6 +346,9 @@ class Application
         // Backup admin routes (1.5).
         $this->loadBackupRoutes();
 
+        // DLNA admin routes — server status/start/stop (2.2).
+        $this->loadDlnaAdminRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -501,6 +504,50 @@ class Application
             );
         } catch (\Throwable) {
             // Backup not configured — silent ignore
+        }
+    }
+
+    /**
+     * Registers DLNA CDS server admin JSON API routes (2.2).
+     *
+     * Wires endpoints for:
+     * - GET /api/v1/admin/dlna/status — current server state
+     * - POST /api/v1/admin/dlna/start — start the CDS server
+     * - POST /api/v1/admin/dlna/stop — stop the CDS server
+     *
+     * These routes are gated by AdminMiddleware.
+     *
+     * @since 2.2
+     */
+    private function loadDlnaAdminRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+            $controller = new \Phlix\Server\Http\Controllers\Dlna\AdminDlnaServerController();
+
+            if ($this->container->has(\Phlix\Dlna\CdsServer::class)) {
+                /** @var \Phlix\Dlna\CdsServer $cdsServer */
+                $cdsServer = $this->container->get(\Phlix\Dlna\CdsServer::class);
+                $controller->setCdsServer($cdsServer);
+            }
+
+            $this->router->group(
+                '/api/v1/admin/dlna',
+                function (Router $r) use ($controller): void {
+                    $r->get('/status', [$controller, 'status']);
+                    $r->post('/start', [$controller, 'start']);
+                    $r->post('/stop', [$controller, 'stop']);
+                },
+                [$adminMiddleware],
+            );
+        } catch (\Throwable) {
+            // DLNA admin not configured — silent ignore
         }
     }
 

@@ -13,7 +13,9 @@ use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
+use Phlix\Auth\WatchHistory;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -51,6 +53,12 @@ class WebPortalRouter
     /** @var UserRepository|null Persists/reads user settings; null when not wired */
     private ?UserRepository $userRepository;
 
+    /** @var WatchHistory|null Tracks watch history per profile; null when not wired */
+    private ?WatchHistory $watchHistory;
+
+    /** @var UserProfileManager|null Resolves user profiles; null when not wired */
+    private ?UserProfileManager $profileManager;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -65,6 +73,10 @@ class WebPortalRouter
      * @param PlaybackMarkerService $playbackMarkerService Provides skip-button specs
      * @param UserRepository|null $userRepository Persists user settings (optional;
      *        when null the settings endpoints respond 503 instead of faking success)
+     * @param WatchHistory|null $watchHistory Tracks watch history per profile (optional;
+     *        when null the history endpoints respond 503 instead of faking success)
+     * @param UserProfileManager|null $profileManager Resolves user profiles (optional;
+     *        when null the history endpoints respond 503 instead of faking success)
      *
      * @example
      * ```php
@@ -75,7 +87,9 @@ class WebPortalRouter
      *     $playbackController,
      *     $authManager,
      *     $playbackMarkerService,
-     *     $userRepository
+     *     $userRepository,
+     *     $watchHistory,
+     *     $profileManager
      * );
      * ```
      */
@@ -86,7 +100,9 @@ class WebPortalRouter
         PlaybackController $playbackController,
         AuthManager $authManager,
         PlaybackMarkerService $playbackMarkerService,
-        ?UserRepository $userRepository = null
+        ?UserRepository $userRepository = null,
+        ?WatchHistory $watchHistory = null,
+        ?UserProfileManager $profileManager = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -97,6 +113,8 @@ class WebPortalRouter
         $this->playbackController = $playbackController;
         $this->playbackMarkerService = $playbackMarkerService;
         $this->userRepository = $userRepository;
+        $this->watchHistory = $watchHistory;
+        $this->profileManager = $profileManager;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -131,6 +149,10 @@ class WebPortalRouter
         // User activity routes
         $this->router->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
         $this->router->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
+
+        // Watch history routes
+        $this->router->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
+        $this->router->delete('/api/v1/users/me/history', [$this, 'clearHistory']);
 
         // Settings routes
         $this->router->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
@@ -459,6 +481,104 @@ class WebPortalRouter
 
         $items = $this->playbackController->getRecentlyWatched($userId);
         return (new Response())->json(['items' => $items]);
+    }
+
+    /**
+     * Removes a single item from the user's watch history.
+     *
+     * @param Request $request The HTTP request (userId set from auth)
+     * @param array<string, string> $params Route parameters including 'mediaItemId'
+     *
+     * @return Response JSON response with success message, 401 if not authenticated,
+     *         or 404 if the item was not found in history
+     *
+     * @api_endpoint DELETE /api/v1/users/me/history/{mediaItemId}
+     *
+     * @requires Authentication
+     */
+    public function removeFromHistory(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->watchHistory === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Watch history is not configured on this server',
+            ]);
+        }
+
+        if ($this->profileManager === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Profile manager is not configured on this server',
+            ]);
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+        }
+
+        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
+        if ($profileId === '') {
+            return (new Response())->status(500)->json(['error' => 'Invalid profile ID']);
+        }
+
+        $mediaItemId = $params['mediaItemId'] ?? '';
+        if ($mediaItemId === '') {
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+        }
+
+        $this->watchHistory->removeFromHistory($profileId, $mediaItemId);
+
+        return (new Response())->json(['message' => 'Removed from watch history']);
+    }
+
+    /**
+     * Clears all watch history for the user's active profile.
+     *
+     * @param Request $request The HTTP request (userId set from auth)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with success message or 401 if not authenticated
+     *
+     * @api_endpoint DELETE /api/v1/users/me/history
+     *
+     * @requires Authentication
+     */
+    public function clearHistory(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->watchHistory === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Watch history is not configured on this server',
+            ]);
+        }
+
+        if ($this->profileManager === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Profile manager is not configured on this server',
+            ]);
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            return (new Response())->status(404)->json(['error' => 'No active profile found']);
+        }
+
+        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
+        if ($profileId === '') {
+            return (new Response())->status(500)->json(['error' => 'Invalid profile ID']);
+        }
+
+        $this->watchHistory->clearHistory($profileId);
+
+        return (new Response())->json(['message' => 'Watch history cleared']);
     }
 
     /**

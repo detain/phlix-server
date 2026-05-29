@@ -173,17 +173,24 @@ describe('CollectionsPage', () => {
 
   it('creates a manual collection and shows success toast', async () => {
     const { calls } = renderPage([
-      // Initial load (StrictMode double = 4 calls)
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      // Initial load - return sampleCollection so library dropdown is populated
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       // POST create
       { status: 200, body: { collection: sampleCollection }, urlMatch: '/collections' },
-      // Refresh after create (2 parallel calls)
+      // Refresh after create - with plenty extra
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      // Extra for StrictMode cleanup
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
     ]);
@@ -207,14 +214,32 @@ describe('CollectionsPage', () => {
 
   it('deletes a collection after confirming', async () => {
     const { calls } = renderPage([
-      // Initial load (StrictMode double = 4 calls)
+      // Initial load - 12 sets of responses for each pattern
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       // DELETE
       { status: 200, body: { message: 'deleted' }, urlMatch: '/collections' },
-      // Refresh (2 calls)
+      // Refresh after delete - 8 sets for each pattern
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
     ]);
@@ -260,7 +285,13 @@ describe('CollectionsPage', () => {
 
   it('opens view items modal and shows items', async () => {
     renderPage([
-      // Initial load (StrictMode double = 4 calls)
+      // Initial load - many responses to handle StrictMode unpredictable double invocation
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
@@ -270,7 +301,11 @@ describe('CollectionsPage', () => {
         { id: 'item-1', title: 'Movie 1' },
         { id: 'item-2', title: 'Movie 2' },
       ]}, urlMatch: '/collections' },
-      // Extra responses for safety (StrictMode cleanup, etc.)
+      // Extra responses for StrictMode cleanup and safety
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
     ]);
@@ -293,14 +328,24 @@ describe('CollectionsPage', () => {
 
   it('creates a smart collection with rules', async () => {
     renderPage([
-      // Initial load (StrictMode double = 4 calls)
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      // Initial load - return sampleCollection so library dropdown is populated
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       // POST create
       { status: 200, body: { smart_playlist: sampleSmart }, urlMatch: '/smart-playlists' },
-      // Refresh (2 calls)
+      // Refresh after create - with plenty extra
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+      { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
     ]);
@@ -365,16 +410,19 @@ describe('CollectionsPage', () => {
 
   it('deletes a smart collection after confirming', async () => {
     const { calls } = renderPage([
-      // Initial load (StrictMode double = 4 calls)
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
+      // Initial load - many responses to handle StrictMode unpredictable double invocation
+      // Each pattern needs 20+ responses to prevent counter wraparound
+      ...Array.from({ length: 12 }, () => [
+        { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+        { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
+      ]).flat(),
       // DELETE
       { status: 200, body: { message: 'deleted' }, urlMatch: '/smart-playlists' },
-      // Refresh (2 calls)
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      // Refresh after delete - many sets for each pattern
+      ...Array.from({ length: 12 }, () => [
+        { status: 200, body: { collections: [] }, urlMatch: '/collections' },
+        { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      ]).flat(),
     ]);
 
     await waitFor(() => {

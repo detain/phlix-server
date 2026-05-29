@@ -1,4 +1,4 @@
-{extends file="layouts/app.tpl"}
+{extends file="layouts/main.tpl"}
 
 {block name="content"}
 <div class="webauthn-settings">
@@ -18,11 +18,13 @@
                     <span class="ms-2">Loading credentials...</span>
                 </div>
             </div>
+            <div id="credentials-error" class="text-danger mt-2" style="display:none;"></div>
         </div>
         <div class="card-footer">
             <button type="button" class="btn btn-primary" id="register-passkey-btn">
                 <i class="bi bi-plus-circle"></i> Register New Passkey
             </button>
+            <div id="register-error" class="text-danger mt-2" style="display:none;"></div>
         </div>
     </div>
 
@@ -54,7 +56,14 @@
     'use strict';
 
     const credentialsList = document.getElementById('credentials-list');
+    const credentialsError = document.getElementById('credentials-error');
     const registerBtn = document.getElementById('register-passkey-btn');
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
 
     async function loadCredentials() {
         try {
@@ -87,7 +96,7 @@
             const deviceIcon = cred.device_type === 'platform' ? 'bi-laptop' : 'bi-phone';
             html += '<li class="list-group-item d-flex justify-content-between align-items-center">';
             html += '<div><i class="bi ' + deviceIcon + ' me-2"></i>';
-            html += '<span class="credential-id">' + cred.credential_id.substring(0, 20) + '...</span>';
+            html += '<span class="credential-id">' + escapeHtml(cred.credential_id.substring(0, 20)) + '...</span>';
             html += '<small class="text-muted d-block">Registered: ' + created + '</small>';
             html += '</div>';
             html += '<button type="button" class="btn btn-sm btn-outline-danger delete-credential-btn" ';
@@ -128,7 +137,8 @@
 
             loadCredentials();
         } catch (error) {
-            alert('Error deleting credential: ' + error.message);
+            credentialsError.textContent = 'Error deleting credential: ' + error.message;
+            credentialsError.style.display = 'block';
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-trash"></i> Delete';
         }
@@ -191,7 +201,11 @@
 
             loadCredentials();
         } catch (error) {
-            alert('Error registering passkey: ' + error.message);
+            const registerError = document.getElementById('register-error');
+            if (registerError) {
+                registerError.textContent = 'Error registering passkey: ' + error.message;
+                registerError.style.display = 'block';
+            }
         } finally {
             registerBtn.disabled = false;
             registerBtn.innerHTML = '<i class="bi bi-plus-circle"></i> Register New Passkey';

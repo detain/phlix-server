@@ -1825,3 +1825,340 @@ body {
     width: 100%;
   }
 }
+
+/* --- Live TV page (2.5) --- */
+
+.page--live-tv {
+  max-width: 900px;
+}
+
+.livetv__section {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  border: 1px solid #000;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.livetv__section-header {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  color: var(--admin-fg);
+  transition: background-color 0.15s;
+}
+
+.livetv__section-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.livetv__section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.livetv__section-title-row h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.livetv__chevron {
+  font-size: 0.75rem;
+  transition: transform 0.2s;
+  color: var(--admin-muted);
+}
+
+.livetv__chevron--up {
+  transform: rotate(180deg);
+}
+
+.livetv__section-summary {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--admin-muted);
+}
+
+.livetv__section-body {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.livetv__section-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.livetv__empty {
+  color: var(--admin-muted);
+  margin: 0;
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+/* Tuner grid */
+.livetv__tuner-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.livetv__tuner-card {
+  background: var(--admin-bg);
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.livetv__tuner-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.livetv__tuner-name {
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.livetv__status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--admin-muted);
+  flex-shrink: 0;
+}
+
+.livetv__status-dot--active {
+  background: var(--admin-success);
+}
+
+.livetv__dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 1rem;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.livetv__dl dt {
+  color: var(--admin-muted);
+}
+
+.livetv__dl dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.livetv__card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* Guide / EPG */
+.livetv__date-picker {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.livetv__guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+
+.livetv__program-card {
+  background: var(--admin-bg);
+  border-radius: 6px;
+  padding: 0.75rem;
+  border: 1px solid #000;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.livetv__program-card:hover,
+.livetv__program-card--selected {
+  border-color: var(--admin-accent);
+}
+
+.livetv__program-card--selected {
+  background: rgba(74, 140, 255, 0.08);
+}
+
+.livetv__program-time {
+  font-size: 0.75rem;
+  color: var(--admin-muted);
+  margin-bottom: 0.25rem;
+}
+
+.livetv__program-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 0.25rem;
+}
+
+.livetv__program-desc {
+  font-size: 0.8rem;
+  color: var(--admin-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.livetv__program-expanded {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.livetv__program-full-desc {
+  font-size: 0.85rem;
+  color: var(--admin-fg);
+  margin: 0 0 0.5rem;
+  line-height: 1.5;
+}
+
+.livetv__program-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* Recordings */
+.livetv__recording-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.livetv__recording-tab {
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: color 0.15s, background 0.15s;
+}
+
+.livetv__recording-tab:hover {
+  color: var(--admin-fg);
+  background: var(--admin-bg);
+}
+
+.livetv__recording-tab--active {
+  color: var(--admin-fg);
+  background: var(--admin-bg);
+  border-color: #000;
+  border-bottom-color: var(--admin-bg);
+}
+
+.livetv__recordings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.livetv__recording-card {
+  background: var(--admin-bg);
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.livetv__recording-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.livetv__recording-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.livetv__recording-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+/* Series Rules */
+.livetv__rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.livetv__rule-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  background: var(--admin-bg);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+}
+
+.livetv__rule-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.livetv__rule-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.livetv__rule-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-size: 0.8rem;
+}
+
+/* Form row utility */
+.form__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 500px) {
+  .livetv__tuner-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .livetv__guide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form__row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -18,6 +18,7 @@ import { BackupPage } from './pages/BackupPage';
 import { CastDevicesPage } from './pages/CastDevicesPage';
 import { DlnaServerPage } from './pages/DlnaServerPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { RemoteAccessPage } from './pages/RemoteAccessPage';
 import { LibrariesPage } from './pages/LibrariesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
@@ -67,6 +68,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/services" element={<ServicesPage client={client} />} />
             <Route path="/cast-devices" element={<CastDevicesPage client={client} />} />
             <Route path="/dlna-server" element={<DlnaServerPage client={client} />} />
+            <Route path="/remote-access" element={<RemoteAccessPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

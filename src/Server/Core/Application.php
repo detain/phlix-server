@@ -349,6 +349,9 @@ class Application
         // DLNA admin routes — server status/start/stop (2.2).
         $this->loadDlnaAdminRoutes();
 
+        // Remote access admin routes — hub pairing/subdomain/relay/portforward (2.3).
+        $this->loadHubAdminRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -548,6 +551,67 @@ class Application
             );
         } catch (\Throwable) {
             // DLNA admin not configured — silent ignore
+        }
+    }
+
+    /**
+     * Registers remote access admin JSON API routes (2.3).
+     *
+     * Wires endpoints for hub pairing, subdomain management, relay tunnel
+     * control, and port-forward configuration. These routes are gated by
+     * AdminMiddleware.
+     *
+     * @since 2.3
+     */
+    private function loadHubAdminRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+            $configDirRaw = $this->config['_config_dir'] ?? 'config';
+            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $controller = new \Phlix\Server\Http\Controllers\Admin\AdminHubController(
+                $this->container,
+                $configDir,
+            );
+
+            $this->router->group(
+                '/api/v1/admin/remote',
+                function (Router $r) use ($controller): void {
+                    // Hub pairing (6 endpoints)
+                    $r->get('/hub/status', [$controller, 'hubStatus']);
+                    $r->post('/hub/pair', [$controller, 'hubPair']);
+                    $r->post('/hub/poll', [$controller, 'hubPoll']);
+                    $r->post('/hub/complete', [$controller, 'hubComplete']);
+                    $r->post('/hub/unenroll', [$controller, 'hubUnenroll']);
+                    $r->post('/hub/heartbeat', [$controller, 'hubHeartbeat']);
+
+                    // Subdomain (3 endpoints)
+                    $r->get('/subdomain/status', [$controller, 'subdomainStatus']);
+                    $r->post('/subdomain/claim', [$controller, 'subdomainClaim']);
+                    $r->post('/subdomain/release', [$controller, 'subdomainRelease']);
+
+                    // Relay tunnel (4 endpoints)
+                    $r->get('/relay/status', [$controller, 'relayStatus']);
+                    $r->post('/relay/enable', [$controller, 'relayEnable']);
+                    $r->post('/relay/disable', [$controller, 'relayDisable']);
+                    $r->post('/relay/ping', [$controller, 'relayPing']);
+
+                    // Port forward (4 endpoints)
+                    $r->get('/portforward/status', [$controller, 'portForwardStatus']);
+                    $r->post('/portforward/enable', [$controller, 'portForwardEnable']);
+                    $r->post('/portforward/disable', [$controller, 'portForwardDisable']);
+                    $r->get('/portforward/candidates', [$controller, 'portForwardCandidates']);
+                },
+                [$adminMiddleware],
+            );
+        } catch (\Throwable) {
+            // Remote access not configured — silent ignore
         }
     }
 

@@ -352,6 +352,9 @@ class Application
         // Remote access admin routes — hub pairing/subdomain/relay/portforward (2.3).
         $this->loadHubAdminRoutes();
 
+        // Live TV / DVR admin routes — tuners, channels, guide, recordings, series rules (2.4).
+        $this->loadLiveTvAdminRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -612,6 +615,70 @@ class Application
             );
         } catch (\Throwable) {
             // Remote access not configured — silent ignore
+        }
+    }
+
+    /**
+     * Registers Live TV / DVR admin JSON API routes (2.4).
+     *
+     * Wires 20 endpoints for tuners, channels, EPG/guide, recordings, and
+     * series rules. These routes are gated by AdminMiddleware.
+     *
+     * @since 2.4
+     */
+    private function loadLiveTvAdminRoutes(): void
+    {
+        if ($this->container === null) {
+            return;
+        }
+
+        try {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+            /** @var \Phlix\Server\Http\Controllers\Admin\AdminLiveTvController $controller */
+            $controller = $this->container->get(\Phlix\Server\Http\Controllers\Admin\AdminLiveTvController::class);
+
+            $this->router->group(
+                '/api/v1/admin/livetv',
+                function (Router $r) use ($controller): void {
+                    // Tuners (5 endpoints)
+                    $r->get('/tuners', [$controller, 'listTuners']);
+                    $r->get('/tuners/scan', [$controller, 'scanTuners']);
+                    $r->get('/tuners/{id}', [$controller, 'getTuner']);
+                    $r->put('/tuners/{id}', [$controller, 'updateTuner']);
+                    $r->delete('/tuners/{id}', [$controller, 'deleteTuner']);
+
+                    // Channels (4 endpoints)
+                    $r->get('/channels', [$controller, 'listChannels']);
+                    $r->get('/channels/{id}', [$controller, 'getChannel']);
+                    $r->put('/channels/{id}', [$controller, 'updateChannel']);
+                    $r->get('/channels/{id}/stream', [$controller, 'streamChannel']);
+
+                    // Guide / EPG (3 endpoints)
+                    $r->get('/guide', [$controller, 'listGuide']);
+                    $r->get('/guide/programs/{id}', [$controller, 'getProgram']);
+                    $r->post('/guide/refresh', [$controller, 'refreshGuide']);
+
+                    // Recordings (6 endpoints)
+                    $r->get('/recordings', [$controller, 'listRecordings']);
+                    $r->get('/recordings/upcoming', [$controller, 'listUpcomingRecordings']);
+                    $r->get('/recordings/series/{seriesId}', [$controller, 'listBySeries']);
+                    $r->get('/recordings/{id}', [$controller, 'getRecording']);
+                    $r->post('/recordings', [$controller, 'createRecording']);
+                    $r->delete('/recordings/{id}', [$controller, 'deleteRecording']);
+
+                    // Series Rules (5 endpoints)
+                    $r->get('/series-rules', [$controller, 'listSeriesRules']);
+                    $r->get('/series-rules/{id}', [$controller, 'getSeriesRule']);
+                    $r->post('/series-rules', [$controller, 'createSeriesRule']);
+                    $r->put('/series-rules/{id}', [$controller, 'updateSeriesRule']);
+                    $r->delete('/series-rules/{id}', [$controller, 'deleteSeriesRule']);
+                },
+                [$adminMiddleware],
+            );
+        } catch (\Throwable) {
+            // LiveTV admin not configured — silent ignore
         }
     }
 

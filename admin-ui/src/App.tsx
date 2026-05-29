@@ -16,6 +16,7 @@ import { useAdminGuard, type RedirectFn } from './auth/useAdminGuard';
 import { AdminNav } from './nav/AdminNav';
 import { BackupPage } from './pages/BackupPage';
 import { CastDevicesPage } from './pages/CastDevicesPage';
+import { CollectionsPage } from './pages/CollectionsPage';
 import { DlnaServerPage } from './pages/DlnaServerPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { RemoteAccessPage } from './pages/RemoteAccessPage';
@@ -71,6 +72,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/dlna-server" element={<DlnaServerPage client={client} />} />
             <Route path="/remote-access" element={<RemoteAccessPage client={client} />} />
             <Route path="/live-tv" element={<LiveTvPage client={client} />} />
+            <Route path="/collections" element={<CollectionsPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

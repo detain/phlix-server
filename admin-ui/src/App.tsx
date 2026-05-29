@@ -21,6 +21,7 @@ import { DlnaServerPage } from './pages/DlnaServerPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { RemoteAccessPage } from './pages/RemoteAccessPage';
 import { LiveTvPage } from './pages/LiveTvPage';
+import { HistoryPage } from './pages/HistoryPage';
 import { LibrariesPage } from './pages/LibrariesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
@@ -73,6 +74,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/remote-access" element={<RemoteAccessPage client={client} />} />
             <Route path="/live-tv" element={<LiveTvPage client={client} />} />
             <Route path="/collections" element={<CollectionsPage client={client} />} />
+            <Route path="/history" element={<HistoryPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

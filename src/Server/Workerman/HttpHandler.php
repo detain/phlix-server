@@ -260,6 +260,9 @@ final class HttpHandler
         if ($path === '/settings') {
             return $renderer->renderSettings($request);
         }
+        if ($path === '/settings/security') {
+            return $renderer->renderWebAuthnSettings($request);
+        }
         if (str_starts_with($path, '/admin/plugins')) {
             return $this->dispatchAdminPlugins($renderer, $request, $path);
         }

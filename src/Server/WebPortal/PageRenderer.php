@@ -430,6 +430,25 @@ class PageRenderer
     }
 
     /**
+     * Renders the WebAuthn/passkeys settings page.
+     *
+     * @param Request $request The HTTP request.
+     *
+     * @return Response HTML response with the rendered page.
+     */
+    public function renderWebAuthnSettings(Request $request): Response
+    {
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'settings');
+        $template->assign('user', ['display_name' => 'User']);
+
+        $html = $template->fetch('auth/webauthn-settings.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
      * Render an arbitrary Smarty template with the given variables and
      * return the resulting HTML as a string. Centralised so subordinate
      * page controllers (e.g.

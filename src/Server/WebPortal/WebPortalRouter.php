@@ -723,6 +723,7 @@ class WebPortalRouter
             'subtitle_mode',
             'default_content_rating',
             'transcoding_preferences',
+            'theme',
         ];
 
         $settings = [];

@@ -83,7 +83,9 @@ describe('NotFoundPage', () => {
 
 describe('NAV_ITEMS', () => {
   it('includes all admin navigation routes', () => {
-    expect(NAV_ITEMS).toEqual([
+    // Check that specific nav items exist rather than checking exact array equality
+    // since NAV_ITEMS grows over time as new features are added
+    const expectedItems = [
       { path: '/', label: 'Dashboard' },
       { path: '/libraries', label: 'Libraries' },
       { path: '/users', label: 'Users' },
@@ -94,6 +96,15 @@ describe('NAV_ITEMS', () => {
       { path: '/backup', label: 'Backup' },
       { path: '/cast-devices', label: 'Cast Devices' },
       { path: '/dlna-server', label: 'DLNA Server' },
-    ]);
+      { path: '/remote-access', label: 'Remote Access' },
+      { path: '/live-tv', label: 'Live TV' },
+      { path: '/collections', label: 'Collections' },
+      { path: '/history', label: 'Watch History' },
+      { path: '/syncplay', label: 'SyncPlay' },
+    ];
+    expect(NAV_ITEMS).toHaveLength(expectedItems.length);
+    expectedItems.forEach(item => {
+      expect(NAV_ITEMS).toContainEqual(item);
+    });
   });
 });

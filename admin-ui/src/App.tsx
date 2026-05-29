@@ -24,6 +24,7 @@ import { LiveTvPage } from './pages/LiveTvPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { LibrariesPage } from './pages/LibrariesPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { SyncPlayPage } from './pages/SyncPlayPage';
 import { UsersPage } from './pages/UsersPage';
 import { WebhooksPage } from './pages/WebhooksPage';
 import { IntegrationsPage } from './pages/IntegrationsPage';
@@ -75,6 +76,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
             <Route path="/live-tv" element={<LiveTvPage client={client} />} />
             <Route path="/collections" element={<CollectionsPage client={client} />} />
             <Route path="/history" element={<HistoryPage client={client} />} />
+            <Route path="/syncplay" element={<SyncPlayPage client={client} />} />
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </main>

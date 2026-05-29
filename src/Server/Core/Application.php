@@ -12,10 +12,12 @@ use Phlix\Hub\HubApplication;
 use Phlix\Hub\RelayApplication;
 use Phlix\Discovery\DiscoveryServer;
 use Phlix\Server\Http\Controllers\HubJwksController;
+use Phlix\Server\Http\Controllers\SyncPlayController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Routes\AdminRoutes;
+use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -355,6 +357,9 @@ class Application
         // Live TV / DVR admin routes — tuners, channels, guide, recordings, series rules (2.4).
         $this->loadLiveTvAdminRoutes();
 
+        // SyncPlay group watching routes (3.5).
+        $this->loadSyncPlayRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -680,6 +685,42 @@ class Application
         } catch (\Throwable) {
             // LiveTV admin not configured — silent ignore
         }
+    }
+
+    /**
+     * Registers SyncPlay group watching REST API routes (3.5).
+     *
+     * Wires endpoints for:
+     * - GET /api/v1/syncplay/groups — list all groups
+     * - POST /api/v1/syncplay/groups — create a new group
+     * - GET /api/v1/syncplay/groups/{id} — get group state
+     * - POST /api/v1/syncplay/groups/{id}/join — join a group
+     * - POST /api/v1/syncplay/groups/{id}/leave — leave a group
+     *
+     * @since 3.5
+     */
+    private function loadSyncPlayRoutes(): void
+    {
+        $controller = $this->getSyncPlayController();
+
+        $this->router->get('/api/v1/syncplay/groups', [$controller, 'listGroups']);
+        $this->router->post('/api/v1/syncplay/groups', [$controller, 'createGroup']);
+        $this->router->get('/api/v1/syncplay/groups/{id}', [$controller, 'getGroup']);
+        $this->router->post('/api/v1/syncplay/groups/{id}/join', [$controller, 'joinGroup']);
+        $this->router->post('/api/v1/syncplay/groups/{id}/leave', [$controller, 'leaveGroup']);
+    }
+
+    /**
+     * Returns a SyncPlayController instance.
+     *
+     * @return SyncPlayController The controller instance.
+     *
+     * @since 3.5
+     */
+    private function getSyncPlayController(): SyncPlayController
+    {
+        $syncPlayManager = new SyncPlayManager();
+        return new SyncPlayController($syncPlayManager);
     }
 
     /**

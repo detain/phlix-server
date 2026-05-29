@@ -376,6 +376,16 @@ class UserRepository
                 : [];
         }
 
+        // Fetch active theme from user_profiles and add to settings
+        $profileResult = $this->db->query(
+            "SELECT active_theme_id FROM user_profiles WHERE user_id = ? AND is_active = TRUE",
+            [$userId]
+        );
+        $profile = UserRow::firstFromMixed($profileResult);
+        if ($profile !== null && isset($profile['active_theme_id']) && is_string($profile['active_theme_id'])) {
+            $settings['theme'] = $profile['active_theme_id'];
+        }
+
         return $settings;
     }
 
@@ -437,26 +447,35 @@ class UserRepository
             $values[] = json_encode($settings['transcoding_preferences']);
         }
 
-        if ($columns === []) {
-            return;
+        if ($columns !== []) {
+            // Upsert in a single statement (user_id is the PRIMARY KEY), matching the
+            // INSERT ... ON DUPLICATE KEY UPDATE convention used elsewhere in this
+            // codebase (e.g. AudiobookProgressStore). On a new row the VALUES() are
+            // inserted; on an existing row only the supplied columns are updated.
+            $insertColumns = array_merge(['user_id'], $columns);
+            $placeholders = implode(', ', array_fill(0, count($insertColumns), '?'));
+            $updateClause = implode(
+                ', ',
+                array_map(static fn (string $col): string => "{$col} = VALUES({$col})", $columns)
+            );
+
+            $sql = 'INSERT INTO user_settings (' . implode(', ', $insertColumns) . ')'
+                . ' VALUES (' . $placeholders . ')'
+                . ' ON DUPLICATE KEY UPDATE ' . $updateClause;
+
+            $this->db->query($sql, array_merge([$userId], $values));
         }
 
-        // Upsert in a single statement (user_id is the PRIMARY KEY), matching the
-        // INSERT ... ON DUPLICATE KEY UPDATE convention used elsewhere in this
-        // codebase (e.g. AudiobookProgressStore). On a new row the VALUES() are
-        // inserted; on an existing row only the supplied columns are updated.
-        $insertColumns = array_merge(['user_id'], $columns);
-        $placeholders = implode(', ', array_fill(0, count($insertColumns), '?'));
-        $updateClause = implode(
-            ', ',
-            array_map(static fn (string $col): string => "{$col} = VALUES({$col})", $columns)
-        );
-
-        $sql = 'INSERT INTO user_settings (' . implode(', ', $insertColumns) . ')'
-            . ' VALUES (' . $placeholders . ')'
-            . ' ON DUPLICATE KEY UPDATE ' . $updateClause;
-
-        $this->db->query($sql, array_merge([$userId], $values));
+        // Handle theme separately — it goes to user_profiles, not user_settings
+        if (isset($settings['theme']) && is_string($settings['theme'])) {
+            $validThemes = ['phlix-light', 'phlix-dark', 'phlix-amoled', 'phlix-contrast'];
+            if (in_array($settings['theme'], $validThemes, true)) {
+                $this->db->query(
+                    'UPDATE user_profiles SET active_theme_id = ? WHERE user_id = ? AND is_active = TRUE',
+                    [$settings['theme'], $userId]
+                );
+            }
+        }
     }
 
     /**

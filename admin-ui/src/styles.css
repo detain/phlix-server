@@ -2162,3 +2162,233 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Collections page (3.3) --- */
+
+.page--collections {
+  max-width: 900px;
+}
+
+.collections-section {
+  background: var(--admin-panel);
+  border-radius: 8px;
+  border: 1px solid #000;
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.collections-section__header {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  color: var(--admin-fg);
+  transition: background-color 0.15s;
+}
+
+.collections-section__header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.collections-section__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.collections-section__title-row h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.collections-section__chevron {
+  font-size: 0.75rem;
+  transition: transform 0.2s;
+  color: var(--admin-muted);
+}
+
+.collections-section__chevron--up {
+  transform: rotate(180deg);
+}
+
+.collections-section__body {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.collection-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.collection-card {
+  background: var(--admin-bg);
+  border-radius: 6px;
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.collection-card__info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.collection-card__name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.collection-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.collection-card__actions button {
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--admin-muted);
+  background: transparent;
+  color: var(--admin-fg);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.collection-card__actions button:hover {
+  border-color: var(--admin-accent);
+  color: var(--admin-accent);
+}
+
+.collection-card__actions button:last-child:hover {
+  border-color: var(--admin-error);
+  color: var(--admin-error);
+}
+
+.collections-empty {
+  color: var(--admin-muted);
+  margin: 0;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.collection-items-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.collection-items-list__item {
+  padding: 0.5rem 0.75rem;
+  background: var(--admin-bg);
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+/* Rule Builder */
+.rule-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rule-builder__header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.rule-builder__label {
+  font-size: 0.85rem;
+  color: var(--admin-muted);
+}
+
+.rule-builder__logic {
+  flex: 1;
+  max-width: 200px;
+}
+
+.rule-builder__rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-left: 1rem;
+  border-left: 2px solid var(--admin-bg);
+}
+
+.rule-builder__rule {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.rule-builder__field {
+  width: 120px;
+}
+
+.rule-builder__op {
+  width: 130px;
+}
+
+.rule-builder__value {
+  flex: 1;
+  min-width: 100px;
+}
+
+.rule-builder__delete {
+  background: none;
+  border: none;
+  color: var(--admin-error);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.rule-builder__delete:hover {
+  background: rgba(255, 93, 93, 0.1);
+}
+
+.rule-builder__nested {
+  padding: 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  margin-top: 0.25rem;
+}
+
+.rule-builder__add {
+  align-self: flex-start;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  border: 1px dashed var(--admin-muted);
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.rule-builder__add:hover {
+  border-color: var(--admin-accent);
+  color: var(--admin-accent);
+}

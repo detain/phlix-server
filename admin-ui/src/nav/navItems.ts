@@ -26,4 +26,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/dlna-server', label: 'DLNA Server' },
   { path: '/remote-access', label: 'Remote Access' },
   { path: '/live-tv', label: 'Live TV' },
+  { path: '/collections', label: 'Collections' },
 ] as const;

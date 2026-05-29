@@ -28,4 +28,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { path: '/live-tv', label: 'Live TV' },
   { path: '/collections', label: 'Collections' },
   { path: '/history', label: 'Watch History' },
+  { path: '/syncplay', label: 'SyncPlay' },
 ] as const;

@@ -113,7 +113,23 @@
         </form>
     </section>
 
-    {* Section 5: Plugins *}
+    {* Section 5: Appearance (Theme Switcher) *}
+    <section class="settings-section">
+        <h2>Appearance</h2>
+        <p>Choose your preferred theme.</p>
+        <div class="form-group">
+            <label for="theme">Theme</label>
+            <select id="theme" name="theme">
+                <option value="phlix-light">Phlix Light</option>
+                <option value="phlix-dark">Phlix Dark</option>
+                <option value="phlix-amoled">Phlix AMOLED</option>
+                <option value="phlix-contrast">Phlix High Contrast</option>
+            </select>
+            <small class="form-hint">Changes apply immediately and are saved automatically</small>
+        </div>
+    </section>
+
+    {* Section 6: Plugins *}
     <section class="settings-section">
         <h2>Plugins</h2>
         <p>Install or configure plugins. <a href="/admin/plugins">Plugin manager &rarr;</a></p>
@@ -193,6 +209,7 @@
         form.preferred_subtitle_language.value = settings.preferred_subtitle_language || '';
         form.subtitle_mode.value = settings.subtitle_mode || 'foreign_only';
         form.default_content_rating.value = settings.default_content_rating || 'all';
+        form.theme.value = settings.theme || 'phlix-dark';
 
         // Store original values
         originalValues = getFormValues();
@@ -280,6 +297,21 @@
         inputs[i].addEventListener('change', updateSaveButton);
         inputs[i].addEventListener('input', updateSaveButton);
     }
+
+    // Auto-save theme on change (no save button needed)
+    form.theme.addEventListener('change', function() {
+        fetch('/api/v1/users/me/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ theme: form.theme.value })
+        }).then(function(res) {
+            if (res.ok) {
+                showMessage('Theme saved.', false);
+            }
+        }).catch(function(err) {
+            showMessage('Could not save theme: ' + err.message, true);
+        });
+    });
 
     // Load settings on page load
     loadSettings();

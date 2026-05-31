@@ -273,6 +273,50 @@ describe('LibrariesPage', () => {
     expect(calls.length).toBe(callsAfterCompleted);
   });
 
+  it('match metadata → POSTs to /match-metadata → 202 toast → polls running', async () => {
+    vi.useFakeTimers();
+    const { fetch, calls } = makeFetch([
+      // initial load
+      { status: 200, body: { libraries: [lib] } },
+      { status: 200, body: { scan_status: null } },
+      // POST match-metadata (202)
+      { status: 202, body: { job_id: 'job-m', status: 'queued', message: 'Metadata match queued.' } },
+      // immediate poll → running metadata job
+      { status: 200, body: { scan_status: job({ id: 'job-m', type: 'metadata', status: 'running' }) } },
+      // any subsequent poll
+      { status: 200, body: { scan_status: job({ id: 'job-m', type: 'metadata', status: 'running' }) } },
+    ]);
+    const client = new ApiClient({
+      baseUrl: '',
+      tokenStore: new MemoryTokenStore({ access: 't' }),
+      fetchImpl: fetch,
+    });
+    render(
+      <ToastProvider timeoutMs={0}>
+        <LibrariesPage client={client} pollIntervalMs={1000} />
+      </ToastProvider>,
+    );
+
+    // Resolve the initial load.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(screen.getByText('Movies')).toBeInTheDocument();
+
+    // Trigger the metadata match (fire the click handler directly under fake timers).
+    screen.getByRole('button', { name: 'Match metadata for Movies' }).click();
+
+    // POST + immediate poll resolve.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The POST must target the match-metadata endpoint.
+    const post = calls.find(
+      (c) => c.init?.method === 'POST' && String(c.url).includes('match-metadata'),
+    );
+    expect(post).toBeDefined();
+
+    // The row reflects the running badge from the metadata job's scan-status.
+    expect(screen.getByTestId('status-lib-1')).toHaveTextContent('Running');
+  });
+
   it('shows the error string for a failed job', async () => {
     renderPage([
       { status: 200, body: { libraries: [lib] } },

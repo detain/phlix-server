@@ -16,7 +16,10 @@ use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\Metadata\Imdb\ImdbLookup;
+use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -117,10 +120,32 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // Workerman MySQL Connection, already resolvable in this provider.
             ScanJobRepository::class => autowire(),
 
-            // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository
-            // + LibraryManager — are both autowired above; the optional
-            // StructuredLogger defaults to the MEDIA channel.
-            LibraryScanWorker::class => autowire(),
+            // Offline IMDb dataset lookup — ctor dep is the Workerman MySQL
+            // Connection (already resolvable here); the optional logger defaults
+            // to the MEDIA channel.
+            ImdbLookup::class => autowire(),
+
+            // Cross-source movie metadata resolver (TMDB + IMDb). TmdbProvider is
+            // built by the factory above (admin-managed key, env/config
+            // fallback); ImdbLookup is autowired; the optional logger defaults to
+            // the MEDIA channel.
+            MovieMetadataResolver::class => autowire()
+                ->constructorParameter('tmdb', get(TmdbProvider::class))
+                ->constructorParameter('imdb', get(ImdbLookup::class)),
+
+            // Background per-library metadata matcher run for `metadata`-type
+            // scan jobs. Its ItemRepository + MovieMetadataResolver deps are
+            // resolvable above; the optional logger defaults to the MEDIA channel.
+            LibraryMetadataMatcher::class => autowire()
+                ->constructorParameter('items', get(ItemRepository::class))
+                ->constructorParameter('resolver', get(MovieMetadataResolver::class)),
+
+            // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
+            // LibraryManager and the LibraryMetadataMatcher (for `metadata`
+            // jobs) — are all autowired above; the optional StructuredLogger
+            // defaults to the MEDIA channel.
+            LibraryScanWorker::class => autowire()
+                ->constructorParameter('metadataMatcher', get(LibraryMetadataMatcher::class)),
 
             MetadataManager::class => autowire(),
 

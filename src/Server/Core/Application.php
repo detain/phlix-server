@@ -838,6 +838,11 @@ class Application
         $this->router->get('/api/v1/libraries/{id}/scan-status', [$libraryController, 'scanStatus']);
         $this->router->get('/api/v1/libraries/{id}/scan-history', [$libraryController, 'scanHistory']);
 
+        // Background metadata match (reuses the scan-job queue + status, so the
+        // existing scan-status badge/polling shows its progress). 3-segment
+        // literal path, so it cannot shadow / be shadowed by the {id} routes.
+        $this->router->post('/api/v1/libraries/{id}/match-metadata', [$libraryController, 'matchMetadata']);
+
         // Theme media routes
         $this->router->get('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'getThemeMedia']);
         $this->router->post('/api/v1/libraries/{id}/theme-media/scan', [$themeMediaController, 'scanThemeMedia']);

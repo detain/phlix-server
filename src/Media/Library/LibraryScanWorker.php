@@ -6,6 +6,7 @@ namespace Phlix\Media\Library;
 
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Throwable;
 use Workerman\Timer;
 
@@ -19,10 +20,12 @@ use Workerman\Timer;
  * actually runs the scan.
  *
  * Lifecycle per job: {@see ScanJobRepository::claimNext()} atomically claims the
- * oldest `queued` row and flips it to `running`; the worker then runs the
- * existing {@see LibraryManager::scanLibrary()} / {@see LibraryManager::rescanLibrary()}
- * by `type` and records the outcome via {@see ScanJobRepository::markCompleted()}
- * (success) or {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
+ * oldest `queued` row and flips it to `running`; the worker then dispatches on
+ * `type` — the existing {@see LibraryManager::scanLibrary()} /
+ * {@see LibraryManager::rescanLibrary()} for `scan`/`rescan`, or
+ * {@see LibraryMetadataMatcher::matchLibrary()} for a `metadata` job — and
+ * records the outcome via {@see ScanJobRepository::markCompleted()} (success) or
+ * {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
  *
  * **Coarse progress is intentional.** `LibraryManager::scanLibrary()` /
  * `rescanLibrary()` return `void` and emit no counts, so the worker records the
@@ -49,25 +52,32 @@ class LibraryScanWorker
     /** @var LibraryManager Existing scan engine the worker delegates to. */
     private LibraryManager $libraries;
 
+    /** @var LibraryMetadataMatcher Background metadata matcher for `metadata` jobs. */
+    private LibraryMetadataMatcher $metadataMatcher;
+
     /** @var StructuredLogger Logger for the MEDIA channel. */
     private StructuredLogger $logger;
 
     /**
-     * @param ScanJobRepository     $jobs      Queue + progress store.
-     * @param LibraryManager        $libraries Existing scan engine.
-     * @param StructuredLogger|null $logger    Optional logger; defaults to the
-     *                                          MEDIA channel via
-     *                                          {@see \Phlix\Common\Logger\LoggerFactory}.
+     * @param ScanJobRepository      $jobs            Queue + progress store.
+     * @param LibraryManager         $libraries       Existing scan engine.
+     * @param LibraryMetadataMatcher $metadataMatcher Background metadata matcher
+     *                                                run for `metadata` jobs.
+     * @param StructuredLogger|null  $logger          Optional logger; defaults
+     *                                                to the MEDIA channel via
+     *                                                {@see \Phlix\Common\Logger\LoggerFactory}.
      *
      * @since 1.1b
      */
     public function __construct(
         ScanJobRepository $jobs,
         LibraryManager $libraries,
+        LibraryMetadataMatcher $metadataMatcher,
         ?StructuredLogger $logger = null
     ) {
         $this->jobs = $jobs;
         $this->libraries = $libraries;
+        $this->metadataMatcher = $metadataMatcher;
         $this->logger = $logger ?? \Phlix\Common\Logger\LoggerFactory::get(LogChannels::MEDIA);
     }
 
@@ -113,7 +123,9 @@ class LibraryScanWorker
         }
 
         try {
-            if ($type === 'rescan') {
+            if ($type === 'metadata') {
+                $this->metadataMatcher->matchLibrary($libraryId);
+            } elseif ($type === 'rescan') {
                 $this->libraries->rescanLibrary($libraryId);
             } else {
                 $this->libraries->scanLibrary($libraryId);

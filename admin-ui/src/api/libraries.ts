@@ -111,6 +111,10 @@ export interface UpdateLibraryInput {
 export interface CreateLibraryResult {
   library_id: string;
   message: string;
+  /** Async initial-scan job id (create enqueues a background scan). @since 1.7 */
+  job_id?: string;
+  /** 'scanning' while the background initial scan runs. @since 1.7 */
+  status?: string;
 }
 
 /** Result of {@link LibrariesApi.scan}/{@link LibrariesApi.rescan}. @since 1.1c */

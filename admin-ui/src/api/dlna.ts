@@ -43,59 +43,64 @@ export class DlnaApi {
   constructor(private readonly client: ApiClient) {}
 
   /**
-   * `GET /api/v1/dlna/devices` → `{ success, data: DlnaDevice[] }`
+   * `GET /api/v1/dlna/renderers` → `{ renderers, count }`.
+   *
+   * The server mounts DLNA "play-to" devices under `/dlna/renderers` (see
+   * RendererListController) and returns them under `renderers` — the SPA
+   * previously hit `/dlna/devices` (404) and read `data` (undefined). Accept
+   * both keys and default to [].
    */
   async listDevices(): Promise<DlnaDevice[]> {
-    const { data } = await this.client.get<{ success: boolean; data: DlnaDevice[] }>(
-      '/api/v1/dlna/devices',
+    const res = await this.client.get<{ renderers?: DlnaDevice[]; data?: DlnaDevice[] }>(
+      '/api/v1/dlna/renderers',
     );
-    return data;
+    return res.renderers ?? res.data ?? [];
   }
 
   /**
-   * `GET /api/v1/dlna/devices/:id/status` → `{ success, data: DlnaPlaybackState }`
+   * `GET /api/v1/dlna/renderers/:id/status` → `{ success, data: DlnaPlaybackState }`
    */
   async getStatus(deviceId: string): Promise<DlnaPlaybackState> {
     const { data } = await this.client.get<{ success: boolean; data: DlnaPlaybackState }>(
-      `/api/v1/dlna/devices/${encodeURIComponent(deviceId)}/status`,
+      `/api/v1/dlna/renderers/${encodeURIComponent(deviceId)}/status`,
     );
     return data;
   }
 
   /**
-   * `POST /api/v1/dlna/devices/:id/play` → DlnaActionResult
+   * `POST /api/v1/dlna/renderers/:id/play` → DlnaActionResult
    */
   async play(deviceId: string): Promise<DlnaActionResult> {
     return this.client.post<DlnaActionResult>(
-      `/api/v1/dlna/devices/${encodeURIComponent(deviceId)}/play`,
+      `/api/v1/dlna/renderers/${encodeURIComponent(deviceId)}/play`,
     );
   }
 
   /**
-   * `POST /api/v1/dlna/devices/:id/pause` → DlnaActionResult
+   * `POST /api/v1/dlna/renderers/:id/pause` → DlnaActionResult
    */
   async pause(deviceId: string): Promise<DlnaActionResult> {
     return this.client.post<DlnaActionResult>(
-      `/api/v1/dlna/devices/${encodeURIComponent(deviceId)}/pause`,
+      `/api/v1/dlna/renderers/${encodeURIComponent(deviceId)}/pause`,
     );
   }
 
   /**
-   * `POST /api/v1/dlna/devices/:id/stop` → DlnaActionResult
+   * `POST /api/v1/dlna/renderers/:id/stop` → DlnaActionResult
    */
   async stop(deviceId: string): Promise<DlnaActionResult> {
     return this.client.post<DlnaActionResult>(
-      `/api/v1/dlna/devices/${encodeURIComponent(deviceId)}/stop`,
+      `/api/v1/dlna/renderers/${encodeURIComponent(deviceId)}/stop`,
     );
   }
 
   /**
-   * `POST /api/v1/dlna/devices/:id/seek` → DlnaActionResult
+   * `POST /api/v1/dlna/renderers/:id/seek` → DlnaActionResult
    * @param positionSeconds - Target position in seconds
    */
   async seek(deviceId: string, positionSeconds: number): Promise<DlnaActionResult> {
     return this.client.post<DlnaActionResult>(
-      `/api/v1/dlna/devices/${encodeURIComponent(deviceId)}/seek`,
+      `/api/v1/dlna/renderers/${encodeURIComponent(deviceId)}/seek`,
       { position_seconds: positionSeconds },
     );
   }

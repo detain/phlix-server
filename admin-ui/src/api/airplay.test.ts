@@ -41,7 +41,7 @@ describe('AirPlayApi', () => {
   describe('listDevices()', () => {
     it('GETs /api/v1/airplay/devices and returns device list', async () => {
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: [airplayDevice] } },
+        { status: 200, body: { devices: [airplayDevice] } },
       ]);
 
       const result = await api.listDevices();

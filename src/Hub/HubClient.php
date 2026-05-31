@@ -31,6 +31,16 @@ class HubClient
     private const HEARTBEAT_INTERVAL = 60;
     private const ENROLLMENT_FILE = 'hub-enrollment.json';
 
+    /** @var int Enrollment JWT lifetime in seconds (7 days). */
+    private const ENROLLMENT_TTL = 604800;
+
+    /**
+     * @var int Age (seconds) at which proactive renewal begins (6 days).
+     *          Renewing within the final ~1 day before expiry keeps the
+     *          current JWT valid for the authenticated renew call.
+     */
+    private const RENEWAL_THRESHOLD = 518400;
+
     /** @var Ed25519KeyManager Key manager instance. */
     private Ed25519KeyManager $keyManager;
 
@@ -397,14 +407,21 @@ class HubClient
     }
 
     /**
-     * Checks enrollment expiry and attempts re-enrollment if needed.
+     * Proactively renews the enrollment JWT before it expires.
      *
-     * Called automatically before every heartbeat. Re-enrollment
-     * requires the operator to re-enter a claim code, so this method
-     * logs a warning and leaves the server in a degraded state rather
-     * than blocking.
+     * Called automatically before every heartbeat. The enrollment JWT has a
+     * 7-day lifetime; once the enrollment is at least 6 days old (and thus
+     * within ~1 day of expiry) this method renews it against the hub's
+     * `POST /api/v1/servers/{serverId}/renew` endpoint. The renew call is
+     * authenticated by the CURRENT (still-valid) JWT, which the active
+     * {@see HttpClient} sends as a Bearer token, so renewal must succeed
+     * BEFORE full expiry.
      *
-     * @return bool True if re-enrollment succeeded; false otherwise.
+     * If the enrollment is already fully expired the current JWT can no
+     * longer authenticate a renew, so a one-time operator re-pair is
+     * required; this method only logs a warning in that case.
+     *
+     * @return bool True if the enrollment was renewed; false otherwise.
      */
     public function reEnrollIfNeeded(): bool
     {
@@ -413,16 +430,78 @@ class HubClient
             return false;
         }
 
-        if (!$enrollment->isExpired()) {
+        $age = time() - $enrollment->enrolledAt;
+
+        // Already fully expired: the JWT can no longer authenticate the
+        // renew call, so an operator re-pair is required.
+        if ($age >= self::ENROLLMENT_TTL) {
+            $this->logger->warning('Enrollment expired; re-enrollment required', [
+                'server_id' => $enrollment->serverId,
+                'enrolled_at' => $enrollment->enrolledAt,
+            ]);
+
             return false;
         }
 
-        $this->logger->warning('Enrollment expired; re-enrollment required', [
-            'server_id' => $enrollment->serverId,
-            'enrolled_at' => $enrollment->enrolledAt,
-        ]);
+        // Not yet within the renewal window: nothing to do.
+        if ($age < self::RENEWAL_THRESHOLD) {
+            return false;
+        }
 
-        return false;
+        // Within ~1 day of expiry: renew while the current JWT is still valid.
+        try {
+            $response = $this->httpClient->post(
+                "/api/v1/servers/{$enrollment->serverId}/renew",
+                [],
+            );
+
+            if (!$response->isSuccess()) {
+                $this->logger->warning('Enrollment renewal failed', [
+                    'server_id' => $enrollment->serverId,
+                    'status' => $response->statusCode,
+                    'error_code' => $response->getErrorCode() ?? 'UNKNOWN',
+                ]);
+
+                return false;
+            }
+
+            $body = $response->body;
+            // Mirror the claim flow's enrollment_jwt parsing (snake_case).
+            $newJwt = is_string($body['enrollment_jwt'] ?? null) ? $body['enrollment_jwt'] : '';
+            if ($newJwt === '') {
+                $this->logger->warning('Enrollment renewal response missing enrollment_jwt', [
+                    'server_id' => $enrollment->serverId,
+                ]);
+
+                return false;
+            }
+
+            // Persist the fresh enrollment via the same path storeEnrollment()
+            // uses; storeEnrollment() resets enrolled_at to time().
+            $this->storeEnrollment(
+                $newJwt,
+                $enrollment->hubJwksUrl,
+                $enrollment->serverId,
+                $enrollment->hubBaseUrl,
+            );
+
+            // Rebuild the HTTP client with the renewed JWT (mirrors the
+            // heartbeat loop's construction in startHeartbeatLoop()).
+            $this->httpClient = new HttpClient($enrollment->hubBaseUrl, $newJwt);
+
+            $this->logger->info('Enrollment renewed', [
+                'server_id' => $enrollment->serverId,
+            ]);
+
+            return true;
+        } catch (Throwable $e) {
+            $this->logger->warning('Enrollment renewal exception', [
+                'server_id' => $enrollment->serverId,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**

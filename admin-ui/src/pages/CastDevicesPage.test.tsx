@@ -145,10 +145,10 @@ describe('CastDevicesPage', () => {
       { status: 200, body: { success: true, data: dlnaDevices }, urlMatch: '/api/v1/dlna/' },
     ]);
 
-    await waitFor(() => {
-      expect(screen.getByText('Chromecast Devices')).toBeInTheDocument();
-    });
-    expect(screen.getByText('No chromecast devices discovered.')).toBeInTheDocument();
+    // findBy* waits for the async device fetch to resolve; a sync getByText
+    // here races the fetch and flakes on slower CI runners.
+    expect(await screen.findByText('Chromecast Devices')).toBeInTheDocument();
+    expect(await screen.findByText('No chromecast devices discovered.')).toBeInTheDocument();
   });
 
   it('selects a Chromecast device and shows playback controls with seek', async () => {

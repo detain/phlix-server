@@ -61,6 +61,90 @@ export interface ActivityEvent {
   details: string;
 }
 
+// ---------------------------------------------------------------------------
+// Server→SPA normalisers
+//
+// The server (`DashboardService`) and these SPA interfaces drifted on field
+// names: `username`↔`user_name`, `title`↔`media_title`, `type`↔`media_type`,
+// `total_watch_time`↔`total_watch_time_seconds`, `total_duration`↔
+// `total_duration_seconds`, `stream_id`↔`session_id`, `occurred_at`↔
+// `created_at`, and activity nests `media_title`/`media_item_id` under
+// `details`. Normalise to the exact shape the cards render. Each mapper
+// accepts BOTH names, so it keeps working if the server is later aligned.
+// ---------------------------------------------------------------------------
+
+type Raw = Record<string, unknown>;
+
+function asString(value: unknown, fallback = ''): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    return Number(value);
+  }
+  return fallback;
+}
+
+function asArray(value: unknown): Raw[] {
+  return Array.isArray(value) ? (value as Raw[]) : [];
+}
+
+function toNowPlaying(r: Raw): NowPlayingItem {
+  return {
+    session_id: asString(r['session_id'] ?? r['stream_id']),
+    user_id: asString(r['user_id']),
+    user_name: asString(r['user_name'] ?? r['username']),
+    media_item_id: asString(r['media_item_id']),
+    media_title: asString(r['media_title']),
+    media_type: asString(r['media_type']),
+    progress_percent: asNumber(r['progress_percent']),
+    started_at: asString(r['started_at']),
+  };
+}
+
+function toTopUser(r: Raw): TopUser {
+  return {
+    user_id: asString(r['user_id']),
+    user_name: asString(r['user_name'] ?? r['username']),
+    total_watch_time_seconds: asNumber(r['total_watch_time_seconds'] ?? r['total_watch_time']),
+    play_count: asNumber(r['play_count']),
+    last_seen: asString(r['last_seen']),
+  };
+}
+
+function toTopMedia(r: Raw): TopMedia {
+  return {
+    media_item_id: asString(r['media_item_id']),
+    media_title: asString(r['media_title'] ?? r['title']),
+    media_type: asString(r['media_type'] ?? r['type']),
+    play_count: asNumber(r['play_count']),
+    total_duration_seconds: asNumber(r['total_duration_seconds'] ?? r['total_duration']),
+    last_played_at: asString(r['last_played_at']),
+  };
+}
+
+function toActivityEvent(r: Raw): ActivityEvent {
+  const details: Raw =
+    typeof r['details'] === 'object' && r['details'] !== null ? (r['details'] as Raw) : {};
+  return {
+    id: asString(r['id']),
+    event_type: asString(r['event_type']),
+    user_id: asString(r['user_id']),
+    user_name: asString(r['user_name'] ?? r['username']),
+    media_item_id: asString(r['media_item_id'] ?? details['media_item_id']),
+    media_title: asString(r['media_title'] ?? details['media_title']),
+    created_at: asString(r['created_at'] ?? r['occurred_at']),
+    // The SPA renders `details` as a short string; the server sends a
+    // structured object, so keep the string form when present, else ''.
+    details: typeof r['details'] === 'string' ? r['details'] : '',
+  };
+}
+
 /**
  * Typed client for the admin dashboard endpoints.
  *
@@ -71,10 +155,10 @@ export class DashboardApi {
 
   /** `GET /api/v1/admin/dashboard/now-playing` → `{ success, data: NowPlayingItem[] }` */
   async getNowPlaying(): Promise<NowPlayingItem[]> {
-    const { data } = await this.client.get<{ success: boolean; data: NowPlayingItem[] }>(
+    const { data } = await this.client.get<{ success: boolean; data: unknown }>(
       '/api/v1/admin/dashboard/now-playing',
     );
-    return data;
+    return asArray(data).map(toNowPlaying);
   }
 
   /**
@@ -86,11 +170,11 @@ export class DashboardApi {
     const params: Record<string, string> = {};
     if (limit !== undefined) params['limit'] = String(limit);
     if (days !== undefined) params['days'] = String(days);
-    const { data } = await this.client.get<{ success: boolean; data: TopUser[] }>(
+    const { data } = await this.client.get<{ success: boolean; data: unknown }>(
       '/api/v1/admin/dashboard/top-users',
       Object.keys(params).length ? params : undefined,
     );
-    return data;
+    return asArray(data).map(toTopUser);
   }
 
   /**
@@ -102,11 +186,11 @@ export class DashboardApi {
     const params: Record<string, string> = {};
     if (limit !== undefined) params['limit'] = String(limit);
     if (days !== undefined) params['days'] = String(days);
-    const { data } = await this.client.get<{ success: boolean; data: TopMedia[] }>(
+    const { data } = await this.client.get<{ success: boolean; data: unknown }>(
       '/api/v1/admin/dashboard/top-media',
       Object.keys(params).length ? params : undefined,
     );
-    return data;
+    return asArray(data).map(toTopMedia);
   }
 
   /**
@@ -136,10 +220,10 @@ export class DashboardApi {
    */
   async getActivity(limit?: number): Promise<ActivityEvent[]> {
     const params = limit !== undefined ? { limit: String(limit) } : undefined;
-    const { data } = await this.client.get<{ success: boolean; data: ActivityEvent[] }>(
+    const { data } = await this.client.get<{ success: boolean; data: unknown }>(
       '/api/v1/admin/dashboard/activity',
       params,
     );
-    return data;
+    return asArray(data).map(toActivityEvent);
   }
 }

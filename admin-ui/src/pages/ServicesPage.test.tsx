@@ -94,10 +94,11 @@ describe('ServicesPage', () => {
         { status: 200, body: { connected: true, username: 'traktuser' } },
         { status: 200, body: { connected: true, username: 'lastfmuser', api_key_set: true } },
       ]);
-      // Wait for useEffect to run and state to update
-      await new Promise(resolve => setTimeout(resolve, 0));
-      // Both services show their username when connected
-      expect(screen.getAllByText('lastfmuser').length).toBeGreaterThan(0);
+      // waitFor polls until the async fetch + state update lands; a single
+      // setTimeout(0) tick races the fetch and flakes on slow CI runners.
+      await waitFor(() => {
+        expect(screen.getAllByText('lastfmuser').length).toBeGreaterThan(0);
+      });
       // API key status is shown
       expect(screen.getAllByText('Set').length).toBeGreaterThan(0);
     });

@@ -16,6 +16,7 @@ use Phlix\Hub\HubJwtValidatorInterface;
 use Phlix\Hub\HttpClient;
 use Phlix\Hub\HttpClientFactory;
 use Phlix\Hub\HttpClientFactoryInterface;
+use Phlix\Hub\HttpClientInterface;
 use Phlix\Hub\JwksCache;
 use Phlix\Hub\RelayApplication;
 use Phlix\Hub\RelayConfig;
@@ -67,6 +68,16 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             HttpClient::class => autowire(),
 
+            // HubClient requires an HttpClientInterface but creates its own
+            // enrollment-scoped client lazily (startHeartbeatLoop / pairing),
+            // so this injected instance is just a placeholder that lets the
+            // container resolve HubClient (and HubApplication) at all. Without
+            // a binding the interface is "not instantiable" and the hub
+            // heartbeat worker can't boot.
+            HttpClientInterface::class => factory(
+                static fn (): HttpClientInterface => new HttpClient('')
+            ),
+
             HttpClientFactory::class => autowire(),
 
             HttpClientFactoryInterface::class => get(HttpClientFactory::class),
@@ -76,7 +87,8 @@ final class HubServicesProvider implements ServiceProviderInterface
 
             HubClient::class => autowire()
                 ->constructorParameter('logger', get('logger.hub'))
-                ->constructorParameter('configDir', $configDir),
+                ->constructorParameter('configDir', $configDir)
+                ->constructorParameter('httpClient', get(HttpClientInterface::class)),
 
             HubJwksController::class => autowire()
                 ->constructorParameter('hubClient', get(HubClient::class)),

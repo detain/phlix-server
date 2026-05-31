@@ -159,6 +159,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $metadataManager = $c->get(MetadataManager::class);
                     /** @var LibraryManager $libraryManager */
                     $libraryManager = $c->get(LibraryManager::class);
+                    /** @var AuthManager $authManager */
+                    $authManager = $c->get(AuthManager::class);
 
                     $musicManager = new MusicLibraryManager(
                         new AudioScanner($db, $itemRepository),
@@ -167,7 +169,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $db,
                     );
 
-                    return new MusicPageController($musicManager, $libraryManager, $templateDir);
+                    return new MusicPageController($musicManager, $libraryManager, $templateDir, $authManager);
                 }
             ),
 
@@ -177,8 +179,10 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $itemRepository = $c->get(ItemRepository::class);
                     /** @var LibraryManager $libraryManager */
                     $libraryManager = $c->get(LibraryManager::class);
+                    /** @var AuthManager $authManager */
+                    $authManager = $c->get(AuthManager::class);
 
-                    return new BookPageController($itemRepository, $libraryManager, $templateDir);
+                    return new BookPageController($itemRepository, $libraryManager, $templateDir, $authManager);
                 }
             ),
 
@@ -188,8 +192,10 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $itemRepository = $c->get(ItemRepository::class);
                     /** @var LibraryManager $libraryManager */
                     $libraryManager = $c->get(LibraryManager::class);
+                    /** @var AuthManager $authManager */
+                    $authManager = $c->get(AuthManager::class);
 
-                    return new AudiobookPageController($itemRepository, $libraryManager, $templateDir);
+                    return new AudiobookPageController($itemRepository, $libraryManager, $templateDir, $authManager);
                 }
             ),
 
@@ -201,6 +207,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $itemRepository = $c->get(ItemRepository::class);
                     /** @var LibraryManager $libraryManager */
                     $libraryManager = $c->get(LibraryManager::class);
+                    /** @var AuthManager $authManager */
+                    $authManager = $c->get(AuthManager::class);
 
                     return new PhotoPageController(
                         $itemRepository,
@@ -208,6 +216,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         new ExifProvider($itemRepository),
                         $libraryManager,
                         $templateDir,
+                        $authManager,
                     );
                 }
             ),

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal\Controllers;
 
+use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\PhotoLibraryManager;
@@ -48,25 +49,33 @@ class PhotoPageController
     /** @var string Absolute path to the Smarty template root. */
     private string $templateDir;
 
+    /** @var AuthManager|null Resolves the signed-in user for the sidebar/admin link. */
+    private ?AuthManager $authManager;
+
     /**
      * @param ItemRepository      $itemRepo       Media item repository.
      * @param PhotoLibraryManager $photoManager   Date-grouping manager.
      * @param ExifProvider        $exifProvider   EXIF metadata provider.
      * @param LibraryManager      $libraryManager Library enumeration manager.
      * @param string              $templateDir    Absolute path to templates.
+     * @param AuthManager|null    $authManager    Resolves the signed-in user so
+     *        the shared sidebar shows their name and the admin link; optional so
+     *        existing five-arg constructions keep working.
      */
     public function __construct(
         ItemRepository $itemRepo,
         PhotoLibraryManager $photoManager,
         ExifProvider $exifProvider,
         LibraryManager $libraryManager,
-        string $templateDir
+        string $templateDir,
+        ?AuthManager $authManager = null
     ) {
         $this->itemRepo = $itemRepo;
         $this->photoManager = $photoManager;
         $this->exifProvider = $exifProvider;
         $this->libraryManager = $libraryManager;
         $this->templateDir = $templateDir;
+        $this->authManager = $authManager;
     }
 
     /**
@@ -101,7 +110,7 @@ class PhotoPageController
         return $this->render('photo/albums.tpl', [
             'current_page' => 'photos',
             'albums' => $albums,
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -133,7 +142,7 @@ class PhotoPageController
                     'photo_count' => count($photos),
                     'photos' => $photos,
                 ],
-            ]);
+            ], $request->userId);
         }
 
         return (new Response())->status(404)->html('<h1>404 — album not found</h1>');
@@ -173,7 +182,7 @@ class PhotoPageController
             ],
             'album_id' => $request->queryString('album_id', '') ?? '',
             'library_id' => $request->queryString('library_id', '') ?? '',
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -235,7 +244,7 @@ class PhotoPageController
             'current_page' => 'photos',
             'slideshow' => $slideshow,
             'interval' => $interval,
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -265,9 +274,9 @@ class PhotoPageController
      * @param array<string,mixed> $vars     Variables to assign.
      * @return Response HTML response.
      */
-    private function render(string $template, array $vars): Response
+    private function render(string $template, array $vars, ?string $userId = null): Response
     {
-        $vars['user'] = $vars['user'] ?? ['display_name' => 'Guest'];
+        $vars['user'] = $vars['user'] ?? PageRenderer::resolveUserVarsFor($this->authManager, $userId);
         $html = PageRenderer::renderTemplate($this->templateDir, $template, $vars);
         return (new Response())->html($html);
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal\Controllers;
 
+use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Server\Http\Request;
@@ -36,19 +37,27 @@ class BookPageController
     /** @var string Absolute path to the Smarty template root. */
     private string $templateDir;
 
+    /** @var AuthManager|null Resolves the signed-in user for the sidebar/admin link. */
+    private ?AuthManager $authManager;
+
     /**
-     * @param ItemRepository $itemRepo       Media item repository.
-     * @param LibraryManager $libraryManager Library enumeration manager.
-     * @param string         $templateDir    Absolute path to templates.
+     * @param ItemRepository   $itemRepo       Media item repository.
+     * @param LibraryManager   $libraryManager Library enumeration manager.
+     * @param string           $templateDir    Absolute path to templates.
+     * @param AuthManager|null $authManager    Resolves the signed-in user so the
+     *        shared sidebar shows their name and the admin link; optional so
+     *        existing three-arg constructions keep working.
      */
     public function __construct(
         ItemRepository $itemRepo,
         LibraryManager $libraryManager,
-        string $templateDir
+        string $templateDir,
+        ?AuthManager $authManager = null
     ) {
         $this->itemRepo = $itemRepo;
         $this->libraryManager = $libraryManager;
         $this->templateDir = $templateDir;
+        $this->authManager = $authManager;
     }
 
     /**
@@ -74,7 +83,7 @@ class BookPageController
         return $this->render('books/books.tpl', [
             'current_page' => 'books',
             'books' => $books,
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -96,7 +105,7 @@ class BookPageController
         return $this->render('books/book.tpl', [
             'current_page' => 'books',
             'book' => $book,
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -119,7 +128,7 @@ class BookPageController
             'current_page' => 'books',
             'book' => $book,
             'theme' => 'light',
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -167,9 +176,9 @@ class BookPageController
      * @param array<string,mixed> $vars     Variables to assign.
      * @return Response HTML response.
      */
-    private function render(string $template, array $vars): Response
+    private function render(string $template, array $vars, ?string $userId = null): Response
     {
-        $vars['user'] = $vars['user'] ?? ['display_name' => 'Guest'];
+        $vars['user'] = $vars['user'] ?? PageRenderer::resolveUserVarsFor($this->authManager, $userId);
         $html = PageRenderer::renderTemplate($this->templateDir, $template, $vars);
         return (new Response())->html($html);
     }

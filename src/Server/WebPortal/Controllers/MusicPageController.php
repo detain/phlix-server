@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\WebPortal\Controllers;
 
+use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Server\Http\Request;
@@ -37,19 +38,27 @@ class MusicPageController
     /** @var string Absolute path to the Smarty template root. */
     private string $templateDir;
 
+    /** @var AuthManager|null Resolves the signed-in user for the sidebar/admin link. */
+    private ?AuthManager $authManager;
+
     /**
      * @param MusicLibraryManager $musicManager   Music aggregation manager.
      * @param LibraryManager      $libraryManager Library enumeration manager.
      * @param string              $templateDir    Absolute path to templates.
+     * @param AuthManager|null    $authManager    Resolves the signed-in user so
+     *        the shared sidebar shows their name and the admin link; optional so
+     *        existing three-arg constructions keep working.
      */
     public function __construct(
         MusicLibraryManager $musicManager,
         LibraryManager $libraryManager,
-        string $templateDir
+        string $templateDir,
+        ?AuthManager $authManager = null
     ) {
         $this->musicManager = $musicManager;
         $this->libraryManager = $libraryManager;
         $this->templateDir = $templateDir;
+        $this->authManager = $authManager;
     }
 
     /**
@@ -77,7 +86,7 @@ class MusicPageController
         return $this->render('music/albums.tpl', [
             'current_page' => 'music',
             'albums' => array_values($albums),
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -102,7 +111,7 @@ class MusicPageController
                     return $this->render('music/album.tpl', [
                         'current_page' => 'music',
                         'album' => $album,
-                    ]);
+                    ], $request->userId);
                 }
             }
         }
@@ -143,7 +152,7 @@ class MusicPageController
         return $this->render('music/artists.tpl', [
             'current_page' => 'music',
             'artists' => array_values($merged),
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -203,7 +212,7 @@ class MusicPageController
                 'albums' => $albums,
                 'tracks' => $tracks,
             ],
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -238,7 +247,7 @@ class MusicPageController
             'total' => count($all),
             'limit' => $limit,
             'offset' => $offset,
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -254,7 +263,7 @@ class MusicPageController
     {
         return $this->render('music/player.tpl', [
             'current_page' => 'music',
-        ]);
+        ], $request->userId);
     }
 
     /**
@@ -305,9 +314,9 @@ class MusicPageController
      * @param array<string,mixed> $vars     Variables to assign.
      * @return Response HTML response.
      */
-    private function render(string $template, array $vars): Response
+    private function render(string $template, array $vars, ?string $userId = null): Response
     {
-        $vars['user'] = $vars['user'] ?? ['display_name' => 'Guest'];
+        $vars['user'] = $vars['user'] ?? PageRenderer::resolveUserVarsFor($this->authManager, $userId);
         $html = PageRenderer::renderTemplate($this->templateDir, $template, $vars);
         return (new Response())->html($html);
     }

@@ -65,9 +65,23 @@ describe('CastApi', () => {
   });
 
   describe('getStatus()', () => {
-    it('GETs /api/v1/cast/devices/:id/status and returns playback state', async () => {
+    it('normalises the flat server status into CastPlaybackState', async () => {
+      // Real server shape: flat `{ device_id, active, state, session_id,
+      // media_status }` (ChromecastController::getStatus), NOT `{ success, data }`.
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: castPlaybackState } },
+        {
+          status: 200,
+          body: {
+            device_id: 'cast-1',
+            active: true,
+            state: 'PLAYING',
+            session_id: 's1',
+            media_item_id: 'm1',
+            volume_level: 0.75,
+            muted: false,
+            media_status: { media_title: 'My Movie', position_seconds: 1800, duration_seconds: 7200 },
+          },
+        },
       ]);
 
       const result = await api.getStatus('cast-1');
@@ -140,7 +154,7 @@ describe('CastApi', () => {
 
       expect(calls[0]!.url).toContain('/api/v1/cast/devices/cast-1/seek');
       expect(calls[0]!.init!.method).toBe('POST');
-      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_seconds: 3600 }));
+      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_ms: 3600000 }));
       expect(result.success).toBe(true);
     });
 
@@ -151,7 +165,7 @@ describe('CastApi', () => {
 
       await api.seek('cast-1', 0);
 
-      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_seconds: 0 }));
+      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_ms: 0 }));
     });
   });
 

@@ -109,12 +109,25 @@ export class DashboardApi {
     return data;
   }
 
-  /** `GET /api/v1/admin/dashboard/storage` → `{ success, data: StorageSummary[] }` */
+  /**
+   * `GET /api/v1/admin/dashboard/storage`.
+   *
+   * The server's `DashboardService::getStorageSummary()` returns an OBJECT —
+   * `{ movie_bytes, …, items: StorageSummary[], formatted_transcode_cache }` —
+   * NOT a bare list. The per-media-type rows the UI renders live under
+   * `data.items`; unwrap that (and default to `[]`) so callers always get the
+   * array they expect. Returning `data` verbatim handed the page an object and
+   * crashed `StorageCard` with "items.reduce is not a function".
+   */
   async getStorage(): Promise<StorageSummary[]> {
-    const { data } = await this.client.get<{ success: boolean; data: StorageSummary[] }>(
-      '/api/v1/admin/dashboard/storage',
-    );
-    return data;
+    const { data } = await this.client.get<{
+      success: boolean;
+      data: { items?: StorageSummary[] } | StorageSummary[];
+    }>('/api/v1/admin/dashboard/storage');
+    if (Array.isArray(data)) {
+      return data;
+    }
+    return Array.isArray(data?.items) ? data.items : [];
   }
 
   /**

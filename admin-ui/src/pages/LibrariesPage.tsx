@@ -265,15 +265,20 @@ export function LibrariesPage({
 
   const triggerScan = async (
     lib: Library,
-    kind: 'scan' | 'rescan',
+    kind: 'scan' | 'rescan' | 'metadata',
   ): Promise<void> => {
     try {
       const result =
-        kind === 'scan' ? await api.scan(lib.id) : await api.rescan(lib.id);
-      pushToast(
-        result.message || `Scan queued (job ${result.job_id}).`,
-        'success',
-      );
+        kind === 'metadata'
+          ? await api.matchMetadata(lib.id)
+          : kind === 'rescan'
+            ? await api.rescan(lib.id)
+            : await api.scan(lib.id);
+      const fallback =
+        kind === 'metadata'
+          ? `Metadata match queued (job ${result.job_id}).`
+          : `Scan queued (job ${result.job_id}).`;
+      pushToast(result.message || fallback, 'success');
       // Reflect the queued state immediately, then start polling.
       setStatuses((prev) => ({
         ...prev,
@@ -365,6 +370,13 @@ export function LibrariesPage({
             aria-label={`Rescan ${lib.name}`}
           >
             Rescan
+          </button>
+          <button
+            type="button"
+            onClick={() => void triggerScan(lib, 'metadata')}
+            aria-label={`Match metadata for ${lib.name}`}
+          >
+            Match metadata
           </button>
           <button
             type="button"

@@ -17,6 +17,13 @@ return [
             'username'  => getenv('DB_USER')     ?: (getenv('DB_USERNAME') ?: 'phlix'),
             'password'  => getenv('DB_PASSWORD') ?: '',
             'charset'   => 'utf8mb4',
+            // Coroutine connection pool. OFF by default: the proven
+            // single-connection mutex stays active. Set DB_POOL_ENABLED=1 (and
+            // tune `pool_size`) to give each coroutine its own leased
+            // connection for true intra-worker DB parallelism — validate on a
+            // non-prod restart first (see PooledMySQLConnection). pool_size=1
+            // is a safe, fully-serialised fallback.
+            'pool_enabled' => filter_var(getenv('DB_POOL_ENABLED') ?: false, FILTER_VALIDATE_BOOLEAN),
             'pool_size' => 20,
             'timeout'   => 5,
         ],

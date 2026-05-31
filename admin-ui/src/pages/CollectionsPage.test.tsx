@@ -214,32 +214,13 @@ describe('CollectionsPage', () => {
 
   it('deletes a collection after confirming', async () => {
     const { calls } = renderPage([
-      // Initial load - 12 sets of responses for each pattern
+      // DELETE routes to its own specific pattern (matched before the generic
+      // `/collections`, so it never steals a list-GET round-robin slot).
+      { status: 200, body: { message: 'deleted' }, urlMatch: '/collections/col-1' },
+      // List GETs: initial returns the collection, the post-delete refetch
+      // returns empty. loadData runs once per call (stable useRef api wrapper,
+      // no StrictMode in tests), so order is deterministic: idx0 then idx1.
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      // DELETE
-      { status: 200, body: { message: 'deleted' }, urlMatch: '/collections' },
-      // Refresh after delete - 8 sets for each pattern
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
       { status: 200, body: { collections: [] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
     ]);
@@ -285,27 +266,13 @@ describe('CollectionsPage', () => {
 
   it('opens view items modal and shows items', async () => {
     renderPage([
-      // Initial load - many responses to handle StrictMode unpredictable double invocation
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      // View items modal - GET collection with items
+      // Detail GET routes to its own specific pattern (matched before the
+      // generic `/collections`), so it deterministically returns the items
+      // payload regardless of how many list GETs preceded it.
       { status: 200, body: { collection: sampleCollection, items: [
         { id: 'item-1', title: 'Movie 1' },
         { id: 'item-2', title: 'Movie 2' },
-      ]}, urlMatch: '/collections' },
-      // Extra responses for StrictMode cleanup and safety
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
-      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      ]}, urlMatch: '/collections/col-1' },
       { status: 200, body: { collections: [sampleCollection] }, urlMatch: '/collections' },
       { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
     ]);
@@ -410,19 +377,14 @@ describe('CollectionsPage', () => {
 
   it('deletes a smart collection after confirming', async () => {
     const { calls } = renderPage([
-      // Initial load - many responses to handle StrictMode unpredictable double invocation
-      // Each pattern needs 20+ responses to prevent counter wraparound
-      ...Array.from({ length: 12 }, () => [
-        { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-        { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
-      ]).flat(),
-      // DELETE
-      { status: 200, body: { message: 'deleted' }, urlMatch: '/smart-playlists' },
-      // Refresh after delete - many sets for each pattern
-      ...Array.from({ length: 12 }, () => [
-        { status: 200, body: { collections: [] }, urlMatch: '/collections' },
-        { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
-      ]).flat(),
+      // DELETE routes to its own specific pattern (matched before the generic
+      // `/smart-playlists`, so it never steals a list-GET round-robin slot).
+      { status: 200, body: { message: 'deleted' }, urlMatch: '/smart-playlists/sp-1' },
+      // Smart-playlist GETs: initial returns the playlist, the post-delete
+      // refetch returns empty (deterministic order: idx0 then idx1).
+      { status: 200, body: { smart_playlists: [sampleSmart] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { smart_playlists: [] }, urlMatch: '/smart-playlists' },
+      { status: 200, body: { collections: [] }, urlMatch: '/collections' },
     ]);
 
     await waitFor(() => {

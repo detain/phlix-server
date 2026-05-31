@@ -230,6 +230,10 @@ class HubClientTest extends TestCase
         $httpClient = $this->createMock(HttpClientInterface::class);
         $logger = new StructuredLogger('hub', []);
 
+        // A fresh enrollment (enrolled_at = now) is well inside the 6-day
+        // window, so no renew call must be made.
+        $httpClient->expects($this->never())->method('post');
+
         $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
         $client->storeEnrollment(
             'jwt-token',
@@ -243,11 +247,87 @@ class HubClientTest extends TestCase
         $this->assertFalse($reEnrolled);
     }
 
-    public function test_reEnrollIfNeeded_re_enrolls_when_expired(): void
+    public function test_reEnrollIfNeeded_renews_within_six_to_seven_day_window(): void
     {
         $keyManager = new Ed25519KeyManager($this->keyPath);
         $httpClient = $this->createMock(HttpClientInterface::class);
         $logger = new StructuredLogger('hub', []);
+
+        // Enrollment is 6.5 days old: inside the renewal window but the
+        // current JWT is still valid (< 7 days), so renew should fire.
+        $enrollmentPath = $this->tmpDir . '/hub-enrollment.json';
+        $renewableData = [
+            'enrollment_jwt' => 'old-jwt',
+            'hub_jwks_url' => 'https://hub.example.com/.well-known/jwks.json',
+            'server_id' => 'server-uuid',
+            'hub_base_url' => 'https://hub.example.com',
+            'enrolled_at' => time() - (int) (6.5 * 86400),
+        ];
+        file_put_contents($enrollmentPath, json_encode($renewableData));
+
+        $httpClient->expects($this->once())
+            ->method('post')
+            ->with('/api/v1/servers/server-uuid/renew', [])
+            ->willReturn(new HttpResponse(200, [], [
+                'enrollment_jwt' => 'fresh-jwt',
+                'expires_in' => 604800,
+            ]));
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+        $reEnrolled = $client->reEnrollIfNeeded();
+
+        $this->assertTrue($reEnrolled);
+
+        // The fresh enrollment must be persisted with the new JWT and a
+        // reset enrolled_at timestamp.
+        $data = json_decode(file_get_contents($enrollmentPath), true);
+        $this->assertEquals('fresh-jwt', $data['enrollment_jwt']);
+        $this->assertEquals('server-uuid', $data['server_id']);
+        $this->assertEquals('https://hub.example.com', $data['hub_base_url']);
+        $this->assertGreaterThanOrEqual(time() - 5, $data['enrolled_at']);
+    }
+
+    public function test_reEnrollIfNeeded_returns_false_when_renew_fails(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $enrollmentPath = $this->tmpDir . '/hub-enrollment.json';
+        $renewableData = [
+            'enrollment_jwt' => 'old-jwt',
+            'hub_jwks_url' => 'https://hub.example.com/.well-known/jwks.json',
+            'server_id' => 'server-uuid',
+            'hub_base_url' => 'https://hub.example.com',
+            'enrolled_at' => time() - (int) (6.5 * 86400),
+        ];
+        file_put_contents($enrollmentPath, json_encode($renewableData));
+
+        $httpClient->expects($this->once())
+            ->method('post')
+            ->willReturn(new HttpResponse(401, [], [
+                'error_code' => 'ENROLLMENT_TOKEN_EXPIRED',
+            ]));
+
+        $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
+        $reEnrolled = $client->reEnrollIfNeeded();
+
+        $this->assertFalse($reEnrolled);
+
+        // The stored enrollment must be untouched on failure.
+        $data = json_decode(file_get_contents($enrollmentPath), true);
+        $this->assertEquals('old-jwt', $data['enrollment_jwt']);
+    }
+
+    public function test_reEnrollIfNeeded_does_not_renew_when_already_expired(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        // Already fully expired (8 days): the JWT can no longer authenticate
+        // a renew, so no renew call must be made and the method returns false.
+        $httpClient->expects($this->never())->method('post');
 
         $enrollmentPath = $this->tmpDir . '/hub-enrollment.json';
         $expiredData = [

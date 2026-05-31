@@ -111,28 +111,55 @@ class PageRenderer
     }
 
     /**
-     * Resolve the display name for the signed-in user, falling back to
-     * 'User' when the request is unauthenticated or the lookup fails.
-     * Mirrors the resolution used by {@see self::renderHome()} so every
-     * page renders the same "Signed in as …" label.
+     * Resolve the template `user` vars (display name + admin flag) for the
+     * signed-in user, in a single {@see AuthManager::getUser()} lookup.
+     *
+     * Falls back to a non-admin `'User'` when the request is unauthenticated,
+     * the lookup fails, or the auth services aren't wired (the four-arg
+     * constructor path used by existing tests). The `is_admin` flag drives
+     * the conditional "Admin" link in `layouts/main.tpl` — the only place a
+     * link to the `/admin` SPA is surfaced in the portal chrome.
      *
      * @param string|null $userId The authenticated user id from the request.
      *
-     * @return string Human-readable display name (never empty).
+     * @return array{display_name: string, is_admin: bool}
      */
-    private function resolveDisplayName(?string $userId): string
+    private function resolveUserVars(?string $userId): array
     {
-        if (!is_string($userId) || $userId === '' || $this->authManager === null) {
-            return 'User';
+        return self::resolveUserVarsFor($this->authManager, $userId);
+    }
+
+    /**
+     * Stateless variant of {@see self::resolveUserVars()} for the subordinate
+     * page controllers (Music/Photo/Book/Audiobook) that render `main.tpl`
+     * via {@see self::renderTemplate()} rather than through this renderer.
+     *
+     * Kept static (and request-state-free) on purpose: those controllers are
+     * long-lived singletons in the Workerman daemon, so the signed-in user
+     * MUST be resolved per call from the passed `$userId`, never cached on the
+     * instance.
+     *
+     * @param AuthManager|null $authManager Auth lookup service, or null when
+     *        unwired (degrades to a non-admin guest).
+     * @param string|null      $userId      Authenticated user id from the request.
+     *
+     * @return array{display_name: string, is_admin: bool}
+     */
+    public static function resolveUserVarsFor(?AuthManager $authManager, ?string $userId): array
+    {
+        $vars = ['display_name' => 'User', 'is_admin' => false];
+        if (!is_string($userId) || $userId === '' || $authManager === null) {
+            return $vars;
         }
-        $user = $this->authManager->getUser($userId);
+        $user = $authManager->getUser($userId);
         if (is_array($user)) {
             $candidate = $user['display_name'] ?? $user['username'] ?? null;
             if (is_string($candidate) && $candidate !== '') {
-                return $candidate;
+                $vars['display_name'] = $candidate;
             }
+            $vars['is_admin'] = (bool) ($user['is_admin'] ?? false);
         }
-        return 'User';
+        return $vars;
     }
 
     /**
@@ -209,24 +236,13 @@ class PageRenderer
         );
 
         $continueWatching = [];
-        $displayName = 'User';
         if (is_string($userId) && $userId !== '') {
             $continueWatching = $this->playbackController->getContinueWatching($userId, 10);
-
-            if ($this->authManager !== null) {
-                $user = $this->authManager->getUser($userId);
-                if (is_array($user)) {
-                    $candidate = $user['display_name'] ?? $user['username'] ?? null;
-                    if (is_string($candidate) && $candidate !== '') {
-                        $displayName = $candidate;
-                    }
-                }
-            }
         }
 
         // Assign variables
         $template->assign('current_page', 'home');
-        $template->assign('user', ['display_name' => $displayName]);
+        $template->assign('user', $this->resolveUserVars($userId));
         $template->assign('libraries', $librariesWithItems);
         $template->assign('recently_added', $recentlyAdded);
         $template->assign('continue_watching', $continueWatching);
@@ -311,6 +327,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'library');
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('library', $library);
         $template->assign('items', $items);
         $template->assign('themeMedia', $themeMedia);
@@ -388,6 +405,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'library');
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('library', ['name' => 'All Libraries']);
         $template->assign('libraries', $libraries);
         $template->assign('items', array_slice($items, 0, 100));
@@ -428,6 +446,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'search');
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('query', $query);
         $template->assign('results', $results);
 
@@ -453,7 +472,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'settings');
-        $template->assign('user', ['display_name' => $this->resolveDisplayName($request->userId ?? null)]);
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
 
         $html = $template->fetch('settings/index.tpl');
 
@@ -472,7 +491,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'settings');
-        $template->assign('user', ['display_name' => $this->resolveDisplayName($request->userId ?? null)]);
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
 
         $html = $template->fetch('auth/webauthn-settings.tpl');
 

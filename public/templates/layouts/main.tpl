@@ -30,6 +30,12 @@
                 <span class="icon">⚙️</span>
                 <span>Settings</span>
             </a>
+            {if $user.is_admin|default:false}
+            <a href="/admin" class="nav-item {if $current_page == 'admin'}active{/if}">
+                <span class="icon">🛠️</span>
+                <span>Admin</span>
+            </a>
+            {/if}
         </nav>
 
         <div class="sidebar-footer">

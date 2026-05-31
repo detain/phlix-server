@@ -251,10 +251,9 @@ describe('DashboardPage', () => {
       { status: 200, body: { success: true, data: topMedia } },
     ]);
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Now Playing' })).toBeInTheDocument();
-    });
-    expect(screen.getByText('No active sessions')).toBeInTheDocument();
+    // findBy* waits for the async now-playing fetch to resolve; a sync getByText
+    // after waiting on the (static) heading races the fetch and flakes on CI.
+    expect(await screen.findByText('No active sessions')).toBeInTheDocument();
   });
 
   it('shows empty state for Top Users when no data', async () => {

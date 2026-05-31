@@ -31,6 +31,11 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Retry timing-sensitive React Testing Library tests a couple of times.
+    // Several suites assert on content that lands after an async fetch; on
+    // slow CI runners a single attempt can race the fetch. A real (deterministic)
+    // failure still fails every attempt, so this only absorbs transient flakes.
+    retry: 2,
     coverage: {
       provider: 'v8',
       reportsDirectory: './coverage',

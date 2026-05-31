@@ -66,14 +66,33 @@ const NUMERIC_CONSTRAINTS: Record<string, { min?: number; max?: number }> = {
 /** Fields that should render as password type. */
 const PASSWORD_FIELDS = new Set(['tmdb.api_key']);
 
+/** Explicit, unambiguous labels for keys whose derived name is unclear. */
+const FIELD_LABELS: Record<string, string> = {
+  'tmdb.api_key': 'TMDB API Key',
+};
+
+/** Inline help shown under a field. */
+const FIELD_HELP: Record<string, string> = {
+  'tmdb.api_key':
+    'Your TMDB (The Movie Database) API key — get one free at themoviedb.org → Settings → API (v3 auth). Used to fetch movie & TV metadata, posters, and external IDs.',
+};
+
 function getDisplayName(key: string): string {
-  // Human-readable label from key: "hwaccel.enabled" → "Hwaccel enabled"
-  // or "tmdb.api_key" → "Api Key"
+  // Prefer an explicit label; otherwise derive from the key:
+  // "hwaccel.enabled" → "Hwaccel enabled".
+  if (FIELD_LABELS[key]) {
+    return FIELD_LABELS[key];
+  }
   return key
     .split('.')
     .pop()!
     .replace(/_/g, ' ')
     .replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+function renderFieldHelp(key: string): JSX.Element | null {
+  if (!FIELD_HELP[key]) return null;
+  return <p className="form__help settings-field__help">{FIELD_HELP[key]}</p>;
 }
 
 function isOverridden(key: string, overridden: string[]): boolean {
@@ -227,6 +246,7 @@ export function SettingsPage({ client }: SettingsPageProps): JSX.Element {
             <span className="overridden-badge">custom</span>
           )}
           {renderFieldError(key, fieldErrors)}
+          {renderFieldHelp(key)}
         </div>
       );
     }
@@ -248,6 +268,7 @@ export function SettingsPage({ client }: SettingsPageProps): JSX.Element {
             <span className="overridden-badge">custom</span>
           )}
           {renderFieldError(key, fieldErrors)}
+          {renderFieldHelp(key)}
         </div>
       );
     }
@@ -274,6 +295,7 @@ export function SettingsPage({ client }: SettingsPageProps): JSX.Element {
             <span className="overridden-badge">custom</span>
           )}
           {renderFieldError(key, fieldErrors)}
+          {renderFieldHelp(key)}
         </div>
       );
     }
@@ -291,6 +313,7 @@ export function SettingsPage({ client }: SettingsPageProps): JSX.Element {
           <span className="overridden-badge">custom</span>
         )}
         {renderFieldError(key, fieldErrors)}
+        {renderFieldHelp(key)}
       </div>
     );
   };

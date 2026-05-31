@@ -41,7 +41,7 @@ describe('RokuApi', () => {
   describe('listDevices()', () => {
     it('GETs /api/v1/roku/devices and returns device list', async () => {
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: [rokuDevice] } },
+        { status: 200, body: { devices: [rokuDevice] } },
       ]);
 
       const result = await api.listDevices();

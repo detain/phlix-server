@@ -43,7 +43,7 @@ describe('CastApi', () => {
   describe('listDevices()', () => {
     it('GETs /api/v1/cast/devices and returns device list', async () => {
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: [castDevice] } },
+        { status: 200, body: { devices: [castDevice] } },
       ]);
 
       const result = await api.listDevices();

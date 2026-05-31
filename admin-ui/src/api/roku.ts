@@ -46,10 +46,12 @@ export class RokuApi {
    * `GET /api/v1/roku/devices` → `{ success, data: RokuDevice[] }`
    */
   async listDevices(): Promise<RokuDevice[]> {
-    const { data } = await this.client.get<{ success: boolean; data: RokuDevice[] }>(
+    // Server returns `{ devices, count }` (RokuController::listDevices), not
+    // `{ success, data }`. Accept both and default to [].
+    const res = await this.client.get<{ devices?: RokuDevice[]; data?: RokuDevice[] }>(
       '/api/v1/roku/devices',
     );
-    return data;
+    return res.devices ?? res.data ?? [];
   }
 
   /**

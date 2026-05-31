@@ -46,10 +46,12 @@ export class AirPlayApi {
    * `GET /api/v1/airplay/devices` → `{ success, data: AirPlayDevice[] }`
    */
   async listDevices(): Promise<AirPlayDevice[]> {
-    const { data } = await this.client.get<{ success: boolean; data: AirPlayDevice[] }>(
+    // Server returns `{ devices, count }` (AirPlayController::listDevices), not
+    // `{ success, data }`. Accept both and default to [].
+    const res = await this.client.get<{ devices?: AirPlayDevice[]; data?: AirPlayDevice[] }>(
       '/api/v1/airplay/devices',
     );
-    return data;
+    return res.devices ?? res.data ?? [];
   }
 
   /**

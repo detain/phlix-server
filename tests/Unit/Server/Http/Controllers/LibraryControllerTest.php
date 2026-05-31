@@ -173,7 +173,13 @@ class LibraryControllerTest extends TestCase
         // Note: AdminMiddleware is final and cannot be mocked in unit tests.
         // Admin enforcement is covered in integration tests.
         // Here we test the happy path without admin middleware set.
+        // Create must enqueue an async scan job (the worker scans in the
+        // background) rather than scanning inline, so create returns fast.
         $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('new-lib-id', 'scan')
+            ->willReturn('job-1');
         $controller = new LibraryController($libraryManager, $scanJobs);
 
         $request = new Request();
@@ -189,7 +195,9 @@ class LibraryControllerTest extends TestCase
         $this->assertSame(201, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertSame('new-lib-id', $body['library_id']);
-        $this->assertSame('Library created successfully', $body['message']);
+        $this->assertSame('job-1', $body['job_id']);
+        $this->assertSame('scanning', $body['status']);
+        $this->assertStringContainsString('background', $body['message']);
     }
 
     /**

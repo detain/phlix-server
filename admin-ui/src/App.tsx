@@ -15,6 +15,7 @@ import { Route, Routes } from 'react-router-dom';
 import { useAdminGuard, type RedirectFn } from './auth/useAdminGuard';
 import { AdminNav } from './nav/AdminNav';
 import { BackupPage } from './pages/BackupPage';
+import { LogsPage } from './pages/LogsPage';
 import { CastDevicesPage } from './pages/CastDevicesPage';
 import { CollectionsPage } from './pages/CollectionsPage';
 import { DlnaServerPage } from './pages/DlnaServerPage';
@@ -64,6 +65,7 @@ export function App({ client, redirect }: AppProps): JSX.Element | null {
           <Routes>
             <Route path="/" element={<DashboardPage user={user} />} />
             <Route path="/backup" element={<BackupPage client={client} />} />
+            <Route path="/logs" element={<LogsPage client={client} />} />
             <Route path="/libraries" element={<LibrariesPage client={client} />} />
             <Route path="/settings" element={<SettingsPage client={client} />} />
             <Route path="/users" element={<UsersPage client={client} />} />

@@ -94,6 +94,7 @@ describe('NAV_ITEMS', () => {
       { path: '/integrations', label: 'Integrations' },
       { path: '/services', label: 'Services' },
       { path: '/backup', label: 'Backup' },
+      { path: '/logs', label: 'Logs' },
       { path: '/cast-devices', label: 'Cast Devices' },
       { path: '/dlna-server', label: 'DLNA Server' },
       { path: '/remote-access', label: 'Remote Access' },

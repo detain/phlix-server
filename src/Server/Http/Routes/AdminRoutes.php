@@ -10,6 +10,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
+use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -146,6 +147,12 @@ final class AdminRoutes
                 /** @var FsBrowseController $fsBrowseController */
                 $fsBrowseController = $container->get(FsBrowseController::class);
                 $r->get('/fs/browse', [$fsBrowseController, 'browse']);
+
+                // Log viewer (Step 1.7): list + tail the server log files.
+                /** @var LogController $logController */
+                $logController = $container->get(LogController::class);
+                $r->get('/logs', [$logController, 'index']);
+                $r->get('/logs/tail', [$logController, 'tail']);
 
                 // Admin user management (Step 1.2a).
                 /** @var AdminUserController $adminUserController */

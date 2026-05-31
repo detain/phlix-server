@@ -13,6 +13,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
+use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
 
@@ -84,6 +85,13 @@ final class AdminServicesProvider implements ServiceProviderInterface
                 }
 
                 return new FsBrowseController($list);
+            }),
+
+            // Admin log viewer (Step 1.7) — tails the rotating log files in
+            // the project's .logs/ directory (same dir config/logger.php writes
+            // to). The dir is resolved + jailed inside LogController.
+            LogController::class => factory(static function (): LogController {
+                return new LogController(__DIR__ . '/../../../../.logs');
             }),
         ]);
     }

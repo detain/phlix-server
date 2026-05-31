@@ -14,6 +14,7 @@ if (!file_exists($autoloadPath)) {
 }
 
 require $autoloadPath;
+require_once __DIR__ . '/bootstrap_env.php';
 
 function getPortForwardService(): PortForwardService
 {

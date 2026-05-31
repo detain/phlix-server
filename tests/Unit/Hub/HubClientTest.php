@@ -46,11 +46,12 @@ class HubClientTest extends TestCase
         $httpClient = $this->createMock(HttpClientInterface::class);
         $logger = new StructuredLogger('hub', []);
 
+        // The hub replies in the shared ClaimResponse wire format (camelCase).
         $httpClient->method('post')->willReturn(new HttpResponse(200, [], [
-            'claim_code' => 'ABCD-1234',
-            'expires_in' => 600,
-            'claim_id' => 'claim-uuid-123',
-            'hub_base_url' => 'https://hub.example.com',
+            'claimCode' => 'ABCD-1234',
+            'expiresIn' => 600,
+            'claimId' => 'claim-uuid-123',
+            'hubBaseUrl' => 'https://hub.example.com',
         ]));
 
         $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);

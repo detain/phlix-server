@@ -111,6 +111,31 @@ class PageRenderer
     }
 
     /**
+     * Resolve the display name for the signed-in user, falling back to
+     * 'User' when the request is unauthenticated or the lookup fails.
+     * Mirrors the resolution used by {@see self::renderHome()} so every
+     * page renders the same "Signed in as …" label.
+     *
+     * @param string|null $userId The authenticated user id from the request.
+     *
+     * @return string Human-readable display name (never empty).
+     */
+    private function resolveDisplayName(?string $userId): string
+    {
+        if (!is_string($userId) || $userId === '' || $this->authManager === null) {
+            return 'User';
+        }
+        $user = $this->authManager->getUser($userId);
+        if (is_array($user)) {
+            $candidate = $user['display_name'] ?? $user['username'] ?? null;
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
+        return 'User';
+    }
+
+    /**
      * Sets the theme media repository for theme media lookup.
      *
      * @param ThemeMediaRepository $repository Theme media repository
@@ -428,7 +453,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'settings');
-        $template->assign('user', ['display_name' => 'User']);
+        $template->assign('user', ['display_name' => $this->resolveDisplayName($request->userId ?? null)]);
 
         $html = $template->fetch('settings/index.tpl');
 
@@ -447,7 +472,7 @@ class PageRenderer
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
         $template->assign('current_page', 'settings');
-        $template->assign('user', ['display_name' => 'User']);
+        $template->assign('user', ['display_name' => $this->resolveDisplayName($request->userId ?? null)]);
 
         $html = $template->fetch('auth/webauthn-settings.tpl');
 

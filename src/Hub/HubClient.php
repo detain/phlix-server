@@ -7,6 +7,7 @@ namespace Phlix\Hub;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Network\PortForwardService;
 use Phlix\Shared\Hub\ClaimRequest;
+use Phlix\Shared\Hub\HeartbeatDto;
 use Throwable;
 
 /**
@@ -351,25 +352,19 @@ class HubClient
             return new HeartbeatResult(false, 'Not enrolled', 'NOT_ENROLLED');
         }
 
-        $payload = [
-            'server_id' => $enrollment->serverId,
-            'version' => $this->serverVersion,
-            'timestamp' => time(),
-            'uptime_seconds' => time() - $this->processStartTime,
-            'active_sessions' => 0,
-            'active_transcodes' => 0,
-            'hostname_candidates' => $this->getHostnameCandidates(),
-            'capabilities' => [
-                'direct-play',
-                'transcode-h264',
-                'transcode-h265',
-                'syncplay',
-                'relay',
-                'library-sharing',
-            ],
-            'library_count' => 0,
-            'total_size_bytes' => 0,
-        ];
+        // Build from the shared HeartbeatDto so the wire payload uses the
+        // camelCase keys the hub parses with HeartbeatDto::fromPayload();
+        // a snake_case array here is rejected with 400 "Bad Request"
+        // ("serverId is required").
+        $payload = (new HeartbeatDto(
+            serverId: $enrollment->serverId,
+            version: $this->serverVersion,
+            timestamp: time(),
+            uptimeSeconds: time() - $this->processStartTime,
+            activeSessions: 0,
+            activeTranscodes: 0,
+            hostnameCandidates: array_values($this->getHostnameCandidates()),
+        ))->toPayload();
 
         try {
             $response = $this->httpClient->post("/api/v1/servers/{$enrollment->serverId}/heartbeat", $payload);

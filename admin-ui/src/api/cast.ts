@@ -46,10 +46,13 @@ export class CastApi {
    * `GET /api/v1/cast/devices` → `{ success, data: CastDevice[] }`
    */
   async listDevices(): Promise<CastDevice[]> {
-    const { data } = await this.client.get<{ success: boolean; data: CastDevice[] }>(
+    // Server returns `{ devices, count }` (ChromecastController::listDevices),
+    // not `{ success, data }`. Accept both and default to [] so the page never
+    // maps over undefined.
+    const res = await this.client.get<{ devices?: CastDevice[]; data?: CastDevice[] }>(
       '/api/v1/cast/devices',
     );
-    return data;
+    return res.devices ?? res.data ?? [];
   }
 
   /**

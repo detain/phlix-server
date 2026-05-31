@@ -160,9 +160,17 @@ class LibraryController
             $options
         );
 
+        // Run the initial scan in the BACKGROUND (the phlix-library-scan worker
+        // picks up queued jobs) so create returns immediately instead of
+        // blocking the admin form for the whole scan. The UI polls scan-status
+        // to show progress.
+        $jobId = $this->scanJobs->enqueue($libraryId, 'scan');
+
         return (new Response())->status(201)->json([
             'library_id' => $libraryId,
-            'message' => 'Library created successfully',
+            'job_id' => $jobId,
+            'status' => 'scanning',
+            'message' => 'Library created; initial scan started in the background.',
         ]);
     }
 

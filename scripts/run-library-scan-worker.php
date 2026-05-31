@@ -31,6 +31,7 @@ declare(strict_types=1);
 $baseDir = dirname(__DIR__);
 chdir($baseDir);
 require_once $baseDir . '/vendor/autoload.php';
+require_once __DIR__ . '/bootstrap_env.php';
 
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;

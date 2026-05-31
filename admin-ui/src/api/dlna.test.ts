@@ -41,14 +41,14 @@ const dlnaPlaybackState: DlnaPlaybackState = {
 
 describe('DlnaApi', () => {
   describe('listDevices()', () => {
-    it('GETs /api/v1/dlna/devices and returns device list', async () => {
+    it('GETs /api/v1/dlna/renderers and returns device list', async () => {
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: [dlnaDevice] } },
+        { status: 200, body: { renderers: [dlnaDevice] } },
       ]);
 
       const result = await api.listDevices();
 
-      expect(calls[0]!.url).toBe('/api/v1/dlna/devices');
+      expect(calls[0]!.url).toBe('/api/v1/dlna/renderers');
       expect(calls[0]!.init!.method).toBe('GET');
       expect(result).toEqual([dlnaDevice]);
     });
@@ -65,14 +65,14 @@ describe('DlnaApi', () => {
   });
 
   describe('getStatus()', () => {
-    it('GETs /api/v1/dlna/devices/:id/status and returns playback state', async () => {
+    it('GETs /api/v1/dlna/renderers/:id/status and returns playback state', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true, data: dlnaPlaybackState } },
       ]);
 
       const result = await api.getStatus('dlna-1');
 
-      expect(calls[0]!.url).toContain('/api/v1/dlna/devices/dlna-1/status');
+      expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/status');
       expect(calls[0]!.init!.method).toBe('GET');
       expect(result).toEqual(dlnaPlaybackState);
     });
@@ -89,56 +89,56 @@ describe('DlnaApi', () => {
   });
 
   describe('play()', () => {
-    it('POSTs to /api/v1/dlna/devices/:id/play', async () => {
+    it('POSTs to /api/v1/dlna/renderers/:id/play', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true, message: 'Playing' } },
       ]);
 
       const result = await api.play('dlna-1');
 
-      expect(calls[0]!.url).toContain('/api/v1/dlna/devices/dlna-1/play');
+      expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/play');
       expect(calls[0]!.init!.method).toBe('POST');
       expect(result.success).toBe(true);
     });
   });
 
   describe('pause()', () => {
-    it('POSTs to /api/v1/dlna/devices/:id/pause', async () => {
+    it('POSTs to /api/v1/dlna/renderers/:id/pause', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true, message: 'Paused' } },
       ]);
 
       const result = await api.pause('dlna-1');
 
-      expect(calls[0]!.url).toContain('/api/v1/dlna/devices/dlna-1/pause');
+      expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/pause');
       expect(calls[0]!.init!.method).toBe('POST');
       expect(result.success).toBe(true);
     });
   });
 
   describe('stop()', () => {
-    it('POSTs to /api/v1/dlna/devices/:id/stop', async () => {
+    it('POSTs to /api/v1/dlna/renderers/:id/stop', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true } },
       ]);
 
       const result = await api.stop('dlna-1');
 
-      expect(calls[0]!.url).toContain('/api/v1/dlna/devices/dlna-1/stop');
+      expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/stop');
       expect(calls[0]!.init!.method).toBe('POST');
       expect(result.success).toBe(true);
     });
   });
 
   describe('seek()', () => {
-    it('POSTs to /api/v1/dlna/devices/:id/seek with position_seconds', async () => {
+    it('POSTs to /api/v1/dlna/renderers/:id/seek with position_seconds', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true } },
       ]);
 
       const result = await api.seek('dlna-1', 2700);
 
-      expect(calls[0]!.url).toContain('/api/v1/dlna/devices/dlna-1/seek');
+      expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/seek');
       expect(calls[0]!.init!.method).toBe('POST');
       expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_seconds: 2700 }));
       expect(result.success).toBe(true);

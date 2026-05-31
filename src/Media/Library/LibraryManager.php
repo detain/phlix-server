@@ -97,7 +97,14 @@ class LibraryManager
     }
 
     /**
-     * Creates a new media library and initiates initial scan.
+     * Creates a new media library (metadata only; does NOT scan inline).
+     *
+     * The initial scan is intentionally NOT run here — it can take minutes for
+     * large folders, which would block the create HTTP request and freeze the
+     * admin form. The create endpoint enqueues an async scan job (processed by
+     * {@see LibraryScanWorker}) instead, so create returns immediately and the
+     * UI shows live scan-status. {@see scanLibrary()} still does the actual work
+     * when the worker claims the job.
      *
      * @param string $name Human-readable name for the library
      * @param string $type Media type (e.g., 'video', 'audio', 'image')
@@ -122,10 +129,8 @@ class LibraryManager
 
         $this->logger->info('Library created', ['library_id' => $id, 'name' => $name, 'type' => $type]);
 
-        // Initial scan
-        $this->scanLibrary($id);
-
-        // Start watching for changes
+        // Start watching for changes. (The initial scan is enqueued as a
+        // background job by the caller — NOT run inline — see the docblock.)
         $this->watcher->watch($id, $paths);
 
         return $id;

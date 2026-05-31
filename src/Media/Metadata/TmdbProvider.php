@@ -97,6 +97,57 @@ class TmdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * Resolve a movie by its IMDb id via TMDB's `/find` endpoint.
+     *
+     * Uses `GET /find/{imdbId}?external_source=imdb_id` and returns the first
+     * `movie_results` entry mapped like a {@see self::search()} result. This is
+     * faster and more reliable than a title search when an IMDb id is known.
+     *
+     * @param string $imdbId IMDb id, e.g. `tt0133093`.
+     * @return array{id: string, title: string, overview: string, year: int|null}|null
+     *     First matching movie, or null when there is no match.
+     */
+    public function findByImdbId(string $imdbId): ?array
+    {
+        if ($imdbId === '') {
+            return null;
+        }
+
+        $response = $this->http->get("/find/{$imdbId}", [
+            'external_source' => 'imdb_id',
+        ]);
+
+        if ($response === null) {
+            return null;
+        }
+
+        $movieResults = MetadataValue::asAssocList($response['movie_results'] ?? null);
+        if ($movieResults === []) {
+            return null;
+        }
+
+        $first = $movieResults[0];
+
+        $year = null;
+        $releaseDate = MetadataValue::asString($first['release_date'] ?? null);
+        if ($releaseDate !== '') {
+            $timestamp = strtotime($releaseDate);
+            if ($timestamp !== false) {
+                $year = (int) date('Y', $timestamp);
+            }
+        }
+
+        return [
+            'id' => MetadataValue::asString($first['id'] ?? null),
+            'title' => MetadataValue::asString(
+                $first['title'] ?? ($first['name'] ?? null)
+            ),
+            'overview' => MetadataValue::asString($first['overview'] ?? null),
+            'year' => $year,
+        ];
+    }
+
+    /**
      * Get detailed movie information from TMDB.
      *
      * @param string $externalId TMDB movie ID
@@ -109,7 +160,7 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get("/movie/{$externalId}", [
             'language' => $language,
-            'append_to_response' => 'credits,genres,production_companies',
+            'append_to_response' => 'credits,genres,production_companies,external_ids',
         ]);
 
         if ($response === null) {
@@ -194,6 +245,14 @@ class TmdbProvider implements MetadataProviderInterface
             ? MetadataValue::asNullableString($studios[0]['name'])
             : null;
 
+        // The `tt…` IMDb id may arrive either at the top level (plain
+        // /movie/{id} response) or nested under `external_ids` when requested
+        // via append_to_response=external_ids. Prefer the explicit external_ids
+        // block, falling back to the top-level field.
+        $externalIds = MetadataValue::asAssoc($data['external_ids'] ?? null);
+        $imdbId = MetadataValue::asNullableString($externalIds['imdb_id'] ?? null)
+            ?? MetadataValue::asNullableString($data['imdb_id'] ?? null);
+
         $credits = MetadataValue::asAssoc($data['credits'] ?? null);
         $cast = MetadataValue::asAssocList($credits['cast'] ?? null);
         $crew = MetadataValue::asAssocList($credits['crew'] ?? null);
@@ -225,7 +284,7 @@ class TmdbProvider implements MetadataProviderInterface
             'tagline' => MetadataValue::asString($data['tagline'] ?? null),
             'budget' => MetadataValue::asInt($data['budget'] ?? null),
             'revenue' => MetadataValue::asInt($data['revenue'] ?? null),
-            'imdb_id' => MetadataValue::asNullableString($data['imdb_id'] ?? null),
+            'imdb_id' => $imdbId,
             'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
             'actors' => $actors,
             'director' => $this->findDirector($crew),

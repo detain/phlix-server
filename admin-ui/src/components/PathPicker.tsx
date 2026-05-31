@@ -95,10 +95,21 @@ export function PathPicker({
         <button
           type="button"
           className="path-picker__up"
-          disabled={loading || result === null || result.parent === null}
+          // Enabled whenever we're inside a directory. At a top-level root the
+          // server returns `parent: null` (its real parent is outside the
+          // allowed jail); "Up" from there returns to the ROOTS list rather
+          // than dead-ending — otherwise you can't switch between roots
+          // (e.g. from /vault1 over to /vault2).
+          disabled={loading || result === null || current === null}
           onClick={() => {
-            if (result && result.parent !== null) {
+            if (!result || current === null) {
+              return;
+            }
+            if (result.parent !== null) {
               void browse(result.parent);
+            } else {
+              // At a root → go back to the roots list (empty path).
+              void browse();
             }
           }}
         >

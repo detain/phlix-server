@@ -59,47 +59,79 @@ export class CastApi {
    * `GET /api/v1/cast/devices/:id/status` → `{ success, data: CastPlaybackState }`
    */
   async getStatus(deviceId: string): Promise<CastPlaybackState> {
-    const { data } = await this.client.get<{ success: boolean; data: CastPlaybackState }>(
+    // The server returns a FLAT object `{ device_id, active, state,
+    // session_id, media_status }` (ChromecastController::getStatus), not
+    // `{ success, data }`. Normalise to the fields the UI reads, with safe
+    // defaults so a missing/idle session never errors the status panel.
+    const res = await this.client.get<Record<string, unknown>>(
       `/api/v1/cast/devices/${encodeURIComponent(deviceId)}/status`,
     );
-    return data;
+    return normalizeCastStatus(res, deviceId);
   }
 
   /**
-   * `POST /api/v1/cast/devices/:id/play` → CastActionResult
+   * `POST /api/v1/cast/devices/:id/play`. The client throws on non-2xx, so a
+   * resolved call is success — normalise to `{ success: true, … }` (the server
+   * doesn't always send a `success` field).
    */
   async play(deviceId: string): Promise<CastActionResult> {
-    return this.client.post<CastActionResult>(
+    const res = await this.client.post<Partial<CastActionResult>>(
       `/api/v1/cast/devices/${encodeURIComponent(deviceId)}/play`,
     );
+    return { success: true, ...res };
   }
 
-  /**
-   * `POST /api/v1/cast/devices/:id/pause` → CastActionResult
-   */
+  /** `POST /api/v1/cast/devices/:id/pause` → normalised `{ success: true, … }`. */
   async pause(deviceId: string): Promise<CastActionResult> {
-    return this.client.post<CastActionResult>(
+    const res = await this.client.post<Partial<CastActionResult>>(
       `/api/v1/cast/devices/${encodeURIComponent(deviceId)}/pause`,
     );
+    return { success: true, ...res };
   }
 
-  /**
-   * `POST /api/v1/cast/devices/:id/stop` → CastActionResult
-   */
+  /** `POST /api/v1/cast/devices/:id/stop` → normalised `{ success: true, … }`. */
   async stop(deviceId: string): Promise<CastActionResult> {
-    return this.client.post<CastActionResult>(
+    const res = await this.client.post<Partial<CastActionResult>>(
       `/api/v1/cast/devices/${encodeURIComponent(deviceId)}/stop`,
     );
+    return { success: true, ...res };
   }
 
   /**
-   * `POST /api/v1/cast/devices/:id/seek` → CastActionResult
+   * `POST /api/v1/cast/devices/:id/seek`. The server expects `position_ms`
+   * (ChromecastController::seek), so convert from seconds.
    * @param positionSeconds - Target position in seconds
    */
   async seek(deviceId: string, positionSeconds: number): Promise<CastActionResult> {
-    return this.client.post<CastActionResult>(
+    const res = await this.client.post<Partial<CastActionResult>>(
       `/api/v1/cast/devices/${encodeURIComponent(deviceId)}/seek`,
-      { position_seconds: positionSeconds },
+      { position_ms: Math.round(positionSeconds * 1000) },
     );
+    return { success: true, ...res };
   }
+}
+
+/**
+ * Map the server's flat status object to {@link CastPlaybackState}. `state`
+ * (or the `active` flag) drives `transport_state`; media metadata is read from
+ * the nested `media_status` when present. All fields default safely.
+ */
+function normalizeCastStatus(res: Record<string, unknown>, deviceId: string): CastPlaybackState {
+  const ms = (typeof res['media_status'] === 'object' && res['media_status'] !== null
+    ? (res['media_status'] as Record<string, unknown>)
+    : {});
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const transport = str(res['transport_state'] ?? res['state'])
+    || (res['active'] === true ? 'PLAYING' : 'STOPPED');
+  return {
+    device_id: str(res['device_id']) || deviceId,
+    media_title: str(res['media_title'] ?? ms['media_title'] ?? ms['title']),
+    media_item_id: (typeof res['media_item_id'] === 'string' ? res['media_item_id'] : null),
+    transport_state: transport,
+    volume_level: num(res['volume_level'] ?? ms['volume_level']),
+    muted: res['muted'] === true,
+    position_seconds: num(res['position_seconds'] ?? ms['position_seconds'] ?? ms['current_time']),
+    duration_seconds: num(res['duration_seconds'] ?? ms['duration_seconds'] ?? ms['duration']),
+  };
 }

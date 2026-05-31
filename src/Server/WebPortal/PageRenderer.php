@@ -390,8 +390,14 @@ class PageRenderer
 
         $results = [];
         if ($query !== '') {
-            /** @var array<int, array<string, mixed>> $results */
-            $results = $this->itemRepository->search($query, 50);
+            try {
+                /** @var array<int, array<string, mixed>> $results */
+                $results = $this->itemRepository->search($query, 50);
+            } catch (\Throwable) {
+                // Never let a search backend failure take down the page;
+                // render an empty result set instead of a 500/502.
+                $results = [];
+            }
         }
 
         $template = new \Smarty();

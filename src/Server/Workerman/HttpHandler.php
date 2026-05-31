@@ -22,6 +22,7 @@ use Phlix\Server\WebPortal\Controllers\MusicPageController;
 use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\PageRenderer;
+use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -106,6 +107,24 @@ final class HttpHandler
             $appResponse = $this->application->dispatch($request);
             if ($appResponse->statusCode !== 404) {
                 $connection->send($appResponse->toWorkermanResponse());
+                return;
+            }
+
+            // 1b) Web-portal JSON API routes that the Application router
+            //     doesn't own — /api/v1/libraries, /api/v1/media/{id},
+            //     /api/v1/users/me/* (continue-watching, recently-watched,
+            //     history, settings). These live on {@see WebPortalRouter}
+            //     and public/index.php dispatches them for the CGI path; the
+            //     Workerman daemon must mirror that or the entire web-portal
+            //     API 404s (e.g. the /settings page hangs on its
+            //     GET /api/v1/users/me/settings fetch). Any /api/ request the
+            //     Application router 404s on is served here and never falls
+            //     through to the HTML page renderer.
+            if (str_starts_with($request->path, '/api/')) {
+                /** @var WebPortalRouter $webPortalRouter */
+                $webPortalRouter = $this->container->get(WebPortalRouter::class);
+                $apiResponse = $webPortalRouter->dispatch($request);
+                $connection->send($apiResponse->toWorkermanResponse());
                 return;
             }
 

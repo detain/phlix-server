@@ -146,6 +146,7 @@
 </div>
 {/block}
 
+{block name="scripts"}
 {literal}
 <script>
 (function () {
@@ -155,6 +156,9 @@
     var saveBtn = document.getElementById('save-btn');
     var messageEl = document.getElementById('settings-message');
     var loadingOverlay = document.getElementById('loading-overlay');
+    // The theme picker lives in its own <section>, outside #settings-form,
+    // so it is NOT reachable via form.theme — resolve it by id instead.
+    var themeSelect = document.getElementById('theme');
 
     if (!form) return;
 
@@ -209,7 +213,9 @@
         form.preferred_subtitle_language.value = settings.preferred_subtitle_language || '';
         form.subtitle_mode.value = settings.subtitle_mode || 'foreign_only';
         form.default_content_rating.value = settings.default_content_rating || 'all';
-        form.theme.value = settings.theme || 'phlix-dark';
+        if (themeSelect) {
+            themeSelect.value = settings.theme || 'phlix-dark';
+        }
 
         // Store original values
         originalValues = getFormValues();
@@ -239,7 +245,9 @@
                 return res.json();
             })
             .then(function (data) {
-                populateForm(data);
+                // GET /api/v1/users/me/settings wraps the values as
+                // { settings: { ... } }; tolerate a flat object too.
+                populateForm((data && data.settings) ? data.settings : (data || {}));
             })
             .catch(function (err) {
                 showMessage('Could not load settings: ' + err.message, true);
@@ -299,25 +307,28 @@
     }
 
     // Auto-save theme on change (no save button needed)
-    form.theme.addEventListener('change', function() {
-        fetch('/api/v1/users/me/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ theme: form.theme.value })
-        }).then(function(res) {
-            if (res.ok) {
-                showMessage('Theme saved.', false);
-            }
-        }).catch(function(err) {
-            showMessage('Could not save theme: ' + err.message, true);
+    if (themeSelect) {
+        themeSelect.addEventListener('change', function() {
+            fetch('/api/v1/users/me/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ theme: themeSelect.value })
+            }).then(function(res) {
+                if (res.ok) {
+                    showMessage('Theme saved.', false);
+                }
+            }).catch(function(err) {
+                showMessage('Could not save theme: ' + err.message, true);
+            });
         });
-    });
+    }
 
     // Load settings on page load
     loadSettings();
 })();
 </script>
 {/literal}
+{/block}
 
 {block name="styles"}
 <style>

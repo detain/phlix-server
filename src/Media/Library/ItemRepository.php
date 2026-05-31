@@ -169,18 +169,29 @@ class ItemRepository
     /**
      * Performs full-text search on media item names.
      *
+     * Raw user input is passed to a FULLTEXT … AGAINST(… IN BOOLEAN MODE)
+     * match. Boolean mode treats `+ - > < ( ) ~ * " @` as operators, so an
+     * unbalanced or operator-only query (e.g. an email address or `C++`)
+     * makes MySQL raise a "syntax error in fulltext search expression" and
+     * the whole request would otherwise blow up. Fall back to a plain LIKE
+     * scan so search degrades gracefully instead of erroring out.
+     *
      * @param string $query The search query for full-text matching
      * @param int $limit Maximum number of results to return
      * @return array<int, array<string, mixed>> Array of hydrated media items matching the query
      */
     public function search(string $query, int $limit = 50): array
     {
-        $results = $this->db->query(
-            "SELECT * FROM media_items WHERE MATCH(name) AGAINST(? IN BOOLEAN MODE) LIMIT ?",
-            [$query, $limit]
-        );
+        try {
+            $results = $this->db->query(
+                "SELECT * FROM media_items WHERE MATCH(name) AGAINST(? IN BOOLEAN MODE) LIMIT ?",
+                [$query, $limit]
+            );
 
-        return $this->hydrateRows($results);
+            return $this->hydrateRows($results);
+        } catch (\Throwable) {
+            return $this->searchFuzzy($query, $limit);
+        }
     }
 
     /**

@@ -40,7 +40,34 @@ $hubUrl = rtrim(is_string($argv[1] ?? null) ? $argv[1] : '', '/');
 $serverName = is_string($argv[2] ?? null) ? $argv[2] : '';
 $configDir = __DIR__ . '/../config';
 $keyPath = $configDir . '/hub-server-key.pem';
+$enrollmentPath = $configDir . '/hub-enrollment.json';
 $logger = LoggerFactory::get(LogChannels::HUB);
+
+/**
+ * Hand a freshly-created file to whoever owns the config directory.
+ *
+ * Operators usually run this as root (`sudo php scripts/pair-with-hub.php`),
+ * which leaves the Ed25519 key and enrollment root-owned (0600) — and the
+ * non-root account the daemon runs as then can't read them ("Cannot read
+ * Ed25519 private key"). Match the config dir's owner so the service can
+ * use what pairing created. No-op when not root or without ext-posix.
+ */
+$handOwnershipToConfigOwner = static function (string $path) use ($configDir): void {
+    if (!is_file($path)) {
+        return;
+    }
+    if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+        return;
+    }
+    $uid = fileowner($configDir);
+    $gid = filegroup($configDir);
+    if (is_int($uid)) {
+        @chown($path, $uid);
+    }
+    if (is_int($gid)) {
+        @chgrp($path, $gid);
+    }
+};
 
 $keyManager = new Ed25519KeyManager($keyPath);
 $httpClient = new HttpClient($hubUrl);
@@ -54,6 +81,10 @@ try {
     fwrite(STDERR, "ERROR: Failed to initiate pairing: " . $e->getMessage() . "\n");
     exit(1);
 }
+
+// The keypair was just (re)created by initiatePairing(); make sure the
+// daemon user owns it even if this ran under sudo.
+$handOwnershipToConfigOwner($keyPath);
 
 echo "Pairing initiated.\n";
 echo "Claim code: {$result->claimCode}\n";
@@ -83,6 +114,7 @@ while (true) {
                     $status->serverId,
                     $hubUrl,
                 );
+                $handOwnershipToConfigOwner($enrollmentPath);
                 echo "Enrollment stored.\n";
             } catch (\Throwable $e) {
                 fwrite(STDERR, "ERROR: Failed to store enrollment: " . $e->getMessage() . "\n");

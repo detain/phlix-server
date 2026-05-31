@@ -24,7 +24,10 @@ return [
             // non-prod restart first (see PooledMySQLConnection). pool_size=1
             // is a safe, fully-serialised fallback.
             'pool_enabled' => filter_var(getenv('DB_POOL_ENABLED') ?: false, FILTER_VALIDATE_BOOLEAN),
-            'pool_size' => 20,
+            // Per-worker pool ceiling. Each worker process keeps its OWN pool,
+            // so the server-wide max is roughly (worker count × pool_size) — keep
+            // it comfortably under MySQL `max_connections`. Tune via DB_POOL_SIZE.
+            'pool_size' => (int) (getenv('DB_POOL_SIZE') ?: 8),
             'timeout'   => 5,
         ],
     ],

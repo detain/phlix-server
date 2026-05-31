@@ -193,7 +193,9 @@ export function CollectionsPage({ client }: CollectionsPageProps): JSX.Element {
     setLoadingItems(true);
     try {
       const result = await collectionsApi.get(col.id);
-      setCollectionItems(result.items);
+      // Defensive: a collection with no items (or a payload that omits the
+      // `items` key) must not blow up the render with `undefined.length`.
+      setCollectionItems(Array.isArray(result.items) ? result.items : []);
     } catch (err) {
       const msg =
         err instanceof ApiError ? err.message : 'Failed to load items.';

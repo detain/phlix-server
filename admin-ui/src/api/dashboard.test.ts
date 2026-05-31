@@ -195,4 +195,55 @@ describe('DashboardApi', () => {
 
     await expect(api.getNowPlaying()).rejects.toBeInstanceOf(ApiError);
   });
+
+  // -------------------------------------------------------------------------
+  // Server→SPA field normalisation (DashboardService uses different names)
+  // -------------------------------------------------------------------------
+
+  it('getTopUsers() normalises server field names (username, total_watch_time)', async () => {
+    const { api } = makeApi([
+      { status: 200, body: { success: true, data: [
+        { user_id: 'u1', username: 'Alice', total_watch_time: 3661, play_count: 12 },
+      ] } },
+    ]);
+    const result = await api.getTopUsers();
+    expect(result).toEqual([
+      { user_id: 'u1', user_name: 'Alice', total_watch_time_seconds: 3661, play_count: 12, last_seen: '' },
+    ]);
+  });
+
+  it('getTopMedia() normalises server field names (title, type, total_duration)', async () => {
+    const { api } = makeApi([
+      { status: 200, body: { success: true, data: [
+        { media_item_id: 'm1', title: 'Movie One', type: 'movie', play_count: 42, total_duration: 7200 },
+      ] } },
+    ]);
+    const result = await api.getTopMedia();
+    expect(result).toEqual([
+      { media_item_id: 'm1', media_title: 'Movie One', media_type: 'movie', play_count: 42, total_duration_seconds: 7200, last_played_at: '' },
+    ]);
+  });
+
+  it('getNowPlaying() normalises server field names (stream_id, username)', async () => {
+    const { api } = makeApi([
+      { status: 200, body: { success: true, data: [
+        { stream_id: 'sess-1', user_id: 'u1', username: 'Alice', media_item_id: 'm1', media_title: 'Movie One', media_type: 'movie', progress_percent: 45 },
+      ] } },
+    ]);
+    const result = await api.getNowPlaying();
+    expect(result[0]).toMatchObject({ session_id: 'sess-1', user_name: 'Alice', media_title: 'Movie One', progress_percent: 45 });
+  });
+
+  it('getActivity() normalises occurred_at→created_at and pulls media_title out of details', async () => {
+    const { api } = makeApi([
+      { status: 200, body: { success: true, data: [
+        { id: 'e1', event_type: 'playback_completed', user_id: 'u1', username: 'Alice',
+          occurred_at: '2026-05-28T10:00:00Z', details: { media_title: 'Movie One', duration_seconds: 100 } },
+      ] } },
+    ]);
+    const result = await api.getActivity();
+    expect(result[0]).toMatchObject({
+      id: 'e1', user_name: 'Alice', media_title: 'Movie One', created_at: '2026-05-28T10:00:00Z', details: '',
+    });
+  });
 });

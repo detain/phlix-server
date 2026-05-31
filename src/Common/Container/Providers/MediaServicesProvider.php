@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
@@ -23,6 +24,7 @@ use Phlix\Playlists\SmartPlaylistController;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRefreshHandler;
 use Phlix\Playlists\SmartPlaylistRepository;
+use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 
@@ -77,8 +79,27 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $builder->addDefinitions([
             ItemRepository::class => autowire(),
 
-            TmdbProvider::class => factory(static function () use ($tmdbApiKey): TmdbProvider {
-                return new TmdbProvider($tmdbApiKey);
+            TmdbProvider::class => factory(static function (ContainerInterface $c) use ($tmdbApiKey): TmdbProvider {
+                // Prefer the admin-managed server setting (set via the admin
+                // UI's Settings → Metadata page, persisted in server_settings)
+                // and fall back to config/tmdb.php / the TMDB_API_KEY env var.
+                // getEffective() already returns the override when present,
+                // else the config/env default, so an admin-saved key wins.
+                // Resolved when the provider is first built, so a saved key
+                // applies on the next worker cycle without a redeploy.
+                $key = $tmdbApiKey;
+                try {
+                    $settings = $c->get(SettingsRepository::class);
+                    if ($settings instanceof SettingsRepository) {
+                        $stored = $settings->getEffective('tmdb.api_key');
+                        if (is_string($stored) && $stored !== '') {
+                            $key = $stored;
+                        }
+                    }
+                } catch (\Throwable) {
+                    // Settings store not available — keep the config/env key.
+                }
+                return new TmdbProvider($key);
             }),
 
             FolderWatcher::class => autowire()

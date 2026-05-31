@@ -136,6 +136,36 @@ describe('DashboardApi', () => {
     expect(result).toEqual([storageSummary]);
   });
 
+  it('getStorage() unwraps the real server shape { data: { items: [...] } }', async () => {
+    // DashboardService::getStorageSummary() returns an OBJECT with the
+    // per-type rows under `items` (plus aggregate *_bytes fields), NOT a bare
+    // list. getStorage() must return `data.items` so StorageCard gets an array.
+    const { api } = makeApi([
+      {
+        status: 200,
+        body: {
+          success: true,
+          data: {
+            movie_bytes: 1_000_000_000_000,
+            transcode_cache_bytes: 5_000_000_000,
+            items: [storageSummary],
+            formatted_transcode_cache: '5 GB',
+          },
+        },
+      },
+    ]);
+
+    const result = await api.getStorage();
+
+    expect(result).toEqual([storageSummary]);
+  });
+
+  it('getStorage() falls back to [] when the payload has no items array', async () => {
+    const { api } = makeApi([{ status: 200, body: { success: true, data: {} } }]);
+    const result = await api.getStorage();
+    expect(result).toEqual([]);
+  });
+
   it('getActivity() GETs /api/v1/admin/dashboard/activity with limit param', async () => {
     const { api, calls } = makeApi([
       { status: 200, body: { success: true, data: [activityEvent] } },

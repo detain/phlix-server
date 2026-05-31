@@ -236,7 +236,10 @@ interface StorageCardProps {
 }
 
 function StorageCard({ items, loading }: StorageCardProps): JSX.Element {
-  const totalCache = items.reduce((sum, s) => sum + s.transcode_cache_bytes, 0);
+  // Defensive: never let a non-array payload (e.g. an API shape change)
+  // crash the whole dashboard render via `.reduce`/`.map`.
+  const rows = Array.isArray(items) ? items : [];
+  const totalCache = rows.reduce((sum, s) => sum + s.transcode_cache_bytes, 0);
   return (
     <section className="dashboard-card dashboard-card--full" aria-labelledby="storage-heading">
       <header className="dashboard-card__header">
@@ -244,12 +247,12 @@ function StorageCard({ items, loading }: StorageCardProps): JSX.Element {
       </header>
       {loading ? (
         <SectionSkeleton />
-      ) : items.length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState message="No storage data" />
       ) : (
         <>
           <div className="storage-cards">
-            {items.map((s) => (
+            {rows.map((s) => (
               <div key={s.media_type} className="storage-card">
                 <div className="storage-card__type">
                   <span className={`badge badge--sm ${mediaTypeBadgeClass(s.media_type)}`}>

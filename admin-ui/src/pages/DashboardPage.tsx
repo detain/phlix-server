@@ -13,8 +13,8 @@
  *
  * @since 1.6
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiClient, type AuthUser } from '../api/client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, type AuthUser } from '../api/client';
 import type { ApiClient as ApiClientInterface } from '../api/client';
 import { DashboardApi, type ActivityEvent, type NowPlayingItem, type StorageSummary, type TopMedia, type TopUser } from '../api/dashboard';
 import { useToast } from '../components/Toast';
@@ -376,8 +376,14 @@ export interface DashboardPageProps {
 
 const ACTIVITY_PAGE_SIZE = 20;
 
-export function DashboardPage({ client = new ApiClient(), user }: DashboardPageProps): JSX.Element {
-  const dashboardApi = new DashboardApi(client);
+export function DashboardPage({ client = api, user }: DashboardPageProps): JSX.Element {
+  // Memoise both the client default and the DashboardApi wrapper so they are
+  // STABLE across renders. Previously `new DashboardApi(new ApiClient())` ran
+  // on every render, making every fetch useCallback a new reference, which
+  // made the date-range effect re-run after each render — its own setState
+  // triggered the next render → an unbounded ~15 req/s fetch loop. A stable
+  // `dashboardApi` lets the fetch callbacks and effects settle.
+  const dashboardApi = useMemo(() => new DashboardApi(client), [client]);
 
   // Date range state (7d / 30d / 90d)
   const [dateRange, setDateRange] = useState<DateRange>(30);

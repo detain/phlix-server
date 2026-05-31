@@ -57,12 +57,16 @@ jobs:
           tags: |
             ${{ env.BASE_IMAGE }}:latest
             ${{ env.BASE_IMAGE }}:${{ github.sha }}
+          # Registry cache MUST use a dedicated tag, not the image tag — pushing
+          # `mode=max` cache to `:latest` pollutes the image manifest with a
+          # buildkit cacheconfig blob, which later breaks `FROM …:latest`
+          # ("unknown type application/vnd.buildkit.cacheconfig.v0").
           cache-from: |
             type=gha
-            type=registry,ref=${{ env.BASE_IMAGE }}:latest
+            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache
           cache-to: |
             type=gha,mode=max
-            type=registry,ref=${{ env.BASE_IMAGE }}:latest,mode=max
+            type=registry,ref=${{ env.BASE_IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
           build-args: |
             PHP_VERSION=8.3
 
@@ -125,8 +129,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}
-          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }},mode=max
+          # Dedicated cache tag (not the image tag) — see the base job's note.
+          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }}
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.tag }},mode=max,image-manifest=true,oci-mediatypes=true
           build-args: |
             PHP_VERSION=8.3
             PHLIX_VERSION=${{ github.ref_name }}
@@ -189,7 +194,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.hubmeta.outputs.tags }}
-          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:latest
-          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:latest,mode=max
+          # Dedicated cache tag (not the image tag) — see the base job's note.
+          cache-from: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache
+          cache-to: type=gha,type=registry,ref=${{ env.REGISTRY }}/detain/phlix-hub:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
           build-args: |
             PHLIX_BASE_IMAGE=${{ env.BASE_IMAGE }}:latest

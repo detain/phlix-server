@@ -1320,6 +1320,12 @@ RestartSec=5s
 TimeoutStopSec=30
 TimeoutStartSec=30
 
+# Swoole 6's io_uring event loop pins locked memory; the default 8 MB
+# RLIMIT_MEMLOCK is too small for the worker pool, so io_uring init fails
+# with ENOMEM and workers intermittently drop connections (random 502s).
+# Lift the cap so io_uring initialises cleanly.
+LimitMEMLOCK=infinity
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SERVICE_NAME}

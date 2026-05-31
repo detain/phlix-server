@@ -51,13 +51,14 @@ export function useAdminGuard(
   useEffect(() => {
     let cancelled = false;
 
-    // No stored token at all → straight to login, skip the network call.
-    if (!client.isLoggedIn()) {
-      setResult({ status: 'unauthorized', user: null });
-      redirect('/login');
-      return;
-    }
-
+    // Always probe `auth/me` rather than gating on a stored localStorage
+    // token. Browser sessions authenticate via the HttpOnly `phlix_session`
+    // cookie (set by the portal login), which is NOT readable from JS but
+    // DOES ride along on these same-origin requests — so a portal-logged-in
+    // admin has a valid session here with no localStorage token at all.
+    // Short-circuiting on `!isLoggedIn()` would bounce them to /login in an
+    // endless loop. The server-side AdminMiddleware remains the authoritative
+    // gate; this probe just confirms the session resolves to an admin.
     client
       .getCurrentUser()
       .then((user) => {

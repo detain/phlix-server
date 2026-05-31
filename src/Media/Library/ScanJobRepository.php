@@ -38,11 +38,16 @@ class ScanJobRepository
     private Connection $db;
 
     /**
-     * Allowed scan-job types, mirroring the `type` ENUM in migration 027.
+     * Allowed scan-job types, mirroring the `type` column in migration 027.
+     *
+     * `metadata` reuses the same async job queue + status infrastructure as
+     * `scan`/`rescan` so the admin UI's scan-status badge/polling shows progress
+     * for a background metadata match unchanged. The column is a string, so this
+     * allowlist is the only place the set of accepted types is enforced.
      *
      * @var list<string>
      */
-    private const ALLOWED_TYPES = ['scan', 'rescan'];
+    private const ALLOWED_TYPES = ['scan', 'rescan', 'metadata'];
 
     /**
      * Counter columns that {@see self::updateProgress()} and

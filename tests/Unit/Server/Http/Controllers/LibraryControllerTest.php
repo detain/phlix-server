@@ -531,6 +531,85 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * Happy path: matchMetadata() enqueues a `metadata` job and returns 202,
+     * mirroring scan() (reuses the scan-job queue so the UI badge works).
+     */
+    public function testMatchMetadataReturns202AndEnqueuesMetadataJob(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video']);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->once())
+            ->method('enqueue')
+            ->with('lib-1', 'metadata')
+            ->willReturn('job-md');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $response = $controller->matchMetadata($request, ['id' => 'lib-1']);
+
+        $this->assertSame(202, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertSame('job-md', $body['job_id']);
+        $this->assertSame('queued', $body['status']);
+        $this->assertSame('Metadata match queued', $body['message']);
+    }
+
+    /**
+     * Negative: matchMetadata() returns 404 when library not found (no enqueue).
+     */
+    public function testMatchMetadataReturns404WhenLibraryNotFound(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('nonexistent')
+            ->willReturn(null);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+
+        $response = $controller->matchMetadata($request, ['id' => 'nonexistent']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    /**
+     * Negative: matchMetadata() returns 401 when unauthenticated (no lookup,
+     * no enqueue).
+     */
+    public function testMatchMetadataReturns401WhenUnauthenticated(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('getLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->expects($this->never())->method('enqueue');
+
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        // request->userId intentionally left null
+
+        $response = $controller->matchMetadata($request, ['id' => 'lib-1']);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    /**
      * Happy path: scanStatus() returns 200 with the latest job row (1.1b).
      */
     public function testScanStatusReturns200WithLatestJob(): void

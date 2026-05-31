@@ -207,6 +207,35 @@ try {
 }
 
 // -----------------------------------------------------------------------------
+// 4c. Hub heartbeat worker.
+//
+// When the server is enrolled with a hub, it must POST periodic heartbeats
+// so the hub keeps it marked online. The heartbeat is a Workerman\Timer
+// armed by HubClient::startHeartbeatLoop(); a Timer only ticks inside a
+// running worker, and a Worker created after runAll() never forks — so it
+// MUST be declared here, before runAll(). count=1 so an enrolled server
+// emits a single heartbeat stream (not one per HTTP worker). HubApplication
+// ->start() is a no-op when there is no enrollment, so this is harmless on
+// an unpaired server.
+// -----------------------------------------------------------------------------
+
+try {
+    $hubHeartbeatWorker = new Worker();
+    $hubHeartbeatWorker->count = 1;
+    $hubHeartbeatWorker->name = 'phlix-hub-heartbeat';
+    $hubHeartbeatWorker->onWorkerStart = static function (Worker $w) use ($config): void {
+        // Built inside the fork so the child owns its own DB/HTTP state.
+        $container = ContainerFactory::create($config);
+        /** @var \Phlix\Hub\HubApplication $hubApp */
+        $hubApp = $container->get(\Phlix\Hub\HubApplication::class);
+        $hubApp->start();
+    };
+} catch (\Throwable $e) {
+    // The heartbeat worker is best-effort; never block the HTTP server.
+    trigger_error('Failed to set up hub heartbeat worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 5. Run
 // -----------------------------------------------------------------------------
 

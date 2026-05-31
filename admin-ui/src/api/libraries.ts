@@ -74,7 +74,7 @@ export interface Library {
 export interface ScanJob {
   id: string;
   library_id: string;
-  type: 'scan' | 'rescan';
+  type: 'scan' | 'rescan' | 'metadata';
   status: 'queued' | 'running' | 'completed' | 'failed';
   items_found: number;
   items_added: number;
@@ -182,6 +182,13 @@ export class LibrariesApi {
   rescan(id: string): Promise<ScanQueuedResult> {
     return this.client.post<ScanQueuedResult>(
       `/api/v1/libraries/${encodeURIComponent(id)}/rescan`,
+    );
+  }
+
+  /** `POST /api/v1/libraries/{id}/match-metadata` → `202 { job_id, status, message }`. */
+  matchMetadata(id: string): Promise<ScanQueuedResult> {
+    return this.client.post<ScanQueuedResult>(
+      `/api/v1/libraries/${encodeURIComponent(id)}/match-metadata`,
     );
   }
 

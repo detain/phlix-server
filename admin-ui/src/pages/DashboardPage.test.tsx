@@ -92,6 +92,46 @@ describe('DashboardPage', () => {
   }
 
   // -------------------------------------------------------------------------
+  // Regression: runaway fetch loop
+  // -------------------------------------------------------------------------
+
+  it('does not refetch in an unbounded loop (stable api wrapper)', async () => {
+    // `dashboardApi` used to be rebuilt on every render, so the fetch
+    // callbacks changed identity each render and the dateRange effect re-ran
+    // after its own setState — an unbounded ~15 req/s loop. With a memoised
+    // dashboardApi the per-endpoint fetch count must settle and stop growing.
+    const { fetch, calls } = makeFetch([
+      { urlMatch: 'now-playing', status: 200, body: { success: true, data: nowPlayingItems } },
+      { urlMatch: 'top-users', status: 200, body: { success: true, data: topUsers } },
+      { urlMatch: 'top-media', status: 200, body: { success: true, data: topMedia } },
+      { urlMatch: 'storage', status: 200, body: { success: true, data: storageData } },
+      { urlMatch: 'activity', status: 200, body: { success: true, data: activityData } },
+    ]);
+    const client = new ApiClient({
+      baseUrl: '',
+      tokenStore: new MemoryTokenStore({ access: 't' }),
+      fetchImpl: fetch,
+    });
+
+    render(
+      <ToastProvider timeoutMs={0}>
+        <DashboardPage client={client} />
+      </ToastProvider>,
+    );
+
+    const topUsersCalls = (): number =>
+      calls.filter((c) => c.url.includes('/top-users')).length;
+    await waitFor(() => expect(topUsersCalls()).toBeGreaterThanOrEqual(1));
+
+    const settled = topUsersCalls();
+    await new Promise((r) => setTimeout(r, 80));
+
+    // No further top-users fetches after the initial load → the loop is gone.
+    expect(topUsersCalls()).toBe(settled);
+    expect(settled).toBeLessThanOrEqual(2); // 1 on mount (+1 tolerance)
+  });
+
+  // -------------------------------------------------------------------------
   // Section rendering with data
   // -------------------------------------------------------------------------
 

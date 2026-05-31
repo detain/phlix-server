@@ -95,7 +95,10 @@ export class ApiClient {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
-      const init: RequestInit = { method, headers };
+      // `same-origin` so the HttpOnly `phlix_session` session cookie set by
+      // the portal login rides along — browser sessions authenticate by
+      // cookie, not by a localStorage bearer token (which may be absent).
+      const init: RequestInit = { method, headers, credentials: 'same-origin' };
       if (
         data !== null &&
         (method === 'POST' || method === 'PUT' || method === 'PATCH')
@@ -162,6 +165,7 @@ export class ApiClient {
       const response = await this.doFetch(`${this.baseUrl}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!response.ok) {

@@ -72,6 +72,35 @@ describe('PathPicker', () => {
     expect(calls[3]!.url).toContain('path=%2Fmedia');
   });
 
+  it('returns to the roots list when going Up from a top-level root', async () => {
+    // A top-level root (e.g. /vault1) has parent=null (its real parent is
+    // outside the jail). "Up" from there must return to the ROOTS list so you
+    // can switch to another root (e.g. /vault2) — previously it dead-ended.
+    const user = userEvent.setup();
+    const roots = [
+      { name: 'vault1', path: '/vault1' },
+      { name: 'vault2', path: '/vault2' },
+    ];
+    const { fs } = makeFs([
+      env(null, null, roots),
+      env('/vault1', null, [{ name: 'movies', path: '/vault1/movies' }]),
+      env(null, null, roots),
+    ]);
+    render(<Harness fs={fs} />);
+
+    await user.click(await screen.findByRole('button', { name: 'vault1' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('path-picker-current')).toHaveTextContent('/vault1'),
+    );
+
+    // "Up" from the /vault1 root returns to the roots list.
+    await user.click(screen.getByRole('button', { name: 'Up' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('path-picker-current')).toHaveTextContent('(roots)'),
+    );
+    expect(await screen.findByRole('button', { name: 'vault2' })).toBeInTheDocument();
+  });
+
   it('selects the current folder and removes a selected path', async () => {
     const user = userEvent.setup();
     const { fs } = makeFs([

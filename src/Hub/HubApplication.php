@@ -5,18 +5,18 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use Phlix\Common\Logger\StructuredLogger;
-use Workerman\Worker;
 
 /**
- * Workerman Worker wrapper for the hub heartbeat background task.
+ * Hub heartbeat background task.
  *
- * This worker runs alongside the main HTTP server worker and is
- * responsible for maintaining the server's presence on the hub via
- * periodic heartbeat calls.
+ * Maintains the server's presence on the hub via periodic heartbeat
+ * calls. It must be invoked from a worker context that already exists in
+ * the Workerman event loop (the dedicated `phlix-hub-heartbeat` worker in
+ * `start.php`, created before `Worker::runAll()`): {@see HubClient::startHeartbeatLoop()}
+ * registers a `Workerman\Timer`, which only fires inside a running worker.
  *
- * The worker is started automatically when the server is enrolled
- * (has a valid `hub-enrollment.json`) and stopped when the server
- * is de-registered.
+ * Started automatically when the server is enrolled (has a valid
+ * `hub-enrollment.json`) and stopped when the server is de-registered.
  *
  * @package Phlix\Hub
  * @since 0.11.0
@@ -29,10 +29,7 @@ final class HubApplication
     /** @var StructuredLogger Logger instance. */
     private StructuredLogger $logger;
 
-    /** @var Worker|null The Workerman worker instance. */
-    private ?Worker $worker = null;
-
-    /** @var bool Whether the worker is currently running. */
+    /** @var bool Whether the heartbeat loop is currently running. */
     private bool $running = false;
 
     /**
@@ -48,12 +45,12 @@ final class HubApplication
     }
 
     /**
-     * Starts the hub heartbeat worker.
+     * Starts the hub heartbeat loop in the current worker.
      *
-     * Creates a Workerman Worker on the `text://` protocol (no actual
-     * network socket needed) purely to get a timer context within
-     * the Workerman event loop. The Workerman timer subsystem drives
-     * the heartbeat loop.
+     * No-op unless the server is enrolled. Must be called from within a
+     * running Workerman worker (the `phlix-hub-heartbeat` worker's
+     * `onWorkerStart`), because {@see HubClient::startHeartbeatLoop()}
+     * arms a `Workerman\Timer` that only ticks inside the event loop.
      *
      * @return void
      */
@@ -69,14 +66,7 @@ final class HubApplication
             return;
         }
 
-        $this->worker = new Worker('text://0.0.0.0:0');
-        $this->worker->name = 'phlix-hub-heartbeat';
-        $this->worker->count = 1;
-        $this->worker->onWorkerStart = function (): void {
-            $this->logger->info('HubApplication worker started');
-            $this->hubClient->startHeartbeatLoop();
-        };
-
+        $this->hubClient->startHeartbeatLoop();
         $this->running = true;
 
         $this->logger->info('HubApplication started', [
@@ -97,12 +87,6 @@ final class HubApplication
         }
 
         $this->hubClient->stopHeartbeatLoop();
-
-        if ($this->worker !== null) {
-            $this->worker->stop();
-            $this->worker = null;
-        }
-
         $this->running = false;
 
         $this->logger->info('HubApplication stopped');

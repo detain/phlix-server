@@ -270,6 +270,12 @@ final class HttpHandler
         if ($path === '/library' || $path === '/library/') {
             return $renderer->renderLibrariesOverview($request);
         }
+        // Single media-item detail (linked from media_card.tpl / the player's
+        // back button). MUST be matched before the single-segment library
+        // route below.
+        if (preg_match('#^/library/item/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            return $renderer->renderItem($request, ['id' => $m['id']]);
+        }
         if (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
             return $renderer->renderLibrary($request, ['id' => $m['id']]);
         }

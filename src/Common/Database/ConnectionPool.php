@@ -47,19 +47,47 @@ class ConnectionPool
             $username = $connConfig['username'] ?? '';
             $password = $connConfig['password'] ?? '';
             $database = $connConfig['database'] ?? '';
+            $charset = isset($connConfig['charset']) && is_scalar($connConfig['charset'])
+                ? (string) $connConfig['charset']
+                : 'utf8mb4';
+            $poolEnabled = (bool) ($connConfig['pool_enabled'] ?? false);
+            $poolSize = is_numeric($connConfig['pool_size'] ?? null)
+                ? (int) $connConfig['pool_size']
+                : 8;
 
-            // Use the local PhlixMySQLConnection subclass so positional
-            // arrays passed to query() are re-keyed to 1-indexed before
-            // PDO::bindParam() — workaround for workerman/mysql v1.0.9's
-            // bindMore() bug on PHP 8.x. Type-compatible with the parent
-            // Connection so every existing typehint keeps working.
-            self::$connections[$name] = new PhlixMySQLConnection(
-                is_scalar($host) ? (string)$host : '',
-                is_numeric($port) ? (int)$port : 3306,
-                is_scalar($username) ? (string)$username : '',
-                is_scalar($password) ? (string)$password : '',
-                is_scalar($database) ? (string)$database : ''
-            );
+            $hostStr = is_scalar($host) ? (string)$host : '';
+            $portInt = is_numeric($port) ? (int)$port : 3306;
+            $userStr = is_scalar($username) ? (string)$username : '';
+            $passStr = is_scalar($password) ? (string)$password : '';
+            $dbStr = is_scalar($database) ? (string)$database : '';
+
+            if ($poolEnabled) {
+                // Coroutine connection pool: each coroutine leases its own
+                // connection for true intra-worker DB parallelism. OFF unless
+                // `pool_enabled` is set — see PooledMySQLConnection. Validate
+                // on a non-prod restart before trusting under load.
+                self::$connections[$name] = new PooledMySQLConnection(
+                    $hostStr,
+                    $portInt,
+                    $userStr,
+                    $passStr,
+                    $dbStr,
+                    $poolSize,
+                    $charset
+                );
+            } else {
+                // Default: the single PhlixMySQLConnection subclass — re-keys
+                // positional bind arrays (workerman/mysql v1.0.9 bindMore() bug
+                // on PHP 8.x) and serialises cross-coroutine access via its
+                // per-connection mutex. Type-compatible with the parent.
+                self::$connections[$name] = new PhlixMySQLConnection(
+                    $hostStr,
+                    $portInt,
+                    $userStr,
+                    $passStr,
+                    $dbStr
+                );
+            }
         }
         return self::$connections[$name];
     }

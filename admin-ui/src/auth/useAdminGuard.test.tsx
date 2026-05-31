@@ -44,8 +44,22 @@ describe('useAdminGuard', () => {
     expect(redirect).not.toHaveBeenCalled();
   });
 
-  it('redirects to /login immediately when no token is stored (no network call)', async () => {
-    const client = clientWith([{ status: 200, body: {} }]); // no token
+  it('authorizes via the session cookie even with no stored token', async () => {
+    // Portal-logged-in admins have an HttpOnly session cookie but NO
+    // localStorage token. The guard must still probe auth/me (the cookie
+    // rides along same-origin) and authorize, not bounce to /login.
+    const client = clientWith([{ status: 200, body: { user: { id: 'u1', is_admin: 1 } } }]); // no token
+    const redirect = vi.fn();
+
+    const { result } = renderHook(() => useAdminGuard(client, redirect));
+
+    await waitFor(() => expect(result.current.status).toBe('authorized'));
+    expect(result.current.user).toMatchObject({ id: 'u1', is_admin: true });
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it('redirects to /login when no session resolves (auth/me 401, no token)', async () => {
+    const client = clientWith([{ status: 401, body: { error: 'Unauthorized' } }]); // no token, no cookie
     const redirect = vi.fn();
 
     const { result } = renderHook(() => useAdminGuard(client, redirect));

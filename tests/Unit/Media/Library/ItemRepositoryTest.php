@@ -238,6 +238,59 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals('Test Movie', $result[0]['name']);
     }
 
+    public function testSearchReturnsFullTextMatches(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->stringContains('MATCH(name) AGAINST(? IN BOOLEAN MODE)'))
+            ->willReturn([
+                [
+                    'id' => 'movie-1',
+                    'name' => 'Test Movie',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'path' => '/movies/test.mkv',
+                    'metadata_json' => '{}',
+                ],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->search('Test');
+
+        $this->assertCount(1, $result);
+        $this->assertEquals('Test Movie', $result[0]['name']);
+    }
+
+    public function testSearchFallsBackToLikeWhenFullTextErrors(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // A malformed BOOLEAN MODE query (e.g. an operator-only string) makes
+        // MySQL throw; search() must degrade to the LIKE-based scan rather
+        // than letting the exception bubble up and crash the request.
+        $db->method('query')->willReturnCallback(function (string $sql) {
+            if (str_contains($sql, 'IN BOOLEAN MODE')) {
+                throw new \RuntimeException('syntax error in fulltext search expression');
+            }
+            return [
+                [
+                    'id' => 'movie-2',
+                    'name' => 'Fallback Movie',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'path' => '/movies/fallback.mkv',
+                    'metadata_json' => '{}',
+                ],
+            ];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->search('@@@');
+
+        $this->assertCount(1, $result);
+        $this->assertEquals('Fallback Movie', $result[0]['name']);
+    }
+
     public function testCountByTypeReturnsCorrectCount(): void
     {
         $db = $this->createMock(Connection::class);

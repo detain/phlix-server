@@ -65,9 +65,11 @@ describe('DlnaApi', () => {
   });
 
   describe('getStatus()', () => {
-    it('GETs /api/v1/dlna/renderers/:id/status and returns playback state', async () => {
+    it('normalises the flat server status (ticks→seconds) into DlnaPlaybackState', async () => {
+      // Server returns flat `{ renderer_id, state, position, ... }` with
+      // position/duration in 100-nanosecond ticks (RendererListController).
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: dlnaPlaybackState } },
+        { status: 200, body: { renderer_id: 'dlna-1', media_title: 'My Video', media_item_id: 'v1', state: 'PLAYING', volume_level: 0.8, muted: false, position: 1200 * 10_000_000, duration: 5400 * 10_000_000 } },
       ]);
 
       const result = await api.getStatus('dlna-1');
@@ -140,7 +142,7 @@ describe('DlnaApi', () => {
 
       expect(calls[0]!.url).toContain('/api/v1/dlna/renderers/dlna-1/seek');
       expect(calls[0]!.init!.method).toBe('POST');
-      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_seconds: 2700 }));
+      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_ticks: 27000000000 }));
       expect(result.success).toBe(true);
     });
 
@@ -151,7 +153,7 @@ describe('DlnaApi', () => {
 
       await api.seek('dlna-1', 0);
 
-      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_seconds: 0 }));
+      expect(calls[0]!.init!.body).toBe(JSON.stringify({ position_ticks: 0 }));
     });
   });
 

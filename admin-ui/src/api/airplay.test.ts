@@ -63,9 +63,10 @@ describe('AirPlayApi', () => {
   });
 
   describe('getStatus()', () => {
-    it('GETs /api/v1/airplay/devices/:id/status and returns playback state', async () => {
+    it('normalises the flat server status into AirPlayPlaybackState', async () => {
+      // Server returns a flat object, not `{ success, data }`.
       const { api, calls } = makeApi([
-        { status: 200, body: { success: true, data: airplayPlaybackState } },
+        { status: 200, body: { device_id: 'airplay-1', media_title: 'My Podcast', media_item_id: 'p1', state: 'PLAYING', volume_level: 0.5, muted: false } },
       ]);
 
       const result = await api.getStatus('airplay-1');
@@ -87,14 +88,14 @@ describe('AirPlayApi', () => {
   });
 
   describe('play()', () => {
-    it('POSTs to /api/v1/airplay/devices/:id/play', async () => {
+    it('POSTs to /api/v1/airplay/devices/:id/resume (server has no /play)', async () => {
       const { api, calls } = makeApi([
         { status: 200, body: { success: true, message: 'Playing' } },
       ]);
 
       const result = await api.play('airplay-1');
 
-      expect(calls[0]!.url).toContain('/api/v1/airplay/devices/airplay-1/play');
+      expect(calls[0]!.url).toContain('/api/v1/airplay/devices/airplay-1/resume');
       expect(calls[0]!.init!.method).toBe('POST');
       expect(result.success).toBe(true);
     });

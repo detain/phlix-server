@@ -9,6 +9,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use RuntimeException;
 
 /**
@@ -32,6 +33,18 @@ class LibraryScanWorkerTest extends TestCase
     }
 
     /**
+     * A metadata-matcher mock that expects NOT to be invoked. Used by the
+     * scan/rescan/empty/invalid tests, where the worker must never run a
+     * metadata match.
+     */
+    private function makeUnusedMatcher(): LibraryMetadataMatcher
+    {
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->never())->method('matchLibrary');
+        return $matcher;
+    }
+
+    /**
      * runOnce() with a `scan` job: claims, runs scanLibrary, marks completed,
      * returns true (and does NOT mark failed / rescan).
      */
@@ -48,7 +61,7 @@ class LibraryScanWorkerTest extends TestCase
         $libraries->expects($this->once())->method('scanLibrary')->with('lib-1');
         $libraries->expects($this->never())->method('rescanLibrary');
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }
@@ -70,7 +83,7 @@ class LibraryScanWorkerTest extends TestCase
         $libraries->expects($this->once())->method('rescanLibrary')->with('lib-2');
         $libraries->expects($this->never())->method('scanLibrary');
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }
@@ -90,7 +103,7 @@ class LibraryScanWorkerTest extends TestCase
         $libraries->expects($this->never())->method('scanLibrary');
         $libraries->expects($this->never())->method('rescanLibrary');
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertFalse($worker->runOnce());
     }
@@ -115,7 +128,7 @@ class LibraryScanWorkerTest extends TestCase
             ->with('lib-3')
             ->willThrowException(new RuntimeException('disk gone'));
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }
@@ -138,7 +151,7 @@ class LibraryScanWorkerTest extends TestCase
             ->with('lib-4')
             ->willThrowException(new RuntimeException('boom'));
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }
@@ -162,7 +175,7 @@ class LibraryScanWorkerTest extends TestCase
         $libraries->expects($this->never())->method('scanLibrary');
         $libraries->expects($this->never())->method('rescanLibrary');
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }
@@ -184,7 +197,63 @@ class LibraryScanWorkerTest extends TestCase
         $libraries->expects($this->once())->method('scanLibrary')->with('lib-5');
         $libraries->expects($this->never())->method('rescanLibrary');
 
-        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeLogger());
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() with a `metadata` job: runs the metadata matcher (NOT the scan
+     * engine), marks completed, returns true.
+     */
+    public function testRunOnceProcessesMetadataJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-6', 'library_id' => 'lib-6', 'type' => 'metadata']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-6');
+        $jobs->expects($this->never())->method('markFailed');
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->once())
+            ->method('matchLibrary')
+            ->with('lib-6')
+            ->willReturn(['matched' => 3, 'processed' => 5]);
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
+    /**
+     * runOnce() where the metadata matcher throws: marks the job failed, does
+     * NOT mark completed, still returns true.
+     */
+    public function testRunOnceMarksFailedWhenMetadataMatchThrows(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-7', 'library_id' => 'lib-7', 'type' => 'metadata']);
+        $jobs->expects($this->never())->method('markCompleted');
+        $jobs->expects($this->once())->method('markFailed')->with('job-7', 'tmdb down');
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->once())
+            ->method('matchLibrary')
+            ->with('lib-7')
+            ->willThrowException(new RuntimeException('tmdb down'));
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
     }

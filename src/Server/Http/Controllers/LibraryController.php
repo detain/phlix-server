@@ -283,6 +283,41 @@ class LibraryController
     }
 
     /**
+     * Enqueue a background metadata match for a library.
+     *
+     * Mirrors {@see self::scan()} but enqueues a `metadata` job, which the async
+     * {@see \Phlix\Media\Library\LibraryScanWorker} drains off the HTTP path by
+     * running {@see \Phlix\Media\Metadata\LibraryMetadataMatcher::matchLibrary()}.
+     * The job is recorded in the same `library_scan_jobs` queue, so the existing
+     * scan-status badge/polling shows progress unchanged.
+     *
+     * @param array<string, string> $params Route params; `id` is the library UUID.
+     *
+     * @return Response `202` `{ job_id, status:"queued", message }` · `404`
+     *                  library-missing · `401`/`403` auth.
+     */
+    public function matchMetadata(Request $request, array $params): Response
+    {
+        $authResponse = $this->requireAdmin($request);
+        if ($authResponse !== null) {
+            return $authResponse;
+        }
+
+        $library = $this->libraryManager->getLibrary($params['id']);
+        if (!$library) {
+            return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        $jobId = $this->scanJobs->enqueue($params['id'], 'metadata');
+
+        return (new Response())->status(202)->json([
+            'job_id' => $jobId,
+            'status' => 'queued',
+            'message' => 'Metadata match queued',
+        ]);
+    }
+
+    /**
      * Return the latest scan job for a library (Step 1.1b).
      *
      * Powers `GET /api/v1/libraries/{id}/scan-status`. Admin-gated

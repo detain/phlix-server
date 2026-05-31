@@ -430,6 +430,13 @@
 }
 
 /* Loading overlay */
+/* `display: flex` below outranks the UA `[hidden] { display: none }` rule,
+   so the `hidden` attribute alone can't hide the overlay — it would stay
+   on screen forever after loadSettings() finishes. Restore hide-ability. */
+.loading-overlay[hidden] {
+    display: none;
+}
+
 .loading-overlay {
     position: fixed;
     top: 0;

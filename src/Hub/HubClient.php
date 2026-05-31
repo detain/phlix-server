@@ -6,6 +6,7 @@ namespace Phlix\Hub;
 
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Network\PortForwardService;
+use Phlix\Shared\Hub\ClaimRequest;
 use Throwable;
 
 /**
@@ -97,13 +98,18 @@ class HubClient
         $keyPair = $this->keyManager->getOrCreateKeyPair();
         $publicKeyJwk = $this->keyManager->getPublicKeyJwk();
 
-        $payload = [
-            'server_name' => $serverName,
-            'version' => $this->serverVersion,
-            'public_keys' => $publicKeyJwk,
-            'hostname_candidates' => $this->getHostnameCandidates(),
-            'protocol_version' => self::PROTOCOL_VERSION,
-        ];
+        // Build the wire payload from the shared ClaimRequest DTO so the
+        // server emits exactly the camelCase keys the hub parses with
+        // ClaimRequest::fromPayload(). A hand-rolled snake_case array here
+        // (server_name/public_keys/…) makes the hub reject the request with
+        // 400 "Bad Request" ("serverName is required").
+        $payload = (new ClaimRequest(
+            serverName: $serverName,
+            version: $this->serverVersion,
+            publicKeysJwk: $publicKeyJwk,
+            hostnameCandidates: array_values($this->getHostnameCandidates()),
+            protocolVersion: self::PROTOCOL_VERSION,
+        ))->toPayload();
 
         $this->logger->info('Initiating pairing with hub', [
             'hub_url' => $hubUrl,
@@ -128,10 +134,13 @@ class HubClient
 
         $body = $response->body;
 
-        $claimCode = is_string($body['claim_code'] ?? null) ? $body['claim_code'] : '';
-        $expiresIn = is_int($body['expires_in'] ?? null) ? $body['expires_in'] : 600;
-        $claimId = is_string($body['claim_id'] ?? null) ? $body['claim_id'] : '';
-        $hubBaseUrl = is_string($body['hub_base_url'] ?? null) ? $body['hub_base_url'] : $hubUrl;
+        // The hub replies with the shared ClaimResponse wire format
+        // (camelCase: claimCode/expiresIn/claimId/hubBaseUrl); read those
+        // keys, not snake_case, or the claim code comes back empty.
+        $claimCode = is_string($body['claimCode'] ?? null) ? $body['claimCode'] : '';
+        $expiresIn = is_int($body['expiresIn'] ?? null) ? $body['expiresIn'] : 600;
+        $claimId = is_string($body['claimId'] ?? null) ? $body['claimId'] : '';
+        $hubBaseUrl = is_string($body['hubBaseUrl'] ?? null) ? $body['hubBaseUrl'] : $hubUrl;
 
         return new ClaimInitiateResult(
             claimCode: $claimCode,

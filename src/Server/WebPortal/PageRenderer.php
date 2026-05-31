@@ -338,6 +338,41 @@ class PageRenderer
     }
 
     /**
+     * Renders a single media item's detail page.
+     *
+     * Backs the `/library/item/{id}` route that `media_card.tpl` and the player
+     * "back" link point at (previously unrouted → 404). The id is a MEDIA ITEM
+     * id; the item's `metadata_json` is hydrated by {@see ItemRepository}.
+     *
+     * @param Request $request The HTTP request (userId used for the sidebar).
+     * @param array<string, string> $params Route parameters:
+     *   - id: Media item id to display
+     *
+     * @return Response HTML response with the rendered item page, or 404.
+     *
+     * @example Template: library/detail.tpl
+     */
+    public function renderItem(Request $request, array $params): Response
+    {
+        $itemId = $params['id'] ?? '';
+        $item = $this->itemRepository->findById($itemId);
+
+        if (!is_array($item)) {
+            return (new Response())->status(404)->html('<h1>Item not found</h1>');
+        }
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'library');
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
+        $template->assign('item', $item);
+
+        $html = $template->fetch('library/detail.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
      * Renders the login page.
      *
      * Displays the authentication form for users to sign in.

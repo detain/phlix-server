@@ -20,6 +20,11 @@ export function AdminNav({ client, user }: AdminNavProps): JSX.Element {
   return (
     <nav className="admin-nav" aria-label="Admin navigation">
       <div className="admin-nav__brand">Phlix Admin</div>
+      {/* Plain anchor (NOT a router link): the portal lives OUTSIDE the
+          /admin SPA, so this is a full-page navigation back to it. */}
+      <a className="admin-nav__back" href="/">
+        ← Back to Phlix
+      </a>
       <ul className="admin-nav__list">
         {NAV_ITEMS.map((item) => (
           <li key={item.path} className="admin-nav__item">

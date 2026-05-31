@@ -26,6 +26,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
+use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -79,6 +80,7 @@ final class AdminRoutesTest extends TestCase
             new SettingsRepository($this->createMock(Connection::class)),
         );
         $fsBrowseController  = new FsBrowseController([sys_get_temp_dir()]);
+        $logController       = new LogController(sys_get_temp_dir());
         $adminUserController  = new AdminUserController($this->users);
         $profileManager = new FakeUserProfileManager();
         $adminProfileController = new AdminProfileController($profileManager, $this->users);
@@ -92,6 +94,7 @@ final class AdminRoutesTest extends TestCase
             $backupController,
             $settingsController,
             $fsBrowseController,
+            $logController,
             $adminUserController,
             $profileManager,
             $adminProfileController,
@@ -108,6 +111,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly BackupController $backupController,
                 private readonly AdminSettingsController $settingsController,
                 private readonly FsBrowseController $fsBrowseController,
+                private readonly LogController $logController,
                 private readonly AdminUserController $adminUserController,
                 private readonly FakeUserProfileManager $profileManager,
                 private readonly AdminProfileController $adminProfileController,
@@ -148,6 +152,7 @@ final class AdminRoutesTest extends TestCase
                     BackupController::class    => $this->backupController,
                     AdminSettingsController::class => $this->settingsController,
                     FsBrowseController::class => $this->fsBrowseController,
+                    LogController::class => $this->logController,
                     AdminUserController::class => $this->adminUserController,
                     UserProfileManager::class => $this->profileManager,
                     AdminProfileController::class => $this->adminProfileController,
@@ -168,6 +173,7 @@ final class AdminRoutesTest extends TestCase
                     BackupController::class,
                     AdminSettingsController::class,
                     FsBrowseController::class,
+                    LogController::class,
                     AdminUserController::class,
                     UserProfileManager::class,
                     AdminProfileController::class,

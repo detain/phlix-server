@@ -59,6 +59,28 @@ describe('ServicesPage', () => {
       });
     });
 
+    it('shows setup guidance and disables Connect when not configured', async () => {
+      renderPage([
+        { status: 200, body: { connected: false, username: null, configured: false } },
+        { status: 200, body: { connected: false, username: null, api_key_set: false } },
+      ]);
+      await waitFor(() => {
+        expect(screen.getByText(/Trakt isn’t configured yet/)).toBeInTheDocument();
+      });
+      expect(screen.getByRole('button', { name: 'Connect to Trakt' })).toBeDisabled();
+    });
+
+    it('enables Connect when configured but not connected', async () => {
+      renderPage([
+        { status: 200, body: { connected: false, username: null, configured: true } },
+        { status: 200, body: { connected: false, username: null, api_key_set: false } },
+      ]);
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Connect to Trakt' })).toBeEnabled();
+      });
+      expect(screen.queryByText(/Trakt isn’t configured yet/)).not.toBeInTheDocument();
+    });
+
     it('shows status badge - Not connected', async () => {
       renderPage([
         { status: 200, body: { connected: false, username: null } },

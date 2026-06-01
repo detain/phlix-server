@@ -16,6 +16,13 @@ import type { ApiClient } from './client';
 export interface TraktStatus {
   connected: boolean;
   username: string | null;
+  /**
+   * Whether the operator has supplied Trakt application credentials
+   * (client_id + client_secret). When false, the Connect button would
+   * dead-end on the "not configured" page, so the UI shows setup guidance
+   * instead. Optional for backward-compatibility with older server builds.
+   */
+  configured?: boolean;
 }
 
 /**

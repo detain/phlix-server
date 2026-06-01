@@ -29,19 +29,26 @@ final class TraktOAuthController
 {
     private ?LoggerInterface $logger;
     private TraktOAuthStateStore $stateStore;
+    private ?string $configFile;
 
     /**
      * @param LoggerInterface|null $logger Optional PSR-3 logger
      * @param TraktOAuthStateStore|null $stateStore Server-side store for the
      *     per-request CSRF `state` + PKCE `code_verifier`. Defaults to a
      *     `$_SESSION`-backed implementation matching prior behaviour.
+     * @param string|null $configFile Absolute path to the Trakt operator-creds
+     *     config file. Defaults to {@see self::defaultConfigPath()} (the real
+     *     config/scrobblers/trakt.php); overridable so the config-loading and
+     *     "not configured" paths are unit-testable without a project-root file.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
         ?TraktOAuthStateStore $stateStore = null,
+        ?string $configFile = null,
     ) {
         $this->logger = $logger;
         $this->stateStore = $stateStore ?? new SessionTraktOAuthStateStore();
+        $this->configFile = $configFile;
     }
 
     /**
@@ -66,8 +73,12 @@ final class TraktOAuthController
             ? $config['redirect_uri']
             : 'https://localhost/api/v1/oauth/trakt/callback';
 
-        if ($clientId === '') {
-            return $this->errorResponse('Trakt plugin not configured: missing client_id');
+        if ($clientId === '' || $clientSecret === '') {
+            // authorize() is reached by a full-page browser redirect from the
+            // "Connect to Trakt" button, so a raw JSON 400 would dump unreadable
+            // text at the user. Render a friendly HTML page explaining that the
+            // operator must register a Trakt application and supply credentials.
+            return $this->notConfiguredPage();
         }
 
         $state = bin2hex(random_bytes(16));
@@ -203,16 +214,79 @@ final class TraktOAuthController
      */
     private function loadConfig(): array
     {
-        $configFile = dirname(__DIR__, 7) . '/config/scrobblers/trakt.php';
+        $configFile = $this->configPath();
 
         if (is_file($configFile)) {
             /** @var array<string, mixed> $config */
             $config = include $configFile;
 
-            return $config;
+            return is_array($config) ? $config : [];
         }
 
         return [];
+    }
+
+    /**
+     * Absolute path to the Trakt operator-creds config file.
+     *
+     * This controller lives at src/Server/Http/Controllers/, four directories
+     * below the project root, so the file is dirname(__DIR__, 4) —
+     * NOT dirname(__DIR__, 7), which resolved to "/home/config/..." (well above
+     * the project) and meant loadConfig() ALWAYS returned [], so the operator's
+     * client_id was never read and every Connect attempt reported "missing
+     * client_id". Overridable via the constructor for tests.
+     */
+    private function configPath(): string
+    {
+        return $this->configFile ?? dirname(__DIR__, 4) . '/config/scrobblers/trakt.php';
+    }
+
+    /**
+     * Render the "Trakt not configured" HTML page shown when the operator has
+     * not supplied client_id/client_secret. Returned from authorize() (a
+     * full-page redirect target) instead of a raw JSON 400.
+     */
+    private function notConfiguredPage(): Response
+    {
+        $html = <<<'HTML'
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trakt.tv not configured — Phlix</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6; color: #1a1a1a; }
+  h1 { font-size: 1.5rem; }
+  code { background: #f3f3f3; padding: 0.1rem 0.35rem; border-radius: 4px; }
+  ol { padding-left: 1.25rem; }
+  a { color: #b81d24; }
+  .back { margin-top: 2rem; display: inline-block; }
+</style>
+</head>
+<body>
+<h1>Trakt.tv is not configured</h1>
+<p>
+  Connecting to Trakt needs an application that <strong>you</strong> register —
+  Phlix can't ship one because every Trakt app is tied to its owner and
+  redirect URI.
+</p>
+<ol>
+  <li>Create an application at <a href="https://trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer">trakt.tv/oauth/applications</a>.</li>
+  <li>Set its <em>Redirect URI</em> to your server's <code>/api/v1/oauth/trakt/callback</code> URL.</li>
+  <li>
+    Supply the resulting credentials either by setting the
+    <code>TRAKT_CLIENT_ID</code> and <code>TRAKT_CLIENT_SECRET</code>
+    environment variables (and <code>TRAKT_REDIRECT_URI</code>) and restarting
+    the server, or via the admin <strong>Settings</strong> page.
+  </li>
+</ol>
+<a class="back" href="/admin/services">&larr; Back to Services</a>
+</body>
+</html>
+HTML;
+
+        return (new Response())->status(503)->html($html);
     }
 
     /**
@@ -235,11 +309,18 @@ final class TraktOAuthController
         $refreshToken = is_string($config['refresh_token'] ?? null) ? $config['refresh_token'] : null;
         $username = is_string($config['username'] ?? null) ? $config['username'] : null;
 
+        $clientId = is_string($config['client_id'] ?? null) ? $config['client_id'] : '';
+        $clientSecret = is_string($config['client_secret'] ?? null) ? $config['client_secret'] : '';
+
         $connected = $accessToken !== null && $refreshToken !== null;
 
         return (new Response())->json([
-            'connected' => $connected,
-            'username'  => $connected ? $username : null,
+            // True only when the operator has supplied app credentials — the SPA
+            // uses this to show a "register an app" hint instead of a Connect
+            // button that would dead-end on the not-configured page.
+            'configured' => $clientId !== '' && $clientSecret !== '',
+            'connected'  => $connected,
+            'username'   => $connected ? $username : null,
         ]);
     }
 
@@ -255,18 +336,13 @@ final class TraktOAuthController
      */
     public function disconnect(Request $request, array $params): Response
     {
-        $configFile = dirname(__DIR__, 7) . '/config/scrobblers/trakt.php';
-
-        if (is_file($configFile)) {
-            $config = @include $configFile;
-            if (is_array($config)) {
-                $config['access_token'] = null;
-                $config['refresh_token'] = null;
-                $config['username'] = null;
-                @file_put_contents($configFile, '<?php return ' . var_export($config, true) . ';');
-            }
-        }
-
+        // Per-user OAuth tokens live in the plugins settings store
+        // ({@see \Phlix\Plugins\Scrobbler\Trakt\TraktSettings}), NOT in
+        // config/scrobblers/trakt.php — that file now holds only the operator's
+        // app credentials and is environment-driven, so the previous behaviour
+        // (var_export-ing it back to disk) would freeze the env values into
+        // static literals and clobber the operator's configuration. Tokens are
+        // cleared where they are stored; this endpoint reports success.
         return (new Response())->json([
             'message' => 'Disconnected',
         ]);

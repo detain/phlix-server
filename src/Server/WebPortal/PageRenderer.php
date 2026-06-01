@@ -391,6 +391,64 @@ class PageRenderer
     }
 
     /**
+     * Renders the web video player for a single media item.
+     *
+     * Backs the `/player/{id}` route the "Play" button in
+     * `library/detail.tpl` links to. The `<video>` element direct-plays the
+     * source file via the byte-serving `/media/{id}/stream` endpoint
+     * (HTTP Range / 206, handled in {@see \Phlix\Server\Workerman\HttpHandler}),
+     * which browsers do natively for H.264/AAC MP4 and WebM. Other containers
+     * (e.g. MKV/HEVC) render the player but need a transcode path that is not
+     * yet wired.
+     *
+     * @param Request $request The HTTP request (userId used for the sidebar).
+     * @param array<string, string> $params Route parameters:
+     *   - id: Media item id to play.
+     *
+     * @return Response HTML response with the rendered player page, or 404.
+     *
+     * @example Template: player/index.tpl
+     */
+    public function renderPlayer(Request $request, array $params): Response
+    {
+        $itemId = $params['id'] ?? '';
+        $item = $this->itemRepository->findById($itemId);
+
+        if (!is_array($item)) {
+            return (new Response())->status(404)->html('<h1>Item not found</h1>');
+        }
+
+        $resolvedId = is_string($item['id'] ?? null) ? $item['id'] : $itemId;
+        $path = is_string($item['path'] ?? null) ? $item['path'] : '';
+        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        $mimeMap = [
+            'mp4' => 'video/mp4',
+            'm4v' => 'video/mp4',
+            'mov' => 'video/mp4',
+            'webm' => 'video/webm',
+            'ogv' => 'video/ogg',
+            'mkv' => 'video/x-matroska',
+        ];
+        $item['media_sources'] = [
+            [
+                'id' => 'default',
+                'url' => '/media/' . $resolvedId . '/stream',
+                'container' => $mimeMap[$ext] ?? 'video/mp4',
+            ],
+        ];
+
+        $template = new \Smarty();
+        $template->setTemplateDir($this->templateDir);
+        $template->assign('current_page', 'library');
+        $template->assign('user', $this->resolveUserVars($request->userId ?? null));
+        $template->assign('item', $item);
+
+        $html = $template->fetch('player/index.tpl');
+
+        return (new Response())->html($html);
+    }
+
+    /**
      * Renders the login page.
      *
      * Displays the authentication form for users to sign in.

@@ -9,6 +9,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
 use Throwable;
+use Phlix\Media\Metadata\SceneFilenameNormalizer;
 
 /**
  * Background metadata matcher for a whole library.
@@ -203,7 +204,16 @@ class LibraryMetadataMatcher
             return false;
         }
 
+        $normalized = SceneFilenameNormalizer::normalize($name);
+        if ($normalized['title'] !== '') {
+            $name = $normalized['title'];
+        }
+
         $year = $this->extractYear($existingMetadata);
+        if ($year === null && $normalized['year'] !== null) {
+            $year = $normalized['year'];
+        }
+
         $externalIds = $this->extractExternalIds($existingMetadata);
 
         $resolved = $this->resolver->resolve($name, $year, $externalIds);

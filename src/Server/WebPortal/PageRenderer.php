@@ -363,6 +363,24 @@ class PageRenderer
 
         $template = new \Smarty();
         $template->setTemplateDir($this->templateDir);
+        // `library/detail.tpl` formats the resume position with the
+        // `count_ticks_to_time` modifier. Smarty compiles the whole template
+        // (the `{if resume > 0}` guard is runtime-only), so the modifier must
+        // be registered or every item page throws a SmartyCompilerException
+        // (500). Ticks are 100-nanosecond units (1s = 10,000,000 ticks).
+        $template->registerPlugin('modifier', 'count_ticks_to_time', static function ($ticks): string {
+            $seconds = (int) ((int) $ticks / 10_000_000);
+            if ($seconds < 0) {
+                $seconds = 0;
+            }
+            $hours = intdiv($seconds, 3600);
+            $minutes = intdiv($seconds % 3600, 60);
+            $secs = $seconds % 60;
+
+            return $hours > 0
+                ? sprintf('%d:%02d:%02d', $hours, $minutes, $secs)
+                : sprintf('%d:%02d', $minutes, $secs);
+        });
         $template->assign('current_page', 'library');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('item', $item);

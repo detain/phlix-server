@@ -31,7 +31,7 @@
                 <span>Settings</span>
             </a>
             {if $user.is_admin|default:false}
-            <a href="/admin" class="nav-item {if $current_page == 'admin'}active{/if}">
+            <a href="{if defined('PHLIX_VUE_AUTH') && constant('PHLIX_VUE_AUTH')}/app/settings{else}/admin{/if}" class="nav-item {if $current_page == 'admin'}active{/if}">
                 <span class="icon">🛠️</span>
                 <span>Admin</span>
             </a>

@@ -21,6 +21,8 @@ export interface LogsPageProps {
 
 const LINE_OPTIONS = [200, 500, 1000, 2000] as const;
 const AUTO_REFRESH_MS = 5000;
+/** Sentinel `selected` value for the combined "watch every log file" view. */
+export const ALL_LOGS = '__all__';
 
 export function LogsPage({ client = new ApiClient() }: LogsPageProps): JSX.Element {
   const apiRef = useRef(new LogsApi(client));
@@ -63,7 +65,10 @@ export function LogsPage({ client = new ApiClient() }: LogsPageProps): JSX.Eleme
       if (file === '') return;
       setLoading(true);
       try {
-        const res = await apiRef.current.tail(file, count);
+        const res =
+          file === ALL_LOGS
+            ? await apiRef.current.tailAll(count)
+            : await apiRef.current.tail(file, count);
         setLines(res.lines);
         setTruncated(res.truncated);
         // Keep the view pinned to the newest lines.
@@ -117,6 +122,9 @@ export function LogsPage({ client = new ApiClient() }: LogsPageProps): JSX.Eleme
             onChange={(e) => setSelected(e.target.value)}
           >
             {files.length === 0 ? <option value="">(no log files)</option> : null}
+            {files.length > 0 ? (
+              <option value={ALL_LOGS}>All logs (combined)</option>
+            ) : null}
             {files.map((f) => (
               <option key={f.name} value={f.name}>
                 {f.name}
@@ -161,7 +169,8 @@ export function LogsPage({ client = new ApiClient() }: LogsPageProps): JSX.Eleme
 
       {truncated ? (
         <p className="logs-truncated" role="note">
-          Showing the most recent {lineCount} lines (file is larger).
+          Showing the most recent {lineCount} lines (
+          {selected === ALL_LOGS ? 'more lines available across files' : 'file is larger'}).
         </p>
       ) : null}
 

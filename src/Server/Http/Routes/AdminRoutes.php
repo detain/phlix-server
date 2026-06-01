@@ -152,6 +152,7 @@ final class AdminRoutes
                 /** @var LogController $logController */
                 $logController = $container->get(LogController::class);
                 $r->get('/logs', [$logController, 'index']);
+                $r->get('/logs/tail-all', [$logController, 'tailAll']);
                 $r->get('/logs/tail', [$logController, 'tail']);
 
                 // Admin user management (Step 1.2a).

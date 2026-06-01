@@ -4,6 +4,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Stats\StatsCollector;
 use Workerman\MySQL\Connection;
 
 class ItemRepositoryTest extends TestCase
@@ -14,6 +15,68 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
 
         $this->assertInstanceOf(ItemRepository::class, $repo);
+    }
+
+    public function testCreateRecordsItemAddedChangeWhenCollectorWired(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('recordLibraryChange')
+            ->with('item_added', 'item-7', 'lib-1');
+
+        $repo = new ItemRepository($db, $stats);
+        $id = $repo->create([
+            'id' => 'item-7',
+            'library_id' => 'lib-1',
+            'name' => 'Test',
+            'type' => 'movie',
+            'path' => '/m/t.mkv',
+        ]);
+
+        $this->assertSame('item-7', $id);
+    }
+
+    public function testDeleteRecordsItemRemovedChangeWithLibraryId(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // The pre-delete SELECT resolves the owning library.
+        $db->method('query')->willReturn([['library_id' => 'lib-9']]);
+
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('recordLibraryChange')
+            ->with('item_removed', 'item-9', 'lib-9');
+
+        (new ItemRepository($db, $stats))->delete('item-9');
+    }
+
+    public function testDeleteByLibraryRecordsSingleAggregateChange(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $stats = $this->createMock(StatsCollector::class);
+        $stats->expects($this->once())
+            ->method('recordLibraryChange')
+            ->with('library_cleared', null, 'lib-3');
+
+        (new ItemRepository($db, $stats))->deleteByLibrary('lib-3');
+    }
+
+    public function testCreateWithoutCollectorDoesNotThrow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $repo = new ItemRepository($db); // no collector — recording is a no-op
+
+        $this->assertSame(
+            'item-1',
+            $repo->create([
+                'id' => 'item-1',
+                'library_id' => 'lib-1',
+                'name' => 'Test',
+                'type' => 'movie',
+                'path' => '/m/t.mkv',
+            ]),
+        );
     }
 
     public function testFindByIdReturnsNullWhenNotFound(): void

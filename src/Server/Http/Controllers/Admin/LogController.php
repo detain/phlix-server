@@ -18,6 +18,9 @@ use Throwable;
  *    (name, size, modified time).
  *  - `GET /api/v1/admin/logs/tail?file=app.log&lines=N` — last N lines of one
  *    file.
+ *  - `GET /api/v1/admin/logs/tail-all?lines=N` — last N lines across *every*
+ *    `*.log` file, each line tagged with its source file and merged into one
+ *    chronological stream (so the admin can watch all logs at once).
  *
  * SECURITY: the requested `file` is reduced to its {@see basename()} and must
  * match a strict `*.log` allowlist pattern, then is resolved with
@@ -118,6 +121,107 @@ final class LogController
             'lines' => array_values($tail),
             'truncated' => count($all) > count($tail),
         ]);
+    }
+
+    /**
+     * Return the last N lines across *all* `*.log` files, merged into one
+     * chronological stream.
+     *
+     * Every line is prefixed with its source file name so the combined view
+     * stays readable, and lines are ordered by their leading Monolog timestamp
+     * (`[2026-05-15T22:11:44.893642-04:00] …`). Continuation lines (stack
+     * traces and the like, which carry no timestamp) inherit the timestamp of
+     * the line above them so they stay attached in order.
+     *
+     * Memory is bounded regardless of how many rotated files exist: the
+     * per-file read window is scaled down by the file count so the total bytes
+     * read stays near {@see self::TAIL_BYTES}.
+     *
+     * @param Request $request `lines` (optional) query param.
+     * @param array<string, string> $params Unused.
+     */
+    public function tailAll(Request $request, array $params): Response
+    {
+        $lines = $request->queryInt('lines', self::DEFAULT_LINES);
+        $lines = max(1, min(self::MAX_LINES, $lines));
+
+        if ($this->logDir === '') {
+            return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
+        }
+
+        $paths = array_values(array_filter(glob($this->logDir . '/*.log') ?: [], 'is_file'));
+        $fileCount = count($paths);
+        if ($fileCount === 0) {
+            return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
+        }
+
+        // Scale the per-file read window down by the file count so the total
+        // bytes read stays bounded even with many rotated daily files.
+        $perFileBytes = max(64 * 1024, intdiv(self::TAIL_BYTES, $fileCount));
+
+        /** @var list<array{ts: string, seq: int, text: string}> $entries */
+        $entries = [];
+        $seq = 0;
+        $names = [];
+        foreach ($paths as $path) {
+            $name = basename($path);
+            $names[] = $name;
+            try {
+                $content = $this->readTail($path, $perFileBytes);
+            } catch (Throwable) {
+                continue;
+            }
+            if ($content === '') {
+                continue;
+            }
+            $fileLines = array_slice(explode("\n", rtrim($content, "\n")), -$lines);
+            $lastTs = '';
+            foreach ($fileLines as $line) {
+                $ts = $this->parseTimestamp($line);
+                if ($ts === '') {
+                    $ts = $lastTs; // continuation line keeps its predecessor's order
+                } else {
+                    $lastTs = $ts;
+                }
+                $entries[] = [
+                    'ts' => $ts,
+                    'seq' => $seq++,
+                    'text' => sprintf('%-22s %s', $name, $line),
+                ];
+            }
+        }
+
+        // Chronological merge: by leading timestamp, then stable read order.
+        usort(
+            $entries,
+            static fn (array $a, array $b): int => [$a['ts'], $a['seq']] <=> [$b['ts'], $b['seq']],
+        );
+
+        $kept = array_slice($entries, -$lines);
+        sort($names);
+
+        return (new Response())->json([
+            'files' => $names,
+            'lines' => array_values(array_map(static fn (array $e): string => $e['text'], $kept)),
+            'truncated' => count($entries) > count($kept),
+        ]);
+    }
+
+    /**
+     * Extract the leading Monolog timestamp from a log line for sorting, or ''
+     * when the line has none (e.g. a stack-trace continuation line).
+     *
+     * Matches the default `[Y-m-d\TH:i:s.uP]` format Phlix writes, e.g.
+     * `[2026-05-15T22:11:44.893642-04:00]`. ISO-8601 strings written on one
+     * host share a timezone offset, so a lexicographic compare orders them
+     * correctly.
+     */
+    private function parseTimestamp(string $line): string
+    {
+        if (preg_match('/^\[(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\]]*)\]/', $line, $m) === 1) {
+            return $m[1];
+        }
+        return '';
     }
 
     /**

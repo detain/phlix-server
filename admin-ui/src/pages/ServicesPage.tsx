@@ -142,12 +142,36 @@ export function ServicesPage({ client }: ServicesPageProps): JSX.Element {
                 </dl>
               )}
 
+              {!traktStatus.connected && traktStatus.configured === false && (
+                <p className="services__hint">
+                  Trakt isn’t configured yet. Register an application at{' '}
+                  <a
+                    href="https://trakt.tv/oauth/applications"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    trakt.tv/oauth/applications
+                  </a>{' '}
+                  (set its redirect URI to this server’s{' '}
+                  <code>/api/v1/oauth/trakt/callback</code>), then add the
+                  client ID and secret in Settings or via the{' '}
+                  <code>TRAKT_CLIENT_ID</code> / <code>TRAKT_CLIENT_SECRET</code>{' '}
+                  environment variables.
+                </p>
+              )}
+
               <div className="services__card-actions">
                 {!traktStatus.connected ? (
                   <button
                     type="button"
                     className="btn--primary"
                     onClick={connectTrakt}
+                    disabled={traktStatus.configured === false}
+                    title={
+                      traktStatus.configured === false
+                        ? 'Add Trakt client ID and secret first'
+                        : undefined
+                    }
                   >
                     Connect to Trakt
                   </button>

@@ -254,4 +254,54 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $this->assertSame(['matched' => 0, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
+
+    /**
+     * The run emits progress log entries as it goes — a start marker, a per-item
+     * line (so the log shows items being processed instead of nothing until the
+     * end), a per-batch progress summary, and a completion line — rather than a
+     * single line written only when the whole run finishes.
+     */
+    public function testEmitsProgressLogEntriesAsItRuns(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [
+                ['id' => 'm1', 'type' => 'movie', 'name' => 'The Matrix', 'metadata' => []],
+                ['id' => 'm2', 'type' => 'movie', 'name' => 'Unknown Film', 'metadata' => []],
+            ],
+            [],
+        );
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->method('resolve')->willReturnCallback(
+            static fn (string $title): ?array =>
+                $title === 'The Matrix' ? ['external_ids' => ['tmdb' => '603']] : null,
+        );
+
+        $infoMessages = [];
+        $debugMessages = [];
+        $logger = $this->createMock(StructuredLogger::class);
+        $logger->method('info')->willReturnCallback(
+            static function (string $message) use (&$infoMessages): void {
+                $infoMessages[] = $message;
+            }
+        );
+        $logger->method('debug')->willReturnCallback(
+            static function (string $message) use (&$debugMessages): void {
+                $debugMessages[] = $message;
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher($items, $resolver, $logger);
+        $matcher->matchLibrary('lib-1');
+
+        // Start + per-batch progress + completion are all logged at INFO.
+        $this->assertContains('LibraryMetadataMatcher: library match started', $infoMessages);
+        $this->assertContains('LibraryMetadataMatcher: library match progress', $infoMessages);
+        $this->assertContains('LibraryMetadataMatcher: library match complete', $infoMessages);
+
+        // Each processed item produces a per-item DEBUG line as it happens.
+        $this->assertContains('LibraryMetadataMatcher: item matched', $debugMessages);
+        $this->assertContains('LibraryMetadataMatcher: item not matched', $debugMessages);
+    }
 }

@@ -1,4 +1,12 @@
-import { createPhlixApp } from '@phlix/ui';
+import { createPhlixApp, LibraryScanPage } from '@phlix/ui';
 
-const app = createPhlixApp();
+const app = createPhlixApp({
+    extraRoutes: [
+        {
+            path: '/library/scan',
+            name: 'library-scan',
+            component: LibraryScanPage,
+        },
+    ],
+});
 app.mount('#phlix-app');

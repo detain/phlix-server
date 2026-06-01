@@ -72,8 +72,13 @@ final class LastfmController
             $authUrl = 'https://www.last.fm/api/auth/?' . http_build_query($query);
         }
 
+        // This controller lives at src/Server/Http/Controllers/Admin/, i.e.
+        // five directories below the project root, so the template base is
+        // dirname(__DIR__, 5) — NOT 4 (which resolved to the non-existent
+        // src/public/templates and threw "Unable to load template
+        // admin/lastfm.tpl" → HTTP 500 on the Connect Last.fm page).
         $smarty = new \Smarty();
-        $smarty->setTemplateDir(dirname(__DIR__, 4) . '/public/templates');
+        $smarty->setTemplateDir(dirname(__DIR__, 5) . '/public/templates');
         $smarty->assign('configured', $configured);
         $smarty->assign('session', $session === null ? null : [
             'username'     => $this->config->username !== '' ? $this->config->username : ($session['user_id']),
@@ -81,6 +86,10 @@ final class LastfmController
         ]);
         $smarty->assign('auth_url', $authUrl);
         $smarty->assign('callback_url', $this->config->callbackUrl);
+        // Shared admin nav (partials/admin-nav.tpl) reads $current_page to mark
+        // the active tab; without it the layout emits "Undefined array key
+        // current_page" warnings on every render.
+        $smarty->assign('current_page', 'admin_lastfm');
 
         return (new Response())->html((string) $smarty->fetch('admin/lastfm.tpl'));
     }

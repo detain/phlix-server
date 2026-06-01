@@ -21,6 +21,16 @@ export interface LogTail {
   truncated: boolean;
 }
 
+/** Result of tailing *all* log files merged into one chronological stream. */
+export interface LogTailAll {
+  /** The source file names that were merged. */
+  files: string[];
+  /** Merged lines, each prefixed with its source file name. */
+  lines: string[];
+  /** True when more lines existed across the files than were returned. */
+  truncated: boolean;
+}
+
 /** Typed client for the admin log endpoints. @since 1.7 */
 export class LogsApi {
   constructor(private readonly client: ApiClient) {}
@@ -41,6 +51,19 @@ export class LogsApi {
     );
     return {
       file: typeof res.file === 'string' ? res.file : file,
+      lines: Array.isArray(res.lines) ? res.lines : [],
+      truncated: res.truncated === true,
+    };
+  }
+
+  /** `GET /api/v1/admin/logs/tail-all?lines=` → merged tail across every file. */
+  async tailAll(lines = 200): Promise<LogTailAll> {
+    const res = await this.client.get<Partial<LogTailAll>>(
+      '/api/v1/admin/logs/tail-all',
+      { lines: String(lines) },
+    );
+    return {
+      files: Array.isArray(res.files) ? res.files : [],
       lines: Array.isArray(res.lines) ? res.lines : [],
       truncated: res.truncated === true,
     };

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Stats\StatsCollector;
+use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
@@ -24,13 +26,47 @@ class ItemRepository
     private Connection $db;
 
     /**
+     * Optional stats collector. When wired, item adds/removes are recorded into
+     * stats_library_changes, which feeds the admin dashboard activity feed.
+     * Null in unit tests / legacy callers (recording no-ops).
+     *
+     * @var StatsCollector|null
+     */
+    private ?StatsCollector $statsCollector;
+
+    /**
      * Constructor for ItemRepository.
      *
      * @param Connection $db Database connection for media item persistence
+     * @param StatsCollector|null $statsCollector Optional collector; records
+     *        item add/remove changes for the admin dashboard when supplied.
      */
-    public function __construct(Connection $db)
+    public function __construct(Connection $db, ?StatsCollector $statsCollector = null)
     {
         $this->db = $db;
+        $this->statsCollector = $statsCollector;
+    }
+
+    /**
+     * Record a library-change stat for the admin dashboard.
+     *
+     * No-ops when no {@see StatsCollector} is wired. Any failure is swallowed
+     * so statistics collection can never break a library scan or delete.
+     *
+     * @param string      $changeType   'item_added', 'item_removed', or 'library_cleared'.
+     * @param string|null $mediaItemId  Affected media item UUID, if applicable.
+     * @param string|null $libraryId    Owning library UUID, if known.
+     */
+    private function recordChange(string $changeType, ?string $mediaItemId, ?string $libraryId): void
+    {
+        if ($this->statsCollector === null) {
+            return;
+        }
+        try {
+            $this->statsCollector->recordLibraryChange($changeType, $mediaItemId, $libraryId);
+        } catch (Throwable) {
+            // Stats recording must never break library operations.
+        }
     }
 
     /**
@@ -241,6 +277,11 @@ class ItemRepository
             ]
         );
 
+        $libraryId = isset($data['library_id']) && is_string($data['library_id'])
+            ? $data['library_id']
+            : null;
+        $this->recordChange('item_added', $id, $libraryId);
+
         return $id;
     }
 
@@ -284,7 +325,21 @@ class ItemRepository
      */
     public function delete(string $id): void
     {
+        // Capture the owning library before the row is gone so the change can
+        // be attributed (cheap single-row lookup, only when a collector is wired).
+        $libraryId = null;
+        if ($this->statsCollector !== null) {
+            $rows = $this->db->query("SELECT library_id FROM media_items WHERE id = ?", [$id]);
+            $first = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : null;
+            $lib = $first['library_id'] ?? null;
+            if (is_string($lib)) {
+                $libraryId = $lib;
+            }
+        }
+
         $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
+
+        $this->recordChange('item_removed', $id, $libraryId);
     }
 
     /**
@@ -296,6 +351,10 @@ class ItemRepository
     public function deleteByLibrary(string $libraryId): void
     {
         $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
+
+        // One aggregate change row rather than one per deleted item — bulk
+        // library clears would otherwise flood stats_library_changes.
+        $this->recordChange('library_cleared', null, $libraryId);
     }
 
     /**

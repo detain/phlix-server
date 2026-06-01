@@ -104,6 +104,11 @@ class LibraryMetadataMatcher
         $processed = 0;
         $offset = 0;
 
+        // A start marker so the log shows the run has begun, not just its end.
+        $this->logger->info('LibraryMetadataMatcher: library match started', [
+            'library_id' => $libraryId,
+        ]);
+
         while (true) {
             $batch = $this->items->getByLibrary($libraryId, self::PAGE_SIZE, $offset);
             if ($batch === []) {
@@ -117,20 +122,47 @@ class LibraryMetadataMatcher
                 }
 
                 $processed++;
+                $id = is_string($item['id'] ?? null) ? $item['id'] : '';
+                $name = is_string($item['name'] ?? null) ? $item['name'] : '';
 
                 try {
                     if ($this->matchItem($item)) {
                         $matched++;
+                        // Per-item line (DEBUG) so progress is visible as items
+                        // are processed, written immediately rather than buffered
+                        // until the run finishes.
+                        $this->logger->debug('LibraryMetadataMatcher: item matched', [
+                            'library_id' => $libraryId,
+                            'item_id' => $id,
+                            'name' => $name,
+                            'processed' => $processed,
+                            'matched' => $matched,
+                        ]);
+                    } else {
+                        $this->logger->debug('LibraryMetadataMatcher: item not matched', [
+                            'library_id' => $libraryId,
+                            'item_id' => $id,
+                            'name' => $name,
+                            'processed' => $processed,
+                        ]);
                     }
                 } catch (Throwable $e) {
-                    $id = is_string($item['id'] ?? null) ? $item['id'] : '';
                     $this->logger->warning('LibraryMetadataMatcher: item match failed; skipping', [
                         'library_id' => $libraryId,
                         'item_id' => $id,
+                        'name' => $name,
                         'error' => $e->getMessage(),
                     ]);
                 }
             }
+
+            // Per-batch summary at INFO so the run is visibly advancing even when
+            // the per-item DEBUG lines are filtered out.
+            $this->logger->info('LibraryMetadataMatcher: library match progress', [
+                'library_id' => $libraryId,
+                'processed' => $processed,
+                'matched' => $matched,
+            ]);
 
             // The driver may return a short final page; stop once it does.
             if (count($batch) < self::PAGE_SIZE) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlix\Server\Http\Controllers\TraktOAuthController;
 use Phlix\Server\Http\Request;
@@ -165,6 +166,42 @@ final class TraktOAuthControllerTest extends TestCase
         $body = json_decode((string) $response->body, true);
 
         self::assertFalse($body['configured']);
+    }
+
+    /**
+     * Credentials saved in the admin Settings page (server_settings) must take
+     * precedence over the env/file config: a config file with empty creds plus
+     * a DB override yields a configured (and connectable) Trakt integration.
+     */
+    public function test_db_settings_override_env_and_file_credentials(): void
+    {
+        $configFile = $this->writeConfig([
+            'client_id' => '',
+            'client_secret' => '',
+        ]);
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getOverride')->willReturnMap([
+            ['trakt.client_id', ['value' => 'db-client-id', 'value_type' => 'string']],
+            ['trakt.client_secret', ['value' => 'db-client-secret', 'value_type' => 'string']],
+            ['trakt.redirect_uri', null],
+        ]);
+
+        $controller = new TraktOAuthController(
+            logger: null,
+            stateStore: new FakeTraktOAuthStateStore(),
+            configFile: $configFile,
+            settings: $settings,
+        );
+
+        $status = $controller->status(new Request(), []);
+        /** @var array<string, mixed> $body */
+        $body = json_decode((string) $status->body, true);
+        self::assertTrue($body['configured'], 'DB-stored credentials should mark Trakt configured');
+
+        // And the OAuth flow now starts instead of dead-ending on the page.
+        $authorize = $controller->authorize(new Request(), []);
+        self::assertSame(302, $authorize->statusCode);
     }
 
     /**

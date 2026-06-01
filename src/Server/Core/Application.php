@@ -2540,6 +2540,7 @@ class Application
     private function getTraktOAuthController(): \Phlix\Server\Http\Controllers\TraktOAuthController
     {
         $logger = null;
+        $settings = null;
         if ($this->container !== null) {
             try {
                 /** @var \Psr\Log\LoggerInterface */
@@ -2547,11 +2548,20 @@ class Application
             } catch (\Throwable) {
                 // Logger not available — use null
             }
+            try {
+                /** @var \Phlix\Admin\SettingsRepository $settings */
+                $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+            } catch (\Throwable) {
+                // Settings repository not available — fall back to env/file config.
+                $settings = null;
+            }
         }
 
         return new \Phlix\Server\Http\Controllers\TraktOAuthController(
             logger: $logger,
-            stateStore: null
+            stateStore: null,
+            configFile: null,
+            settings: $settings,
         );
     }
 

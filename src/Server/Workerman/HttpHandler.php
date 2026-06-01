@@ -12,6 +12,7 @@ use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -66,6 +67,16 @@ final class HttpHandler
             $static = $this->serveStatic($wr);
             if ($static !== null) {
                 $connection->send($static);
+                return;
+            }
+
+            // Media direct-play byte stream (the web player's <video> source).
+            // Handled with Workerman's native withFile() before the router so
+            // large files stream via the event loop instead of being read into
+            // worker memory.
+            $mediaStream = $this->serveMediaStream($wr);
+            if ($mediaStream !== null) {
+                $connection->send($mediaStream);
                 return;
             }
 
@@ -188,6 +199,84 @@ final class HttpHandler
     }
 
     /**
+     * Byte-serve a media item's source file for browser direct play.
+     *
+     * Backs `GET /media/{id}/stream` — the URL the web player's `<video>`
+     * source points at (and what {@see \Phlix\Media\Streaming\StreamManager::buildDirectStreamUrl()}
+     * builds). Returns null when the path is not a media-stream request so the
+     * caller falls through to the normal router.
+     *
+     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the file
+     * streams through the event loop (chunked for anything over 2 MB) rather
+     * than being read into worker memory — essential for multi-GB videos. HTTP
+     * `Range` requests are honoured (206 + `Content-Range`) so the browser can
+     * seek; an unsatisfiable range yields 416.
+     */
+    private function serveMediaStream(WorkermanRequest $wr): ?WorkermanResponse
+    {
+        if ($wr->method() !== 'GET') {
+            return null;
+        }
+        if (preg_match('#^/media/(?P<id>[^/]+)/stream$#', $wr->path(), $m) !== 1) {
+            return null;
+        }
+
+        /** @var ItemRepository $repo */
+        $repo = $this->container->get(ItemRepository::class);
+        $item = $repo->findById($m['id']);
+        $path = is_array($item) && is_string($item['path'] ?? null) ? $item['path'] : '';
+        if ($path === '' || !is_file($path) || !is_readable($path)) {
+            return new WorkermanResponse(404, ['Content-Type' => 'text/plain; charset=utf-8'], 'Media not found');
+        }
+
+        $fileSize = (int) filesize($path);
+        $mime = self::videoMimeFor($path);
+
+        $rangeHeader = $wr->header('range');
+        if (is_string($rangeHeader) && preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $rm) === 1) {
+            $start = (int) $rm[1];
+            $end = ($rm[2] !== '' ? (int) $rm[2] : $fileSize - 1);
+            if ($fileSize === 0 || $start >= $fileSize || $end >= $fileSize || $start > $end) {
+                return new WorkermanResponse(416, [
+                    'Content-Type' => $mime,
+                    'Content-Range' => "bytes */{$fileSize}",
+                ]);
+            }
+            $resp = new WorkermanResponse(206, ['Content-Type' => $mime]);
+            // withFile() with a non-zero offset/length makes Workerman emit
+            // 206 + Content-Range automatically.
+            $resp->withFile($path, $start, $end - $start + 1);
+            return $resp;
+        }
+
+        $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
+        $resp->withFile($path);
+        return $resp;
+    }
+
+    /**
+     * Content-Type for a video file we're about to direct-play.
+     *
+     * Extension-first so the browser gets a deterministic, playable MIME for
+     * the formats `<video>` understands; unknown extensions fall back to a
+     * binary default.
+     */
+    private static function videoMimeFor(string $path): string
+    {
+        $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        return [
+            'mp4'  => 'video/mp4',
+            'm4v'  => 'video/mp4',
+            'mov'  => 'video/mp4',
+            'webm' => 'video/webm',
+            'ogv'  => 'video/ogg',
+            'mkv'  => 'video/x-matroska',
+            'avi'  => 'video/x-msvideo',
+            'ts'   => 'video/mp2t',
+        ][$ext] ?? 'application/octet-stream';
+    }
+
+    /**
      * Best-guess Content-Type for a file we're about to serve.
      *
      * Extension first — `mime_content_type()` sniffs file content via
@@ -275,6 +364,10 @@ final class HttpHandler
         // route below.
         if (preg_match('#^/library/item/(?P<id>[^/]+)$#', $path, $m) === 1) {
             return $renderer->renderItem($request, ['id' => $m['id']]);
+        }
+        // Web video player page (linked from the detail page "Play" button).
+        if (preg_match('#^/player/(?P<id>[^/]+)$#', $path, $m) === 1) {
+            return $renderer->renderPlayer($request, ['id' => $m['id']]);
         }
         if (preg_match('#^/library/(?P<id>[^/]+)$#', $path, $m) === 1) {
             return $renderer->renderLibrary($request, ['id' => $m['id']]);

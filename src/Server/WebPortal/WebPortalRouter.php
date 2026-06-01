@@ -143,6 +143,7 @@ class WebPortalRouter
         $this->router->get('/api/v1/libraries/{id}/items', [$this, 'getLibraryItems']);
 
         // Media routes
+        $this->router->get('/api/v1/media', [$this, 'getMedia']);
         $this->router->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
         $this->router->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
 
@@ -339,6 +340,164 @@ class WebPortalRouter
         $item['streams'] = $this->itemRepository->getItemStreams($itemId);
 
         return (new Response())->json(['item' => $item]);
+    }
+
+    /**
+     * Queries media items with flexible filtering, sorting, and pagination.
+     *
+     * Accepts the full set of library-query schema parameters and returns
+     * a paginated list of media items shaped according to media-item.schema.json.
+     *
+     * @param Request $request The HTTP request with query parameters:
+     *   - search (string): Full-text or fuzzy name search
+     *   - genres (string[]): Filter to items with any of these genres
+     *   - yearFrom (int): Minimum release year (inclusive)
+     *   - yearTo (int): Maximum release year (inclusive)
+     *   - ratings (string[]): Filter to items with any of these ratings
+     *   - actors (string[]): Filter to items featuring any of these actors
+     *   - sort (string): Sort field — name|year|rating|date_added|runtime
+     *   - order (string): Sort direction — asc|desc
+     *   - limit (int): Max items to return 1-100 (default: 50)
+     *   - offset (int): Items to skip for pagination (default: 0)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with items array and pagination info
+     *
+     * @api_endpoint GET /api/v1/media
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "items": [
+     *     {
+     *       "id": "item_xyz789",
+     *       "name": "Movie Title",
+     *       "type": "movie",
+     *       "poster_url": "http://example.com/poster.jpg",
+     *       "genres": ["Action", "Drama"],
+     *       "year": 2020,
+     *       "rating": "PG-13",
+     *       "runtime": 7200,
+     *       "overview": "A great movie...",
+     *       "actors": ["Actor One", "Actor Two"],
+     *       "director": "Director Name"
+     *     }
+     *   ],
+     *   "total": 100,
+     *   "limit": 50,
+     *   "offset": 0
+     * }
+     * ```
+     */
+    public function getMedia(Request $request, array $params): Response
+    {
+        $queryParams = $this->extractMediaQueryParams($request);
+
+        $result = $this->itemRepository->query($queryParams);
+
+        $items = array_map(function (array $item): array {
+            return $this->shapeMediaItem($item);
+        }, $result['items']);
+
+        return (new Response())->json([
+            'items' => $items,
+            'total' => $result['total'],
+            'limit' => $result['limit'],
+            'offset' => $result['offset'],
+        ]);
+    }
+
+    /**
+     * Extracts and normalizes media query parameters from the request.
+     *
+     * @param Request $request The HTTP request
+     * @return array<string, mixed> Normalized query parameters
+     */
+    private function extractMediaQueryParams(Request $request): array
+    {
+        $params = [];
+        $query = $request->query;
+
+        $search = $request->queryString('search');
+        if ($search !== null && $search !== '') {
+            $params['search'] = $search;
+        }
+
+        $genres = $query['genres'] ?? null;
+        if (is_array($genres) && count($genres) > 0) {
+            $params['genres'] = array_filter($genres, 'is_string');
+        }
+
+        $yearFrom = $request->queryString('yearFrom');
+        if ($yearFrom !== null && is_numeric($yearFrom)) {
+            $params['yearFrom'] = (int) $yearFrom;
+        }
+
+        $yearTo = $request->queryString('yearTo');
+        if ($yearTo !== null && is_numeric($yearTo)) {
+            $params['yearTo'] = (int) $yearTo;
+        }
+
+        $ratings = $query['ratings'] ?? null;
+        if (is_array($ratings) && count($ratings) > 0) {
+            $params['ratings'] = array_filter($ratings, 'is_string');
+        }
+
+        $actors = $query['actors'] ?? null;
+        if (is_array($actors) && count($actors) > 0) {
+            $params['actors'] = array_filter($actors, 'is_string');
+        }
+
+        $sort = $request->queryString('sort');
+        if ($sort !== null && $sort !== '') {
+            $params['sort'] = $sort;
+        }
+
+        $order = $request->queryString('order');
+        if ($order !== null && $order !== '') {
+            $params['order'] = $order;
+        }
+
+        $limit = $request->queryString('limit');
+        if ($limit !== null && is_numeric($limit)) {
+            $params['limit'] = (int) $limit;
+        }
+
+        $offset = $request->queryString('offset');
+        if ($offset !== null && is_numeric($offset)) {
+            $params['offset'] = (int) $offset;
+        }
+
+        return $params;
+    }
+
+    /**
+     * Shapes a raw media item DB row into the media-item.schema.json format.
+     *
+     * @param array<string, mixed> $item Raw hydrated media item
+     * @return array<string, mixed> Media-item shaped response
+     */
+    private function shapeMediaItem(array $item): array
+    {
+        /** @var array<string, mixed> $metadata */
+        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+
+        return [
+            'id' => $item['id'] ?? null,
+            'name' => $item['name'] ?? null,
+            'type' => $item['type'] ?? null,
+            'path' => $item['path'] ?? null,
+            'poster_url' => $metadata['poster_url'] ?? null,
+            'genres' => $metadata['genres'] ?? [],
+            'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
+            'rating' => $metadata['rating'] ?? null,
+            'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime']) ? (int) $metadata['runtime'] : null,
+            'overview' => $metadata['overview'] ?? null,
+            'actors' => $metadata['actors'] ?? [],
+            'director' => $metadata['director'] ?? null,
+            'created_at' => $item['created_at'] ?? null,
+            'updated_at' => $item['updated_at'] ?? null,
+        ];
     }
 
     /**

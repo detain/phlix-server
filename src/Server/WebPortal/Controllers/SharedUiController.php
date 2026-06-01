@@ -6,6 +6,7 @@ namespace Phlix\Server\WebPortal\Controllers;
 
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\WebPortal\ViteAssets;
 
 /**
  * Serves the HTML shell for the shared Vue 3 SPA (`@phlix/ui`) at `/app/*`.
@@ -58,6 +59,20 @@ final class SharedUiController
     {
         unset($request, $params);
 
+        // Validate build exists via ViteAssets manifest check.
+        try {
+            $viteAssets = new ViteAssets($this->publicRoot);
+            $viteAssets->getEntryJsPath();
+        } catch (\RuntimeException) {
+            return (new Response())
+                ->status(503)
+                ->html(
+                    '<h1>503 — Shared UI not built</h1>'
+                    . '<p>The Vue SPA bundle is missing. '
+                    . 'Run <code>cd web-ui &amp;&amp; npm install &amp;&amp; npm run build</code>.</p>'
+                );
+        }
+
         $shellPath = $this->publicRoot . self::SHELL_RELATIVE_PATH;
         $real = realpath($shellPath);
 
@@ -81,6 +96,21 @@ final class SharedUiController
                 ->status(503)
                 ->html('<h1>503 — Shared UI could not be read</h1>');
         }
+
+        // Inject window.__PHLIX__ config
+        $config = [
+            'app' => 'server',
+            // apiBase: empty string = relative URLs (same-origin). Cross-origin would set actual URL.
+            'apiBase' => '',
+            'routerBase' => '/app',
+            'menu' => [],
+            'extraRoutes' => [],
+            'features' => (object) [],
+        ];
+
+        $configScript = '<script>window.__PHLIX__ = '
+            . json_encode($config, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP) . '</script>' . "\n";
+        $html = preg_replace('/<head>/i', "<head>\n" . $configScript, $html, 1) ?? $html;
 
         return (new Response())->html($html);
     }

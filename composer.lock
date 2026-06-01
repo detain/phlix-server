@@ -413,16 +413,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.7.0",
+            "version": "v0.7.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "d2455a5f1b508c63ac68a7f253ce9190575afc18"
+                "reference": "63d269422875ed72499343e758ac5db76b9f94f1"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/d2455a5f1b508c63ac68a7f253ce9190575afc18",
-                "reference": "d2455a5f1b508c63ac68a7f253ce9190575afc18",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/63d269422875ed72499343e758ac5db76b9f94f1",
+                "reference": "63d269422875ed72499343e758ac5db76b9f94f1",
                 "shasum": ""
             },
             "require": {
@@ -468,10 +468,10 @@
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.7.0",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.7.1",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-05-27T13:17:42+00:00"
+            "time": "2026-06-01T12:43:33+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

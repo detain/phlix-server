@@ -80,7 +80,7 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Loading…');
   });
 
-  it('renders all 8 tabs after settings load', async () => {
+  it('renders all 9 tabs after settings load', async () => {
     renderPage([{ status: 200, body: FULL_SETTINGS_RESPONSE }]);
     // Wait for settings to load and tabs to appear
     await waitFor(() => {
@@ -93,6 +93,7 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('tab', { name: 'Trickplay' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Newsletter' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Port Forward' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Scrobblers' })).toBeInTheDocument();
   });
 
   it('renders Transcoding tab fields on load', async () => {

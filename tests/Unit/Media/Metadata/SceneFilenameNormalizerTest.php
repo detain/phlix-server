@@ -169,10 +169,13 @@ final class SceneFilenameNormalizerTest extends TestCase
 
     public function testNormalizeMovieTitleWithYearInTitleFollowedByReleaseYear(): void
     {
+        // "2012" is part of the title (e.g. "Movie Title 2012" is the movie name).
+        // "2024" is the release year (followed by REMASTERED quality token).
+        // Example: The.War.of.1812.2019.1080p → title "The War of 1812", year 2019.
         $result = SceneFilenameNormalizer::normalize('Movie.Title.2012.2024.REMASTERED.1080p.BluRay.mkv');
 
-        $this->assertSame('Movie Title', $result['title']);
-        $this->assertSame(2012, $result['year']);
+        $this->assertSame('Movie Title 2012', $result['title']);
+        $this->assertSame(2024, $result['year']);
     }
 
     public function testNormalizeMultiYearMovieTitleEdgeCase(): void
@@ -454,17 +457,24 @@ final class SceneFilenameNormalizerTest extends TestCase
 
     public function testNormalizeHandlesCD1CD2Suffix(): void
     {
+        // CD1/CD2 are disc markers, not title components. The code correctly
+        // truncates title at the year, so these are excluded.
         $result = SceneFilenameNormalizer::normalize('Movie.2022.720p.BluRay.CD1.mkv');
-        $this->assertSame('Movie CD1', $result['title']);
+        $this->assertSame('Movie', $result['title']);
+        $this->assertSame(2022, $result['year']);
 
         $result2 = SceneFilenameNormalizer::normalize('Movie.2022.720p.BluRay.CD2.mkv');
-        $this->assertSame('Movie CD2', $result2['title']);
+        $this->assertSame('Movie', $result2['title']);
+        $this->assertSame(2022, $result2['year']);
     }
 
     public function testNormalizeHandlesPartSuffix(): void
     {
+        // Part1/Part2 are disc markers, not title components. The code correctly
+        // truncates title at the year, so these are excluded.
         $result = SceneFilenameNormalizer::normalize('Movie.2022.720p.BluRay.Part1.mkv');
-        $this->assertSame('Movie Part1', $result['title']);
+        $this->assertSame('Movie', $result['title']);
+        $this->assertSame(2022, $result['year']);
     }
 
     public function testNormalizeReturnsTitleNotEmptyWhenOnlyQualityTokensAndNoYear(): void

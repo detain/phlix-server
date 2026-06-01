@@ -1,0 +1,25 @@
+{
+    "name": "@phlix/server-web-ui",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Thin Vue 3 + Vite consumer of @phlix/ui, serving the shared Phlix SPA at /app/*",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vue-tsc --noEmit && vite build",
+        "preview": "vite preview",
+        "typecheck": "vue-tsc --noEmit"
+    },
+    "dependencies": {
+        "@phlix/ui": "github:detain/phlix-ui#v0.1.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.30",
+        "@vitejs/plugin-vue": "^5.0.4",
+        "@vue/tsconfig": "^0.5.1",
+        "typescript": "^5.4.3",
+        "vite": "^5.2.6",
+        "vue": "^3.4.0",
+        "vue-tsc": "^2.0.7"
+    }
+}

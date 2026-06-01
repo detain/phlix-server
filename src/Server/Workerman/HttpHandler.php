@@ -22,6 +22,7 @@ use Phlix\Server\WebPortal\Controllers\BookPageController;
 use Phlix\Server\WebPortal\Controllers\MusicPageController;
 use Phlix\Server\WebPortal\Controllers\PhotoPageController;
 use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
+use Phlix\Server\WebPortal\Controllers\SharedUiController;
 use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
 use Phlix\Theming\ThemeMiddleware;
@@ -402,6 +403,9 @@ final class HttpHandler
         if (str_starts_with($path, '/photo')) {
             return $this->dispatchPhoto($request, $path);
         }
+        if ($path === '/app' || str_starts_with($path, '/app/')) {
+            return $this->dispatchSharedUi($request);
+        }
         return (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
     }
 
@@ -460,6 +464,19 @@ final class HttpHandler
         $app = new AdminAppController($this->publicRoot);
         $redirect = $app->gateRedirect($admin->checkAccess($request));
         return $redirect ?? $app->shell($request, []);
+    }
+
+    /**
+     * Serve the shared Vue 3 SPA shell for `/app` + `/app/*` (Phase C).
+     *
+     * Reached after all specific page routes. The SPA has no auth gate here —
+     * it handles authentication itself via `ApiClient` + `tokenStore`.
+     * A missing bundle returns 503 with an actionable message.
+     */
+    private function dispatchSharedUi(Request $request): Response
+    {
+        $app = new \Phlix\Server\WebPortal\Controllers\SharedUiController($this->publicRoot);
+        return $app->shell($request, []);
     }
 
     private function dispatchMusic(Request $request, string $path): Response

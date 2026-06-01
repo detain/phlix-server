@@ -53,11 +53,14 @@ final class AdminSettingsControllerTest extends TestCase
             'newsletter.enabled'                        => 'bool',
             'newsletter.send_hour'                      => 'int',
             'port-forward.port_forwarding.upnp_enabled' => 'bool',
+            'trakt.client_id'                           => 'string',
+            'trakt.client_secret'                       => 'string',
+            'trakt.redirect_uri'                        => 'string',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(15, $actual);
+        $this->assertCount(18, $actual);
         $this->assertEquals($expected, $actual);
     }
 

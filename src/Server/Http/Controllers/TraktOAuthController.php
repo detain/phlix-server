@@ -10,6 +10,7 @@ use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
 use Phlix\Plugins\Scrobbler\Trakt\TraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktSettings;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Psr\Log\LoggerInterface;
@@ -30,6 +31,19 @@ final class TraktOAuthController
     private ?LoggerInterface $logger;
     private TraktOAuthStateStore $stateStore;
     private ?string $configFile;
+    private ?SettingsRepository $settings;
+
+    /**
+     * Maps the dotted server-settings keys to the local config keys they
+     * override. {@see self::loadConfig()} overlays a DB value on top of the
+     * env/file value whenever an operator has saved it in the admin Settings
+     * page (DB-set wins over environment, which wins over the file literal).
+     */
+    private const SETTING_KEY_MAP = [
+        'trakt.client_id'     => 'client_id',
+        'trakt.client_secret' => 'client_secret',
+        'trakt.redirect_uri'  => 'redirect_uri',
+    ];
 
     /**
      * @param LoggerInterface|null $logger Optional PSR-3 logger
@@ -37,18 +51,23 @@ final class TraktOAuthController
      *     per-request CSRF `state` + PKCE `code_verifier`. Defaults to a
      *     `$_SESSION`-backed implementation matching prior behaviour.
      * @param string|null $configFile Absolute path to the Trakt operator-creds
-     *     config file. Defaults to {@see self::defaultConfigPath()} (the real
+     *     config file. Defaults to {@see self::configPath()} (the real
      *     config/scrobblers/trakt.php); overridable so the config-loading and
      *     "not configured" paths are unit-testable without a project-root file.
+     * @param SettingsRepository|null $settings When supplied, operator
+     *     credentials saved in the admin Settings page (server_settings table)
+     *     take precedence over the environment/file config.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
         ?TraktOAuthStateStore $stateStore = null,
         ?string $configFile = null,
+        ?SettingsRepository $settings = null,
     ) {
         $this->logger = $logger;
         $this->stateStore = $stateStore ?? new SessionTraktOAuthStateStore();
         $this->configFile = $configFile;
+        $this->settings = $settings;
     }
 
     /**
@@ -216,14 +235,43 @@ final class TraktOAuthController
     {
         $configFile = $this->configPath();
 
+        $config = [];
         if (is_file($configFile)) {
-            /** @var array<string, mixed> $config */
-            $config = include $configFile;
-
-            return is_array($config) ? $config : [];
+            /** @var mixed $loaded */
+            $loaded = include $configFile;
+            if (is_array($loaded)) {
+                /** @var array<string, mixed> $config */
+                $config = $loaded;
+            }
         }
 
-        return [];
+        return $this->applySettingsOverrides($config);
+    }
+
+    /**
+     * Overlay operator credentials saved in the admin Settings page on top of
+     * the env/file config. A DB value wins only when it is a non-empty string,
+     * so an unset (or blank) setting falls back to the environment/file value.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function applySettingsOverrides(array $config): array
+    {
+        if ($this->settings === null) {
+            return $config;
+        }
+
+        foreach (self::SETTING_KEY_MAP as $settingKey => $configKey) {
+            $override = $this->settings->getOverride($settingKey);
+            $value = $override['value'] ?? null;
+            if (is_string($value) && $value !== '') {
+                $config[$configKey] = $value;
+            }
+        }
+
+        return $config;
     }
 
     /**
@@ -256,7 +304,8 @@ final class TraktOAuthController
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trakt.tv not configured — Phlix</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6; color: #1a1a1a; }
+  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 4rem auto;
+         padding: 0 1.5rem; line-height: 1.6; color: #1a1a1a; }
   h1 { font-size: 1.5rem; }
   code { background: #f3f3f3; padding: 0.1rem 0.35rem; border-radius: 4px; }
   ol { padding-left: 1.25rem; }
@@ -272,7 +321,9 @@ final class TraktOAuthController
   redirect URI.
 </p>
 <ol>
-  <li>Create an application at <a href="https://trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer">trakt.tv/oauth/applications</a>.</li>
+  <li>Create an application at
+    <a href="https://trakt.tv/oauth/applications" target="_blank" rel="noopener noreferrer"
+    >trakt.tv/oauth/applications</a>.</li>
   <li>Set its <em>Redirect URI</em> to your server's <code>/api/v1/oauth/trakt/callback</code> URL.</li>
   <li>
     Supply the resulting credentials either by setting the

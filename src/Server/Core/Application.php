@@ -1117,6 +1117,10 @@ class Application
         // Start backup timer if enabled
         $this->startBackupTimerIfEnabled();
 
+        // Start the periodic storage-snapshot timer so the admin dashboard's
+        // Storage card has data (nothing else writes stats_storage).
+        $this->startStorageSnapshotTimer();
+
         $request = Request::fromGlobals();
 
         // Build the final handler that dispatches to the router
@@ -1504,6 +1508,127 @@ class Application
                 }
             }
         });
+    }
+
+    /**
+     * Interval (seconds) between automatic storage snapshots.
+     *
+     * Storage totals change slowly (only as the library grows), so a 6-hour
+     * cadence keeps the dashboard's Storage card fresh without churn.
+     */
+    private const STORAGE_SNAPSHOT_INTERVAL = 21600;
+
+    /**
+     * Start the periodic storage-snapshot timer.
+     *
+     * The admin dashboard's Storage card reads the latest row per media type
+     * from `stats_storage`; nothing else populates that table, so without this
+     * timer the card is permanently empty. Records one snapshot immediately at
+     * worker start and then every {@see self::STORAGE_SNAPSHOT_INTERVAL} seconds.
+     *
+     * @return void
+     *
+     * @since 1.8
+     */
+    private function startStorageSnapshotTimer(): void
+    {
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
+
+        try {
+            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $collector = new \Phlix\Stats\StatsCollector($db);
+
+            // Initial snapshot so the dashboard has data without waiting a cycle.
+            $this->recordStorageSnapshots($collector, $db, $logger);
+
+            \Workerman\Timer::add(
+                self::STORAGE_SNAPSHOT_INTERVAL,
+                function () use ($collector, $db, $logger): void {
+                    $this->recordStorageSnapshots($collector, $db, $logger);
+                },
+            );
+        } catch (\Throwable $e) {
+            $logger->error('Failed to start storage-snapshot timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Compute and record a storage snapshot per dashboard media type.
+     *
+     * Aggregates `media_items` by type, summing the `file_size` carried in each
+     * row's `metadata_json`, and folds the granular item types into the four
+     * buckets the dashboard (and `stats_storage`) understands. Failures are
+     * logged and swallowed so a snapshot run can never take down the worker.
+     *
+     * @param \Phlix\Stats\StatsCollector $collector Collector to write through.
+     * @param \Workerman\MySQL\Connection $db        Live MySQL connection.
+     * @param \Phlix\Common\Logger\StructuredLogger $logger Application logger.
+     *
+     * @return void
+     */
+    private function recordStorageSnapshots(
+        \Phlix\Stats\StatsCollector $collector,
+        \Workerman\MySQL\Connection $db,
+        \Phlix\Common\Logger\StructuredLogger $logger
+    ): void {
+        try {
+            /** @var array<array<string, mixed>> $rows */
+            $rows = $db->query(
+                "SELECT type,
+                        COUNT(*) AS item_count,
+                        COALESCE(
+                            SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.file_size')) AS UNSIGNED)),
+                            0
+                        ) AS total_bytes
+                 FROM media_items
+                 GROUP BY type"
+            );
+
+            // Fold the granular media_items.type ENUM into the four buckets the
+            // dashboard / stats_storage ENUM supports. Types with no bucket
+            // (e.g. book, video) are intentionally dropped.
+            $buckets = [
+                'movie' => ['count' => 0, 'bytes' => 0],
+                'series' => ['count' => 0, 'bytes' => 0],
+                'music' => ['count' => 0, 'bytes' => 0],
+                'photo' => ['count' => 0, 'bytes' => 0],
+            ];
+            $map = [
+                'movie' => 'movie',
+                'series' => 'series', 'season' => 'series', 'episode' => 'series',
+                'music' => 'music', 'album' => 'music', 'artist' => 'music', 'audio' => 'music',
+                'photo' => 'photo',
+            ];
+
+            foreach ($rows as $row) {
+                $type = is_string($row['type'] ?? null) ? $row['type'] : '';
+                $bucket = $map[$type] ?? null;
+                if ($bucket === null) {
+                    continue;
+                }
+                $count = is_numeric($row['item_count'] ?? null) ? (int) $row['item_count'] : 0;
+                $bytes = is_numeric($row['total_bytes'] ?? null) ? (int) $row['total_bytes'] : 0;
+                $buckets[$bucket]['count'] += $count;
+                $buckets[$bucket]['bytes'] += $bytes;
+            }
+
+            foreach ($buckets as $mediaType => $totals) {
+                $collector->recordStorageSnapshot($mediaType, $totals['count'], $totals['bytes']);
+            }
+
+            $logger->info('Storage snapshot recorded', [
+                'movie' => $buckets['movie']['count'],
+                'series' => $buckets['series']['count'],
+                'music' => $buckets['music']['count'],
+                'photo' => $buckets['photo']['count'],
+            ]);
+        } catch (\Throwable $e) {
+            $logger->error('Failed to record storage snapshot', [
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

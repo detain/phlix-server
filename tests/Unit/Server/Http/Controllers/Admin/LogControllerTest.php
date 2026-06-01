@@ -104,4 +104,63 @@ final class LogControllerTest extends TestCase
         $resp = $controller->tail($this->req(['file' => 'nope.log']), []);
         $this->assertSame(404, $resp->statusCode);
     }
+
+    public function testTailAllMergesEveryLogFileTaggedBySource(): void
+    {
+        $controller = new LogController($this->dir);
+        $body = json_decode($controller->tailAll($this->req([]), [])->body, true);
+
+        // Lists every .log file that was merged (notes.txt excluded).
+        sort($body['files']);
+        $this->assertSame(['app.log', 'error.log'], $body['files']);
+
+        // Every source line appears, each prefixed with its file name.
+        $joined = implode("\n", $body['lines']);
+        $this->assertStringContainsString('app.log', $joined);
+        $this->assertStringContainsString('error.log', $joined);
+        foreach (['l1', 'l5', 'e1', 'e2'] as $needle) {
+            $this->assertStringContainsString($needle, $joined);
+        }
+        // app.log (5) + error.log (2) = 7 merged lines.
+        $this->assertCount(7, $body['lines']);
+        $this->assertFalse($body['truncated']);
+        // Never leaks the non-.log file.
+        $this->assertStringNotContainsString('secret', $joined);
+    }
+
+    public function testTailAllOrdersByLeadingTimestampAcrossFiles(): void
+    {
+        // Two files whose timestamped lines interleave chronologically.
+        file_put_contents(
+            $this->dir . '/a.log',
+            "[2026-05-15T10:00:00.000000-04:00] a.INFO: first\n"
+            . "[2026-05-15T10:00:30.000000-04:00] a.INFO: third\n",
+        );
+        file_put_contents(
+            $this->dir . '/b.log',
+            "[2026-05-15T10:00:15.000000-04:00] b.INFO: second\n"
+            . "[2026-05-15T10:00:45.000000-04:00] b.INFO: fourth\n",
+        );
+
+        $controller = new LogController($this->dir);
+        $body = json_decode($controller->tailAll($this->req([]), [])->body, true);
+        $joined = implode("\n", $body['lines']);
+
+        $this->assertLessThan(strpos($joined, 'second'), strpos($joined, 'first'));
+        $this->assertLessThan(strpos($joined, 'third'), strpos($joined, 'second'));
+        $this->assertLessThan(strpos($joined, 'fourth'), strpos($joined, 'third'));
+
+        @unlink($this->dir . '/a.log');
+        @unlink($this->dir . '/b.log');
+    }
+
+    public function testTailAllRespectsLineCap(): void
+    {
+        $controller = new LogController($this->dir);
+        // app.log has 5, error.log 2 → 7 total; cap at 3.
+        $body = json_decode($controller->tailAll($this->req(['lines' => '3']), [])->body, true);
+
+        $this->assertCount(3, $body['lines']);
+        $this->assertTrue($body['truncated']);
+    }
 }

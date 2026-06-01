@@ -27,6 +27,7 @@ use Phlix\Playlists\SmartPlaylistController;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRefreshHandler;
 use Phlix\Playlists\SmartPlaylistRepository;
+use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -80,7 +81,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
             : ((string)(getenv('TMDB_API_KEY') ?: ''));
 
         $builder->addDefinitions([
-            ItemRepository::class => autowire(),
+            // `statsCollector` is named explicitly because PHP-DI skips optional
+            // ctor params with defaults during autowiring; without it item
+            // add/remove changes never reach stats_library_changes (the admin
+            // dashboard activity feed).
+            ItemRepository::class => autowire()
+                ->constructorParameter('statsCollector', get(StatsCollector::class)),
 
             TmdbProvider::class => factory(static function (ContainerInterface $c) use ($tmdbApiKey): TmdbProvider {
                 // Prefer the admin-managed server setting (set via the admin

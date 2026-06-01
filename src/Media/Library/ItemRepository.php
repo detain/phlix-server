@@ -901,6 +901,232 @@ class ItemRepository
     }
 
     /**
+     * Queries media items with flexible filtering, sorting, and pagination.
+     *
+     * Honors the library-query schema params over metadata_json, building on the
+     * existing getByAllowedGenres() (JSON_CONTAINS) and search() (FULLTEXT/LIKE)
+     * patterns. All filter conditions are AND-combined; array-valued filters
+     * (genres, ratings, actors) use OR logic within the array.
+     *
+     * @param array<string, mixed> $params Query parameters:
+     *   - search (string|null): Full-text or fuzzy name search
+     *   - genres (string[]|null): Filter to items with any of these genres
+     *   - yearFrom (int|null): Minimum release year (inclusive)
+     *   - yearTo (int|null): Maximum release year (inclusive)
+     *   - ratings (string[]|null): Filter to items with any of these ratings
+     *   - actors (string[]|null): Filter to items featuring any of these actors
+     *   - sort (string): Sort field — name|year|rating|date_added|runtime (default: name)
+     *   - order (string): Sort direction — asc|desc (default: asc)
+     *   - limit (int): Max items to return 1-100 (default: 50)
+     *   - offset (int): Items to skip for pagination (default: 0)
+     * @param string|null $libraryId Optional library ID to scope results to one library
+     *
+     * @return array{items: list<array<string, mixed>>, total: int, limit: int, offset: int}
+     *
+     * @since 0.13.0
+     */
+    public function query(array $params, ?string $libraryId = null): array
+    {
+        $wheres = ['1=1'];
+        $bindings = [];
+
+        if ($libraryId !== null) {
+            $wheres[] = 'library_id = ?';
+            $bindings[] = $libraryId;
+        }
+
+        $search = isset($params['search']) && is_string($params['search']) ? $params['search'] : null;
+        $genres = isset($params['genres']) && is_array($params['genres']) ? $params['genres'] : null;
+        $yearFrom = isset($params['yearFrom']) && is_numeric($params['yearFrom']) ? (int) $params['yearFrom'] : null;
+        $yearTo = isset($params['yearTo']) && is_numeric($params['yearTo']) ? (int) $params['yearTo'] : null;
+        $ratings = isset($params['ratings']) && is_array($params['ratings']) ? $params['ratings'] : null;
+        $actors = isset($params['actors']) && is_array($params['actors']) ? $params['actors'] : null;
+        $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
+        $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
+        $sort = $this->normalizeSortField($sortRaw);
+        $order = $this->normalizeSortOrder($orderRaw);
+        $limit = $this->normalizeLimit($params['limit'] ?? 50);
+        $offset = $this->normalizeOffset($params['offset'] ?? 0);
+
+        if ($search !== null && $search !== '') {
+            $searchBindings = $this->buildSearchBindings($search);
+            $wheres[] = $searchBindings['where'];
+            $bindings = array_merge($bindings, $searchBindings['params']);
+        }
+
+        if ($genres !== null && count($genres) > 0) {
+            $genreWheres = [];
+            foreach ($genres as $genre) {
+                if (is_string($genre) && $genre !== '') {
+                    $genreWheres[] = 'JSON_CONTAINS(metadata_json, ?) > 0';
+                    $bindings[] = json_encode($genre);
+                }
+            }
+            if (count($genreWheres) > 0) {
+                $wheres[] = '(' . implode(' OR ', $genreWheres) . ')';
+            }
+        }
+
+        if ($yearFrom !== null) {
+            $wheres[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, "$.year")) AS SIGNED) >= ?';
+            $bindings[] = $yearFrom;
+        }
+
+        if ($yearTo !== null) {
+            $wheres[] = 'CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, "$.year")) AS SIGNED) <= ?';
+            $bindings[] = $yearTo;
+        }
+
+        if ($ratings !== null && count($ratings) > 0) {
+            $ratingPlaceholders = implode(',', array_fill(0, count($ratings), '?'));
+            $wheres[] = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) IN ({$ratingPlaceholders})";
+            $bindings = array_merge($bindings, $ratings);
+        }
+
+        if ($actors !== null && count($actors) > 0) {
+            $actorWheres = [];
+            foreach ($actors as $actor) {
+                if (is_string($actor) && $actor !== '') {
+                    $escapedActor = addcslashes($actor, '%_');
+                    $actorWheres[] = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.actors')) LIKE ?";
+                    $bindings[] = '%' . $escapedActor . '%';
+                }
+            }
+            if (count($actorWheres) > 0) {
+                $wheres[] = '(' . implode(' OR ', $actorWheres) . ')';
+            }
+        }
+
+        $orderClause = $this->buildOrderClause($sort, $order);
+
+        $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . implode(' AND ', $wheres);
+        $countResult = $this->db->query($countSql, $bindings);
+        $total = $this->extractCount($countResult);
+
+        $selectSql = 'SELECT * FROM media_items WHERE ' . implode(' AND ', $wheres) . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+        $fetchBindings = array_merge($bindings, [$limit, $offset]);
+        $results = $this->db->query($selectSql, $fetchBindings);
+
+        return [
+            'items' => $this->hydrateRows($results),
+            'total' => $total,
+            'limit' => $limit,
+            'offset' => $offset,
+        ];
+    }
+
+    /**
+     * Normalizes the sort field to a safe column name.
+     *
+     * @param string $sort Raw sort field from query param
+     * @return string Safe column name (always one of: name, year, rating, date_added, runtime)
+     */
+    private function normalizeSortField(string $sort): string
+    {
+        return match ($sort) {
+            'year' => 'year_sort',
+            'rating' => 'rating_sort',
+            'date_added' => 'created_at',
+            'runtime' => 'runtime_sort',
+            default => 'name',
+        };
+    }
+
+    /**
+     * Normalizes the sort order to 'asc' or 'desc'.
+     *
+     * @param string $order Raw order param
+     * @return string Normalized order
+     */
+    private function normalizeSortOrder(string $order): string
+    {
+        return strtolower($order) === 'desc' ? 'desc' : 'asc';
+    }
+
+    /**
+     * Normalizes the limit to an integer between 1 and 100.
+     *
+     * @param mixed $limit Raw limit value
+     * @return int Normalized limit
+     */
+    private function normalizeLimit(mixed $limit): int
+    {
+        $l = is_numeric($limit) ? (int) $limit : 50;
+        if ($l < 1) {
+            return 1;
+        }
+        if ($l > 100) {
+            return 100;
+        }
+        return $l;
+    }
+
+    /**
+     * Normalizes the offset to a non-negative integer.
+     *
+     * @param mixed $offset Raw offset value
+     * @return int Normalized offset
+     */
+    private function normalizeOffset(mixed $offset): int
+    {
+        $o = is_numeric($offset) ? (int) $offset : 0;
+        return $o < 0 ? 0 : $o;
+    }
+
+    /**
+     * Builds the WHERE clause and bindings for a search parameter.
+     *
+     * Uses MySQL FULLTEXT search with boolean mode, falling back to a LIKE-based
+     * scan when FULLTEXT raises a syntax error (e.g. operator-only queries).
+     *
+     * @param string $search Search query
+     * @return array{where: string, params: array<string>}
+     */
+    private function buildSearchBindings(string $search): array
+    {
+        $escapedSearch = addcslashes($search, '%_');
+
+        return [
+            'where' => '(MATCH(name) AGAINST(? IN BOOLEAN MODE) OR name LIKE ?)',
+            'params' => [$search, '%' . $escapedSearch . '%'],
+        ];
+    }
+
+    /**
+     * Builds the ORDER BY clause from a normalized sort field and order.
+     *
+     * Uses CASE expressions to map string ratings to numeric sort order, matching
+     * the existing RATING_ORDER mapping used by getByAllowedRatings().
+     *
+     * @param string $sort Normalized sort field
+     * @param string $order Sort direction
+     * @return string Safe ORDER BY clause
+     */
+    private function buildOrderClause(string $sort, string $order): string
+    {
+        $direction = $order === 'desc' ? 'DESC' : 'ASC';
+
+        if ($sort === 'year_sort') {
+            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.year')) AS SIGNED) {$direction}, name {$direction}";
+        }
+
+        if ($sort === 'rating_sort') {
+            $ratingCases = [];
+            foreach (self::RATING_ORDER as $rating => $orderVal) {
+                $ratingCases[] = "WHEN JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) = '{$rating}' THEN {$orderVal}";
+            }
+            $ratingOrderSql = 'CASE ' . implode(' ', $ratingCases) . ' ELSE 999 END';
+            return "{$ratingOrderSql} {$direction}, name {$direction}";
+        }
+
+        if ($sort === 'runtime_sort') {
+            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.runtime')) AS SIGNED) {$direction}, name {$direction}";
+        }
+
+        return "{$sort} {$direction}";
+    }
+
+    /**
      * Extracts a `count` aggregate from a `SELECT COUNT(*) as count` result set.
      *
      * @param mixed $results Raw result set from {@see Connection::query()}.

@@ -539,4 +539,179 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $repo->findShowsWithUnfingerprintedEpisodes(10);
     }
+
+    public function testQueryReturnsItemsAndPagination(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnOnConsecutiveCalls(
+            [['count' => 2]],
+            [
+                [
+                    'id' => 'movie-1',
+                    'name' => 'Test Movie',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'path' => '/movies/test.mkv',
+                    'metadata_json' => '{"year": 2020, "poster_url": "http://example.com/poster.jpg"}',
+                ],
+                [
+                    'id' => 'movie-2',
+                    'name' => 'Another Movie',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'path' => '/movies/another.mkv',
+                    'metadata_json' => '{"year": 2021, "poster_url": "http://example.com/poster2.jpg"}',
+                ],
+            ]
+        );
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['limit' => 50, 'offset' => 0]);
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('items', $result);
+        $this->assertArrayHasKey('total', $result);
+        $this->assertArrayHasKey('limit', $result);
+        $this->assertArrayHasKey('offset', $result);
+        $this->assertEquals(2, $result['total']);
+        $this->assertEquals(50, $result['limit']);
+        $this->assertEquals(0, $result['offset']);
+        $this->assertCount(2, $result['items']);
+    }
+
+    public function testQueryWithLibraryIdFiltersCorrectly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains('library_id = ?'),
+                $this->callback(function ($params) {
+                    return is_array($params) && in_array('lib-specific', $params, true);
+                })
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['limit' => 50], 'lib-specific');
+    }
+
+    public function testQueryWithSearchAppliesFullTextOrLike(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains('MATCH(name) AGAINST(? IN BOOLEAN MODE) OR name LIKE ?')
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 1]], [['id' => 'movie-1', 'name' => 'Batman', 'type' => 'movie', 'library_id' => 'lib-1', 'path' => '/m/batman.mkv', 'metadata_json' => '{}']]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['search' => 'batman']);
+
+        $this->assertCount(1, $result['items']);
+        $this->assertEquals('Batman', $result['items'][0]['name']);
+    }
+
+    public function testQueryWithYearRangeFiltersCorrectly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains('CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, "$.year")) AS SIGNED) >= ?'),
+                $this->callback(function ($params) {
+                    return is_array($params) && in_array(2010, $params, true) && in_array(2020, $params, true);
+                })
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['yearFrom' => 2010, 'yearTo' => 2020]);
+    }
+
+    public function testQueryWithRatingsFilterAppliesCorrectly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['ratings' => ['PG', 'R']]);
+
+        $this->assertIsArray($result);
+        $this->assertEquals(0, $result['total']);
+    }
+
+    public function testQueryWithGenresFilterAppliesCorrectly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains('JSON_CONTAINS(metadata_json, ?) > 0')
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['genres' => ['Action', 'Drama']]);
+    }
+
+    public function testQueryWithActorsFilterAppliesCorrectly(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains("JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.actors')) LIKE ?")
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['actors' => ['Tom Hanks', 'Morgan Freeman']]);
+    }
+
+    public function testQueryNormalizesLimit(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['count' => 0]]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['limit' => 200]);
+
+        $this->assertEquals(100, $result['limit']);
+    }
+
+    public function testQueryNormalizesOffset(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['count' => 0]]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['offset' => -5]);
+
+        $this->assertEquals(0, $result['offset']);
+    }
+
+    public function testQueryHydratesMetadata(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnOnConsecutiveCalls(
+            [['count' => 1]],
+            [[
+                'id' => 'movie-1',
+                'name' => 'Test Movie',
+                'type' => 'movie',
+                'library_id' => 'lib-1',
+                'path' => '/movies/test.mkv',
+                'metadata_json' => '{"year": 2020, "poster_url": "http://example.com/poster.jpg", "genres": ["Action"], "rating": "PG-13"}',
+            ]]
+        );
+
+        $repo = new ItemRepository($db);
+        $result = $repo->query(['limit' => 50]);
+
+        $this->assertEquals(['year' => 2020, 'poster_url' => 'http://example.com/poster.jpg', 'genres' => ['Action'], 'rating' => 'PG-13'], $result['items'][0]['metadata']);
+    }
 }

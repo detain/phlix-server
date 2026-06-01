@@ -10,6 +10,7 @@ use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\Metadata\SceneFilenameNormalizer;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
@@ -366,17 +367,19 @@ class MediaScanner
     {
         $metadata = [];
 
-        // Remove extension
         $name = pathinfo($filename, PATHINFO_FILENAME);
+        $normalized = SceneFilenameNormalizer::normalize($name);
 
-        // Movie pattern: Movie Name (Year) or Movie Name [Year]
-        if ($type === 'movie') {
-            if (preg_match('/(.+?)\s*[\(\[]\s*(\d{4})\s*[\)\]]/', $name, $matches)) {
-                $metadata['name'] = trim($matches[1]);
-                $metadata['year'] = $matches[2];
-            } else {
-                $metadata['name'] = $name;
-            }
+        $metadata['raw_filename'] = $name;
+
+        if ($normalized['title'] !== '') {
+            $metadata['name'] = $normalized['title'];
+        } else {
+            $metadata['name'] = $name;
+        }
+
+        if ($type === 'movie' && $normalized['year'] !== null) {
+            $metadata['year'] = (string) $normalized['year'];
         }
 
         // Series pattern: Series S01E01 or Series - S01E01 - Episode Title

@@ -37,6 +37,7 @@ const TABS = [
   { id: 'trickplay', label: 'Trickplay' },
   { id: 'newsletter', label: 'Newsletter' },
   { id: 'port-forward', label: 'Port Forward' },
+  { id: 'scrobblers', label: 'Scrobblers' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -51,6 +52,7 @@ const TAB_KEYS: Record<TabId, string[]> = {
   trickplay: ['trickplay.enabled', 'trickplay.interval_seconds'],
   newsletter: ['newsletter.enabled', 'newsletter.send_hour'],
   'port-forward': ['port-forward.port_forwarding.upnp_enabled'],
+  scrobblers: ['trakt.client_id', 'trakt.client_secret', 'trakt.redirect_uri'],
 };
 
 /** Constraints for number fields (min/max from schema). */
@@ -64,17 +66,26 @@ const NUMERIC_CONSTRAINTS: Record<string, { min?: number; max?: number }> = {
 };
 
 /** Fields that should render as password type. */
-const PASSWORD_FIELDS = new Set(['tmdb.api_key']);
+const PASSWORD_FIELDS = new Set(['tmdb.api_key', 'trakt.client_secret']);
 
 /** Explicit, unambiguous labels for keys whose derived name is unclear. */
 const FIELD_LABELS: Record<string, string> = {
   'tmdb.api_key': 'TMDB API Key',
+  'trakt.client_id': 'Trakt Client ID',
+  'trakt.client_secret': 'Trakt Client Secret',
+  'trakt.redirect_uri': 'Trakt Redirect URI',
 };
 
 /** Inline help shown under a field. */
 const FIELD_HELP: Record<string, string> = {
   'tmdb.api_key':
     'Your TMDB (The Movie Database) API key — get one free at themoviedb.org → Settings → API (v3 auth). Used to fetch movie & TV metadata, posters, and external IDs.',
+  'trakt.client_id':
+    'Register an application at trakt.tv/oauth/applications to get a client ID and secret. Required before users can connect their Trakt account. Saving here overrides the TRAKT_CLIENT_ID environment variable.',
+  'trakt.client_secret':
+    'The client secret paired with your Trakt client ID. Overrides the TRAKT_CLIENT_SECRET environment variable.',
+  'trakt.redirect_uri':
+    "Must exactly match the redirect URI registered in your Trakt app — this server's /api/v1/oauth/trakt/callback URL.",
 };
 
 function getDisplayName(key: string): string {

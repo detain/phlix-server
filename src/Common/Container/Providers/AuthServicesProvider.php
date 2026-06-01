@@ -18,6 +18,7 @@ use Phlix\Auth\WebAuthn\WebAuthnSettings;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\WebAuthnController;
+use Phlix\Stats\StatsCollector;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -84,10 +85,16 @@ final class AuthServicesProvider implements ServiceProviderInterface
 
             AuthProviderController::class => autowire(),
 
+            // `statsCollector` is wired so successful logins/logouts land in
+            // stats_user_activity (the admin dashboard activity feed). PHP-DI
+            // skips optional ctor params with defaults during autowiring, so it
+            // must be named explicitly — without this it stays null and no
+            // activity is recorded.
             AuthManager::class => autowire()
                 ->constructorParameter('logger', get('logger.auth'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
-                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class)),
+                ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
+                ->constructorParameter('statsCollector', get(StatsCollector::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

@@ -12,6 +12,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Stats\StatsCollector;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -68,6 +69,15 @@ class AuthManager
     private ?ProviderManager $providerManager;
 
     /**
+     * Optional stats collector. When wired, successful logins and logouts are
+     * recorded into stats_user_activity, which feeds the admin dashboard's
+     * activity feed. Null in unit tests / legacy callers (recording no-ops).
+     *
+     * @var StatsCollector|null
+     */
+    private ?StatsCollector $statsCollector;
+
+    /**
      * Create a new AuthManager instance.
      *
      * @param UserRepository $userRepository User data access repository
@@ -82,6 +92,9 @@ class AuthManager
      *                                       the matching lifecycle methods.
      * @param Connection|null $db Optional database connection for transactions.
      * @param ProviderManager|null $providerManager Optional bridge to external providers.
+     * @param StatsCollector|null $statsCollector Optional stats collector; when
+     *                                       supplied, successful logins/logouts
+     *                                       are recorded for the admin dashboard.
      *
      * @example
      * ```php
@@ -99,7 +112,8 @@ class AuthManager
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
         ?Connection $db = null,
-        ?ProviderManager $providerManager = null
+        ?ProviderManager $providerManager = null,
+        ?StatsCollector $statsCollector = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -108,6 +122,7 @@ class AuthManager
         $this->eventDispatcher = $eventDispatcher;
         $this->db = $db;
         $this->providerManager = $providerManager;
+        $this->statsCollector = $statsCollector;
     }
 
     /**
@@ -150,6 +165,31 @@ class AuthManager
     {
         $ip = $_SERVER['REMOTE_ADDR'] ?? null;
         return is_string($ip) ? $ip : '127.0.0.1';
+    }
+
+    /**
+     * Record a user-activity stat (login/logout) for the admin dashboard.
+     *
+     * No-ops when no {@see StatsCollector} is wired. Any failure is logged and
+     * swallowed so that statistics collection can never break authentication.
+     *
+     * @param string      $userId       UUID of the user.
+     * @param string      $activityType 'login' or 'logout'.
+     * @param string|null $ipAddress    Client IP when known.
+     */
+    private function recordActivity(string $userId, string $activityType, ?string $ipAddress): void
+    {
+        if ($this->statsCollector === null || $userId === '') {
+            return;
+        }
+        try {
+            $this->statsCollector->recordUserActivity($userId, $activityType, $ipAddress);
+        } catch (Throwable $e) {
+            $this->logger->warning('Failed to record user activity stat', [
+                'activity_type' => $activityType,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -377,6 +417,8 @@ class AuthManager
 
         $this->logger->info('User logged in', ['user_id' => $userId, 'device_id' => $deviceId]);
 
+        $this->recordActivity($userId, 'login', $clientIp);
+
         $this->dispatchUserLoggedIn($userId, $deviceId);
 
         return $this->createAuthResponse($userId);
@@ -445,6 +487,8 @@ class AuthManager
             'user_id' => $userId,
             'device_id' => $deviceId,
         ]);
+
+        $this->recordActivity($userId, 'login', $this->getClientIp());
 
         $this->dispatchUserLoggedIn($userId, $deviceId);
 
@@ -630,6 +674,7 @@ class AuthManager
             'session_id' => $sessionId,
             'reason' => $reason,
         ]);
+        $this->recordActivity($userId, 'logout', $this->getClientIp());
         $this->dispatchUserLoggedOut($userId, $sessionId, $reason);
     }
 

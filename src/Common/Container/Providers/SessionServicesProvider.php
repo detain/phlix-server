@@ -8,6 +8,7 @@ use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
+use Phlix\Stats\StatsCollector;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
 use function DI\autowire;
@@ -40,9 +41,15 @@ final class SessionServicesProvider implements ServiceProviderInterface
             SessionManager::class => autowire()
                 ->constructorParameter('logger', get('logger.session')),
 
+            // `statsCollector` is wired so playback start/stop events land in
+            // stats_playback_events — the source the admin dashboard's Top
+            // Users / Top Media / activity widgets read from. Without it the
+            // controller silently no-ops its recording (the ctor param is
+            // optional) and those widgets stay empty.
             PlaybackController::class => autowire()
                 ->constructorParameter('logger', get('logger.session'))
-                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
+                ->constructorParameter('statsCollector', get(StatsCollector::class)),
         ]);
     }
 }

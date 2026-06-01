@@ -16,6 +16,9 @@
 -- Idempotent: re-running ADD COLUMN raises "Duplicate column name", which the
 -- migration runner downgrades to a note (see src/Common/Database/MigrationRunner.php).
 
+-- NOTE: keep this statement free of semicolons inside string literals. The
+-- migration runner strips comments then splits on `;` (see MigrationRunner::
+-- splitStatements), so a `;` inside the COMMENT text would shred the ALTER.
 ALTER TABLE media_items
     ADD COLUMN metadata_refreshed_at DATETIME NULL DEFAULT NULL
-        COMMENT 'When LibraryMetadataMatcher last refreshed this item; NULL = never matched';
+        COMMENT 'When LibraryMetadataMatcher last refreshed this item, NULL means never matched';

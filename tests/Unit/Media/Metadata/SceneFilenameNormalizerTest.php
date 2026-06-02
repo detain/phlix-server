@@ -337,12 +337,15 @@ final class SceneFilenameNormalizerTest extends TestCase
         $this->assertSame('', $result['raw']);
     }
 
-    public function testNormalizeSingleYearOnlyReturnsEmptyTitle(): void
+    public function testNormalizeBareYearNameKeepsNumericTitle(): void
     {
+        // A name that is ONLY a 4-digit year (a film literally titled "2022") must keep
+        // the numeric title — the old behavior stripped it to an empty title that then
+        // failed lookup (phlix_ui_missing.md #4).
         $result = SceneFilenameNormalizer::normalize('2022.mp4');
 
-        $this->assertSame('', $result['title']);
-        $this->assertSame(2022, $result['year']);
+        $this->assertSame('2022', $result['title']);
+        $this->assertNull($result['year']);
     }
 
     public function testNormalizeYearOnlyFollowedByQuality(): void
@@ -495,5 +498,43 @@ final class SceneFilenameNormalizerTest extends TestCase
     {
         $result = SceneFilenameNormalizer::normalize('VP9.Movie.2022.1080p.WEBRip.mkv');
         $this->assertSame('VP9 Movie', $result['title']);
+    }
+
+    // --- gap-report fixes (phlix_ui_missing.md #4) ---------------------------
+
+    /** A bracketed (YYYY) outside 1900–2099 must NOT be taken as the year. */
+    public function testNormalizeRejectsOutOfRangeBracketedYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Avatar (1899).mkv');
+        $this->assertSame('Avatar', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** A plausible bracketed (YYYY) is still extracted as the year. */
+    public function testNormalizeAcceptsInRangeBracketedYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Avatar (2009).mkv');
+        $this->assertSame('Avatar', $result['title']);
+        $this->assertSame(2009, $result['year']);
+    }
+
+    /** A title that IS a 4-digit year (e.g. "1917") keeps the title, not stripped to ''. */
+    public function testNormalizeKeepsNumericTitleWhenItIsTheWholeName(): void
+    {
+        foreach (['1917', '2012'] as $name) {
+            $result = SceneFilenameNormalizer::normalize("{$name}.mkv");
+            $this->assertSame($name, $result['title'], "title for {$name}");
+            $this->assertNull($result['year'], "year for {$name}");
+        }
+    }
+
+    /** A dirty YTS-style release filename normalizes to the clean (title, year). */
+    public function testNormalizeDirtyYtsFilename(): void
+    {
+        $result = SceneFilenameNormalizer::normalize(
+            'Three.Wise.Men.And.A.Baby.2022.1080p.WEBRip.x264.AAC5.1-[YTS.MX].mp4'
+        );
+        $this->assertSame('Three Wise Men And A Baby', $result['title']);
+        $this->assertSame(2022, $result['year']);
     }
 }

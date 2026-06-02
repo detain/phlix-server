@@ -647,10 +647,12 @@ class ItemRepositoryTest extends TestCase
     public function testQueryWithGenresFilterAppliesCorrectly(): void
     {
         $db = $this->createMock(Connection::class);
+        // The genre containment MUST be scoped to the '$.genres' path — a path-less
+        // JSON_CONTAINS tests the whole document and matches nothing.
         $db->expects($this->exactly(2))
             ->method('query')
             ->with(
-                $this->stringContains('JSON_CONTAINS(metadata_json, ?) > 0')
+                $this->stringContains("JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0")
             )
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
@@ -661,10 +663,12 @@ class ItemRepositoryTest extends TestCase
     public function testQueryWithActorsFilterAppliesCorrectly(): void
     {
         $db = $this->createMock(Connection::class);
+        // Actor matching uses JSON_SEARCH scoped to each '$.actors[*]' element so a LIKE
+        // can't span the serialized "," boundary between two names.
         $db->expects($this->exactly(2))
             ->method('query')
             ->with(
-                $this->stringContains("JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.actors')) LIKE ?")
+                $this->stringContains("JSON_SEARCH(metadata_json, 'one', ?, NULL, '\$.actors[*]') IS NOT NULL")
             )
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 

@@ -110,18 +110,23 @@ final class SceneFilenameNormalizer
         $cleaned = trim($cleaned);
 
         if (preg_match('/^(.+?)\s*[\(\[]\s*(\d{4})\s*[\)\]]$/', $cleaned, $bracketMatch)) {
-            $titlePart = trim($bracketMatch[1]);
-            $year = (int) $bracketMatch[2];
-            $titlePart = self::stripGroupSuffix($titlePart);
-            $title = self::stripBracketedTags($titlePart);
-            $title = preg_replace('/\s+/', ' ', $title) ?? $title;
-            $title = trim($title);
+            $bracketYear = (int) $bracketMatch[2];
+            // Only treat a bracketed (YYYY) as the year when it is plausible — an
+            // out-of-range value (e.g. "Avatar (1899)") is noise that would poison the
+            // IMDb ±1-year window, so fall through to the general handling below.
+            if ($bracketYear >= 1900 && $bracketYear <= 2099) {
+                $titlePart = trim($bracketMatch[1]);
+                $titlePart = self::stripGroupSuffix($titlePart);
+                $title = self::stripBracketedTags($titlePart);
+                $title = preg_replace('/\s+/', ' ', $title) ?? $title;
+                $title = trim($title);
 
-            return [
-                'title' => $title !== '' ? $title : $cleaned,
-                'year' => $year,
-                'raw' => $raw,
-            ];
+                return [
+                    'title' => $title !== '' ? $title : $cleaned,
+                    'year' => $bracketYear,
+                    'raw' => $raw,
+                ];
+            }
         }
 
         $yearPositions = [];
@@ -165,15 +170,18 @@ final class SceneFilenameNormalizer
             }
         } elseif (count($yearPositions) === 1) {
             $year1 = $yearPositions[0];
+            $candidateTitle = trim(substr($cleaned, 0, $year1['offset']));
             $afterYear1 = trim(substr($cleaned, $year1['offset'] + 4));
-            $year1FirstToken = self::getFirstToken($afterYear1);
-            $year1FollowedByQuality = $year1FirstToken !== null && self::isQualityToken($year1FirstToken);
-
-            if ($year1FollowedByQuality) {
-                $title = trim(substr($cleaned, 0, $year1['offset']));
-                $year = $year1['year'];
+            if ($candidateTitle === '' && $afterYear1 === '') {
+                // The four digits ARE the entire name (e.g. "1917", "2012"): stripping to
+                // the year offset would leave an empty title that fails lookup. Keep the
+                // numeric title and treat it as having no detected year.
+                $title = $cleaned;
+                $year = null;
             } else {
-                $title = trim(substr($cleaned, 0, $year1['offset']));
+                // "Title 2024 …" (text precedes the year) — or year-then-junk, where the
+                // empty pre-year title is the existing, intended behavior.
+                $title = $candidateTitle;
                 $year = $year1['year'];
             }
         } else {

@@ -332,7 +332,7 @@ final class TraktOAuthController
     the server, or via the admin <strong>Settings</strong> page.
   </li>
 </ol>
-<a class="back" href="/admin/services">&larr; Back to Services</a>
+<a class="back" href="/app/admin/services">&larr; Back to Services</a>
 </body>
 </html>
 HTML;

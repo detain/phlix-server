@@ -139,7 +139,19 @@
         }
 
         try {
-            const queryString = new URLSearchParams(params).toString();
+            // Array params (genres/ratings/actors) must serialize as repeated `key[]=`
+            // so PHP parses them into arrays; a bare repeated/comma key arrives as a
+            // string and the server drops it.
+            const sp = new URLSearchParams();
+            Object.keys(params).forEach(function(key) {
+                const value = params[key];
+                if (Array.isArray(value)) {
+                    value.forEach(function(v) { sp.append(key + '[]', v); });
+                } else {
+                    sp.append(key, value);
+                }
+            });
+            const queryString = sp.toString();
             const response = await fetch('/api/v1/media?' + queryString);
             if (!response.ok) {
                 throw new Error('Failed to load items');

@@ -482,15 +482,34 @@ class WebPortalRouter
         /** @var array<string, mixed> $metadata */
         $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
 
+        // The media-item schema marks id/name/type as required (non-null) and constrains
+        // type + rating to enums — coerce malformed rows so a bad row can't break the
+        // contract for the whole list.
+        $idRaw = $item['id'] ?? null;
+        $id = is_scalar($idRaw) ? (string) $idRaw : '';
+        $nameRaw = $item['name'] ?? null;
+        $name = is_scalar($nameRaw) ? (string) $nameRaw : '';
+        if ($name === '') {
+            $name = $id !== '' ? $id : 'Untitled';
+        }
+        $validTypes = ['movie', 'series', 'episode', 'audio', 'image'];
+        $type = is_string($item['type'] ?? null) && in_array($item['type'], $validTypes, true)
+            ? $item['type']
+            : 'movie';
+        $validRatings = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'X', 'UNRATED'];
+        $rating = is_string($metadata['rating'] ?? null) && in_array($metadata['rating'], $validRatings, true)
+            ? $metadata['rating']
+            : null;
+
         return [
-            'id' => $item['id'] ?? null,
-            'name' => $item['name'] ?? null,
-            'type' => $item['type'] ?? null,
+            'id' => $id,
+            'name' => $name,
+            'type' => $type,
             'path' => $item['path'] ?? null,
             'poster_url' => $metadata['poster_url'] ?? null,
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
-            'rating' => $metadata['rating'] ?? null,
+            'rating' => $rating,
             'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime']) ? (int) $metadata['runtime'] : null,
             'overview' => $metadata['overview'] ?? null,
             'actors' => $metadata['actors'] ?? [],

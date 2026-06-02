@@ -742,19 +742,24 @@ class ItemRepository
             return $this->getByLibrary($libraryId, $limit, $offset);
         }
 
-        $genrePlaceholders = implode(',', array_fill(0, count($allowedGenres), '?'));
+        // One containment test per allowed genre, each scoped to '$.genres' and fed a
+        // JSON-encoded candidate (a bare string is not a valid JSON_CONTAINS candidate).
+        $genreWheres = implode(
+            ' OR ',
+            array_fill(0, count($allowedGenres), "JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0")
+        );
+        $encodedGenres = array_map(static fn ($g) => json_encode($g), $allowedGenres);
 
-        // Use JSON_CONTAINS for genre array matching
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
                AND (
-                   JSON_CONTAINS(metadata_json, ?) > 0
-                   OR JSON_EXTRACT(metadata_json, '$.genres') IS NULL
+                   {$genreWheres}
+                   OR JSON_EXTRACT(metadata_json, '\$.genres') IS NULL
                )
              ORDER BY name
              LIMIT ? OFFSET ?",
-            array_merge([$libraryId], $allowedGenres, [$limit, $offset])
+            array_merge([$libraryId], $encodedGenres, [$limit, $offset])
         );
 
         return $this->hydrateRows($results);
@@ -958,7 +963,9 @@ class ItemRepository
             $genreWheres = [];
             foreach ($genres as $genre) {
                 if (is_string($genre) && $genre !== '') {
-                    $genreWheres[] = 'JSON_CONTAINS(metadata_json, ?) > 0';
+                    // Match the genre inside the metadata_json.genres array. Without the
+                    // '$.genres' path JSON_CONTAINS tests the whole document and never matches.
+                    $genreWheres[] = "JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0";
                     $bindings[] = json_encode($genre);
                 }
             }
@@ -988,7 +995,10 @@ class ItemRepository
             foreach ($actors as $actor) {
                 if (is_string($actor) && $actor !== '') {
                     $escapedActor = addcslashes($actor, '%_');
-                    $actorWheres[] = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.actors')) LIKE ?";
+                    // Match each actor array element independently (JSON_SEARCH over
+                    // '$.actors[*]') so the LIKE can't span the serialized "," boundary
+                    // between two names the way a flat JSON_EXTRACT+LIKE could.
+                    $actorWheres[] = "JSON_SEARCH(metadata_json, 'one', ?, NULL, '\$.actors[*]') IS NOT NULL";
                     $bindings[] = '%' . $escapedActor . '%';
                 }
             }

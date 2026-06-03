@@ -165,7 +165,9 @@ if (str_starts_with($path, '/api/v1/admin/')) {
     $renderer = $container->get(PageRenderer::class);
 
     if ($path === '/' || $path === '') {
-        $response = $renderer->renderHome($request);
+        // The redesigned Vue SPA is the front door — send the bare root to /app.
+        // Old SSR pages (/login, /library, /player/{id}, …) stay reachable.
+        $response = (new Response())->redirect('/app');
     } elseif ($path === '/login') {
         $response = $renderer->renderLogin($request);
     } elseif (str_starts_with($path, '/admin/plugins')) {

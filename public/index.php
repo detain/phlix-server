@@ -315,18 +315,20 @@ if (str_starts_with($path, '/api/v1/admin/')) {
             /** @var PhotoPageController $photoPage */
             $photoPage = $container->get(PhotoPageController::class);
             $response = $photoPage->slideshow($request, []);
-        } elseif ($path === '/app' || str_starts_with($path, '/app/')) {
-            /**
-             * Shared Vue 3 SPA shell (Phase C). The built `index.html`
-             * is served from `public/assets/app/`; client-side routing
-             * handles `/app/*` deep links. No auth gate here — the SPA
-             * itself handles authentication via `ApiClient`.
-             */
-            $sharedUi = new \Phlix\Server\WebPortal\Controllers\SharedUiController(__DIR__);
-            $response = $sharedUi->shell($request, []);
         } else {
             $response = (new Response())->status(404)->html('<h1>404 - Page not found</h1>');
         }
+    } elseif ($path === '/app' || str_starts_with($path, '/app/')) {
+        /**
+         * Shared Vue 3 SPA shell (Phase C). Registered at the TOP LEVEL of the
+         * page router — NOT nested under /photo — so every /app deep-link reload
+         * resolves (mirrors HttpHandler::dispatch in the Workerman daemon, where
+         * /app is already a top-level check). The built `index.html` is served
+         * from `public/assets/app/`; client-side routing handles `/app/*` deep
+         * links. No auth gate here — the SPA authenticates via `ApiClient`.
+         */
+        $sharedUi = new \Phlix\Server\WebPortal\Controllers\SharedUiController(__DIR__);
+        $response = $sharedUi->shell($request, []);
     } else {
         http_response_code(404);
         echo '<h1>404 - Page not found</h1>';

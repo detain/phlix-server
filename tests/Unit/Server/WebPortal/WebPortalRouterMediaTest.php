@@ -80,6 +80,46 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertEquals('http://example.com/poster.jpg', $body['items'][0]['poster_url']);
         $this->assertEquals(['Action', 'Drama'], $body['items'][0]['genres']);
         $this->assertEquals(2020, $body['items'][0]['year']);
+        // non-TMDB poster → no responsive srcset (card falls back to poster_url)
+        $this->assertNull($body['items'][0]['poster_srcset']);
+    }
+
+    public function testGetMediaEmitsResponsivePosterSrcsetForTmdbPostersOnly(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('query')->willReturn([
+            'items' => [
+                [
+                    'id' => 'tmdb-1',
+                    'name' => 'Tmdb Movie',
+                    'type' => 'movie',
+                    'path' => '/movies/a.mkv',
+                    'metadata' => ['poster_url' => 'https://image.tmdb.org/t/p/w500/abc.jpg'],
+                ],
+                [
+                    'id' => 'local-1',
+                    'name' => 'Local Movie',
+                    'type' => 'movie',
+                    'path' => '/movies/b.mkv',
+                    'metadata' => ['poster_url' => 'http://example.com/poster.jpg'],
+                ],
+            ],
+            'total' => 2,
+            'limit' => 50,
+            'offset' => 0,
+        ]);
+
+        $request = new Request();
+        $request->query = [];
+        $body = json_decode($this->makeRouter($itemRepo)->getMedia($request, [])->body, true);
+
+        // TMDB poster → a width-descriptor srcset the browser can choose from
+        $srcset = $body['items'][0]['poster_srcset'];
+        $this->assertIsString($srcset);
+        $this->assertStringContainsString('https://image.tmdb.org/t/p/w185/abc.jpg 185w', $srcset);
+        $this->assertStringContainsString('https://image.tmdb.org/t/p/w780/abc.jpg 780w', $srcset);
+        // non-TMDB poster → null, so that card keeps its single poster_url
+        $this->assertNull($body['items'][1]['poster_srcset']);
     }
 
     public function testGetMediaWithSearchParam(): void

@@ -10,6 +10,7 @@ use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\Metadata\PosterSrcset;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Auth\AuthManager;
@@ -507,6 +508,11 @@ class WebPortalRouter
             'type' => $type,
             'path' => $item['path'] ?? null,
             'poster_url' => $metadata['poster_url'] ?? null,
+            // Responsive poster variants (TMDB width swap) for the client's
+            // `srcset`; null for non-TMDB posters → the card uses `poster_url`.
+            'poster_srcset' => PosterSrcset::forPosterUrl(
+                is_string($metadata['poster_url'] ?? null) ? $metadata['poster_url'] : null,
+            ),
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,

@@ -396,7 +396,12 @@ class AuthManager
         $clientIp = $this->getClientIp();
         $this->checkRateLimit($clientIp);
 
+        // Accept either a username or an email as the identifier — the SPA login
+        // field is "Username or email" and submits whichever the user typed.
         $user = $this->userRepository->findByUsername($username);
+        if ($user === null) {
+            $user = $this->userRepository->findByEmail($username);
+        }
         $userId = UserRow::string($user, 'id');
 
         if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {

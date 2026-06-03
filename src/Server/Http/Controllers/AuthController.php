@@ -108,6 +108,15 @@ class AuthController
     {
         $data = $request->body;
         $username = $data['username'] ?? null;
+        // Fall back to the `email` field when `username` is missing/blank, so a
+        // client that submits only an email still authenticates. AuthManager::login
+        // matches the identifier against both the username and email columns.
+        if (!is_string($username) || $username === '') {
+            $email = $data['email'] ?? null;
+            if (is_string($email) && $email !== '') {
+                $username = $email;
+            }
+        }
         $password = $data['password'] ?? null;
 
         $isBrowser = $this->isBrowserRequest($request);

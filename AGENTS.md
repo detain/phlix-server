@@ -23,7 +23,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 
 **Entry**: `public/index.php` bootstraps `ConnectionPool::init()` + `LoggerFactory::init()`, builds `AuthManager`, `LibraryManager`, `SessionManager`, `PlaybackController`, then dispatches via `PageRenderer` or `/api/` JSON. Server worker entry is `src/Server/Core/Application.php` (`Workerman\Worker`).
 
-**HTTP** (`src/Server/Http/`): `Request::fromGlobals()` → `Router::dispatch()` matches `{param}` placeholders → handler returns chained `Response`. Controllers live in `src/Server/Http/Controllers/` (`AuthController.php`, `LibraryController.php`, `MediaItemController.php`, `HlsController.php`, `SessionController.php`). Middleware via `$router->group($prefix, $cb, [$middleware])`.
+**HTTP** (`src/Server/Http/`): `Request::fromGlobals()` → `Router::dispatch()` matches `{param}` placeholders → handler returns chained `Response`. Controllers live in `src/Server/Http/Controllers/` (`AuthController.php`, `LibraryController.php`, `MediaItemController.php`, `HlsController.php`, `SessionController.php`, `TraktOAuthController.php`). Middleware via `$router->group($prefix, $cb, [$middleware])`.
 
 **WebSocket** (`src/Server/WebSocket/`): `WebSocketServer.php` wraps `Workerman\Worker` on `websocket://`. `Connection.php` implements `ConnectionInterface.php`. `ConnectionPool.php` is singleton (`getInstance()`). `MessageHandler->on($event, $cb)` registers handlers; events listed in `Events.php` (`WebSocketEvents::PLAYBACK_*`, `SYNCPLAY_*`, `AUTH_*`).
 
@@ -60,7 +60,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 - `Database/`: `ConnectionPool.php` (static `init()`/`getConnection('mysql')`), `QueryBuilder.php`
 - `Logger/`: `LoggerFactory.php` · `LogChannels.php` (`AUTH`, `HTTP`, `WEBSOCKET`, `MEDIA`, `SESSION`, `STREAMING`) · `StructuredLogger.php` (Monolog wrapper) · `AuditLogger.php`
 
-**Web portal** (`src/Server/WebPortal/` + `public/`): `WebPortalRouter.php` for `/api/v1/libraries`, `/api/v1/media/{id}`. `PageRenderer.php` instantiates `\Smarty`, `setTemplateDir($templateDir)`, `assign()`, `fetch('home/index.tpl')`. Templates: `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`. Assets: `public/assets/{css,js,images}/`. JS: `app.js` (global helpers, `window.PhlixApp`), `api-client.js` (`Auth`/`Library`/`Player` namespaces, refresh-token retry), `player.js` (30s `Player.reportProgress`).
+**Web portal** (`src/Server/WebPortal/` + `public/`): `WebPortalRouter.php` for `/api/v1/libraries`, `/api/v1/media/{id}`. `PageRenderer.php` instantiates `\Smarty`, `setTemplateDir($templateDir)`, `assign()`, `fetch('home/index.tpl')`. Templates: `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`. Assets: `public/assets/{css,js,images}/`. JS: `app.js` (global helpers, `window.PhlixApp`), `api-client.js` (`Auth`/`Library`/`Player` namespaces, refresh-token retry), `player.js` (30s `Player.reportProgress`). `ViteAssets.php` injects the Vite-built front-end bundle (TypeScript source in `web-ui/` per `web-ui/vite.config.ts`, output committed to `public/assets/app/`) into the Smarty layout.
 
 ## Database
 
@@ -115,7 +115,7 @@ grep -q "caliber" .git/hooks/pre-commit 2>/dev/null && echo "hook-active" || ech
 - If **hook-active**: the hook handles sync automatically — just commit normally. Tell the user: "Caliber will sync your agent configs automatically via the pre-commit hook."
 - If **no-hook**: run Caliber manually before committing:
   1. Tell the user: "Caliber: Syncing agent configs with your latest changes..."
-  2. Run: `caliber refresh && git add CLAUDE.md .claude/ .cursor/ .cursorrules .github/copilot-instructions.md .github/instructions/ AGENTS.md CALIBER_LEARNINGS.md .agents/ .opencode/ 2>/dev/null`
+  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md AGENTS.md .agents/ 2>/dev/null`
   3. After it completes, briefly tell the user what Caliber updated. Then proceed with the commit.
 
 **Valid `caliber refresh` options:** `--quiet` (suppress output) and `--dry-run` (preview without writing). Do not pass any other flags — options like `--auto-approve`, `--debug`, or `--force` do not exist and will cause errors.
@@ -131,3 +131,20 @@ If `caliber` is not found, read `.agents/skills/setup-caliber/SKILL.md` and foll
 Read `CALIBER_LEARNINGS.md` for patterns and anti-patterns learned from previous sessions.
 These are auto-extracted from real tool usage — treat them as project-specific rules.
 <!-- /caliber:managed:learnings -->
+
+<!-- caliber:managed:model-config -->
+## Model Configuration
+
+Recommended default: `claude-sonnet-4-6` with high effort (stronger reasoning; higher cost and latency than smaller models).
+Smaller/faster models trade quality for speed and cost — pick what fits the task.
+Pin your choice (`/model` in Claude Code, or `CALIBER_MODEL` when using Caliber with an API provider) so upstream default changes do not silently change behavior.
+
+<!-- /caliber:managed:model-config -->
+
+<!-- caliber:managed:sync -->
+## Context Sync
+
+This project uses [Caliber](https://github.com/caliber-ai-org/ai-setup) to keep AI agent configs in sync across Claude Code, Cursor, Copilot, and Codex.
+Configs update automatically before each commit via `caliber refresh`.
+If the pre-commit hook is not set up, read `.agents/skills/setup-caliber/SKILL.md` and follow the setup instructions.
+<!-- /caliber:managed:sync -->

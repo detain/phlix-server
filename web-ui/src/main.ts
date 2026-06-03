@@ -17,7 +17,9 @@ const app = createPhlixApp({
         // pages) at /app/admin/*. Reachable via the gated "Admin" nav entry.
         ...buildAdminRoutes(),
         {
-            path: '/library/scan',
+            // Must carry the /app prefix like every other route — the router's
+            // history base is '/', so the prefix lives in the path itself.
+            path: '/app/library/scan',
             name: 'library-scan',
             component: LibraryScanPage,
         },

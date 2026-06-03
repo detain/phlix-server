@@ -286,6 +286,8 @@ class TmdbProvider implements MetadataProviderInterface
             'revenue' => MetadataValue::asInt($data['revenue'] ?? null),
             'imdb_id' => $imdbId,
             'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
+            'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
+            'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'actors' => $actors,
             'director' => $this->findDirector($crew),
         ];

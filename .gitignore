@@ -1,3 +1,13 @@
+# Ignore all Claude CLI personal files and state
+.claude/
+!.claude/settings.json
+!.claude/rules/
+!.claude/skills/
+!.claude/hooks/
+.opencode/node_modules/
+.opencode/memory/
+.opencode/.env
+
 vendor
 .codenomad
 .logs
@@ -22,14 +32,6 @@ var/themes/
 
 # Smarty compile cache (created when templates render)
 templates_c/
-
-# Claude Code transient runtime files
-.claude/scheduled_tasks.lock
-.claude/worktrees/
-
-# Local-only Caliber session tooling (NEVER stage — these contain user-machine paths)
-.claude/hooks/caliber-freshness-notify.sh
-.claude/hooks/caliber-session-freshness.sh
 
 # Admin SPA (admin-ui/) — see step 0.4. Build-output decision: the built
 # bundle in public/assets/admin/ IS committed (so the production server has

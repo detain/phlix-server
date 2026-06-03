@@ -348,7 +348,10 @@ final class HttpHandler
         $renderer = $this->container->get(PageRenderer::class);
 
         if ($path === '/' || $path === '') {
-            return $renderer->renderHome($request);
+            // The redesigned Vue SPA is the front door — send the bare root to
+            // /app. Old SSR pages (/login, /library, /player/{id}, …) stay
+            // reachable at their own paths.
+            return (new Response())->redirect('/app');
         }
         if ($path === '/login') {
             return $renderer->renderLogin($request);

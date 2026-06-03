@@ -11,15 +11,15 @@
         "typecheck": "vue-tsc --noEmit"
     },
     "dependencies": {
-        "@phlix/ui": "github:detain/phlix-ui#v0.7.0"
+        "@phlix/ui": "github:detain/phlix-ui#v0.9.0"
     },
     "devDependencies": {
-        "@types/node": "^20.11.30",
-        "@vitejs/plugin-vue": "^5.0.4",
-        "@vue/tsconfig": "^0.5.1",
-        "typescript": "^5.4.3",
+        "@types/node": "^25.9.1",
+        "@vitejs/plugin-vue": "^6.0.7",
+        "@vue/tsconfig": "^0.9.1",
+        "typescript": "^6.0.3",
         "vite": "^8.0.16",
-        "vue": "^3.4.0",
-        "vue-tsc": "^2.0.7"
+        "vue": "^3.5.0",
+        "vue-tsc": "^3.3.3"
     }
 }

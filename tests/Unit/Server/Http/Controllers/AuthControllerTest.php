@@ -135,6 +135,54 @@ class AuthControllerTest extends TestCase
     }
 
     /**
+     * A body with only `email` (no `username`) still authenticates: the
+     * controller forwards the email value as the identifier to AuthManager::login.
+     */
+    public function testLoginAcceptsEmailWhenUsernameAbsent(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('login')
+            ->with('alice@example.com', 'hunter2hunter2', 'unknown')
+            ->willReturn([
+                'access_token' => 'access-tok',
+                'refresh_token' => 'refresh-tok',
+                'user' => ['id' => 'u-1', 'username' => 'alice'],
+            ]);
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = ['email' => 'alice@example.com', 'password' => 'hunter2hunter2'];
+        $request->headers = [];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * Negative: login() returns 400 when neither `username` nor `email` is present.
+     */
+    public function testLoginReturns400WhenNoIdentifier(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->never())->method('login');
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = ['password' => 'hunter2hunter2'];
+        $request->headers = [];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('Missing required fields: username, password', $body['error']);
+    }
+
+    /**
      * Happy path: refresh() returns 200 with a fresh token pair.
      */
     public function testRefreshReturns200OnSuccess(): void

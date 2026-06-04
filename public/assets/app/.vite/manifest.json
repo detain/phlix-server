@@ -64,7 +64,7 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-CUfJCBDs.js",
+    "file": "assets/index-B0dve0Ax.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
@@ -107,7 +107,7 @@
       "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js"
     ],
     "css": [
-      "assets/index-gP4e83YP.css"
+      "assets/index-DP2R1A4h.css"
     ],
     "assets": [
       "assets/fraunces-var-latin-DihXLNYH.woff2",
@@ -116,7 +116,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/AdminLayout-Zw752Gpo.js": {
-    "file": "assets/AdminLayout-Zw752Gpo-DbjpKGQU.js",
+    "file": "assets/AdminLayout-Zw752Gpo-CccEm7Cw.js",
     "name": "AdminLayout-Zw752Gpo",
     "src": "node_modules/@phlix/ui/dist/AdminLayout-Zw752Gpo.js",
     "isDynamicEntry": true,
@@ -127,7 +127,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/BackupPage-pj0jHGKU.js": {
-    "file": "assets/BackupPage-pj0jHGKU-DHH-tewN.js",
+    "file": "assets/BackupPage-pj0jHGKU-Dlf-I4d2.js",
     "name": "BackupPage-pj0jHGKU",
     "src": "node_modules/@phlix/ui/dist/BackupPage-pj0jHGKU.js",
     "isDynamicEntry": true,
@@ -141,7 +141,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js": {
-    "file": "assets/BrowsePage-CTUZe02W-jiPc1lW7.js",
+    "file": "assets/BrowsePage-CTUZe02W-C8W56p46.js",
     "name": "BrowsePage-CTUZe02W",
     "src": "node_modules/@phlix/ui/dist/BrowsePage-CTUZe02W.js",
     "isDynamicEntry": true,
@@ -155,7 +155,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/CastDevicesPage-DentGPYn.js": {
-    "file": "assets/CastDevicesPage-DentGPYn-BkKp3prg.js",
+    "file": "assets/CastDevicesPage-DentGPYn-BmvSjuq7.js",
     "name": "CastDevicesPage-DentGPYn",
     "src": "node_modules/@phlix/ui/dist/CastDevicesPage-DentGPYn.js",
     "isDynamicEntry": true,
@@ -169,7 +169,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/CollectionsPage-BH2Us6rV.js": {
-    "file": "assets/CollectionsPage-BH2Us6rV-CNJl33hY.js",
+    "file": "assets/CollectionsPage-BH2Us6rV-CqzC_ISZ.js",
     "name": "CollectionsPage-BH2Us6rV",
     "src": "node_modules/@phlix/ui/dist/CollectionsPage-BH2Us6rV.js",
     "isDynamicEntry": true,
@@ -183,7 +183,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js": {
-    "file": "assets/CommandPalette-BRIAAiSF-TBsn7XFT.js",
+    "file": "assets/CommandPalette-BRIAAiSF-BnO0njOI.js",
     "name": "CommandPalette-BRIAAiSF",
     "src": "node_modules/@phlix/ui/dist/CommandPalette-BRIAAiSF.js",
     "isDynamicEntry": true,
@@ -196,7 +196,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/DashboardPage-B6LXf4Iz.js": {
-    "file": "assets/DashboardPage-B6LXf4Iz-BOmb_H49.js",
+    "file": "assets/DashboardPage-B6LXf4Iz-Ci9PeLju.js",
     "name": "DashboardPage-B6LXf4Iz",
     "src": "node_modules/@phlix/ui/dist/DashboardPage-B6LXf4Iz.js",
     "isDynamicEntry": true,
@@ -209,7 +209,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/DlnaServerPage-BF7ouXsL.js": {
-    "file": "assets/DlnaServerPage-BF7ouXsL-B1erqL1H.js",
+    "file": "assets/DlnaServerPage-BF7ouXsL-Dp1Rm8dz.js",
     "name": "DlnaServerPage-BF7ouXsL",
     "src": "node_modules/@phlix/ui/dist/DlnaServerPage-BF7ouXsL.js",
     "isDynamicEntry": true,
@@ -222,7 +222,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/HistoryPage-qb6KcTDY.js": {
-    "file": "assets/HistoryPage-qb6KcTDY-DD9qhfWc.js",
+    "file": "assets/HistoryPage-qb6KcTDY-Bu0FPgnO.js",
     "name": "HistoryPage-qb6KcTDY",
     "src": "node_modules/@phlix/ui/dist/HistoryPage-qb6KcTDY.js",
     "isDynamicEntry": true,
@@ -235,7 +235,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/IntegrationsPage-CwrPBrOQ.js": {
-    "file": "assets/IntegrationsPage-CwrPBrOQ-CngVTmkm.js",
+    "file": "assets/IntegrationsPage-CwrPBrOQ-CdLxAJDn.js",
     "name": "IntegrationsPage-CwrPBrOQ",
     "src": "node_modules/@phlix/ui/dist/IntegrationsPage-CwrPBrOQ.js",
     "isDynamicEntry": true,
@@ -249,7 +249,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LibrariesPage-CyEgwLmL.js": {
-    "file": "assets/LibrariesPage-CyEgwLmL-Bi418VYZ.js",
+    "file": "assets/LibrariesPage-CyEgwLmL-Dc6m9vfJ.js",
     "name": "LibrariesPage-CyEgwLmL",
     "src": "node_modules/@phlix/ui/dist/LibrariesPage-CyEgwLmL.js",
     "isDynamicEntry": true,
@@ -263,7 +263,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LiveTvPage-CR_Y0NzT.js": {
-    "file": "assets/LiveTvPage-CR_Y0NzT-DudTmOVl.js",
+    "file": "assets/LiveTvPage-CR_Y0NzT-BuAFyOrZ.js",
     "name": "LiveTvPage-CR_Y0NzT",
     "src": "node_modules/@phlix/ui/dist/LiveTvPage-CR_Y0NzT.js",
     "isDynamicEntry": true,
@@ -278,7 +278,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js": {
-    "file": "assets/LoginPage-D-HZupX6-Y_h9_7DJ.js",
+    "file": "assets/LoginPage-D-HZupX6-D4Crolqn.js",
     "name": "LoginPage-D-HZupX6",
     "src": "node_modules/@phlix/ui/dist/LoginPage-D-HZupX6.js",
     "isDynamicEntry": true,
@@ -289,7 +289,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/LogsPage-CQoCZYDI.js": {
-    "file": "assets/LogsPage-CQoCZYDI-DFvWz1i9.js",
+    "file": "assets/LogsPage-CQoCZYDI-5ppgTLNb.js",
     "name": "LogsPage-CQoCZYDI",
     "src": "node_modules/@phlix/ui/dist/LogsPage-CQoCZYDI.js",
     "isDynamicEntry": true,
@@ -302,7 +302,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js": {
-    "file": "assets/MediaDetailPage-D6PXVAsQ-CmRKDIfu.js",
+    "file": "assets/MediaDetailPage-D6PXVAsQ-CpBQgRxa.js",
     "name": "MediaDetailPage-D6PXVAsQ",
     "src": "node_modules/@phlix/ui/dist/MediaDetailPage-D6PXVAsQ.js",
     "isDynamicEntry": true,
@@ -316,7 +316,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js": {
-    "file": "assets/PlayerPage-3oji0CfW-62n4ezDU.js",
+    "file": "assets/PlayerPage-3oji0CfW-Dq0k3Y14.js",
     "name": "PlayerPage-3oji0CfW",
     "src": "node_modules/@phlix/ui/dist/PlayerPage-3oji0CfW.js",
     "isDynamicEntry": true,
@@ -330,7 +330,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/RemoteAccessPage-DJNJ1efr.js": {
-    "file": "assets/RemoteAccessPage-DJNJ1efr-BuREXs4g.js",
+    "file": "assets/RemoteAccessPage-DJNJ1efr-CRgJNauP.js",
     "name": "RemoteAccessPage-DJNJ1efr",
     "src": "node_modules/@phlix/ui/dist/RemoteAccessPage-DJNJ1efr.js",
     "isDynamicEntry": true,
@@ -344,7 +344,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/ServicesPage-Bl0X_ZFA.js": {
-    "file": "assets/ServicesPage-Bl0X_ZFA-DKTBd6TS.js",
+    "file": "assets/ServicesPage-Bl0X_ZFA-rprrzM8z.js",
     "name": "ServicesPage-Bl0X_ZFA",
     "src": "node_modules/@phlix/ui/dist/ServicesPage-Bl0X_ZFA.js",
     "isDynamicEntry": true,
@@ -357,7 +357,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js": {
-    "file": "assets/SettingsPage-9rku4j9E-78TT5Ckk.js",
+    "file": "assets/SettingsPage-9rku4j9E-B9Nzea95.js",
     "name": "SettingsPage-9rku4j9E",
     "src": "node_modules/@phlix/ui/dist/SettingsPage-9rku4j9E.js",
     "isDynamicEntry": true,
@@ -370,7 +370,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SettingsPage-CEo7NkNn.js": {
-    "file": "assets/SettingsPage-CEo7NkNn-VXVXbSUv.js",
+    "file": "assets/SettingsPage-CEo7NkNn-CSJPySEO.js",
     "name": "SettingsPage-CEo7NkNn",
     "src": "node_modules/@phlix/ui/dist/SettingsPage-CEo7NkNn.js",
     "isDynamicEntry": true,
@@ -384,7 +384,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js": {
-    "file": "assets/SignupPage-NR_4KnZ2-D0z8RzTn.js",
+    "file": "assets/SignupPage-NR_4KnZ2-DuiebRb2.js",
     "name": "SignupPage-NR_4KnZ2",
     "src": "node_modules/@phlix/ui/dist/SignupPage-NR_4KnZ2.js",
     "isDynamicEntry": true,
@@ -395,7 +395,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/SyncPlayPage-BDoFoRty.js": {
-    "file": "assets/SyncPlayPage-BDoFoRty-Di_XhuSu.js",
+    "file": "assets/SyncPlayPage-BDoFoRty-BRLNtxPq.js",
     "name": "SyncPlayPage-BDoFoRty",
     "src": "node_modules/@phlix/ui/dist/SyncPlayPage-BDoFoRty.js",
     "isDynamicEntry": true,
@@ -409,7 +409,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/UsersPage-BavvRnbH.js": {
-    "file": "assets/UsersPage-BavvRnbH-Dc-l_OQH.js",
+    "file": "assets/UsersPage-BavvRnbH-CKbyWt25.js",
     "name": "UsersPage-BavvRnbH",
     "src": "node_modules/@phlix/ui/dist/UsersPage-BavvRnbH.js",
     "isDynamicEntry": true,
@@ -423,7 +423,7 @@
     ]
   },
   "node_modules/@phlix/ui/dist/WebhooksPage-CMWZXlnR.js": {
-    "file": "assets/WebhooksPage-CMWZXlnR-DGGKyoPg.js",
+    "file": "assets/WebhooksPage-CMWZXlnR-DUzkwKpY.js",
     "name": "WebhooksPage-CMWZXlnR",
     "src": "node_modules/@phlix/ui/dist/WebhooksPage-CMWZXlnR.js",
     "isDynamicEntry": true,

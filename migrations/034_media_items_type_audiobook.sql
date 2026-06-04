@@ -1,0 +1,41 @@
+-- Migration: 034_media_items_type_audiobook.sql
+-- Description: Add `audiobook` to the media_items.type ENUM.
+--
+-- AudiobookLibraryManager::upsertAudiobook() (src/Media/Library/AudiobookLibraryManager.php
+-- line 159) and AudiobookScanner::scanAudiobookLibrary() (src/Media/Library/AudiobookScanner.php
+-- line 908) build media item rows with 'type' => 'audiobook' and persist them
+-- through ItemRepository::create()/update(), whose INSERT writes the type column
+-- verbatim (src/Media/Library/ItemRepository.php lines 267-274). The whole
+-- audiobook read side matches on the same literal: the API and portal controllers
+-- guard every endpoint with ($item['type'] ?? '') === 'audiobook'
+-- (src/Server/Http/Controllers/AudiobookController.php lines 119, 149, 195, 346,
+-- 386 and src/Server/WebPortal/Controllers/AudiobookPageController.php lines 82,
+-- 150) so audiobook is a first-class, distinct media type throughout the code.
+--
+-- The original media_items table in 001_initial_schema.sql defined type as
+-- ENUM('movie', 'series', 'season', 'episode', 'music', 'album', 'artist',
+-- 'video', 'audio', 'book', 'photo'), widened by 011_music_library.sql to add
+-- 'track'. Neither ever admitted 'audiobook', so writing an audiobook item is an
+-- ENUM-value violation: under strict SQL mode MySQL rejects it (error 1265
+-- "Data truncated for column 'type'" / 1406), and under non-strict mode it
+-- silently coerces to '' (empty string), so audiobook libraries store rows that
+-- no longer match the type='audiobook' read filters and disappear from the UI.
+--
+-- This is the enum-value bug class, DISTINCT from the missing-column
+-- (SQLSTATE[42S22]) audit that shipped 031-033 -- those added columns the code
+-- wrote to, this admits a value the code already writes.
+--
+-- 'audiobook' is appended at the END of the value list so every existing value
+-- keeps its ENUM ordinal (MySQL stores ENUM as the 1-based index, so inserting
+-- mid-list would silently renumber already-stored rows). All existing values and
+-- the NOT NULL constraint are preserved unchanged.
+--
+-- Idempotent: re-running MODIFY COLUMN with the same definition is a no-op (the
+-- migration runner also downgrades duplicate-object errors to notes -- see
+-- scripts/run-migrations.php / src/Common/Database/MigrationRunner.php).
+
+-- NOTE: keep this statement free of semicolons inside string literals. The
+-- migration runner strips comments then splits on `;` (see MigrationRunner::
+-- splitStatements), so a `;` inside a string literal would shred the ALTER.
+ALTER TABLE media_items
+    MODIFY COLUMN type ENUM('movie', 'series', 'season', 'episode', 'track', 'music', 'album', 'artist', 'video', 'audio', 'book', 'photo', 'audiobook') NOT NULL;

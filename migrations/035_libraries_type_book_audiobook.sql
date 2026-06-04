@@ -1,0 +1,51 @@
+-- Migration: 035_libraries_type_book_audiobook.sql
+-- Description: Add `book` and `audiobook` to the libraries.type ENUM.
+--
+-- The libraries.type column declares the kind of media a library holds, and the
+-- code uses values the ENUM never admitted:
+--   * LibraryController::create() validates the requested type against
+--     $validTypes = ['movie', 'series', 'music', 'photo', 'book', 'video']
+--     (src/Server/Http/Controllers/LibraryController.php line 131) and then
+--     passes it straight into LibraryManager::createLibrary(), which runs
+--     INSERT INTO libraries (id, name, type, paths, options) VALUES (?, ?, ?, ?, ?)
+--     (src/Media/Library/LibraryManager.php lines 121-126). So creating a 'book'
+--     library is accepted by the controller but rejected by the column.
+--   * LibraryManager::scan() routes on $library->type === 'book' (line 304) and
+--     $library->type === 'audiobook' (line 310), and the registered library-type
+--     plugins declare BookLibraryType::TYPE = 'book'
+--     (src/Media/Music/BookLibraryType.php line 31) and
+--     AudiobookLibraryType::TYPE = 'audiobook'
+--     (src/Media/Music/AudiobookLibraryType.php line 33). The audiobook read side
+--     also filters libraries with ($library['type'] ?? null) === 'audiobook'
+--     (src/Server/WebPortal/Controllers/AudiobookPageController.php line 173).
+--
+-- The original libraries table in 001_initial_schema.sql defined type as
+-- ENUM('movie', 'series', 'music', 'photo', 'video') and no later migration
+-- widened it. Writing a 'book' (or 'audiobook') library is therefore an
+-- ENUM-value violation: under strict SQL mode MySQL rejects it (error 1265
+-- "Data truncated for column 'type'" / 1406), and under non-strict mode it
+-- silently coerces to '' (empty string), so the library no longer matches the
+-- type-based scan routing and read filters and effectively disappears.
+--
+-- This is the same enum-value bug class fixed for media_items.type in migration
+-- 034 (and DISTINCT from the missing-column / SQLSTATE[42S22] audit that shipped
+-- 031-033) -- this admits values the code already writes.
+--
+-- Only library-level types are added: 'book' and 'audiobook'. Item-level types
+-- such as 'track'/'audio'/'episode'/'album'/'artist' belong to media_items.type,
+-- not libraries.type, and are intentionally NOT added here.
+--
+-- The two new values are appended at the END of the list so every existing value
+-- keeps its ENUM ordinal (MySQL stores ENUM as the 1-based index, so inserting
+-- mid-list would silently renumber already-stored rows). All existing values and
+-- the NOT NULL constraint are preserved unchanged.
+--
+-- Idempotent: re-running MODIFY COLUMN with the same definition is a no-op (the
+-- migration runner also downgrades duplicate-object errors to notes -- see
+-- scripts/run-migrations.php / src/Common/Database/MigrationRunner.php).
+
+-- NOTE: keep this statement free of semicolons inside string literals. The
+-- migration runner strips comments then splits on `;` (see MigrationRunner::
+-- splitStatements), so a `;` inside a string literal would shred the ALTER.
+ALTER TABLE libraries
+    MODIFY COLUMN type ENUM('movie', 'series', 'music', 'photo', 'video', 'book', 'audiobook') NOT NULL;

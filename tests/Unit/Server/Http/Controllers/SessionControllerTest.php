@@ -393,4 +393,79 @@ class SessionControllerTest extends TestCase
         $this->assertArrayHasKey('error', $body);
         $this->assertEquals('Forbidden', $body['error']);
     }
+
+    public function testCreateSessionDelegatesToManagerAndReturns201WithSessionId(): void
+    {
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->expects($this->once())
+            ->method('createSession')
+            ->with('user-1', 'web-device-xyz', 'Web Player', 'web')
+            ->willReturn('new-session-99');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $this->createMock(PlaybackController::class),
+            $this->createMock(MarkerService::class),
+        );
+
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['device_id' => 'web-device-xyz'];
+
+        $response = $controller->createSession($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('new-session-99', $body['session_id']);
+    }
+
+    public function testCreateSessionRequiresAuthentication(): void
+    {
+        $controller = new SessionController(
+            $this->createMock(SessionManager::class),
+            $this->createMock(PlaybackController::class),
+            $this->createMock(MarkerService::class),
+        );
+        $request = new Request();
+        $request->body = ['device_id' => 'x'];
+
+        $this->assertSame(401, $controller->createSession($request, [])->statusCode);
+    }
+
+    public function testCreateSessionRejectsMissingDeviceId(): void
+    {
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->expects($this->never())->method('createSession');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $this->createMock(PlaybackController::class),
+            $this->createMock(MarkerService::class),
+        );
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = []; // no device_id
+
+        $this->assertSame(400, $controller->createSession($request, [])->statusCode);
+    }
+
+    public function testCreateSessionHonorsCustomDeviceNameDefaultingType(): void
+    {
+        $sessionManager = $this->createMock(SessionManager::class);
+        $sessionManager->expects($this->once())
+            ->method('createSession')
+            ->with('user-1', 'dev', 'My Browser', 'web')
+            ->willReturn('s1');
+
+        $controller = new SessionController(
+            $sessionManager,
+            $this->createMock(PlaybackController::class),
+            $this->createMock(MarkerService::class),
+        );
+        $request = new Request();
+        $request->userId = 'user-1';
+        $request->body = ['device_id' => 'dev', 'device_name' => 'My Browser'];
+
+        $this->assertSame(201, $controller->createSession($request, [])->statusCode);
+    }
 }

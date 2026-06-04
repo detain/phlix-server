@@ -283,6 +283,7 @@ class Application
 
         // Session management endpoints
         $sessionController = $this->getSessionController();
+        $this->router->post('/api/v1/sessions', [$sessionController, 'createSession']);
         $this->router->get('/api/v1/sessions/{id}/progress', [$sessionController, 'getProgress']);
         $this->router->post('/api/v1/sessions/{id}/progress', [$sessionController, 'reportProgress']);
         $this->router->get('/api/v1/me/continue-watching', [$sessionController, 'getContinueWatching']);

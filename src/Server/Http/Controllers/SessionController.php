@@ -74,6 +74,49 @@ class SessionController
     }
 
     /**
+     * Creates (or reuses) a playback session for the authenticated user.
+     *
+     * Idempotent per `device_id`: a stable client device id (e.g. the web player's
+     * persistent per-browser id) reuses its existing session row rather than
+     * spawning a new one each time. This lets an otherwise session-less client —
+     * the browser player — obtain a session id it can then report progress to
+     * (`POST /api/v1/sessions/{id}/progress`), so its playback joins the user's
+     * cross-device resume aggregation (`continue-watching`).
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Path parameters (unused)
+     * @return Response 201 JSON with the session id, or 400/401 on error
+     *
+     * @required_fields device_id
+     */
+    public function createSession(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        $data = $request->body;
+        $deviceId = $data['device_id'] ?? null;
+        if (!is_string($deviceId) || $deviceId === '') {
+            return (new Response())->status(400)->json([
+                'error' => 'Missing required field: device_id',
+            ]);
+        }
+
+        $deviceName = is_string($data['device_name'] ?? null) && $data['device_name'] !== ''
+            ? $data['device_name']
+            : 'Web Player';
+        $deviceType = is_string($data['device_type'] ?? null) && $data['device_type'] !== ''
+            ? $data['device_type']
+            : 'web';
+
+        $sessionId = $this->sessionManager->createSession($userId, $deviceId, $deviceName, $deviceType);
+
+        return (new Response())->status(201)->json(['session_id' => $sessionId]);
+    }
+
+    /**
      * Ends a specific playback session.
      *
      * @param Request $request The HTTP request

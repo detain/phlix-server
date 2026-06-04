@@ -40,7 +40,7 @@
             <p class="detail-overview">{$item.metadata.overview|default:''}</p>
 
             <div class="detail-actions">
-                <a href="/player/{$item.id}" class="btn btn-primary btn-play">
+                <a href="/app/player/{$item.id}" class="btn btn-primary btn-play">
                     ▶ Play
                 </a>
                 {if $item.user_data.resume_position_ticks > 0}

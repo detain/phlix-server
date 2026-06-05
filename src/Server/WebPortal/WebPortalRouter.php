@@ -516,7 +516,9 @@ class WebPortalRouter
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,
-            'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime']) ? (int) $metadata['runtime'] : null,
+            'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime'])
+                ? (int) $metadata['runtime']
+                : null,
             'overview' => $metadata['overview'] ?? null,
             'actors' => $metadata['actors'] ?? [],
             'director' => $metadata['director'] ?? null,

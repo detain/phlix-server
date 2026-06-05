@@ -62,6 +62,13 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- **`web-ui`: bumped `@phlix/ui` to `v0.19.0` (admin composability + Hub Dashboard).** Behaviour-neutral for the
+  server: `buildAdminRoutes()` (no args) still yields the same 16 admin routes/names, so the mounted admin section,
+  the `/app/admin/dashboard` landing, and the sidebar order are unchanged. The committed SPA bundle under
+  `public/assets/app/` was rebuilt against the new tag. (v0.19.0 makes the shared admin shell composable so the hub
+  can mount its own page group; the server keeps the default set. Two unused lazy chunks — `HubDashboardPage` and
+  `AuditLogsPage` — are now emitted into the bundle because `@phlix/ui`'s admin registry statically references the
+  hub page group; the server router never registers those routes, so the chunks are never fetched at runtime.)
 - **WebAuthn/passkeys settings: routed `/settings/security` to `auth/webauthn-settings.tpl`.** Template now loads correctly (fixed broken `layouts/app.tpl` → `layouts/main.tpl`). Inline error messages replace `alert()` calls. Credential IDs are XSS-safe.
 
 - **Settings page: replaced thin-shell form with working GET/PUT form backed by `/api/v1/users/me/settings`.** Streams, bitrate, audio/subtitle language, subtitle mode, and parental control settings now persist correctly.

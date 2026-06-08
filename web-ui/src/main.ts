@@ -8,7 +8,10 @@ const app = createPhlixApp({
     // "Admin" is `requiresAdmin`, so the shell shows it only for an admin
     // (`useAuthStore().isAdmin`); the admin API is gated server-side regardless.
     menu: [
-        { id: 'browse', label: 'Browse', to: '/app' },
+        // `libraryLinks` expands Browse into one nav link per library (Movies, TV,
+        // Anime, …), fetched from /api/v1/libraries — so each library is reachable
+        // straight from the nav, matching the per-library Browse sections.
+        { id: 'browse', label: 'Browse', to: '/app', libraryLinks: true },
         { id: 'settings', label: 'Settings', to: '/app/settings' },
         { id: 'admin', label: 'Admin', to: '/app/admin/dashboard', requiresAdmin: true },
     ],

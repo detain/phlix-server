@@ -36,7 +36,7 @@ class WebPortalRouterMediaTest extends TestCase
             ->method('query')
             ->with($this->callback(function (array $params): bool {
                 return $params === [];
-            }))
+            }), $this->isNull())
             ->willReturn([
                 'items' => [
                     [
@@ -129,7 +129,7 @@ class WebPortalRouterMediaTest extends TestCase
             ->method('query')
             ->with($this->callback(function (array $params): bool {
                 return ($params['search'] ?? null) === 'batman';
-            }))
+            }), $this->isNull())
             ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
 
         $router = $this->makeRouter($itemRepo);
@@ -156,7 +156,7 @@ class WebPortalRouterMediaTest extends TestCase
                     && ($params['order'] ?? null) === 'desc'
                     && ($params['limit'] ?? null) === 25
                     && ($params['offset'] ?? null) === 50;
-            }))
+            }), $this->isNull())
             ->willReturn(['items' => [], 'total' => 0, 'limit' => 25, 'offset' => 50]);
 
         $router = $this->makeRouter($itemRepo);
@@ -179,6 +179,46 @@ class WebPortalRouterMediaTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertEquals(25, $body['limit']);
         $this->assertEquals(50, $body['offset']);
+    }
+
+    public function testGetMediaScopesToLibraryWhenLibraryIdProvided(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                // libraryId is NOT a query-param key — it is passed as the
+                // dedicated 2nd argument, so it must not leak into $params.
+                return !array_key_exists('libraryId', $params);
+            }), $this->equalTo('lib-42'))
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['libraryId' => 'lib-42'];
+
+        $response = $router->getMedia($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
+    }
+
+    public function testGetMediaTreatsBlankLibraryIdAsUnscoped(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->anything(), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['libraryId' => ''];
+
+        $response = $router->getMedia($request, []);
+
+        $this->assertEquals(200, $response->statusCode);
     }
 
     public function testGetMediaShapesMetadataFieldsCorrectly(): void

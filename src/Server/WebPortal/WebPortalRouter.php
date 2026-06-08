@@ -360,6 +360,7 @@ class WebPortalRouter
      *   - order (string): Sort direction — asc|desc
      *   - limit (int): Max items to return 1-100 (default: 50)
      *   - offset (int): Items to skip for pagination (default: 0)
+     *   - libraryId (string): Scope results (and total) to a single library
      * @param array<string, string> $params Route parameters (unused)
      *
      * @return Response JSON response with items array and pagination info
@@ -394,7 +395,14 @@ class WebPortalRouter
     {
         $queryParams = $this->extractMediaQueryParams($request);
 
-        $result = $this->itemRepository->query($queryParams);
+        // Optional per-library scoping: `?libraryId=<uuid>` confines the result
+        // (and its total) to one library so the Browse surface can render a
+        // section/rail per library. Absent/blank → an all-libraries query
+        // (backward-compatible with the original global Browse grid).
+        $libraryIdRaw = $request->queryString('libraryId');
+        $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+        $result = $this->itemRepository->query($queryParams, $libraryId);
 
         $items = array_map(function (array $item): array {
             return $this->shapeMediaItem($item);

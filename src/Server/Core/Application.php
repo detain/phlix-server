@@ -894,11 +894,14 @@ class Application
     }
 
     /**
-     * Registers HLS and DASH streaming API routes.
+     * Registers HLS and DASH streaming routes.
      *
-     * Wires endpoints for:
-     * - HlsController: getMasterPlaylist, getVariantPlaylist, getSegment, getPlaylist (4 routes)
-     * - DashController: getMasterManifest, getAdaptationSetManifest, getSegment, getManifest (4 routes)
+     * The CMAF transcode pipeline writes one job directory per transcode holding
+     * the DASH manifest, the HLS playlists and the shared fMP4 segments, all
+     * cross-referenced by relative filename. Serving is therefore a generic
+     * per-job file handler per protocol (plus a JSON info endpoint). The JSON
+     * `playlist` / `manifest` routes are registered BEFORE the catch-all
+     * `{file}` route so first-match dispatch resolves them.
      *
      * @since 0.14.0
      */
@@ -907,25 +910,14 @@ class Application
         $hlsController = $this->getHlsController();
         $dashController = $this->getDashController();
 
-        // HLS streaming routes
-        // GET /hls/{job_id}/master.m3u8 — master playlist with variant streams
-        $this->router->get('/hls/{job_id}/master.m3u8', [$hlsController, 'getMasterPlaylist']);
-        // GET /hls/{job_id}/{variant_index}/playlist.m3u8 — variant playlist for specific quality
-        $this->router->get('/hls/{job_id}/{variant_index}/playlist.m3u8', [$hlsController, 'getVariantPlaylist']);
-        // GET /hls/{job_id}/{variant_index}/{segment_number}.ts — individual segment file
-        $this->router->get('/hls/{job_id}/{variant_index}/{segment_number}.ts', [$hlsController, 'getSegment']);
-        // GET /hls/{job_id}/playlist — JSON with playlist URL info
+        // HLS: JSON info, then the generic file server (master.m3u8, media_N.m3u8,
+        // init-N.m4s, chunk-*.m4s).
         $this->router->get('/hls/{job_id}/playlist', [$hlsController, 'getPlaylist']);
+        $this->router->get('/hls/{job_id}/{file}', [$hlsController, 'serveFile']);
 
-        // DASH streaming routes
-        // GET /dash/{job_id}/manifest.mpd — master manifest (MPD format)
-        $this->router->get('/dash/{job_id}/manifest.mpd', [$dashController, 'getMasterManifest']);
-        // GET /dash/{job_id}/{set_id}/manifest.mpd — adaptation set manifest
-        $this->router->get('/dash/{job_id}/{set_id}/manifest.mpd', [$dashController, 'getAdaptationSetManifest']);
-        // GET /dash/{job_id}/{set_id}/segment_{segment_number}.m4s — segment file (M4S container)
-        $this->router->get('/dash/{job_id}/{set_id}/segment_{segment_number}.m4s', [$dashController, 'getSegment']);
-        // GET /dash/{job_id}/manifest — JSON with manifest URL info
+        // DASH: JSON info, then the generic file server (manifest.mpd + .m4s).
         $this->router->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
+        $this->router->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
     }
 
     /**
@@ -2332,9 +2324,7 @@ class Application
 
         /** @var \Phlix\Media\Streaming\HlsStreamer */
         $hlsStreamer = $this->container->get(\Phlix\Media\Streaming\HlsStreamer::class);
-        /** @var \Phlix\Media\Transcoding\TranscodeManager */
-        $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
-        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer, $transcodeManager);
+        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer);
     }
 
     /**
@@ -2357,25 +2347,15 @@ class Application
      */
     private function getDashController(): \Phlix\Server\Http\Controllers\DashController
     {
-        if ($this->container === null) {
-            $segmentDir = sys_get_temp_dir() . '/phlix_dash';
-            $baseUrl = 'http://localhost:8096';
-            $dashStreamer = new \Phlix\Media\Streaming\Dash\DashStreamer($segmentDir, $baseUrl);
-            return new \Phlix\Server\Http\Controllers\DashController($dashStreamer);
-        }
-
-        // DashStreamer is not registered in the container, so we instantiate manually
-        // Use same config pattern as HlsStreamer (segment_dir, base_url from $appConfig['hls'])
+        // DASH segments are the SAME CMAF fMP4 files the HLS pipeline writes, so
+        // DashController serves from the shared HLS segment dir (config['hls']).
         $hlsConfigRaw = $this->config['hls'] ?? null;
         /** @var array<string, mixed> $hlsConfig */
         $hlsConfig = is_array($hlsConfigRaw) ? $hlsConfigRaw : [];
         $segmentDirRaw = $hlsConfig['segment_dir'] ?? null;
-        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_dash';
-        $baseUrlRaw = $hlsConfig['base_url'] ?? null;
-        $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
+        $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_hls';
 
-        $dashStreamer = new \Phlix\Media\Streaming\Dash\DashStreamer($segmentDir, $baseUrl);
-        return new \Phlix\Server\Http\Controllers\DashController($dashStreamer);
+        return new \Phlix\Server\Http\Controllers\DashController($segmentDir);
     }
 
     /**

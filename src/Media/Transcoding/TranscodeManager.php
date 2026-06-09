@@ -200,13 +200,16 @@ class TranscodeManager
      * direct-played. It is idempotent: a still-valid job for the same
      * (media item, profile) is reused rather than spawning a duplicate FFmpeg.
      * Otherwise it probes the source, decides per-stream copy-vs-encode, creates
-     * the job directory under the shared HLS segment dir, records the row and
-     * launches a DETACHED ffmpeg HLS encode (so the event loop never blocks).
+     * the job directory under the shared segment dir, records the row and launches
+     * a DETACHED ffmpeg CMAF encode (one pass → both DASH `.mpd` and HLS `.m3u8`
+     * from shared `.m4s` segments), so the event loop never blocks.
      *
      * @param string $mediaItemId Media item to transcode.
      * @param string $profileName Device profile name (e.g. 'web', 'mobile-high').
      *
-     * @return array{job_id: string, status: string, master_url: string, hls_url: string, reused: bool}
+     * @return array{
+     *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool
+     * }
      *
      * @throws \InvalidArgumentException If the media item is not found.
      * @throws \RuntimeException If concurrency is exhausted, probing fails, or the
@@ -225,6 +228,7 @@ class TranscodeManager
                 'status' => $this->statusOf($existing),
                 'master_url' => "/hls/{$existing}/master.m3u8",
                 'hls_url' => "/hls/{$existing}/master.m3u8",
+                'dash_url' => "/dash/{$existing}/manifest.mpd",
                 'reused' => true,
             ];
         }
@@ -260,7 +264,8 @@ class TranscodeManager
         $width = is_int($params['variant_width'] ?? null) ? $params['variant_width'] : null;
         $height = is_int($params['variant_height'] ?? null) ? $params['variant_height'] : null;
         $bandwidth = is_int($params['variant_bandwidth'] ?? null) ? $params['variant_bandwidth'] : null;
-        $playlistPath = "{$hlsDir}/stream_0.m3u8";
+        // CMAF master playlist (HLS); the DASH manifest.mpd lands in the same dir.
+        $playlistPath = "{$hlsDir}/master.m3u8";
 
         $this->db->query(
             "INSERT INTO transcode_jobs
@@ -271,7 +276,7 @@ class TranscodeManager
                 $width, $height, $bandwidth]
         );
 
-        $pid = $this->ffmpeg->startHlsTranscode($itemPath, $hlsDir, $params);
+        $pid = $this->ffmpeg->startCmafTranscode($itemPath, $hlsDir, $params);
         if ($pid <= 0) {
             $this->db->query(
                 "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ?",
@@ -280,7 +285,7 @@ class TranscodeManager
             throw new \RuntimeException('Failed to launch transcode');
         }
 
-        $this->logger->info('HLS transcode started', [
+        $this->logger->info('CMAF transcode started', [
             'job_id' => $jobId,
             'media_item_id' => $mediaItemId,
             'profile' => $profileName,
@@ -294,6 +299,7 @@ class TranscodeManager
             'status' => self::STATUS_RUNNING,
             'master_url' => "/hls/{$jobId}/master.m3u8",
             'hls_url' => "/hls/{$jobId}/master.m3u8",
+            'dash_url' => "/dash/{$jobId}/manifest.mpd",
             'reused' => false,
         ];
     }
@@ -328,7 +334,7 @@ class TranscodeManager
         $dbStatus = is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING;
 
         $segments = $this->countSegments($dir);
-        $playlistReady = file_exists("{$dir}/stream_0.m3u8") && $segments > 0;
+        $playlistReady = file_exists("{$dir}/master.m3u8") && $segments > 0;
 
         $status = $dbStatus;
         if ($dbStatus !== self::STATUS_CANCELLED) {
@@ -367,49 +373,6 @@ class TranscodeManager
             'playlist_ready' => $playlistReady,
             'progress' => $progress,
         ];
-    }
-
-    /**
-     * Returns the variant descriptor for a job (for the HLS master playlist).
-     *
-     * @param string $jobId Job identifier.
-     *
-     * @return array{width: int|null, height: int|null, bandwidth: int|null, status: string}|null
-     *         Variant info, or null when the job is unknown.
-     *
-     * @since 0.23.0
-     */
-    public function getJobVariant(string $jobId): ?array
-    {
-        $row = $this->getJobRow($jobId);
-        if ($row === null) {
-            return null;
-        }
-        return [
-            'width' => $this->nullableInt($row['variant_width'] ?? null),
-            'height' => $this->nullableInt($row['variant_height'] ?? null),
-            'bandwidth' => $this->nullableInt($row['variant_bandwidth'] ?? null),
-            'status' => is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING,
-        ];
-    }
-
-    /**
-     * Coerces a mixed value to a positive int or null.
-     *
-     * @param mixed $value Raw value.
-     *
-     * @return int|null Positive int, or null.
-     */
-    private function nullableInt(mixed $value): ?int
-    {
-        if (is_int($value)) {
-            return $value > 0 ? $value : null;
-        }
-        if (is_string($value) && is_numeric($value)) {
-            $n = (int) $value;
-            return $n > 0 ? $n : null;
-        }
-        return null;
     }
 
     /**
@@ -566,15 +529,15 @@ class TranscodeManager
     }
 
     /**
-     * Counts produced segment files for variant 0 in a job directory.
+     * Counts produced CMAF media segments in a job directory.
      *
-     * @param string $dir Job HLS directory.
+     * @param string $dir Job output directory.
      *
-     * @return int Number of segment_0_*.ts files.
+     * @return int Number of chunk-*.m4s files (across all representations).
      */
     private function countSegments(string $dir): int
     {
-        $files = glob("{$dir}/segment_0_*.ts");
+        $files = glob("{$dir}/chunk-*.m4s");
         return $files === false ? 0 : count($files);
     }
 

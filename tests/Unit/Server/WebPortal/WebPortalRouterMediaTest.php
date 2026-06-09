@@ -270,6 +270,133 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertEquals('Director Name', $item['director']);
     }
 
+    public function testGetMediaExposesSeriesHierarchyFields(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('query')->willReturn([
+            'items' => [
+                [
+                    'id' => 'ep-1',
+                    'name' => 'Pilot',
+                    'type' => 'episode',
+                    'parent_id' => 'season-1',
+                    'path' => '/tv/show/s01e01.mkv',
+                    'metadata' => [
+                        'season' => 1,
+                        'episode' => 2,
+                        'episode_title' => 'Pilot',
+                    ],
+                ],
+            ],
+            'total' => 1,
+            'limit' => 50,
+            'offset' => 0,
+        ]);
+
+        $router = $this->makeRouter($itemRepo);
+        $body = json_decode($router->getMedia(new Request(), [])->body, true);
+        $item = $body['items'][0];
+
+        $this->assertSame('episode', $item['type']);
+        $this->assertSame('season-1', $item['parent_id']);
+        $this->assertSame(1, $item['season_number']);
+        $this->assertSame(2, $item['episode_number']);
+        $this->assertSame('Pilot', $item['episode_title']);
+    }
+
+    public function testGetMediaPassesThroughSeasonTypeAndNullHierarchyForTopLevel(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('query')->willReturn([
+            'items' => [
+                // A season row keeps its `season` type (not coerced to movie).
+                [
+                    'id' => 'season-1',
+                    'name' => 'Season 1',
+                    'type' => 'season',
+                    'parent_id' => 'series-1',
+                    'path' => '/tv/show/s01',
+                    'metadata' => ['season' => 1],
+                ],
+                // A top-level series has a null parent + null season/episode numbers.
+                [
+                    'id' => 'series-1',
+                    'name' => 'The Show',
+                    'type' => 'series',
+                    'parent_id' => null,
+                    'path' => '/tv/show',
+                    'metadata' => [],
+                ],
+            ],
+            'total' => 2,
+            'limit' => 50,
+            'offset' => 0,
+        ]);
+
+        $router = $this->makeRouter($itemRepo);
+        $body = json_decode($router->getMedia(new Request(), [])->body, true);
+
+        $this->assertSame('season', $body['items'][0]['type']);
+        $this->assertSame('series-1', $body['items'][0]['parent_id']);
+        $this->assertSame(1, $body['items'][0]['season_number']);
+
+        $this->assertSame('series', $body['items'][1]['type']);
+        $this->assertNull($body['items'][1]['parent_id']);
+        $this->assertNull($body['items'][1]['season_number']);
+        $this->assertNull($body['items'][1]['episode_number']);
+        $this->assertNull($body['items'][1]['episode_title']);
+    }
+
+    public function testGetMediaForwardsParentIdScope(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['parentId'] ?? null) === 'series-7'
+                    && !array_key_exists('topLevel', $params);
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['parentId' => 'series-7'];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaForwardsTopLevelFlag(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['topLevel'] ?? null) === true;
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['topLevel' => '1'];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
+    public function testGetMediaIgnoresBlankParentIdAndUnsetTopLevel(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return !array_key_exists('parentId', $params)
+                    && !array_key_exists('topLevel', $params);
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['parentId' => '', 'topLevel' => '0'];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
     public function testGetMediaHandlesMissingMetadata(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

@@ -596,6 +596,67 @@ class ItemRepositoryTest extends TestCase
         $repo->query(['limit' => 50], 'lib-specific');
     }
 
+    public function testQueryWithParentIdScopesToChildren(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->stringContains('parent_id = ?'),
+                $this->callback(function ($params) {
+                    return is_array($params) && in_array('series-7', $params, true);
+                })
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['parentId' => 'series-7']);
+    }
+
+    public function testQueryWithTopLevelExcludesChildren(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->stringContains('parent_id IS NULL'))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['topLevel' => true]);
+    }
+
+    public function testQueryParentIdWinsOverTopLevel(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // parentId and topLevel are mutually exclusive — parentId wins, so the
+        // WHERE must use `parent_id = ?` and NOT the top-level `IS NULL` clause.
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return str_contains($sql, 'parent_id = ?') && !str_contains($sql, 'parent_id IS NULL');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['parentId' => 'series-7', 'topLevel' => true]);
+    }
+
+    public function testQueryTopLevelIgnoredWhenSearching(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // An active search must span the whole library, so `topLevel` is dropped
+        // (no `parent_id IS NULL` clause) when a search term is present.
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return !str_contains($sql, 'parent_id IS NULL');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['topLevel' => true, 'search' => 'batman']);
+    }
+
     public function testQueryWithSearchAppliesFullTextOrLike(): void
     {
         $db = $this->createMock(Connection::class);

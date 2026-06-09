@@ -96,13 +96,14 @@ class TranscodeManagerTest extends TestCase
             $captured
         );
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->expects($this->never())->method('startHlsTranscode');
+        $ff->expects($this->never())->method('startCmafTranscode');
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
         $this->assertTrue($result['reused']);
         $this->assertSame('existing-job', $result['job_id']);
         $this->assertStringContainsString('/hls/existing-job/master.m3u8', $result['master_url']);
+        $this->assertSame('/dash/existing-job/manifest.mpd', $result['dash_url']);
     }
 
     public function testEnsureHlsJobIgnoresReuseRowWhenDirMissing(): void
@@ -120,7 +121,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
-        $ff->method('startHlsTranscode')->willReturn(4242);
+        $ff->method('startCmafTranscode')->willReturn(4242);
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
@@ -159,7 +160,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
         $passed = [];
-        $ff->method('startHlsTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscode')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -183,7 +184,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6],
         ]]);
         $passed = [];
-        $ff->method('startHlsTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscode')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -207,7 +208,7 @@ class TranscodeManagerTest extends TestCase
         $ff->method('probe')->willReturn(['streams' => [
             ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
         ]]);
-        $ff->method('startHlsTranscode')->willReturn(0);
+        $ff->method('startCmafTranscode')->willReturn(0);
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Failed to launch transcode');
@@ -218,8 +219,8 @@ class TranscodeManagerTest extends TestCase
     {
         $dir = $this->segmentDir . '/job-c';
         mkdir($dir, 0755, true);
-        file_put_contents("{$dir}/stream_0.m3u8", "#EXTM3U\n");
-        file_put_contents("{$dir}/segment_0_000.ts", 'x');
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/chunk-0-00001.m4s", 'x');
         file_put_contents("{$dir}/.complete", '');
         $captured = [];
         $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
@@ -252,8 +253,8 @@ class TranscodeManagerTest extends TestCase
     {
         $dir = $this->segmentDir . '/job-r';
         mkdir($dir, 0755, true);
-        file_put_contents("{$dir}/stream_0.m3u8", "#EXTM3U\n");
-        file_put_contents("{$dir}/segment_0_000.ts", 'x');
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/chunk-0-00001.m4s", 'x');
         $captured = [];
         $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
         $ff = $this->createMock(FfmpegRunner::class);

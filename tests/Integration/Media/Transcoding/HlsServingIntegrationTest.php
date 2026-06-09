@@ -10,16 +10,17 @@ use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
+use Phlix\Server\Http\Controllers\DashController;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
 use Workerman\MySQL\Connection;
 
 /**
- * Full server-side HLS chain against a REAL ffmpeg binary: TranscodeManager
- * launches the encode, then HlsController serves the produced master playlist,
- * variant playlist (with rewritten segment URIs) and the actual segment bytes —
- * proving the playlist-URI <-> segment-route round trip end to end. The DB is
- * mocked; ffmpeg/filesystem are real. Skipped when ffmpeg is absent.
+ * Full server-side CMAF chain against a REAL ffmpeg binary: TranscodeManager runs
+ * one encode that produces BOTH HLS and DASH, then HlsController and DashController
+ * serve the master playlist, a media playlist, the MPD manifest, and the shared
+ * fMP4 segment bytes — proving DASH and HLS are both wired off one transcode. The
+ * DB is mocked; ffmpeg/filesystem are real. Skipped when ffmpeg is absent.
  */
 class HlsServingIntegrationTest extends TestCase
 {
@@ -32,7 +33,7 @@ class HlsServingIntegrationTest extends TestCase
         if (!$this->ffmpeg->isAvailable()) {
             $this->markTestSkipped('ffmpeg binary not available');
         }
-        $this->segmentDir = sys_get_temp_dir() . '/phlix_hls_serve_' . uniqid();
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_cmaf_serve_' . uniqid();
         mkdir($this->segmentDir, 0755, true);
     }
 
@@ -43,7 +44,7 @@ class HlsServingIntegrationTest extends TestCase
         }
     }
 
-    public function testManagerProducesHlsThatControllerServes(): void
+    public function testManagerProducesCmafThatHlsAndDashControllersServe(): void
     {
         $clip = "{$this->segmentDir}/in.mkv";
         $cmd = sprintf(
@@ -56,9 +57,8 @@ class HlsServingIntegrationTest extends TestCase
         exec($cmd, $o, $code);
         $this->assertSame(0, $code);
 
-        $db = $this->mockDb($clip);
         $manager = new TranscodeManager(
-            $db,
+            $this->mockDb($clip),
             $this->ffmpeg,
             new EncodingHelper(),
             $this->segmentDir,
@@ -69,6 +69,7 @@ class HlsServingIntegrationTest extends TestCase
 
         $job = $manager->ensureHlsJob('media-1', 'web');
         $this->assertFalse($job['reused']);
+        $this->assertSame('/dash/' . $job['job_id'] . '/manifest.mpd', $job['dash_url']);
         $jobId = $job['job_id'];
 
         // Poll until the detached encode finishes.
@@ -85,30 +86,34 @@ class HlsServingIntegrationTest extends TestCase
         $this->assertGreaterThanOrEqual(1, $readiness['segments']);
 
         $streamer = new HlsStreamer($this->segmentDir, 'http://localhost:8096', new QualitySelector());
-        $controller = new HlsController($streamer, $manager);
+        $hls = new HlsController($streamer);
+        $dash = new DashController($this->segmentDir);
         $req = new Request();
 
-        // Master playlist references the variant.
-        $master = $controller->getMasterPlaylist($req, ['job_id' => $jobId]);
+        // --- HLS side ---
+        $master = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'master.m3u8']);
         $this->assertSame(200, $master->statusCode);
-        $this->assertStringContainsString('0/playlist.m3u8', $master->body);
+        $this->assertSame('application/vnd.apple.mpegurl', $master->headers['Content-Type']);
+        $this->assertStringContainsString('#EXTM3U', $master->body);
+        // Master references a media playlist; fetch it and a referenced segment.
+        $this->assertSame(1, preg_match('/^(media_\d+\.m3u8)$/m', $master->body, $mm));
+        $media = $hls->serveFile($req, ['job_id' => $jobId, 'file' => $mm[1]]);
+        $this->assertSame(200, $media->statusCode);
+        $this->assertSame(1, preg_match('/^(chunk-[\w-]+\.m4s)$/m', $media->body, $cm));
+        $seg = $hls->serveFile($req, ['job_id' => $jobId, 'file' => $cm[1]]);
+        $this->assertSame(200, $seg->statusCode);
+        $this->assertSame('video/mp4', $seg->headers['Content-Type']);
+        $this->assertGreaterThan(0, strlen($seg->body));
 
-        // Variant playlist: real, with canonical segment URIs.
-        $variant = $controller->getVariantPlaylist($req, ['job_id' => $jobId, 'variant_index' => '0']);
-        $this->assertSame(200, $variant->statusCode);
-        $this->assertStringContainsString('#EXTM3U', $variant->body);
-        $this->assertStringNotContainsString('segment_0_', $variant->body);
-
-        // Extract the first segment number from the playlist and fetch it.
-        $this->assertSame(1, preg_match('/^(\d+)\.ts$/m', $variant->body, $m));
-        $segment = $controller->getSegment($req, [
-            'job_id' => $jobId,
-            'variant_index' => '0',
-            'segment_number' => $m[1],
-        ]);
-        $this->assertSame(200, $segment->statusCode);
-        $this->assertSame('video/mp2t', $segment->headers['Content-Type']);
-        $this->assertGreaterThan(0, strlen($segment->body), 'segment body should not be empty');
+        // --- DASH side (same job dir, real .mpd + shared .m4s) ---
+        $mpd = $dash->serveFile($req, ['job_id' => $jobId, 'file' => 'manifest.mpd']);
+        $this->assertSame(200, $mpd->statusCode);
+        $this->assertSame('application/dash+xml', $mpd->headers['Content-Type']);
+        $this->assertStringContainsString('<MPD', $mpd->body);
+        // The same segment is reachable under the DASH prefix too.
+        $dashSeg = $dash->serveFile($req, ['job_id' => $jobId, 'file' => $cm[1]]);
+        $this->assertSame(200, $dashSeg->statusCode);
+        $this->assertSame($seg->body, $dashSeg->body);
     }
 
     private function mockDb(string $clipPath): Connection
@@ -126,9 +131,6 @@ class HlsServingIntegrationTest extends TestCase
                     return [['id' => 'media-1', 'path' => $clipPath]];
                 }
                 if (str_contains($sql, 'SELECT * FROM transcode_jobs WHERE id')) {
-                    // Readiness reads hls_dir from the row; the manager created the
-                    // dir under segmentDir/{jobId} but we don't know the id here, so
-                    // return null hls_dir to force the segmentDir/{jobId} fallback.
                     return [['status' => 'running', 'variant_width' => 320, 'variant_height' => 240]];
                 }
                 return [];

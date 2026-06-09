@@ -924,6 +924,12 @@ class ItemRepository
      *   - order (string): Sort direction — asc|desc (default: asc)
      *   - limit (int): Max items to return 1-100 (default: 50)
      *   - offset (int): Items to skip for pagination (default: 0)
+     *   - parentId (string|null): Scope to the direct children of one item (its
+     *     seasons/episodes) — drives the series detail drill-down
+     *   - topLevel (bool): Return only parent-less items (movies + series),
+     *     excluding seasons/episodes — drives Browse rails/library grids. Ignored
+     *     when `search` is set (so search still spans the whole library). Mutually
+     *     exclusive with `parentId` (parentId wins).
      * @param string|null $libraryId Optional library ID to scope results to one library
      *
      * @return array{items: list<array<string, mixed>>, total: int, limit: int, offset: int}
@@ -952,6 +958,23 @@ class ItemRepository
         $order = $this->normalizeSortOrder($orderRaw);
         $limit = $this->normalizeLimit($params['limit'] ?? 50);
         $offset = $this->normalizeOffset($params['offset'] ?? 0);
+
+        $parentId = isset($params['parentId']) && is_string($params['parentId']) && $params['parentId'] !== ''
+            ? $params['parentId']
+            : null;
+        $topLevel = ($params['topLevel'] ?? false) === true;
+
+        // Hierarchy scope. `parentId` (a series detail drill-down → its
+        // seasons/episodes) wins over `topLevel`. `topLevel` restricts to
+        // parent-less items (movies + series) so a series library shows shows,
+        // not a flat dump of every episode — but it yields to an active search
+        // so a title search still spans the whole library, episodes included.
+        if ($parentId !== null) {
+            $wheres[] = 'parent_id = ?';
+            $bindings[] = $parentId;
+        } elseif ($topLevel && ($search === null || $search === '')) {
+            $wheres[] = 'parent_id IS NULL';
+        }
 
         if ($search !== null && $search !== '') {
             $searchBindings = $this->buildSearchBindings($search);

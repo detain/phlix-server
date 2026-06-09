@@ -84,6 +84,42 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringContainsString('-hls_time 6', $cmd);
     }
 
+    public function testBuildCmafCommandEmitsDashWithHlsPlaylist(): void
+    {
+        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+            'audio_codec' => 'aac',
+            'segment_seconds' => 6,
+        ]);
+
+        // DASH muxer + HLS playlist generation from one encode.
+        $this->assertStringContainsString('-f dash', $cmd);
+        $this->assertStringContainsString('-hls_playlist 1', $cmd);
+        $this->assertStringContainsString('-hls_master_name master.m3u8', $cmd);
+        $this->assertStringContainsString('-seg_duration 6', $cmd);
+        $this->assertStringContainsString('manifest.mpd', $cmd);
+        // CMAF fMP4 segment templates.
+        $this->assertStringContainsString('init-$RepresentationID$.m4s', $cmd);
+        $this->assertStringContainsString('chunk-$RepresentationID$-$Number%05d$.m4s', $cmd);
+        // Explicit mapping: video required, audio optional.
+        $this->assertStringContainsString('-map 0:v:0', $cmd);
+        $this->assertStringContainsString('-map 0:a:0?', $cmd);
+        $this->assertStringContainsString('-c:v libx264', $cmd);
+    }
+
+    public function testBuildCmafCommandCopiesCompatibleStreams(): void
+    {
+        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
+            'video_codec' => 'copy',
+            'audio_codec' => 'copy',
+        ]);
+        $this->assertStringContainsString('-c:v copy', $cmd);
+        $this->assertStringContainsString('-c:a copy', $cmd);
+        $this->assertStringContainsString('-f dash', $cmd);
+        $this->assertStringNotContainsString('libx264', $cmd);
+    }
+
     public function testStartDetachedReturnsPidAndIsNonBlocking(): void
     {
         $dir = sys_get_temp_dir() . '/phlix_detached_' . uniqid();

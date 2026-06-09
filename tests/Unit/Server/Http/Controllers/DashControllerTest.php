@@ -5,197 +5,105 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
-use Phlix\Media\Streaming\Dash\AdaptationSet;
-use Phlix\Media\Streaming\Dash\DashStreamer;
 use Phlix\Server\Http\Controllers\DashController;
 use Phlix\Server\Http\Request;
 
 /**
  * Unit tests for {@see DashController}.
  *
- * Covers the four handler methods now wired in Application::loadStreamingRoutes():
- *   GET /dash/{job_id}/manifest.mpd                     -> getMasterManifest
- *   GET /dash/{job_id}/{set_id}/manifest.mpd            -> getAdaptationSetManifest
- *   GET /dash/{job_id}/{set_id}/segment_{n}.m4s         -> getSegment
- *   GET /dash/{job_id}/manifest                         -> getManifest
- *
- * Uses createMock() for DashStreamer dependency following the project's
- * existing controller-test conventions.
+ * DASH is served from the SAME CMAF job directory as HLS (shared fMP4 segments):
+ *   GET /dash/{job_id}/manifest -> getManifest (JSON mpd url)
+ *   GET /dash/{job_id}/{file}   -> serveFile   (manifest.mpd / *.m4s)
  */
 class DashControllerTest extends TestCase
 {
-    private DashController $controller;
-    private DashStreamer $mockStreamer;
+    private string $segmentDir;
 
     protected function setUp(): void
     {
-        $this->mockStreamer = $this->createMock(DashStreamer::class);
-        $this->controller = new DashController($this->mockStreamer);
+        $this->segmentDir = sys_get_temp_dir() . '/phlix_dashctl_' . uniqid();
+        mkdir($this->segmentDir, 0755, true);
     }
 
-    /**
-     * Happy path: getMasterManifest() returns 200 with MPD manifest content.
-     */
-    public function testGetMasterManifestReturns200WithMpd(): void
+    protected function tearDown(): void
     {
-        $this->mockStreamer->expects($this->once())
-            ->method('generateMasterMpd')
-            ->with('job-456', $this->isType('array'))
-            ->willReturn('<?xml version="1.0"?><MPD></MPD>');
-
-        $request = new Request();
-        $response = $this->controller->getMasterManifest($request, ['job_id' => 'job-456']);
-
-        $this->assertSame(200, $response->statusCode);
-        $this->assertSame('application/dash+xml', $response->headers['Content-Type']);
-        $this->assertStringContainsString('<MPD', $response->body);
+        $this->rrmdir($this->segmentDir);
     }
 
-    /**
-     * Negative: getMasterManifest() returns 400 when job_id is empty.
-     */
-    public function testGetMasterManifestReturns400WhenJobIdEmpty(): void
+    private function controller(): DashController
     {
-        $this->mockStreamer->expects($this->never())->method('generateMasterMpd');
-
-        $request = new Request();
-        $response = $this->controller->getMasterManifest($request, ['job_id' => '']);
-
-        $this->assertSame(400, $response->statusCode);
-        $body = json_decode($response->body, true);
-        $this->assertSame('job_id is required', $body['error']);
+        return new DashController($this->segmentDir);
     }
 
-    /**
-     * Happy path: getAdaptationSetManifest() returns 200 with adaptation set MPD.
-     */
-    public function testGetAdaptationSetManifestReturns200WithMpd(): void
+    private function writeJobFile(string $jobId, string $file, string $content): void
     {
-        $this->mockStreamer->expects($this->once())
-            ->method('generateAdaptationSetMpd')
-            ->with('job-456', 0, $this->anything(), $this->anything())
-            ->willReturn('<?xml version="1.0"?><MPD><Period></Period></MPD>');
-
-        $request = new Request();
-        $response = $this->controller->getAdaptationSetManifest($request, [
-            'job_id' => 'job-456',
-            'set_id' => '0',
-        ]);
-
-        $this->assertSame(200, $response->statusCode);
-        $this->assertSame('application/dash+xml', $response->headers['Content-Type']);
-        $this->assertStringContainsString('<MPD', $response->body);
-    }
-
-    /**
-     * Happy path: getSegment() returns 200 with segment content when file exists.
-     */
-    public function testGetSegmentReturns200WithContent(): void
-    {
-        // Create a temp file to simulate existing segment
-        $tempDir = sys_get_temp_dir() . '/phlix_test_dash_' . uniqid();
-        mkdir($tempDir, 0755, true);
-        $segmentFile = $tempDir . '/segment_0_00005.m4s';
-        file_put_contents($segmentFile, 'segment-binary-data');
-
-        try {
-            $this->mockStreamer->expects($this->once())
-                ->method('getSegmentPath')
-                ->with('job-456', 0, 5)
-                ->willReturn($segmentFile);
-
-            $request = new Request();
-            $response = $this->controller->getSegment($request, [
-                'job_id' => 'job-456',
-                'set_id' => '0',
-                'segment_number' => '5',
-            ]);
-
-            $this->assertSame(200, $response->statusCode);
-            $this->assertSame('video/mp4', $response->headers['Content-Type']);
-            $this->assertSame('segment-binary-data', $response->body);
-            $this->assertSame('public, max-age=31536000', $response->headers['Cache-Control']);
-            $this->assertSame('bytes', $response->headers['Accept-Ranges']);
-        } finally {
-            @unlink($segmentFile);
-            @rmdir($tempDir);
+        $dir = "{$this->segmentDir}/{$jobId}";
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
         }
+        file_put_contents("{$dir}/{$file}", $content);
     }
 
-    /**
-     * Negative: getSegment() returns 404 when segment file does not exist.
-     */
-    public function testGetSegmentReturns404WhenFileNotFound(): void
+    public function testGetManifestReturnsMpdUrl(): void
     {
-        $this->mockStreamer->expects($this->once())
-            ->method('getSegmentPath')
-            ->with('job-456', 0, 999)
-            ->willReturn('/nonexistent/path/segment_0_00999.m4s');
-
-        $request = new Request();
-        $response = $this->controller->getSegment($request, [
-            'job_id' => 'job-456',
-            'set_id' => '0',
-            'segment_number' => '999',
-        ]);
-
-        $this->assertSame(404, $response->statusCode);
-        $body = json_decode($response->body, true);
-        $this->assertSame('Segment not found', $body['error']);
-    }
-
-    /**
-     * Negative: getSegment() returns 400 when job_id is empty.
-     */
-    public function testGetSegmentReturns400WhenJobIdEmpty(): void
-    {
-        $this->mockStreamer->expects($this->never())->method('getSegmentPath');
-
-        $request = new Request();
-        $response = $this->controller->getSegment($request, [
-            'job_id' => '',
-            'set_id' => '0',
-            'segment_number' => '5',
-        ]);
-
-        $this->assertSame(400, $response->statusCode);
-        $body = json_decode($response->body, true);
-        $this->assertSame('job_id is required', $body['error']);
-    }
-
-    /**
-     * Happy path: getManifest() returns 200 with manifest URL in JSON.
-     */
-    public function testGetManifestReturns200WithManifestUrl(): void
-    {
-        $this->mockStreamer->expects($this->once())
-            ->method('getMasterMpdUrl')
-            ->with('job-456')
-            ->willReturn('/dash/job-456/manifest.mpd');
-
-        $request = new Request();
-        $response = $this->controller->getManifest($request, ['job_id' => 'job-456']);
-
-        $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
-        $this->assertIsArray($body);
-        $this->assertSame('/dash/job-456/manifest.mpd', $body['manifest_url']);
-        $this->assertSame('job-456', $body['job_id']);
+        $res = $this->controller()->getManifest(new Request(), ['job_id' => 'job-1']);
+        $this->assertSame(200, $res->statusCode);
+        $body = json_decode($res->body, true);
+        $this->assertSame('/dash/job-1/manifest.mpd', $body['manifest_url']);
         $this->assertSame('DASH', $body['protocol']);
     }
 
-    /**
-     * Negative: getManifest() returns 400 when job_id is empty.
-     */
     public function testGetManifestReturns400WhenJobIdEmpty(): void
     {
-        $this->mockStreamer->expects($this->never())->method('getMasterMpdUrl');
+        $res = $this->controller()->getManifest(new Request(), ['job_id' => '']);
+        $this->assertSame(400, $res->statusCode);
+    }
 
-        $request = new Request();
-        $response = $this->controller->getManifest($request, ['job_id' => '']);
+    public function testServesMpdWithDashContentType(): void
+    {
+        $this->writeJobFile('job-2', 'manifest.mpd', '<?xml version="1.0"?><MPD></MPD>');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-2', 'file' => 'manifest.mpd']);
 
-        $this->assertSame(400, $response->statusCode);
-        $body = json_decode($response->body, true);
-        $this->assertSame('job_id is required', $body['error']);
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('application/dash+xml', $res->headers['Content-Type']);
+        $this->assertSame('no-cache', $res->headers['Cache-Control']);
+        $this->assertStringContainsString('<MPD>', $res->body);
+    }
+
+    public function testServesM4sSegment(): void
+    {
+        $this->writeJobFile('job-3', 'chunk-1-00002.m4s', 'AUDIOBYTES');
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-3', 'file' => 'chunk-1-00002.m4s']);
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('video/mp4', $res->headers['Content-Type']);
+        $this->assertSame('AUDIOBYTES', $res->body);
+    }
+
+    public function testServeFile404WhenMissing(): void
+    {
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-x', 'file' => 'manifest.mpd']);
+        $this->assertSame(404, $res->statusCode);
+    }
+
+    public function testServeFileRejectsTraversal(): void
+    {
+        $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-3', 'file' => '..']);
+        $this->assertSame(400, $res->statusCode);
+    }
+
+    private function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $e) {
+            if ($e === '.' || $e === '..') {
+                continue;
+            }
+            $p = "{$dir}/{$e}";
+            is_dir($p) ? $this->rrmdir($p) : unlink($p);
+        }
+        rmdir($dir);
     }
 }

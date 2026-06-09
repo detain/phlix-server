@@ -395,6 +395,104 @@ class FfmpegRunner
     }
 
     /**
+     * Builds an FFmpeg command that muxes the input to CMAF (fMP4) output that
+     * serves BOTH DASH and HLS from a single encode.
+     *
+     * Uses FFmpeg's DASH muxer with `-hls_playlist 1`, so one pass writes:
+     *   - `manifest.mpd`              (DASH manifest)
+     *   - `master.m3u8` + `media_N.m3u8` (HLS master + media playlists, HLS v7 fMP4)
+     *   - `init-N.m4s` + `chunk-N-NNNNN.m4s` (shared CMAF init + media segments)
+     * All playlists/manifest reference segments by relative filename, so a generic
+     * per-job file server delivers them with no URI rewriting.
+     *
+     * Per-stream copy vs encode follows the same `video_codec` / `audio_codec`
+     * convention as {@see self::buildHlsCommand()} (`'copy'` to remux, an encoder
+     * name to transcode).
+     *
+     * @param string               $inputPath Source media file path.
+     * @param string               $outDir    Directory the manifest/playlists/segments are written to.
+     * @param array<string, mixed> $params    Encoding / segmenting parameters (see buildHlsCommand()).
+     *
+     * @return string Complete FFmpeg CMAF command.
+     *
+     * @since 0.24.0
+     */
+    public function buildCmafCommand(string $inputPath, string $outDir, array $params): string
+    {
+        $segSeconds = self::paramInt($params, 'segment_seconds') ?? 6;
+        if ($segSeconds < 1) {
+            $segSeconds = 6;
+        }
+
+        $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+
+        // Explicit mapping: video required, audio optional (some files have none).
+        $cmd .= ' -map 0:v:0 -map 0:a:0?';
+
+        // Video: copy a compatible stream as-is, otherwise encode.
+        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
+        if ($videoCodec === 'copy') {
+            $cmd .= ' -c:v copy';
+        } else {
+            $cmd .= ' -c:v ' . $videoCodec;
+            if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
+                $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
+                $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
+                $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
+            }
+            $width = self::paramInt($params, 'width');
+            $height = self::paramInt($params, 'height');
+            if ($width !== null && $height !== null) {
+                $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+            }
+            // Closed, fixed-size GOP so segments are keyframe-aligned across both protocols.
+            $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
+        }
+
+        // Audio: copy AAC as-is, otherwise encode to AAC.
+        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === 'copy') {
+            $cmd .= ' -c:a copy';
+        } else {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $cmd .= ' -ar ' . (self::paramInt($params, 'audio_sample_rate') ?? 48000);
+            $audioChannels = self::paramInt($params, 'audio_channels');
+            if ($audioChannels !== null) {
+                $cmd .= ' -ac ' . $audioChannels;
+            }
+        }
+
+        // DASH muxer with HLS playlist generation — one encode, both protocols.
+        $cmd .= ' -f dash';
+        $cmd .= ' -seg_duration ' . $segSeconds;
+        $cmd .= ' -use_template 1 -use_timeline 1';
+        $cmd .= ' -init_seg_name ' . escapeshellarg('init-$RepresentationID$.m4s');
+        $cmd .= ' -media_seg_name ' . escapeshellarg('chunk-$RepresentationID$-$Number%05d$.m4s');
+        $cmd .= ' -hls_playlist 1 -hls_master_name master.m3u8';
+        $cmd .= ' ' . escapeshellarg($outDir . '/manifest.mpd');
+
+        return $cmd;
+    }
+
+    /**
+     * Starts a CMAF transcode (DASH + HLS) as a detached background process.
+     *
+     * @param string               $inputPath Source media file path.
+     * @param string               $outDir    Output directory.
+     * @param array<string, mixed> $params    Parameters for {@see self::buildCmafCommand()}.
+     *
+     * @return int OS process id of the launched job (0 if launch failed).
+     *
+     * @since 0.24.0
+     */
+    public function startCmafTranscode(string $inputPath, string $outDir, array $params): int
+    {
+        return $this->startDetached($this->buildCmafCommand($inputPath, $outDir, $params), $outDir);
+    }
+
+    /**
      * Launches an FFmpeg command fully detached from the PHP process.
      *
      * Phlix runs on a long-lived Workerman event loop, so the synchronous

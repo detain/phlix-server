@@ -131,6 +131,47 @@ class FfmpegHlsTranscodeTest extends TestCase
         $this->assertGreaterThanOrEqual(1, count(glob("{$out}/segment_0_*.ts") ?: []));
     }
 
+    public function testDetachedCmafTranscodeProducesBothDashAndHls(): void
+    {
+        $clip = "{$this->dir}/in.mkv";
+        $this->makeClip($clip);
+
+        $out = "{$this->dir}/cmaf";
+        mkdir($out, 0755, true);
+
+        $pid = $this->runner->startCmafTranscode($clip, $out, [
+            'video_codec' => 'libx264',
+            'preset' => 'ultrafast',
+            'crf' => 28,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '96k',
+            'segment_seconds' => 1,
+        ]);
+        $this->assertGreaterThan(0, $pid);
+
+        $deadline = microtime(true) + 30.0;
+        while (microtime(true) < $deadline && !file_exists("{$out}/.complete") && !file_exists("{$out}/.failed")) {
+            usleep(200000);
+        }
+
+        $log = is_file("{$out}/ffmpeg.log") ? (string) file_get_contents("{$out}/ffmpeg.log") : '';
+        $this->assertFileExists("{$out}/.complete", "cmaf failed: {$log}");
+
+        // DASH manifest + HLS master/media playlists from a single encode.
+        $this->assertFileExists("{$out}/manifest.mpd");
+        $this->assertFileExists("{$out}/master.m3u8");
+        $this->assertStringContainsString('<MPD', (string) file_get_contents("{$out}/manifest.mpd"));
+        $this->assertStringContainsString('#EXTM3U', (string) file_get_contents("{$out}/master.m3u8"));
+
+        // Shared fMP4 init + media segments.
+        $this->assertGreaterThanOrEqual(1, count(glob("{$out}/init-*.m4s") ?: []));
+        $chunks = glob("{$out}/chunk-*.m4s") ?: [];
+        $this->assertGreaterThanOrEqual(1, count($chunks));
+        foreach ($chunks as $c) {
+            $this->assertGreaterThan(0, (int) filesize($c));
+        }
+    }
+
     private function rrmdir(string $dir): void
     {
         $entries = scandir($dir) ?: [];

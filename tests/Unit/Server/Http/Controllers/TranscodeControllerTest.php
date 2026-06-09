@@ -26,6 +26,7 @@ class TranscodeControllerTest extends TestCase
                 'status' => 'running',
                 'master_url' => '/hls/job-7/master.m3u8',
                 'hls_url' => '/hls/job-7/master.m3u8',
+                'dash_url' => '/dash/job-7/manifest.mpd',
                 'reused' => false,
             ]);
         $controller = new TranscodeController($manager);
@@ -36,6 +37,7 @@ class TranscodeControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertSame('job-7', $body['job_id']);
         $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
+        $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
         $this->assertFalse($body['reused']);
     }
 
@@ -93,6 +95,7 @@ class TranscodeControllerTest extends TestCase
         $this->assertSame('running', $body['status']);
         $this->assertTrue($body['playlist_ready']);
         $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
+        $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
     }
 
     public function testStatusReturns404WhenJobUnknown(): void

@@ -7,122 +7,25 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Streaming\HlsStreamer;
-use Phlix\Media\Transcoding\TranscodeManager;
 
 /**
- * Serves HLS playlists and segments for transcode jobs.
+ * Serves HLS playlists and CMAF segments for transcode jobs.
  *
- * The variant playlist and segments are read straight from the files the
- * detached FFmpeg HLS encode writes ({@see TranscodeManager}), so this serves
- * REAL transcoded output rather than the placeholder manifests it used to.
+ * The transcode pipeline ({@see \Phlix\Media\Transcoding\TranscodeManager}) runs
+ * one CMAF (fMP4) encode that writes `master.m3u8` + `media_N.m3u8` (HLS) and the
+ * shared `init-N.m4s` / `chunk-N-NNNNN.m4s` segments into the job directory. Every
+ * playlist references its segments by relative filename, so this serves the job
+ * directory's files verbatim — no URI rewriting.
  */
 class HlsController
 {
-    private HlsStreamer $hlsStreamer;
-    private ?TranscodeManager $transcodeManager;
+    use TranscodeFileServer;
 
-    public function __construct(HlsStreamer $hlsStreamer, ?TranscodeManager $transcodeManager = null)
+    private HlsStreamer $hlsStreamer;
+
+    public function __construct(HlsStreamer $hlsStreamer)
     {
         $this->hlsStreamer = $hlsStreamer;
-        $this->transcodeManager = $transcodeManager;
-    }
-
-    /**
-     * GET /hls/{job_id}/master.m3u8 — master playlist referencing the variant(s).
-     *
-     * Built from the job's recorded variant descriptor (resolution / bandwidth)
-     * so an adaptive client gets accurate STREAM-INF metadata. Falls back to
-     * 1080p defaults when the descriptor is unavailable.
-     *
-     * @param array<string, string> $params
-     */
-    public function getMasterPlaylist(Request $request, array $params): Response
-    {
-        $jobId = $params['job_id'] ?? '';
-        if ($jobId === '') {
-            return (new Response())->status(400)->json(['error' => 'job_id is required']);
-        }
-
-        $variant = $this->transcodeManager?->getJobVariant($jobId);
-        $width = (int) ($variant['width'] ?? 1920);
-        $height = (int) ($variant['height'] ?? 1080);
-        $bandwidth = (int) ($variant['bandwidth'] ?? 5000000);
-
-        $playlist = "#EXTM3U\n#EXT-X-VERSION:3\n";
-        $playlist .= sprintf(
-            "#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n",
-            $bandwidth > 0 ? $bandwidth : 5000000,
-            $width > 0 ? $width : 1920,
-            $height > 0 ? $height : 1080
-        );
-        // Relative to /hls/{jobId}/master.m3u8 -> /hls/{jobId}/0/playlist.m3u8.
-        $playlist .= "0/playlist.m3u8\n";
-
-        return (new Response())
-            ->header('Content-Type', 'application/vnd.apple.mpegurl')
-            ->header('Cache-Control', 'no-cache')
-            ->body($playlist);
-    }
-
-    /**
-     * GET /hls/{job_id}/{variant_index}/playlist.m3u8 — the real variant playlist.
-     *
-     * Reads the FFmpeg-produced `stream_{variant}.m3u8` from the job directory
-     * and rewrites each `segment_{variant}_NNN.ts` URI to the canonical route
-     * form (`NNN.ts`, resolved against this playlist's URL → the segment route).
-     * 404 while the encode has not written the playlist yet, so the client
-     * retries until the first segments land.
-     *
-     * @param array<string, string> $params
-     */
-    public function getVariantPlaylist(Request $request, array $params): Response
-    {
-        $jobId = $params['job_id'] ?? '';
-        $variantIndex = (int) ($params['variant_index'] ?? 0);
-        if ($jobId === '') {
-            return (new Response())->status(400)->json(['error' => 'job_id is required']);
-        }
-
-        $file = $this->hlsStreamer->getJobDirectory($jobId) . "/stream_{$variantIndex}.m3u8";
-        if (!is_file($file)) {
-            return (new Response())->status(404)->json(['error' => 'Playlist not ready']);
-        }
-
-        $content = file_get_contents($file);
-        if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read playlist']);
-        }
-
-        $content = $this->rewriteSegmentUris($content, $variantIndex);
-
-        return (new Response())
-            ->header('Content-Type', 'application/vnd.apple.mpegurl')
-            ->header('Cache-Control', 'no-cache')
-            ->body($content);
-    }
-
-    /**
-     * GET /hls/{job_id}/{variant_index}/{segment_number}.ts — one segment file.
-     *
-     * @param array<string, string> $params
-     */
-    public function getSegment(Request $request, array $params): Response
-    {
-        $jobId = $params['job_id'] ?? '';
-        $variantIndex = (int) ($params['variant_index'] ?? 0);
-        $segmentNumber = (int) ($params['segment_number'] ?? 0);
-
-        $content = $this->hlsStreamer->getSegmentContent($jobId, $variantIndex, $segmentNumber);
-        if ($content === null) {
-            return (new Response())->status(404)->json(['error' => 'Segment not found']);
-        }
-
-        return (new Response())
-            ->header('Content-Type', 'video/mp2t')
-            ->header('Cache-Control', 'public, max-age=31536000')
-            ->header('Content-Length', (string) strlen($content))
-            ->header('Accept-Ranges', 'bytes')
-            ->body($content);
     }
 
     /**
@@ -144,21 +47,17 @@ class HlsController
     }
 
     /**
-     * Rewrites `segment_{variant}_NNN.ts` URIs to the canonical `NNN.ts` route form.
+     * GET /hls/{job_id}/{file} — serve a playlist or segment from the job dir.
      *
-     * @param string $playlist     Raw FFmpeg variant playlist.
-     * @param int    $variantIndex Variant index whose segment prefix to strip.
+     * Handles `master.m3u8`, `media_N.m3u8`, `init-N.m4s` and `chunk-*.m4s`.
      *
-     * @return string Playlist with rewritten segment URIs.
+     * @param array<string, string> $params
      */
-    private function rewriteSegmentUris(string $playlist, int $variantIndex): string
+    public function serveFile(Request $request, array $params): Response
     {
-        $pattern = '/^segment_' . $variantIndex . '_(\d+)\.ts$/m';
-        $result = preg_replace_callback(
-            $pattern,
-            static fn(array $m): string => ((int) $m[1]) . '.ts',
-            $playlist
-        );
-        return is_string($result) ? $result : $playlist;
+        $jobId = $params['job_id'] ?? '';
+        $file = $params['file'] ?? '';
+        $dir = $jobId !== '' ? $this->hlsStreamer->getJobDirectory($jobId) : '';
+        return $this->serveJobFile($dir, $file);
     }
 }

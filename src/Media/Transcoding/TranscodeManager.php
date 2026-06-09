@@ -370,6 +370,49 @@ class TranscodeManager
     }
 
     /**
+     * Returns the variant descriptor for a job (for the HLS master playlist).
+     *
+     * @param string $jobId Job identifier.
+     *
+     * @return array{width: int|null, height: int|null, bandwidth: int|null, status: string}|null
+     *         Variant info, or null when the job is unknown.
+     *
+     * @since 0.23.0
+     */
+    public function getJobVariant(string $jobId): ?array
+    {
+        $row = $this->getJobRow($jobId);
+        if ($row === null) {
+            return null;
+        }
+        return [
+            'width' => $this->nullableInt($row['variant_width'] ?? null),
+            'height' => $this->nullableInt($row['variant_height'] ?? null),
+            'bandwidth' => $this->nullableInt($row['variant_bandwidth'] ?? null),
+            'status' => is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING,
+        ];
+    }
+
+    /**
+     * Coerces a mixed value to a positive int or null.
+     *
+     * @param mixed $value Raw value.
+     *
+     * @return int|null Positive int, or null.
+     */
+    private function nullableInt(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            $n = (int) $value;
+            return $n > 0 ? $n : null;
+        }
+        return null;
+    }
+
+    /**
      * Computes HLS encode parameters from a probe + device profile.
      *
      * Copies a browser-compatible stream when possible (h264 video without a

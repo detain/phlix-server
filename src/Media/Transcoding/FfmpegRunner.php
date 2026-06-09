@@ -286,6 +286,178 @@ class FfmpegRunner
     }
 
     /**
+     * Builds an FFmpeg command that muxes the input straight to HLS.
+     *
+     * Unlike {@see self::buildTranscodeCommand()} (single opaque output file),
+     * this uses FFmpeg's native HLS muxer to write a variant playlist
+     * (`stream_{variant}.m3u8`) and its mpegts segments
+     * (`segment_{variant}_NNN.ts`) into $outDir — exactly what
+     * {@see \Phlix\Server\Http\Controllers\HlsController} serves.
+     *
+     * Per-stream copy vs encode is the caller's decision via `video_codec` /
+     * `audio_codec`: pass `'copy'` to remux a browser-compatible stream (e.g.
+     * h264/aac already, just wrong container — fast, no CPU) or an encoder name
+     * (`libx264`, `libx265`, `h264_nvenc`, …) to transcode.
+     *
+     * Recognized $params keys: variant_index, video_codec, audio_codec, width,
+     * height, preset, crf, audio_bitrate, audio_channels, audio_sample_rate,
+     * segment_seconds, playlist_type, start_number. All are read through the
+     * type-safe paramString()/paramInt() accessors, so unknown or wrongly-typed
+     * values are simply ignored.
+     *
+     * @param string               $inputPath Source media file path.
+     * @param string               $outDir    Directory the playlist + segments are written to.
+     * @param array<string, mixed> $params    Encoding / segmenting parameters (see above).
+     *
+     * @return string Complete FFmpeg HLS command.
+     *
+     * @since 0.23.0
+     */
+    public function buildHlsCommand(string $inputPath, string $outDir, array $params): string
+    {
+        $variant = self::paramInt($params, 'variant_index') ?? 0;
+        $segSeconds = self::paramInt($params, 'segment_seconds') ?? 6;
+        if ($segSeconds < 1) {
+            $segSeconds = 6;
+        }
+        $playlistType = self::paramString($params, 'playlist_type') ?? 'event';
+        $startNumber = self::paramInt($params, 'start_number') ?? 0;
+
+        $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+
+        // Video: copy a compatible stream as-is, otherwise encode.
+        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
+        if ($videoCodec === 'copy') {
+            $cmd .= ' -c:v copy';
+        } else {
+            $cmd .= ' -c:v ' . $videoCodec;
+            if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
+                $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
+                $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
+                $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
+            }
+            $width = self::paramInt($params, 'width');
+            $height = self::paramInt($params, 'height');
+            if ($width !== null && $height !== null) {
+                $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+            }
+            // Closed, fixed-size GOP so every segment can start on a keyframe and
+            // play independently (independent_segments). sc_threshold 0 stops
+            // scene-cut keyframes from producing uneven segment boundaries.
+            $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
+        }
+
+        // Audio: copy AAC as-is, otherwise encode to AAC.
+        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === 'copy') {
+            $cmd .= ' -c:a copy';
+        } else {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $cmd .= ' -ar ' . (self::paramInt($params, 'audio_sample_rate') ?? 48000);
+            $audioChannels = self::paramInt($params, 'audio_channels');
+            if ($audioChannels !== null) {
+                $cmd .= ' -ac ' . $audioChannels;
+            }
+        }
+
+        // HLS muxer — write the variant playlist + segments directly.
+        $cmd .= ' -f hls';
+        $cmd .= ' -hls_time ' . $segSeconds;
+        $cmd .= ' -hls_playlist_type ' . escapeshellarg($playlistType);
+        $cmd .= ' -hls_flags independent_segments';
+        $cmd .= ' -hls_segment_type mpegts';
+        $cmd .= ' -start_number ' . $startNumber;
+        $cmd .= ' -hls_segment_filename ' . escapeshellarg($outDir . '/segment_' . $variant . '_%03d.ts');
+        $cmd .= ' ' . escapeshellarg($outDir . '/stream_' . $variant . '.m3u8');
+
+        return $cmd;
+    }
+
+    /**
+     * Starts an HLS transcode as a detached background process.
+     *
+     * Convenience wrapper: builds the HLS command and launches it via
+     * {@see self::startDetached()} so the caller returns immediately.
+     *
+     * @param string               $inputPath Source media file path.
+     * @param string               $outDir    Output directory.
+     * @param array<string, mixed> $params    Parameters for {@see self::buildHlsCommand()}.
+     *
+     * @return int OS process id of the launched job (0 if launch failed).
+     *
+     * @since 0.23.0
+     */
+    public function startHlsTranscode(string $inputPath, string $outDir, array $params): int
+    {
+        return $this->startDetached($this->buildHlsCommand($inputPath, $outDir, $params), $outDir);
+    }
+
+    /**
+     * Launches an FFmpeg command fully detached from the PHP process.
+     *
+     * Phlix runs on a long-lived Workerman event loop, so the synchronous
+     * {@see self::transcode()} (proc_open + stream_get_contents + proc_close)
+     * MUST NOT be used in the request path — it would block the worker for the
+     * entire encode. This backgrounds the command with `nohup ... &`, captures
+     * output to `$outDir/ffmpeg.log`, and writes a `.complete` / `.failed`
+     * marker on exit so readiness can be polled from disk (surviving worker
+     * reloads, which an in-memory process handle would not).
+     *
+     * @param string $command The full FFmpeg command to run.
+     * @param string $outDir  Directory for the log and completion markers.
+     *
+     * @return int OS process id of the background job (0 if launch failed).
+     *
+     * @since 0.23.0
+     */
+    public function startDetached(string $command, string $outDir): int
+    {
+        $inner = $command
+            . ' && touch ' . escapeshellarg($outDir . '/.complete')
+            . ' || touch ' . escapeshellarg($outDir . '/.failed');
+        $full = sprintf(
+            'nohup sh -c %s > %s 2>&1 & echo $!',
+            escapeshellarg($inner),
+            escapeshellarg($outDir . '/ffmpeg.log')
+        );
+
+        $this->logger->debug('Starting detached HLS transcode', ['command' => $command]);
+
+        $pid = shell_exec($full);
+        if (!is_string($pid)) {
+            $this->logger->error('Failed to launch detached transcode');
+            return 0;
+        }
+
+        return (int) trim($pid);
+    }
+
+    /**
+     * Checks whether a process id is still running.
+     *
+     * Uses `posix_kill($pid, 0)` when ext-posix is present, otherwise probes
+     * `/proc/{pid}`. Returns false for non-positive pids.
+     *
+     * @param int $pid Process id to check.
+     *
+     * @return bool True if the process appears to be alive.
+     *
+     * @since 0.23.0
+     */
+    public function isProcessRunning(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+        if (function_exists('posix_kill')) {
+            return posix_kill($pid, 0);
+        }
+        return is_dir('/proc/' . $pid);
+    }
+
+    /**
      * Generates a thumbnail image from a video.
      *
      * @param string $inputPath Source video path

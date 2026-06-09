@@ -15,6 +15,7 @@ use Phlix\Common\Container\Providers\NetworkServicesProvider;
 use Phlix\Common\Container\Providers\PluginsProvider;
 use Phlix\Common\Container\Providers\SessionServicesProvider;
 use Phlix\Common\Container\Providers\ThemingServicesProvider;
+use Phlix\Common\Container\Providers\TranscodeServicesProvider;
 use Phlix\Common\Container\Providers\WebPortalServicesProvider;
 use Psr\Container\ContainerInterface;
 
@@ -114,6 +115,7 @@ final class ContainerFactory
             new AuthServicesProvider(),
             new HubServicesProvider(),
             new MediaServicesProvider(),
+            new TranscodeServicesProvider(),
             new NetworkServicesProvider(),
             new SessionServicesProvider(),
             new WebPortalServicesProvider(),

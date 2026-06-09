@@ -16,4 +16,25 @@ return [
         'reloadable' => true,
         'reuse_port' => true,
     ],
+
+    // FFmpeg / transcoding settings (binary paths, hardware accel, timeouts).
+    // Loaded here so the DI providers (MediaServicesProvider, the transcode
+    // wiring) see it via $appConfig['ffmpeg'] in BOTH entry points
+    // (public/index.php CGI path and the Workerman daemon Application boot),
+    // rather than only the ad-hoc include bin/phlix does for hwaccel probing.
+    'ffmpeg' => require __DIR__ . '/ffmpeg.php',
+
+    // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
+    // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the
+    // TranscodeManager writes there and HlsController/HlsStreamer read from the
+    // very same directory. It defaults to a writable temp path so on-demand
+    // transcoding works out of the box without provisioning /var/segments.
+    // `base_url` is only used to build absolute playlist URLs for casting.
+    'hls' => [
+        'segment_dir' => sys_get_temp_dir() . '/phlix_hls',
+        'base_url' => 'http://localhost:8096',
+        // Target HLS segment duration (seconds). 6s is the Apple-recommended
+        // default and keeps the segment count (and per-request overhead) sane.
+        'segment_seconds' => 6,
+    ],
 ];

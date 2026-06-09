@@ -36,7 +36,7 @@ PHP 8.3+ media server on **Workerman 5.x**. PSR-4 autoload: `Phlix\` → `src/`,
 - **`src/Server/WebSocket/`** — `WebSocketServer` wraps `Workerman\Worker`. `ConnectionPool` is a singleton (`getInstance()`). `MessageHandler->on($event, $cb)` registers handlers; event constants in `Events.php` (`WebSocketEvents::PLAYBACK_*`, `SYNCPLAY_*`, `AUTH_*`). Payload shape is always `['type' => $event, 'data' => $payload, 'timestamp' => time()]`.
 - **`src/Server/WebPortal/`** — `WebPortalRouter` serves portal JSON (`/api/v1/libraries`, etc.); `PageRenderer` instantiates `\Smarty`, sets template dir, assigns vars, fetches templates from `public/templates/{layouts,partials,auth,home,library,player}/*.tpl`. A Vite-built front-end (`web-ui/`) compiles to a committed bundle under `public/assets/app/`, injected into templates by `src/Server/WebPortal/ViteAssets.php`.
 - **`src/Auth/`** — `JwtHandler` (HS256, `iss=phlix`, 1h access / 7d refresh). `UserRepository` uses `password_hash(..., PASSWORD_ARGON2ID)`. `AuthManager` orchestrates register/login/refresh and calls `AuditLogger`. `UserProfileManager` enforces ≤5 profiles per user, PINs (4 or 6 digits, Argon2ID-hashed), and rating filter (G/PG/PG-13/R/NC-17/X/UNRATED). `WatchHistory` marks complete at 90%.
-- **`src/Media/`** — `Library/` (scanner parses `S01E02`, `(2020)`; `FolderWatcher` uses mtime checksum; `ItemRepository` hydrates `metadata_json`). `Metadata/` providers (`Tmdb`, `Tvdb`, `Fanart`, `LocalNfo`) implement `MetadataProviderInterface`; `MetadataManager` priority is `tmdb→local` for movies, `tvdb→fanart→local` for series, with 24h cache via `metadata_refreshed_at`. `Streaming/` (`HlsStreamer` master/variant `.m3u8` + `.ts`; `QualitySelector` profiles: generic, mobile-low, mobile-high, web, tv-4k). `Transcoding/` (`FfmpegRunner`, `EncodingHelper` CRF 23/28 libx264/libx265, config in `config/ffmpeg.php`).
+- **`src/Media/`** — `Library/` (scanner parses `S01E02`, `(2020)`; `FolderWatcher` uses mtime checksum; `ItemRepository` hydrates `metadata_json`). `Metadata/` providers (`Tmdb`, `Tvdb`, `Fanart`, `LocalNfo`) implement `MetadataProviderInterface`; `MetadataManager` priority is `tmdb→local` for movies, `tvdb→fanart→local` for series, with 24h cache via `metadata_refreshed_at`. `Streaming/` (`HlsStreamer` master/variant `.m3u8` + `.ts`; `QualitySelector` profiles: generic, mobile-low, mobile-high, web, tv-4k). `Transcoding/` (`FfmpegRunner` probe/transcode/HLS-segment, `EncodingHelper` CRF 23/28 libx264/libx265, `TranscodeManager` HLS pipeline; config in `config/ffmpeg.php`; DI wiring in `src/Common/Container/Providers/TranscodeServicesProvider.php`).
 - **`src/Session/`** — `SessionManager` (device sessions), `PlaybackController` (continue-watching at <95%), `SyncPlay/` with `TimeSync` doing NTP-style weighted-mean offset over `OFFSET_SAMPLE_COUNT=5` samples.
 - **`src/LiveTv/`** (`ChannelManager`, `GuideManager`, `Recorder`, `LiveTvManager`) and **`src/Dlna/`** (`ContentDirectory`, `AvTransport`, `DlnaServer`, `DeviceRegistry`, `DlnaDevice`).
 - **`src/Common/`** — `Database/ConnectionPool` (static `init()` / `getConnection('mysql')`), `QueryBuilder`. `Logger/LoggerFactory` + `LogChannels` (`AUTH`, `HTTP`, `WEBSOCKET`, `MEDIA`, `SESSION`, `STREAMING`); `StructuredLogger` wraps Monolog; `AuditLogger` for security events.
@@ -86,10 +86,14 @@ grep -q "caliber" .git/hooks/pre-commit 2>/dev/null && echo "hook-active" || ech
 - If **hook-active**: the hook handles sync automatically — just commit normally. Tell the user: "Caliber will sync your agent configs automatically via the pre-commit hook."
 - If **no-hook**: run Caliber manually before committing:
   1. Tell the user: "Caliber: Syncing agent configs with your latest changes..."
-  2. Run: `/home/my/.nvm/versions/node/v24.15.0/bin/caliber refresh && git add CLAUDE.md .claude/ .cursor/ .cursorrules .github/copilot-instructions.md .github/instructions/ AGENTS.md CALIBER_LEARNINGS.md .agents/ .opencode/ 2>/dev/null`
+  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md CLAUDE.md .claude/ AGENTS.md .agents/ 2>/dev/null`
   3. After it completes, briefly tell the user what Caliber updated. Then proceed with the commit.
 
-If `/home/my/.nvm/versions/node/v24.15.0/bin/caliber` is not found, tell the user: "This project uses Caliber for agent config sync. Run /setup-caliber to get set up."
+**Valid `caliber refresh` options:** `--quiet` (suppress output) and `--dry-run` (preview without writing). Do not pass any other flags — options like `--auto-approve`, `--debug`, or `--force` do not exist and will cause errors.
+
+**`caliber config`** takes no flags — it runs an interactive provider setup. Do not pass `--provider`, `--api-key`, or `--endpoint`.
+
+If `caliber` is not found, tell the user: "This project uses Caliber for agent config sync. Run /setup-caliber to get set up."
 <!-- /caliber:managed:pre-commit -->
 
 <!-- caliber:managed:learnings -->
@@ -112,6 +116,6 @@ Pin your choice (`/model` in Claude Code, or `CALIBER_MODEL` when using Caliber 
 ## Context Sync
 
 This project uses [Caliber](https://github.com/caliber-ai-org/ai-setup) to keep AI agent configs in sync across Claude Code, Cursor, Copilot, and Codex.
-Configs update automatically before each commit via `/home/my/.nvm/versions/node/v24.15.0/bin/caliber refresh`.
+Configs update automatically before each commit via `caliber refresh`.
 If the pre-commit hook is not set up, run `/setup-caliber` to configure everything automatically.
 <!-- /caliber:managed:sync -->

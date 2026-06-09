@@ -546,20 +546,17 @@ class MediaScanner
             $metadata['year'] = (string) $normalized['year'];
         }
 
-        // Series pattern: Series S01E01 or Series - S01E01 - Episode Title
-        if (preg_match('/^(.+?)\s*S(\d{2})E(\d{2})/i', $name, $matches)) {
-            // Normalise scene separators (dots/underscores → spaces) and strip any
-            // trailing separators so "24.", "24 -" etc. collapse to "24".
-            $seriesTitle = (string) preg_replace('/[._]+/', ' ', $matches[1]);
-            $seriesTitle = (string) preg_replace('/\s+/', ' ', $seriesTitle);
-            $seriesTitle = trim($seriesTitle, " -._\t\n");
-            $metadata['name'] = $seriesTitle !== '' ? $seriesTitle : trim($matches[1]);
-            $metadata['season'] = (int)$matches[2];
-            $metadata['episode'] = (int)$matches[3];
-
-            // Extract episode title if present
-            if (preg_match('/E\d{2}\s*-\s*(.+)$/', $name, $titleMatch)) {
-                $metadata['episode_title'] = trim($titleMatch[1]);
+        // Episode detection across the many real-world naming styles (S01E02,
+        // "S01 E02", "1x02", absolute "Show - 394"/"Show 125"). Absolute
+        // numbering is only honoured in series libraries so a movie like
+        // "Blade Runner 2049" is never read as episode 2049.
+        $episode = EpisodeFilenameParser::parse($name, $type === 'series');
+        if ($episode !== null) {
+            $metadata['name'] = $episode['series'];
+            $metadata['season'] = $episode['season'];
+            $metadata['episode'] = $episode['episode'];
+            if ($episode['episode_title'] !== null) {
+                $metadata['episode_title'] = $episode['episode_title'];
             }
         }
 

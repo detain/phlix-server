@@ -14,12 +14,15 @@ declare(strict_types=1);
  * every row's existing `metadata_json` (TMDB/IMDb matches etc.) — unlike a full
  * rescan, which purges and re-creates.
  *
- * A candidate is any top-level row (`parent_id IS NULL`) in a video-content
- * library (video/series/movie) whose metadata carries BOTH a season and an
- * episode number, and whose path is a real file (not an existing synthetic
- * container). Real series/season containers carry no episode number and are
- * skipped; already-reparented episodes have a parent and are skipped — so the
- * script is safe to re-run (idempotent).
+ * A candidate is any top-level real-file row (`parent_id IS NULL`, path not a
+ * synthetic container) in a series/video library. Its filename is RE-PARSED with
+ * {@see EpisodeFilenameParser}, so it catches episodes the original scanner
+ * missed (spaced "S01 E02", absolute "Show - 394"/"Show 125", etc.) whose stored
+ * metadata has no season/episode — the parsed season/episode are written back
+ * into the row's metadata. Rows that do not parse as episodes (real movies or
+ * specials misfiled in a series library) are skipped. The movie library is
+ * excluded entirely. Already-reparented episodes have a parent and are skipped,
+ * so the script is safe to re-run (idempotent).
  *
  * Container paths come from {@see SeriesContainerNaming}, the SAME scheme the
  * live scanner uses, so a later scan resolves to these rows rather than making
@@ -35,6 +38,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/bootstrap_env.php';
 
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Media\Library\EpisodeFilenameParser;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesContainerNaming;
 
@@ -56,17 +60,19 @@ if ($libraryFilter !== null) {
 }
 echo str_repeat('-', 60) . "\n";
 
-// Candidate episodes: top-level rows in a video-content library carrying both a
-// season and an episode number, excluding synthetic containers.
-$sql = "SELECT mi.id, mi.library_id, mi.name, mi.type, mi.path, mi.metadata_json
+// Candidate rows: every top-level real-file row in a series/video library
+// (movies are excluded so the movie library is never touched). The filename is
+// re-parsed per row with EpisodeFilenameParser, so this catches episodes the
+// original scanner missed (spaced "S01 E02", absolute "Show - 394", etc.) whose
+// stored metadata has no season/episode. Non-episodes (real movies/specials in
+// a series library) parse to null and are skipped.
+$sql = "SELECT mi.id, mi.library_id, mi.name, mi.type, mi.path, mi.metadata_json, l.type AS library_type
         FROM media_items mi
         JOIN libraries l ON l.id = mi.library_id
         WHERE mi.parent_id IS NULL
-          AND l.type IN ('video', 'series', 'movie')
+          AND l.type IN ('video', 'series')
           AND mi.path NOT LIKE 'series:%'
-          AND mi.path NOT LIKE 'season:%'
-          AND JSON_EXTRACT(mi.metadata_json, '$.season') IS NOT NULL
-          AND JSON_EXTRACT(mi.metadata_json, '$.episode') IS NOT NULL";
+          AND mi.path NOT LIKE 'season:%'";
 $bindings = [];
 if ($libraryFilter !== null) {
     $sql .= " AND mi.library_id = ?";
@@ -78,7 +84,7 @@ if (!is_array($rows)) {
     $rows = [];
 }
 
-echo 'Found ' . count($rows) . " candidate episode row(s).\n\n";
+echo 'Found ' . count($rows) . " candidate row(s) to examine.\n\n";
 
 /** @var array<string, string> $containerCache synthetic path => container id */
 $containerCache = [];
@@ -86,6 +92,7 @@ $containerCache = [];
 $perSeries = [];
 $created = ['series' => 0, 'season' => 0];
 $reparented = 0;
+$skipped = 0;
 
 /**
  * Find or create a synthetic container row, mirroring MediaScanner.
@@ -128,30 +135,42 @@ $findOrCreate = static function (
     return $containerCache[$path] = $id;
 };
 
-/** Light series-title cleanup matching the scanner ("24." / "24 -" => "24"). */
-$cleanTitle = static function (string $raw): string {
-    $t = (string) preg_replace('/[._]+/', ' ', $raw);
-    $t = (string) preg_replace('/\s+/', ' ', $t);
-    $t = trim($t, " -._\t\n");
-    return $t !== '' ? $t : trim($raw);
-};
-
 foreach ($rows as $row) {
     if (!is_array($row)) {
         continue;
     }
     $id = is_string($row['id'] ?? null) ? $row['id'] : null;
     $libraryId = is_string($row['library_id'] ?? null) ? $row['library_id'] : null;
-    if ($id === null || $libraryId === null) {
+    $path = is_string($row['path'] ?? null) ? $row['path'] : null;
+    $libraryType = is_string($row['library_type'] ?? null) ? $row['library_type'] : '';
+    if ($id === null || $libraryId === null || $path === null) {
         continue;
     }
+
+    // Re-parse the filename; absolute numbering only honoured in series libraries.
+    $parsed = EpisodeFilenameParser::parse(basename($path), $libraryType === 'series');
+    if ($parsed === null) {
+        $skipped++;
+        continue;
+    }
+
     $rawMeta = $row['metadata_json'] ?? '{}';
     $metadata = is_string($rawMeta) ? (json_decode($rawMeta, true) ?: []) : (is_array($rawMeta) ? $rawMeta : []);
+    if (!is_array($metadata)) {
+        $metadata = [];
+    }
 
-    $season = isset($metadata['season']) && is_numeric($metadata['season']) ? (int) $metadata['season'] : 0;
-    $seriesName = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
-        ? $cleanTitle($metadata['name'])
-        : 'Unknown Series';
+    $seriesName = $parsed['series'] !== '' ? $parsed['series'] : 'Unknown Series';
+    $season = $parsed['season'];
+
+    // Merge parsed episode fields into the row's metadata so the API exposes
+    // season_number/episode_number (these rows previously carried none).
+    $metadata['name'] = $seriesName;
+    $metadata['season'] = $season;
+    $metadata['episode'] = $parsed['episode'];
+    if ($parsed['episode_title'] !== null) {
+        $metadata['episode_title'] = $parsed['episode_title'];
+    }
 
     $seriesId = $findOrCreate(
         $libraryId,
@@ -172,7 +191,7 @@ foreach ($rows as $row) {
     );
 
     if ($apply) {
-        $repo->update($id, ['parent_id' => $seasonId, 'type' => 'episode']);
+        $repo->update($id, ['parent_id' => $seasonId, 'type' => 'episode', 'metadata_json' => $metadata]);
     }
     $reparented++;
     $key = SeriesContainerNaming::slug($seriesName);
@@ -188,6 +207,7 @@ echo str_repeat('-', 60) . "\n";
 echo "Series containers " . ($apply ? 'created' : 'to create') . ": {$created['series']}\n";
 echo "Season containers " . ($apply ? 'created' : 'to create') . ": {$created['season']}\n";
 echo "Episodes " . ($apply ? 'reparented' : 'to reparent') . ": {$reparented}\n";
+echo "Skipped (not recognised as episodes): {$skipped}\n";
 echo $apply
     ? "\nDone. Reload the library in the app to see grouped shows.\n"
     : "\nDry-run only. Re-run with --apply to write these changes.\n";

@@ -23,7 +23,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 
 **Entry**: `public/index.php` bootstraps `ConnectionPool::init()` + `LoggerFactory::init()`, builds `AuthManager`, `LibraryManager`, `SessionManager`, `PlaybackController`, then dispatches via `PageRenderer` or `/api/` JSON. Server worker entry is `src/Server/Core/Application.php` (`Workerman\Worker`).
 
-**HTTP** (`src/Server/Http/`): `Request::fromGlobals()` → `Router::dispatch()` matches `{param}` placeholders → handler returns chained `Response`. Controllers live in `src/Server/Http/Controllers/` (`AuthController.php`, `LibraryController.php`, `MediaItemController.php`, `HlsController.php`, `SessionController.php`, `TraktOAuthController.php`). Middleware via `$router->group($prefix, $cb, [$middleware])`.
+**HTTP** (`src/Server/Http/`): `Request::fromGlobals()` → `Router::dispatch()` matches `{param}` placeholders → handler returns chained `Response`. Controllers live in `src/Server/Http/Controllers/` (`AuthController.php`, `LibraryController.php`, `MediaItemController.php`, `HlsController.php`, `TranscodeController.php`, `SessionController.php`, `TraktOAuthController.php`). Middleware via `$router->group($prefix, $cb, [$middleware])`.
 
 **WebSocket** (`src/Server/WebSocket/`): `WebSocketServer.php` wraps `Workerman\Worker` on `websocket://`. `Connection.php` implements `ConnectionInterface.php`. `ConnectionPool.php` is singleton (`getInstance()`). `MessageHandler->on($event, $cb)` registers handlers; events listed in `Events.php` (`WebSocketEvents::PLAYBACK_*`, `SYNCPLAY_*`, `AUTH_*`).
 
@@ -115,7 +115,7 @@ grep -q "caliber" .git/hooks/pre-commit 2>/dev/null && echo "hook-active" || ech
 - If **hook-active**: the hook handles sync automatically — just commit normally. Tell the user: "Caliber will sync your agent configs automatically via the pre-commit hook."
 - If **no-hook**: run Caliber manually before committing:
   1. Tell the user: "Caliber: Syncing agent configs with your latest changes..."
-  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md CLAUDE.md .claude/ AGENTS.md .agents/ 2>/dev/null`
+  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md AGENTS.md .agents/ 2>/dev/null`
   3. After it completes, briefly tell the user what Caliber updated. Then proceed with the commit.
 
 **Valid `caliber refresh` options:** `--quiet` (suppress output) and `--dry-run` (preview without writing). Do not pass any other flags — options like `--auto-approve`, `--debug`, or `--force` do not exist and will cause errors.

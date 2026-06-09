@@ -430,24 +430,23 @@ class MediaScanner
         $season = isset($metadata['season']) && is_numeric($metadata['season'])
             ? (int) $metadata['season']
             : 0;
-        $slug = $this->slug($seriesName);
 
         $seriesId = $this->findOrCreateContainer(
             $libraryId,
             'series',
             $seriesName,
-            "series:{$libraryId}:{$slug}",
+            SeriesContainerNaming::seriesPath($libraryId, $seriesName),
             null,
             ['name' => $seriesName]
         );
 
-        $seasonLabel = $season > 0 ? "Season {$season}" : 'Specials';
+        $seasonLabel = SeriesContainerNaming::seasonLabel($season);
 
         return $this->findOrCreateContainer(
             $libraryId,
             'season',
             $seasonLabel,
-            "season:{$libraryId}:{$slug}:{$season}",
+            SeriesContainerNaming::seasonPath($libraryId, $seriesName, $season),
             $seriesId,
             ['name' => $seasonLabel, 'season' => $season]
         );
@@ -515,21 +514,6 @@ class MediaScanner
             return $metadata['raw_filename'];
         }
         return $file->getBasename('.' . $file->getExtension());
-    }
-
-    /**
-     * Builds a stable slug for synthetic container paths: lower-cased, with runs
-     * of non-alphanumerics collapsed to single hyphens.
-     *
-     * @param string $value Source string (a series title).
-     * @return string Slug, or 'unknown' when nothing alphanumeric remains.
-     */
-    private function slug(string $value): string
-    {
-        $slug = strtolower($value);
-        $slug = (string) preg_replace('/[^a-z0-9]+/', '-', $slug);
-        $slug = trim($slug, '-');
-        return $slug === '' ? 'unknown' : $slug;
     }
 
     /**

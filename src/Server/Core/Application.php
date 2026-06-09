@@ -266,6 +266,13 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // On-demand transcode: start (or reuse) an HLS job for a media item, and
+        // poll its readiness. The web player calls these when a file can't be
+        // direct-played; the master playlist URL is served by HlsController.
+        $transcodeController = $this->getTranscodeController();
+        $this->router->post('/api/v1/media/{id}/transcode', [$transcodeController, 'start']);
+        $this->router->get('/api/v1/transcode/{jobId}/status', [$transcodeController, 'status']);
+
         // Marker endpoints — intro/outro/chapter markers used by the player's
         // "skip intro" / "skip outro" UI and bulk per-show export.
         $markerController = $this->getMarkerController();
@@ -2325,7 +2332,22 @@ class Application
 
         /** @var \Phlix\Media\Streaming\HlsStreamer */
         $hlsStreamer = $this->container->get(\Phlix\Media\Streaming\HlsStreamer::class);
-        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer);
+        /** @var \Phlix\Media\Transcoding\TranscodeManager */
+        $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer, $transcodeManager);
+    }
+
+    /**
+     * Returns a TranscodeController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\TranscodeController The controller instance.
+     */
+    private function getTranscodeController(): \Phlix\Server\Http\Controllers\TranscodeController
+    {
+        /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
+        $transcodeManager = $this->container?->get(\Phlix\Media\Transcoding\TranscodeManager::class)
+            ?? throw new \RuntimeException('Container required for TranscodeController');
+        return new \Phlix\Server\Http\Controllers\TranscodeController($transcodeManager);
     }
 
     /**

@@ -361,6 +361,11 @@ class WebPortalRouter
      *   - limit (int): Max items to return 1-100 (default: 50)
      *   - offset (int): Items to skip for pagination (default: 0)
      *   - libraryId (string): Scope results (and total) to a single library
+     *   - parentId (string): Scope to the direct children (seasons/episodes) of
+     *     one item — drives the series detail drill-down
+     *   - topLevel (1|true): Return only parent-less items (movies + series),
+     *     excluding seasons/episodes — drives Browse rails/library grids; ignored
+     *     when `search` is set
      * @param array<string, string> $params Route parameters (unused)
      *
      * @return Response JSON response with items array and pagination info
@@ -382,7 +387,11 @@ class WebPortalRouter
      *       "runtime": 7200,
      *       "overview": "A great movie...",
      *       "actors": ["Actor One", "Actor Two"],
-     *       "director": "Director Name"
+     *       "director": "Director Name",
+     *       "parent_id": null,
+     *       "season_number": null,
+     *       "episode_number": null,
+     *       "episode_title": null
      *     }
      *   ],
      *   "total": 100,
@@ -477,6 +486,21 @@ class WebPortalRouter
             $params['offset'] = (int) $offset;
         }
 
+        // Hierarchy scoping. `parentId` fetches the direct children (seasons/
+        // episodes) of one item for the series detail drill-down; `topLevel`
+        // restricts a Browse rail / library grid to parent-less items (movies +
+        // series) so a series library shows shows, not every episode. Both are
+        // forwarded into ItemRepository::query() via $params.
+        $parentId = $request->queryString('parentId');
+        if ($parentId !== null && $parentId !== '') {
+            $params['parentId'] = $parentId;
+        }
+
+        $topLevel = $request->queryString('topLevel');
+        if ($topLevel === '1' || $topLevel === 'true') {
+            $params['topLevel'] = true;
+        }
+
         return $params;
     }
 
@@ -501,7 +525,7 @@ class WebPortalRouter
         if ($name === '') {
             $name = $id !== '' ? $id : 'Untitled';
         }
-        $validTypes = ['movie', 'series', 'episode', 'audio', 'image'];
+        $validTypes = ['movie', 'series', 'season', 'episode', 'audio', 'image'];
         $type = is_string($item['type'] ?? null) && in_array($item['type'], $validTypes, true)
             ? $item['type']
             : 'movie';
@@ -530,6 +554,22 @@ class WebPortalRouter
             'overview' => $metadata['overview'] ?? null,
             'actors' => $metadata['actors'] ?? [],
             'director' => $metadata['director'] ?? null,
+            // Series→season→episode hierarchy. `parent_id` is a top-level column;
+            // season/episode numbers + the per-episode title live in metadata_json
+            // (the scanner parses `S01E02` into metadata.season/episode/episode_title).
+            // Top-level items (movies, series) carry a null parent + null numbers.
+            'parent_id' => is_scalar($item['parent_id'] ?? null) && ($item['parent_id'] ?? null) !== ''
+                ? (string) $item['parent_id']
+                : null,
+            'season_number' => isset($metadata['season']) && is_numeric($metadata['season'])
+                ? (int) $metadata['season']
+                : null,
+            'episode_number' => isset($metadata['episode']) && is_numeric($metadata['episode'])
+                ? (int) $metadata['episode']
+                : null,
+            'episode_title' => is_string($metadata['episode_title'] ?? null)
+                ? $metadata['episode_title']
+                : null,
             'created_at' => $item['created_at'] ?? null,
             'updated_at' => $item['updated_at'] ?? null,
         ];

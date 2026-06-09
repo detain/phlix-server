@@ -243,18 +243,19 @@ final class ContainerFactoryTest extends TestCase
     {
         $providers = ContainerFactory::defaultProviders();
 
-        $this->assertCount(11, $providers);
+        $this->assertCount(12, $providers);
         $this->assertInstanceOf(CoreServicesProvider::class, $providers[0]);
         $this->assertInstanceOf(EventServicesProvider::class, $providers[1]);
         $this->assertInstanceOf(AuthServicesProvider::class, $providers[2]);
         $this->assertInstanceOf(\Phlix\Common\Container\Providers\HubServicesProvider::class, $providers[3]);
         $this->assertInstanceOf(MediaServicesProvider::class, $providers[4]);
-        $this->assertInstanceOf(\Phlix\Common\Container\Providers\NetworkServicesProvider::class, $providers[5]);
-        $this->assertInstanceOf(SessionServicesProvider::class, $providers[6]);
-        $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[7]);
-        $this->assertInstanceOf(AdminServicesProvider::class, $providers[8]);
-        $this->assertInstanceOf(PluginsProvider::class, $providers[9]);
-        $this->assertInstanceOf(ThemingServicesProvider::class, $providers[10]);
+        $this->assertInstanceOf(\Phlix\Common\Container\Providers\TranscodeServicesProvider::class, $providers[5]);
+        $this->assertInstanceOf(\Phlix\Common\Container\Providers\NetworkServicesProvider::class, $providers[6]);
+        $this->assertInstanceOf(SessionServicesProvider::class, $providers[7]);
+        $this->assertInstanceOf(WebPortalServicesProvider::class, $providers[8]);
+        $this->assertInstanceOf(AdminServicesProvider::class, $providers[9]);
+        $this->assertInstanceOf(PluginsProvider::class, $providers[10]);
+        $this->assertInstanceOf(ThemingServicesProvider::class, $providers[11]);
     }
 
     public function test_resolves_hls_streamer_with_config_overrides(): void

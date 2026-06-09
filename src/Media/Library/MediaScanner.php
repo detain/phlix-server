@@ -50,6 +50,25 @@ class MediaScanner
     private ?TrailerFinder $trailerFinder = null;
 
     /**
+     * Library types whose files hold episodic/movie video content and should be
+     * organised into a series → season → episode hierarchy when filenames carry
+     * an `SxxExx` marker. Other library types (audio, image, book, …) are passed
+     * through unchanged.
+     *
+     * @var array<int, string>
+     */
+    private const VIDEO_CONTENT_LIBRARY_TYPES = ['video', 'series', 'movie'];
+
+    /**
+     * Per-scan cache of series/season container IDs keyed by their synthetic path,
+     * so the many episodes of one show resolve to a single shared series + season
+     * without a repository round-trip each time. Reset at the start of every scan.
+     *
+     * @var array<string, string>
+     */
+    private array $containerCache = [];
+
+    /**
      * Constructor for MediaScanner.
      *
      * @param Connection $db Database connection for media item persistence
@@ -215,6 +234,7 @@ class MediaScanner
         }
 
         $startMs = (int)(microtime(true) * 1000);
+        $this->containerCache = [];
         $this->dispatchScanStarted($libraryId, $path);
 
         $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
@@ -309,16 +329,33 @@ class MediaScanner
             return false; // Already scanned
         }
 
-        // Determine media type
-        $mediaType = $this->determineMediaType($file, $type);
+        // Parse naming for series/movies (extracts season/episode/episode_title).
+        $metadata = $this->parseNaming($file->getFilename(), $type);
 
-        // Parse naming for series/movies
-        $metadata = $this->parseNaming($file->getFilename(), $mediaType);
+        // An SxxExx marker in a video-content library means this file is an
+        // episode: type it as such and slot it under a (find-or-created) series
+        // → season parent so the library groups by show instead of dumping every
+        // episode as its own top-level entry.
+        $isEpisode = $this->isVideoContentLibrary($type)
+            && isset($metadata['season'], $metadata['episode']);
+
+        if ($isEpisode) {
+            $mediaType = 'episode';
+            $parentId = $this->resolveEpisodeParent($libraryId, $metadata);
+            $name = $this->episodeName($metadata, $file);
+        } else {
+            $mediaType = $this->determineMediaType($file, $type);
+            $parentId = null;
+            $name = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
+                ? $metadata['name']
+                : $file->getBasename('.' . $file->getExtension());
+        }
 
         // Create media item
         $itemId = $this->itemRepository->create([
             'library_id' => $libraryId,
-            'name' => $metadata['name'] ?? $file->getBasename('.' . $file->getExtension()),
+            'parent_id' => $parentId,
+            'name' => $name,
             'type' => $mediaType,
             'path' => $path,
             'metadata_json' => $metadata,
@@ -336,20 +373,163 @@ class MediaScanner
     }
 
     /**
-     * Determines the specific media type from file and library type.
+     * Determines the media type for a NON-episodic file.
+     *
+     * Episode detection happens in {@see processFile()} before this is called.
+     * Any video-content library ('video', 'series', 'movie') defaults its loose,
+     * non-episodic files to 'movie' — a file sitting in a series library that
+     * carries no `SxxExx` marker becomes a top-level movie rather than a bogus
+     * `type='series'` row (the prior behaviour that made every episode look like
+     * its own separate series). Other library types pass through unchanged.
      *
      * @param SplFileInfo $file The file info
-     * @param string $libraryType The library type ('video', 'audio', 'image')
-     * @return string The specific media type ('movie', 'episode', 'track', etc.)
+     * @param string $libraryType The library type ('video', 'series', 'movie', 'audio', 'image', …)
+     * @return string The specific media type ('movie', 'audio', 'image', 'book', …)
      */
     private function determineMediaType(SplFileInfo $file, string $libraryType): string
     {
-        if ($libraryType !== 'video') {
-            return $libraryType;
+        if ($this->isVideoContentLibrary($libraryType)) {
+            return 'movie';
         }
 
-        // Could add series episode detection here
-        return 'movie';
+        return $libraryType;
+    }
+
+    /**
+     * Whether a library type holds movie/episode video content that should be
+     * organised into a series → season → episode hierarchy.
+     *
+     * @param string $libraryType The library type.
+     * @return bool True for 'video', 'series' and 'movie' libraries.
+     */
+    private function isVideoContentLibrary(string $libraryType): bool
+    {
+        return in_array($libraryType, self::VIDEO_CONTENT_LIBRARY_TYPES, true);
+    }
+
+    /**
+     * Resolves (find-or-creating) the season container an episode belongs under,
+     * creating the owning series container first when needed.
+     *
+     * Containers are addressed by a deterministic synthetic path
+     * (`series:<libraryId>:<slug>` / `season:<libraryId>:<slug>:<n>`) so repeated
+     * scans and the many episodes of one show all resolve to the same rows via
+     * {@see ItemRepository::findByPath()} — no schema or unique-key changes
+     * needed, and incremental rescans attach new episodes to existing shows.
+     *
+     * @param string               $libraryId Owning library UUID.
+     * @param array<string, mixed> $metadata  Parsed episode metadata (expects
+     *                                         'name' = series title, 'season' int).
+     * @return string The season container's media-item ID (the episode's parent).
+     */
+    private function resolveEpisodeParent(string $libraryId, array $metadata): string
+    {
+        $seriesName = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
+            ? $metadata['name']
+            : 'Unknown Series';
+        $season = isset($metadata['season']) && is_numeric($metadata['season'])
+            ? (int) $metadata['season']
+            : 0;
+        $slug = $this->slug($seriesName);
+
+        $seriesId = $this->findOrCreateContainer(
+            $libraryId,
+            'series',
+            $seriesName,
+            "series:{$libraryId}:{$slug}",
+            null,
+            ['name' => $seriesName]
+        );
+
+        $seasonLabel = $season > 0 ? "Season {$season}" : 'Specials';
+
+        return $this->findOrCreateContainer(
+            $libraryId,
+            'season',
+            $seasonLabel,
+            "season:{$libraryId}:{$slug}:{$season}",
+            $seriesId,
+            ['name' => $seasonLabel, 'season' => $season]
+        );
+    }
+
+    /**
+     * Finds an existing container row by its synthetic path or creates one,
+     * memoising the ID for the duration of the scan.
+     *
+     * @param string               $libraryId     Owning library UUID.
+     * @param string               $type          'series' or 'season'.
+     * @param string               $name          Display name.
+     * @param string               $syntheticPath Deterministic addressing path.
+     * @param string|null          $parentId      Parent container ID (null for a series).
+     * @param array<string, mixed> $metadata      Container metadata.
+     * @return string The container's media-item ID.
+     */
+    private function findOrCreateContainer(
+        string $libraryId,
+        string $type,
+        string $name,
+        string $syntheticPath,
+        ?string $parentId,
+        array $metadata
+    ): string {
+        if (isset($this->containerCache[$syntheticPath])) {
+            return $this->containerCache[$syntheticPath];
+        }
+
+        $existing = $this->itemRepository->findByPath($syntheticPath);
+        if (is_array($existing) && isset($existing['id']) && is_string($existing['id'])) {
+            $this->containerCache[$syntheticPath] = $existing['id'];
+            return $existing['id'];
+        }
+
+        $id = (string) $this->itemRepository->create([
+            'library_id' => $libraryId,
+            'parent_id' => $parentId,
+            'name' => $name,
+            'type' => $type,
+            'path' => $syntheticPath,
+            'metadata_json' => $metadata,
+        ]);
+
+        $this->containerCache[$syntheticPath] = $id;
+
+        return $id;
+    }
+
+    /**
+     * Picks a human-readable name for an episode row: its episode title when the
+     * filename carried one, else the raw filename base (kept distinct per episode
+     * rather than repeating the series title).
+     *
+     * @param array<string, mixed> $metadata Parsed episode metadata.
+     * @param SplFileInfo          $file     The source file.
+     * @return string Episode display name.
+     */
+    private function episodeName(array $metadata, SplFileInfo $file): string
+    {
+        if (is_string($metadata['episode_title'] ?? null) && $metadata['episode_title'] !== '') {
+            return $metadata['episode_title'];
+        }
+        if (is_string($metadata['raw_filename'] ?? null) && $metadata['raw_filename'] !== '') {
+            return $metadata['raw_filename'];
+        }
+        return $file->getBasename('.' . $file->getExtension());
+    }
+
+    /**
+     * Builds a stable slug for synthetic container paths: lower-cased, with runs
+     * of non-alphanumerics collapsed to single hyphens.
+     *
+     * @param string $value Source string (a series title).
+     * @return string Slug, or 'unknown' when nothing alphanumeric remains.
+     */
+    private function slug(string $value): string
+    {
+        $slug = strtolower($value);
+        $slug = (string) preg_replace('/[^a-z0-9]+/', '-', $slug);
+        $slug = trim($slug, '-');
+        return $slug === '' ? 'unknown' : $slug;
     }
 
     /**
@@ -384,7 +564,12 @@ class MediaScanner
 
         // Series pattern: Series S01E01 or Series - S01E01 - Episode Title
         if (preg_match('/^(.+?)\s*S(\d{2})E(\d{2})/i', $name, $matches)) {
-            $metadata['name'] = trim($matches[1]);
+            // Normalise scene separators (dots/underscores → spaces) and strip any
+            // trailing separators so "24.", "24 -" etc. collapse to "24".
+            $seriesTitle = (string) preg_replace('/[._]+/', ' ', $matches[1]);
+            $seriesTitle = (string) preg_replace('/\s+/', ' ', $seriesTitle);
+            $seriesTitle = trim($seriesTitle, " -._\t\n");
+            $metadata['name'] = $seriesTitle !== '' ? $seriesTitle : trim($matches[1]);
             $metadata['season'] = (int)$matches[2];
             $metadata['episode'] = (int)$matches[3];
 

@@ -46,7 +46,7 @@ Coverage writes to `coverage.xml` + `coverage-report/` (configured in `phpunit.x
 - `Library/`: `LibraryManager.php` · `MediaScanner.php` (parses `S01E02`, `(2020)`) · `FolderWatcher.php` (mtime checksum) · `ItemRepository.php` (hydrates `metadata_json`)
 - `Metadata/`: `MetadataManager.php` priority `tmdb→local` (movie), `tvdb→fanart→local` (series); 24h cache via `metadata_refreshed_at`. Providers: `TmdbProvider.php`, `TvdbProvider.php`, `FanartProvider.php`, `LocalNfoProvider.php` — all implement `MetadataProviderInterface.php`. Shared client: `MetadataHttpClient.php`. Helpers: `PosterSrcset.php` (responsive poster `srcset`), `SceneFilenameNormalizer.php` (normalizes scene-release filenames).
 - `Streaming/`: `StreamManager.php` · `QualitySelector.php` (profiles: generic, mobile-low, mobile-high, web, tv-4k) · `StreamState.php` (positionTicks, statuses) · `HlsStreamer.php` (master/variant `.m3u8`, segment `.ts`)
-- `Transcoding/`: `FfmpegRunner.php` (probe/transcode/thumbnail) · `EncodingHelper.php` (CRF 23/28, libx264/libx265) · `TranscodeManager.php` (config `config/ffmpeg.php`)
+- `Transcoding/`: `FfmpegRunner.php` (probe/transcode/thumbnail, HLS segmenting) · `EncodingHelper.php` (CRF 23/28, libx264/libx265) · `TranscodeManager.php` (HLS transcode pipeline; config `config/ffmpeg.php`). DI bindings in `src/Common/Container/Providers/TranscodeServicesProvider.php`; HLS columns added to `transcode_jobs` by `migrations/036_transcode_jobs_hls_columns.sql`.
 
 **Session** (`src/Session/`): `SessionManager.php` device sessions · `PlaybackController.php` continue-watching (<95%) · `SyncPlay/` group state, `TimeSync.php` NTP-style with `OFFSET_SAMPLE_COUNT=5`, weighted-mean offset.
 
@@ -115,7 +115,7 @@ grep -q "caliber" .git/hooks/pre-commit 2>/dev/null && echo "hook-active" || ech
 - If **hook-active**: the hook handles sync automatically — just commit normally. Tell the user: "Caliber will sync your agent configs automatically via the pre-commit hook."
 - If **no-hook**: run Caliber manually before committing:
   1. Tell the user: "Caliber: Syncing agent configs with your latest changes..."
-  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md AGENTS.md .agents/ 2>/dev/null`
+  2. Run: `caliber refresh && git add CALIBER_LEARNINGS.md CLAUDE.md .claude/ AGENTS.md .agents/ 2>/dev/null`
   3. After it completes, briefly tell the user what Caliber updated. Then proceed with the commit.
 
 **Valid `caliber refresh` options:** `--quiet` (suppress output) and `--dry-run` (preview without writing). Do not pass any other flags — options like `--auto-approve`, `--debug`, or `--force` do not exist and will cause errors.

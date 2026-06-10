@@ -346,6 +346,9 @@ class FfmpegRunner
             // play independently (independent_segments). sc_threshold 0 stops
             // scene-cut keyframes from producing uneven segment boundaries.
             $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
+            // Force an 8-bit 4:2:0 H.264 profile so a 10-bit (High 10) source is
+            // re-encoded into a stream browsers can actually decode.
+            $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
         }
 
         // Audio: copy AAC as-is, otherwise encode to AAC.
@@ -448,6 +451,9 @@ class FfmpegRunner
             }
             // Closed, fixed-size GOP so segments are keyframe-aligned across both protocols.
             $cmd .= ' -g 48 -keyint_min 48 -sc_threshold 0';
+            // Force an 8-bit 4:2:0 H.264 profile so a 10-bit (High 10) source is
+            // re-encoded into a stream browsers can actually decode.
+            $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
         }
 
         // Audio: copy AAC as-is, otherwise encode to AAC.
@@ -1032,6 +1038,33 @@ class FfmpegRunner
     public function getTranscodeDir(): string
     {
         return $this->transcodeDir;
+    }
+
+    /**
+     * Browser-safe pixel-format / profile flags for a software H.264/H.265 encode.
+     *
+     * Browser Media Source Extensions (and hls.js) can only decode 8-bit 4:2:0
+     * H.264 (Baseline/Main/High). A 10-bit (High 10) or 4:2:2/4:4:4 source —
+     * common for HEVC "Main 10" remuxes — would otherwise produce an output the
+     * player loads but cannot decode, surfacing as "couldn't prepare a playable
+     * version". Forcing `-pix_fmt yuv420p` (8-bit 4:2:0) plus an H.264
+     * `-profile:v`/`-level` guarantees a decodable stream. Callers may override
+     * any of `pix_fmt` / `profile` / `level` via $params (e.g. an HDR profile).
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function browserSafeVideoFlags(string $videoCodec, array $params): string
+    {
+        if ($videoCodec === 'libx264') {
+            return ' -pix_fmt ' . (self::paramString($params, 'pix_fmt') ?? 'yuv420p')
+                . ' -profile:v ' . (self::paramString($params, 'profile') ?? 'high')
+                . ' -level ' . (self::paramString($params, 'level') ?? '4.1');
+        }
+        if ($videoCodec === 'libx265') {
+            $pixFmt = self::paramString($params, 'pix_fmt');
+            return $pixFmt !== null ? ' -pix_fmt ' . $pixFmt : '';
+        }
+        return '';
     }
 
     /**

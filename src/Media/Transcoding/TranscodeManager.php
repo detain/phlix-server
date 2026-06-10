@@ -394,6 +394,8 @@ class TranscodeManager
 
         $srcV = strtolower(is_string($video['codec_name'] ?? null) ? (string) $video['codec_name'] : '');
         $srcA = strtolower(is_string($audio['codec_name'] ?? null) ? (string) $audio['codec_name'] : '');
+        $srcPixFmt = strtolower(is_string($video['pix_fmt'] ?? null) ? (string) $video['pix_fmt'] : '');
+        $srcProfile = strtolower(is_string($video['profile'] ?? null) ? (string) $video['profile'] : '');
         $width = $this->intVal($video['width'] ?? null);
         $height = $this->intVal($video['height'] ?? null);
         $channels = $this->intVal($audio['channels'] ?? null);
@@ -410,12 +412,21 @@ class TranscodeManager
             'playlist_type' => 'event',
         ];
 
-        if ($srcV === 'h264' && !$needScale) {
+        // Remux (copy) only a stream the browser can actually decode: 8-bit 4:2:0
+        // H.264. A 10-bit (High 10) or 4:2:2/4:4:4 H.264 source copied as-is would
+        // load but fail to decode in MSE/hls.js, so it must be re-encoded.
+        if ($srcV === 'h264' && self::isBrowserSafeH264($srcPixFmt, $srcProfile) && !$needScale) {
             $params['video_codec'] = 'copy';
         } else {
             $params['video_codec'] = 'libx264';
             $params['preset'] = 'veryfast';
             $params['crf'] = 23;
+            // 8-bit 4:2:0 High@4.1 — the browser-decodable baseline (see
+            // FfmpegRunner::browserSafeVideoFlags). Explicit here so the policy
+            // lives with the rest of the encode decision.
+            $params['pix_fmt'] = 'yuv420p';
+            $params['profile'] = 'high';
+            $params['level'] = '4.1';
             if ($needScale) {
                 $params['width'] = $maxW;
                 $params['height'] = $maxH;
@@ -558,6 +569,34 @@ class TranscodeManager
             }
         }
         return 'Transcode failed';
+    }
+
+    /**
+     * Whether an H.264 stream is one browsers can decode via MSE/hls.js.
+     *
+     * Browser H.264 decoders handle only 8-bit 4:2:0 (Baseline/Main/High). A
+     * 10-/12-bit pixel format (e.g. `yuv420p10le`), a 4:2:2/4:4:4 chroma layout,
+     * or a "High 10 / High 4:2:2 / High 4:4:4" profile cannot be decoded and must
+     * be re-encoded rather than copied. Unknown/empty values are treated as safe
+     * to preserve the fast copy path for ordinary 8-bit files (ffprobe reliably
+     * reports `pix_fmt` for H.264, so empty only happens when probing failed).
+     */
+    private static function isBrowserSafeH264(string $pixFmt, string $profile): bool
+    {
+        $pix = strtolower($pixFmt);
+        if (str_contains($pix, '10') || str_contains($pix, '12')) {
+            return false; // 10-/12-bit
+        }
+        if (str_starts_with($pix, 'yuv422') || str_starts_with($pix, 'yuv444')) {
+            return false; // non-4:2:0 chroma
+        }
+        $prof = strtolower($profile);
+        foreach (['high 10', 'high 4:2:2', 'high 4:4:4'] as $unsafe) {
+            if (str_contains($prof, $unsafe)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

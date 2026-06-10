@@ -347,6 +347,59 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertNull($body['items'][1]['episode_title']);
     }
 
+    public function testGetMediaItemEnrichesSingleItemWithPosterAndStreams(): void
+    {
+        // The detail/player endpoint must return the SAME enriched shape as the
+        // list (poster_url, genres, overview, season/episode numbers) PLUS streams
+        // — previously it returned the raw row and those pages rendered blank.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->with('ep-1')->willReturn([
+            'id' => 'ep-1',
+            'name' => 'Pilot',
+            'type' => 'episode',
+            'parent_id' => 'season-1',
+            'path' => '/tv/show/s01e01.mkv',
+            'intro_start_seconds' => 12,
+            'metadata' => [
+                'poster_url' => 'https://image.tmdb.org/t/p/w500/ep.jpg',
+                'overview' => 'The one where it begins.',
+                'genres' => ['Drama'],
+                'season' => 1,
+                'episode' => 1,
+                'episode_title' => 'Pilot',
+            ],
+        ]);
+        $itemRepo->method('getItemStreams')->with('ep-1')->willReturn([
+            ['stream_index' => 0, 'stream_type' => 'video', 'codec' => 'h264'],
+        ]);
+
+        $router = $this->makeRouter($itemRepo);
+        $body = json_decode($router->getMediaItem(new Request(), ['id' => 'ep-1'])->body, true);
+        $item = $body['item'];
+
+        $this->assertSame('https://image.tmdb.org/t/p/w500/ep.jpg', $item['poster_url']);
+        $this->assertNotNull($item['poster_srcset']); // TMDB poster → responsive srcset
+        $this->assertSame('The one where it begins.', $item['overview']);
+        $this->assertSame(['Drama'], $item['genres']);
+        $this->assertSame(1, $item['season_number']);
+        $this->assertSame(1, $item['episode_number']);
+        $this->assertSame('Pilot', $item['episode_title']);
+        // Single-item extras the list shape omits are preserved.
+        $this->assertSame(12, $item['intro_start_seconds']);
+        $this->assertCount(1, $item['streams']);
+        $this->assertSame('video', $item['streams'][0]['stream_type']);
+    }
+
+    public function testGetMediaItemReturns404WhenMissing(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturn(null);
+
+        $response = $this->makeRouter($itemRepo)->getMediaItem(new Request(), ['id' => 'nope']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
     public function testGetMediaForwardsParentIdScope(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

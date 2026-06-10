@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
 
@@ -55,11 +56,13 @@ class MediaItemController
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
-        // Also get streams
+        // Enrich into the public media-item shape (poster URLs, genres, overview,
+        // season/episode numbers, …) + streams so the detail/player pages don't
+        // render a blank hero. Mirrors WebPortalRouter::getMediaItem().
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
-        $item['streams'] = $this->itemRepository->getItemStreams($itemId);
+        $shaped = MediaItemShaper::shapeDetail($item, $this->itemRepository->getItemStreams($itemId));
 
-        return (new Response())->json(['item' => $item]);
+        return (new Response())->json(['item' => $shaped]);
     }
 
     /**

@@ -9,8 +9,8 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Markers\PlaybackMarkerService;
-use Phlix\Media\Metadata\PosterSrcset;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Auth\AuthManager;
@@ -336,11 +336,13 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
-        // Get streams
+        // Enrich the row into the same shape the list endpoint returns (poster
+        // URLs, genres, overview, season/episode numbers, …) PLUS streams, so the
+        // detail/player pages render a cover and metadata instead of a blank hero.
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
-        $item['streams'] = $this->itemRepository->getItemStreams($itemId);
+        $shaped = MediaItemShaper::shapeDetail($item, $this->itemRepository->getItemStreams($itemId));
 
-        return (new Response())->json(['item' => $item]);
+        return (new Response())->json(['item' => $shaped]);
     }
 
     /**
@@ -512,67 +514,7 @@ class WebPortalRouter
      */
     private function shapeMediaItem(array $item): array
     {
-        /** @var array<string, mixed> $metadata */
-        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
-
-        // The media-item schema marks id/name/type as required (non-null) and constrains
-        // type + rating to enums — coerce malformed rows so a bad row can't break the
-        // contract for the whole list.
-        $idRaw = $item['id'] ?? null;
-        $id = is_scalar($idRaw) ? (string) $idRaw : '';
-        $nameRaw = $item['name'] ?? null;
-        $name = is_scalar($nameRaw) ? (string) $nameRaw : '';
-        if ($name === '') {
-            $name = $id !== '' ? $id : 'Untitled';
-        }
-        $validTypes = ['movie', 'series', 'season', 'episode', 'audio', 'image'];
-        $type = is_string($item['type'] ?? null) && in_array($item['type'], $validTypes, true)
-            ? $item['type']
-            : 'movie';
-        $validRatings = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'X', 'UNRATED'];
-        $rating = is_string($metadata['rating'] ?? null) && in_array($metadata['rating'], $validRatings, true)
-            ? $metadata['rating']
-            : null;
-
-        return [
-            'id' => $id,
-            'name' => $name,
-            'type' => $type,
-            'path' => $item['path'] ?? null,
-            'poster_url' => $metadata['poster_url'] ?? null,
-            // Responsive poster variants (TMDB width swap) for the client's
-            // `srcset`; null for non-TMDB posters → the card uses `poster_url`.
-            'poster_srcset' => PosterSrcset::forPosterUrl(
-                is_string($metadata['poster_url'] ?? null) ? $metadata['poster_url'] : null,
-            ),
-            'genres' => $metadata['genres'] ?? [],
-            'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
-            'rating' => $rating,
-            'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime'])
-                ? (int) $metadata['runtime']
-                : null,
-            'overview' => $metadata['overview'] ?? null,
-            'actors' => $metadata['actors'] ?? [],
-            'director' => $metadata['director'] ?? null,
-            // Series→season→episode hierarchy. `parent_id` is a top-level column;
-            // season/episode numbers + the per-episode title live in metadata_json
-            // (the scanner parses `S01E02` into metadata.season/episode/episode_title).
-            // Top-level items (movies, series) carry a null parent + null numbers.
-            'parent_id' => is_scalar($item['parent_id'] ?? null) && ($item['parent_id'] ?? null) !== ''
-                ? (string) $item['parent_id']
-                : null,
-            'season_number' => isset($metadata['season']) && is_numeric($metadata['season'])
-                ? (int) $metadata['season']
-                : null,
-            'episode_number' => isset($metadata['episode']) && is_numeric($metadata['episode'])
-                ? (int) $metadata['episode']
-                : null,
-            'episode_title' => is_string($metadata['episode_title'] ?? null)
-                ? $metadata['episode_title']
-                : null,
-            'created_at' => $item['created_at'] ?? null,
-            'updated_at' => $item['updated_at'] ?? null,
-        ];
+        return MediaItemShaper::shape($item);
     }
 
     /**

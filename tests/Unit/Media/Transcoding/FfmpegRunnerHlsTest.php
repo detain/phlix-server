@@ -120,6 +120,54 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('libx264', $cmd);
     }
 
+    public function testBuildCmafCommandForcesBrowserDecodableH264Profile(): void
+    {
+        // A libx264 re-encode must pin an 8-bit 4:2:0 High@4.1 stream so a
+        // 10-bit (High 10) source can't yield an undecodable HLS variant.
+        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+            'audio_codec' => 'aac',
+        ]);
+        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringContainsString('-profile:v high', $cmd);
+        $this->assertStringContainsString('-level 4.1', $cmd);
+    }
+
+    public function testBuildCmafCommandHonorsExplicitPixFmtAndProfile(): void
+    {
+        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
+            'video_codec' => 'libx264',
+            'pix_fmt' => 'yuv420p',
+            'profile' => 'main',
+            'level' => '4.0',
+        ]);
+        $this->assertStringContainsString('-profile:v main', $cmd);
+        $this->assertStringContainsString('-level 4.0', $cmd);
+    }
+
+    public function testBuildCmafCommandCopyPathOmitsPixFmtFlags(): void
+    {
+        // A direct copy must NOT inject encoder-only flags.
+        $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
+            'video_codec' => 'copy',
+            'audio_codec' => 'copy',
+        ]);
+        $this->assertStringNotContainsString('-pix_fmt', $cmd);
+        $this->assertStringNotContainsString('-profile:v', $cmd);
+    }
+
+    public function testBuildHlsCommandForcesBrowserDecodableH264Profile(): void
+    {
+        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
+            'video_codec' => 'libx264',
+            'audio_codec' => 'aac',
+        ]);
+        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringContainsString('-profile:v high', $cmd);
+        $this->assertStringContainsString('-level 4.1', $cmd);
+    }
+
     public function testStartDetachedReturnsPidAndIsNonBlocking(): void
     {
         $dir = sys_get_temp_dir() . '/phlix_detached_' . uniqid();

@@ -198,6 +198,71 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(1080, $passed['height']);
         $this->assertSame('aac', $passed['audio_codec']);
         $this->assertSame(6, $passed['audio_channels']);
+        // The encode must pin a browser-decodable 8-bit 4:2:0 profile.
+        $this->assertSame('yuv420p', $passed['pix_fmt']);
+        $this->assertSame('high', $passed['profile']);
+    }
+
+    public function testEnsureHlsJobReEncodes10BitH264InsteadOfCopying(): void
+    {
+        // A 10-bit (High 10) H.264 stream copies cleanly but won't decode in the
+        // browser — it must be re-encoded to 8-bit 4:2:0, not remuxed.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn(['streams' => [
+            [
+                'codec_type' => 'video',
+                'codec_name' => 'h264',
+                'width' => 1920,
+                'height' => 1080,
+                'pix_fmt' => 'yuv420p10le',
+                'profile' => 'High 10',
+            ],
+            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+        ]]);
+        $passed = [];
+        $ff->method('startCmafTranscode')->willReturnCallback(
+            function (string $in, string $dir, array $params) use (&$passed): int {
+                $passed = $params;
+                return 100;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertSame('libx264', $passed['video_codec']);
+        $this->assertSame('yuv420p', $passed['pix_fmt']);
+    }
+
+    public function testEnsureHlsJobCopies8BitH264(): void
+    {
+        // An ordinary 8-bit 4:2:0 H.264 stream still takes the fast copy path.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn(['streams' => [
+            [
+                'codec_type' => 'video',
+                'codec_name' => 'h264',
+                'width' => 1280,
+                'height' => 720,
+                'pix_fmt' => 'yuv420p',
+                'profile' => 'High',
+            ],
+            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+        ]]);
+        $passed = [];
+        $ff->method('startCmafTranscode')->willReturnCallback(
+            function (string $in, string $dir, array $params) use (&$passed): int {
+                $passed = $params;
+                return 100;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertSame('copy', $passed['video_codec']);
     }
 
     public function testEnsureHlsJobFailsWhenLaunchReturnsZeroPid(): void

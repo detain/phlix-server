@@ -60,25 +60,32 @@ class LibraryMetadataMatcher
     /** @var MovieMetadataResolver Cross-source resolver (TMDB + IMDb). */
     private MovieMetadataResolver $resolver;
 
+    /** @var SeriesMetadataResolver|null TV series resolver (TMDB TV); null disables TV matching. */
+    private ?SeriesMetadataResolver $seriesResolver;
+
     /** @var StructuredLogger Logger for the MEDIA channel. */
     private StructuredLogger $logger;
 
     /**
-     * @param ItemRepository        $items    Media-item data access.
-     * @param MovieMetadataResolver $resolver Cross-source metadata resolver.
-     * @param StructuredLogger|null $logger   Optional logger; defaults to the
-     *                                        MEDIA channel via
-     *                                        {@see LoggerFactory}.
+     * @param ItemRepository             $items          Media-item data access.
+     * @param MovieMetadataResolver      $resolver       Cross-source movie resolver.
+     * @param SeriesMetadataResolver|null $seriesResolver TV series resolver; when
+     *                                                   null, series/episode items
+     *                                                   are skipped (movie-only).
+     * @param StructuredLogger|null      $logger         Optional logger; defaults
+     *                                                   to the MEDIA channel.
      *
      * @since 0.21.0
      */
     public function __construct(
         ItemRepository $items,
         MovieMetadataResolver $resolver,
+        ?SeriesMetadataResolver $seriesResolver = null,
         ?StructuredLogger $logger = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
+        $this->seriesResolver = $seriesResolver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
     }
 
@@ -118,7 +125,11 @@ class LibraryMetadataMatcher
 
             foreach ($batch as $item) {
                 $type = $item['type'] ?? null;
-                if (!is_string($type) || !in_array($type, self::MOVIE_TYPES, true)) {
+                $isMovie = is_string($type) && in_array($type, self::MOVIE_TYPES, true);
+                $isSeries = $type === 'series' && $this->seriesResolver !== null;
+                // Seasons/episodes are enriched under their series (matchSeries),
+                // so the flat pass only acts on movies and series roots.
+                if (!$isMovie && !$isSeries) {
                     continue;
                 }
 
@@ -127,7 +138,8 @@ class LibraryMetadataMatcher
                 $name = is_string($item['name'] ?? null) ? $item['name'] : '';
 
                 try {
-                    if ($this->matchItem($item)) {
+                    $hit = $isSeries ? $this->matchSeries($item) : $this->matchItem($item);
+                    if ($hit) {
                         $matched++;
                         // Per-item line (DEBUG) so progress is visible as items
                         // are processed, written immediately rather than buffered
@@ -223,12 +235,265 @@ class LibraryMetadataMatcher
 
         $merged = array_merge($existingMetadata, $resolved);
 
+        $this->persistMetadata($id, $merged);
+
+        return true;
+    }
+
+    /**
+     * Resolve + persist a TV series and enrich its whole season/episode subtree.
+     *
+     * Matches the series against TMDB TV, persists its poster/overview/genres,
+     * then walks its children: each season gets the series (or season) poster +
+     * overview, and each episode gets its TMDB title/still/overview/air-date —
+     * falling back to the series poster so nothing in the tree renders blank.
+     *
+     * @param array<string, mixed> $seriesItem Hydrated `series`-type row.
+     *
+     * @return bool True when the series matched (and its subtree was enriched).
+     */
+    private function matchSeries(array $seriesItem): bool
+    {
+        $resolver = $this->seriesResolver;
+        if ($resolver === null) {
+            return false;
+        }
+
+        $id = is_string($seriesItem['id'] ?? null) ? $seriesItem['id'] : '';
+        if ($id === '') {
+            return false;
+        }
+
+        $existing = $this->extractMetadata($seriesItem);
+        $name = $this->extractName($seriesItem, $existing);
+        if ($name === null) {
+            return false;
+        }
+
+        $normalized = SceneFilenameNormalizer::normalize($name);
+        if ($normalized['title'] !== '') {
+            $name = $normalized['title'];
+        }
+        $year = $this->extractYear($existing) ?? $normalized['year'];
+
+        $resolved = $resolver->resolve($name, $year);
+        if ($resolved === null) {
+            return false;
+        }
+
+        $this->persistMetadata($id, array_merge($existing, $resolved));
+
+        $tmdbId = $this->resolvedTmdbId($resolved);
+        if ($tmdbId !== '') {
+            $this->enrichSeriesChildren(
+                $id,
+                $tmdbId,
+                $this->stringOrNull($resolved['poster_url'] ?? null),
+                $this->stringOrNull($resolved['backdrop_url'] ?? null),
+                $this->stringOrNull($resolved['overview'] ?? null),
+            );
+        }
+
+        return true;
+    }
+
+    /**
+     * Enrich a series' seasons + episodes from TMDB, caching one season fetch per
+     * season number.
+     *
+     * @param string      $seriesId       The series item id.
+     * @param string      $tmdbId         Resolved TMDB series id.
+     * @param string|null $seriesPoster   Series poster URL (episode/season fallback).
+     * @param string|null $seriesBackdrop Series backdrop URL.
+     * @param string|null $seriesOverview Series overview (episode/season fallback).
+     */
+    private function enrichSeriesChildren(
+        string $seriesId,
+        string $tmdbId,
+        ?string $seriesPoster,
+        ?string $seriesBackdrop,
+        ?string $seriesOverview
+    ): void {
+        /** @var array<int, array<string, mixed>> $seasonCache */
+        $seasonCache = [];
+
+        foreach ($this->items->findByParent($seriesId) as $child) {
+            $childType = $child['type'] ?? null;
+            $childId = is_string($child['id'] ?? null) ? $child['id'] : '';
+            if ($childId === '') {
+                continue;
+            }
+            $childMeta = $this->extractMetadata($child);
+
+            if ($childType === 'season') {
+                $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
+                $this->persistMetadata(
+                    $childId,
+                    array_merge($childMeta, $this->seasonPatch($seasonData, $seriesPoster, $seriesBackdrop, $seriesOverview))
+                );
+                foreach ($this->items->findByParent($childId) as $episode) {
+                    $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+                }
+            } elseif ($childType === 'episode') {
+                $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
+                $this->enrichEpisode($child, $seasonData, $seriesPoster, $seriesOverview);
+            }
+        }
+    }
+
+    /**
+     * Persist an episode's TMDB title/still/overview/air-date, falling back to the
+     * season/series poster + series overview so it never renders blank.
+     *
+     * @param array<string, mixed>      $episode        Hydrated episode row.
+     * @param array<string, mixed>|null $seasonData     Resolved season data (or null).
+     * @param string|null               $seriesPoster   Series poster fallback.
+     * @param string|null               $seriesOverview Series overview fallback.
+     */
+    private function enrichEpisode(
+        array $episode,
+        ?array $seasonData,
+        ?string $seriesPoster,
+        ?string $seriesOverview
+    ): void {
+        $id = is_string($episode['id'] ?? null) ? $episode['id'] : '';
+        if ($id === '') {
+            return;
+        }
+        $meta = $this->extractMetadata($episode);
+        $episodeNumber = $this->intMeta($meta, 'episode');
+
+        /** @var array<string, mixed> $info */
+        $info = [];
+        if ($seasonData !== null && $episodeNumber !== null) {
+            $episodes = $seasonData['episodes'] ?? [];
+            if (is_array($episodes) && isset($episodes[$episodeNumber]) && is_array($episodes[$episodeNumber])) {
+                $info = $episodes[$episodeNumber];
+            }
+        }
+
+        $patch = [];
+        $title = $this->stringOrNull($info['episode_title'] ?? null);
+        if ($title !== null) {
+            $patch['episode_title'] = $title;
+        }
+        $overview = $this->stringOrNull($info['overview'] ?? null) ?? $seriesOverview;
+        if ($overview !== null) {
+            $patch['overview'] = $overview;
+        }
+        $airDate = $this->stringOrNull($info['air_date'] ?? null);
+        if ($airDate !== null) {
+            $patch['air_date'] = $airDate;
+        }
+        if (is_int($info['runtime'] ?? null) && $info['runtime'] > 0) {
+            $patch['runtime'] = $info['runtime'];
+        }
+        // Poster: episode still → season poster → series poster.
+        $poster = $this->stringOrNull($info['poster_url'] ?? null)
+            ?? ($seasonData !== null ? $this->stringOrNull($seasonData['poster_url'] ?? null) : null)
+            ?? $seriesPoster;
+        if ($poster !== null) {
+            $patch['poster_url'] = $poster;
+        }
+
+        if ($patch !== []) {
+            $this->persistMetadata($id, array_merge($meta, $patch));
+        }
+    }
+
+    /**
+     * Build the season-item metadata patch (poster + overview, series fallbacks).
+     *
+     * @param array<string, mixed>|null $seasonData
+     * @return array<string, mixed>
+     */
+    private function seasonPatch(
+        ?array $seasonData,
+        ?string $seriesPoster,
+        ?string $seriesBackdrop,
+        ?string $seriesOverview
+    ): array {
+        $patch = [];
+        $poster = ($seasonData !== null ? $this->stringOrNull($seasonData['poster_url'] ?? null) : null) ?? $seriesPoster;
+        if ($poster !== null) {
+            $patch['poster_url'] = $poster;
+        }
+        if ($seriesBackdrop !== null) {
+            $patch['backdrop_url'] = $seriesBackdrop;
+        }
+        $overview = ($seasonData !== null ? $this->stringOrNull($seasonData['overview'] ?? null) : null) ?? $seriesOverview;
+        if ($overview !== null) {
+            $patch['overview'] = $overview;
+        }
+        return $patch;
+    }
+
+    /**
+     * Return the cached season data for a season number, fetching once per number.
+     *
+     * @param array<int, array<string, mixed>> $cache Season cache (by number, mutated).
+     *
+     * @return array<string, mixed>|null Season data, or null when no number.
+     */
+    private function cachedSeason(string $tmdbId, ?int $seasonNumber, array &$cache): ?array
+    {
+        if ($seasonNumber === null || $this->seriesResolver === null) {
+            return null;
+        }
+        if (!array_key_exists($seasonNumber, $cache)) {
+            $cache[$seasonNumber] = $this->seriesResolver->resolveSeasonEpisodes($tmdbId, $seasonNumber);
+        }
+        return $cache[$seasonNumber];
+    }
+
+    /**
+     * Pull the TMDB series id out of a resolved metadata array.
+     *
+     * @param array<string, mixed> $resolved
+     */
+    private function resolvedTmdbId(array $resolved): string
+    {
+        $ext = $resolved['external_ids'] ?? null;
+        if (is_array($ext) && is_string($ext['tmdb'] ?? null) && $ext['tmdb'] !== '') {
+            return $ext['tmdb'];
+        }
+        return $this->stringOrNull($resolved['tmdb_id'] ?? null) ?? '';
+    }
+
+    /**
+     * Persist a merged metadata array onto an item, stamping the refresh time.
+     *
+     * @param array<string, mixed> $merged
+     */
+    private function persistMetadata(string $id, array $merged): void
+    {
         $this->items->update($id, [
             'metadata_json' => $merged,
             'metadata_refreshed_at' => date('Y-m-d H:i:s'),
         ]);
+    }
 
-        return true;
+    /** A non-empty string value, or null. */
+    private function stringOrNull(mixed $value): ?string
+    {
+        return (is_string($value) && $value !== '') ? $value : null;
+    }
+
+    /**
+     * Read an int from a metadata field (int or numeric string), else null.
+     *
+     * @param array<string, mixed> $meta
+     */
+    private function intMeta(array $meta, string $key): ?int
+    {
+        $value = $meta[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_string($value) && is_numeric($value)) {
+            return (int) $value;
+        }
+        return null;
     }
 
     /**

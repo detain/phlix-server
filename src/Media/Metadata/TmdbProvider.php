@@ -29,11 +29,13 @@ class TmdbProvider implements MetadataProviderInterface
     /**
      * Constructor for TmdbProvider.
      *
-     * @param string $apiKey TMDB API v3 authentication key
+     * @param string                  $apiKey TMDB API v3 authentication key.
+     * @param MetadataHttpClient|null $http   Optional HTTP client (injected in
+     *                                        tests); defaults to a real TMDB client.
      */
-    public function __construct(string $apiKey)
+    public function __construct(string $apiKey, ?MetadataHttpClient $http = null)
     {
-        $this->http = new MetadataHttpClient(
+        $this->http = $http ?? new MetadataHttpClient(
             'https://api.themoviedb.org/3',
             $apiKey
         );
@@ -168,6 +170,181 @@ class TmdbProvider implements MetadataProviderInterface
         }
 
         return $this->formatMovieDetails($response);
+    }
+
+    /**
+     * Search for TV series by name.
+     *
+     * @param string $query TV series name search query.
+     * @param array<string, mixed> $options Search options (language, first_air_date_year).
+     * @return array<int, array{
+     *     id: string,
+     *     name: string,
+     *     overview: string,
+     *     poster_path: string|null,
+     *     backdrop_path: string|null,
+     *     first_air_date: string,
+     *     vote_average: float
+     * }> Search results.
+     */
+    public function searchTv(string $query, array $options = []): array
+    {
+        $params = [
+            'query' => $query,
+            'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
+            'include_adult' => (bool) ($options['include_adult'] ?? false),
+        ];
+        $year = $options['first_air_date_year'] ?? null;
+        if (is_int($year) || (is_string($year) && $year !== '')) {
+            $params['first_air_date_year'] = (string) $year;
+        }
+
+        $response = $this->http->get('/search/tv', $params);
+        if ($response === null || !isset($response['results'])) {
+            return [];
+        }
+
+        $output = [];
+        foreach (MetadataValue::asAssocList($response['results']) as $result) {
+            $output[] = [
+                'id' => MetadataValue::asString($result['id'] ?? null),
+                'name' => MetadataValue::asString($result['name'] ?? ($result['original_name'] ?? null)),
+                'overview' => MetadataValue::asString($result['overview'] ?? null),
+                'poster_path' => MetadataValue::asNullableString($result['poster_path'] ?? null),
+                'backdrop_path' => MetadataValue::asNullableString($result['backdrop_path'] ?? null),
+                'first_air_date' => MetadataValue::asString($result['first_air_date'] ?? null),
+                'vote_average' => MetadataValue::asFloat($result['vote_average'] ?? null),
+            ];
+        }
+
+        return $output;
+    }
+
+    /**
+     * Get detailed TV series information from TMDB.
+     *
+     * @param string $externalId TMDB TV series ID.
+     * @param array<string, mixed> $options Options (language).
+     * @return array<string, mixed> Series details (name, overview, year, genres,
+     *     poster_path, backdrop_path, official_rating, tmdb_id, imdb_id).
+     */
+    public function getTvDetails(string $externalId, array $options = []): array
+    {
+        $response = $this->http->get("/tv/{$externalId}", [
+            'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
+            'append_to_response' => 'genres,external_ids,content_ratings',
+        ]);
+        if ($response === null) {
+            return [];
+        }
+
+        return $this->formatTvDetails($response);
+    }
+
+    /**
+     * Get a TV season's details + episode list from TMDB.
+     *
+     * @param string $externalId   TMDB TV series ID.
+     * @param int    $seasonNumber Season number (0 = Specials).
+     * @param array<string, mixed> $options Options (language).
+     * @return array{
+     *     poster_path: string|null,
+     *     overview: string,
+     *     episodes: array<int, array{
+     *         episode_number: int,
+     *         name: string,
+     *         overview: string,
+     *         still_path: string|null,
+     *         air_date: string,
+     *         runtime: int
+     *     }>
+     * } Season details (empty `episodes` when the season is unknown).
+     */
+    public function getTvSeason(string $externalId, int $seasonNumber, array $options = []): array
+    {
+        $response = $this->http->get("/tv/{$externalId}/season/{$seasonNumber}", [
+            'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
+        ]);
+        if ($response === null) {
+            return ['poster_path' => null, 'overview' => '', 'episodes' => []];
+        }
+
+        $episodes = [];
+        foreach (MetadataValue::asAssocList($response['episodes'] ?? null) as $ep) {
+            $episodes[] = [
+                'episode_number' => MetadataValue::asInt($ep['episode_number'] ?? null),
+                'name' => MetadataValue::asString($ep['name'] ?? null),
+                'overview' => MetadataValue::asString($ep['overview'] ?? null),
+                'still_path' => MetadataValue::asNullableString($ep['still_path'] ?? null),
+                'air_date' => MetadataValue::asString($ep['air_date'] ?? null),
+                'runtime' => MetadataValue::asInt($ep['runtime'] ?? null),
+            ];
+        }
+
+        return [
+            'poster_path' => MetadataValue::asNullableString($response['poster_path'] ?? null),
+            'overview' => MetadataValue::asString($response['overview'] ?? null),
+            'episodes' => $episodes,
+        ];
+    }
+
+    /**
+     * Format a TMDB `/tv/{id}` response into a standard series-details structure.
+     *
+     * @param array<string, mixed> $data Raw TMDB API response.
+     * @return array<string, mixed> Formatted series details.
+     */
+    private function formatTvDetails(array $data): array
+    {
+        $firstAir = MetadataValue::asString($data['first_air_date'] ?? null);
+        $year = null;
+        if ($firstAir !== '') {
+            $timestamp = strtotime($firstAir);
+            if ($timestamp !== false) {
+                $year = (int) date('Y', $timestamp);
+            }
+        }
+
+        $genreNames = [];
+        foreach (MetadataValue::asAssocList($data['genres'] ?? null) as $genre) {
+            $genreNames[] = MetadataValue::asString($genre['name'] ?? null);
+        }
+
+        $externalIds = MetadataValue::asAssoc($data['external_ids'] ?? null);
+        $imdbId = MetadataValue::asNullableString($externalIds['imdb_id'] ?? null);
+
+        return [
+            'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
+            'original_name' => MetadataValue::asString($data['original_name'] ?? null),
+            'overview' => MetadataValue::asString($data['overview'] ?? null),
+            'official_rating' => $this->extractUsContentRating($data['content_ratings'] ?? null),
+            'vote_average' => MetadataValue::asFloat($data['vote_average'] ?? null),
+            'year' => $year,
+            'genres' => $genreNames,
+            'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
+            'imdb_id' => $imdbId,
+            'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
+            'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
+            'number_of_seasons' => MetadataValue::asInt($data['number_of_seasons'] ?? null),
+        ];
+    }
+
+    /**
+     * Pull the US content rating (e.g. `TV-14`) from a `content_ratings` block.
+     *
+     * @param mixed $contentRatings Raw `content_ratings` payload.
+     * @return string|null The US rating, or null when absent.
+     */
+    private function extractUsContentRating(mixed $contentRatings): ?string
+    {
+        $block = MetadataValue::asAssoc($contentRatings);
+        foreach (MetadataValue::asAssocList($block['results'] ?? null) as $row) {
+            if (MetadataValue::asString($row['iso_3166_1'] ?? null) === 'US') {
+                $rating = MetadataValue::asString($row['rating'] ?? null);
+                return $rating !== '' ? $rating : null;
+            }
+        }
+        return null;
     }
 
     /**

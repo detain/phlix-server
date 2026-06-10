@@ -20,6 +20,7 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -139,12 +140,18 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('tmdb', get(TmdbProvider::class))
                 ->constructorParameter('imdb', get(ImdbLookup::class)),
 
+            // TV series resolver (TMDB TV). Shares the admin-keyed TmdbProvider so
+            // series/season/episode matching uses the same API key as movies.
+            SeriesMetadataResolver::class => autowire()
+                ->constructorParameter('tmdb', get(TmdbProvider::class)),
+
             // Background per-library metadata matcher run for `metadata`-type
-            // scan jobs. Its ItemRepository + MovieMetadataResolver deps are
-            // resolvable above; the optional logger defaults to the MEDIA channel.
+            // scan jobs. Its ItemRepository + resolver deps are resolvable above;
+            // the optional logger defaults to the MEDIA channel.
             LibraryMetadataMatcher::class => autowire()
                 ->constructorParameter('items', get(ItemRepository::class))
-                ->constructorParameter('resolver', get(MovieMetadataResolver::class)),
+                ->constructorParameter('resolver', get(MovieMetadataResolver::class))
+                ->constructorParameter('seriesResolver', get(SeriesMetadataResolver::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`

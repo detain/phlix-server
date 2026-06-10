@@ -102,7 +102,7 @@ class LibraryMetadataMatcherTest extends TestCase
                 })
             );
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $result = $matcher->matchLibrary('lib-1');
 
@@ -127,7 +127,7 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $items->expects($this->once())->method('update');
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
@@ -155,7 +155,7 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $items->expects($this->once())->method('update');
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
@@ -179,7 +179,7 @@ class LibraryMetadataMatcherTest extends TestCase
         // No persistence on a miss.
         $items->expects($this->never())->method('update');
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $this->assertSame(['matched' => 0, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
@@ -209,7 +209,7 @@ class LibraryMetadataMatcherTest extends TestCase
         // Only the good item is persisted; the bad one is logged + skipped.
         $items->expects($this->once())->method('update')->with('item-good', $this->anything());
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $result = $matcher->matchLibrary('lib-1');
 
@@ -231,7 +231,7 @@ class LibraryMetadataMatcherTest extends TestCase
         $resolver = $this->createMock(MovieMetadataResolver::class);
         $resolver->expects($this->never())->method('resolve');
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $this->assertSame(['matched' => 0, 'processed' => 0], $matcher->matchLibrary('lib-empty'));
     }
@@ -250,7 +250,7 @@ class LibraryMetadataMatcherTest extends TestCase
         $resolver->expects($this->never())->method('resolve');
         $items->expects($this->never())->method('update');
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $this->makeLogger());
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
 
         $this->assertSame(['matched' => 0, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
@@ -292,7 +292,7 @@ class LibraryMetadataMatcherTest extends TestCase
             }
         );
 
-        $matcher = new LibraryMetadataMatcher($items, $resolver, $logger);
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $logger);
         $matcher->matchLibrary('lib-1');
 
         // Start + per-batch progress + completion are all logged at INFO.
@@ -303,5 +303,158 @@ class LibraryMetadataMatcherTest extends TestCase
         // Each processed item produces a per-item DEBUG line as it happens.
         $this->assertContains('LibraryMetadataMatcher: item matched', $debugMessages);
         $this->assertContains('LibraryMetadataMatcher: item not matched', $debugMessages);
+    }
+
+    /**
+     * A `series` item is resolved AND its season/episode subtree is enriched:
+     * the series gets its poster/overview, the season inherits the series poster,
+     * and the episode gets its TMDB title + still.
+     */
+    public function testMatchesSeriesAndEnrichesSeasonAndEpisodes(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'series-1', 'type' => 'series', 'name' => '24', 'metadata' => []]],
+            [] // second page empty → stop
+        );
+        // series → [season], season → [episode]
+        $items->method('findByParent')->willReturnCallback(static function (string $parentId): array {
+            if ($parentId === 'series-1') {
+                return [['id' => 'season-1', 'type' => 'season', 'name' => 'Season 1', 'metadata' => ['season' => 1]]];
+            }
+            if ($parentId === 'season-1') {
+                return [['id' => 'ep-1', 'type' => 'episode', 'name' => '24', 'metadata' => ['season' => 1, 'episode' => 1]]];
+            }
+            return [];
+        });
+
+        $movieResolver = $this->createMock(MovieMetadataResolver::class);
+        $movieResolver->expects($this->never())->method('resolve');
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        $seriesResolver->expects($this->once())
+            ->method('resolve')
+            ->with('24', null)
+            ->willReturn([
+                'external_ids' => ['tmdb' => '1668'],
+                'tmdb_id' => '1668',
+                'poster_url' => 'https://image.tmdb.org/t/p/w500/series.jpg',
+                'overview' => 'Real-time thriller.',
+                'genres' => ['Drama'],
+                'sources' => ['tmdb'],
+            ]);
+        $seriesResolver->method('resolveSeasonEpisodes')->with('1668', 1)->willReturn([
+            'poster_url' => 'https://image.tmdb.org/t/p/w500/s1.jpg',
+            'overview' => 'Season one.',
+            'episodes' => [
+                1 => [
+                    'episode_title' => '12:00 A.M. - 1:00 A.M.',
+                    'overview' => 'Jack Bauer.',
+                    'poster_url' => 'https://image.tmdb.org/t/p/w500/e1.jpg',
+                    'air_date' => '2001-11-06',
+                    'runtime' => 44,
+                ],
+            ],
+        ]);
+
+        $updates = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$updates): void {
+                $updates[$id] = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher($items, $movieResolver, $seriesResolver, $this->makeLogger());
+        $result = $matcher->matchLibrary('lib-1');
+
+        // Series resolved (counts as the one processed/matched flat-loop item).
+        $this->assertSame(['matched' => 1, 'processed' => 1], $result);
+
+        // Series got its TMDB poster + overview.
+        $this->assertSame('https://image.tmdb.org/t/p/w500/series.jpg', $updates['series-1']['poster_url']);
+        $this->assertSame('Real-time thriller.', $updates['series-1']['overview']);
+
+        // Season got the season poster + overview.
+        $this->assertSame('https://image.tmdb.org/t/p/w500/s1.jpg', $updates['season-1']['poster_url']);
+        $this->assertSame('Season one.', $updates['season-1']['overview']);
+
+        // Episode got its title + still, preserving the scanner's season/episode.
+        $this->assertSame('12:00 A.M. - 1:00 A.M.', $updates['ep-1']['episode_title']);
+        $this->assertSame('https://image.tmdb.org/t/p/w500/e1.jpg', $updates['ep-1']['poster_url']);
+        $this->assertSame(44, $updates['ep-1']['runtime']);
+        $this->assertSame(1, $updates['ep-1']['season']);
+        $this->assertSame(1, $updates['ep-1']['episode']);
+    }
+
+    /**
+     * An episode whose TMDB still is missing falls back to the series poster so it
+     * never renders blank.
+     */
+    public function testEpisodeFallsBackToSeriesPosterWhenNoStill(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'series-1', 'type' => 'series', 'name' => 'Show', 'metadata' => []]],
+            []
+        );
+        $items->method('findByParent')->willReturnCallback(static function (string $parentId): array {
+            if ($parentId === 'series-1') {
+                return [['id' => 'ep-9', 'type' => 'episode', 'name' => 'Show', 'metadata' => ['season' => 2, 'episode' => 9]]];
+            }
+            return [];
+        });
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        $seriesResolver->method('resolve')->willReturn([
+            'external_ids' => ['tmdb' => '50'],
+            'tmdb_id' => '50',
+            'poster_url' => 'https://image.tmdb.org/t/p/w500/series.jpg',
+            'sources' => ['tmdb'],
+        ]);
+        // Season known but episode 9 absent / no still.
+        $seriesResolver->method('resolveSeasonEpisodes')->willReturn([
+            'poster_url' => null,
+            'overview' => '',
+            'episodes' => [],
+        ]);
+
+        $updates = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$updates): void {
+                $updates[$id] = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+        $matcher->matchLibrary('lib-1');
+
+        $this->assertSame('https://image.tmdb.org/t/p/w500/series.jpg', $updates['ep-9']['poster_url']);
+    }
+
+    /**
+     * Without a series resolver the matcher is movie-only: series items are skipped.
+     */
+    public function testSeriesSkippedWhenNoSeriesResolver(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'series-1', 'type' => 'series', 'name' => '24', 'metadata' => []]],
+            []
+        );
+        $items->expects($this->never())->method('update');
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            null,
+            $this->makeLogger()
+        );
+
+        $this->assertSame(['matched' => 0, 'processed' => 0], $matcher->matchLibrary('lib-1'));
     }
 }

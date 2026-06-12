@@ -167,6 +167,11 @@ final class AdminRoutes
                 $r->post('/users/{id}/set-admin', [$adminUserController, 'setAdmin']);
                 $r->post('/users/{id}/reset-password', [$adminUserController, 'resetPassword']);
 
+                // Signup approval gate (S1): manage the pending queue.
+                $r->post('/users/{id}/approve', [$adminUserController, 'approve']);
+                $r->post('/users/{id}/disable', [$adminUserController, 'disable']);
+                $r->post('/users/{id}/reject', [$adminUserController, 'reject']);
+
                 // Admin profile management (Step 1.2b).
                 /** @var AdminProfileController $adminProfileController */
                 $adminProfileController = $container->get(AdminProfileController::class);

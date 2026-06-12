@@ -12,14 +12,17 @@ use Phlix\Server\Http\Response;
 /**
  * Admin JSON API for user management (Step 1.2a).
  *
- * Provides 7 REST endpoints for administering server users:
- * - GET    /api/v1/admin/users          — list all users
+ * Provides REST endpoints for administering server users:
+ * - GET    /api/v1/admin/users          — list all users (?status= filter)
  * - GET    /api/v1/admin/users/{id}     — get a single user
  * - POST   /api/v1/admin/users         — create a new user
  * - PUT    /api/v1/admin/users/{id}     — update an existing user
  * - DELETE /api/v1/admin/users/{id}    — delete a user
  * - POST   /api/v1/admin/users/{id}/set-admin — promote or demote admin status
  * - POST   /api/v1/admin/users/{id}/reset-password — generate a new password
+ * - POST   /api/v1/admin/users/{id}/approve — approve a pending signup (S1)
+ * - POST   /api/v1/admin/users/{id}/disable — disable a user (S1)
+ * - POST   /api/v1/admin/users/{id}/reject  — reject (delete) a pending signup (S1)
  *
  * All routes are gated by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
  * (registered in {@see \Phlix\Server\Http\Routes\AdminRoutes}); non-admin
@@ -40,14 +43,124 @@ final class AdminUserController
     }
 
     /**
-     * List all users.
+     * List users, optionally filtered by account status.
+     *
+     * `GET /api/v1/admin/users` returns every user; `?status=pending`
+     * (or active|disabled) narrows the list — used by the admin UI to render
+     * the pending-approval queue (S1). Each row includes the `status` column.
+     *
+     * @param Request|null $request The HTTP request (optional `status` query).
      *
      * @return Response 200 { users: User[] }
      */
-    public function list(): Response
+    public function list(?Request $request = null): Response
     {
-        $users = $this->userRepository->findAll();
+        $status = $request !== null ? $request->queryString('status') : null;
+
+        if (is_string($status) && in_array($status, ['pending', 'active', 'disabled'], true)) {
+            $users = $this->userRepository->listByStatus($status);
+        } else {
+            $users = $this->userRepository->findAll();
+        }
+
         return (new Response())->json(['users' => $users]);
+    }
+
+    /**
+     * Approve a pending user: set status='active' so they can log in (S1).
+     *
+     * @param Request              $request The HTTP request (unused body).
+     * @param array<string, string> $params Path parameters ({id}).
+     *
+     * @return Response 200 { message } | 404 { error }
+     */
+    public function approve(Request $request, array $params): Response
+    {
+        return $this->changeStatus($params['id'] ?? '', 'active', 'User approved successfully');
+    }
+
+    /**
+     * Disable a user: set status='disabled' so they can no longer log in (S1).
+     *
+     * Refuses to disable the last remaining admin so the box can't lock itself
+     * out, mirroring {@see delete()} / {@see setAdmin()}.
+     *
+     * @param Request              $request The HTTP request (unused body).
+     * @param array<string, string> $params Path parameters ({id}).
+     *
+     * @return Response 200 { message } | 404 | 400 { error }
+     */
+    public function disable(Request $request, array $params): Response
+    {
+        $id = $params['id'] ?? '';
+        $user = $this->userRepository->findById($id);
+        if ($user === null) {
+            return (new Response())->status(404)->json(['error' => 'User not found']);
+        }
+
+        // Cannot disable yourself.
+        $currentUserId = RequestContext::getUserId();
+        if ($currentUserId !== null && (string) $currentUserId === $id) {
+            return (new Response())->status(400)->json(['error' => 'Cannot disable your own account']);
+        }
+
+        // Cannot disable the last admin.
+        if (!empty($user['is_admin']) && $this->countAdmins() <= 1) {
+            return (new Response())->status(400)->json(['error' => 'Cannot disable the last admin']);
+        }
+
+        $this->userRepository->setStatus($id, 'disabled');
+        return (new Response())->json(['message' => 'User disabled successfully']);
+    }
+
+    /**
+     * Reject a pending user: delete the account (S1).
+     *
+     * Only meaningful for a still-pending account; an already-active account
+     * should be disabled instead, so this refuses non-pending users.
+     *
+     * @param Request              $request The HTTP request (unused body).
+     * @param array<string, string> $params Path parameters ({id}).
+     *
+     * @return Response 200 { message } | 404 | 400 { error }
+     */
+    public function reject(Request $request, array $params): Response
+    {
+        $id = $params['id'] ?? '';
+        $user = $this->userRepository->findById($id);
+        if ($user === null) {
+            return (new Response())->status(404)->json(['error' => 'User not found']);
+        }
+
+        $status = is_string($user['status'] ?? null) ? $user['status'] : 'active';
+        if ($status !== 'pending') {
+            return (new Response())->status(400)->json([
+                'error' => 'Only pending users can be rejected; disable an active account instead',
+            ]);
+        }
+
+        $this->userRepository->delete($id);
+        return (new Response())->json(['message' => 'User rejected successfully']);
+    }
+
+    /**
+     * Shared helper: ensure the user exists, then set its status.
+     *
+     * @param string $id            User UUID.
+     * @param string $status        Target status (active|disabled|pending).
+     * @param string $successMessage Message returned on success.
+     *
+     * @return Response 200 { message } | 404 { error }
+     */
+    private function changeStatus(string $id, string $status, string $successMessage): Response
+    {
+        $user = $this->userRepository->findById($id);
+        if ($user === null) {
+            return (new Response())->status(404)->json(['error' => 'User not found']);
+        }
+
+        $this->userRepository->setStatus($id, $status);
+        return (new Response())->json(['message' => $successMessage]);
     }
 
     /**

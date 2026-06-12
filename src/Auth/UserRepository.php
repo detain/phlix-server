@@ -105,8 +105,11 @@ class UserRepository
      */
     public function findAdminById(string $id): ?array
     {
+        // S1 security fix: a disabled admin must be treated as a non-admin, so
+        // gate on status = 'active' as well as is_admin. Without this predicate
+        // a suspended admin still passes AdminMiddleware::checkAccess().
         $result = $this->db->query(
-            "SELECT * FROM users WHERE id = ? AND is_admin = 1",
+            "SELECT * FROM users WHERE id = ? AND is_admin = 1 AND status = 'active'",
             [$id]
         );
         if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
@@ -115,6 +118,31 @@ class UserRepository
         /** @var array<string, mixed> $row */
         $row = $result[0];
         return $row;
+    }
+
+    /**
+     * Look up only a user's account status by id.
+     *
+     * S1 security fix: the authenticated hot path (token refresh + per-request
+     * access-token validation in {@see \Phlix\Auth\AuthManager}) uses this to
+     * re-check the backing user's status so an account disabled mid-session is
+     * revoked rather than continuing to work until its token expires. Kept to a
+     * single lightweight lookup on the primary key, selecting only `status`.
+     *
+     * @param string $id User UUID to look up.
+     *
+     * @return string|null The stored status string, or null when the user does
+     *         not exist (caller treats null as "not active").
+     *
+     * @since S1 (signup approval gate — security follow-up)
+     */
+    public function getStatus(string $id): ?string
+    {
+        $result = $this->db->query(
+            "SELECT status FROM users WHERE id = ?",
+            [$id]
+        );
+        return UserRow::string(UserRow::firstFromMixed($result), 'status');
     }
 
     /**
@@ -189,6 +217,59 @@ class UserRepository
     }
 
     /**
+     * Set a user's account status.
+     *
+     * Part of the signup approval gate (S1): admins move a 'pending' account to
+     * 'active' (approve) or 'disabled' (suspend); registration writes 'pending'
+     * or 'active' through {@see create()}.
+     *
+     * @param string $id     User UUID to update.
+     * @param string $status One of 'pending', 'active', 'disabled'. Any other
+     *                       value is ignored (no-op) so the ENUM is never fed a
+     *                       bad value.
+     *
+     * @return void
+     *
+     * @since S1 (signup approval gate)
+     */
+    public function setStatus(string $id, string $status): void
+    {
+        if (!in_array($status, ['pending', 'active', 'disabled'], true)) {
+            return;
+        }
+        $this->db->query(
+            "UPDATE users SET status = ? WHERE id = ?",
+            [$status, $id]
+        );
+    }
+
+    /**
+     * Return all users whose account status matches the given value.
+     *
+     * Backs the admin "pending approval" queue
+     * (`GET /api/v1/admin/users?status=pending`).
+     *
+     * @param string $status One of 'pending', 'active', 'disabled'.
+     *
+     * @return array<int, array<string, mixed>> Matching user rows (empty when
+     *         the status is invalid or no rows match).
+     *
+     * @since S1 (signup approval gate)
+     */
+    public function listByStatus(string $status): array
+    {
+        if (!in_array($status, ['pending', 'active', 'disabled'], true)) {
+            return [];
+        }
+        $result = $this->db->query('SELECT * FROM users WHERE status = ?', [$status]);
+        if (!is_array($result)) {
+            return [];
+        }
+        /** @var array<int, array<string, mixed>> */
+        return $result;
+    }
+
+    /**
      * Find a user by their email address.
      *
      * @param string $email Email address to look up (case-sensitive)
@@ -220,6 +301,10 @@ class UserRepository
      *        - email: Valid email address (required)
      *        - password: Plain text password (required, will be hashed)
      *        - display_name: Display name (optional, defaults to username)
+     *        - status: Account status enum (optional, defaults to 'active' so
+     *                  existing callers keep creating immediately-usable users;
+     *                  the signup approval gate passes 'pending' when the
+     *                  `auth.signup_mode` setting is 'approval').
      *
      * @return string Generated UUID for the new user
      *
@@ -244,14 +329,24 @@ class UserRepository
         }
         $passwordHash = password_hash($passwordRaw, PASSWORD_ARGON2ID);
 
+        // Default to 'active' so existing callers (admin user create, external
+        // provider create) keep producing immediately-usable accounts. The
+        // signup approval gate passes 'pending' explicitly. Any unknown value is
+        // coerced back to 'active' rather than letting the ENUM reject it.
+        $statusRaw = $data['status'] ?? 'active';
+        $status = is_string($statusRaw) && in_array($statusRaw, ['pending', 'active', 'disabled'], true)
+            ? $statusRaw
+            : 'active';
+
         $this->db->query(
-            "INSERT INTO users (id, username, email, password_hash, display_name) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, email, password_hash, display_name, status) VALUES (?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $data['username'],
                 $data['email'],
                 $passwordHash,
                 $data['display_name'] ?? $data['username'],
+                $status,
             ]
         );
 

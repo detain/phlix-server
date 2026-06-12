@@ -42,6 +42,7 @@ final class AdminSettingsControllerTest extends TestCase
             'hwaccel.prefer_hardware'                   => 'bool',
             'hwaccel.probe_timeout'                     => 'int',
             'tmdb.api_key'                              => 'string',
+            'auth.signup_mode'                          => 'string',
             'marker_detection.similarity_threshold'     => 'float',
             'marker_detection.intro_max_duration'       => 'int',
             'subtitles.enabled'                         => 'bool',
@@ -60,7 +61,7 @@ final class AdminSettingsControllerTest extends TestCase
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(18, $actual);
+        $this->assertCount(19, $actual);
         $this->assertEquals($expected, $actual);
     }
 

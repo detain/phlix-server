@@ -588,4 +588,218 @@ final class AdminUserControllerTest extends TestCase
 
         $this->assertSame(404, $response->statusCode);
     }
+
+    // ─────────────────────────────────────────────────────────────────
+    // list(?status=) filter (S1)
+    // ─────────────────────────────────────────────────────────────────
+
+    public function testListFiltersByPendingStatus(): void
+    {
+        $pending = [
+            ['id' => '3', 'username' => 'nina', 'email' => 'nina@example.com', 'status' => 'pending'],
+        ];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())
+            ->method('listByStatus')
+            ->with('pending')
+            ->willReturn($pending);
+        // The unfiltered findAll() must NOT be used when a valid status is given.
+        $repo->expects($this->never())->method('findAll');
+
+        $request = new Request();
+        $request->query = ['status' => 'pending'];
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->list($request);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertCount(1, $body['users']);
+        $this->assertSame('pending', $body['users'][0]['status']);
+    }
+
+    public function testListIgnoresInvalidStatusAndReturnsAll(): void
+    {
+        $all = [
+            ['id' => '1', 'username' => 'alice', 'status' => 'active'],
+            ['id' => '2', 'username' => 'bob', 'status' => 'disabled'],
+        ];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findAll')->willReturn($all);
+        $repo->expects($this->never())->method('listByStatus');
+
+        $request = new Request();
+        $request->query = ['status' => 'banana'];
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->list($request);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertCount(2, $body['users']);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // approve() (S1)
+    // ─────────────────────────────────────────────────────────────────
+
+    public function testApproveSetsStatusActive(): void
+    {
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'pending'];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('setStatus')->with('3', 'active');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->approve($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('User approved successfully', $body['message']);
+    }
+
+    public function testApproveNotFound(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('999')->willReturn(null);
+        $repo->expects($this->never())->method('setStatus');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->approve($this->makeRequest(), ['id' => '999']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // disable() (S1)
+    // ─────────────────────────────────────────────────────────────────
+
+    public function testDisableSetsStatusDisabled(): void
+    {
+        $this->setCurrentUser('1');
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'active', 'is_admin' => 0];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('setStatus')->with('3', 'disabled');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->disable($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('User disabled successfully', $body['message']);
+
+        $this->clearCurrentUser();
+    }
+
+    public function testDisableNotFound(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('999')->willReturn(null);
+        $repo->expects($this->never())->method('setStatus');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->disable($this->makeRequest(), ['id' => '999']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function testDisableCannotDisableOwnAccount(): void
+    {
+        $this->setCurrentUser('1');
+        $user = ['id' => '1', 'username' => 'admin', 'status' => 'active', 'is_admin' => 1];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('1')->willReturn($user);
+        $repo->expects($this->never())->method('setStatus');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->disable($this->makeRequest(), ['id' => '1']);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Cannot disable your own account', $body['error']);
+
+        $this->clearCurrentUser();
+    }
+
+    public function testDisableCannotDisableLastAdmin(): void
+    {
+        $this->setCurrentUser('1');
+        $user = ['id' => '2', 'username' => 'admin2', 'status' => 'active', 'is_admin' => 1];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('2')->willReturn($user);
+        $repo->expects($this->once())->method('countUsers')->with('is_admin = 1')->willReturn(1);
+        $repo->expects($this->never())->method('setStatus');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->disable($this->makeRequest(), ['id' => '2']);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Cannot disable the last admin', $body['error']);
+
+        $this->clearCurrentUser();
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // reject() (S1)
+    // ─────────────────────────────────────────────────────────────────
+
+    public function testRejectDeletesPendingUser(): void
+    {
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'pending'];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('delete')->with('3');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->reject($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('User rejected successfully', $body['message']);
+    }
+
+    public function testRejectNotFound(): void
+    {
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('999')->willReturn(null);
+        $repo->expects($this->never())->method('delete');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->reject($this->makeRequest(), ['id' => '999']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function testRejectRefusesNonPendingUser(): void
+    {
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'active'];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->never())->method('delete');
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->reject($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertStringContainsString('pending', $body['error']);
+    }
 }

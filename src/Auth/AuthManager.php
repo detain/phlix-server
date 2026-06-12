@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Auth;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\Dto\UserRow;
 use Phlix\Shared\Events\Auth\UserCreated;
 use Phlix\Shared\Events\Auth\UserLoggedIn;
@@ -78,6 +79,16 @@ class AuthManager
     private ?StatsCollector $statsCollector;
 
     /**
+     * Optional server-settings store used to read the `auth.signup_mode`
+     * effective value (open|approval|disabled). Null in unit tests / legacy
+     * callers, in which case registration falls back to the historical
+     * always-open behaviour.
+     *
+     * @var SettingsRepository|null
+     */
+    private ?SettingsRepository $settingsRepository;
+
+    /**
      * Create a new AuthManager instance.
      *
      * @param UserRepository $userRepository User data access repository
@@ -95,6 +106,10 @@ class AuthManager
      * @param StatsCollector|null $statsCollector Optional stats collector; when
      *                                       supplied, successful logins/logouts
      *                                       are recorded for the admin dashboard.
+     * @param SettingsRepository|null $settingsRepository Optional server-settings
+     *                                       store; when supplied, register() honours
+     *                                       the `auth.signup_mode` setting
+     *                                       (open|approval|disabled).
      *
      * @example
      * ```php
@@ -113,7 +128,8 @@ class AuthManager
         ?EventDispatcherInterface $eventDispatcher = null,
         ?Connection $db = null,
         ?ProviderManager $providerManager = null,
-        ?StatsCollector $statsCollector = null
+        ?StatsCollector $statsCollector = null,
+        ?SettingsRepository $settingsRepository = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -123,6 +139,38 @@ class AuthManager
         $this->db = $db;
         $this->providerManager = $providerManager;
         $this->statsCollector = $statsCollector;
+        $this->settingsRepository = $settingsRepository;
+    }
+
+    /**
+     * Resolve the effective signup mode from the settings store.
+     *
+     * @return string One of 'open', 'approval', 'disabled'. Defaults to
+     *                'approval' (the secure default) when the setting is
+     *                unreadable or holds an unexpected value. Falls back to
+     *                'open' only when no settings store is wired (legacy /
+     *                unit-test callers) to preserve historical behaviour.
+     */
+    private function resolveSignupMode(): string
+    {
+        if ($this->settingsRepository === null) {
+            return 'open';
+        }
+
+        try {
+            $mode = $this->settingsRepository->getEffective('auth.signup_mode');
+        } catch (Throwable $e) {
+            $this->logger->warning('Failed to read auth.signup_mode; defaulting to approval', [
+                'error' => $e->getMessage(),
+            ]);
+            return 'approval';
+        }
+
+        if (is_string($mode) && in_array($mode, ['open', 'approval', 'disabled'], true)) {
+            return $mode;
+        }
+
+        return 'approval';
     }
 
     /**
@@ -266,8 +314,13 @@ class AuthManager
      * @param string $email User's email address (must be valid format)
      * @param string $password User's password (minimum 8 characters)
      *
-     * @return array<string, mixed> Authentication response with access_token,
-     *         refresh_token, token_type, expires_in, and user data
+     * @return array<string, mixed> When the account is created active (open mode
+     *         or the first-user bootstrap), the authentication response with
+     *         access_token, refresh_token, token_type, expires_in and user data.
+     *         When the `auth.signup_mode` setting is 'approval' (and this is not
+     *         the first user), the account is created with status='pending', NO
+     *         tokens are issued, and the response is
+     *         `['status' => 'pending', 'message' => '...', 'user' => null]`.
      *
      * @throws \InvalidArgumentException If validation fails:
      *         - Username must be 3-50 characters
@@ -275,6 +328,8 @@ class AuthManager
      *         - Password must be at least 8 characters
      *         - Username already taken
      *         - Email already registered
+     * @throws SignupDisabledException When `auth.signup_mode` is 'disabled' and
+     *         this is not the first user (no account is created).
      *
      * @example
      * ```php
@@ -311,6 +366,20 @@ class AuthManager
         // a "prior" user. See Step A.5 for the admin-bootstrap policy.
         $isFirstUser = $this->userRepository->countUsers() === 0;
 
+        // Resolve the signup gate (S1). The first user ALWAYS bootstraps as an
+        // active admin regardless of mode, so the gate only applies to Nth users.
+        $signupMode = $this->resolveSignupMode();
+        if (!$isFirstUser && $signupMode === 'disabled') {
+            $this->auditLogger->logFailedAuth('signups_disabled', [
+                'username' => $username,
+            ]);
+            throw new SignupDisabledException();
+        }
+
+        // Status the new account is created with: active for the first user and
+        // for 'open' mode; pending for 'approval' mode (no tokens issued).
+        $status = ($isFirstUser || $signupMode !== 'approval') ? 'active' : 'pending';
+
         // Wrap create() + setAdmin() in a transaction for the first-user
         // path so a failure between the two does not leave the database
         // with an unauthorized half-promoted account. For the common
@@ -330,6 +399,7 @@ class AuthManager
                 'email' => $email,
                 'password' => $password,
                 'display_name' => $username,
+                'status' => $status,
             ]);
 
             if ($isFirstUser) {
@@ -364,9 +434,23 @@ class AuthManager
             throw $e;
         }
 
-        $this->logger->info('User registered', ['user_id' => $userId, 'username' => $username]);
+        $this->logger->info('User registered', [
+            'user_id' => $userId,
+            'username' => $username,
+            'status' => $status,
+        ]);
 
         $this->dispatchUserCreated($userId, $username, $email);
+
+        // Approval mode: the account is pending and CANNOT log in or see media
+        // until an admin approves it, so issue no tokens.
+        if ($status === 'pending') {
+            return [
+                'status' => 'pending',
+                'message' => 'Your account is awaiting administrator approval.',
+                'user' => null,
+            ];
+        }
 
         return $this->createAuthResponse($userId);
     }
@@ -385,6 +469,9 @@ class AuthManager
      *         refresh_token, token_type, expires_in, and user data
      *
      * @throws \InvalidArgumentException If credentials are invalid
+     * @throws AccountInactiveException If credentials are valid but the account
+     *         is not 'active' (pending approval or disabled) — no tokens issued.
+     * @throws RateLimitException If the client IP has exceeded the rate limit.
      *
      * @example
      * ```php
@@ -411,6 +498,19 @@ class AuthManager
                 'device_id' => $deviceId,
             ]);
             throw new \InvalidArgumentException('Invalid username or password');
+        }
+
+        // Signup approval gate (S1): credentials are correct, but the account
+        // must be 'active' to log in. Pending (awaiting approval) and disabled
+        // (suspended) accounts are rejected with a distinct error code and no
+        // tokens. A missing status column defaults to 'active' for safety.
+        $status = UserRow::string($user, 'status') ?? 'active';
+        if ($status !== 'active') {
+            $this->auditLogger->logFailedAuth('account_' . $status, [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+            throw AccountInactiveException::forStatus($status);
         }
 
         $this->clearRateLimit($clientIp);
@@ -536,6 +636,22 @@ class AuthManager
             throw new \InvalidArgumentException('Refresh token missing subject');
         }
 
+        // S1 security fix: the token may be cryptographically valid but the
+        // backing account could have been disabled (or set pending) since it
+        // was issued. Re-check the current DB status with a single lightweight
+        // PK lookup and refuse to mint fresh tokens unless the account is
+        // active. Mirror this method's existing invalid/expired-token failure
+        // contract exactly (throw \InvalidArgumentException, which the caller
+        // already maps to a 401) so callers need no change.
+        $status = $this->userRepository->getStatus($userId) ?? 'active';
+        if ($status !== 'active') {
+            $this->auditLogger->logFailedAuth('account_' . $status, [
+                'user_id' => $userId,
+                'context' => 'refresh',
+            ]);
+            throw new \InvalidArgumentException('Account is not active');
+        }
+
         return $this->createAuthResponse($userId);
     }
 
@@ -565,6 +681,21 @@ class AuthManager
 
         $payload = $this->jwtHandler->validateToken($token);
         if (!$payload) {
+            return null;
+        }
+
+        // S1 security fix: a cryptographically valid access token must still be
+        // backed by an active account. An account disabled mid-session (its 1h
+        // token still live) is revoked here on every authenticated request via a
+        // single lightweight PK lookup. Mirror the invalid-token failure
+        // contract exactly (return null) so HttpHandler simply leaves the
+        // request unauthenticated — no signature or caller change.
+        $userId = self::asString($payload['sub'] ?? null);
+        if ($userId === '') {
+            return null;
+        }
+        $status = $this->userRepository->getStatus($userId) ?? 'active';
+        if ($status !== 'active') {
             return null;
         }
 

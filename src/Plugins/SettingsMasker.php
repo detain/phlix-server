@@ -57,6 +57,42 @@ final class SettingsMasker
     }
 
     /**
+     * Project a plugin manifest's `settings` map into the normalised
+     * schema shape the admin configure form consumes: per key
+     * `{type, required, secret, label, description, default}`.
+     *
+     * Missing optional descriptors are defaulted (`required`/`secret` →
+     * false, `label`/`description` → empty string, `type` → `mixed`).
+     * The `default` key is only present when the manifest declares one,
+     * so the UI can distinguish "no default" from "default is null".
+     *
+     * @param InstalledPlugin $plugin Installed plugin whose manifest to project.
+     *
+     * @return array<string, array{type:string, required:bool, secret:bool, label:string,
+     *     description:string, default?:mixed}>
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    public static function schema(InstalledPlugin $plugin): array
+    {
+        $out = [];
+        foreach ($plugin->manifest->settings as $key => $schema) {
+            $entry = [
+                'type'        => is_string($schema['type'] ?? null) ? (string) $schema['type'] : 'mixed',
+                'required'    => isset($schema['required']) && $schema['required'] === true,
+                'secret'      => isset($schema['secret']) && $schema['secret'] === true,
+                'label'       => is_string($schema['label'] ?? null) ? (string) $schema['label'] : '',
+                'description' => is_string($schema['description'] ?? null) ? (string) $schema['description'] : '',
+            ];
+            if (array_key_exists('default', $schema)) {
+                $entry['default'] = $schema['default'];
+            }
+            $out[$key] = $entry;
+        }
+        return $out;
+    }
+
+    /**
      * Render the masked settings as a flat list of rows suitable for a
      * Smarty `{foreach}`: one row per declared setting key with
      * `{key, type, value, secret}`.

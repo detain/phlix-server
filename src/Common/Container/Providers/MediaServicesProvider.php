@@ -151,7 +151,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
             LibraryMetadataMatcher::class => autowire()
                 ->constructorParameter('items', get(ItemRepository::class))
                 ->constructorParameter('resolver', get(MovieMetadataResolver::class))
-                ->constructorParameter('seriesResolver', get(SeriesMetadataResolver::class)),
+                ->constructorParameter('seriesResolver', get(SeriesMetadataResolver::class))
+                // Direct TMDB provider powers the interactive per-item match
+                // API (search/apply). Named because PHP-DI skips defaulted
+                // optional ctor params during autowiring; shares the same
+                // admin-keyed TmdbProvider as the resolvers.
+                ->constructorParameter('tmdb', get(TmdbProvider::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`

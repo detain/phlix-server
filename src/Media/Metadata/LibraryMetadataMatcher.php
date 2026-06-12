@@ -8,6 +8,8 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Throwable;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 
@@ -63,8 +65,14 @@ class LibraryMetadataMatcher
     /** @var SeriesMetadataResolver|null TV series resolver (TMDB TV); null disables TV matching. */
     private ?SeriesMetadataResolver $seriesResolver;
 
+    /** @var TmdbProvider|null Direct TMDB provider for interactive single-item search/apply. */
+    private ?TmdbProvider $tmdb;
+
     /** @var StructuredLogger Logger for the MEDIA channel. */
     private StructuredLogger $logger;
+
+    /** @var string Base URL for the TMDB image CDN (poster/backdrop URL building). */
+    private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
 
     /**
      * @param ItemRepository             $items          Media-item data access.
@@ -74,6 +82,12 @@ class LibraryMetadataMatcher
      *                                                   are skipped (movie-only).
      * @param StructuredLogger|null      $logger         Optional logger; defaults
      *                                                   to the MEDIA channel.
+     * @param TmdbProvider|null          $tmdb           Direct TMDB provider used by
+     *                                                   the interactive per-item
+     *                                                   search/apply API; when null,
+     *                                                   {@see self::searchCandidates()}
+     *                                                   / {@see self::applyMatch()}
+     *                                                   report TMDB as unconfigured.
      *
      * @since 0.21.0
      */
@@ -81,12 +95,14 @@ class LibraryMetadataMatcher
         ItemRepository $items,
         MovieMetadataResolver $resolver,
         ?SeriesMetadataResolver $seriesResolver = null,
-        ?StructuredLogger $logger = null
+        ?StructuredLogger $logger = null,
+        ?TmdbProvider $tmdb = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
         $this->seriesResolver = $seriesResolver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
+        $this->tmdb = $tmdb;
     }
 
     /**
@@ -192,6 +208,453 @@ class LibraryMetadataMatcher
         ]);
 
         return ['matched' => $matched, 'processed' => $processed];
+    }
+
+    /**
+     * Map a media-item `type` to the TMDB search/apply mode (`tv` or `movie`).
+     *
+     * series/season/episode all resolve against TMDB TV; everything else (movie,
+     * video, …) resolves against TMDB movie.
+     *
+     * @param mixed $type The item's stored `type` column value.
+     *
+     * @return string `'tv'` or `'movie'`.
+     *
+     * @since 0.25.0
+     */
+    public static function modeForType(mixed $type): string
+    {
+        return (is_string($type) && in_array($type, ['series', 'season', 'episode'], true)) ? 'tv' : 'movie';
+    }
+
+    /**
+     * Search TMDB for candidate matches for the interactive per-item match UI.
+     *
+     * Stateless — performs NO persistence. Maps raw TMDB movie/tv search results
+     * into a stable candidate shape the UI renders as a pick-list.
+     *
+     * @param string $query Search query (e.g. the item's title).
+     * @param string $type  `'tv'` or `'movie'`; anything else is treated as movie.
+     * @param int|null $year Optional release / first-air year to bias the search.
+     * @param int    $limit Maximum candidates to return (clamped to [1, 50]).
+     *
+     * @return list<array{
+     *     tmdb_id: string,
+     *     type: string,
+     *     title: string,
+     *     year: int|null,
+     *     overview: string,
+     *     poster_url: string|null,
+     *     backdrop_url: string|null,
+     *     vote_average: float
+     * }> Candidate matches (possibly empty).
+     *
+     * @throws TmdbUnconfiguredException When no TMDB provider is wired.
+     *
+     * @since 0.25.0
+     */
+    public function searchCandidates(string $query, string $type, ?int $year = null, int $limit = 20): array
+    {
+        $tmdb = $this->requireTmdb();
+        $query = trim($query);
+        if ($query === '') {
+            return [];
+        }
+        $limit = max(1, min(50, $limit));
+        $mode = $type === 'tv' ? 'tv' : 'movie';
+
+        $candidates = [];
+        if ($mode === 'tv') {
+            $options = $year !== null ? ['first_air_date_year' => $year] : [];
+            foreach ($tmdb->searchTv($query, $options) as $row) {
+                $candidates[] = [
+                    'tmdb_id' => MetadataValue::asString($row['id'] ?? null),
+                    'type' => 'tv',
+                    'title' => MetadataValue::asString($row['name'] ?? null),
+                    'year' => $this->yearFromDate($row['first_air_date'] ?? null),
+                    'overview' => MetadataValue::asString($row['overview'] ?? null),
+                    'poster_url' => $this->imageUrl($row['poster_path'] ?? null),
+                    'backdrop_url' => $this->imageUrl($row['backdrop_path'] ?? null),
+                    'vote_average' => MetadataValue::asFloat($row['vote_average'] ?? null),
+                ];
+            }
+        } else {
+            $options = $year !== null ? ['year' => $year] : [];
+            foreach ($tmdb->search($query, $options) as $row) {
+                $candidates[] = [
+                    'tmdb_id' => MetadataValue::asString($row['id'] ?? null),
+                    'type' => 'movie',
+                    'title' => MetadataValue::asString($row['title'] ?? null),
+                    'year' => $this->yearFromDate($row['release_date'] ?? null),
+                    'overview' => MetadataValue::asString($row['overview'] ?? null),
+                    'poster_url' => $this->imageUrl($row['poster_path'] ?? null),
+                    'backdrop_url' => $this->imageUrl($row['backdrop_path'] ?? null),
+                    'vote_average' => MetadataValue::asFloat($row['vote_average'] ?? null),
+                ];
+            }
+        }
+
+        // Drop entries with no usable id, then cap.
+        $candidates = array_values(array_filter(
+            $candidates,
+            static fn(array $c): bool => $c['tmdb_id'] !== '',
+        ));
+
+        return array_slice($candidates, 0, $limit);
+    }
+
+    /**
+     * Apply a chosen TMDB match to a single media item, persisting its metadata.
+     *
+     * Mirrors the whole-library matcher's persistence (`persistMetadata`,
+     * `enrichSeriesChildren`) so the DRY persistence path is reused:
+     *  - `movie` mode → fetch `/movie/{id}` details and merge+persist onto the item.
+     *  - `tv` mode on a `series` item → fetch `/tv/{id}` details, persist, then
+     *    enrich every season/episode child (same as a whole-library series match).
+     *  - `tv` mode on a `season` item → persist the season's poster/overview from
+     *    `/tv/{id}/season/{n}` (season number from the item's metadata) and enrich
+     *    that season's episode children.
+     *  - `tv` mode on an `episode` item → persist that episode's title/still/
+     *    overview/air-date from the right season/episode of `/tv/{id}`.
+     *
+     * @param string $itemId Target media-item id.
+     * @param string $tmdbId Chosen TMDB id (movie or series).
+     * @param string $type   `'tv'` or `'movie'`; anything else is treated as movie.
+     *
+     * @return array{
+     *     item_id: string,
+     *     mode: string,
+     *     tmdb_id: string,
+     *     matched: bool,
+     *     children_enriched: int
+     * } What was applied. `matched` is false when TMDB returned no usable details.
+     *
+     * @throws TmdbUnconfiguredException When no TMDB provider is wired.
+     *
+     * @since 0.25.0
+     */
+    public function applyMatch(string $itemId, string $tmdbId, string $type): array
+    {
+        $tmdb = $this->requireTmdb();
+        $tmdbId = trim($tmdbId);
+        if ($itemId === '' || $tmdbId === '') {
+            return ['item_id' => $itemId, 'mode' => $type, 'tmdb_id' => $tmdbId, 'matched' => false, 'children_enriched' => 0];
+        }
+
+        $item = $this->items->findById($itemId);
+        if ($item === null) {
+            return ['item_id' => $itemId, 'mode' => $type, 'tmdb_id' => $tmdbId, 'matched' => false, 'children_enriched' => 0];
+        }
+
+        $itemType = $item['type'] ?? null;
+        $mode = $type === 'tv' ? 'tv' : 'movie';
+        $existing = $this->extractMetadata($item);
+        $childrenEnriched = 0;
+        $matched = false;
+
+        if ($mode === 'tv') {
+            $details = $tmdb->getTvDetails($tmdbId);
+            if ($details !== []) {
+                $resolved = $this->formatSeriesDetails($tmdbId, $details);
+
+                if ($itemType === 'series') {
+                    $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                    $childrenEnriched = $this->enrichSeriesChildren(
+                        $itemId,
+                        $tmdbId,
+                        $this->stringOrNull($resolved['poster_url'] ?? null),
+                        $this->stringOrNull($resolved['backdrop_url'] ?? null),
+                        $this->stringOrNull($resolved['overview'] ?? null),
+                    );
+                } elseif ($itemType === 'season') {
+                    $childrenEnriched = $this->applyToSeason(
+                        $itemId,
+                        $tmdbId,
+                        $existing,
+                        $this->stringOrNull($resolved['poster_url'] ?? null),
+                        $this->stringOrNull($resolved['backdrop_url'] ?? null),
+                        $this->stringOrNull($resolved['overview'] ?? null),
+                    );
+                } elseif ($itemType === 'episode') {
+                    $this->applyToEpisode(
+                        $itemId,
+                        $item,
+                        $tmdbId,
+                        $existing,
+                        $this->stringOrNull($resolved['poster_url'] ?? null),
+                        $this->stringOrNull($resolved['overview'] ?? null),
+                    );
+                } else {
+                    // A non-hierarchy item matched against TV: persist series-level metadata.
+                    $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                }
+                $matched = true;
+            }
+        } else {
+            $details = $tmdb->getDetails($tmdbId);
+            if ($details !== []) {
+                $resolved = $this->formatMovieDetails($tmdbId, $details, $existing);
+                $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                $matched = true;
+            }
+        }
+
+        $this->logger->info('LibraryMetadataMatcher: interactive apply', [
+            'item_id' => $itemId,
+            'tmdb_id' => $tmdbId,
+            'mode' => $mode,
+            'matched' => $matched,
+            'children_enriched' => $childrenEnriched,
+        ]);
+
+        return [
+            'item_id' => $itemId,
+            'mode' => $mode,
+            'tmdb_id' => $tmdbId,
+            'matched' => $matched,
+            'children_enriched' => $childrenEnriched,
+        ];
+    }
+
+    /**
+     * Apply a chosen series id to a single `season` item: persist the season's
+     * poster/overview + enrich its episode children.
+     *
+     * @param array<string, mixed> $existing Decoded existing season metadata.
+     *
+     * @return int Episodes enriched.
+     */
+    private function applyToSeason(
+        string $seasonId,
+        string $tmdbId,
+        array $existing,
+        ?string $seriesPoster,
+        ?string $seriesBackdrop,
+        ?string $seriesOverview
+    ): int {
+        $seasonNumber = $this->intMeta($existing, 'season');
+        $seasonData = ($seasonNumber !== null && $this->seriesResolver !== null)
+            ? $this->seriesResolver->resolveSeasonEpisodes($tmdbId, $seasonNumber)
+            : null;
+
+        $this->persistMetadata(
+            $seasonId,
+            array_merge($existing, $this->seasonPatch($seasonData, $seriesPoster, $seriesBackdrop, $seriesOverview))
+        );
+
+        $enriched = 0;
+        foreach ($this->items->findByParent($seasonId) as $episode) {
+            $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+            $enriched++;
+        }
+        return $enriched;
+    }
+
+    /**
+     * Apply a chosen series id to a single `episode` item: persist that episode's
+     * title/still/overview/air-date from the right season/episode.
+     *
+     * @param array<string, mixed> $episode  Hydrated episode row.
+     * @param array<string, mixed> $existing Decoded existing episode metadata.
+     */
+    private function applyToEpisode(
+        string $episodeId,
+        array $episode,
+        string $tmdbId,
+        array $existing,
+        ?string $seriesPoster,
+        ?string $seriesOverview
+    ): void {
+        $seasonNumber = $this->intMeta($existing, 'season');
+        $seasonData = ($seasonNumber !== null && $this->seriesResolver !== null)
+            ? $this->seriesResolver->resolveSeasonEpisodes($tmdbId, $seasonNumber)
+            : null;
+        $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+    }
+
+    /**
+     * Format raw TMDB `/tv/{id}` details into a mergeable series-metadata array
+     * (same shape {@see SeriesMetadataResolver::resolve()} produces).
+     *
+     * @param array<string, mixed> $details Formatted TMDB TV details (from getTvDetails).
+     *
+     * @return array<string, mixed>
+     */
+    private function formatSeriesDetails(string $tmdbId, array $details): array
+    {
+        $result = [
+            'external_ids' => array_filter([
+                'tmdb' => $tmdbId,
+                'imdb' => MetadataValue::asNullableString($details['imdb_id'] ?? null),
+            ], static fn(?string $v): bool => $v !== null && $v !== ''),
+            'tmdb_id' => $tmdbId,
+            'sources' => ['tmdb'],
+        ];
+
+        $name = MetadataValue::asNullableString($details['name'] ?? null);
+        if ($name !== null) {
+            $result['title'] = $name;
+        }
+        $overview = MetadataValue::asNullableString($details['overview'] ?? null);
+        if ($overview !== null) {
+            $result['overview'] = $overview;
+        }
+        $poster = $this->imageUrl($details['poster_path'] ?? null);
+        if ($poster !== null) {
+            $result['poster_url'] = $poster;
+        }
+        $backdrop = $this->imageUrl($details['backdrop_path'] ?? null);
+        if ($backdrop !== null) {
+            $result['backdrop_url'] = $backdrop;
+        }
+        $genres = MetadataValue::asList($details['genres'] ?? null);
+        $genreNames = array_values(array_filter(
+            array_map(static fn(mixed $g): string => MetadataValue::asString($g), $genres),
+            static fn(string $g): bool => $g !== '',
+        ));
+        if ($genreNames !== []) {
+            $result['genres'] = $genreNames;
+        }
+        $year = MetadataValue::asNullableInt($details['year'] ?? null);
+        if ($year !== null) {
+            $result['year'] = $year;
+        }
+        $rating = MetadataValue::asNullableString($details['official_rating'] ?? null);
+        if ($rating !== null) {
+            $result['official_rating'] = $rating;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Format raw TMDB `/movie/{id}` details into a mergeable movie-metadata array
+     * (same descriptive keys {@see MovieMetadataResolver::resolve()} produces).
+     *
+     * @param array<string, mixed> $details  Formatted TMDB movie details (from getDetails).
+     * @param array<string, mixed> $existing Existing metadata (its external_ids are preserved/merged under).
+     *
+     * @return array<string, mixed>
+     */
+    private function formatMovieDetails(string $tmdbId, array $details, array $existing): array
+    {
+        $imdbId = MetadataValue::asNullableString($details['imdb_id'] ?? null);
+
+        $existingExternal = $this->extractExternalIds($existing);
+        $discovered = array_filter([
+            'tmdb' => $tmdbId,
+            'imdb' => $imdbId,
+        ], static fn(?string $v): bool => $v !== null && $v !== '');
+
+        $result = [
+            'external_ids' => array_merge($existingExternal, $discovered),
+            'tmdb_id' => $tmdbId,
+            'sources' => ['tmdb'],
+        ];
+
+        $title = MetadataValue::asNullableString($details['name'] ?? null);
+        if ($title !== null) {
+            $result['title'] = $title;
+        }
+        $overview = MetadataValue::asNullableString($details['overview'] ?? null);
+        if ($overview !== null) {
+            $result['overview'] = $overview;
+        }
+        $poster = $this->imageUrl($details['poster_path'] ?? null);
+        if ($poster !== null) {
+            $result['poster_url'] = $poster;
+        }
+        $backdrop = $this->imageUrl($details['backdrop_path'] ?? null);
+        if ($backdrop !== null) {
+            $result['backdrop_url'] = $backdrop;
+        }
+        $genres = $this->stringList($details['genres'] ?? null);
+        if ($genres !== []) {
+            $result['genres'] = $genres;
+        }
+        $year = MetadataValue::asNullableInt($details['year'] ?? null);
+        if ($year !== null) {
+            $result['year'] = $year;
+        }
+        $ticks = MetadataValue::asNullableInt($details['runtime_ticks'] ?? null);
+        if ($ticks !== null && $ticks > 0) {
+            $result['runtime'] = (int) ($ticks / 600000000);
+        }
+        $director = MetadataValue::asNullableString($details['director'] ?? null);
+        if ($director !== null) {
+            $result['director'] = $director;
+        }
+        $actors = MetadataValue::asAssocList($details['actors'] ?? null);
+        if ($actors !== []) {
+            $result['actors'] = $actors;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Narrow a mixed value to a de-duplicated list of non-empty strings (genres).
+     *
+     * @param mixed $value
+     *
+     * @return list<string>
+     */
+    private function stringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            $name = MetadataValue::asNullableString($entry);
+            if ($name !== null && !in_array($name, $out, true)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Build a full TMDB image URL from a `/path.jpg` fragment, or null when absent.
+     */
+    private function imageUrl(mixed $path): ?string
+    {
+        $clean = MetadataValue::asNullableString($path);
+        if ($clean === null) {
+            return null;
+        }
+        return $this->imageBaseUrl . '/w500' . $clean;
+    }
+
+    /**
+     * Extract a 4-digit year from a TMDB date string (`YYYY-MM-DD`), or null.
+     */
+    private function yearFromDate(mixed $date): ?int
+    {
+        $clean = MetadataValue::asNullableString($date);
+        if ($clean === null) {
+            return null;
+        }
+        if (preg_match('/^(\d{4})/', $clean, $m) === 1) {
+            return (int) $m[1];
+        }
+        return null;
+    }
+
+    /**
+     * Return the wired TMDB provider, or throw when interactive search/apply is
+     * unavailable because no provider is wired OR no API key is configured
+     * (an empty key would otherwise fail TMDB auth and surface as an empty
+     * result / no-match instead of the clear "configure TMDB" signal).
+     *
+     * @throws TmdbUnconfiguredException
+     */
+    private function requireTmdb(): TmdbProvider
+    {
+        if ($this->tmdb === null || !$this->tmdb->hasApiKey()) {
+            throw new TmdbUnconfiguredException();
+        }
+        return $this->tmdb;
     }
 
     /**
@@ -319,6 +782,8 @@ class LibraryMetadataMatcher
      * @param string|null $seriesPoster   Series poster URL (episode/season fallback).
      * @param string|null $seriesBackdrop Series backdrop URL.
      * @param string|null $seriesOverview Series overview (episode/season fallback).
+     *
+     * @return int Number of child nodes (seasons + episodes) enriched.
      */
     private function enrichSeriesChildren(
         string $seriesId,
@@ -326,9 +791,10 @@ class LibraryMetadataMatcher
         ?string $seriesPoster,
         ?string $seriesBackdrop,
         ?string $seriesOverview
-    ): void {
+    ): int {
         /** @var array<int, array<string, mixed>> $seasonCache */
         $seasonCache = [];
+        $enriched = 0;
 
         foreach ($this->items->findByParent($seriesId) as $child) {
             $childType = $child['type'] ?? null;
@@ -344,14 +810,19 @@ class LibraryMetadataMatcher
                     $childId,
                     array_merge($childMeta, $this->seasonPatch($seasonData, $seriesPoster, $seriesBackdrop, $seriesOverview))
                 );
+                $enriched++;
                 foreach ($this->items->findByParent($childId) as $episode) {
                     $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+                    $enriched++;
                 }
             } elseif ($childType === 'episode') {
                 $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
                 $this->enrichEpisode($child, $seasonData, $seriesPoster, $seriesOverview);
+                $enriched++;
             }
         }
+
+        return $enriched;
     }
 
     /**

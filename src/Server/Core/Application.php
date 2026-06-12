@@ -266,6 +266,12 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // Interactive per-item metadata match (S5). Admin-gated inside the
+        // controller (same protection as the whole-library match endpoint).
+        $mediaMatchController = $this->getMediaMatchController();
+        $this->router->get('/api/v1/media/{id}/match/search', [$mediaMatchController, 'search']);
+        $this->router->post('/api/v1/media/{id}/match/apply', [$mediaMatchController, 'apply']);
+
         // On-demand transcode: start (or reuse) an HLS job for a media item, and
         // poll its readiness. The web player calls these when a file can't be
         // direct-played; the master playlist URL is served by HlsController.
@@ -2028,6 +2034,36 @@ class Application
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+    }
+
+    /**
+     * Returns a MediaMatchController instance (interactive per-item metadata match).
+     *
+     * Always resolved through the DI container in production so the
+     * LibraryMetadataMatcher (and its admin-keyed TmdbProvider + resolvers) is
+     * autowired; the admin middleware is wired when available so both endpoints
+     * are admin-gated exactly like the whole-library match endpoint.
+     *
+     * @return \Phlix\Server\Http\Controllers\MediaMatchController The controller instance.
+     */
+    private function getMediaMatchController(): \Phlix\Server\Http\Controllers\MediaMatchController
+    {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for MediaMatchController');
+
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
+        /** @var \Phlix\Media\Metadata\LibraryMetadataMatcher */
+        $matcher = $container->get(\Phlix\Media\Metadata\LibraryMetadataMatcher::class);
+        $controller = new \Phlix\Server\Http\Controllers\MediaMatchController($itemRepository, $matcher);
+
+        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
     }
 
     /**

@@ -29,6 +29,16 @@ class TmdbProviderTest extends TestCase
         $this->assertContains('tmdb', $providers);
     }
 
+    public function testHasApiKeyTrueWhenKeyPresent(): void
+    {
+        $this->assertTrue((new TmdbProvider('test-api-key'))->hasApiKey());
+    }
+
+    public function testHasApiKeyFalseWhenKeyEmpty(): void
+    {
+        $this->assertFalse((new TmdbProvider(''))->hasApiKey());
+    }
+
     public function testSearchTvMapsResultsAndForwardsYear(): void
     {
         $http = $this->createMock(MetadataHttpClient::class);

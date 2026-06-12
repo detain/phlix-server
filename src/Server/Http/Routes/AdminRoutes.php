@@ -36,6 +36,8 @@ use Psr\Container\ContainerInterface;
  *
  *  - `GET    /api/v1/admin/plugins`                  → list installed
  *  - `POST   /api/v1/admin/plugins/install`          → install from URL
+ *  - `GET    /api/v1/admin/plugins/{name}`           → detail + settings schema
+ *  - `PUT    /api/v1/admin/plugins/{name}/settings`  → save settings
  *  - `POST   /api/v1/admin/plugins/{name}/enable`    → enable
  *  - `POST   /api/v1/admin/plugins/{name}/disable`   → disable
  *  - `DELETE /api/v1/admin/plugins/{name}`           → uninstall
@@ -81,6 +83,8 @@ final class AdminRoutes
 
                 $r->get('/plugins', [$pluginController, 'index']);
                 $r->post('/plugins/install', [$pluginController, 'install']);
+                $r->get('/plugins/{name}', [$pluginController, 'show']);
+                $r->put('/plugins/{name}/settings', [$pluginController, 'updateSettings']);
                 $r->post('/plugins/{name}/enable', [$pluginController, 'enable']);
                 $r->post('/plugins/{name}/disable', [$pluginController, 'disable']);
                 $r->delete('/plugins/{name}', [$pluginController, 'uninstall']);

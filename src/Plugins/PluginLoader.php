@@ -400,6 +400,43 @@ class PluginLoader
     }
 
     /**
+     * Fetch a single installed plugin by manifest name.
+     *
+     * Thin facade over {@see PluginRepository::findByName()} so the admin
+     * controllers (configure/detail endpoints) can read one plugin's
+     * manifest + persisted settings without reaching past the loader.
+     *
+     * @param string $name Manifest name (e.g. `phlix-plugin-anidb`).
+     *
+     * @return InstalledPlugin Fully hydrated DTO (manifest + settings).
+     *
+     * @throws PluginNotFoundException When no row matches the name.
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    public function getInstalled(string $name): InstalledPlugin
+    {
+        return $this->repository->findByName($name);
+    }
+
+    /**
+     * Persist a replacement settings map for an installed plugin.
+     *
+     * Thin facade over {@see PluginRepository::updateSettings()}. The
+     * caller is responsible for validating/merging the map against the
+     * manifest schema first; this method only writes the JSON blob.
+     *
+     * @param string               $name     Manifest name.
+     * @param array<string, mixed> $settings Full settings map to store.
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    public function updateSettings(string $name, array $settings): void
+    {
+        $this->repository->updateSettings($name, $settings);
+    }
+
+    /**
      * Re-attach every persisted-as-enabled plugin to the dispatcher.
      * Called by the {@see \Phlix\Common\Container\Providers\PluginsProvider}
      * after the container is built so server restarts pick up plugins

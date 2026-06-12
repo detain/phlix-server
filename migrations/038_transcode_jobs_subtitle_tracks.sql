@@ -1,0 +1,21 @@
+-- Migration: 038_transcode_jobs_subtitle_tracks.sql
+-- Description: Record extracted WebVTT subtitle tracks on a transcode job.
+--
+-- The transcode pipeline (src/Media/Transcoding/TranscodeManager::ensureHlsJob())
+-- now extracts a media file's embedded TEXT subtitle tracks (ASS/SRT/mov_text)
+-- to selectable `sub-{index}.vtt` sidecars in the job directory, served via the
+-- same /hls/{job}/{file} route as the CMAF segments. The transcode-start and
+-- status responses surface a track list — { index, language, label, url, default }
+-- — so the player can offer selectable subtitle tracks.
+--
+-- The track descriptors are derived at job-creation time from the in-memory
+-- ffprobe result (detection is cheap and synchronous; the ACTUAL extraction runs
+-- in the detached ffmpeg job). They are stored as a JSON array so the status
+-- endpoint can return them without re-probing on every poll.
+--
+-- Only ADDs one nullable column; no existing column/constraint is altered.
+-- Idempotent: re-running an ADD COLUMN that already exists raises a duplicate-
+-- column error which the migration runner downgrades to a note (see
+-- scripts/run-migrations.php / src/Common/Database/MigrationRunner.php).
+
+ALTER TABLE transcode_jobs ADD COLUMN subtitle_tracks TEXT NULL AFTER error;

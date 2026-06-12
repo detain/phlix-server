@@ -28,6 +28,10 @@ class TranscodeControllerTest extends TestCase
                 'hls_url' => '/hls/job-7/master.m3u8',
                 'dash_url' => '/dash/job-7/manifest.mpd',
                 'reused' => false,
+                'subtitles' => [
+                    ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
+                        'url' => '/hls/job-7/sub-0.vtt'],
+                ],
             ]);
         $controller = new TranscodeController($manager);
 
@@ -39,6 +43,9 @@ class TranscodeControllerTest extends TestCase
         $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
         $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
         $this->assertFalse($body['reused']);
+        $this->assertSame('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
+        $this->assertSame('English', $body['subtitles'][0]['label']);
+        $this->assertTrue($body['subtitles'][0]['default']);
     }
 
     public function testStartReturns400WhenMediaIdEmpty(): void
@@ -85,6 +92,10 @@ class TranscodeControllerTest extends TestCase
                 'segments' => 3,
                 'playlist_ready' => true,
                 'progress' => 3.0,
+                'subtitles' => [
+                    ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
+                        'url' => '/hls/job-7/sub-0.vtt'],
+                ],
             ]);
         $controller = new TranscodeController($manager);
 
@@ -96,6 +107,7 @@ class TranscodeControllerTest extends TestCase
         $this->assertTrue($body['playlist_ready']);
         $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
         $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
+        $this->assertSame('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
     }
 
     public function testStatusReturns404WhenJobUnknown(): void

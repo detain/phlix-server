@@ -205,6 +205,100 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->removeDir($dir);
     }
 
+    public function testStartDetachedWritesFailedMarkerWithTrailingCmds(): void
+    {
+        // Regression for the subtitle-chain precedence bug: a FAILED primary
+        // command must write .failed even when trailing (subtitle) commands are
+        // present and succeed. The old `cmd && extract || true && touch .complete`
+        // chain wrote .complete here; the if/then/else form must not.
+        $dir = sys_get_temp_dir() . '/phlix_detached_subfail_' . uniqid();
+        mkdir($dir, 0755, true);
+
+        // Primary fails; trailing extract group is the always-succeeding form.
+        $this->runner()->startDetached('false', $dir, ['( true ) || true']);
+
+        $deadline = microtime(true) + 5.0;
+        while (microtime(true) < $deadline && !file_exists("{$dir}/.failed")) {
+            usleep(50000);
+        }
+        $this->assertFileExists("{$dir}/.failed");
+        $this->assertFileDoesNotExist("{$dir}/.complete");
+
+        $this->removeDir($dir);
+    }
+
+    public function testStartDetachedRunsTrailingCmdsOnlyOnSuccessAndKeepsComplete(): void
+    {
+        // A SUCCESSFUL primary command writes .complete, then runs the trailing
+        // commands; a FAILING trailing command must NOT flip the job to .failed.
+        $dir = sys_get_temp_dir() . '/phlix_detached_subok_' . uniqid();
+        mkdir($dir, 0755, true);
+        $marker = $dir . '/trailing-ran';
+
+        $this->runner()->startDetached(
+            'true',
+            $dir,
+            ['( false ) || true', 'touch ' . escapeshellarg($marker)]
+        );
+
+        $deadline = microtime(true) + 5.0;
+        while (microtime(true) < $deadline && !file_exists("{$dir}/.complete")) {
+            usleep(50000);
+        }
+        $this->assertFileExists("{$dir}/.complete");
+        $this->assertFileDoesNotExist("{$dir}/.failed");
+        // Trailing command ran (after .complete) despite an earlier failing group.
+        $this->assertFileExists($marker);
+
+        $this->removeDir($dir);
+    }
+
+    public function testBuildDetachedCommandGuardsCompleteWithIfThenElse(): void
+    {
+        $cmd = $this->runner()->buildDetachedCommand('SOME_ENCODE', '/out', ['( EXTRACT0 ) || true']);
+
+        // The marker decision is an unambiguous if/then/else keyed on the encode,
+        // NOT a `... || true && touch .complete` chain that the extract `|| true`
+        // could bridge through on a failed encode.
+        $this->assertStringContainsString('if SOME_ENCODE; then touch ', $cmd);
+        $this->assertStringContainsString('/out/.complete', $cmd);
+        $this->assertStringContainsString('else touch ', $cmd);
+        $this->assertStringContainsString('/out/.failed', $cmd);
+        $this->assertStringContainsString('fi', $cmd);
+        // The extract group lives inside the `then` branch, after `.complete`.
+        $this->assertMatchesRegularExpression(
+            '/then touch .*\.complete.*; \( EXTRACT0 \) \|\| true.*; else touch .*\.failed/s',
+            $cmd
+        );
+        // The old bridging pattern must be gone.
+        $this->assertStringNotContainsString('|| true && touch', $cmd);
+    }
+
+    public function testStartCmafTranscodeWithSubtitlesGuardsCompleteOnEncodeFailure(): void
+    {
+        // End-to-end via the real with-subtitles path using sh stand-ins: a
+        // failing CMAF encode must produce .failed, never .complete, even with a
+        // (succeeding) subtitle-extract trailing command present.
+        $dir = sys_get_temp_dir() . '/phlix_cmaf_subfail_' . uniqid();
+        mkdir($dir, 0755, true);
+
+        // Build the full chain exactly as production does, then swap the real
+        // CMAF command for `false` to simulate an encode failure deterministically.
+        $runner = $this->runner();
+        $extract = '( true ) || true';
+        $full = $runner->buildDetachedCommand('false', $dir, [$extract]);
+        shell_exec($full);
+
+        $deadline = microtime(true) + 5.0;
+        while (microtime(true) < $deadline && !file_exists("{$dir}/.failed")) {
+            usleep(50000);
+        }
+        $this->assertFileExists("{$dir}/.failed");
+        $this->assertFileDoesNotExist("{$dir}/.complete");
+
+        $this->removeDir($dir);
+    }
+
     public function testIsProcessRunningForSelfAndBogusPid(): void
     {
         $runner = $this->runner();

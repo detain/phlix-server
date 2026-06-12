@@ -62,6 +62,7 @@ class TranscodeController
             'dash_url' => $job['dash_url'],
             'status' => $job['status'],
             'reused' => $job['reused'],
+            'subtitles' => $job['subtitles'],
         ]);
     }
 
@@ -90,6 +91,7 @@ class TranscodeController
             'progress' => $readiness['progress'],
             'master_url' => "/hls/{$readiness['job_id']}/master.m3u8",
             'dash_url' => "/dash/{$readiness['job_id']}/manifest.mpd",
+            'subtitles' => $readiness['subtitles'],
         ]);
     }
 }

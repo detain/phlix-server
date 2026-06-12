@@ -6,6 +6,7 @@ namespace Phlix\Media\Transcoding;
 
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Streaming\StreamState;
+use Phlix\Media\Transcoding\Subtitles\SubtitleExtractor;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
@@ -51,6 +52,15 @@ class TranscodeManager
 
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
+
+    /** @var SubtitleExtractor Detects + builds extraction for embedded text subs */
+    private SubtitleExtractor $subtitleExtractor;
+
+    /** @var string Absolute php binary path used by the detached VTT cleaner step */
+    private string $phpBinary;
+
+    /** @var string Absolute path to the scripts/clean-vtt.php cleaner CLI */
+    private string $cleanVttScript;
 
     /**
      * Profile resolution caps used to decide downscaling for HLS jobs.
@@ -99,7 +109,10 @@ class TranscodeManager
         string $transcodeDir,
         string $segmentDir,
         ?LoggerInterface $logger = null,
-        int $segmentSeconds = 6
+        int $segmentSeconds = 6,
+        ?SubtitleExtractor $subtitleExtractor = null,
+        ?string $phpBinary = null,
+        ?string $cleanVttScript = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
@@ -109,6 +122,11 @@ class TranscodeManager
         $this->maxConcurrentTranscodes = 4;
         $this->logger = $logger ?? new NullLogger();
         $this->segmentSeconds = $segmentSeconds > 0 ? $segmentSeconds : 6;
+        $this->subtitleExtractor = $subtitleExtractor ?? new SubtitleExtractor();
+        // PHP_BINARY is the absolute path to the running interpreter, used by the
+        // detached job to invoke the VTT-cleaner CLI.
+        $this->phpBinary = $phpBinary ?? PHP_BINARY;
+        $this->cleanVttScript = $cleanVttScript ?? (dirname(__DIR__, 3) . '/scripts/clean-vtt.php');
     }
 
     /**
@@ -208,7 +226,8 @@ class TranscodeManager
      * @param string $profileName Device profile name (e.g. 'web', 'mobile-high').
      *
      * @return array{
-     *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool
+     *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool,
+     *     subtitles: list<array{index: int, language: string, label: string, default: bool, url: string}>
      * }
      *
      * @throws \InvalidArgumentException If the media item is not found.
@@ -230,6 +249,7 @@ class TranscodeManager
                 'hls_url' => "/hls/{$existing}/master.m3u8",
                 'dash_url' => "/dash/{$existing}/manifest.mpd",
                 'reused' => true,
+                'subtitles' => $this->subtitleTracksFor($existing),
             ];
         }
 
@@ -267,16 +287,33 @@ class TranscodeManager
         // CMAF master playlist (HLS); the DASH manifest.mpd lands in the same dir.
         $playlistPath = "{$hlsDir}/master.m3u8";
 
+        // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/
+        // VobSub are skipped). Detection is a cheap parse of the in-memory probe;
+        // the actual extraction runs in the detached job below.
+        $tracks = $this->subtitleExtractor->detectTextTracks($probe);
+        $extractCmds = [];
+        foreach ($tracks as $track) {
+            $extractCmds[] = $this->subtitleExtractor->buildExtractCommand(
+                $this->ffmpeg->getFfmpegPath(),
+                $this->phpBinary,
+                $this->cleanVttScript,
+                $itemPath,
+                $hlsDir,
+                $track['index']
+            );
+        }
+        $tracksJson = $tracks === [] ? null : json_encode($tracks);
+
         $this->db->query(
             "INSERT INTO transcode_jobs
                 (id, media_item_id, input_path, output_path, hls_dir, status, profile, key_hash,
-                 variant_width, variant_height, variant_bandwidth, started_at)
-             VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, NOW())",
+                 variant_width, variant_height, variant_bandwidth, subtitle_tracks, started_at)
+             VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, NOW())",
             [$jobId, $mediaItemId, $itemPath, $playlistPath, $hlsDir, $profileName, $keyHash,
-                $width, $height, $bandwidth]
+                $width, $height, $bandwidth, $tracksJson]
         );
 
-        $pid = $this->ffmpeg->startCmafTranscode($itemPath, $hlsDir, $params);
+        $pid = $this->ffmpeg->startCmafTranscodeWithSubtitles($itemPath, $hlsDir, $params, $extractCmds);
         if ($pid <= 0) {
             $this->db->query(
                 "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ?",
@@ -292,6 +329,7 @@ class TranscodeManager
             'pid' => $pid,
             'video_codec' => $params['video_codec'] ?? null,
             'audio_codec' => $params['audio_codec'] ?? null,
+            'subtitle_tracks' => count($tracks),
         ]);
 
         return [
@@ -301,7 +339,111 @@ class TranscodeManager
             'hls_url' => "/hls/{$jobId}/master.m3u8",
             'dash_url' => "/dash/{$jobId}/manifest.mpd",
             'reused' => false,
+            'subtitles' => $this->subtitleTrackUrls($jobId, $tracks),
         ];
+    }
+
+    /**
+     * Builds the public subtitle-track descriptors for a job from detector output.
+     *
+     * Maps each detected track to the playable shape the API returns: the sidecar
+     * `url` points at the same /hls/{job}/{file} route that serves the segments.
+     *
+     * @param string $jobId  Job identifier.
+     * @param list<array{index: int, language: string, label: string, default: bool, codec: string, filename: string}> $tracks
+     *
+     * @return list<array{index: int, language: string, label: string, default: bool, url: string}>
+     */
+    private function subtitleTrackUrls(string $jobId, array $tracks): array
+    {
+        $out = [];
+        foreach ($tracks as $track) {
+            $out[] = [
+                'index' => $track['index'],
+                'language' => $track['language'],
+                'label' => $track['label'],
+                'default' => $track['default'],
+                'url' => "/hls/{$jobId}/{$track['filename']}",
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Reads the stored subtitle-track descriptors for an existing job.
+     *
+     * Decodes the `subtitle_tracks` JSON persisted at job creation and maps it to
+     * the public {index, language, label, default, url} shape. Returns an empty
+     * list when the job has no text subtitles or the column is empty.
+     *
+     * @param string $jobId Job identifier.
+     *
+     * @return list<array{index: int, language: string, label: string, default: bool, url: string}>
+     */
+    public function subtitleTracksFor(string $jobId): array
+    {
+        $row = $this->getJobRow($jobId);
+        if ($row === null) {
+            return [];
+        }
+        return $this->decodeSubtitleTracks($jobId, $row);
+    }
+
+    /**
+     * Decodes a job row's `subtitle_tracks` JSON into public track descriptors.
+     *
+     * Subtitle extraction runs detached/async AFTER the encode (and a track may
+     * fail to convert), so the persisted descriptor list can advertise more
+     * tracks than actually materialized. To guarantee every advertised `url`
+     * resolves (no 404s), a track is only returned when its `sub-{index}.vtt`
+     * sidecar exists on disk in the job directory at response time.
+     *
+     * @param string               $jobId Job identifier (for the sidecar URLs).
+     * @param array<string, mixed> $row   The transcode_jobs row.
+     *
+     * @return list<array{index: int, language: string, label: string, default: bool, url: string}>
+     */
+    private function decodeSubtitleTracks(string $jobId, array $row): array
+    {
+        $raw = $row['subtitle_tracks'] ?? null;
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
+            ? (string) $row['hls_dir']
+            : "{$this->segmentDir}/{$jobId}";
+
+        $out = [];
+        foreach ($decoded as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $index = is_int($entry['index'] ?? null)
+                ? $entry['index']
+                : (is_numeric($entry['index'] ?? null) ? (int) $entry['index'] : null);
+            $filename = is_string($entry['filename'] ?? null) ? $entry['filename'] : null;
+            if ($index === null || $filename === null) {
+                continue;
+            }
+            // Only advertise a track whose .vtt actually exists on disk so the
+            // returned url is guaranteed to resolve (extraction is async/may fail).
+            if (!file_exists($dir . '/' . $filename)) {
+                continue;
+            }
+            $out[] = [
+                'index' => $index,
+                'language' => is_string($entry['language'] ?? null) ? $entry['language'] : 'und',
+                'label' => is_string($entry['label'] ?? null) ? $entry['label'] : 'Unknown',
+                'default' => (bool) ($entry['default'] ?? false),
+                'url' => "/hls/{$jobId}/{$filename}",
+            ];
+        }
+        return $out;
     }
 
     /**
@@ -313,7 +455,8 @@ class TranscodeManager
      *
      * @param string $jobId Job identifier.
      *
-     * @return array{job_id: string, status: string, segments: int, playlist_ready: bool, progress: float}
+     * @return array{job_id: string, status: string, segments: int, playlist_ready: bool, progress: float,
+     *     subtitles: list<array{index: int, language: string, label: string, default: bool, url: string}>}
      *
      * @since 0.23.0
      */
@@ -327,6 +470,7 @@ class TranscodeManager
                 'segments' => 0,
                 'playlist_ready' => false,
                 'progress' => 0.0,
+                'subtitles' => [],
             ];
         }
 
@@ -372,6 +516,7 @@ class TranscodeManager
             'segments' => $segments,
             'playlist_ready' => $playlistReady,
             'progress' => $progress,
+            'subtitles' => $this->decodeSubtitleTracks($jobId, $row),
         ];
     }
 

@@ -74,6 +74,9 @@ trait TranscodeFileServer
             'mpd' => 'application/dash+xml',
             'm4s', 'mp4' => 'video/mp4',
             'ts' => 'video/mp2t',
+            // Extracted subtitle sidecars (sub-{index}.vtt) served from the job
+            // dir alongside the CMAF segments for the player's <track> elements.
+            'vtt' => 'text/vtt',
             default => 'application/octet-stream',
         };
     }

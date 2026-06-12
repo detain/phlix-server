@@ -7,6 +7,8 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\SignupDisabledException;
+use Phlix\Auth\AccountInactiveException;
 use InvalidArgumentException;
 
 /**
@@ -82,10 +84,31 @@ class AuthController
 
         try {
             $result = $this->authManager->register($username, $email, $password);
+
+            // Approval mode: the account was created pending and no tokens were
+            // issued. Don't set session cookies — there is nothing to log in as.
+            if (($result['status'] ?? null) === 'pending') {
+                if ($isBrowser) {
+                    $msg = is_string($result['message'] ?? null)
+                        ? $result['message']
+                        : 'Your account is awaiting administrator approval.';
+                    return (new Response())->redirect('/login?notice=' . rawurlencode($msg));
+                }
+                return (new Response())->status(202)->json($result);
+            }
+
             if ($isBrowser) {
                 return $this->browserAuthResponse($result, '/');
             }
             return (new Response())->status(201)->json($result);
+        } catch (SignupDisabledException $e) {
+            if ($isBrowser) {
+                return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
+            }
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => SignupDisabledException::ERROR_CODE,
+            ]);
         } catch (InvalidArgumentException $e) {
             if ($isBrowser) {
                 return (new Response())->redirect('/auth/register?error=' . rawurlencode($e->getMessage()));
@@ -136,6 +159,16 @@ class AuthController
                 return $this->browserAuthResponse($result, '/');
             }
             return (new Response())->json($result);
+        } catch (AccountInactiveException $e) {
+            // Correct credentials but the account is pending/disabled — 403 with
+            // a distinct code so clients can show the right message.
+            if ($isBrowser) {
+                return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));
+            }
+            return (new Response())->status(403)->json([
+                'error' => $e->getMessage(),
+                'code' => $e->errorCode,
+            ]);
         } catch (InvalidArgumentException $e) {
             if ($isBrowser) {
                 return (new Response())->redirect('/login?error=' . rawurlencode($e->getMessage()));

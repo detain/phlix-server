@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\JwtHandler;
@@ -94,7 +95,11 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.auth'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('db', get(\Workerman\MySQL\Connection::class))
-                ->constructorParameter('statsCollector', get(StatsCollector::class)),
+                ->constructorParameter('statsCollector', get(StatsCollector::class))
+                // Wired so register() honours the `auth.signup_mode` setting
+                // (open|approval|disabled). PHP-DI skips optional ctor params
+                // with defaults during autowiring, so it must be named.
+                ->constructorParameter('settingsRepository', get(SettingsRepository::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

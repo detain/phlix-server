@@ -26,6 +26,9 @@ class TmdbProvider implements MetadataProviderInterface
     /** @var string Base URL for TMDB image CDN */
     private string $imageBaseUrl;
 
+    /** @var string TMDB API v3 authentication key (empty when unconfigured). */
+    private string $apiKey;
+
     /**
      * Constructor for TmdbProvider.
      *
@@ -35,11 +38,26 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function __construct(string $apiKey, ?MetadataHttpClient $http = null)
     {
+        $this->apiKey = $apiKey;
         $this->http = $http ?? new MetadataHttpClient(
             'https://api.themoviedb.org/3',
             $apiKey
         );
         $this->imageBaseUrl = 'https://image.tmdb.org/t/p';
+    }
+
+    /**
+     * Whether a (non-empty) TMDB API key is configured.
+     *
+     * Used by interactive search/apply to surface a clear "configure TMDB"
+     * error instead of letting an unauthenticated request silently return no
+     * results / no match.
+     *
+     * @return bool True when an API key is present.
+     */
+    public function hasApiKey(): bool
+    {
+        return $this->apiKey !== '';
     }
 
     /**

@@ -265,16 +265,29 @@ class LibraryMetadataMatcher
         }
 
         $existing = $this->extractMetadata($seriesItem);
-        $name = $this->extractName($seriesItem, $existing);
-        if ($name === null) {
-            return false;
-        }
 
-        $normalized = SceneFilenameNormalizer::normalize($name);
-        if ($normalized['title'] !== '') {
-            $name = $normalized['title'];
+        // Prefer the folder-derived series title/year hint that the scanner
+        // persists in series-per-directory mode (`series_title`/`year` on the
+        // container's metadata). The folder name is far cleaner than the noisy
+        // filename-derived title, so it drives the TMDB TV search directly with
+        // no further scene-normalisation. Fall back to the legacy
+        // name-+-normalise path when no hint is present.
+        $hintTitle = $this->stringOrNull($existing['series_title'] ?? null);
+        if ($hintTitle !== null) {
+            $name = $hintTitle;
+            $year = $this->extractYear($existing);
+        } else {
+            $name = $this->extractName($seriesItem, $existing);
+            if ($name === null) {
+                return false;
+            }
+
+            $normalized = SceneFilenameNormalizer::normalize($name);
+            if ($normalized['title'] !== '') {
+                $name = $normalized['title'];
+            }
+            $year = $this->extractYear($existing) ?? $normalized['year'];
         }
-        $year = $this->extractYear($existing) ?? $normalized['year'];
 
         $resolved = $resolver->resolve($name, $year);
         if ($resolved === null) {

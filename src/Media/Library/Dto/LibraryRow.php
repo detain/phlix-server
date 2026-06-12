@@ -69,6 +69,37 @@ final class LibraryRow
     }
 
     /**
+     * Whether this (series) library stores each series in its own top-level
+     * directory, so the scanner/matcher should treat the directory name as the
+     * authoritative series title/year. Only meaningful for `type='series'`
+     * libraries; defaults to false for everything else.
+     *
+     * Reads the `series_per_directory` key from the decoded options blob,
+     * accepting bools, the strings "1"/"true"/"yes"/"on", and int 1 as true.
+     */
+    public function seriesPerDirectory(): bool
+    {
+        return self::optionIsTruthy($this->options['series_per_directory'] ?? null);
+    }
+
+    /**
+     * Coerce a loosely-typed options value to a boolean flag.
+     */
+    private static function optionIsTruthy(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+        }
+        return false;
+    }
+
+    /**
      * Decodes the `paths` column into a list of strings.
      *
      * @param mixed $value Raw column value (string JSON or array).

@@ -180,6 +180,25 @@ class LibraryManager
     }
 
     /**
+     * Whether a library is a series library that stores each series in its own
+     * top-level directory (so the directory name is the authoritative series
+     * title/year for hierarchy grouping AND TMDB matching).
+     *
+     * Returns false for a missing library, a non-series library, or when the
+     * `series_per_directory` option is absent/false.
+     *
+     * @param string $id The library's unique identifier.
+     */
+    public function seriesPerDirectory(string $id): bool
+    {
+        $row = $this->fetchLibraryRow($id);
+        if ($row === null || $row->type !== 'series') {
+            return false;
+        }
+        return $row->seriesPerDirectory();
+    }
+
+    /**
      * Retrieves all libraries ordered by display order and name.
      *
      * @return array<int, array<string, mixed>> Array of library data arrays with decoded paths and options
@@ -312,12 +331,14 @@ class LibraryManager
             return;
         }
 
+        $seriesPerDirectory = $library->type === 'series' && $library->seriesPerDirectory();
+
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->scanner->scan($libraryId, $path, $library->type);
+            $this->scanner->scan($libraryId, $path, $library->type, $seriesPerDirectory);
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);

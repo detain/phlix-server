@@ -219,6 +219,11 @@ class MediaScanner
      * @param string $libraryId The library's unique identifier
      * @param string $path Filesystem path to scan
      * @param string $type Media type ('video', 'audio', 'image')
+     * @param bool   $seriesPerDirectory When true (series libraries only), each
+     *               immediate child directory of $path is treated as exactly one
+     *               series: the directory name supplies the authoritative series
+     *               title + year, and EVERY episode file beneath it attaches to
+     *               that single series regardless of its filename's title text.
      * @return void
      *
      * @example
@@ -226,7 +231,7 @@ class MediaScanner
      * $scanner->scan('library-123', '/mnt/media/movies', 'video');
      * ```
      */
-    public function scan(string $libraryId, string $path, string $type): void
+    public function scan(string $libraryId, string $path, string $type, bool $seriesPerDirectory = false): void
     {
         if (!is_dir($path)) {
             $this->logger->warning('Scan path does not exist', ['path' => $path]);
@@ -239,6 +244,36 @@ class MediaScanner
 
         $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
 
+        if ($seriesPerDirectory && $type === 'series') {
+            $added = $this->scanSeriesPerDirectory($libraryId, $path, $type, $extensions);
+        } else {
+            $added = $this->scanFlat($libraryId, $path, $type, $extensions, null);
+        }
+
+        $endMs = (int)(microtime(true) * 1000);
+        $this->dispatchScanCompleted($libraryId, $added, $endMs - $startMs);
+    }
+
+    /**
+     * Flat (default) scan: recursively walk $path and process each media file,
+     * deriving the series/movie identity from the FILENAME.
+     *
+     * When $forcedSeries is non-null (series-per-directory mode) every episode
+     * found is slotted under that one series container instead of a
+     * filename-derived series.
+     *
+     * @param array<int, string> $extensions Allowed file extensions.
+     * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries
+     *        Forced series identity, or null.
+     * @return int Number of items added.
+     */
+    private function scanFlat(
+        string $libraryId,
+        string $path,
+        string $type,
+        array $extensions,
+        ?array $forcedSeries
+    ): int {
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
         );
@@ -267,7 +302,7 @@ class MediaScanner
                 continue;
             }
 
-            if ($this->processFile($libraryId, $file, $type)) {
+            if ($this->processFile($libraryId, $file, $type, $forcedSeries)) {
                 $added++;
             }
             $scanned++;
@@ -281,8 +316,77 @@ class MediaScanner
             'added' => $added,
         ]);
 
-        $endMs = (int)(microtime(true) * 1000);
-        $this->dispatchScanCompleted($libraryId, $added, $endMs - $startMs);
+        return $added;
+    }
+
+    /**
+     * Series-per-directory scan: treat each immediate child directory of $path as
+     * exactly one series. The directory name (year stripped) is the authoritative
+     * series title/year used both for grouping AND as the TMDB match hint; every
+     * episode file beneath the directory attaches to that one series.
+     *
+     * Loose media files sitting directly under the library root (not inside a
+     * series subdirectory) are handled gracefully by the normal flat path so a
+     * stray file never aborts the scan.
+     *
+     * @param array<int, string> $extensions Allowed file extensions.
+     * @return int Number of items added.
+     */
+    private function scanSeriesPerDirectory(
+        string $libraryId,
+        string $path,
+        string $type,
+        array $extensions
+    ): int {
+        $added = 0;
+
+        $entries = new \DirectoryIterator($path);
+        foreach ($entries as $entry) {
+            if ($entry->isDot()) {
+                continue;
+            }
+
+            if ($entry->isDir()) {
+                $dirName = $entry->getFilename();
+                if ($this->shouldSkipFile($dirName)) {
+                    continue;
+                }
+                $forcedSeries = SeriesContainerNaming::fromDirectoryName($dirName);
+                // Carry the FULL directory basename so the synthetic series/season
+                // paths are slugged from it: two sibling folders that differ only
+                // by year or punctuation ("The Office (2005)" vs
+                // "The Office (2001)", "Re:Zero" vs "Re Zero") must NOT collapse
+                // into one container (which would silently merge episodes).
+                $forcedSeries['slug_source'] = $dirName;
+                $added += $this->scanFlat($libraryId, $entry->getPathname(), $type, $extensions, $forcedSeries);
+                continue;
+            }
+
+            // A loose file directly under the library root: process it as a
+            // single file via the normal (filename-derived) path so it neither
+            // crashes nor gets force-grouped under a bogus series.
+            if ($entry->isFile()) {
+                $extension = strtolower($entry->getExtension());
+                if (!in_array($extension, $extensions, true)) {
+                    continue;
+                }
+                if ($this->shouldSkipFile($entry->getFilename())) {
+                    continue;
+                }
+                $file = new SplFileInfo($entry->getPathname());
+                if ($this->processFile($libraryId, $file, $type, null)) {
+                    $added++;
+                }
+            }
+        }
+
+        $this->logger->info('Series-per-directory scan complete', [
+            'library_id' => $libraryId,
+            'path' => $path,
+            'added' => $added,
+        ]);
+
+        return $added;
     }
 
     /**
@@ -315,12 +419,19 @@ class MediaScanner
      * @param string $libraryId The library's unique identifier
      * @param SplFileInfo $file The file to process
      * @param string $type The media type
+     * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries When set
+     *        (series-per-directory mode), the episode is grouped under this
+     *        folder-derived series identity instead of the filename-derived one.
      *
      * @return bool True when a new item was added to the repository; false
      *              when the file was already known and was skipped.
      */
-    private function processFile(string $libraryId, SplFileInfo $file, string $type): bool
-    {
+    private function processFile(
+        string $libraryId,
+        SplFileInfo $file,
+        string $type,
+        ?array $forcedSeries = null
+    ): bool {
         $path = $file->getPathname();
 
         // Check if already exists
@@ -341,7 +452,7 @@ class MediaScanner
 
         if ($isEpisode) {
             $mediaType = 'episode';
-            $parentId = $this->resolveEpisodeParent($libraryId, $metadata);
+            $parentId = $this->resolveEpisodeParent($libraryId, $metadata, $forcedSeries);
             $name = $this->episodeName($metadata, $file);
         } else {
             $mediaType = $this->determineMediaType($file, $type);
@@ -417,16 +528,41 @@ class MediaScanner
      * {@see ItemRepository::findByPath()} — no schema or unique-key changes
      * needed, and incremental rescans attach new episodes to existing shows.
      *
-     * @param string               $libraryId Owning library UUID.
-     * @param array<string, mixed> $metadata  Parsed episode metadata (expects
-     *                                         'name' = series title, 'season' int).
+     * @param string               $libraryId    Owning library UUID.
+     * @param array<string, mixed> $metadata     Parsed episode metadata (expects
+     *                                            'name' = series title, 'season' int).
+     * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries When set
+     *        (series-per-directory mode), the folder-derived series title/year is
+     *        used as the authoritative series identity + TMDB match hint instead
+     *        of the noisy filename-derived title; every episode beneath the same
+     *        directory therefore resolves to ONE shared series container. The
+     *        optional `slug_source` (the full directory basename) is what the
+     *        synthetic path is slugged from, so sibling folders that differ only
+     *        by year/punctuation never collide.
      * @return string The season container's media-item ID (the episode's parent).
      */
-    private function resolveEpisodeParent(string $libraryId, array $metadata): string
+    private function resolveEpisodeParent(string $libraryId, array $metadata, ?array $forcedSeries = null): string
     {
-        $seriesName = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
-            ? $metadata['name']
-            : 'Unknown Series';
+        $slugSource = null;
+        if ($forcedSeries !== null && $forcedSeries['title'] !== '') {
+            $seriesName = $forcedSeries['title'];
+            $seriesMeta = ['name' => $seriesName, 'series_title' => $seriesName];
+            if ($forcedSeries['year'] !== null) {
+                $seriesMeta['year'] = $forcedSeries['year'];
+            }
+            // Slug the FULL directory basename (which already carries the year)
+            // rather than the bare title, so two distinct sibling directories
+            // never resolve to the same synthetic container path.
+            if (isset($forcedSeries['slug_source']) && is_string($forcedSeries['slug_source'])) {
+                $slugSource = $forcedSeries['slug_source'];
+            }
+        } else {
+            $seriesName = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
+                ? $metadata['name']
+                : 'Unknown Series';
+            $seriesMeta = ['name' => $seriesName];
+        }
+
         $season = isset($metadata['season']) && is_numeric($metadata['season'])
             ? (int) $metadata['season']
             : 0;
@@ -435,9 +571,9 @@ class MediaScanner
             $libraryId,
             'series',
             $seriesName,
-            SeriesContainerNaming::seriesPath($libraryId, $seriesName),
+            SeriesContainerNaming::seriesPath($libraryId, $seriesName, $slugSource),
             null,
-            ['name' => $seriesName]
+            $seriesMeta
         );
 
         $seasonLabel = SeriesContainerNaming::seasonLabel($season);
@@ -446,7 +582,7 @@ class MediaScanner
             $libraryId,
             'season',
             $seasonLabel,
-            SeriesContainerNaming::seasonPath($libraryId, $seriesName, $season),
+            SeriesContainerNaming::seasonPath($libraryId, $seriesName, $season, $slugSource),
             $seriesId,
             ['name' => $seasonLabel, 'season' => $season]
         );
@@ -479,6 +615,14 @@ class MediaScanner
         $existing = $this->itemRepository->findByPath($syntheticPath);
         if (is_array($existing) && isset($existing['id']) && is_string($existing['id'])) {
             $this->containerCache[$syntheticPath] = $existing['id'];
+            // Idempotency (series-per-directory activation): the synthetic series
+            // path is stable across scans, so an ALREADY-scanned container would
+            // otherwise never receive the folder-derived `series_title`/`year`
+            // hint and the matcher would fall back to the noisy filename title.
+            // When this resolve carries a hint, ensure the existing row's metadata
+            // carries the current hint — merging (never clobbering tmdb_id/poster/
+            // overview/…), and only writing when it is missing or has changed.
+            $this->ensureContainerHint($existing['id'], $existing, $metadata);
             return $existing['id'];
         }
 
@@ -494,6 +638,79 @@ class MediaScanner
         $this->containerCache[$syntheticPath] = $id;
 
         return $id;
+    }
+
+    /**
+     * Idempotently stamp the folder-derived `series_title`/`year` hint onto an
+     * EXISTING container's metadata so series-per-directory activation works via
+     * a plain rescan (no purge required).
+     *
+     * Only the hint keys that the resolve supplies are considered. The existing
+     * metadata is merged — unrelated keys (tmdb_id, poster_url, overview, …) are
+     * preserved — and a write is issued ONLY when the hint is missing or differs
+     * from what is already stored, so repeated scans of an up-to-date container
+     * perform no work.
+     *
+     * @param string               $id       Existing container media-item ID.
+     * @param array<string, mixed> $existing Hydrated existing container row.
+     * @param array<string, mixed> $metadata The resolve metadata (may carry
+     *                                        `series_title`/`year` hint keys).
+     */
+    private function ensureContainerHint(string $id, array $existing, array $metadata): void
+    {
+        // Nothing to stamp unless this resolve carries the folder-derived hint.
+        if (!array_key_exists('series_title', $metadata)) {
+            return;
+        }
+
+        $existingMeta = $this->existingMetadata($existing);
+
+        $patch = [];
+        if (($existingMeta['series_title'] ?? null) !== $metadata['series_title']) {
+            $patch['series_title'] = $metadata['series_title'];
+        }
+        if (array_key_exists('year', $metadata)) {
+            if (($existingMeta['year'] ?? null) !== $metadata['year']) {
+                $patch['year'] = $metadata['year'];
+            }
+        }
+
+        if ($patch === []) {
+            return; // Already up to date — stay idempotent, no write.
+        }
+
+        // Merge over the existing metadata so tmdb_id/poster/overview/genres/etc.
+        // are never clobbered, then persist the full blob.
+        $merged = array_merge($existingMeta, $patch);
+        $this->itemRepository->update($id, ['metadata_json' => $merged]);
+    }
+
+    /**
+     * Extracts the decoded metadata array from a (possibly raw) container row.
+     *
+     * Accepts both the hydrated `metadata` key (real {@see ItemRepository}) and a
+     * `metadata_json` value that may be a decoded array or a JSON string.
+     *
+     * @param array<string, mixed> $row Container row.
+     * @return array<string, mixed> Decoded metadata (empty when none).
+     */
+    private function existingMetadata(array $row): array
+    {
+        $meta = $row['metadata'] ?? $row['metadata_json'] ?? null;
+        if (is_string($meta)) {
+            $decoded = json_decode($meta, true);
+            $meta = is_array($decoded) ? $decoded : [];
+        }
+        if (!is_array($meta)) {
+            return [];
+        }
+        $out = [];
+        foreach ($meta as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
     }
 
     /**

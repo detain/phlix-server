@@ -96,7 +96,7 @@ class TranscodeManagerTest extends TestCase
             $captured
         );
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->expects($this->never())->method('startCmafTranscode');
+        $ff->expects($this->never())->method('startCmafTranscodeWithSubtitles');
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
@@ -121,7 +121,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
-        $ff->method('startCmafTranscode')->willReturn(4242);
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(4242);
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
@@ -160,7 +160,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
         $passed = [];
-        $ff->method('startCmafTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -184,7 +184,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6],
         ]]);
         $passed = [];
-        $ff->method('startCmafTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -222,7 +222,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
         $passed = [];
-        $ff->method('startCmafTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -253,7 +253,7 @@ class TranscodeManagerTest extends TestCase
             ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
         ]]);
         $passed = [];
-        $ff->method('startCmafTranscode')->willReturnCallback(
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
             function (string $in, string $dir, array $params) use (&$passed): int {
                 $passed = $params;
                 return 100;
@@ -273,7 +273,7 @@ class TranscodeManagerTest extends TestCase
         $ff->method('probe')->willReturn(['streams' => [
             ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
         ]]);
-        $ff->method('startCmafTranscode')->willReturn(0);
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(0);
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Failed to launch transcode');
@@ -339,6 +339,69 @@ class TranscodeManagerTest extends TestCase
         $r = $this->manager($db, $ff)->getJobReadiness('nope');
 
         $this->assertSame('not_found', $r['status']);
+    }
+
+    public function testSubtitleTracksOnlyAdvertisedWhenVttExistsOnDisk(): void
+    {
+        // Finding 2: the persisted descriptor list may advertise more tracks than
+        // actually materialized (extraction is async / a track may fail). Only a
+        // track whose sub-{index}.vtt exists on disk should be returned, so every
+        // advertised url resolves (no 404s).
+        $dir = $this->segmentDir . '/job-subs';
+        mkdir($dir, 0755, true);
+        // Two detected tracks persisted, but only track 0's sidecar materialized.
+        file_put_contents("{$dir}/sub-0.vtt", "WEBVTT\n");
+        $tracks = json_encode([
+            ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
+                'codec' => 'ass', 'filename' => 'sub-0.vtt'],
+            ['index' => 1, 'language' => 'jpn', 'label' => 'Japanese', 'default' => false,
+                'codec' => 'ass', 'filename' => 'sub-1.vtt'],
+        ]);
+
+        $captured = [];
+        $db = $this->mockDb(
+            [],
+            0,
+            [],
+            ['hls_dir' => $dir, 'status' => 'completed', 'subtitle_tracks' => $tracks],
+            $captured
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $result = $this->manager($db, $ff)->subtitleTracksFor('job-subs');
+
+        $this->assertCount(1, $result);
+        $this->assertSame(0, $result[0]['index']);
+        $this->assertSame('/hls/job-subs/sub-0.vtt', $result[0]['url']);
+        // Every advertised url resolves to a real file on disk.
+        foreach ($result as $track) {
+            $file = $dir . '/' . basename($track['url']);
+            $this->assertFileExists($file);
+        }
+    }
+
+    public function testSubtitleTracksEmptyWhenNoVttMaterialized(): void
+    {
+        // Detected at job creation but extraction not yet done / failed → no
+        // sidecars on disk → advertise nothing rather than 404-ing urls.
+        $dir = $this->segmentDir . '/job-nosubs';
+        mkdir($dir, 0755, true);
+        $tracks = json_encode([
+            ['index' => 0, 'language' => 'eng', 'label' => 'English', 'default' => true,
+                'codec' => 'ass', 'filename' => 'sub-0.vtt'],
+        ]);
+
+        $captured = [];
+        $db = $this->mockDb(
+            [],
+            0,
+            [],
+            ['hls_dir' => $dir, 'status' => 'running', 'subtitle_tracks' => $tracks],
+            $captured
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertSame([], $this->manager($db, $ff)->subtitleTracksFor('job-nosubs'));
     }
 
     private function rrmdir(string $dir): void

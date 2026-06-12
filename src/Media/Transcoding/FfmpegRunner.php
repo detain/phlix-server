@@ -326,6 +326,11 @@ class FfmpegRunner
         $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
         $cmd .= ' -i ' . escapeshellarg($inputPath);
 
+        // Map ONLY the first video + first audio; drop data/subtitle/attachment
+        // streams so font attachments and `bin_data` can't break the HLS mux
+        // (see buildCmafCommand()).
+        $cmd .= ' -map 0:v:0 -map 0:a:0? -map -0:t? -dn -sn';
+
         // Video: copy a compatible stream as-is, otherwise encode.
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
         if ($videoCodec === 'copy') {
@@ -430,8 +435,13 @@ class FfmpegRunner
         $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
         $cmd .= ' -i ' . escapeshellarg($inputPath);
 
-        // Explicit mapping: video required, audio optional (some files have none).
-        $cmd .= ' -map 0:v:0 -map 0:a:0?';
+        // Explicit mapping: ONLY the first video + the first audio track. Anime/TV
+        // MKVs often carry embedded subtitle streams AND font ATTACHMENT / data
+        // (`bin_data`) streams; if the DASH/CMAF muxer pulls any of those into the
+        // A/V encode it produces extra representations or fails the mux outright.
+        // `-dn -sn` drop data + subtitle streams and `-map -0:t?` excludes any
+        // attachment so only the playable video+audio reach the CMAF output.
+        $cmd .= ' -map 0:v:0 -map 0:a:0? -map -0:t? -dn -sn';
 
         // Video: copy a compatible stream as-is, otherwise encode.
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
@@ -499,6 +509,49 @@ class FfmpegRunner
     }
 
     /**
+     * Starts a CMAF transcode and, in the same detached job, extracts the given
+     * text subtitle tracks to cleaned `sub-{index}.vtt` sidecars.
+     *
+     * The subtitle extraction commands are appended to the CMAF command with
+     * `&&` so they run AFTER the A/V encode (each is internally `|| true` so a
+     * failed track never aborts the job — the video is the hard requirement).
+     * The whole chain is launched once via {@see self::startDetached()}, so the
+     * Workerman worker never blocks on FFmpeg.
+     *
+     * @param string                       $inputPath     Source media file path.
+     * @param string                       $outDir        Output directory.
+     * @param array<string, mixed>         $params        Parameters for {@see self::buildCmafCommand()}.
+     * @param array<int, string>           $extractCmds   Extra `&&`-chainable extraction commands
+     *                                                    (built by {@see \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor::buildExtractCommand()}).
+     *
+     * @return int OS process id of the launched job (0 if launch failed).
+     *
+     * @since 0.25.0
+     */
+    public function startCmafTranscodeWithSubtitles(
+        string $inputPath,
+        string $outDir,
+        array $params,
+        array $extractCmds = []
+    ): int {
+        $command = $this->buildCmafCommand($inputPath, $outDir, $params);
+
+        // Subtitle extraction is a TRAILING step that runs ONLY when the CMAF
+        // encode succeeded (see startDetached() — these go inside the `then`
+        // branch, AFTER `.complete` is written). Each extract group is itself
+        // `|| true`, so a failed track can never alter the already-decided job
+        // status, and the `|| true` can never bridge back to a failed encode.
+        $trailing = [];
+        foreach ($extractCmds as $extract) {
+            if (is_string($extract) && $extract !== '') {
+                $trailing[] = $extract;
+            }
+        }
+
+        return $this->startDetached($command, $outDir, $trailing);
+    }
+
+    /**
      * Launches an FFmpeg command fully detached from the PHP process.
      *
      * Phlix runs on a long-lived Workerman event loop, so the synchronous
@@ -509,23 +562,29 @@ class FfmpegRunner
      * marker on exit so readiness can be polled from disk (surviving worker
      * reloads, which an in-memory process handle would not).
      *
-     * @param string $command The full FFmpeg command to run.
-     * @param string $outDir  Directory for the log and completion markers.
+     * The marker decision uses an unambiguous `if <command>; then ...; else ...; fi`
+     * form so it reflects ONLY the primary command's exit status, regardless of
+     * `set -e` state. `$trailingCmds` (e.g. subtitle extraction) run inside the
+     * `then` branch AFTER `.complete` is written — so they execute only on a
+     * successful primary command and their own exit status can never flip the
+     * job to `.complete`/`.failed`. (Contrast the old `cmd && extract || true &&
+     * touch .complete` chain, where a left-associative `|| true` after the
+     * extract group could mask a FAILED primary command and still touch
+     * `.complete`.)
+     *
+     * @param string             $command      The full primary FFmpeg command to run.
+     * @param string             $outDir       Directory for the log and completion markers.
+     * @param array<int, string> $trailingCmds Commands to run after a SUCCESSFUL primary
+     *                                          command (each should be internally `|| true`
+     *                                          so it cannot abort the post-success sequence).
      *
      * @return int OS process id of the background job (0 if launch failed).
      *
      * @since 0.23.0
      */
-    public function startDetached(string $command, string $outDir): int
+    public function startDetached(string $command, string $outDir, array $trailingCmds = []): int
     {
-        $inner = $command
-            . ' && touch ' . escapeshellarg($outDir . '/.complete')
-            . ' || touch ' . escapeshellarg($outDir . '/.failed');
-        $full = sprintf(
-            'nohup sh -c %s > %s 2>&1 & echo $!',
-            escapeshellarg($inner),
-            escapeshellarg($outDir . '/ffmpeg.log')
-        );
+        $full = $this->buildDetachedCommand($command, $outDir, $trailingCmds);
 
         $this->logger->debug('Starting detached HLS transcode', ['command' => $command]);
 
@@ -536,6 +595,43 @@ class FfmpegRunner
         }
 
         return (int) trim($pid);
+    }
+
+    /**
+     * Builds the full backgrounded launch string used by {@see self::startDetached()}.
+     *
+     * Factored out so the unambiguous marker structure can be asserted in tests
+     * without actually spawning a process. The marker decision is an
+     * `if <command>; then touch .complete; <trailing...>; else touch .failed; fi`
+     * form: `.complete` is written ONLY when `$command` exits 0, and the
+     * `$trailingCmds` (subtitle extraction) run inside `then` AFTER `.complete`,
+     * so neither a `|| true` extract wrapper nor a failing extract can ever bridge
+     * a FAILED primary command to `.complete`, nor flip a success to `.failed`.
+     *
+     * @param string             $command      The primary command.
+     * @param string             $outDir       Marker / log directory.
+     * @param array<int, string> $trailingCmds Post-success commands (each internally `|| true`).
+     *
+     * @return string The full `nohup sh -c ... & echo $!` launch string.
+     *
+     * @since 0.25.0
+     */
+    public function buildDetachedCommand(string $command, string $outDir, array $trailingCmds = []): string
+    {
+        $then = 'touch ' . escapeshellarg($outDir . '/.complete');
+        foreach ($trailingCmds as $trailing) {
+            if (is_string($trailing) && $trailing !== '') {
+                $then .= '; ' . $trailing;
+            }
+        }
+        $inner = 'if ' . $command . '; then ' . $then
+            . '; else touch ' . escapeshellarg($outDir . '/.failed') . '; fi';
+
+        return sprintf(
+            'nohup sh -c %s > %s 2>&1 & echo $!',
+            escapeshellarg($inner),
+            escapeshellarg($outDir . '/ffmpeg.log')
+        );
     }
 
     /**

@@ -437,6 +437,128 @@ class LibraryMetadataMatcherTest extends TestCase
     }
 
     /**
+     * When the series container carries the scanner's folder-derived
+     * series_title (+ year) hint, the TMDB TV search is driven by THAT title and
+     * year — not by the (noisy) item name / filename guess.
+     */
+    public function testMatchSeriesPrefersFolderDerivedTitleAndYearHint(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [[
+                'id' => 'series-1',
+                'type' => 'series',
+                // The item NAME is the clean folder title; but the decisive bit
+                // is the hint in metadata, which must win regardless.
+                'name' => 'Whatever Filename Guess',
+                'metadata' => [
+                    'series_title' => 'Assassination Classroom',
+                    'year' => 2013,
+                ],
+            ]],
+            []
+        );
+        $items->method('findByParent')->willReturn([]);
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        // The hint title + year drive the search — NOT 'Whatever Filename Guess'.
+        $seriesResolver->expects($this->once())
+            ->method('resolve')
+            ->with('Assassination Classroom', 2013)
+            ->willReturn([
+                'external_ids' => ['tmdb' => '42'],
+                'tmdb_id' => '42',
+                'poster_url' => 'https://image.tmdb.org/t/p/w500/ac.jpg',
+                'sources' => ['tmdb'],
+            ]);
+
+        $items->method('update');
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * The folder hint title is used verbatim (no scene-normalisation that would
+     * mangle a clean title), and a missing year hint passes null to the resolver.
+     */
+    public function testMatchSeriesUsesHintTitleVerbatimWithNullYearWhenAbsent(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [[
+                'id' => 'series-1',
+                'type' => 'series',
+                'name' => 'noise',
+                'metadata' => ['series_title' => 'Cowboy Bebop'], // no year hint
+            ]],
+            []
+        );
+        $items->method('findByParent')->willReturn([]);
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        $seriesResolver->expects($this->once())
+            ->method('resolve')
+            ->with('Cowboy Bebop', null)
+            ->willReturn(['external_ids' => ['tmdb' => '30991'], 'tmdb_id' => '30991', 'sources' => ['tmdb']]);
+
+        $items->method('update');
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * Falls back to the legacy name + scene-normalisation path when NO folder
+     * hint is present on the series container.
+     */
+    public function testMatchSeriesFallsBackToNameWhenNoHint(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [[
+                'id' => 'series-1',
+                'type' => 'series',
+                // No series_title hint → legacy path; name carries a scene-style
+                // year that normalisation should extract.
+                'name' => 'Some.Show.2016',
+                'metadata' => [],
+            ]],
+            []
+        );
+        $items->method('findByParent')->willReturn([]);
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        $seriesResolver->expects($this->once())
+            ->method('resolve')
+            ->with('Some Show', 2016)
+            ->willReturn(['external_ids' => ['tmdb' => '7'], 'tmdb_id' => '7', 'sources' => ['tmdb']]);
+
+        $items->method('update');
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
      * Without a series resolver the matcher is movie-only: series items are skipped.
      */
     public function testSeriesSkippedWhenNoSeriesResolver(): void

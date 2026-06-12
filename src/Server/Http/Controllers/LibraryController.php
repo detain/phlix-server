@@ -33,6 +33,26 @@ class LibraryController
     }
 
     /**
+     * Coerce a loosely-typed request value to a strict boolean.
+     *
+     * Accepts real bools, ints (1/0), and the strings "1"/"true"/"yes"/"on"
+     * (case-insensitive) as true; everything else is false.
+     */
+    private function toBool(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value)) {
+            return $value === 1;
+        }
+        if (is_string($value)) {
+            return in_array(strtolower(trim($value)), ['1', 'true', 'yes', 'on'], true);
+        }
+        return false;
+    }
+
+    /**
      * Require authentication for the request.
      */
     private function requireAuth(Request $request): ?Response
@@ -153,6 +173,20 @@ class LibraryController
             }
         }
 
+        // `series_per_directory` (boolean, series libraries only): when true the
+        // scanner/matcher treat each top-level subdirectory as one series and use
+        // the directory name as the authoritative title/year. Accept it at the
+        // top level of the body as well as inside `options`, coerce to a real
+        // bool, and persist it into the options blob. Ignored for non-series.
+        if (array_key_exists('series_per_directory', $data)) {
+            $options['series_per_directory'] = $this->toBool($data['series_per_directory']);
+        } elseif (array_key_exists('series_per_directory', $options)) {
+            $options['series_per_directory'] = $this->toBool($options['series_per_directory']);
+        }
+        if ($type !== 'series') {
+            unset($options['series_per_directory']);
+        }
+
         $libraryId = $this->libraryManager->createLibrary(
             $name,
             $type,
@@ -189,6 +223,47 @@ class LibraryController
 
         if (!$library) {
             return (new Response())->status(404)->json(['error' => 'Library not found']);
+        }
+
+        // Surface `series_per_directory` on update too, SYMMETRICALLY with
+        // create(): accept it at the body top level OR nested inside `options`,
+        // coerce to a real bool, and merge it into the existing options blob so
+        // the rest of the options are preserved. Only meaningful for series
+        // libraries. The raw top-level body value (when present) takes
+        // precedence over a nested one, mirroring create().
+        $bodyOptions = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        $hasTopLevelFlag = array_key_exists('series_per_directory', $data);
+        $hasNestedFlag = array_key_exists('series_per_directory', $bodyOptions);
+
+        if ($hasTopLevelFlag || $hasNestedFlag) {
+            $libraryType = is_string($library['type'] ?? null) ? $library['type'] : '';
+            if ($libraryType === 'series') {
+                $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
+                $mergedOptions = [];
+                foreach ($existingOptions as $optKey => $optVal) {
+                    if (is_string($optKey)) {
+                        $mergedOptions[$optKey] = $optVal;
+                    }
+                }
+                // An explicit `options` in the body still wins as the base.
+                foreach ($bodyOptions as $optKey => $optVal) {
+                    if (is_string($optKey)) {
+                        $mergedOptions[$optKey] = $optVal;
+                    }
+                }
+                $rawFlag = $hasTopLevelFlag
+                    ? $data['series_per_directory']
+                    : $bodyOptions['series_per_directory'];
+                $mergedOptions['series_per_directory'] = $this->toBool($rawFlag);
+                $data['options'] = $mergedOptions;
+            } else {
+                // Non-series: strip a nested flag too so a stray value is never
+                // stored un-coerced for a library type that ignores it.
+                if (isset($data['options']) && is_array($data['options'])) {
+                    unset($data['options']['series_per_directory']);
+                }
+            }
+            unset($data['series_per_directory']);
         }
 
         $this->libraryManager->updateLibrary($params['id'], $data);

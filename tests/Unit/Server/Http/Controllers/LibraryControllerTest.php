@@ -201,6 +201,214 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * create() on a series library persists series_per_directory into options
+     * (coerced to a real bool from the body top level).
+     */
+    public function testCreatePersistsSeriesPerDirectoryForSeriesLibrary(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Anime', 'series', ['/vault1/anime'], ['series_per_directory' => true])
+            ->willReturn('series-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Anime',
+            'type' => 'series',
+            'paths' => ['/vault1/anime'],
+            // Sent as the string "true" — must coerce to a real bool.
+            'series_per_directory' => 'true',
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * create() also accepts series_per_directory nested inside `options` and
+     * coerces an int 1 → true.
+     */
+    public function testCreateCoercesSeriesPerDirectoryInsideOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Anime', 'series', ['/vault1/anime'], ['series_per_directory' => true])
+            ->willReturn('series-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Anime',
+            'type' => 'series',
+            'paths' => ['/vault1/anime'],
+            'options' => ['series_per_directory' => 1],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * create() drops series_per_directory for a NON-series library type, even
+     * when supplied — the option is series-only.
+     */
+    public function testCreateDropsSeriesPerDirectoryForNonSeriesLibrary(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/mnt/movies'], [])
+            ->willReturn('movie-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            'series_per_directory' => true,
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * update() on a series library merges the coerced series_per_directory flag
+     * into the EXISTING options blob (preserving other options).
+     */
+    public function testUpdateMergesSeriesPerDirectoryIntoExistingOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Anime',
+                'type' => 'series',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data)) {
+                    return false;
+                }
+                // The top-level key is stripped before delegating; the merged
+                // options preserve scan_interval and carry the coerced bool.
+                return !array_key_exists('series_per_directory', $data)
+                    && is_array($data['options'] ?? null)
+                    && $data['options']['scan_interval'] === 3600
+                    && $data['options']['series_per_directory'] === true;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['series_per_directory' => 'on'];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() also handles series_per_directory that arrives ONLY nested inside
+     * `options` (no top-level key), symmetrically with create(). The raw nested
+     * value is coerced to a real bool and merged into the existing options blob.
+     */
+    public function testUpdatePersistsNestedOptionsSeriesPerDirectory(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Anime',
+                'type' => 'series',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data)) {
+                    return false;
+                }
+                // No top-level key; the nested raw "true" is coerced to a real
+                // bool and the existing scan_interval is preserved.
+                return !array_key_exists('series_per_directory', $data)
+                    && is_array($data['options'] ?? null)
+                    && $data['options']['scan_interval'] === 3600
+                    && $data['options']['series_per_directory'] === true;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['options' => ['series_per_directory' => 'true']];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() ignores series_per_directory for a non-series library — the flag
+     * is stripped and the existing options are left untouched.
+     */
+    public function testUpdateIgnoresSeriesPerDirectoryForNonSeriesLibrary(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn(['id' => 'lib-1', 'name' => 'Movies', 'type' => 'movie']);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                // The top-level key is stripped; no options injected for a movie lib.
+                return is_array($data)
+                    && !array_key_exists('series_per_directory', $data)
+                    && !array_key_exists('options', $data);
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['series_per_directory' => true];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
      * Negative: create() returns 400 when required fields are missing.
      */
     public function testCreateReturns400WhenRequiredFieldsMissing(): void

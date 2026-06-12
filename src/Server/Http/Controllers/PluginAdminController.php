@@ -25,6 +25,8 @@ use Phlix\Server\Http\Response;
  *
  *  - `GET    /api/v1/admin/plugins`                    → list installed
  *  - `POST   /api/v1/admin/plugins/install`            → install from URL
+ *  - `GET    /api/v1/admin/plugins/{name}`             → detail + settings schema
+ *  - `PUT    /api/v1/admin/plugins/{name}/settings`    → save settings
  *  - `POST   /api/v1/admin/plugins/{name}/enable`      → enable
  *  - `POST   /api/v1/admin/plugins/{name}/disable`     → disable
  *  - `DELETE /api/v1/admin/plugins/{name}`             → uninstall
@@ -83,6 +85,147 @@ final class PluginAdminController
         $plugins = $this->loader->listInstalled();
         $payload = array_map([$this, 'serializeInstalled'], $plugins);
         return (new Response())->json(['plugins' => $payload]);
+    }
+
+    /**
+     * Detail for a single installed plugin, including its manifest
+     * settings SCHEMA (so the admin UI can render a configure form) and
+     * its current persisted VALUES with secrets masked.
+     *
+     * `GET /api/v1/admin/plugins/{name}` →
+     * `200 { "plugin": { name, version, type, enabled, installed_at,
+     *        settings_schema: {key:{type,required,secret,label,description,default?}},
+     *        settings: {key: value-or-***} } }`.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path parameters; `name` is the manifest name.
+     *
+     * @return Response 200 + detail, 404 if not found.
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    public function show(Request $request, array $params): Response
+    {
+        $name = self::pluginName($params);
+        if ($name === null) {
+            return $this->jsonError(400, 'plugin.name.required', 'A "name" path parameter is required.');
+        }
+
+        try {
+            $plugin = $this->loader->getInstalled($name);
+        } catch (PluginNotFoundException $e) {
+            return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
+        }
+
+        return (new Response())->json(['plugin' => $this->serializeDetail($plugin)]);
+    }
+
+    /**
+     * Persist a plugin's settings from the configure form.
+     *
+     * `PUT /api/v1/admin/plugins/{name}/settings` body
+     * `{ "settings": { "<key>": <value>, ... } }`.
+     *
+     * Validation mirrors {@see AdminSettingsController}:
+     *  - every submitted key must EXIST in the manifest settings schema
+     *    (unknown keys → 400 with the offending key);
+     *  - each value's TYPE must match the manifest descriptor (string /
+     *    boolean / integer / number) → 400 on mismatch.
+     *
+     * Secret handling: when a secret field's submitted value is the mask
+     * sentinel {@see SettingsMasker::MASK} (the UI echoed the masked value
+     * back unchanged) the stored secret is KEPT — only a genuinely new
+     * value overwrites it. Otherwise saving the form would wipe API keys.
+     *
+     * The accepted keys are merged OVER the existing settings (keys the
+     * UI did not send are preserved) and persisted via
+     * {@see PluginLoader::updateSettings()}. Returns the refreshed detail
+     * (same shape as {@see self::show()}, secrets masked).
+     *
+     * @param Request              $request The HTTP request (`body.settings`).
+     * @param array<string,string> $params  Path parameters; `name` is the manifest name.
+     *
+     * @return Response 200 + refreshed detail, 400 on validation error, 404 if not found.
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    public function updateSettings(Request $request, array $params): Response
+    {
+        $name = self::pluginName($params);
+        if ($name === null) {
+            return $this->jsonError(400, 'plugin.name.required', 'A "name" path parameter is required.');
+        }
+
+        try {
+            $plugin = $this->loader->getInstalled($name);
+        } catch (PluginNotFoundException $e) {
+            return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
+        }
+
+        $submitted = $request->input('settings');
+        if (!is_array($submitted)) {
+            return $this->jsonError(
+                400,
+                'plugin.settings.invalid',
+                'Body must contain a "settings" object.',
+                ['settings'],
+            );
+        }
+
+        // Normalize the manifest descriptors (guarantees a string 'type',
+        // defaulting to 'mixed' for malformed/typeless descriptors so a bad
+        // manifest can't trigger a 500 here).
+        $schema = SettingsMasker::schema($plugin);
+        $errors = [];
+        /** @var array<string, mixed> $accepted */
+        $accepted = [];
+
+        /** @var mixed $value */
+        foreach ($submitted as $key => $value) {
+            if (!is_string($key) || !array_key_exists($key, $schema)) {
+                $errors[is_string($key) ? $key : (string) $key] = 'Unknown setting key.';
+                continue;
+            }
+
+            $descriptor = $schema[$key];
+            $type     = $descriptor['type'];
+            $isSecret = $descriptor['secret'] === true;
+
+            // Secret echoed back unchanged → keep the stored value, skip.
+            if ($isSecret && $value === SettingsMasker::MASK) {
+                continue;
+            }
+
+            if (!self::valueMatchesType($value, $type)) {
+                $errors[$key] = sprintf('Expected type %s.', $type);
+                continue;
+            }
+
+            $accepted[$key] = self::coerceValue($value, $type);
+        }
+
+        if ($errors !== []) {
+            return (new Response())->status(400)->json([
+                'error'  => 'Validation failed.',
+                'code'   => 'plugin.settings.validation_failed',
+                'errors' => $errors,
+            ]);
+        }
+
+        // Merge accepted values over the existing settings so keys the UI
+        // did not send (including untouched secrets) are preserved.
+        $merged = array_merge($plugin->settings, $accepted);
+        $this->loader->updateSettings($name, $merged);
+
+        $this->audit->logPluginAction(
+            $this->actor($request),
+            'configure',
+            $name,
+            ['source' => 'ui', 'keys' => array_keys($accepted)],
+        );
+
+        $refreshed = $this->loader->getInstalled($name);
+        return (new Response())->json(['plugin' => $this->serializeDetail($refreshed)]);
     }
 
     /**
@@ -288,6 +431,75 @@ final class PluginAdminController
             'signed'       => $plugin->manifest->signature !== null,
             'settings'     => SettingsMasker::mask($plugin),
         ];
+    }
+
+    /**
+     * Serialise an {@see InstalledPlugin} to the configure-form detail
+     * shape: identity + manifest settings schema + masked current values.
+     *
+     * @return array<string, mixed>
+     *
+     * @since 0.12.0 (S6 — plugin configure endpoint)
+     */
+    private function serializeDetail(InstalledPlugin $plugin): array
+    {
+        return [
+            'name'            => $plugin->manifest->name,
+            'version'         => $plugin->manifest->version,
+            'type'            => $plugin->manifest->type,
+            'enabled'         => $plugin->enabled,
+            'installed_at'    => $plugin->installedAt->format(\DateTimeInterface::ATOM),
+            'settings_schema' => SettingsMasker::schema($plugin),
+            'settings'        => SettingsMasker::mask($plugin),
+        ];
+    }
+
+    /**
+     * Whether a raw submitted value is acceptable for a manifest setting
+     * type. Mirrors {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController}
+     * but keyed on the manifest's JSON-Schema-style type vocabulary
+     * (`string`/`boolean`/`integer`/`number`); unknown types accept any
+     * scalar/array so the UI is never blocked by an exotic descriptor.
+     *
+     * Numeric strings are accepted for integer/number and the canonical
+     * bool-ish set for boolean (JSON/form bodies often arrive as strings).
+     *
+     * @param mixed  $value Raw submitted value.
+     * @param string $type  Manifest setting type.
+     */
+    private static function valueMatchesType(mixed $value, string $type): bool
+    {
+        return match ($type) {
+            'boolean', 'bool' => is_bool($value)
+                || (is_int($value) && ($value === 0 || $value === 1))
+                || (is_string($value) && in_array(strtolower($value), ['0', '1', 'true', 'false'], true)),
+            'integer', 'int' => is_int($value)
+                || (is_string($value) && preg_match('/^-?\d+$/', $value) === 1),
+            'number', 'float' => is_int($value) || is_float($value)
+                || (is_string($value) && is_numeric($value)),
+            'string' => is_string($value),
+            'array', 'object', 'json' => is_array($value),
+            default  => is_scalar($value) || is_array($value),
+        };
+    }
+
+    /**
+     * Coerce a validated raw value into its canonical PHP type for
+     * storage. Mirrors {@see \Phlix\Server\Http\Controllers\Admin\AdminSettingsController::coerce()}.
+     *
+     * @param mixed  $value Raw submitted value (already type-validated).
+     * @param string $type  Manifest setting type.
+     */
+    private static function coerceValue(mixed $value, string $type): mixed
+    {
+        return match ($type) {
+            'boolean', 'bool' => is_bool($value)
+                ? $value
+                : (is_string($value) ? in_array(strtolower($value), ['1', 'true'], true) : (bool) $value),
+            'integer', 'int' => (int) (is_numeric($value) ? $value : 0),
+            'number', 'float' => (float) (is_numeric($value) ? $value : 0),
+            default => $value,
+        };
     }
 
     /**

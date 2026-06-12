@@ -120,6 +120,39 @@ final class SettingsMaskerTest extends TestCase
         $this->assertSame('mixed', $rows[0]['type']);
     }
 
+    public function test_schema_projects_descriptors_with_defaults(): void
+    {
+        $plugin = $this->plugin(
+            [],
+            [
+                'username' => ['type' => 'string', 'required' => true, 'label' => 'User', 'description' => 'd'],
+                'api_key'  => ['type' => 'string', 'required' => true, 'secret' => true],
+                'use_dump' => ['type' => 'boolean', 'default' => true],
+                'bare'     => [],
+            ],
+        );
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame('string', $schema['username']['type']);
+        $this->assertTrue($schema['username']['required']);
+        $this->assertFalse($schema['username']['secret']);
+        $this->assertSame('User', $schema['username']['label']);
+        $this->assertSame('d', $schema['username']['description']);
+        $this->assertArrayNotHasKey('default', $schema['username']);
+
+        $this->assertTrue($schema['api_key']['secret']);
+
+        // default present only when declared.
+        $this->assertArrayHasKey('default', $schema['use_dump']);
+        $this->assertSame(true, $schema['use_dump']['default']);
+
+        // missing descriptors default sanely.
+        $this->assertSame('mixed', $schema['bare']['type']);
+        $this->assertFalse($schema['bare']['required']);
+        $this->assertSame('', $schema['bare']['label']);
+    }
+
     /**
      * @param array<string, mixed> $values
      * @param array<string, array<string, mixed>> $manifestSettings

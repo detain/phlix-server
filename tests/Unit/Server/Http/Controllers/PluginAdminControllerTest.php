@@ -308,8 +308,264 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertTrue($body['plugins'][0]['settings']['verbose']);
     }
 
+    // --- S6: detail + settings configure --------------------------------
+
+    public function test_show_returns_404_when_not_found(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->with('missing')->andThrow(
+            new PluginNotFoundException('No installed plugin named "missing".'),
+        );
+
+        $response = $this->controller->show($this->makeRequest('admin-1'), ['name' => 'missing']);
+
+        $this->assertSame(404, $response->statusCode);
+        $this->assertSame('plugin.not_found', $this->decode($response->body)['code']);
+    }
+
+    public function test_show_returns_schema_and_masked_values(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->with('phlix-plugin-anidb')->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-anidb',
+                enabled: true,
+                settings: ['username' => 'joe', 'api_key' => 'topsecret', 'use_title_dump' => true],
+                manifestSettings: [
+                    'username' => ['type' => 'string', 'required' => true, 'label' => 'User'],
+                    'api_key'  => ['type' => 'string', 'required' => true, 'secret' => true],
+                    'use_title_dump' => ['type' => 'boolean', 'default' => true],
+                ],
+            ),
+        );
+
+        $response = $this->controller->show($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-anidb']);
+
+        $this->assertSame(200, $response->statusCode);
+        $plugin = $this->decode($response->body)['plugin'];
+        $this->assertSame('phlix-plugin-anidb', $plugin['name']);
+        $this->assertTrue($plugin['enabled']);
+        // schema projection
+        $this->assertTrue($plugin['settings_schema']['username']['required']);
+        $this->assertSame('User', $plugin['settings_schema']['username']['label']);
+        $this->assertTrue($plugin['settings_schema']['api_key']['secret']);
+        $this->assertSame(true, $plugin['settings_schema']['use_title_dump']['default']);
+        $this->assertArrayNotHasKey('default', $plugin['settings_schema']['username']);
+        // masked values
+        $this->assertSame('joe', $plugin['settings']['username']);
+        $this->assertSame('***', $plugin['settings']['api_key']);
+        $this->assertTrue($plugin['settings']['use_title_dump']);
+    }
+
+    public function test_update_settings_returns_404_when_not_found(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->with('missing')->andThrow(
+            new PluginNotFoundException('No installed plugin named "missing".'),
+        );
+        $this->loader->shouldNotReceive('updateSettings');
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['x' => 1]]),
+            ['name' => 'missing'],
+        );
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function test_update_settings_rejects_missing_settings_object(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+            $this->fixturePlugin('phlix-plugin-demo', enabled: false),
+        );
+        $this->loader->shouldNotReceive('updateSettings');
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', []),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertSame('plugin.settings.invalid', $this->decode($response->body)['code']);
+    }
+
+    public function test_update_settings_rejects_unknown_key(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: false,
+                manifestSettings: ['username' => ['type' => 'string']],
+            ),
+        );
+        $this->loader->shouldNotReceive('updateSettings');
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['username' => 'joe', 'bogus' => 'x']]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $body = $this->decode($response->body);
+        $this->assertSame('plugin.settings.validation_failed', $body['code']);
+        $this->assertArrayHasKey('bogus', $body['errors']);
+    }
+
+    public function test_update_settings_rejects_type_mismatch(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: false,
+                manifestSettings: ['use_dump' => ['type' => 'boolean']],
+            ),
+        );
+        $this->loader->shouldNotReceive('updateSettings');
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['use_dump' => 'banana']]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $this->assertArrayHasKey('use_dump', $this->decode($response->body)['errors']);
+    }
+
+    public function test_update_settings_preserves_secret_when_mask_echoed_back(): void
+    {
+        $existing = [
+            'username' => 'joe',
+            'api_key'  => 'realsecret',
+            'use_dump' => false,
+        ];
+        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-anidb',
+                enabled: true,
+                settings: $existing,
+                manifestSettings: [
+                    'username' => ['type' => 'string'],
+                    'api_key'  => ['type' => 'string', 'secret' => true],
+                    'use_dump' => ['type' => 'boolean'],
+                ],
+            ),
+        );
+
+        // The UI echoes the masked api_key back unchanged, changes username + use_dump.
+        $this->loader->shouldReceive('updateSettings')
+            ->once()
+            ->with('phlix-plugin-anidb', Mockery::on(static function ($settings): bool {
+                return is_array($settings)
+                    && $settings['api_key'] === 'realsecret'   // secret kept
+                    && $settings['username'] === 'jane'        // updated
+                    && $settings['use_dump'] === true;         // coerced + updated
+            }));
+
+        $this->audit->shouldReceive('logPluginAction')
+            ->once()
+            ->with('admin-1', 'configure', 'phlix-plugin-anidb', Mockery::on(
+                static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui'
+            ));
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => [
+                'username' => 'jane',
+                'api_key'  => '***',
+                'use_dump' => 'true',
+            ]]),
+            ['name' => 'phlix-plugin-anidb'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        // refreshed detail returned (still the fixture, secret masked)
+        $this->assertSame('***', $this->decode($response->body)['plugin']['settings']['api_key']);
+    }
+
+    public function test_update_settings_updates_secret_when_real_value_provided(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-anidb',
+                enabled: true,
+                settings: ['api_key' => 'oldsecret'],
+                manifestSettings: ['api_key' => ['type' => 'string', 'secret' => true]],
+            ),
+        );
+
+        $this->loader->shouldReceive('updateSettings')
+            ->once()
+            ->with('phlix-plugin-anidb', Mockery::on(static function ($settings): bool {
+                return is_array($settings) && $settings['api_key'] === 'newsecret';
+            }));
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['api_key' => 'newsecret']]),
+            ['name' => 'phlix-plugin-anidb'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function test_update_settings_merges_over_existing_keys(): void
+    {
+        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: false,
+                settings: ['a' => 'keep', 'b' => 'old'],
+                manifestSettings: [
+                    'a' => ['type' => 'string'],
+                    'b' => ['type' => 'string'],
+                ],
+            ),
+        );
+
+        $this->loader->shouldReceive('updateSettings')
+            ->once()
+            ->with('phlix-plugin-demo', Mockery::on(static function ($settings): bool {
+                // 'a' not submitted → preserved; 'b' updated.
+                return is_array($settings) && $settings['a'] === 'keep' && $settings['b'] === 'new';
+            }));
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['b' => 'new']]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function test_update_settings_handles_typeless_descriptor_without_500(): void
+    {
+        // A malformed manifest descriptor missing 'type' must be treated as
+        // 'mixed' (accept the value) rather than triggering a strict-types 500.
+        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-demo',
+                enabled: false,
+                settings: [],
+                manifestSettings: [
+                    'note' => ['label' => 'Note'], // no 'type' key
+                ],
+            ),
+        );
+
+        $this->loader->shouldReceive('updateSettings')
+            ->once()
+            ->with('phlix-plugin-demo', Mockery::on(static function ($settings): bool {
+                return is_array($settings) && ($settings['note'] ?? null) === 'hello';
+            }));
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->updateSettings(
+            $this->makeRequest('admin-1', ['settings' => ['note' => 'hello']]),
+            ['name' => 'phlix-plugin-demo'],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
     /**
-     * @param array<string, array{type: string, required?: bool, secret?: bool, default?: mixed}> $manifestSettings
+     * @param array<string, array{type?: string, required?: bool, secret?: bool, default?: mixed, label?: string}> $manifestSettings
      * @param array<string, mixed> $settings
      */
     private function fixturePlugin(

@@ -445,6 +445,70 @@ class MediaScannerTest extends TestCase
     }
 
     /**
+     * Regression: episodes of a series whose TITLE contains a dot ("Dr. Stone")
+     * must still be detected as episodes and grouped under one series. A blind
+     * pathinfo() double-strip used to reduce "Dr. Stone S01E05 ….mkv" to "Dr",
+     * losing the SxxExx marker so every such file mis-filed as a loose movie.
+     */
+    public function testDottedSeriesTitleGroupsAsEpisodesNotMovies(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'Dr. Stone S01E01 [1080p] Stone World.mkv',
+            'Dr. Stone S01E02 [1080p] King of the Stone World.mkv',
+            'Dr. STONE S02E01.mp4',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $items = $repo->items();
+        $episodes = array_values(array_filter($items, fn ($i) => $i['type'] === 'episode'));
+        $movies = array_values(array_filter($items, fn ($i) => $i['type'] === 'movie'));
+        $series = array_values(array_filter($items, fn ($i) => $i['type'] === 'series'));
+
+        $this->assertCount(3, $episodes, 'all three files detected as episodes');
+        $this->assertCount(0, $movies, 'no file mis-filed as a loose movie');
+        $this->assertCount(1, $series, 'one shared "Dr. Stone" series container');
+        // Casing follows whichever file created the container first ("Dr. Stone"
+        // vs "Dr. STONE"); both share one slug, so only the count is asserted
+        // exactly while the name is matched case-insensitively.
+        $this->assertEqualsIgnoringCase('Dr. Stone', (string) $series[0]['name']);
+    }
+
+    /**
+     * Regression: a filename carrying stray non-UTF-8 bytes (a Windows-1252
+     * 0x9C here) must be coerced to valid UTF-8 before INSERT — otherwise MySQL
+     * raises 1366 and, with no per-file guard, the whole scan job aborts.
+     */
+    public function testNonUtf8FilenameIsSanitisedAndScanCompletes(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        // Raw 0x9C byte (œ in Windows-1252) embedded in the filename.
+        $bad = "Co\x9Cur S01E01.mkv";
+        $this->tmpDir = $this->makeTempDirWith([$bad, 'Clean Show S01E02.mkv']);
+
+        // Must not throw, and must persist rows.
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $items = $repo->items();
+        $this->assertNotEmpty($items, 'scan persisted at least one row');
+        foreach ($items as $item) {
+            $this->assertTrue(
+                mb_check_encoding((string) $item['name'], 'UTF-8'),
+                'every stored name must be valid UTF-8'
+            );
+            $this->assertTrue(
+                mb_check_encoding((string) $item['path'], 'UTF-8'),
+                'every stored path must be valid UTF-8'
+            );
+        }
+    }
+
+    /**
      * In-memory ItemRepository double: records create()s and supports findByPath
      * for the scanner's dedup + find-or-create-container logic.
      */

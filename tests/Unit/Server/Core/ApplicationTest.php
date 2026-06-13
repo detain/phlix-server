@@ -56,6 +56,64 @@ class ApplicationTest extends TestCase
     }
 
     /**
+     * Security regression: the SPA "Connect Last.fm" OAuth routes
+     * (`GET /api/v1/oauth/lastfm` + `/callback`) MUST be gated by
+     * AdminMiddleware, exactly like the sibling `/api/v1/admin/services/*`
+     * routes. PR #260 originally registered them on the bare router with no
+     * middleware, so any authenticated user could link a Last.fm account.
+     *
+     * @group integration
+     */
+    public function testLastfmOAuthRoutesAreAdminGated(): void
+    {
+        $app = $this->bootApplication();
+
+        $routes = $app->getRouter()->getRoutes();
+
+        $authorize = $this->findRouteByPath($routes['GET'], '/api/v1/oauth/lastfm');
+        $callback = $this->findRouteByPath($routes['GET'], '/api/v1/oauth/lastfm/callback');
+
+        $this->assertNotNull($authorize, 'GET /api/v1/oauth/lastfm must be registered.');
+        $this->assertNotNull($callback, 'GET /api/v1/oauth/lastfm/callback must be registered.');
+
+        // Both must carry a non-empty middleware stack including AdminMiddleware.
+        foreach (['authorize' => $authorize, 'callback' => $callback] as $label => $route) {
+            $middleware = $route['middleware'] ?? [];
+            $this->assertNotEmpty(
+                $middleware,
+                "Last.fm OAuth {$label} route must be wrapped in middleware.",
+            );
+            $hasAdmin = false;
+            foreach ($middleware as $mw) {
+                if ($mw instanceof \Phlix\Server\Http\Middleware\AdminMiddleware) {
+                    $hasAdmin = true;
+                    break;
+                }
+            }
+            $this->assertTrue(
+                $hasAdmin,
+                "Last.fm OAuth {$label} route must be gated by AdminMiddleware.",
+            );
+        }
+    }
+
+    /**
+     * Locate the first route entry whose 'path' matches exactly.
+     *
+     * @param array<int|string, array<string, mixed>> $methodRoutes
+     * @return array<string, mixed>|null
+     */
+    private function findRouteByPath(array $methodRoutes, string $path): ?array
+    {
+        foreach ($methodRoutes as $route) {
+            if (($route['path'] ?? null) === $path) {
+                return $route;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Boots a real Application against the CI MySQL service.
      *
      * Application's constructor eagerly resolves controllers

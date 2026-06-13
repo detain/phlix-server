@@ -80,12 +80,16 @@ class ConnectionPool
                 // positional bind arrays (workerman/mysql v1.0.9 bindMore() bug
                 // on PHP 8.x) and serialises cross-coroutine access via its
                 // per-connection mutex. Type-compatible with the parent.
+                // Pass the configured charset (utf8mb4) so bound params match
+                // the utf8mb4_unicode_ci schema — without it the parent falls
+                // back to utf8mb3 and INSERTs fail with MySQL error 3988.
                 self::$connections[$name] = new PhlixMySQLConnection(
                     $hostStr,
                     $portInt,
                     $userStr,
                     $passStr,
-                    $dbStr
+                    $dbStr,
+                    $charset
                 );
             }
         }

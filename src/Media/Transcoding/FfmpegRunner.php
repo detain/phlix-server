@@ -320,7 +320,10 @@ class FfmpegRunner
         if ($segSeconds < 1) {
             $segSeconds = 6;
         }
-        $playlistType = self::paramString($params, 'playlist_type') ?? 'event';
+        // Default to VOD: callers transcode fixed-length files, so the playlist
+        // should be a closed VOD playlist (EXT-X-ENDLIST), not an open 'event'
+        // stream that a player reads as live with an ever-growing duration.
+        $playlistType = self::paramString($params, 'playlist_type') ?? 'vod';
         $startNumber = self::paramInt($params, 'start_number') ?? 0;
 
         $cmd = sprintf('%s -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));

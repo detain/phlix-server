@@ -821,11 +821,34 @@ class Application
             //    SPA Services page with ?lastfm=not_configured when unusable),
             //  - callback exchanges ?token= and 302s back to the SPA Services
             //    page with ?lastfm=connected|error.
-            // Registered the same way as the legacy routes and the public
-            // Trakt OAuth routes (no group middleware); the callback reads
-            // $request->userId, matching the legacy /admin/lastfm protection.
-            $this->router->get('/api/v1/oauth/lastfm', [$controller, 'apiAuthorize']);
-            $this->router->get('/api/v1/oauth/lastfm/callback', [$controller, 'apiCallback']);
+            //
+            // SECURITY (account-linking): these are admin-only operations, so
+            // they MUST be gated by AdminMiddleware exactly like the sibling
+            // /api/v1/admin/services/* routes. The session cookie is
+            // SameSite=Lax, so it IS sent on the top-level GET navigation to
+            // /api/v1/oauth/lastfm AND on the cross-site redirect back from
+            // last.fm to /api/v1/oauth/lastfm/callback (Lax sends cookies on
+            // top-level GET navigations), so AdminMiddleware can resolve
+            // $request->userId for both. The container may be absent (e.g. some
+            // bootstrap paths) — only then do we fall back to ungated
+            // registration so the routes still exist.
+            if ($this->container !== null) {
+                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+                $adminMiddleware = $this->container->get(
+                    \Phlix\Server\Http\Middleware\AdminMiddleware::class
+                );
+                $this->router->group(
+                    '/api/v1/oauth/lastfm',
+                    function (Router $r) use ($controller): void {
+                        $r->get('', [$controller, 'apiAuthorize']);
+                        $r->get('/callback', [$controller, 'apiCallback']);
+                    },
+                    [$adminMiddleware],
+                );
+            } else {
+                $this->router->get('/api/v1/oauth/lastfm', [$controller, 'apiAuthorize']);
+                $this->router->get('/api/v1/oauth/lastfm/callback', [$controller, 'apiCallback']);
+            }
         } catch (\Throwable) {
             // Last.fm not configured — silent ignore (e.g. DB not ready).
         }

@@ -6,7 +6,9 @@ namespace Phlix\Server\Http\Controllers\Admin;
 
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
+use Phlix\Plugins\Scrobbler\Lastfm\LastfmOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
+use Phlix\Plugins\Scrobbler\Lastfm\SessionLastfmOAuthStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 
@@ -35,15 +37,26 @@ use Phlix\Server\Http\Response;
 final class LastfmController
 {
     /**
-     * @param LastfmConfig            $config   Wraps `config/lastfm.php`.
-     * @param LastfmSessionRepository $sessions Per-user session-key store.
-     * @param LastfmApi               $api      Last.fm HTTP client.
+     * Server-side CSRF `state => userId` store for the SPA OAuth flow.
+     */
+    private readonly LastfmOAuthStateStore $stateStore;
+
+    /**
+     * @param LastfmConfig                 $config     Wraps `config/lastfm.php`.
+     * @param LastfmSessionRepository      $sessions   Per-user session-key store.
+     * @param LastfmApi                    $api        Last.fm HTTP client.
+     * @param LastfmOAuthStateStore|null   $stateStore Server-side store for the
+     *     per-request CSRF `state` bound to the initiating user UUID. Defaults
+     *     to a `$_SESSION`-backed implementation, swappable for tests / DB-backed
+     *     production stores.
      */
     public function __construct(
         private readonly LastfmConfig $config,
         private readonly LastfmSessionRepository $sessions,
         private readonly LastfmApi $api,
+        ?LastfmOAuthStateStore $stateStore = null,
     ) {
+        $this->stateStore = $stateStore ?? new SessionLastfmOAuthStateStore();
     }
 
     /**
@@ -186,9 +199,25 @@ final class LastfmController
             return $this->redirect('/app/admin/services?lastfm=not_configured');
         }
 
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            // AdminMiddleware should already have populated userId; guard so a
+            // forged/unauthenticated request can never seed a state entry.
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        // CSRF state, bound server-side to the initiating user, so the callback
+        // can both validate the state AND recover which user initiated the flow.
+        $state = bin2hex(random_bytes(16));
+        $this->stateStore->put($state, $userId);
+
+        // Last.fm appends `&token=<token>` to whatever `cb` we hand it, so we
+        // carry our `state` on the cb URL itself (it is preserved verbatim).
+        $cb = $this->apiCallbackUrl($request) . '?' . http_build_query(['state' => $state]);
+
         $query = [
             'api_key' => $this->config->apiKey,
-            'cb'      => $this->apiCallbackUrl($request),
+            'cb'      => $cb,
         ];
 
         $authUrl = 'https://www.last.fm/api/auth/?' . http_build_query($query);
@@ -207,15 +236,41 @@ final class LastfmController
      *
      *  - success                  → `/app/admin/services?lastfm=connected`
      *  - missing/invalid token,
-     *    exchange failure, or not
-     *    configured / no user      → `/app/admin/services?lastfm=error`
+     *    exchange failure, not
+     *    configured, or a missing/
+     *    unknown/expired CSRF state → `/app/admin/services?lastfm=error`
+     *
+     * The CSRF `state` (issued + stored by {@see self::apiAuthorize()}) is
+     * validated and consumed BEFORE any session exchange; the resulting
+     * session key is bound to the user recovered FROM the state store (so a
+     * forged callback cannot link an attacker's Last.fm account to a victim).
      *
      * @param array<string, string> $params Path parameters (unused).
      */
     public function apiCallback(Request $request, array $params): Response
     {
-        $userId = $request->userId ?? '';
-        if ($userId === '' || !$this->config->isUsable()) {
+        if (!$this->config->isUsable()) {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        // Validate + consume the CSRF state FIRST, before any session exchange.
+        // A missing/unknown/expired state is treated as a forged callback: we
+        // bail out without touching the token exchange or the session store.
+        $stateRaw = $request->query['state'] ?? null;
+        if (!is_string($stateRaw) || $stateRaw === '') {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        $stateUserId = $this->stateStore->consume($stateRaw);
+        if ($stateUserId === null || $stateUserId === '') {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        // The session key MUST be bound to the user who initiated the flow
+        // (recovered from the server-side state), not solely to whatever the
+        // ambient cookie says. When the cookie is present, it must agree.
+        $cookieUserId = $request->userId ?? '';
+        if ($cookieUserId !== '' && !hash_equals($stateUserId, $cookieUserId)) {
             return $this->redirect('/app/admin/services?lastfm=error');
         }
 
@@ -229,7 +284,7 @@ final class LastfmController
             return $this->redirect('/app/admin/services?lastfm=error');
         }
 
-        $this->sessions->save($userId, $session['session_key']);
+        $this->sessions->save($stateUserId, $session['session_key']);
 
         return $this->redirect('/app/admin/services?lastfm=connected');
     }

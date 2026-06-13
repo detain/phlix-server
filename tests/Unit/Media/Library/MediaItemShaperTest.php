@@ -26,6 +26,7 @@ final class MediaItemShaperTest extends TestCase
                 'year' => 2001,
                 'rating' => 'R',
                 'runtime' => 42,
+                'duration_seconds' => 2542,
                 'overview' => 'Begins.',
                 'season' => 1,
                 'episode' => 1,
@@ -39,6 +40,8 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame(2001, $shaped['year']);
         $this->assertSame('R', $shaped['rating']);
         $this->assertSame(42, $shaped['runtime']);
+        // Precise probed length in seconds, distinct from TMDB `runtime` minutes.
+        $this->assertSame(2542, $shaped['duration']);
         $this->assertSame('Begins.', $shaped['overview']);
         $this->assertSame('season-1', $shaped['parent_id']);
         $this->assertSame(1, $shaped['season_number']);

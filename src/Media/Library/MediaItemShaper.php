@@ -73,6 +73,13 @@ final class MediaItemShaper
             'runtime' => isset($metadata['runtime']) && is_numeric($metadata['runtime'])
                 ? (int) $metadata['runtime']
                 : null,
+            // Precise media length in SECONDS, probed at transcode time
+            // (distinct from `runtime`, which is TMDB minutes). Lets the player
+            // show the true total instead of the value an in-progress transcode
+            // manifest would otherwise grow toward.
+            'duration' => isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds'])
+                ? (int) $metadata['duration_seconds']
+                : null,
             'overview' => $metadata['overview'] ?? null,
             'actors' => $metadata['actors'] ?? [],
             'director' => $metadata['director'] ?? null,

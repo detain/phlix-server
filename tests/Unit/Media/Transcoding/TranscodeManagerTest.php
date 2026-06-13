@@ -203,6 +203,130 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('high', $passed['profile']);
     }
 
+    public function testEnsureHlsJobRequestsVodPlaylistNotEvent(): void
+    {
+        // VOD (not 'event'): an event/live playlist makes hls.js report a
+        // duration that only grows as segments arrive instead of the real total.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn(['streams' => [
+            ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+        ]]);
+        $passed = [];
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
+            function (string $in, string $dir, array $params) use (&$passed): int {
+                $passed = $params;
+                return 100;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertSame('vod', $passed['playlist_type']);
+    }
+
+    public function testEnsureHlsJobPersistsProbedDurationToMediaItem(): void
+    {
+        // The probe's format.duration is written to media_items.metadata_json as
+        // `duration_seconds` so the UI has an authoritative length.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv', 'metadata_json' => '{"name":"X"}'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '1447.025000'],
+        ]);
+        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(100);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $update = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, 'UPDATE media_items SET metadata_json')) {
+                $update = $params;
+                break;
+            }
+        }
+        $this->assertNotNull($update, 'a metadata_json update must be issued');
+        $this->assertIsString($update[0]);
+        $decoded = json_decode($update[0], true);
+        $this->assertSame(1447, $decoded['duration_seconds']);
+        $this->assertSame('X', $decoded['name'], 'existing metadata is preserved');
+    }
+
+    public function testReapStaleRunningJobsFailsGhostWithMissingDir(): void
+    {
+        // A 'running' row whose working dir is gone is a ghost from a dead worker;
+        // it must be flipped to 'failed' so it stops occupying a concurrency slot.
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'ghost-1',
+                        'hls_dir' => $this->segmentDir . '/does-not-exist',
+                        'output_path' => '',
+                        'started_at' => '2026-06-13 07:11:28',
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(1, $reaped);
+        $failUpdate = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, "SET status = 'failed'") && ($params[1] ?? null) === 'ghost-1') {
+                $failUpdate = $params;
+                break;
+            }
+        }
+        $this->assertNotNull($failUpdate, 'ghost job must be marked failed');
+        $this->assertStringContainsString('working directory missing', (string) $failUpdate[0]);
+    }
+
+    public function testReapStaleRunningJobsKeepsLiveJob(): void
+    {
+        // A 'running' job whose dir exists and started recently is left alone.
+        $liveDir = $this->segmentDir . '/live-job';
+        mkdir($liveDir, 0755, true);
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $now = date('Y-m-d H:i:s');
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $liveDir, $now) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'live-1',
+                        'hls_dir' => $liveDir,
+                        'output_path' => '',
+                        'started_at' => $now,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(0, $reaped);
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString("SET status = 'failed'", $sql);
+        }
+    }
+
     public function testEnsureHlsJobReEncodes10BitH264InsteadOfCopying(): void
     {
         // A 10-bit (High 10) H.264 stream copies cleanly but won't decode in the

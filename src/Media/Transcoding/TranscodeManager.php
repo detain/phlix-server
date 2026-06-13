@@ -150,6 +150,8 @@ class TranscodeManager
      */
     public function startTranscode(StreamState $state, array $options = []): string
     {
+        $this->reapStaleRunningJobs();
+
         if (count($this->activeJobs) >= $this->maxConcurrentTranscodes) {
             throw new \RuntimeException(
                 "Maximum concurrent transcodes ({$this->maxConcurrentTranscodes}) reached"
@@ -173,6 +175,8 @@ class TranscodeManager
         if (!$sourceInfoRaw) {
             throw new \RuntimeException("Failed to probe media file");
         }
+
+        $this->persistProbedDuration($state->mediaItemId, $item, $sourceInfoRaw);
 
         $sourceInfo = $this->normalizeSourceInfo($sourceInfoRaw);
 
@@ -240,6 +244,10 @@ class TranscodeManager
     {
         $keyHash = sha1($mediaItemId . '|' . $profileName);
 
+        // Self-heal first: drop any dead 'running' ghosts so a fresh play request
+        // is not refused by the previous worker's leftovers (see reapStaleRunningJobs).
+        $this->reapStaleRunningJobs();
+
         $existing = $this->findReusableJob($keyHash);
         if ($existing !== null) {
             return [
@@ -272,6 +280,9 @@ class TranscodeManager
         if (!$probe) {
             throw new \RuntimeException('Failed to probe media file');
         }
+
+        // Record the precise source duration so the UI shows a correct length.
+        $this->persistProbedDuration($mediaItemId, $item, $probe);
 
         $params = $this->computeHlsParams($probe, $profileName);
 
@@ -554,7 +565,12 @@ class TranscodeManager
         $params = [
             'variant_index' => 0,
             'segment_seconds' => $this->segmentSeconds,
-            'playlist_type' => 'event',
+            // VOD, not 'event': the source is a fixed-length file, so the HLS
+            // playlist must advertise EXT-X-PLAYLIST-TYPE:VOD and terminate with
+            // EXT-X-ENDLIST. An 'event' (live) playlist makes hls.js treat the
+            // stream as open-ended, so the player reports a duration that only
+            // grows as segments arrive instead of the real total.
+            'playlist_type' => 'vod',
         ];
 
         // Remux (copy) only a stream the browser can actually decode: 8-bit 4:2:0
@@ -998,6 +1014,122 @@ class TranscodeManager
                 $this->logger->warning('Cleaned up stale transcode job', ['job_id' => $jobId]);
             }
         }
+
+        // Also reap ghosts recorded only in the DB (see reapStaleRunningJobs).
+        $this->reapStaleRunningJobs($maxAgeSeconds);
+    }
+
+    /**
+     * Reap DB-recorded 'running' jobs that are no longer alive, marking them
+     * 'failed' so they stop counting against {@see $maxConcurrentTranscodes}.
+     *
+     * The concurrency gate counts `status='running'` rows in the DB, but
+     * {@see cleanupStaleJobs()} historically only knew about the in-memory
+     * {@see $activeJobs} map. When the worker restarts (e.g. after a deploy) that
+     * map is empty while the DB still holds the previous run's 'running' rows —
+     * ghosts with no live ffmpeg behind them. Enough of them
+     * ({@see $maxConcurrentTranscodes}) and every new playback request is refused
+     * with "Maximum concurrent transcodes reached", which surfaces to the user as
+     * a video that simply will not play. A job is considered dead when:
+     *
+     *   - its working directory is gone (a live job creates that dir before it
+     *     inserts the row, so a 'running' row without one is a corpse), or
+     *   - it started more than $maxAgeSeconds ago (a wedged / abandoned encode).
+     *
+     * @param int $maxAgeSeconds Age after which a still-'running' job is stale.
+     *
+     * @return int Number of jobs reaped.
+     */
+    public function reapStaleRunningJobs(int $maxAgeSeconds = 3600): int
+    {
+        $result = $this->db->query(
+            "SELECT id, hls_dir, output_path, started_at FROM transcode_jobs WHERE status = 'running'"
+        );
+        $rows = RowMap::listFromMixed($result);
+        $cutoff = time() - max(0, $maxAgeSeconds);
+        $reaped = 0;
+
+        foreach ($rows as $row) {
+            $id = is_string($row['id'] ?? null) ? (string) $row['id'] : '';
+            if ($id === '') {
+                continue;
+            }
+
+            $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
+                ? (string) $row['hls_dir']
+                : (is_string($row['output_path'] ?? null) ? dirname((string) $row['output_path']) : '');
+            $dirGone = $dir !== '' && !is_dir($dir);
+
+            $startedAt = is_string($row['started_at'] ?? null) ? strtotime((string) $row['started_at']) : false;
+            $tooOld = $startedAt !== false && $startedAt < $cutoff;
+
+            if (!$dirGone && !$tooOld) {
+                continue;
+            }
+
+            $this->db->query(
+                "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ? AND status = 'running'",
+                [$dirGone ? 'reaped: working directory missing (dead process)' : 'reaped: exceeded max age', $id]
+            );
+            unset($this->activeJobs[$id]);
+            $reaped++;
+        }
+
+        if ($reaped > 0) {
+            $this->logger->warning('Reaped stale transcode jobs', ['count' => $reaped]);
+        }
+
+        return $reaped;
+    }
+
+    /**
+     * Persist the precise source duration (seconds) probed at transcode time onto
+     * the media item's metadata, so the rest of the app has an authoritative
+     * length without re-probing. Stored under `duration_seconds` to avoid
+     * clobbering TMDB's `runtime` (which is in minutes). Idempotent: a value that
+     * is already present is left untouched.
+     *
+     * @param string               $mediaItemId Media item UUID.
+     * @param array<string, mixed> $item        The media_items row (carries metadata_json).
+     * @param array<string, mixed> $probe       Raw ffprobe result (expects format.duration).
+     */
+    private function persistProbedDuration(string $mediaItemId, array $item, array $probe): void
+    {
+        $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
+        $rawDuration = $format['duration'] ?? null;
+        if (!is_numeric($rawDuration)) {
+            return;
+        }
+        $duration = (int) round((float) $rawDuration);
+        if ($duration <= 0) {
+            return;
+        }
+
+        $metaRaw = $item['metadata_json'] ?? null;
+        $meta = [];
+        if (is_string($metaRaw) && $metaRaw !== '') {
+            $decoded = json_decode($metaRaw, true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        } elseif (is_array($metaRaw)) {
+            $meta = $metaRaw;
+        }
+
+        if (isset($meta['duration_seconds']) && is_numeric($meta['duration_seconds'])) {
+            return;
+        }
+        $meta['duration_seconds'] = $duration;
+
+        $encoded = json_encode($meta);
+        if ($encoded === false) {
+            return;
+        }
+
+        $this->db->query(
+            "UPDATE media_items SET metadata_json = ? WHERE id = ?",
+            [$encoded, $mediaItemId]
+        );
     }
 
     /**

@@ -35,6 +35,10 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringContainsString("stream_0.m3u8", $cmd);
         // A pure remux must NOT encode.
         $this->assertStringNotContainsString('libx264', $cmd);
+        // Defaults to a closed VOD playlist, never an open 'event' (live) one
+        // that would make the player report an ever-growing duration.
+        $this->assertStringContainsString("-hls_playlist_type 'vod'", $cmd);
+        $this->assertStringNotContainsString('event', $cmd);
     }
 
     public function testBuildHlsCommandEncodesAndScalesWhenRequested(): void

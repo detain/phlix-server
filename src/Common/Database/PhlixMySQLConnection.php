@@ -27,6 +27,32 @@ use Workerman\MySQL\Connection;
 final class PhlixMySQLConnection extends Connection
 {
     /**
+     * Default the connection charset to utf8mb4 (the parent defaults to the
+     * legacy 'utf8' alias = utf8mb3).
+     *
+     * The schema is utf8mb4 / utf8mb4_unicode_ci, and the parent connects with
+     * native prepared statements (`PDO::ATTR_EMULATE_PREPARES = false`) plus a
+     * `SET NAMES <charset>` init command. On a utf8mb3 connection MySQL 8 tags
+     * every bound string parameter utf8mb3_general_ci and then REFUSES to widen
+     * it into a utf8mb4_unicode_ci column on INSERT/UPDATE:
+     *   "SQLSTATE[HY000] 3988: Conversion from collation utf8mb3_general_ci into
+     *    utf8mb4_unicode_ci impossible for parameter".
+     * Connecting as utf8mb4 keeps parameters and columns in the same character
+     * set so that conversion never happens. Callers may still override.
+     *
+     * @param string $host
+     * @param int    $port
+     * @param string $user
+     * @param string $password
+     * @param string $db_name
+     * @param string $charset
+     */
+    public function __construct($host, $port, $user, $password, $db_name, $charset = 'utf8mb4')
+    {
+        parent::__construct($host, $port, $user, $password, $db_name, $charset);
+    }
+
+    /**
      * Binary semaphore that serialises socket access across coroutines.
      *
      * Under the Swoole event loop every HTTP request runs in its own

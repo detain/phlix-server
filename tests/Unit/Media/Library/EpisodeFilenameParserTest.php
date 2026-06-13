@@ -58,7 +58,43 @@ class EpisodeFilenameParserTest extends TestCase
             'episode range'        => ['Ed, Edd n Eddy - S05 E16-E17 - Tight End Ed (720p).mp4', 'Ed, Edd n Eddy', 5, 16],
             '1x02 style'           => ['Firefly - 1x02 - The Train Job.mkv', 'Firefly', 1, 2],
             'high season number'   => ['Ducktales - S01 E39 - Catch as Cash Can.mp4', 'Ducktales', 1, 39],
+            // Series titles containing a dot: a blind pathinfo() strip used to
+            // truncate at the FIRST dot ("Dr. Stone …" → "Dr"), losing the
+            // SxxExx marker so the file mis-filed as a movie.
+            'dotted title'         => ['Dr. Stone S01E05 [1080p] Stone World the Beginning.mkv', 'Dr. Stone', 1, 5],
+            'dotted no ext'        => ['Dr. STONE S02E01.mp4', 'Dr. STONE', 2, 1],
+            'dotted hyphen title'  => ['D.Gray-man S01E07 [480p] Tombstone of Memories.mkv', 'D.Gray-man', 1, 7],
         ];
+    }
+
+    /**
+     * The scanner strips the extension before calling parse(); parse() must not
+     * strip a SECOND time. For a dotted series title that double-strip would cut
+     * at the title's dot ("Dr. Stone S01E05 …" → "Dr"), dropping the SxxExx
+     * marker — the bug that left Dr. Stone / D.Gray-man / Gangsta. episodes
+     * scattered as loose movies instead of grouped under one series.
+     */
+    public function testIdempotentForAlreadyStrippedDottedTitle(): void
+    {
+        $alreadyStripped = 'Dr. Stone S01E05 [1080p] Stone World the Beginning';
+        $result = EpisodeFilenameParser::parse($alreadyStripped, true);
+
+        $this->assertNotNull($result, 'pre-stripped dotted name must still parse');
+        $this->assertSame('Dr. Stone', $result['series']);
+        $this->assertSame(1, $result['season']);
+        $this->assertSame(5, $result['episode']);
+    }
+
+    /**
+     * A non-media trailing token after a dot is NOT an extension and must be
+     * preserved (only recognised media containers are stripped).
+     */
+    public function testDoesNotStripNonMediaTrailingToken(): void
+    {
+        $result = EpisodeFilenameParser::parse('Gangsta. S01E03', true);
+        $this->assertNotNull($result);
+        $this->assertSame(1, $result['season']);
+        $this->assertSame(3, $result['episode']);
     }
 
     /**

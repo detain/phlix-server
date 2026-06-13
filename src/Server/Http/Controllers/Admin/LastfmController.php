@@ -162,6 +162,116 @@ final class LastfmController
     }
 
     /**
+     * `GET /api/v1/oauth/lastfm` — SPA-friendly "Connect Last.fm" entry point.
+     *
+     * Mirrors the Trakt flow (`GET /api/v1/oauth/trakt`): instead of rendering
+     * the legacy Smarty page, this issues a top-level browser redirect.
+     *
+     *  - When Last.fm is configured (`isUsable()`), 302-redirects straight to
+     *    `https://www.last.fm/api/auth/?api_key=...&cb=<api-callback>`, where
+     *    `<api-callback>` is this server's `GET /api/v1/oauth/lastfm/callback`
+     *    URL derived from the request host (so the handshake lands on the new
+     *    SPA-aware callback, NOT the legacy `/admin/lastfm/callback`).
+     *  - When NOT configured, 302-redirects back to the SPA Services page with
+     *    `?lastfm=not_configured` rather than rendering any Smarty markup.
+     *
+     * This is an admin-gated route (registered under AdminMiddleware), so the
+     * authenticated user is already established by the time we get here.
+     *
+     * @param array<string, string> $params Path parameters (unused).
+     */
+    public function apiAuthorize(Request $request, array $params): Response
+    {
+        if (!$this->config->isUsable()) {
+            return $this->redirect('/app/admin/services?lastfm=not_configured');
+        }
+
+        $query = [
+            'api_key' => $this->config->apiKey,
+            'cb'      => $this->apiCallbackUrl($request),
+        ];
+
+        $authUrl = 'https://www.last.fm/api/auth/?' . http_build_query($query);
+
+        return $this->redirect($authUrl);
+    }
+
+    /**
+     * `GET /api/v1/oauth/lastfm/callback?token=...` — SPA-friendly callback.
+     *
+     * Reuses the existing exchange ({@see LastfmApi::getSession()} +
+     * {@see LastfmSessionRepository::save()}) but, unlike the legacy
+     * {@see self::callback()}, ALWAYS resolves to a top-level browser redirect
+     * back to the SPA Services page — never a JSON 4xx/5xx that would strand
+     * the browser on a blank error body:
+     *
+     *  - success                  → `/app/admin/services?lastfm=connected`
+     *  - missing/invalid token,
+     *    exchange failure, or not
+     *    configured / no user      → `/app/admin/services?lastfm=error`
+     *
+     * @param array<string, string> $params Path parameters (unused).
+     */
+    public function apiCallback(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '' || !$this->config->isUsable()) {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        $tokenRaw = $request->query['token'] ?? null;
+        if (!is_string($tokenRaw) || $tokenRaw === '') {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        $session = $this->api->getSession($tokenRaw);
+        if ($session === null) {
+            return $this->redirect('/app/admin/services?lastfm=error');
+        }
+
+        $this->sessions->save($userId, $session['session_key']);
+
+        return $this->redirect('/app/admin/services?lastfm=connected');
+    }
+
+    /**
+     * Build a 302 redirect to the given location.
+     */
+    private function redirect(string $location): Response
+    {
+        return (new Response())->status(302)->header('Location', $location);
+    }
+
+    /**
+     * Build the absolute URL of this server's new API callback endpoint
+     * (`/api/v1/oauth/lastfm/callback`) from the inbound request host.
+     *
+     * The legacy operator-configured `callback_url` typically points at the
+     * old `/admin/lastfm/callback`, so the new flow derives its own callback
+     * from the request host (mirroring how Trakt's redirect lands on the API
+     * callback). Falls back to a relative path when no Host header is present
+     * (e.g. unit-test stubs).
+     */
+    private function apiCallbackUrl(Request $request): string
+    {
+        $path = '/api/v1/oauth/lastfm/callback';
+
+        $host = $request->headers['HOST'] ?? ($request->headers['Host'] ?? '');
+        if (!is_string($host) || $host === '') {
+            return $path;
+        }
+
+        // X-Forwarded-Proto is set by the fronting HAProxy/TLS terminator;
+        // default to https since Last.fm requires an https callback in
+        // production and the public deployment is TLS-terminated.
+        $proto = $request->headers['X-FORWARDED-PROTO']
+            ?? ($request->headers['X-Forwarded-Proto'] ?? 'https');
+        $scheme = (is_string($proto) && $proto !== '') ? $proto : 'https';
+
+        return $scheme . '://' . $host . $path;
+    }
+
+    /**
      * `GET /api/v1/admin/services/lastfm/status` — JSON status for the SPA.
      *
      * @param array<string, string> $params Path parameters (unused).

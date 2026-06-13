@@ -462,15 +462,35 @@ class MediaScanner
                 : $file->getBasename('.' . $file->getExtension());
         }
 
-        // Create media item
-        $itemId = $this->itemRepository->create([
-            'library_id' => $libraryId,
-            'parent_id' => $parentId,
-            'name' => $name,
-            'type' => $mediaType,
-            'path' => $path,
-            'metadata_json' => $metadata,
-        ]);
+        // Coerce every string to valid UTF-8 before it reaches the utf8mb4
+        // columns. A scene filename carrying stray non-UTF-8 bytes (e.g. a
+        // Windows-1252 0x9C) otherwise raises MySQL 1366 "Incorrect string
+        // value" on INSERT — and because the loop has no per-file guard, that
+        // one bad file would abort the entire (re)scan job. See toValidUtf8().
+        $name = self::toValidUtf8($name);
+        $path = self::toValidUtf8($path);
+        $metadata = self::sanitizeMetadata($metadata);
+
+        // Create media item. Guard the write so a single unrepresentable row
+        // (or any other per-file failure) is logged and skipped rather than
+        // killing the whole library scan.
+        try {
+            $itemId = $this->itemRepository->create([
+                'library_id' => $libraryId,
+                'parent_id' => $parentId,
+                'name' => $name,
+                'type' => $mediaType,
+                'path' => $path,
+                'metadata_json' => $metadata,
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Skipping media file that failed to persist', [
+                'library_id' => $libraryId,
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
 
         $this->logger->debug('Media file scanned', [
             'item_id' => $itemId,
@@ -481,6 +501,51 @@ class MediaScanner
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
 
         return true;
+    }
+
+    /**
+     * Coerce a string to valid UTF-8 so it can be stored in the utf8mb4 schema.
+     *
+     * Returns the value unchanged when it is already valid UTF-8 (the common
+     * case, no allocation). Otherwise it assumes Windows-1252 — the usual source
+     * of stray high bytes like 0x9C ("œ") in scene filenames — and converts,
+     * falling back to dropping invalid byte sequences if that still is not
+     * clean. mb-safe throughout: no byte-mask trim() that could chop a
+     * multibyte character mid-sequence.
+     */
+    private static function toValidUtf8(string $value): string
+    {
+        if ($value === '' || preg_match('//u', $value) === 1) {
+            return $value;
+        }
+
+        $converted = @iconv('Windows-1252', 'UTF-8//IGNORE', $value);
+        if (is_string($converted) && preg_match('//u', $converted) === 1) {
+            return $converted;
+        }
+
+        return (string) mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+    }
+
+    /**
+     * Recursively coerce every string in a metadata array to valid UTF-8 so the
+     * whole structure can be json_encode()d into the metadata_json column.
+     *
+     * @param array<string, mixed> $metadata
+     * @return array<string, mixed>
+     */
+    private static function sanitizeMetadata(array $metadata): array
+    {
+        foreach ($metadata as $key => $value) {
+            if (is_string($value)) {
+                $metadata[$key] = self::toValidUtf8($value);
+            } elseif (is_array($value)) {
+                /** @var array<string, mixed> $value */
+                $metadata[$key] = self::sanitizeMetadata($value);
+            }
+        }
+
+        return $metadata;
     }
 
     /**

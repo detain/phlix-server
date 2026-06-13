@@ -26,11 +26,29 @@ namespace Phlix\Media\Library;
 final class EpisodeFilenameParser
 {
     /**
+     * Media-container extensions this parser will strip from a filename. Kept
+     * deliberately small: a blind {@see pathinfo()} `PATHINFO_FILENAME` truncates
+     * at the LAST dot, so a series whose title contains a dot ("Dr. Stone",
+     * "D.Gray-man", "Gangsta.") loses everything after it ("Dr. Stone S01E05 …" →
+     * "Dr") and never matches a SxxExx marker — every episode then files as a
+     * stray movie. Stripping only a recognised trailing extension avoids that,
+     * and is also idempotent: the scanner already strips the extension before
+     * calling parse(), so the second pass here is a harmless no-op.
+     *
+     * @var list<string>
+     */
+    private const MEDIA_EXTENSIONS = [
+        'mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'm2ts', 'mts',
+        'mpg', 'mpeg', 'ts', '3gp', 'ogm', 'ogv', 'divx', 'xvid', 'vob', 'rmvb',
+        'asf', 'm4a', 'mp3', 'flac', 'aac', 'ogg', 'opus', 'wav', 'wma',
+    ];
+
+    /**
      * @return array{series: string, season: int, episode: int, episode_title: ?string}|null
      */
     public static function parse(string $filename, bool $allowAbsolute = false): ?array
     {
-        $base = pathinfo($filename, PATHINFO_FILENAME);
+        $base = self::stripExtension($filename);
         // Underscores are a scene separator; normalise so "Ranma_-_098" parses
         // like "Ranma - 098". Keep a normalised copy for matching.
         $norm = (string) preg_replace('/_+/', ' ', $base);
@@ -62,6 +80,26 @@ final class EpisodeFilenameParser
         }
 
         return null;
+    }
+
+    /**
+     * Strip a trailing media-container extension, and ONLY that — never a dot
+     * inside the title. Returns the name unchanged when the trailing token is
+     * not a recognised media extension (see {@see MEDIA_EXTENSIONS}).
+     */
+    private static function stripExtension(string $filename): string
+    {
+        $dot = strrpos($filename, '.');
+        if ($dot === false) {
+            return $filename;
+        }
+
+        $ext = strtolower(substr($filename, $dot + 1));
+        if (in_array($ext, self::MEDIA_EXTENSIONS, true)) {
+            return substr($filename, 0, $dot);
+        }
+
+        return $filename;
     }
 
     /**

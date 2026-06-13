@@ -132,7 +132,10 @@ final class SeriesContainerNaming
             }
         }
 
-        $title = trim($title, " -–._\t");
+        // /u regex, NOT trim() with a byte mask: the en-dash "–" in a trim
+        // mask is matched byte-wise and can strip the lead bytes off an
+        // adjacent multibyte character, producing invalid UTF-8 (MySQL 1366).
+        $title = (string) preg_replace('/^[\s._\x{2013}\x{2014}-]+|[\s._\x{2013}\x{2014}-]+$/u', '', $title);
 
         if ($title === '') {
             $title = trim($norm);

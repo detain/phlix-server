@@ -270,9 +270,9 @@ class ItemRepository
                 $id,
                 $data['library_id'],
                 $data['parent_id'] ?? null,
-                $data['name'],
+                self::toValidUtf8($data['name'] ?? null),
                 $data['type'],
-                $data['path'],
+                self::toValidUtf8($data['path'] ?? null),
                 $metadataJson,
             ]
         );
@@ -283,6 +283,29 @@ class ItemRepository
         $this->recordChange('item_added', $id, $libraryId);
 
         return $id;
+    }
+
+    /**
+     * Guarantee a value is valid UTF-8 before it reaches a utf8mb4 column.
+     *
+     * The `media_items.name`/`path` columns are utf8mb4; a value that is not
+     * valid UTF-8 (a genuinely non-UTF-8 / Windows-1252 filesystem name, or a
+     * multibyte sequence broken by upstream byte-wise string handling) fails
+     * to insert with MySQL error 1366 ("Incorrect string value"). Valid UTF-8
+     * — the overwhelming majority — is returned untouched; otherwise invalid
+     * byte sequences are dropped so the write cannot fail. Non-strings pass
+     * through unchanged.
+     *
+     * @param mixed $value
+     * @return mixed
+     */
+    private static function toValidUtf8(mixed $value): mixed
+    {
+        if (!is_string($value) || $value === '' || mb_check_encoding($value, 'UTF-8')) {
+            return $value;
+        }
+        $scrubbed = @iconv('UTF-8', 'UTF-8//IGNORE', $value);
+        return is_string($scrubbed) ? $scrubbed : $value;
     }
 
     /**
@@ -301,6 +324,8 @@ class ItemRepository
             $sets[] = "$key = ?";
             if ($key === 'metadata_json' && is_array($value)) {
                 $value = json_encode($value);
+            } elseif ($key === 'name' || $key === 'path') {
+                $value = self::toValidUtf8($value);
             }
             $values[] = $value;
         }

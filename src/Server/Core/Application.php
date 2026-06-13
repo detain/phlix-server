@@ -813,6 +813,19 @@ class Application
             $this->router->get('/admin/lastfm', [$controller, 'index']);
             $this->router->get('/admin/lastfm/callback', [$controller, 'callback']);
             $this->router->post('/admin/lastfm/disconnect', [$controller, 'disconnect']);
+
+            // SPA-friendly "Connect Last.fm" flow (mirrors the Trakt OAuth
+            // routes at /api/v1/oauth/trakt[/callback]). These issue top-level
+            // browser redirects instead of rendering the legacy Smarty page:
+            //  - authorize 302s straight to last.fm/api/auth (or back to the
+            //    SPA Services page with ?lastfm=not_configured when unusable),
+            //  - callback exchanges ?token= and 302s back to the SPA Services
+            //    page with ?lastfm=connected|error.
+            // Registered the same way as the legacy routes and the public
+            // Trakt OAuth routes (no group middleware); the callback reads
+            // $request->userId, matching the legacy /admin/lastfm protection.
+            $this->router->get('/api/v1/oauth/lastfm', [$controller, 'apiAuthorize']);
+            $this->router->get('/api/v1/oauth/lastfm/callback', [$controller, 'apiCallback']);
         } catch (\Throwable) {
             // Last.fm not configured — silent ignore (e.g. DB not ready).
         }

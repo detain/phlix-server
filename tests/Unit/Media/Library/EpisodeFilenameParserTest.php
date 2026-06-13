@@ -25,6 +25,28 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertSame($episode, $result['episode']);
     }
 
+    public function testEpisodeTitlePreservesMultibyteQuotesAsValidUtf8(): void
+    {
+        // Regression: the curly quotes “ (E2 80 9C) … ” (E2 80 9D) must survive
+        // intact. The byte-wise trim mask " -–._\t" (containing the multibyte
+        // en-dash) used to strip the E2/80 lead bytes off the leading curly
+        // quote, leaving an invalid lone 0x9C that then failed to insert into a
+        // utf8mb4 column with MySQL error 1366.
+        $name = "Shameless S10E12 \u{201C}Gallavich!\u{201D}.mkv";
+        $result = EpisodeFilenameParser::parse($name, false);
+
+        $this->assertNotNull($result);
+        $this->assertSame('Shameless', $result['series']);
+        $this->assertSame(10, $result['season']);
+        $this->assertSame(12, $result['episode']);
+        $this->assertNotNull($result['episode_title']);
+        $this->assertTrue(
+            mb_check_encoding($result['episode_title'], 'UTF-8'),
+            'episode title must be valid UTF-8'
+        );
+        $this->assertSame("\u{201C}Gallavich!\u{201D}", $result['episode_title']);
+    }
+
     /** @return array<string, array{0:string,1:string,2:int,3:int}> */
     public static function seasonEpisodeCases(): array
     {

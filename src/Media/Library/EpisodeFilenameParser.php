@@ -100,7 +100,7 @@ final class EpisodeFilenameParser
         $title = trim($raw);
         // Cut anything from the first bracket/paren tag onward.
         $title = (string) preg_replace('/\s*[\[\(].*$/', '', $title);
-        $title = trim($title, " -–._\t");
+        $title = self::trimSeparators($title);
         return $title;
     }
 
@@ -112,13 +112,42 @@ final class EpisodeFilenameParser
      */
     private static function extractEpisodeTitle(string $remainder): ?string
     {
-        $title = ltrim($remainder, " -–._\t");
+        $title = self::ltrimSeparators($remainder);
         // Cut at the first bracket/paren tag.
         $title = (string) preg_replace('/\s*[\[\(].*$/', '', $title);
-        $title = trim($title, " -–._\t");
+        $title = self::trimSeparators($title);
         if ($title === '' || preg_match('/^\d+$/', $title)) {
             return null;
         }
         return $title;
+    }
+
+    /**
+     * Character class for the separators we strip from the ends of a title:
+     * whitespace, ASCII hyphen, en/em dash, period, underscore.
+     */
+    private const SEPARATOR_CLASS = '[\s._\x{2013}\x{2014}-]';
+
+    /**
+     * Trim leading + trailing separators. Uses a `/u` regex (NOT trim() with a
+     * byte mask): trim()'s mask is matched byte-by-byte, so a multibyte
+     * character in the mask — the en-dash "–" (E2 80 93) — lets it strip the
+     * E2/80 lead bytes off an adjacent multibyte character (e.g. a curly quote
+     * " = E2 80 9C), leaving an invalid lone byte that then fails to insert
+     * into a utf8mb4 column with MySQL error 1366.
+     */
+    private static function trimSeparators(string $value): string
+    {
+        return (string) preg_replace(
+            '/^' . self::SEPARATOR_CLASS . '+|' . self::SEPARATOR_CLASS . '+$/u',
+            '',
+            $value
+        );
+    }
+
+    /** Trim leading separators only (see {@see trimSeparators()}). */
+    private static function ltrimSeparators(string $value): string
+    {
+        return (string) preg_replace('/^' . self::SEPARATOR_CLASS . '+/u', '', $value);
     }
 }

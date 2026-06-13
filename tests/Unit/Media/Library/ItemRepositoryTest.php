@@ -17,6 +17,69 @@ class ItemRepositoryTest extends TestCase
         $this->assertInstanceOf(ItemRepository::class, $repo);
     }
 
+    public function testCreateScrubsInvalidUtf8InNameAndPath(): void
+    {
+        // Regression: a name/path with invalid UTF-8 bytes must be scrubbed to
+        // valid UTF-8 before the INSERT, else MySQL rejects it with error 1366
+        // ("Incorrect string value") on the utf8mb4 column.
+        $captured = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$captured): bool {
+                    $captured = $params;
+                    return true;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'id'         => 'item-1',
+            'library_id' => 'lib-1',
+            'name'       => "\x9CGallavich!",         // lone continuation byte
+            'type'       => 'episode',
+            'path'       => "/m/\x9CGallavich!.mkv",
+        ]);
+
+        $this->assertIsArray($captured);
+        $this->assertTrue(mb_check_encoding($captured[3], 'UTF-8'), 'name must be valid UTF-8');
+        $this->assertTrue(mb_check_encoding($captured[5], 'UTF-8'), 'path must be valid UTF-8');
+        $this->assertSame('Gallavich!', $captured[3]);
+        $this->assertSame('/m/Gallavich!.mkv', $captured[5]);
+    }
+
+    public function testCreatePreservesValidUtf8NameUntouched(): void
+    {
+        $captured = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$captured): bool {
+                    $captured = $params;
+                    return true;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $valid = "\u{201C}Gallavich!\u{201D}"; // curly quotes — valid UTF-8
+        $repo->create([
+            'id'         => 'item-1',
+            'library_id' => 'lib-1',
+            'name'       => $valid,
+            'type'       => 'episode',
+            'path'       => '/m/x.mkv',
+        ]);
+
+        $this->assertIsArray($captured);
+        $this->assertSame($valid, $captured[3], 'valid UTF-8 must pass through unchanged');
+    }
+
     public function testCreateRecordsItemAddedChangeWhenCollectorWired(): void
     {
         $db = $this->createMock(Connection::class);

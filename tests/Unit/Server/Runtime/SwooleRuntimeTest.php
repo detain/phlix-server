@@ -56,7 +56,15 @@ final class SwooleRuntimeTest extends TestCase
 
         $flags = SwooleRuntime::safeHookFlags();
 
-        foreach (['SWOOLE_HOOK_FILE', 'SWOOLE_HOOK_PROC', 'SWOOLE_HOOK_CURL', 'SWOOLE_HOOK_NATIVE_CURL', 'SWOOLE_HOOK_STDIO'] as $unsafe) {
+        // File/proc/curl/stdio + the PDO drivers and net-function hook must all
+        // be off. (The blocking-function hook for exec/shell_exec is unnamed in
+        // this build — the allowlist excludes it by construction; asserted via
+        // the exact-allowlist test below.)
+        $unsafeNames = [
+            'SWOOLE_HOOK_FILE', 'SWOOLE_HOOK_PROC', 'SWOOLE_HOOK_CURL', 'SWOOLE_HOOK_NATIVE_CURL',
+            'SWOOLE_HOOK_STDIO', 'SWOOLE_HOOK_PDO_PGSQL', 'SWOOLE_HOOK_PDO_SQLITE', 'SWOOLE_HOOK_NET_FUNCTION',
+        ];
+        foreach ($unsafeNames as $unsafe) {
             if (defined($unsafe)) {
                 self::assertSame(
                     0,
@@ -64,6 +72,35 @@ final class SwooleRuntimeTest extends TestCase
                     "$unsafe must be excluded from the safe coroutine hook mask",
                 );
             }
+        }
+    }
+
+    public function test_safe_mask_is_exactly_the_network_sleep_allowlist(): void
+    {
+        if (!defined('SWOOLE_HOOK_TCP')) {
+            self::assertSame(0, SwooleRuntime::safeHookFlags());
+            self::markTestSkipped('ext-swoole not loaded.');
+        }
+
+        $expected = 0;
+        foreach (
+            [
+                'SWOOLE_HOOK_TCP', 'SWOOLE_HOOK_UDP', 'SWOOLE_HOOK_UNIX', 'SWOOLE_HOOK_UDG',
+                'SWOOLE_HOOK_SSL', 'SWOOLE_HOOK_TLS', 'SWOOLE_HOOK_STREAM_FUNCTION',
+                'SWOOLE_HOOK_SLEEP', 'SWOOLE_HOOK_SOCKETS',
+            ] as $name
+        ) {
+            if (defined($name)) {
+                $expected |= (int) constant($name);
+            }
+        }
+
+        // Exactly the allowlist — nothing more. This is what stops an unnamed
+        // bit (e.g. the exec/shell_exec blocking-function hook still set in
+        // SWOOLE_HOOK_ALL) from leaking into the mask.
+        self::assertSame($expected, SwooleRuntime::safeHookFlags());
+        if (defined('SWOOLE_HOOK_ALL')) {
+            self::assertLessThan((int) constant('SWOOLE_HOOK_ALL'), SwooleRuntime::safeHookFlags());
         }
     }
 

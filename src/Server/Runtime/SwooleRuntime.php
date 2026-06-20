@@ -17,23 +17,22 @@ namespace Phlix\Server\Runtime;
  * production stack: PHP 8.5 + Swoole 6.2.1 + kernel 7 with `io_uring` enabled.
  * The `dmesg` traps pointed at `swoole.so`, and the crashes correlated with
  * hooked operations that re-drive a *native* blocking call on the coroutine
- * scheduler:
+ * scheduler — file IO via `io_uring` (`SWOOLE_HOOK_FILE`), `proc_open()`
+ * (`SWOOLE_HOOK_PROC`), libcurl (`SWOOLE_HOOK_NATIVE_CURL`), and — critically —
+ * `exec()`/`shell_exec()` via the blocking-function hook, which is exactly how
+ * the on-demand HLS/CMAF transcode spawns its detached `ffmpeg` from inside a
+ * request.
  *
- *  - `SWOOLE_HOOK_FILE`        — file IO routed through `io_uring` (unstable on
- *                                this kernel; also see the prior io_uring ENOMEM
- *                                startup bug).
- *  - `SWOOLE_HOOK_PROC`        — `proc_open()` / `exec()` / `shell_exec()`, used
- *                                by the on-demand HLS/CMAF transcode to spawn a
- *                                detached `ffmpeg` from inside a request.
- *  - `SWOOLE_HOOK_CURL` /
- *    `SWOOLE_HOOK_NATIVE_CURL` — libcurl re-driven through the reactor.
- *  - `SWOOLE_HOOK_STDIO`       — stdin/stdout/stderr.
- *
- * Dropping those hooks lets the calls run as ordinary blocking syscalls (safe,
- * just not coroutine-yielding within a worker) while the socket/sleep/stream
- * hooks the coroutine MySQL pool and network IO rely on stay on. The mask is
- * configurable so an operator can re-enable specific hooks or disable the
- * coroutine runtime entirely without editing code.
+ * The curated default mask is therefore an **allowlist** ({@see self::SAFE_HOOK_NAMES})
+ * of just the network + sleep hooks the coroutine MySQL pool and async network
+ * IO need — *not* "`SWOOLE_HOOK_ALL` minus a blocklist". The blocklist approach
+ * is unsafe here because `SWOOLE_HOOK_BLOCKING_FUNCTION` (the `exec`/`shell_exec`
+ * hook) is not exposed as a named constant in this Swoole build, so it cannot be
+ * name-subtracted from `SWOOLE_HOOK_ALL` — yet its bit is still set in `ALL`.
+ * Allowlisting guarantees it (and any other unnamed native hook) is never
+ * enabled. Excluded calls run as ordinary blocking syscalls (safe, just not
+ * coroutine-yielding within a worker). The mask is configurable so an operator
+ * can override it or disable the coroutine runtime entirely without editing code.
  *
  * @package Phlix\Server\Runtime
  * @since 0.33.0
@@ -41,17 +40,26 @@ namespace Phlix\Server\Runtime;
 final class SwooleRuntime
 {
     /**
-     * Hooks excluded from the curated default mask because they have been
-     * crashing the worker on the PHP 8.5 / Swoole 6.2.1 / io_uring stack.
+     * The ONLY coroutine hooks the curated default mask enables — an allowlist
+     * of network + sleep hooks the coroutine MySQL pool and async network IO
+     * rely on. Everything else (file IO/io_uring, `proc_open`, curl, stdio, the
+     * PDO drivers, and the blocking-function hook that covers `exec`/
+     * `shell_exec`) is excluded BY CONSTRUCTION — see the class docblock for why
+     * an allowlist is used instead of subtracting a blocklist from
+     * `SWOOLE_HOOK_ALL`.
      *
      * @var list<string>
      */
-    private const UNSAFE_HOOK_NAMES = [
-        'SWOOLE_HOOK_FILE',
-        'SWOOLE_HOOK_PROC',
-        'SWOOLE_HOOK_CURL',
-        'SWOOLE_HOOK_NATIVE_CURL',
-        'SWOOLE_HOOK_STDIO',
+    private const SAFE_HOOK_NAMES = [
+        'SWOOLE_HOOK_TCP',
+        'SWOOLE_HOOK_UDP',
+        'SWOOLE_HOOK_UNIX',
+        'SWOOLE_HOOK_UDG',
+        'SWOOLE_HOOK_SSL',
+        'SWOOLE_HOOK_TLS',
+        'SWOOLE_HOOK_STREAM_FUNCTION',
+        'SWOOLE_HOOK_SLEEP',
+        'SWOOLE_HOOK_SOCKETS',
     ];
 
     /**
@@ -94,24 +102,21 @@ final class SwooleRuntime
     }
 
     /**
-     * `SWOOLE_HOOK_ALL` minus the crash-prone native hooks.
+     * The OR of the {@see self::SAFE_HOOK_NAMES} allowlist (network + sleep
+     * hooks only).
      *
-     * Returns 0 when ext-swoole is not loaded (the constants are absent) —
-     * harmless, because `start.php` only consults this inside an
+     * Returns 0 when ext-swoole is not loaded (none of the constants are
+     * defined) — harmless, because `start.php` only consults this inside an
      * `extension_loaded('swoole')` guard.
      *
      * @since 0.33.0
      */
     public static function safeHookFlags(): int
     {
-        if (!defined('SWOOLE_HOOK_ALL')) {
-            return 0;
-        }
-
-        $flags = (int) constant('SWOOLE_HOOK_ALL');
-        foreach (self::UNSAFE_HOOK_NAMES as $name) {
+        $flags = 0;
+        foreach (self::SAFE_HOOK_NAMES as $name) {
             if (defined($name)) {
-                $flags &= ~((int) constant($name));
+                $flags |= (int) constant($name);
             }
         }
 

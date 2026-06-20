@@ -19,11 +19,12 @@ return [
 
     // Swoole coroutine runtime (consumed by start.php via
     // src/Server/Runtime/SwooleRuntime.php). The HTTP worker runs under Swoole's
-    // event loop with a CURATED hook mask: SWOOLE_HOOK_ALL crashed the worker
-    // with general-protection faults inside swoole.so (exit status 139) on
-    // PHP 8.5 / Swoole 6.2.1 / kernel-7 io_uring, so file/proc/curl/stdio hooks
-    // are OFF by default and run as plain blocking syscalls; socket/sleep/stream
-    // hooks (needed by the coroutine MySQL pool + network IO) stay on.
+    // event loop with a CURATED hook ALLOWLIST: SWOOLE_HOOK_ALL crashed the
+    // worker with general-protection faults inside swoole.so (exit status 139)
+    // on PHP 8.5 / Swoole 6.2.1 / kernel-7 io_uring. Only socket/sleep/stream
+    // hooks (needed by the coroutine MySQL pool + network IO) are enabled;
+    // file/proc/curl/stdio AND the exec/shell_exec blocking-function hook (the
+    // ffmpeg-spawn crash trigger) run as plain blocking syscalls.
     'coroutine' => [
         // Set false to disable the coroutine runtime hook entirely while keeping
         // Swoole as the event loop — the most conservative option.

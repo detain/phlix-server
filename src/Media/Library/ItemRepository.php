@@ -1045,8 +1045,13 @@ class ItemRepository
                     $escapedActor = addcslashes($actor, '%_');
                     // Match each actor array element independently (JSON_SEARCH over
                     // '$.actors[*]') so the LIKE can't span the serialized "," boundary
-                    // between two names the way a flat JSON_EXTRACT+LIKE could.
-                    $actorWheres[] = "JSON_SEARCH(metadata_json, 'one', ?, NULL, '\$.actors[*]') IS NOT NULL";
+                    // between two names the way a flat JSON_EXTRACT+LIKE could. Cover
+                    // BOTH stored shapes: the flat ["Name", …] list ('$.actors[*]')
+                    // and the legacy TMDB [{name, …}, …] objects ('$.actors[*].name'),
+                    // so the filter works before AND after a metadata re-match.
+                    $actorWheres[] = "(JSON_SEARCH(metadata_json, 'one', ?, NULL, '\$.actors[*]') IS NOT NULL"
+                        . " OR JSON_SEARCH(metadata_json, 'one', ?, NULL, '\$.actors[*].name') IS NOT NULL)";
+                    $bindings[] = '%' . $escapedActor . '%';
                     $bindings[] = '%' . $escapedActor . '%';
                 }
             }

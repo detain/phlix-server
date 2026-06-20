@@ -160,6 +160,36 @@ final class MetadataValue
     }
 
     /**
+     * Narrow a mixed cast value to a de-duplicated, ordered list of actor NAME
+     * strings. Tolerates the two shapes actors are stored in across the
+     * metadata pipeline — TMDB's `[{name, role, order}, …]` objects and an
+     * already-flattened `["Name", …]` list — so the public API, the
+     * `$.actors[*]` filter and the SPA cast chips all see plain names.
+     *
+     * @return list<string>
+     */
+    public static function actorNames(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $names = [];
+        foreach ($value as $entry) {
+            if (is_string($entry)) {
+                $name = trim($entry);
+            } elseif (is_array($entry)) {
+                $name = trim(self::asString($entry['name'] ?? null));
+            } else {
+                $name = '';
+            }
+            if ($name !== '' && !in_array($name, $names, true)) {
+                $names[] = $name;
+            }
+        }
+        return $names;
+    }
+
+    /**
      * Narrow a mixed value to a list of mixed entries (preserving order).
      * Non-array inputs return an empty list.
      *

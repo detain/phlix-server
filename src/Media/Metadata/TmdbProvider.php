@@ -250,7 +250,7 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $response = $this->http->get("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
-            'append_to_response' => 'genres,external_ids,content_ratings',
+            'append_to_response' => 'genres,external_ids,content_ratings,aggregate_credits',
         ]);
         if ($response === null) {
             return [];
@@ -331,6 +331,13 @@ class TmdbProvider implements MetadataProviderInterface
         $externalIds = MetadataValue::asAssoc($data['external_ids'] ?? null);
         $imdbId = MetadataValue::asNullableString($externalIds['imdb_id'] ?? null);
 
+        // Recurring series cast (TMDB `aggregate_credits`, order-sorted), reduced
+        // to the top-billed names. `aggregate_credits` entries carry `name` +
+        // `roles[]`; actorNames() only needs `name`.
+        $aggregateCredits = MetadataValue::asAssoc($data['aggregate_credits'] ?? null);
+        $cast = MetadataValue::asAssocList($aggregateCredits['cast'] ?? null);
+        $actors = MetadataValue::actorNames(array_slice($cast, 0, 20));
+
         return [
             'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
             'original_name' => MetadataValue::asString($data['original_name'] ?? null),
@@ -339,6 +346,7 @@ class TmdbProvider implements MetadataProviderInterface
             'vote_average' => MetadataValue::asFloat($data['vote_average'] ?? null),
             'year' => $year,
             'genres' => $genreNames,
+            'actors' => $actors,
             'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
             'imdb_id' => $imdbId,
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),

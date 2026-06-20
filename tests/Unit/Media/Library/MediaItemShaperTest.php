@@ -49,6 +49,38 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('Pilot', $shaped['episode_title']);
     }
 
+    public function testShapeNormalisesActorObjectsToNameStrings(): void
+    {
+        // Legacy/interactive-match data stores TMDB actor OBJECTS; the shaper
+        // must flatten them to names so the SPA cast chips render text, not
+        // "[object Object]".
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm-1',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => [
+                'actors' => [
+                    ['name' => 'Tom Hanks', 'role' => 'Woody', 'order' => 0],
+                    ['name' => 'Tim Allen', 'role' => 'Buzz', 'order' => 1],
+                ],
+            ],
+        ]);
+
+        $this->assertSame(['Tom Hanks', 'Tim Allen'], $shaped['actors']);
+    }
+
+    public function testShapeKeepsActorNameStringsAndDropsBlanksAndDupes(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm-2',
+            'name' => 'Film',
+            'type' => 'movie',
+            'metadata' => ['actors' => ['Sigourney Weaver', '', 'Sigourney Weaver']],
+        ]);
+
+        $this->assertSame(['Sigourney Weaver'], $shaped['actors']);
+    }
+
     public function testShapeCoercesMalformedTypeAndRatingToSchemaSafeValues(): void
     {
         $shaped = MediaItemShaper::shape([

@@ -201,6 +201,19 @@ class MovieMetadataResolver
             $result['runtime'] = $runtime;
         }
 
+        // Cast & crew — TMDB-sourced. TMDB yields actor objects
+        // ({name, role, order}); the shaper, the `$.actors[*]` filter and the
+        // SPA cast chips all consume a flat list of names, so reduce to names
+        // here. Previously omitted entirely, so bulk-matched movies had no cast.
+        $actors = MetadataValue::actorNames($tmdb['actors'] ?? null);
+        if ($actors !== []) {
+            $result['actors'] = $actors;
+        }
+        $director = MetadataValue::asNullableString($tmdb['director'] ?? null);
+        if ($director !== null) {
+            $result['director'] = $director;
+        }
+
         // Ratings — IMDb-sourced only.
         $imdbRating = MetadataValue::asNullableFloat($imdb['average_rating'] ?? null);
         if ($imdbRating !== null) {

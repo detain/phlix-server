@@ -27,6 +27,32 @@ class MetadataValueTest extends TestCase
         $this->assertSame('3.14', MetadataValue::asString(3.14));
     }
 
+    public function testActorNamesFlattensTmdbObjectsToNames(): void
+    {
+        $this->assertSame(
+            ['Tom Hanks', 'Tim Allen'],
+            MetadataValue::actorNames([
+                ['name' => 'Tom Hanks', 'role' => 'Woody', 'order' => 0],
+                ['name' => 'Tim Allen', 'character' => 'Buzz'],
+            ]),
+        );
+    }
+
+    public function testActorNamesAcceptsFlatStringsAndDedupes(): void
+    {
+        $this->assertSame(
+            ['Ripley', 'Newt'],
+            MetadataValue::actorNames(['Ripley', ' Newt ', 'Ripley', '']),
+        );
+    }
+
+    public function testActorNamesReturnsEmptyForNonArrayOrEmptyEntries(): void
+    {
+        $this->assertSame([], MetadataValue::actorNames(null));
+        $this->assertSame([], MetadataValue::actorNames('Tom Hanks'));
+        $this->assertSame([], MetadataValue::actorNames([['order' => 1], 123, null]));
+    }
+
     public function testAsStringFallsBackForOtherTypes(): void
     {
         $this->assertSame('', MetadataValue::asString(null));

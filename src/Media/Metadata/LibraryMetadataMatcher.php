@@ -523,6 +523,10 @@ class LibraryMetadataMatcher
         if ($rating !== null) {
             $result['official_rating'] = $rating;
         }
+        $actors = MetadataValue::actorNames($details['actors'] ?? null);
+        if ($actors !== []) {
+            $result['actors'] = $actors;
+        }
 
         return $result;
     }
@@ -584,7 +588,7 @@ class LibraryMetadataMatcher
         if ($director !== null) {
             $result['director'] = $director;
         }
-        $actors = MetadataValue::asAssocList($details['actors'] ?? null);
+        $actors = MetadataValue::actorNames($details['actors'] ?? null);
         if ($actors !== []) {
             $result['actors'] = $actors;
         }

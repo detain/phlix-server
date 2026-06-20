@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\PosterSrcset;
 
 /**
@@ -81,7 +82,10 @@ final class MediaItemShaper
                 ? (int) $metadata['duration_seconds']
                 : null,
             'overview' => $metadata['overview'] ?? null,
-            'actors' => $metadata['actors'] ?? [],
+            // Normalise to a flat list of names regardless of how the row was
+            // stored (TMDB objects vs an already-flattened list) so the SPA
+            // cast chips never render "[object Object]".
+            'actors' => MetadataValue::actorNames($metadata['actors'] ?? null),
             'director' => $metadata['director'] ?? null,
             // Series→season→episode hierarchy. `parent_id` is a top-level column;
             // season/episode numbers + the per-episode title live in metadata_json

@@ -704,6 +704,33 @@ class ItemRepositoryTest extends TestCase
         $repo->query(['parentId' => 'series-7', 'topLevel' => true]);
     }
 
+    public function testQueryWithMatchedFiltersOnMetadataRefreshedNotNull(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->stringContains('metadata_refreshed_at IS NOT NULL'))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['match' => 'matched']);
+    }
+
+    public function testQueryWithUnmatchedFiltersOnMetadataRefreshedIsNull(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return str_contains($sql, 'metadata_refreshed_at IS NULL')
+                    && !str_contains($sql, 'metadata_refreshed_at IS NOT NULL');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['match' => 'unmatched']);
+    }
+
     public function testQueryTopLevelIgnoredWhenSearching(): void
     {
         $db = $this->createMock(Connection::class);

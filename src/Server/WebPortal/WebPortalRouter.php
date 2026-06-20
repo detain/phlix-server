@@ -468,6 +468,13 @@ class WebPortalRouter
             $params['actors'] = array_filter($actors, 'is_string');
         }
 
+        // Match status: `?match=matched|unmatched` filters on whether the item
+        // has ever been through metadata matching (metadata_refreshed_at).
+        $match = $request->queryString('match');
+        if ($match === 'matched' || $match === 'unmatched') {
+            $params['match'] = $match;
+        }
+
         $sort = $request->queryString('sort');
         if ($sort !== null && $sort !== '') {
             $params['sort'] = $sort;

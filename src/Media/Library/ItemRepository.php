@@ -977,6 +977,7 @@ class ItemRepository
         $yearTo = isset($params['yearTo']) && is_numeric($params['yearTo']) ? (int) $params['yearTo'] : null;
         $ratings = isset($params['ratings']) && is_array($params['ratings']) ? $params['ratings'] : null;
         $actors = isset($params['actors']) && is_array($params['actors']) ? $params['actors'] : null;
+        $match = isset($params['match']) && is_string($params['match']) ? $params['match'] : null;
         $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
         $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
         $sort = $this->normalizeSortField($sortRaw);
@@ -1058,6 +1059,16 @@ class ItemRepository
             if (count($actorWheres) > 0) {
                 $wheres[] = '(' . implode(' OR ', $actorWheres) . ')';
             }
+        }
+
+        // Match status. `metadata_refreshed_at` (migration 031) is stamped when
+        // LibraryMetadataMatcher last enriched the item; NULL means it has never
+        // been matched. Lets the UI surface "unmatched" items that still need a
+        // metadata pass (or "matched" ones to review).
+        if ($match === 'matched') {
+            $wheres[] = 'metadata_refreshed_at IS NOT NULL';
+        } elseif ($match === 'unmatched') {
+            $wheres[] = 'metadata_refreshed_at IS NULL';
         }
 
         $orderClause = $this->buildOrderClause($sort, $order);

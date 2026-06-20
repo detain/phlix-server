@@ -18,6 +18,7 @@ use Jose\Component\Core\JWKSet;
 use Jose\Component\Signature\Algorithm\RS256;
 use Jose\Component\Signature\Algorithm\RS384;
 use Jose\Component\Signature\Algorithm\RS512;
+use Jose\Component\Signature\JWSTokenSupport;
 use Jose\Component\Signature\JWSVerifier;
 use Jose\Component\Signature\Serializer\CompactSerializer;
 use Jose\Component\Signature\Serializer\JWSSerializerManager;
@@ -34,10 +35,19 @@ use RuntimeException;
  */
 final class IdTokenValidator
 {
+    /**
+     * RSA signature algorithms accepted for OIDC ID tokens. Both the
+     * verification {@see \Jose\Component\Core\AlgorithmManager} and the
+     * protected-header {@see AlgorithmChecker} are restricted to this set so a
+     * token can never be verified under an algorithm we did not opt into.
+     */
+    private const ALLOWED_ALGORITHMS = ['RS256', 'RS384', 'RS512'];
+
     private DiscoveryDocument $discovery;
     private JWKSet $jwkSet;
     private ?JWSVerifier $verifier = null;
     private ?JWSSerializerManager $serializerManager = null;
+    private ?HeaderCheckerManager $headerCheckerManager = null;
 
     /** @var array<string, mixed> Cached JWKS by provider URL hash */
     private static array $jwksCache = [];
@@ -82,6 +92,18 @@ final class IdTokenValidator
         $jws = $serializerManager->unserialize($idToken);
 
         $signatureIndex = 0;
+
+        // Defence-in-depth against JWS algorithm-confusion (web-token
+        // GHSA-jc38-x7x8-2xc8, unpatched in the 3.4.x line we run): require the
+        // signing algorithm to be declared in the token's PROTECTED header and
+        // to be one of our RSA algorithms BEFORE the signature is trusted —
+        // never accept an `alg` taken from an unprotected header.
+        try {
+            $this->getHeaderCheckerManager()->check($jws, $signatureIndex, ['alg']);
+        } catch (\Throwable $e) {
+            throw new OidcValidationException('Token header rejected: ' . $e->getMessage(), 0, $e);
+        }
+
         $verified = $this->getVerifier()->verifyWithKeySet(
             $jws,
             $this->jwkSet,
@@ -219,6 +241,26 @@ final class IdTokenValidator
             ]);
         }
         return $this->serializerManager;
+    }
+
+    /**
+     * Header-checker manager that enforces the token's `alg` lives in the
+     * PROTECTED header and is one of {@see self::ALLOWED_ALGORITHMS}. The
+     * `true` flag makes {@see AlgorithmChecker} reject an `alg` that appears
+     * only in an unprotected header — the crux of the algorithm-confusion
+     * mitigation.
+     *
+     * @return HeaderCheckerManager
+     */
+    private function getHeaderCheckerManager(): HeaderCheckerManager
+    {
+        if ($this->headerCheckerManager === null) {
+            $this->headerCheckerManager = new HeaderCheckerManager(
+                [new AlgorithmChecker(self::ALLOWED_ALGORITHMS, true)],
+                [new JWSTokenSupport()],
+            );
+        }
+        return $this->headerCheckerManager;
     }
 
     /**

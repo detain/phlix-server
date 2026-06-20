@@ -9,6 +9,7 @@ use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
+use Phlix\Plugins\Installer\SourceUrlResolver;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\SettingsMasker;
@@ -255,11 +256,14 @@ final class PluginAdminController
         }
         $url = trim($url);
 
-        if (!self::isAllowedInstallUrl($url)) {
+        // Repository URLs (e.g. https://github.com/owner/repo) are rewritten
+        // to a tarball before the scheme is validated, so a scheme-less
+        // `github.com/owner/repo` paste is accepted rather than 400-rejected.
+        if (!self::isAllowedInstallUrl(SourceUrlResolver::normalize($url))) {
             return $this->jsonError(
                 400,
                 'plugin.url.invalid_scheme',
-                'Install URL must use https:// or file:// scheme.',
+                'Install URL must be an https:// archive or repository URL (or file:// for local sources).',
                 ['url'],
             );
         }

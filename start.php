@@ -41,36 +41,13 @@ use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
+use Phlix\Server\Runtime\SwooleRuntime;
 use Phlix\Server\Workerman\HttpHandler;
 use Workerman\Worker;
 
 // -----------------------------------------------------------------------------
-// 0. Coroutine runtime — set Swoole as the eventLoop driver and enable
-//    coroutine hooks in the master process before any Worker is instantiated.
-//    Degrades gracefully with a warning if ext-swoole is not yet available.
-// -----------------------------------------------------------------------------
-
-if (extension_loaded('swoole')) {
-    // NOTE: the canonical Workerman 5 static property is
-    // `Worker::$eventLoopClass`, not `Worker::$eventLoop` (which is an
-    // *instance* property used to override the eventLoop on a single
-    // Worker). Setting the static here, before any Worker is created,
-    // makes Swoole the default eventLoop driver for ALL workers in
-    // this process. The original 0.2a PR shipped the wrong identifier
-    // (`Worker::$eventLoop = ...`), which raised
-    // `Access to undeclared static property` on every `php start.php
-    // <subcommand>` invocation. Caught by the cumulative-pass review
-    // after 0.2c shipped its hub mirror.
-    Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
-    \Swoole\Runtime::enableCoroutine(SWOOLE_HOOK_ALL);
-} else {
-    trigger_error('Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.', E_USER_WARNING);
-}
-
-// -----------------------------------------------------------------------------
-// 2. Per-process configuration that the Workerman master needs
-// -----------------------------------------------------------------------------
-// 1. Configuration
+// 1. Configuration (built first so the coroutine-runtime setup below can read
+//    the `coroutine` settings).
 // -----------------------------------------------------------------------------
 
 /** @var array<string, mixed> $config */
@@ -83,6 +60,33 @@ $config['web_portal']         = array_merge(
 );
 
 LoggerFactory::init($config['logger_config_path']);
+
+// -----------------------------------------------------------------------------
+// 0. Coroutine runtime — make Swoole the eventLoop driver and enable a CURATED
+//    set of coroutine hooks in the master process before any Worker is created.
+//
+//    Hooking *every* native call (SWOOLE_HOOK_ALL) crashed the HTTP worker with
+//    recurring general-protection faults inside swoole.so (`exit with status
+//    139` = SIGSEGV) on the PHP 8.5 / Swoole 6.2.1 / kernel-7 (io_uring) stack —
+//    the faults correlate with hooked file IO (io_uring), process spawns (the
+//    on-demand ffmpeg transcode shells out) and native curl. {@see SwooleRuntime}
+//    keeps the socket/sleep/stream hooks (so the coroutine MySQL pool + network
+//    IO still yield) and drops FILE/PROC/CURL/STDIO, which run as ordinary
+//    blocking syscalls instead. Tune or hard-disable via config('coroutine').
+//    Degrades gracefully with a warning if ext-swoole is not yet available.
+// -----------------------------------------------------------------------------
+
+if (extension_loaded('swoole')) {
+    // The canonical Workerman 5 static is `Worker::$eventLoopClass` (not the
+    // per-instance `Worker::$eventLoop`); set it before any Worker exists so
+    // Swoole drives the eventLoop for every worker in this process.
+    Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
+    if (SwooleRuntime::coroutineEnabled($config)) {
+        \Swoole\Runtime::enableCoroutine(SwooleRuntime::resolveHookFlags($config));
+    }
+} else {
+    trigger_error('Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.', E_USER_WARNING);
+}
 
 // -----------------------------------------------------------------------------
 // 2. Per-process configuration that the Workerman master needs

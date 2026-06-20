@@ -17,6 +17,24 @@ return [
         'reuse_port' => true,
     ],
 
+    // Swoole coroutine runtime (consumed by start.php via
+    // src/Server/Runtime/SwooleRuntime.php). The HTTP worker runs under Swoole's
+    // event loop with a CURATED hook mask: SWOOLE_HOOK_ALL crashed the worker
+    // with general-protection faults inside swoole.so (exit status 139) on
+    // PHP 8.5 / Swoole 6.2.1 / kernel-7 io_uring, so file/proc/curl/stdio hooks
+    // are OFF by default and run as plain blocking syscalls; socket/sleep/stream
+    // hooks (needed by the coroutine MySQL pool + network IO) stay on.
+    'coroutine' => [
+        // Set false to disable the coroutine runtime hook entirely while keeping
+        // Swoole as the event loop — the most conservative option.
+        'enabled' => true,
+        // Override the curated default with an explicit SWOOLE_HOOK_* bitmask if
+        // you need to re-enable a specific hook, e.g.
+        //   'hook_flags' => SWOOLE_HOOK_ALL & ~SWOOLE_HOOK_FILE,
+        // Leave unset to use SwooleRuntime::safeHookFlags().
+        // 'hook_flags' => null,
+    ],
+
     // FFmpeg / transcoding settings (binary paths, hardware accel, timeouts).
     // Loaded here so the DI providers (MediaServicesProvider, the transcode
     // wiring) see it via $appConfig['ffmpeg'] in BOTH entry points

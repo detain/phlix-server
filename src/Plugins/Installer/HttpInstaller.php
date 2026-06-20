@@ -15,13 +15,17 @@ use Phlix\Plugins\Util\RecursiveDelete;
  * Downloads a plugin source from a URL (or local `file://` path) into
  * `var/plugins/<name>/`.
  *
- * Supports three URL flavours:
+ * The incoming URL is first run through {@see SourceUrlResolver::normalize()},
+ * which rewrites a git-host **repository** URL
+ * (`https://github.com/owner/repo`) to its default-branch tarball, so the
+ * admin UI and CLI can accept a plain repo URL. After normalisation the
+ * source is one of these flavours:
  *
  *  - `*.zip`     — fetched, extracted with PHP's `ZipArchive`.
  *  - `*.tar.gz`  — fetched, extracted with `PharData`.
  *  - `*.json`    — treated as a "stub" `plugin.json` whose `source`
  *                  field points to a real tarball or zip; that URL is
- *                  then fetched recursively.
+ *                  itself normalised and then fetched recursively.
  *
  * Non-HTTPS URLs are refused unless the `PHLIX_PLUGINS_ALLOW_HTTP=1`
  * env var is set (default off — HTTPS-only). The `file://` scheme is
@@ -61,6 +65,7 @@ class HttpInstaller
      */
     public function install(string $sourceUrl): array
     {
+        $sourceUrl = SourceUrlResolver::normalize($sourceUrl);
         $this->guardScheme($sourceUrl);
 
         $tempDir = $this->createTempDir();
@@ -297,8 +302,9 @@ class HttpInstaller
                         'Stub plugin.json must contain a "source" field pointing at a tarball or zip.',
                     );
                 }
-                $this->guardScheme($decoded['source']);
-                $this->fetchInto($decoded['source'], $tempDir);
+                $stubSource = SourceUrlResolver::normalize($decoded['source']);
+                $this->guardScheme($stubSource);
+                $this->fetchInto($stubSource, $tempDir);
                 return;
             }
 

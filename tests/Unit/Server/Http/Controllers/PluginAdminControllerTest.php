@@ -102,6 +102,36 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertSame('1.0.0', $body['plugin']['version']);
     }
 
+    public function test_install_accepts_a_scheme_less_github_repository_url(): void
+    {
+        // Regression: a pasted repo URL like `github.com/owner/repo` used to be
+        // 400-rejected by the scheme guard. It must now pass through to the
+        // loader (which rewrites it to a tarball) verbatim.
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-anidb',
+            'version' => '0.1.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Phlix\\Anidb\\AnidbMetadataProvider',
+        ]);
+
+        $this->loader->shouldReceive('install')
+            ->once()
+            ->with('github.com/detain/phlix-plugin-anidb')
+            ->andReturn($manifest);
+
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->install(
+            $this->makeRequest('admin-1', ['url' => 'github.com/detain/phlix-plugin-anidb']),
+            [],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $body = $this->decode($response->body);
+        $this->assertSame('phlix-plugin-anidb', $body['plugin']['name']);
+    }
+
     public function test_install_returns_400_on_missing_url(): void
     {
         $this->loader->shouldNotReceive('install');

@@ -201,12 +201,31 @@ class HttpInstaller
     private function ensureBaseDir(): void
     {
         if (is_dir($this->pluginsBaseDir)) {
+            // Exists but the daemon can't write it — the usual cause is a
+            // sandboxed systemd unit (ProtectSystem=strict) whose ReadWritePaths
+            // omits this directory, or wrong ownership after a manual change.
+            if (!is_writable($this->pluginsBaseDir)) {
+                throw new PluginInstallException(sprintf(
+                    'Plugins base directory %s exists but is not writable by the '
+                    . 'server user. Ensure it is owned by the service user; under a '
+                    . 'sandboxed systemd unit it must also be listed in the unit\'s '
+                    . 'ReadWritePaths. Re-running install.sh --update fixes both.',
+                    $this->pluginsBaseDir,
+                ));
+            }
             return;
         }
         if (!@mkdir($this->pluginsBaseDir, 0750, true) && !is_dir($this->pluginsBaseDir)) {
+            // Surface the OS-level reason (e.g. "Permission denied" / "Read-only
+            // file system") plus the fix, instead of a bare "cannot create".
+            $reason = error_get_last()['message'] ?? 'unknown error';
             throw new PluginInstallException(sprintf(
-                'Cannot create plugins base directory %s.',
+                'Cannot create plugins base directory %s (%s). It must exist and be '
+                . 'writable by the server user; under a sandboxed systemd unit it must '
+                . 'also be in the unit\'s ReadWritePaths. Re-running install.sh '
+                . '--update creates and permits it.',
                 $this->pluginsBaseDir,
+                $reason,
             ));
         }
     }

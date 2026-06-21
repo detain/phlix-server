@@ -13,6 +13,7 @@ use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
+use Phlix\Server\Http\Controllers\PluginCatalogController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
@@ -36,6 +37,9 @@ use Psr\Container\ContainerInterface;
  *
  *  - `GET    /api/v1/admin/plugins`                  → list installed
  *  - `POST   /api/v1/admin/plugins/install`          → install from URL
+ *  - `GET    /api/v1/admin/plugins/catalog`          → aggregated catalog + install state
+ *  - `POST   /api/v1/admin/plugins/catalog/sources`  → add a catalog source
+ *  - `DELETE /api/v1/admin/plugins/catalog/sources`  → remove a catalog source
  *  - `GET    /api/v1/admin/plugins/{name}`           → detail + settings schema
  *  - `PUT    /api/v1/admin/plugins/{name}/settings`  → save settings
  *  - `POST   /api/v1/admin/plugins/{name}/enable`    → enable
@@ -81,8 +85,18 @@ final class AdminRoutes
                 /** @var PluginAdminController $pluginController */
                 $pluginController = $container->get(PluginAdminController::class);
 
+                /** @var PluginCatalogController $catalogController */
+                $catalogController = $container->get(PluginCatalogController::class);
+
                 $r->get('/plugins', [$pluginController, 'index']);
                 $r->post('/plugins/install', [$pluginController, 'install']);
+
+                // Catalog routes must precede `/plugins/{name}` so the literal
+                // `catalog` segment is not captured as a plugin name.
+                $r->get('/plugins/catalog', [$catalogController, 'index']);
+                $r->post('/plugins/catalog/sources', [$catalogController, 'addSource']);
+                $r->delete('/plugins/catalog/sources', [$catalogController, 'removeSource']);
+
                 $r->get('/plugins/{name}', [$pluginController, 'show']);
                 $r->put('/plugins/{name}/settings', [$pluginController, 'updateSettings']);
                 $r->post('/plugins/{name}/enable', [$pluginController, 'enable']);

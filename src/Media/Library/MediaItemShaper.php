@@ -60,6 +60,10 @@ final class MediaItemShaper
         return [
             'id' => $id,
             'name' => $name,
+            // Article-stripped key the client can group/sort by ("The Plot" → "Plot")
+            // while still DISPLAYING `name`. The server already orders listings by
+            // this (see ItemRepository); exposed so any client-side sort agrees.
+            'sort_title' => SortTitle::from($name),
             'type' => $type,
             'path' => $item['path'] ?? null,
             'poster_url' => $posterUrl,

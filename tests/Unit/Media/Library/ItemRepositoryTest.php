@@ -737,18 +737,26 @@ class ItemRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with($this->callback(function (string $sql): bool {
-                return str_contains($sql, 'UPPER(LEFT(name, 1)) AS letter')
+                // Buckets by the first letter of the article-stripped sort key
+                // (so "The Plot" counts under P), not the raw first char.
+                return str_contains($sql, 'UPPER(LEFT(')
+                    && str_contains($sql, "COLLATE utf8mb4_bin = 'the '")
+                    && str_contains($sql, 'AS letter')
                     && str_contains($sql, 'GROUP BY letter');
             }))
             ->willReturn([
                 ['letter' => 'A', 'n' => 12],
                 ['letter' => 'B', 'n' => '5'], // numeric-string count tolerated
-                ['letter' => '', 'n' => 3],    // blank letter dropped
+                ['letter' => '', 'n' => 3],    // empty sort key → folded to '#', not dropped
             ]);
 
         $repo = new ItemRepository($db);
         $this->assertSame(
-            [['letter' => 'A', 'count' => 12], ['letter' => 'B', 'count' => 5]],
+            [
+                ['letter' => 'A', 'count' => 12],
+                ['letter' => 'B', 'count' => 5],
+                ['letter' => '#', 'count' => 3],
+            ],
             $repo->letterCounts(['topLevel' => true], 'lib-1'),
         );
     }
@@ -767,6 +775,100 @@ class ItemRepositoryTest extends TestCase
 
         $repo = new ItemRepository($db);
         $repo->letterCounts(['topLevel' => true, 'match' => 'unmatched'], 'lib-7');
+    }
+
+    public function testQueryDefaultNameSortIgnoresLeadingArticle(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // count() then the paged SELECT share the matcher; only the SELECT carries
+        // ORDER BY. The default name sort files "The Plot" under P (article-stripped
+        // key first) then falls back to the raw name as a stable tiebreak.
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return true; // the count query has no ORDER BY
+                }
+                return str_contains($sql, 'ORDER BY TRIM(CASE')
+                    && str_contains($sql, "COLLATE utf8mb4_bin = 'the '")
+                    && str_contains($sql, 'ELSE name END) ASC, name ASC');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query([]); // defaults: sort=name, order=asc
+    }
+
+    public function testQueryNameSortDescAppliesDescToBothKeys(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return true;
+                }
+                return str_contains($sql, 'ELSE name END) DESC, name DESC');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['sort' => 'name', 'order' => 'desc']);
+    }
+
+    public function testQueryYearSortKeepsArticleInsensitiveTiebreak(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return true;
+                }
+                // Year primary, then the article-stripped title as the tiebreak.
+                return str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.year')")
+                    && str_contains($sql, 'ELSE name END) ASC, name ASC');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['sort' => 'year']);
+    }
+
+    public function testQueryDateAddedSortIsNotArticleStripped(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // `date_added` → created_at must keep its natural ordering: no
+        // article-stripping CASE applied to a timestamp column.
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return true;
+                }
+                return str_contains($sql, 'ORDER BY created_at ASC')
+                    && !str_contains($sql, 'TRIM(CASE');
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['sort' => 'date_added']);
+    }
+
+    public function testGetByLibraryOrdersByArticleStrippedTitle(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return str_contains($sql, 'ORDER BY TRIM(CASE')
+                    && str_contains($sql, 'ELSE name END) ASC, name ASC')
+                    && str_contains($sql, 'LIMIT ? OFFSET ?');
+            }))
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->getByLibrary('lib-1');
     }
 
     public function testQueryTopLevelIgnoredWhenSearching(): void

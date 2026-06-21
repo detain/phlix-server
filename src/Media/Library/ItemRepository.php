@@ -119,6 +119,10 @@ class ItemRepository
      */
     public function findByParent(string $parentId): array
     {
+        // Children are a season/episode drill-down, not an alphabetical browse
+        // listing — they keep raw-name ordering (the UI re-sorts episodes by
+        // season/episode number), so the article-stripping rule is intentionally
+        // NOT applied here. It is reserved for the top-level listings + A-Z rail.
         $results = $this->db->query(
             "SELECT * FROM media_items WHERE parent_id = ? ORDER BY name",
             [$parentId]
@@ -139,7 +143,7 @@ class ItemRepository
     public function getByType(string $libraryId, string $type, int $limit = 100, int $offset = 0): array
     {
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY name LIMIT ? OFFSET ?",
+            "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
             [$libraryId, $type, $limit, $offset]
         );
 
@@ -159,7 +163,7 @@ class ItemRepository
     public function getAllByType(string $type, int $limit = 100, int $offset = 0): array
     {
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE type = ? ORDER BY name LIMIT ? OFFSET ?",
+            "SELECT * FROM media_items WHERE type = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
             [$type, $limit, $offset]
         );
 
@@ -195,7 +199,7 @@ class ItemRepository
     public function getByLibrary(string $libraryId, int $limit = 100, int $offset = 0): array
     {
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE library_id = ? ORDER BY name LIMIT ? OFFSET ?",
+            "SELECT * FROM media_items WHERE library_id = ? ORDER BY " . self::titleOrder() . " LIMIT ? OFFSET ?",
             [$libraryId, $limit, $offset]
         );
 
@@ -687,6 +691,9 @@ class ItemRepository
         // Build rating filter
         $ratingPlaceholders = implode(',', array_fill(0, count($allowedRatings), '?'));
 
+        // Rating restriction first, then an article-insensitive alphabetical tiebreak.
+        $orderBy = $ratingOrderSql . ', ' . self::titleOrder();
+
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
@@ -694,7 +701,7 @@ class ItemRepository
                    JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) IN ({$ratingPlaceholders})
                    OR JSON_EXTRACT(metadata_json, '$.rating') IS NULL
                )
-             ORDER BY {$ratingOrderSql}, name
+             ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
             array_merge([$libraryId], $allowedRatings, [$limit, $offset])
         );
@@ -775,6 +782,8 @@ class ItemRepository
         );
         $encodedGenres = array_map(static fn ($g) => json_encode($g), $allowedGenres);
 
+        $orderBy = self::titleOrder();
+
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
@@ -782,7 +791,7 @@ class ItemRepository
                    {$genreWheres}
                    OR JSON_EXTRACT(metadata_json, '\$.genres') IS NULL
                )
-             ORDER BY name
+             ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
             array_merge([$libraryId], $encodedGenres, [$limit, $offset])
         );
@@ -807,11 +816,13 @@ class ItemRepository
 
         $genrePlaceholders = implode(',', array_fill(0, count($blockedGenres), '?'));
 
+        $orderBy = self::titleOrder();
+
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
                AND JSON_CONTAINS(metadata_json, ?) = 0
-             ORDER BY name
+             ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
             array_merge([$libraryId], $blockedGenres, [$limit, $offset])
         );
@@ -1111,8 +1122,10 @@ class ItemRepository
     /**
      * Per-first-letter counts for the current query — drives the A-Z jump rail.
      * Honors the SAME filters as {@see self::query()} (via {@see self::buildFilters()}),
-     * grouping by the uppercased first character of `name`. Letters are returned
-     * unordered; the caller assigns cumulative offsets in the list's sort order.
+     * grouping by the uppercased first character of the article-stripped sort key
+     * (so "The Plot" counts under P, mirroring the ORDER BY in {@see self::query()}).
+     * Letters are returned unordered; the caller assigns cumulative offsets in the
+     * list's sort order.
      *
      * @param array<string, mixed> $params Same media-query params as query().
      *
@@ -1122,7 +1135,11 @@ class ItemRepository
     {
         ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
 
-        $sql = 'SELECT UPPER(LEFT(name, 1)) AS letter, COUNT(*) AS n FROM media_items WHERE '
+        // Bucket by the first letter of the article-stripped sort key (so
+        // "The Plot" counts under P), matching the ORDER BY in self::query()
+        // so the cumulative letter offsets line up with the grid.
+        $letterExpr = SortTitle::letterSqlExpression('name');
+        $sql = "SELECT {$letterExpr} AS letter, COUNT(*) AS n FROM media_items WHERE "
             . implode(' AND ', $wheres) . ' GROUP BY letter';
         $rows = $this->db->query($sql, $bindings);
 
@@ -1132,10 +1149,18 @@ class ItemRepository
                 if (!is_array($row)) {
                     continue;
                 }
-                $letter = isset($row['letter']) && is_string($row['letter']) ? $row['letter'] : '';
-                if ($letter === '') {
-                    continue;
-                }
+                $rawLetter = $row['letter'] ?? null;
+                // An empty sort key (a name that is only an article like "The ",
+                // or all whitespace) yields LEFT('',1)='' — bucket it under '#'
+                // (where the empty key also sorts, first) instead of dropping it,
+                // so the rail's cumulative offsets stay aligned with the grid.
+                // The router (getLetterIndex) likewise folds every non-A-Z letter
+                // into '#'. NOTE: an accented/non-Latin INITIAL letter (after
+                // stripping, e.g. "Élan" or a Cyrillic title) is returned as-is
+                // and folded to '#' by the router, yet sorts in its unicode_ci
+                // position in the grid — a pre-existing rail/grid skew for
+                // multilingual libraries, out of scope for the article rule.
+                $letter = is_string($rawLetter) && $rawLetter !== '' ? $rawLetter : '#';
                 $count = isset($row['n']) && is_numeric($row['n']) ? (int) $row['n'] : 0;
                 $out[] = ['letter' => $letter, 'count' => $count];
             }
@@ -1235,8 +1260,12 @@ class ItemRepository
     {
         $direction = $order === 'desc' ? 'DESC' : 'ASC';
 
+        // Secondary alphabetical tiebreak ignores a leading article too (so two
+        // items with the same year/rating/runtime still file "The Plot" under P).
+        $titleTie = self::titleOrder($direction);
+
         if ($sort === 'year_sort') {
-            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.year')) AS SIGNED) {$direction}, name {$direction}";
+            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.year')) AS SIGNED) {$direction}, {$titleTie}";
         }
 
         if ($sort === 'rating_sort') {
@@ -1245,14 +1274,35 @@ class ItemRepository
                 $ratingCases[] = "WHEN JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) = '{$rating}' THEN {$orderVal}";
             }
             $ratingOrderSql = 'CASE ' . implode(' ', $ratingCases) . ' ELSE 999 END';
-            return "{$ratingOrderSql} {$direction}, name {$direction}";
+            return "{$ratingOrderSql} {$direction}, {$titleTie}";
         }
 
         if ($sort === 'runtime_sort') {
-            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.runtime')) AS SIGNED) {$direction}, name {$direction}";
+            return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.runtime')) AS SIGNED) {$direction}, {$titleTie}";
+        }
+
+        // Default name sort files "The Plot" under P. `date_added` (→ created_at)
+        // and any other safe column keep their natural ordering.
+        if ($sort === 'name') {
+            return $titleTie;
         }
 
         return "{$sort} {$direction}";
+    }
+
+    /**
+     * `ORDER BY` fragment for an article-insensitive alphabetical listing: the
+     * article-stripped sort key first (so "The Plot" files under P), then the raw
+     * `name` as a stable tiebreaker for distinct titles that share a sort key.
+     *
+     * @param string $direction 'asc'/'desc' (any case); anything else → ASC.
+     * @return string e.g. "TRIM(CASE … END) ASC, name ASC".
+     */
+    private static function titleOrder(string $direction = 'ASC'): string
+    {
+        $dir = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
+
+        return SortTitle::sqlExpression('name') . " {$dir}, name {$dir}";
     }
 
     /**

@@ -952,14 +952,23 @@ class Application
         $hlsController = $this->getHlsController();
         $dashController = $this->getDashController();
 
-        // HLS: JSON info, then the generic file server (master.m3u8, media_N.m3u8,
-        // init-N.m4s, chunk-*.m4s).
-        $this->router->get('/hls/{job_id}/playlist', [$hlsController, 'getPlaylist']);
-        $this->router->get('/hls/{job_id}/{file}', [$hlsController, 'serveFile']);
+        // Streaming bytes require proof of an authenticated session. The player
+        // can't attach a Bearer header to a bare manifest URL, so the gate
+        // accepts a session (hls.js sends the Bearer token on every segment XHR
+        // via xhrSetup; same-origin requests carry the session cookie) OR a
+        // signed-URL token. The token is prefix-scoped to the per-job directory
+        // (see SignedUrl::canonicalResource), so a single signature on the master
+        // playlist URL authorises every variant playlist and segment under it.
+        $this->router->group('', function (Router $r) use ($hlsController, $dashController): void {
+            // HLS: JSON info, then the generic file server (master.m3u8, media_N.m3u8,
+            // init-N.m4s, chunk-*.m4s).
+            $r->get('/hls/{job_id}/playlist', [$hlsController, 'getPlaylist']);
+            $r->get('/hls/{job_id}/{file}', [$hlsController, 'serveFile']);
 
-        // DASH: JSON info, then the generic file server (manifest.mpd + .m4s).
-        $this->router->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
-        $this->router->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
+            // DASH: JSON info, then the generic file server (manifest.mpd + .m4s).
+            $r->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
+            $r->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
+        }, [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]);
     }
 
     /**
@@ -1005,14 +1014,20 @@ class Application
     {
         $controller = $this->getBookController();
 
-        // OPDS 1.2 feed endpoints. Left unauthenticated for now: OPDS e-reader
-        // clients authenticate with HTTP Basic, not a Bearer token, so gating
-        // them here would break those clients without adding Basic support.
-        // TODO(security): add OPDS Basic-auth (tracked follow-up).
-        $this->router->get('/opds/v1.2', [$controller, 'opdsRoot']);
-        $this->router->get('/opds/v1.2/libraries', [$controller, 'opdsLibraries']);
-        $this->router->get('/opds/v1.2/libraries/{id}', [$controller, 'opdsLibraryBooks']);
-        $this->router->get('/opds/v1.2/books/{id}/cover', [$controller, 'opdsBookCover']);
+        // OPDS 1.2 feed endpoints. E-reader clients authenticate with HTTP Basic
+        // (not a Bearer token) and re-send it on every feed/cover/download
+        // request, so this group accepts Basic — as well as an existing session
+        // or a signed-URL token — and challenges with `WWW-Authenticate: Basic`
+        // on failure. The acquisition `download` link the feed emits
+        // (`/opds/v1.2/books/{id}/download`) is registered here too so the whole
+        // OPDS flow is both authenticated and functional.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/opds/v1.2', [$controller, 'opdsRoot']);
+            $r->get('/opds/v1.2/libraries', [$controller, 'opdsLibraries']);
+            $r->get('/opds/v1.2/libraries/{id}', [$controller, 'opdsLibraryBooks']);
+            $r->get('/opds/v1.2/books/{id}/cover', [$controller, 'opdsBookCover']);
+            $r->get('/opds/v1.2/books/{id}/download', [$controller, 'downloadBook']);
+        }, [\Phlix\Server\Http\Middleware\SignedUrlMiddleware::forOpds($this->opdsBasicValidator())]);
 
         // Book browsing JSON requires a signed-in user.
         $this->router->group('', function (Router $r) use ($controller): void {
@@ -1020,13 +1035,38 @@ class Application
             $r->get('/api/v1/books/{id}', [$controller, 'getBook']);
         }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
-        // Binary serving (read/cover/download) stays open: <img>/<a download>/
-        // reader requests can't attach a Bearer header, and an item id is an
-        // unguessable UUID only obtainable via the gated listing above.
-        // TODO(security): signed URLs for these (tracked follow-up).
-        $this->router->get('/api/v1/books/{id}/read', [$controller, 'readBook']);
-        $this->router->get('/api/v1/books/{id}/cover', [$controller, 'getCover']);
-        $this->router->get('/api/v1/books/{id}/download', [$controller, 'downloadBook']);
+        // Binary serving (read/cover/download) can't attach a Bearer header from
+        // an <img>/<a download>/reader, so it accepts an existing session or a
+        // signed-URL token minted by the gated getBook detail endpoint above.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/books/{id}/read', [$controller, 'readBook']);
+            $r->get('/api/v1/books/{id}/cover', [$controller, 'getCover']);
+            $r->get('/api/v1/books/{id}/download', [$controller, 'downloadBook']);
+        }, [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]);
+    }
+
+    /**
+     * Builds the HTTP Basic credential validator used by the OPDS feed group.
+     *
+     * Returns a closure that resolves a username/email + password to a user id
+     * via {@see \Phlix\Auth\AuthManager::verifyCredentials()} (no session is
+     * created). When the container is unavailable (e.g. a bare test harness),
+     * Basic auth is effectively disabled — the closure always rejects — leaving
+     * the session/signed-URL paths intact.
+     */
+    private function opdsBasicValidator(): \Closure
+    {
+        $container = $this->container;
+        if ($container === null) {
+            return static fn (string $username, string $password): ?string => null;
+        }
+
+        return static function (string $username, string $password) use ($container): ?string {
+            /** @var \Phlix\Auth\AuthManager $authManager */
+            $authManager = $container->get(\Phlix\Auth\AuthManager::class);
+
+            return $authManager->verifyCredentials($username, $password);
+        };
     }
 
     /**
@@ -1051,10 +1091,13 @@ class Application
             $r->post('/api/v1/audiobooks/{id}/progress', [$controller, 'saveProgress']);
         }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
-        // Audio byte serving stays open (Range/<audio> can't attach a Bearer
-        // header; id is an unguessable UUID). TODO(security): signed URLs.
-        $this->router->get('/api/v1/audiobooks/{id}/read', [$controller, 'readAudiobook']);
-        $this->router->get('/api/v1/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
+        // Audio byte serving can't attach a Bearer header from a Range/<audio>
+        // request, so it accepts an existing session or a signed-URL token minted
+        // by the gated getAudiobook detail endpoint above.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/audiobooks/{id}/read', [$controller, 'readAudiobook']);
+            $r->get('/api/v1/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
+        }, [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]);
     }
 
     /**
@@ -1079,10 +1122,13 @@ class Application
             $r->get('/api/v1/photo/slideshow', [$controller, 'slideshow']);
         }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
-        // Image byte serving stays open (<img> can't attach a Bearer header; id
-        // is an unguessable UUID). TODO(security): signed URLs.
-        $this->router->get('/api/v1/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
-        $this->router->get('/api/v1/photo/photos/{id}/full', [$controller, 'getFull']);
+        // Image byte serving can't attach a Bearer header from an <img>, so it
+        // accepts an existing session or a signed-URL token minted by the gated
+        // listing/detail endpoints above (which emit signed thumbnail_url/full_url).
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
+            $r->get('/api/v1/photo/photos/{id}/full', [$controller, 'getFull']);
+        }, [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]);
     }
 
     /**

@@ -388,6 +388,19 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertSame(12, $item['intro_start_seconds']);
         $this->assertCount(1, $item['streams']);
         $this->assertSame('video', $item['streams'][0]['stream_type']);
+
+        // The detail endpoint mints a signed direct-play URL (the <video src>
+        // can't attach a Bearer header and /media/{id}/stream is now gated).
+        $this->assertArrayHasKey('stream_url', $item);
+        parse_str((string) parse_url((string) $item['stream_url'], PHP_URL_QUERY), $q);
+        $this->assertTrue(
+            \Phlix\Auth\SignedUrl::fromEnv()->verify(
+                '/media/ep-1/stream',
+                (string) ($q['exp'] ?? ''),
+                (string) ($q['sig'] ?? ''),
+            ),
+            'stream_url must be a verifiable signed URL for /media/ep-1/stream',
+        );
     }
 
     public function testGetMediaItemReturns404WhenMissing(): void

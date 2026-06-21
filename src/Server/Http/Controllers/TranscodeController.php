@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -55,14 +56,21 @@ class TranscodeController
             return (new Response())->status(503)->json(['error' => $e->getMessage()]);
         }
 
+        // Sign the streaming URLs: the player feeds these straight to hls.js /
+        // <video>, which can't attach a Bearer header to the initial manifest
+        // request. The token is prefix-scoped to the per-job directory, so it
+        // authorises every variant playlist and segment too.
+        $signer = SignedUrl::fromEnv();
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+
         return (new Response())->json([
             'job_id' => $job['job_id'],
-            'master_url' => $job['master_url'],
-            'hls_url' => $job['hls_url'],
-            'dash_url' => $job['dash_url'],
+            'master_url' => $sign($job['master_url']),
+            'hls_url' => $sign($job['hls_url']),
+            'dash_url' => $sign($job['dash_url']),
             'status' => $job['status'],
             'reused' => $job['reused'],
-            'subtitles' => $job['subtitles'],
+            'subtitles' => self::signSubtitleUrls($job['subtitles'], $sign),
         ]);
     }
 
@@ -83,15 +91,47 @@ class TranscodeController
             return (new Response())->status(404)->json(['error' => 'Job not found']);
         }
 
+        // Signed, prefix-scoped streaming URLs (see start()).
+        $signer = SignedUrl::fromEnv();
+        $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
+
         return (new Response())->json([
             'job_id' => $readiness['job_id'],
             'status' => $readiness['status'],
             'segments' => $readiness['segments'],
             'playlist_ready' => $readiness['playlist_ready'],
             'progress' => $readiness['progress'],
-            'master_url' => "/hls/{$readiness['job_id']}/master.m3u8",
-            'dash_url' => "/dash/{$readiness['job_id']}/manifest.mpd",
-            'subtitles' => $readiness['subtitles'],
+            'master_url' => $sign("/hls/{$readiness['job_id']}/master.m3u8"),
+            'dash_url' => $sign("/dash/{$readiness['job_id']}/manifest.mpd"),
+            'subtitles' => self::signSubtitleUrls($readiness['subtitles'], $sign),
         ]);
+    }
+
+    /**
+     * Signs the `url` of each subtitle track in a subtitle list.
+     *
+     * Sidecar VTTs are served from the per-job directory under `/hls/{job}/`,
+     * which is now gated; the player loads them via a `<track>` element that
+     * can't attach a Bearer header. Signing each URL (prefix-scoped to the same
+     * job) lets the track load. The list shape is otherwise preserved.
+     *
+     * @param mixed    $subtitles The raw subtitle list from the transcode manager.
+     * @param \Closure $sign      Per-URL signer: `fn(mixed $url): mixed`.
+     *
+     * @return mixed The subtitle list with each `url` signed.
+     */
+    private static function signSubtitleUrls(mixed $subtitles, \Closure $sign): mixed
+    {
+        if (!is_array($subtitles)) {
+            return $subtitles;
+        }
+
+        return array_map(static function (mixed $track) use ($sign): mixed {
+            if (is_array($track) && isset($track['url'])) {
+                $track['url'] = $sign($track['url']);
+            }
+
+            return $track;
+        }, $subtitles);
     }
 }

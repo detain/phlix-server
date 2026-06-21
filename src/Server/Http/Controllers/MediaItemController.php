@@ -62,6 +62,12 @@ class MediaItemController
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
         $shaped = MediaItemShaper::shapeDetail($item, $this->itemRepository->getItemStreams($itemId));
 
+        // Mint a signed direct-play URL (the <video src> can't attach a Bearer
+        // header and /media/{id}/stream is gated). Mirrors WebPortalRouter.
+        if ($itemId !== '') {
+            $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
+        }
+
         return (new Response())->json(['item' => $shaped]);
     }
 

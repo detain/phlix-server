@@ -530,6 +530,48 @@ class AuthManager
     }
 
     /**
+     * Validate a username/email + password pair WITHOUT issuing tokens or
+     * creating a device session.
+     *
+     * This is the lightweight credential check behind HTTP Basic auth on the
+     * OPDS feeds (e-reader clients send `Authorization: Basic`, not a Bearer
+     * token, and re-send it on every feed/cover/download request). Unlike
+     * {@see self::login()} it does not rate-limit, audit, update last-login, or
+     * mint a session — it answers the single question "are these credentials
+     * valid for an active account?" and returns the user id when they are.
+     *
+     * @param string $usernameOrEmail The identifier the client supplied.
+     * @param string $password        The plaintext password to verify.
+     *
+     * @return string|null The user id on success; null when the account does not
+     *                      exist, the password is wrong, or the account is not
+     *                      'active' (pending/suspended).
+     *
+     * @since 0.44.0
+     */
+    public function verifyCredentials(string $usernameOrEmail, string $password): ?string
+    {
+        $user = $this->userRepository->findByUsername($usernameOrEmail);
+        if ($user === null) {
+            $user = $this->userRepository->findByEmail($usernameOrEmail);
+        }
+
+        $userId = UserRow::string($user, 'id');
+        if ($user === null || $userId === null || !$this->userRepository->verifyPassword($userId, $password)) {
+            return null;
+        }
+
+        // Mirror login(): only fully 'active' accounts may stream. A missing
+        // status column defaults to active for backwards compatibility.
+        $status = UserRow::string($user, 'status') ?? 'active';
+        if ($status !== 'active') {
+            return null;
+        }
+
+        return $userId;
+    }
+
+    /**
      * Authenticate a user via an external provider (OIDC, LDAP, SAML, passkey).
      *
      * Handles provider-prefixed usernames (e.g. "oidc:alice@example.com")

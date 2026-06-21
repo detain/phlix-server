@@ -28,7 +28,9 @@ use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
+use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Server\Http\Controllers\PluginAdminController;
+use Phlix\Server\Http\Controllers\PluginCatalogController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
@@ -84,6 +86,17 @@ final class AdminRoutesTest extends TestCase
         $adminUserController  = new AdminUserController($this->users);
         $profileManager = new FakeUserProfileManager();
         $adminProfileController = new AdminProfileController($profileManager, $this->users);
+        // Catalog controller: a real service wired to a stub SettingsRepository
+        // and an offline fetcher (the lifecycle tests never hit the network).
+        $pluginCatalogController = new PluginCatalogController(
+            new PluginCatalogService(
+                new SettingsRepository($this->createMock(Connection::class)),
+                static fn (string $url, int $timeout): string =>
+                    throw new \RuntimeException('catalog fetch disabled in tests'),
+            ),
+            $this->loader,
+            $this->audit,
+        );
 
         $container = new class (
             $this->loader,
@@ -98,6 +111,7 @@ final class AdminRoutesTest extends TestCase
             $adminUserController,
             $profileManager,
             $adminProfileController,
+            $pluginCatalogController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -115,6 +129,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly AdminUserController $adminUserController,
                 private readonly FakeUserProfileManager $profileManager,
                 private readonly AdminProfileController $adminProfileController,
+                private readonly PluginCatalogController $pluginCatalogController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -134,6 +149,7 @@ final class AdminRoutesTest extends TestCase
                         $this->loader,
                         $this->audit,
                     ),
+                    PluginCatalogController::class => $this->pluginCatalogController,
                     AdminMiddleware::class => new AdminMiddleware(
                         $this->users,
                         $this->audit,
@@ -164,6 +180,7 @@ final class AdminRoutesTest extends TestCase
             {
                 return in_array($id, [
                     PluginAdminController::class,
+                    PluginCatalogController::class,
                     AdminMiddleware::class,
                     AuthProviderController::class,
                     OidcAdminController::class,
@@ -212,6 +229,27 @@ final class AdminRoutesTest extends TestCase
         $this->assertIsArray($body);
         $this->assertCount(1, $body['plugins']);
         $this->assertSame('phlix-plugin-demo', $body['plugins'][0]['name']);
+    }
+
+    public function test_catalog_route_precedes_plugin_name_route(): void
+    {
+        // Regression guard: `GET /plugins/catalog` must hit the catalog
+        // controller (200 + `default_source`), NOT be captured by the
+        // `/plugins/{name}` route as a plugin literally named "catalog"
+        // (which would 404). The offline fetcher makes the default catalog
+        // fail, so `catalogs` is empty and the failure surfaces in `errors`.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch($this->request('GET', '/api/v1/admin/plugins/catalog', 'admin-1'));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('default_source', $body);
+        $this->assertArrayHasKey('sources', $body);
+        $this->assertArrayHasKey('catalogs', $body);
+        $this->assertArrayHasKey('errors', $body);
+        $this->assertNotEmpty($body['errors']);
     }
 
     public function test_install_then_enable_then_disable_then_uninstall_via_http(): void

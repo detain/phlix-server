@@ -246,4 +246,36 @@ class BookControllerTest extends TestCase
         $this->assertInstanceOf(Response::class, $response);
         $this->assertEquals(200, $response->statusCode);
     }
+
+    /**
+     * @test
+     */
+    public function testGetBookMintsVerifiableSignedUrls(): void
+    {
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-123',
+            'name' => 'Test Book',
+            'type' => 'book',
+            'path' => '/books/test.epub',
+            'metadata' => [],
+        ]);
+
+        $response = $this->controller->getBook(new Request(), ['id' => 'book-123']);
+        $body = json_decode($response->body, true);
+
+        $signer = \Phlix\Auth\SignedUrl::fromEnv();
+        $expected = [
+            'cover_url' => '/api/v1/books/book-123/cover',
+            'read_url' => '/api/v1/books/book-123/read',
+            'download_url' => '/api/v1/books/book-123/download',
+        ];
+        foreach ($expected as $field => $path) {
+            $this->assertArrayHasKey($field, $body['book']);
+            parse_str((string) parse_url((string) $body['book'][$field], PHP_URL_QUERY), $q);
+            $this->assertTrue(
+                $signer->verify($path, (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+                "{$field} must be a verifiable signed URL for {$path}",
+            );
+        }
+    }
 }

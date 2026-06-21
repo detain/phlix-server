@@ -1073,6 +1073,22 @@ do_update() {
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
+  # 4e. One-off migration: ensure the install dir's config/ is in ReadWritePaths.
+  # The hub-pairing flow persists runtime state there — hub-server-key.pem (the
+  # Ed25519 private key), hub-enrollment.json and hub-subdomain.json — but
+  # ProtectSystem=strict keeps config/ read-only unless listed, so "Initiate
+  # pairing" fails 500 with "Failed to write Ed25519 private key: config/...".
+  # Appends the exact path only when absent, preserving operator customisation.
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null \
+     && ! awk -v p="$INSTALL_PATH/config" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+    log "Adding $INSTALL_PATH/config to systemd ReadWritePaths (hub pairing key/state writes)"
+    sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $INSTALL_PATH/config|" "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
   # 5. Restart the service. We don't touch the env file.
   if [ -f "$SERVICE_FILE" ]; then
     log "Restarting $SERVICE_NAME service"

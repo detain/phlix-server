@@ -35,6 +35,49 @@ class MediaScannerTest extends TestCase
         $this->assertInstanceOf(MediaScanner::class, $scanner);
     }
 
+    public function testCountFilesCountsOnlyMatchingMediaFiles(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'Movie One (2020).mkv',
+            'Movie Two (2021).mp4',
+            'notes.txt',     // wrong extension → not counted
+            '.hidden.mkv',   // hidden → skipped
+            'download.part', // skip pattern → skipped
+        ]);
+
+        // The denominator for a scan progress %: only the two real media files.
+        $this->assertSame(2, $scanner->countFiles($this->tmpDir, 'movie'));
+    }
+
+    public function testCountFilesReturnsZeroForMissingPath(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+        $this->assertSame(0, $scanner->countFiles('/no/such/path', 'movie'));
+    }
+
+    public function testScanInvokesOnFileForEachProcessedMediaFile(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'A (2020).mkv',
+            'B (2021).mkv',
+            'readme.txt', // skipped → no tick
+        ]);
+
+        $seen = [];
+        $scanner->scan('lib-1', $this->tmpDir, 'movie', false, function (string $path) use (&$seen): void {
+            $seen[] = basename($path);
+        });
+
+        sort($seen);
+        // One progress tick per processed media file (the .txt is not ticked),
+        // matching countFiles()'s denominator.
+        $this->assertSame(['A (2020).mkv', 'B (2021).mkv'], $seen);
+    }
+
     public function testSeriesScanBuildsSeriesSeasonEpisodeHierarchy(): void
     {
         $repo = $this->makeFakeRepo();

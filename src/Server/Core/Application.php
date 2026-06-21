@@ -279,20 +279,20 @@ class Application
         $this->router->post('/api/v1/media/{id}/transcode', [$transcodeController, 'start']);
         $this->router->get('/api/v1/transcode/{jobId}/status', [$transcodeController, 'status']);
 
-        // Marker endpoints — intro/outro/chapter markers used by the player's
-        // "skip intro" / "skip outro" UI and bulk per-show export.
+        // Marker + extras endpoints — per-item metadata from the DB (intro/outro
+        // markers for the "skip intro" UI, bulk per-show export, trailers and
+        // other extras). Require a signed-in user (same as the media listings).
         $markerController = $this->getMarkerController();
-        $this->router->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
-        $this->router->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
-        $this->router->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
-        $this->router->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
-
-        // Extras endpoints — trailers and other extras (featurettes,
-        // behind-the-scenes, interviews) for a media item.
         $extrasController = $this->getExtrasController();
-        $this->router->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
-        $this->router->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
-        $this->router->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+        $this->router->group('', function (Router $r) use ($markerController, $extrasController): void {
+            $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
+            $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
+            $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
+            $r->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
+            $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
+            $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
+            $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
 
         // Session management endpoints
         $sessionController = $this->getSessionController();
@@ -975,16 +975,20 @@ class Application
     {
         $controller = $this->getMusicController();
 
-        // Music library browsing routes
-        $this->router->get('/api/v1/music/artists', [$controller, 'listArtists']);
-        $this->router->get('/api/v1/music/artists/{mbid}', [$controller, 'getArtist']);
-        $this->router->get('/api/v1/music/albums', [$controller, 'listAlbums']);
-        $this->router->get('/api/v1/music/albums/{mbid}', [$controller, 'getAlbum']);
-        $this->router->get('/api/v1/music/tracks', [$controller, 'listTracks']);
-        $this->router->get('/api/v1/music/tracks/{id}', [$controller, 'getTrack']);
+        // All music endpoints expose library/track data (or the user's
+        // now-playing), so require a signed-in user.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            // Music library browsing routes
+            $r->get('/api/v1/music/artists', [$controller, 'listArtists']);
+            $r->get('/api/v1/music/artists/{mbid}', [$controller, 'getArtist']);
+            $r->get('/api/v1/music/albums', [$controller, 'listAlbums']);
+            $r->get('/api/v1/music/albums/{mbid}', [$controller, 'getAlbum']);
+            $r->get('/api/v1/music/tracks', [$controller, 'listTracks']);
+            $r->get('/api/v1/music/tracks/{id}', [$controller, 'getTrack']);
 
-        // Now playing for the current session
-        $this->router->get('/api/v1/music/now-playing', [$controller, 'nowPlaying']);
+            // Now playing for the current session
+            $r->get('/api/v1/music/now-playing', [$controller, 'nowPlaying']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
     }
 
     /**
@@ -1001,15 +1005,25 @@ class Application
     {
         $controller = $this->getBookController();
 
-        // OPDS 1.2 feed endpoints
+        // OPDS 1.2 feed endpoints. Left unauthenticated for now: OPDS e-reader
+        // clients authenticate with HTTP Basic, not a Bearer token, so gating
+        // them here would break those clients without adding Basic support.
+        // TODO(security): add OPDS Basic-auth (tracked follow-up).
         $this->router->get('/opds/v1.2', [$controller, 'opdsRoot']);
         $this->router->get('/opds/v1.2/libraries', [$controller, 'opdsLibraries']);
         $this->router->get('/opds/v1.2/libraries/{id}', [$controller, 'opdsLibraryBooks']);
         $this->router->get('/opds/v1.2/books/{id}/cover', [$controller, 'opdsBookCover']);
 
-        // Book web portal endpoints
-        $this->router->get('/api/v1/books', [$controller, 'listBooks']);
-        $this->router->get('/api/v1/books/{id}', [$controller, 'getBook']);
+        // Book browsing JSON requires a signed-in user.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/books', [$controller, 'listBooks']);
+            $r->get('/api/v1/books/{id}', [$controller, 'getBook']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+
+        // Binary serving (read/cover/download) stays open: <img>/<a download>/
+        // reader requests can't attach a Bearer header, and an item id is an
+        // unguessable UUID only obtainable via the gated listing above.
+        // TODO(security): signed URLs for these (tracked follow-up).
         $this->router->get('/api/v1/books/{id}/read', [$controller, 'readBook']);
         $this->router->get('/api/v1/books/{id}/cover', [$controller, 'getCover']);
         $this->router->get('/api/v1/books/{id}/download', [$controller, 'downloadBook']);
@@ -1028,12 +1042,17 @@ class Application
     {
         $controller = $this->getAudiobookController();
 
-        // Audiobook library browsing and playback routes
-        $this->router->get('/api/v1/audiobooks', [$controller, 'listAudiobooks']);
-        $this->router->get('/api/v1/audiobooks/{id}', [$controller, 'getAudiobook']);
-        $this->router->get('/api/v1/audiobooks/{id}/chapters', [$controller, 'getChapters']);
-        $this->router->get('/api/v1/audiobooks/{id}/progress', [$controller, 'getProgress']);
-        $this->router->post('/api/v1/audiobooks/{id}/progress', [$controller, 'saveProgress']);
+        // Browsing + per-user progress require a signed-in user.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/audiobooks', [$controller, 'listAudiobooks']);
+            $r->get('/api/v1/audiobooks/{id}', [$controller, 'getAudiobook']);
+            $r->get('/api/v1/audiobooks/{id}/chapters', [$controller, 'getChapters']);
+            $r->get('/api/v1/audiobooks/{id}/progress', [$controller, 'getProgress']);
+            $r->post('/api/v1/audiobooks/{id}/progress', [$controller, 'saveProgress']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+
+        // Audio byte serving stays open (Range/<audio> can't attach a Bearer
+        // header; id is an unguessable UUID). TODO(security): signed URLs.
         $this->router->get('/api/v1/audiobooks/{id}/read', [$controller, 'readAudiobook']);
         $this->router->get('/api/v1/audiobooks/{id}/stream', [$controller, 'streamAudiobook']);
     }
@@ -1051,16 +1070,19 @@ class Application
     {
         $controller = $this->getPhotoController();
 
-        // Photo album and photo browsing routes
-        $this->router->get('/api/v1/photo/albums', [$controller, 'listAlbums']);
-        $this->router->get('/api/v1/photo/albums/{id}', [$controller, 'getAlbum']);
-        $this->router->get('/api/v1/photo/photos', [$controller, 'listPhotos']);
-        $this->router->get('/api/v1/photo/photos/{id}', [$controller, 'getPhoto']);
+        // Album/photo browsing JSON + slideshow listing require a signed-in user.
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/photo/albums', [$controller, 'listAlbums']);
+            $r->get('/api/v1/photo/albums/{id}', [$controller, 'getAlbum']);
+            $r->get('/api/v1/photo/photos', [$controller, 'listPhotos']);
+            $r->get('/api/v1/photo/photos/{id}', [$controller, 'getPhoto']);
+            $r->get('/api/v1/photo/slideshow', [$controller, 'slideshow']);
+        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+
+        // Image byte serving stays open (<img> can't attach a Bearer header; id
+        // is an unguessable UUID). TODO(security): signed URLs.
         $this->router->get('/api/v1/photo/photos/{id}/thumbnail', [$controller, 'getThumbnail']);
         $this->router->get('/api/v1/photo/photos/{id}/full', [$controller, 'getFull']);
-
-        // Slideshow endpoint
-        $this->router->get('/api/v1/photo/slideshow', [$controller, 'slideshow']);
     }
 
     /**

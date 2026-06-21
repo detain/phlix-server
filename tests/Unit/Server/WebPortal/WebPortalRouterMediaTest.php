@@ -481,4 +481,52 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertNull($item['rating']);
         $this->assertNull($item['runtime']);
     }
+
+    public function testDispatchRequiresAuthForMediaListing(): void
+    {
+        // Going through dispatch() (not the handler directly) exercises the
+        // AuthMiddleware the routes are now grouped behind: no userId → 401 and
+        // the repository is never touched, so the library can't be enumerated.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->never())->method('query');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(401, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
+    }
+
+    public function testDispatchAllowsMediaListingForAuthenticatedUser(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media';
+        $request->userId = 'user-1'; // populated by the entry point from the token
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testDispatchRequiresAuthForLibrariesAndLetterIndex(): void
+    {
+        foreach (['/api/v1/libraries', '/api/v1/media/letter-index'] as $path) {
+            $request = new Request();
+            $request->method = 'GET';
+            $request->path = $path;
+
+            $response = $this->makeRouter($this->createMock(ItemRepository::class))->dispatch($request);
+            $this->assertSame(401, $response->statusCode, "{$path} must require auth");
+        }
+    }
 }

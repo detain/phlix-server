@@ -136,7 +136,14 @@ final class PluginCatalogController
      */
     public function removeSource(Request $request, array $params): Response
     {
+        // Accept the URL from the JSON body or a `?url=` query param: the
+        // browser's DELETE carries no body, so the SPA passes it on the query
+        // string, while direct API callers may still send a body.
         $url = $request->input('url');
+        if (!is_string($url) || trim($url) === '') {
+            $queryUrl = $request->query['url'] ?? null;
+            $url = is_string($queryUrl) ? $queryUrl : null;
+        }
         if (!is_string($url) || trim($url) === '') {
             return $this->jsonError(400, 'plugin.catalog.url.required', 'A "url" field is required.', ['url']);
         }

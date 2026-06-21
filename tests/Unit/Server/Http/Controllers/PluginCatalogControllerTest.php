@@ -154,6 +154,23 @@ final class PluginCatalogControllerTest extends TestCase
         $this->assertSame([], $this->store[PluginCatalogService::KEY_SOURCES]);
     }
 
+    public function test_remove_source_reads_url_from_query_param(): void
+    {
+        // The browser's DELETE has no body — the URL arrives on the query string.
+        $this->store[PluginCatalogService::KEY_SOURCES] = ['https://example.com/extra.json'];
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $request = $this->makeRequest('admin-1', []);
+        $request->query = ['url' => 'https://example.com/extra.json'];
+
+        $controller = $this->controller([]);
+        $response = $controller->removeSource($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame([self::DEFAULT_SOURCE], $this->decode($response->body)['sources']);
+        $this->assertSame([], $this->store[PluginCatalogService::KEY_SOURCES]);
+    }
+
     /**
      * @param array<string, string> $catalogBodies
      */

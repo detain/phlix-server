@@ -109,6 +109,29 @@ class LibraryMetadataMatcherTest extends TestCase
         $this->assertSame(['matched' => 1, 'processed' => 1], $result);
     }
 
+    public function testMatchLibraryReportsProgressToTheCallback(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        // countMatchable() denominator.
+        $items->method('query')->willReturn(['items' => [], 'total' => 5, 'limit' => 1, 'offset' => 0]);
+        $items->method('getByLibrary')->willReturn([
+            ['id' => 'm1', 'type' => 'movie', 'name' => 'A', 'metadata_json' => '{}', 'metadata' => []],
+        ]);
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->method('resolve')->willReturn(['external_ids' => ['tmdb' => '1'], 'sources' => ['tmdb']]);
+
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
+
+        $calls = [];
+        $matcher->matchLibrary('lib-1', function (int $processed, int $total, int $matched) use (&$calls): void {
+            $calls[] = [$processed, $total, $matched];
+        });
+
+        // 1 movie processed, denominator 5 from countMatchable, 1 matched.
+        $this->assertNotEmpty($calls);
+        $this->assertSame([1, 5, 1], $calls[array_key_last($calls)]);
+    }
+
     /**
      * A `video`-typed item is also treated as a movie.
      */

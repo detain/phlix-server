@@ -88,6 +88,37 @@ class LibraryScanWorkerTest extends TestCase
         $this->assertTrue($worker->runOnce());
     }
 
+    public function testRunOnceMetadataJobStreamsProgressToTheJob(): void
+    {
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-3', 'library_id' => 'lib-3', 'type' => 'metadata']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-3');
+        // The matcher's progress callback is forwarded verbatim onto the job row.
+        $jobs->expects($this->once())
+            ->method('updateProgress')
+            ->with('job-3', ['items_found' => 10, 'items_updated' => 4]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->expects($this->once())
+            ->method('matchLibrary')
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): array {
+                if ($onProgress !== null) {
+                    $onProgress(4, 10, 2);
+                }
+                return ['matched' => 2, 'processed' => 4];
+            });
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->never())->method('scanLibrary');
+        $libraries->expects($this->never())->method('rescanLibrary');
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
+
+        $this->assertTrue($worker->runOnce());
+    }
+
     /**
      * runOnce() with an empty queue (claimNext() === null): returns false and
      * touches neither the scan engine nor the mark* methods.

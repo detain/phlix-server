@@ -124,7 +124,17 @@ class LibraryScanWorker
 
         try {
             if ($type === 'metadata') {
-                $this->metadataMatcher->matchLibrary($libraryId);
+                // Stream progress onto the job row so the UI can show a percentage
+                // (items_updated / items_found) while the match runs.
+                $this->metadataMatcher->matchLibrary(
+                    $libraryId,
+                    function (int $processed, int $total) use ($jobId): void {
+                        $this->jobs->updateProgress($jobId, [
+                            'items_found'   => $total,
+                            'items_updated' => $processed,
+                        ]);
+                    },
+                );
             } elseif ($type === 'rescan') {
                 $this->libraries->rescanLibrary($libraryId);
             } else {

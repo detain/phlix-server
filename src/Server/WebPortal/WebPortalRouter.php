@@ -6,6 +6,7 @@ namespace Phlix\Server\WebPortal;
 
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Server\Http\Middleware\AuthMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ItemRepository;
@@ -138,29 +139,39 @@ class WebPortalRouter
      */
     private function registerRoutes(): void
     {
-        // Library routes
-        $this->router->get('/api/v1/libraries', [$this, 'getLibraries']);
-        $this->router->get('/api/v1/libraries/{id}', [$this, 'getLibrary']);
-        $this->router->get('/api/v1/libraries/{id}/items', [$this, 'getLibraryItems']);
+        // Every route here exposes per-user library / media data (listings,
+        // search, single-item detail, watch activity, settings), so require a
+        // signed-in user — otherwise the whole library was enumerable without a
+        // token. `$request->userId` is populated from the Bearer token (or the
+        // `phlix_session` cookie) by BOTH entry points (public/index.php and
+        // HttpHandler) before dispatch; AuthMiddleware just enforces its presence.
+        $auth = new AuthMiddleware();
 
-        // Media routes
-        $this->router->get('/api/v1/media', [$this, 'getMedia']);
-        // Static segment registered BEFORE `{id}` so it can't be swallowed as an id.
-        $this->router->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
-        $this->router->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
-        $this->router->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
+        $this->router->group('', function (Router $r): void {
+            // Library routes
+            $r->get('/api/v1/libraries', [$this, 'getLibraries']);
+            $r->get('/api/v1/libraries/{id}', [$this, 'getLibrary']);
+            $r->get('/api/v1/libraries/{id}/items', [$this, 'getLibraryItems']);
 
-        // User activity routes
-        $this->router->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
-        $this->router->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
+            // Media routes
+            $r->get('/api/v1/media', [$this, 'getMedia']);
+            // Static segment registered BEFORE `{id}` so it can't be swallowed as an id.
+            $r->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
+            $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
+            $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
 
-        // Watch history routes
-        $this->router->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
-        $this->router->delete('/api/v1/users/me/history', [$this, 'clearHistory']);
+            // User activity routes
+            $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
+            $r->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
 
-        // Settings routes
-        $this->router->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
-        $this->router->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
+            // Watch history routes
+            $r->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
+            $r->delete('/api/v1/users/me/history', [$this, 'clearHistory']);
+
+            // Settings routes
+            $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
+            $r->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
+        }, [$auth]);
     }
 
     /**

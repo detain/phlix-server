@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- **`web-ui`: bumped `@phlix/ui` `v0.32.0` → `v0.34.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Brings the shipped UI work to the served app: **full-width layout** + **clicking a poster opens the info/detail page** (v0.33.0), and the **matched/unmatched metadata filter** + **clickable cast** (each cast name opens that title's library filtered to the actor) (v0.34.0). No server code changed — `package.json`/`package-lock.json` pin the new git tag and the Vite bundle was regenerated.
+
 ### Security
 
 - **`web-ui`: bumped `@phlix/ui` to `v0.20.0` — the SPA now validates the session on boot and gates the admin section client-side.** The shared router guard previously treated a token's mere *presence* in `localStorage` as "logged in" (never validating it) and applied no admin-role check, so after a reload a stale/expired token would render every protected route — including the whole `/app/admin/*` console — and the account badge fell back to a generic "A" because the user was never rehydrated. v0.20.0 validates a restored token once via `/auth/me` before the first protected route resolves (clearing it + redirecting to login when invalid) and redirects a logged-in non-admin away from admin routes. The server API already authorized every request (`AdminMiddleware`), so this was client-side broken access control, not data exposure. The committed bundle under `public/assets/app/` was rebuilt; no application code changed.

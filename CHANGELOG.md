@@ -9,7 +9,7 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- **`web-ui`: bumped `@phlix/ui` `v0.32.0` → `v0.34.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Brings the shipped UI work to the served app: **full-width layout** + **clicking a poster opens the info/detail page** (v0.33.0), and the **matched/unmatched metadata filter** + **clickable cast** (each cast name opens that title's library filtered to the actor) (v0.34.0). No server code changed — `package.json`/`package-lock.json` pin the new git tag and the Vite bundle was regenerated.
+- **`web-ui`: bumped `@phlix/ui` `v0.32.0` → `v0.36.0` and rebuilt the committed SPA bundle (`public/assets/app/`).** Brings the shipped UI work to the served app: **full-width layout** + **clicking a poster opens the info/detail page** (v0.33.0); the **matched/unmatched metadata filter** + **clickable cast** (each cast name opens that title's library filtered to the actor) (v0.34.0); the listing grid **pre-sized to the full result count** with on-demand paging (v0.35.0); and the **A-Z jump rail** on long library listings (v0.36.0, driven by the new `letter-index` endpoint). No server application code changed for the bump — `package.json`/`package-lock.json` pin the new git tag and the Vite bundle was regenerated.
 
 ### Security
 

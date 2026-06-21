@@ -58,7 +58,8 @@ class LibraryScanWorkerTest extends TestCase
         $jobs->expects($this->never())->method('markFailed');
 
         $libraries = $this->createMock(LibraryManager::class);
-        $libraries->expects($this->once())->method('scanLibrary')->with('lib-1');
+        $libraries->expects($this->once())->method('scanLibrary')
+            ->with('lib-1', $this->isType('callable'));
         $libraries->expects($this->never())->method('rescanLibrary');
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
@@ -80,7 +81,8 @@ class LibraryScanWorkerTest extends TestCase
         $jobs->expects($this->never())->method('markFailed');
 
         $libraries = $this->createMock(LibraryManager::class);
-        $libraries->expects($this->once())->method('rescanLibrary')->with('lib-2');
+        $libraries->expects($this->once())->method('rescanLibrary')
+            ->with('lib-2', $this->isType('callable'));
         $libraries->expects($this->never())->method('scanLibrary');
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
@@ -117,6 +119,43 @@ class LibraryScanWorkerTest extends TestCase
         $worker = new LibraryScanWorker($jobs, $libraries, $matcher, $this->makeLogger());
 
         $this->assertTrue($worker->runOnce());
+    }
+
+    public function testRunOnceScanJobStreamsThrottledProgress(): void
+    {
+        $writes = [];
+        $jobs = $this->createMock(ScanJobRepository::class);
+        $jobs->expects($this->once())
+            ->method('claimNext')
+            ->willReturn(['id' => 'job-9', 'library_id' => 'lib-9', 'type' => 'scan']);
+        $jobs->expects($this->once())->method('markCompleted')->with('job-9');
+        $jobs->method('updateProgress')->willReturnCallback(
+            function (string $jobId, array $counts, ?string $cur = null) use (&$writes): void {
+                $writes[] = $counts;
+            },
+        );
+
+        // The scan engine drives the progress sink once per file across 30 files.
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())
+            ->method('scanLibrary')
+            ->willReturnCallback(static function (string $lib, ?callable $onProgress = null): void {
+                if ($onProgress === null) {
+                    return;
+                }
+                for ($i = 1; $i <= 30; $i++) {
+                    $onProgress($i, 30, "/media/file-$i.mkv");
+                }
+            });
+
+        $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());
+        $this->assertTrue($worker->runOnce());
+
+        // Throttled to one write per 25 files (at 25) plus the final file (30).
+        $this->assertSame([
+            ['items_found' => 30, 'items_updated' => 25],
+            ['items_found' => 30, 'items_updated' => 30],
+        ], $writes);
     }
 
     /**
@@ -156,7 +195,7 @@ class LibraryScanWorkerTest extends TestCase
         $libraries = $this->createMock(LibraryManager::class);
         $libraries->expects($this->once())
             ->method('scanLibrary')
-            ->with('lib-3')
+            ->with('lib-3', $this->isType('callable'))
             ->willThrowException(new RuntimeException('disk gone'));
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());

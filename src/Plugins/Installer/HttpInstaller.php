@@ -100,12 +100,26 @@ class HttpInstaller
 
             $this->ensureBaseDir();
 
-            if (!@rename($tempDir, $destination)) {
-                throw new PluginInstallException(sprintf(
-                    'Cannot move staged plugin from %s to %s.',
-                    $tempDir,
-                    $destination,
-                ));
+            if (!$this->attemptAtomicMove($tempDir, $destination)) {
+                // rename() cannot move across filesystems (EXDEV). The staging
+                // dir lives under the system temp dir — a tmpfs under systemd
+                // PrivateTmp — while the destination is on the install volume,
+                // so a bare rename always fails there. Fall back to a recursive
+                // copy + delete of the staging tree.
+                try {
+                    if (!is_dir($destination) && !@mkdir($destination, 0750, true) && !is_dir($destination)) {
+                        throw new PluginInstallException(sprintf('Cannot create plugin directory %s.', $destination));
+                    }
+                    $this->copyDirectory($tempDir, $destination);
+                    RecursiveDelete::remove($tempDir);
+                } catch (\Throwable $e) {
+                    throw new PluginInstallException(sprintf(
+                        'Cannot move staged plugin from %s to %s: %s',
+                        $tempDir,
+                        $destination,
+                        $e->getMessage(),
+                    ));
+                }
             }
 
             $this->logger()->info('plugin source installed', [
@@ -475,6 +489,22 @@ class HttpInstaller
      *
      * @throws PluginInstallException
      */
+    /**
+     * Attempt an atomic, same-filesystem move of the staged plugin into place.
+     *
+     * Returns false (rather than throwing) when `rename()` cannot complete —
+     * most commonly EXDEV, because the staging dir is on a different filesystem
+     * (a tmpfs under systemd `PrivateTmp`) than the install volume — so the
+     * caller can fall back to a recursive copy. Extracted as a seam so the
+     * cross-device copy fallback is unit-testable.
+     *
+     * @return bool True on a successful atomic move; false to trigger the copy fallback.
+     */
+    protected function attemptAtomicMove(string $tempDir, string $destination): bool
+    {
+        return @rename($tempDir, $destination);
+    }
+
     private function copyDirectory(string $source, string $destination): void
     {
         $source = rtrim($source, DIRECTORY_SEPARATOR);

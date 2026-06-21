@@ -353,6 +353,27 @@ final class HttpInstallerTest extends TestCase
         }
     }
 
+    public function test_install_falls_back_to_copy_when_atomic_move_fails_cross_device(): void
+    {
+        // Simulate EXDEV: the staging dir (under the system temp dir / a tmpfs
+        // under systemd PrivateTmp) is on a different filesystem than the
+        // install volume, so rename() can't move it. The install must still
+        // succeed via the recursive copy fallback, landing the plugin in place.
+        $installer = new class ($this->base, $this->logger) extends HttpInstaller {
+            protected function attemptAtomicMove(string $tempDir, string $destination): bool
+            {
+                return false; // force the copy fallback
+            }
+        };
+
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+        [$manifest, $destination] = $installer->install('file://' . $zipPath);
+
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
+        $this->assertSame($this->base . '/phlix-plugin-fromdir', $destination);
+        $this->assertFileExists($destination . '/plugin.json');
+    }
+
     public function test_install_wraps_arbitrary_throwables_as_install_exception(): void
     {
         // A zip whose plugin.json is unreadable JSON triggers

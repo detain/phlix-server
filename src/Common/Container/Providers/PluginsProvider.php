@@ -12,7 +12,9 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Catalog\PluginAutoUpdateWorker;
 use Phlix\Plugins\Catalog\PluginCatalogService;
+use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\Installer\ComposerRunner;
 use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\PluginLoader;
@@ -165,6 +167,33 @@ final class PluginsProvider implements ServiceProviderInterface
                     /** @var SettingsRepository $settings */
                     $settings = $c->get(SettingsRepository::class);
                     return new PluginCatalogService($settings);
+                }
+            ),
+
+            PluginUpdateService::class => factory(
+                static function (ContainerInterface $c): PluginUpdateService {
+                    /** @var PluginLoader $loader */
+                    $loader = $c->get(PluginLoader::class);
+                    /** @var PluginCatalogService $catalog */
+                    $catalog = $c->get(PluginCatalogService::class);
+                    return new PluginUpdateService($loader, $catalog);
+                }
+            ),
+
+            PluginAutoUpdateWorker::class => factory(
+                static function (ContainerInterface $c) use ($loggerConfigPath): PluginAutoUpdateWorker {
+                    if (is_string($loggerConfigPath) && $loggerConfigPath !== '') {
+                        LoggerFactory::init($loggerConfigPath);
+                    }
+                    /** @var PluginCatalogService $catalog */
+                    $catalog = $c->get(PluginCatalogService::class);
+                    /** @var PluginUpdateService $updates */
+                    $updates = $c->get(PluginUpdateService::class);
+                    return new PluginAutoUpdateWorker(
+                        $catalog,
+                        $updates,
+                        LoggerFactory::get(LogChannels::PLUGINS),
+                    );
                 }
             ),
         ]);

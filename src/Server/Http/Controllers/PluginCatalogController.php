@@ -6,6 +6,8 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Plugins\Catalog\PluginCatalogService;
+use Phlix\Plugins\Catalog\PluginUpdateService;
+use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -38,11 +40,13 @@ final class PluginCatalogController
      * @param PluginLoader         $loader  Installed-plugin lookup for the
      *                                      install-state cross-reference.
      * @param AuditLogger          $audit   Records source add/remove actions.
+     * @param PluginUpdateService  $updates Update check/apply against catalogs.
      */
     public function __construct(
         private readonly PluginCatalogService $catalog,
         private readonly PluginLoader $loader,
         private readonly AuditLogger $audit,
+        private readonly PluginUpdateService $updates,
     ) {
     }
 
@@ -87,6 +91,120 @@ final class PluginCatalogController
             'catalogs'       => $catalogs,
             'errors'         => $aggregate['errors'],
         ]);
+    }
+
+    /**
+     * Check every installed plugin for a newer version (per its catalog repo).
+     *
+     * `GET /api/v1/admin/plugins/updates` →
+     * `200 { auto_update: bool, available: int, updates: [{ name,
+     *        installed_version, latest_version, update_available, repo,
+     *        checkable, error }] }`.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path parameters (unused).
+     *
+     * @since 0.39.0
+     */
+    public function updates(Request $request, array $params): Response
+    {
+        $result = $this->updates->checkUpdates();
+        return (new Response())->json([
+            'auto_update' => $this->catalog->autoUpdateEnabled(),
+            'available'   => $result['available'],
+            'updates'     => $result['updates'],
+        ]);
+    }
+
+    /**
+     * Update one installed plugin to its catalog's latest version.
+     *
+     * `POST /api/v1/admin/plugins/{name}/update` → `200 { plugin: {...} }`,
+     * `404 plugin.update.no_source` (not in a catalog), or `422
+     * plugin.update.failed`.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  `name` is the manifest name.
+     *
+     * @since 0.39.0
+     */
+    public function updatePlugin(Request $request, array $params): Response
+    {
+        $name = $params['name'] ?? null;
+        if (!is_string($name) || $name === '') {
+            return $this->jsonError(400, 'plugin.name.required', 'A "name" path parameter is required.');
+        }
+
+        try {
+            $manifest = $this->updates->update($name);
+        } catch (PluginInstallException $e) {
+            return $this->jsonError(422, 'plugin.update.failed', $e->getMessage());
+        } catch (\RuntimeException $e) {
+            return $this->jsonError(404, 'plugin.update.no_source', $e->getMessage());
+        }
+
+        $this->audit->logPluginAction($this->actor($request), 'update', $name, ['source' => 'ui']);
+
+        return (new Response())->json([
+            'plugin' => ['name' => $manifest->name, 'version' => $manifest->version],
+        ]);
+    }
+
+    /**
+     * Update every installed plugin that has a newer version available.
+     *
+     * `POST /api/v1/admin/plugins/updates/apply` →
+     * `200 { updated: [{name, from, to}], failed: [{name, error}] }`.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path parameters (unused).
+     *
+     * @since 0.39.0
+     */
+    public function applyUpdates(Request $request, array $params): Response
+    {
+        $result = $this->updates->updateAll();
+        $this->audit->logPluginAction(
+            $this->actor($request),
+            'update_all',
+            '*',
+            ['source' => 'ui', 'updated' => count($result['updated']), 'failed' => count($result['failed'])],
+        );
+        return (new Response())->json($result);
+    }
+
+    /**
+     * Read or set the auto-update toggle.
+     *
+     * `GET /api/v1/admin/plugins/auto-update` → `200 { auto_update: bool }`.
+     * `PUT /api/v1/admin/plugins/auto-update` body `{ enabled: bool }` → same.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path parameters (unused).
+     *
+     * @since 0.39.0
+     */
+    public function autoUpdate(Request $request, array $params): Response
+    {
+        if ($request->method === 'PUT') {
+            $enabled = $request->input('enabled');
+            if (!is_bool($enabled)) {
+                return $this->jsonError(
+                    400,
+                    'plugin.auto_update.invalid',
+                    'An "enabled" boolean is required.',
+                    ['enabled'],
+                );
+            }
+            $this->catalog->setAutoUpdate($enabled);
+            $this->audit->logPluginAction(
+                $this->actor($request),
+                'auto_update',
+                '*',
+                ['source' => 'ui', 'enabled' => $enabled],
+            );
+        }
+        return (new Response())->json(['auto_update' => $this->catalog->autoUpdateEnabled()]);
     }
 
     /**

@@ -12,6 +12,33 @@ use PHPUnit\Framework\TestCase;
  */
 final class MediaItemShaperTest extends TestCase
 {
+    public function testShapeExposesArticleStrippedSortTitleWhileKeepingDisplayName(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'movie-1',
+            'name' => 'The Plot',
+            'type' => 'movie',
+            'metadata' => [],
+        ]);
+
+        // Display name is untouched; sort_title drops the leading article so the
+        // client can file it under P.
+        $this->assertSame('The Plot', $shaped['name']);
+        $this->assertSame('Plot', $shaped['sort_title']);
+    }
+
+    public function testShapeSortTitleEqualsNameWhenNoLeadingArticle(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'movie-2',
+            'name' => 'Plot Device',
+            'type' => 'movie',
+            'metadata' => [],
+        ]);
+
+        $this->assertSame('Plot Device', $shaped['sort_title']);
+    }
+
     public function testShapeExposesMetadataAndHierarchyFields(): void
     {
         $shaped = MediaItemShaper::shape([

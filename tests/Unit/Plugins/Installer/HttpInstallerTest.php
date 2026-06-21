@@ -461,24 +461,51 @@ final class HttpInstallerTest extends TestCase
         }
     }
 
+    public function test_installFromDirectory_throws_when_subdir_mkdir_fails(): void
+    {
+        // The base dir is writable (so ensureBaseDir() passes), but a regular
+        // FILE sits exactly where the plugin's subdir would be created, so
+        // mkdir($destination) fails -> "Cannot create plugin directory". This
+        // exercises the per-plugin subdir guard without a read-only base (which
+        // is now caught earlier by the writability check).
+        $base = $this->work . '/base-fd-' . uniqid('', true);
+        mkdir($base, 0775, true);
+        // validManifest()'s name is the subdir; block it with a file.
+        file_put_contents($base . '/phlix-plugin-fromdir', 'x');
+
+        $installer = new HttpInstaller($base, $this->logger);
+        $source = $this->work . '/src-fd-' . uniqid('', true);
+        mkdir($source, 0775, true);
+        file_put_contents($source . '/plugin.json', (string) json_encode($this->validManifest()));
+
+        try {
+            $installer->installFromDirectory($source);
+            $this->fail('Expected PluginInstallException');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('Cannot create plugin directory', $e->getMessage());
+        }
+    }
+
     /**
      * @group integration
      */
-    public function test_installFromDirectory_throws_when_subdir_mkdir_fails(): void
+    public function test_install_throws_a_clear_error_when_base_dir_is_read_only(): void
     {
-        // pluginsBaseDir is a dir, but read-only -> ensureBaseDir() returns
-        // immediately, mkdir($destination) then fails -- exercises 173-176.
-        $readOnlyBase = $this->work . '/ro-base-fd-' . uniqid('', true);
+        // Reproduces the production failure: the plugins base dir exists but is
+        // not writable by the server user (e.g. ProtectSystem=strict without it
+        // in ReadWritePaths). ensureBaseDir() must surface a clear, actionable
+        // message rather than a bare "cannot create".
+        $readOnlyBase = $this->work . '/ro-base-' . uniqid('', true);
         mkdir($readOnlyBase, 0775, true);
         chmod($readOnlyBase, 0500);
         if (posix_geteuid() === 0) {
             chmod($readOnlyBase, 0775);
-            $this->markTestSkipped('Cannot enforce read-only directory as root - run in docker-compose as non-root user for integration testing.');
+            $this->markTestSkipped('Cannot enforce a read-only directory as root.');
         }
 
         try {
             $installer = new HttpInstaller($readOnlyBase, $this->logger);
-            $source = $this->work . '/ronormal-' . uniqid('', true);
+            $source = $this->work . '/src-ro-' . uniqid('', true);
             mkdir($source, 0775, true);
             file_put_contents($source . '/plugin.json', (string) json_encode($this->validManifest()));
 
@@ -486,7 +513,8 @@ final class HttpInstallerTest extends TestCase
                 $installer->installFromDirectory($source);
                 $this->fail('Expected PluginInstallException');
             } catch (PluginInstallException $e) {
-                $this->assertStringContainsString('Cannot create plugin directory', $e->getMessage());
+                $this->assertStringContainsString('not writable', $e->getMessage());
+                $this->assertStringContainsString('ReadWritePaths', $e->getMessage());
             }
         } finally {
             chmod($readOnlyBase, 0775);

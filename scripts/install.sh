@@ -1023,7 +1023,13 @@ do_update() {
     find "$INSTALL_PATH/templates_c" -mindepth 1 -delete 2>/dev/null || true
   fi
 
-  mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR"
+  # Runtime-writable dirs under the install path. The plugin installer and the
+  # ui-theme extractor write here at runtime, but ProtectSystem=strict makes the
+  # install tree read-only EXCEPT the unit's ReadWritePaths — which lists
+  # /var/www/phlix/var. These must EXIST before the service starts (systemd
+  # binds ReadWritePaths at start), so create them here, ahead of the chown.
+  mkdir -p "$INSTALL_PATH/.logs" "$LOG_DIR" "$RUN_DIR" \
+    "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache"
   # Restore ownership the install was running with.
   if [ "$repo_owner" != "root" ] && id -u "$repo_owner" >/dev/null 2>&1; then
     chown -R "$repo_owner:$repo_owner" "$INSTALL_PATH"
@@ -1048,6 +1054,22 @@ do_update() {
   if [ -f "$SERVICE_FILE" ] && grep -q 'public/index\.php start' "$SERVICE_FILE" 2>/dev/null; then
     log "Migrating systemd unit ExecStart to start.php"
     sed -i 's|public/index\.php start|start.php start|' "$SERVICE_FILE"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+
+  # 4d. One-off migration: ensure the install dir's writable var/ (plugin
+  # installs + ui-theme extraction land in var/plugins and var/themes) is in
+  # ReadWritePaths. Without it, ProtectSystem=strict keeps /var/www/phlix/var
+  # read-only and plugin install fails with "Cannot create plugins base
+  # directory". Appends the exact path to the existing ReadWritePaths line only
+  # when not already present, preserving any operator customisation. Idempotent.
+  if [ -f "$SERVICE_FILE" ] \
+     && grep -q '^ReadWritePaths=' "$SERVICE_FILE" 2>/dev/null \
+     && ! awk -v p="$INSTALL_PATH/var" '
+          /^ReadWritePaths=/ { s=$0; sub(/^ReadWritePaths=/,"",s); n=split(s,a,/[[:space:]]+/);
+            for (i=1;i<=n;i++) if (a[i]==p) f=1 } END { exit f?0:1 }' "$SERVICE_FILE"; then
+    log "Adding $INSTALL_PATH/var to systemd ReadWritePaths (plugin/theme writes)"
+    sed -i "s|^\(ReadWritePaths=.*\)\$|\1 $INSTALL_PATH/var|" "$SERVICE_FILE"
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
@@ -1219,7 +1241,10 @@ fi
 
 log "Installing PHP dependencies"
 ( cd "$INSTALL_PATH" && COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction )
-mkdir -p "$INSTALL_PATH/.logs" "$INSTALL_PATH/templates_c"
+# var/{plugins,themes,cache} are runtime-writable (plugin installs + theme
+# extraction); create them up front so they exist for the unit's ReadWritePaths.
+mkdir -p "$INSTALL_PATH/.logs" "$INSTALL_PATH/templates_c" \
+  "$INSTALL_PATH/var/plugins" "$INSTALL_PATH/var/themes" "$INSTALL_PATH/var/cache"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_PATH"
 
 # ---------------------------------------------------------------------------

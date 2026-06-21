@@ -76,52 +76,107 @@ class ComposerRunner
             ));
         }
 
-        $process = new Process(
-            [
-                $this->composerBin,
-                'install',
-                '--no-dev',
-                '--no-interaction',
-                '--no-progress',
-                '--no-ansi',
-            ],
+        // Composer needs a writable HOME for its config + cache. The server
+        // user's real $HOME/.cache is read-only under the systemd sandbox
+        // (ProtectSystem=strict / ProtectHome), so point COMPOSER_HOME +
+        // COMPOSER_CACHE_DIR at a writable dir inside the plugin. (A token in
+        // the inherited env — e.g. GITHUB_TOKEN — is still passed through.)
+        $composerHome = $pluginDir . DIRECTORY_SEPARATOR . '.composer';
+        @mkdir($composerHome, 0750, true);
+        $env = [
+            'COMPOSER_HOME' => $composerHome,
+            'COMPOSER_CACHE_DIR' => $composerHome . DIRECTORY_SEPARATOR . 'cache',
+            'COMPOSER_NO_INTERACTION' => '1',
+        ];
+
+        $install = $this->runComposer(
+            ['install', '--no-dev', '--no-interaction', '--no-progress', '--no-ansi'],
             $pluginDir,
+            $env,
+        );
+
+        if ($install->isSuccessful()) {
+            $this->logger()->info('composer install completed', ['plugin_dir' => $pluginDir]);
+            return;
+        }
+
+        // `composer install` failed — almost always because a required package
+        // (e.g. detain/phlix-shared, declared via a github vcs repository) can't
+        // be fetched: a token-less host hits the GitHub API rate limit ("Could
+        // not authenticate against github.com"), or the box is offline. Those
+        // shared packages are PROVIDED BY THE HOST at runtime, so fall back to
+        // generating just the plugin's OWN autoloader — no network needed. The
+        // plugin's classes load and host-provided deps (phlix-shared, PSR)
+        // resolve against the already-registered host autoloader.
+        $this->logger()->warning('composer install failed; falling back to dump-autoload', [
+            'plugin_dir' => $pluginDir,
+            'exit_code' => $install->getExitCode(),
+            'stderr' => trim($install->getErrorOutput()),
+        ]);
+
+        $dump = $this->runComposer(
+            ['dump-autoload', '--no-dev', '--no-interaction', '--no-ansi'],
+            $pluginDir,
+            $env,
+        );
+
+        if ($dump->isSuccessful()) {
+            $this->logger()->info('composer dump-autoload completed (install fallback)', [
+                'plugin_dir' => $pluginDir,
+            ]);
+            return;
+        }
+
+        // Both failed — surface the original install error (the meaningful one).
+        $this->logger()->error('composer install + dump-autoload both failed', [
+            'plugin_dir' => $pluginDir,
+            'install_exit' => $install->getExitCode(),
+            'install_stderr' => trim($install->getErrorOutput()),
+            'dump_stderr' => trim($dump->getErrorOutput()),
+        ]);
+        throw new PluginInstallException(sprintf(
+            'composer install failed for %s (exit %d): %s',
+            $pluginDir,
+            (int) $install->getExitCode(),
+            trim($install->getErrorOutput()) ?: trim($install->getOutput()),
+        ));
+    }
+
+    /**
+     * Run composer with the given args in $pluginDir, returning the finished
+     * Process (success or failure). Only a hard timeout throws.
+     *
+     * @param list<string>         $args Composer arguments (after the binary).
+     * @param array<string,string> $env  Extra environment, merged over the parent.
+     *
+     * @throws PluginInstallException On timeout.
+     */
+    private function runComposer(array $args, string $pluginDir, array $env): Process
+    {
+        $process = new Process(
+            array_merge([$this->composerBin], $args),
+            $pluginDir,
+            $env,
         );
         $process->setTimeout((float) $this->timeoutSeconds);
 
         try {
             $process->run();
         } catch (ProcessTimedOutException $e) {
-            $this->logger()->error('composer install timed out', [
+            $this->logger()->error('composer timed out', [
                 'plugin_dir' => $pluginDir,
                 'timeout' => $this->timeoutSeconds,
+                'args' => $args,
             ]);
             throw new PluginInstallException(
-                sprintf('composer install timed out after %d seconds for %s.', $this->timeoutSeconds, $pluginDir),
+                sprintf('composer timed out after %d seconds for %s.', $this->timeoutSeconds, $pluginDir),
                 [],
                 0,
                 $e,
             );
         }
 
-        if (!$process->isSuccessful()) {
-            $this->logger()->error('composer install failed', [
-                'plugin_dir' => $pluginDir,
-                'exit_code' => $process->getExitCode(),
-                'stdout' => $process->getOutput(),
-                'stderr' => $process->getErrorOutput(),
-            ]);
-            throw new PluginInstallException(sprintf(
-                'composer install failed for %s (exit %d): %s',
-                $pluginDir,
-                (int) $process->getExitCode(),
-                trim($process->getErrorOutput()) ?: trim($process->getOutput()),
-            ));
-        }
-
-        $this->logger()->info('composer install completed', [
-            'plugin_dir' => $pluginDir,
-        ]);
+        return $process;
     }
 
     /**

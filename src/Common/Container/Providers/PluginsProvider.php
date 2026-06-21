@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Common\Events\ListenerRegistry;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Installer\ComposerRunner;
 use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\PluginLoader;
@@ -155,6 +157,14 @@ final class PluginsProvider implements ServiceProviderInterface
                         $audit,
                         $logger,
                     );
+                }
+            ),
+
+            PluginCatalogService::class => factory(
+                static function (ContainerInterface $c): PluginCatalogService {
+                    /** @var SettingsRepository $settings */
+                    $settings = $c->get(SettingsRepository::class);
+                    return new PluginCatalogService($settings);
                 }
             ),
         ]);

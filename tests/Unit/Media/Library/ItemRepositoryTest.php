@@ -731,6 +731,44 @@ class ItemRepositoryTest extends TestCase
         $repo->query(['match' => 'unmatched']);
     }
 
+    public function testLetterCountsGroupsByFirstLetterAndShapesRows(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return str_contains($sql, 'UPPER(LEFT(name, 1)) AS letter')
+                    && str_contains($sql, 'GROUP BY letter');
+            }))
+            ->willReturn([
+                ['letter' => 'A', 'n' => 12],
+                ['letter' => 'B', 'n' => '5'], // numeric-string count tolerated
+                ['letter' => '', 'n' => 3],    // blank letter dropped
+            ]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(
+            [['letter' => 'A', 'count' => 12], ['letter' => 'B', 'count' => 5]],
+            $repo->letterCounts(['topLevel' => true], 'lib-1'),
+        );
+    }
+
+    public function testLetterCountsAppliesTheSameFiltersAsQuery(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                return str_contains($sql, 'library_id = ?')
+                    && str_contains($sql, 'parent_id IS NULL')
+                    && str_contains($sql, 'metadata_refreshed_at IS NULL');
+            }))
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->letterCounts(['topLevel' => true, 'match' => 'unmatched'], 'lib-7');
+    }
+
     public function testQueryTopLevelIgnoredWhenSearching(): void
     {
         $db = $this->createMock(Connection::class);

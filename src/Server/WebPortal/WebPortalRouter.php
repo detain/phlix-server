@@ -145,6 +145,8 @@ class WebPortalRouter
 
         // Media routes
         $this->router->get('/api/v1/media', [$this, 'getMedia']);
+        // Static segment registered BEFORE `{id}` so it can't be swallowed as an id.
+        $this->router->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
         $this->router->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
         $this->router->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
 
@@ -425,6 +427,48 @@ class WebPortalRouter
             'limit' => $result['limit'],
             'offset' => $result['offset'],
         ]);
+    }
+
+    /**
+     * A-Z jump index for the media list: for the SAME filters as
+     * `GET /api/v1/media`, the absolute item offset of the first title in each
+     * first-letter bucket (assuming the default name-ascending sort, which the
+     * UI gates the rail on). Non-alphabetic first characters fold into `#`,
+     * placed first to match name-ascending collation. The UI scrolls the
+     * pre-sized grid to `offset` and disables empty buckets.
+     *
+     * `GET /api/v1/media/letter-index?<same filters as /media>`
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path params (unused).
+     *
+     * @return Response `{ "letters": [{letter, offset, count}], "total": int }`.
+     */
+    public function getLetterIndex(Request $request, array $params): Response
+    {
+        $queryParams = $this->extractMediaQueryParams($request);
+        $libraryIdRaw = $request->queryString('libraryId');
+        $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+        // Fold per-first-character counts into A–Z + a single `#` (non-alpha).
+        $byBucket = [];
+        foreach ($this->itemRepository->letterCounts($queryParams, $libraryId) as $row) {
+            $bucket = preg_match('/^[A-Z]$/', $row['letter']) === 1 ? $row['letter'] : '#';
+            $byBucket[$bucket] = ($byBucket[$bucket] ?? 0) + $row['count'];
+        }
+
+        // Cumulative offsets in name-ascending order: `#` first, then A–Z. Every
+        // bucket is returned (empty ones carry count 0) so the rail can render
+        // the full alphabet and disable the letters with nothing behind them.
+        $letters = [];
+        $offset = 0;
+        foreach (array_merge(['#'], range('A', 'Z')) as $bucket) {
+            $count = $byBucket[$bucket] ?? 0;
+            $letters[] = ['letter' => $bucket, 'offset' => $offset, 'count' => $count];
+            $offset += $count;
+        }
+
+        return (new Response())->json(['letters' => $letters, 'total' => $offset]);
     }
 
     /**

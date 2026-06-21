@@ -298,7 +298,7 @@ class LibraryManager
      * $manager->scanLibrary('abc-123');
      * ```
      */
-    public function scanLibrary(string $libraryId): void
+    public function scanLibrary(string $libraryId, ?callable $onProgress = null): void
     {
         $library = $this->fetchLibraryRow($libraryId);
         if ($library === null) {
@@ -333,12 +333,31 @@ class LibraryManager
 
         $seriesPerDirectory = $library->type === 'series' && $library->seriesPerDirectory();
 
+        // When a progress sink is supplied, pre-count the media files across all
+        // paths so the callback can report a real percentage (processed/total),
+        // then stream one tick per processed file. The count walk is cheap (no
+        // DB / metadata) relative to the scan itself.
+        $onFile = null;
+        if ($onProgress !== null) {
+            $total = 0;
+            foreach ($library->paths as $path) {
+                if (is_dir($path)) {
+                    $total += $this->scanner->countFiles($path, $library->type);
+                }
+            }
+            $processed = 0;
+            $onFile = function (string $currentPath) use (&$processed, $total, $onProgress): void {
+                $processed++;
+                $onProgress($processed, $total, $currentPath);
+            };
+        }
+
         foreach ($library->paths as $path) {
             if (!is_dir($path)) {
                 $this->logger->warning('Library path does not exist', ['path' => $path]);
                 continue;
             }
-            $this->scanner->scan($libraryId, $path, $library->type, $seriesPerDirectory);
+            $this->scanner->scan($libraryId, $path, $library->type, $seriesPerDirectory, $onFile);
         }
 
         $this->logger->info('Library scan complete', ['library_id' => $libraryId]);
@@ -455,13 +474,13 @@ class LibraryManager
      * @param string $libraryId The library's unique identifier
      * @return void
      */
-    public function rescanLibrary(string $libraryId): void
+    public function rescanLibrary(string $libraryId, ?callable $onProgress = null): void
     {
         // Remove existing items
         $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
 
         // Rescan
-        $this->scanLibrary($libraryId);
+        $this->scanLibrary($libraryId, $onProgress);
     }
 
     /**

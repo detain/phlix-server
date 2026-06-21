@@ -27,12 +27,14 @@ use Workerman\Timer;
  * records the outcome via {@see ScanJobRepository::markCompleted()} (success) or
  * {@see ScanJobRepository::markFailed()} (on any `\Throwable`).
  *
- * **Coarse progress is intentional.** `LibraryManager::scanLibrary()` /
- * `rescanLibrary()` return `void` and emit no counts, so the worker records the
- * honest `queued → running → completed/failed` lifecycle and leaves `items_*`
- * at 0. It deliberately does NOT fabricate counts and does NOT expand the scan
- * internals to emit per-item progress (a future step can wire real counters
- * through {@see ScanJobRepository::updateProgress()}).
+ * **Real per-file progress.** `scan`/`rescan` pass a progress sink to
+ * {@see LibraryManager::scanLibrary()} / {@see LibraryManager::rescanLibrary()};
+ * the scanner pre-counts media files (the denominator) and ticks once per
+ * processed file, which {@see self::scanProgressSink()} coalesces onto the job
+ * row as `items_found` (total) / `items_updated` (processed) + `current_path`,
+ * matching the `metadata` job's percentage shape. Writes are throttled to one
+ * every {@see self::PROGRESS_WRITE_EVERY} files so a large library does not
+ * hammer the job row.
  *
  * **Resident-memory (Workerman) safety.** The loop uses {@see Timer::add()} —
  * never a blocking `sleep()` (cf. the legacy
@@ -46,6 +48,12 @@ use Workerman\Timer;
  */
 class LibraryScanWorker
 {
+    /**
+     * Persist scan/rescan progress at most once per this many processed files
+     * (and always on the final file), to bound job-row writes on big libraries.
+     */
+    private const PROGRESS_WRITE_EVERY = 25;
+
     /** @var ScanJobRepository Queue + progress store the worker drains. */
     private ScanJobRepository $jobs;
 
@@ -136,9 +144,9 @@ class LibraryScanWorker
                     },
                 );
             } elseif ($type === 'rescan') {
-                $this->libraries->rescanLibrary($libraryId);
+                $this->libraries->rescanLibrary($libraryId, $this->scanProgressSink($jobId));
             } else {
-                $this->libraries->scanLibrary($libraryId);
+                $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
             }
 
             $this->jobs->markCompleted($jobId);
@@ -160,6 +168,37 @@ class LibraryScanWorker
         }
 
         return true;
+    }
+
+    /**
+     * Build a throttled progress sink for a `scan`/`rescan` job.
+     *
+     * Mirrors the `metadata` path's `items_updated / items_found` percentage,
+     * but coalesces writes: the scanner ticks once per file, so we persist at
+     * most every {@see self::PROGRESS_WRITE_EVERY} files (and always on the
+     * final file) to keep a large library from hammering the job row with one
+     * UPDATE per media file. The current path is recorded as the progress hint.
+     *
+     * @param string $jobId The scan job to stream progress onto.
+     *
+     * @return callable(int, int, string): void `(processed, total, currentPath)`.
+     *
+     * @since 0.34.0
+     */
+    private function scanProgressSink(string $jobId): callable
+    {
+        $lastWrite = 0;
+        return function (int $processed, int $total, string $currentPath) use ($jobId, &$lastWrite): void {
+            if ($processed !== $total && $processed - $lastWrite < self::PROGRESS_WRITE_EVERY) {
+                return;
+            }
+            $lastWrite = $processed;
+            $this->jobs->updateProgress(
+                $jobId,
+                ['items_found' => $total, 'items_updated' => $processed],
+                $currentPath,
+            );
+        };
     }
 
     /**

@@ -231,8 +231,13 @@ class MediaScanner
      * $scanner->scan('library-123', '/mnt/media/movies', 'video');
      * ```
      */
-    public function scan(string $libraryId, string $path, string $type, bool $seriesPerDirectory = false): void
-    {
+    public function scan(
+        string $libraryId,
+        string $path,
+        string $type,
+        bool $seriesPerDirectory = false,
+        ?callable $onFile = null
+    ): void {
         if (!is_dir($path)) {
             $this->logger->warning('Scan path does not exist', ['path' => $path]);
             return;
@@ -245,13 +250,56 @@ class MediaScanner
         $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
 
         if ($seriesPerDirectory && $type === 'series') {
-            $added = $this->scanSeriesPerDirectory($libraryId, $path, $type, $extensions);
+            $added = $this->scanSeriesPerDirectory($libraryId, $path, $type, $extensions, $onFile);
         } else {
-            $added = $this->scanFlat($libraryId, $path, $type, $extensions, null);
+            $added = $this->scanFlat($libraryId, $path, $type, $extensions, null, $onFile);
         }
 
         $endMs = (int)(microtime(true) * 1000);
         $this->dispatchScanCompleted($libraryId, $added, $endMs - $startMs);
+    }
+
+    /**
+     * Count the media files under $path that a {@see scan()} of $type would
+     * process — the files passing the extension + skip filters. Used to derive
+     * the *denominator* for a scan/rescan progress percentage before the walk
+     * begins. A single recursive pass; the same set is produced for both flat
+     * and series-per-directory scans (both ultimately process every media file
+     * beneath $path).
+     *
+     * @param string $path Directory to count beneath.
+     * @param string $type Library type whose extension set applies.
+     *
+     * @return int Number of media files that would be processed (0 if absent).
+     *
+     * @since 0.34.0
+     */
+    public function countFiles(string $path, string $type): int
+    {
+        if (!is_dir($path)) {
+            return 0;
+        }
+
+        $extensions = $this->namingOptions[$type] ?? $this->namingOptions['video'];
+
+        $count = 0;
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        foreach ($iterator as $file) {
+            if (!$file instanceof SplFileInfo || $file->isDir()) {
+                continue;
+            }
+            if (!in_array(strtolower($file->getExtension()), $extensions, true)) {
+                continue;
+            }
+            if ($this->shouldSkipFile($file->getFilename())) {
+                continue;
+            }
+            $count++;
+        }
+
+        return $count;
     }
 
     /**
@@ -265,6 +313,8 @@ class MediaScanner
      * @param array<int, string> $extensions Allowed file extensions.
      * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries
      *        Forced series identity, or null.
+     * @param (callable(string): void)|null $onFile Invoked once per processed
+     *        media file with its path, for streaming scan progress.
      * @return int Number of items added.
      */
     private function scanFlat(
@@ -272,7 +322,8 @@ class MediaScanner
         string $path,
         string $type,
         array $extensions,
-        ?array $forcedSeries
+        ?array $forcedSeries,
+        ?callable $onFile = null
     ): int {
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
@@ -306,6 +357,9 @@ class MediaScanner
                 $added++;
             }
             $scanned++;
+            if ($onFile !== null) {
+                $onFile($file->getPathname());
+            }
         }
 
         $this->logger->info('Scan complete', [
@@ -330,13 +384,16 @@ class MediaScanner
      * stray file never aborts the scan.
      *
      * @param array<int, string> $extensions Allowed file extensions.
+     * @param (callable(string): void)|null $onFile Invoked once per processed
+     *        media file with its path, for streaming scan progress.
      * @return int Number of items added.
      */
     private function scanSeriesPerDirectory(
         string $libraryId,
         string $path,
         string $type,
-        array $extensions
+        array $extensions,
+        ?callable $onFile = null
     ): int {
         $added = 0;
 
@@ -358,7 +415,7 @@ class MediaScanner
                 // "The Office (2001)", "Re:Zero" vs "Re Zero") must NOT collapse
                 // into one container (which would silently merge episodes).
                 $forcedSeries['slug_source'] = $dirName;
-                $added += $this->scanFlat($libraryId, $entry->getPathname(), $type, $extensions, $forcedSeries);
+                $added += $this->scanFlat($libraryId, $entry->getPathname(), $type, $extensions, $forcedSeries, $onFile);
                 continue;
             }
 
@@ -376,6 +433,9 @@ class MediaScanner
                 $file = new SplFileInfo($entry->getPathname());
                 if ($this->processFile($libraryId, $file, $type, null)) {
                     $added++;
+                }
+                if ($onFile !== null) {
+                    $onFile($entry->getPathname());
                 }
             }
         }

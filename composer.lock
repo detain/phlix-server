@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "b656d0a83d3c4f2d033678dcfacc23a7",
+    "content-hash": "f064dc9c591b25852b7c4b8024e79c66",
     "packages": [
         {
             "name": "brick/math",
@@ -413,16 +413,16 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.8.1",
+            "version": "v0.9.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "e0bc7816a94002ad7ccba3359ae2a5c3ae0b192e"
+                "reference": "eeb92f143c1a340033350744183db27bcc3a13a5"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/e0bc7816a94002ad7ccba3359ae2a5c3ae0b192e",
-                "reference": "e0bc7816a94002ad7ccba3359ae2a5c3ae0b192e",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/eeb92f143c1a340033350744183db27bcc3a13a5",
+                "reference": "eeb92f143c1a340033350744183db27bcc3a13a5",
                 "shasum": ""
             },
             "require": {
@@ -468,10 +468,10 @@
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O.",
             "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.8.1",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.9.1",
                 "issues": "https://github.com/detain/phlix-shared/issues"
             },
-            "time": "2026-06-12T19:26:42+00:00"
+            "time": "2026-06-21T01:23:08+00:00"
         },
         {
             "name": "directorytree/ldaprecord",
@@ -7772,5 +7772,5 @@
         "ext-ldap": "*"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.9.0"
+    "plugin-api-version": "2.6.0"
 }

@@ -963,6 +963,44 @@ class ItemRepository
      */
     public function query(array $params, ?string $libraryId = null): array
     {
+        ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
+
+        $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
+        $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
+        $sort = $this->normalizeSortField($sortRaw);
+        $order = $this->normalizeSortOrder($orderRaw);
+        $limit = $this->normalizeLimit($params['limit'] ?? 50);
+        $offset = $this->normalizeOffset($params['offset'] ?? 0);
+
+        $orderClause = $this->buildOrderClause($sort, $order);
+
+        $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . implode(' AND ', $wheres);
+        $countResult = $this->db->query($countSql, $bindings);
+        $total = $this->extractCount($countResult);
+
+        $selectSql = 'SELECT * FROM media_items WHERE ' . implode(' AND ', $wheres) . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+        $fetchBindings = array_merge($bindings, [$limit, $offset]);
+        $results = $this->db->query($selectSql, $fetchBindings);
+
+        return [
+            'items' => $this->hydrateRows($results),
+            'total' => $total,
+            'limit' => $limit,
+            'offset' => $offset,
+        ];
+    }
+
+    /**
+     * Build the WHERE clause + bindings shared by {@see self::query()} and
+     * {@see self::letterCounts()} from the public media-query params. Sorting and
+     * paging are NOT included (callers add those).
+     *
+     * @param array<string, mixed> $params
+     *
+     * @return array{wheres: list<string>, bindings: list<mixed>}
+     */
+    private function buildFilters(array $params, ?string $libraryId): array
+    {
         $wheres = ['1=1'];
         $bindings = [];
 
@@ -978,12 +1016,6 @@ class ItemRepository
         $ratings = isset($params['ratings']) && is_array($params['ratings']) ? $params['ratings'] : null;
         $actors = isset($params['actors']) && is_array($params['actors']) ? $params['actors'] : null;
         $match = isset($params['match']) && is_string($params['match']) ? $params['match'] : null;
-        $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
-        $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
-        $sort = $this->normalizeSortField($sortRaw);
-        $order = $this->normalizeSortOrder($orderRaw);
-        $limit = $this->normalizeLimit($params['limit'] ?? 50);
-        $offset = $this->normalizeOffset($params['offset'] ?? 0);
 
         $parentId = isset($params['parentId']) && is_string($params['parentId']) && $params['parentId'] !== ''
             ? $params['parentId']
@@ -1071,22 +1103,45 @@ class ItemRepository
             $wheres[] = 'metadata_refreshed_at IS NULL';
         }
 
-        $orderClause = $this->buildOrderClause($sort, $order);
+        // array_values keeps `bindings` a positional list after the array_merge
+        // calls above (they can widen the inferred key type).
+        return ['wheres' => $wheres, 'bindings' => array_values($bindings)];
+    }
 
-        $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . implode(' AND ', $wheres);
-        $countResult = $this->db->query($countSql, $bindings);
-        $total = $this->extractCount($countResult);
+    /**
+     * Per-first-letter counts for the current query — drives the A-Z jump rail.
+     * Honors the SAME filters as {@see self::query()} (via {@see self::buildFilters()}),
+     * grouping by the uppercased first character of `name`. Letters are returned
+     * unordered; the caller assigns cumulative offsets in the list's sort order.
+     *
+     * @param array<string, mixed> $params Same media-query params as query().
+     *
+     * @return list<array{letter: string, count: int}>
+     */
+    public function letterCounts(array $params, ?string $libraryId = null): array
+    {
+        ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
 
-        $selectSql = 'SELECT * FROM media_items WHERE ' . implode(' AND ', $wheres) . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
-        $fetchBindings = array_merge($bindings, [$limit, $offset]);
-        $results = $this->db->query($selectSql, $fetchBindings);
+        $sql = 'SELECT UPPER(LEFT(name, 1)) AS letter, COUNT(*) AS n FROM media_items WHERE '
+            . implode(' AND ', $wheres) . ' GROUP BY letter';
+        $rows = $this->db->query($sql, $bindings);
 
-        return [
-            'items' => $this->hydrateRows($results),
-            'total' => $total,
-            'limit' => $limit,
-            'offset' => $offset,
-        ];
+        $out = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $letter = isset($row['letter']) && is_string($row['letter']) ? $row['letter'] : '';
+                if ($letter === '') {
+                    continue;
+                }
+                $count = isset($row['n']) && is_numeric($row['n']) ? (int) $row['n'] : 0;
+                $out[] = ['letter' => $letter, 'count' => $count];
+            }
+        }
+
+        return $out;
     }
 
     /**

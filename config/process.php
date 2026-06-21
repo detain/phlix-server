@@ -38,4 +38,13 @@ return [
         'count'        => 1,
         'poll_seconds' => 5,
     ],
+
+    // Plugin auto-update worker. Each tick is a cheap no-op unless the operator
+    // has enabled auto-update in the admin Plugins section, so a slow daily
+    // cadence is fine — the toggle is honoured without a restart.
+    'plugin-auto-update' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 86400,
+    ],
 ];

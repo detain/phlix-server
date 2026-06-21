@@ -205,6 +205,26 @@ try {
             $libraryScanWorker->start($scanPollSeconds);
         };
     }
+
+    $autoUpdateCfgRaw = $processCfg['plugin-auto-update'] ?? null;
+    $autoUpdateCfg = is_array($autoUpdateCfgRaw) ? $autoUpdateCfgRaw : [];
+
+    if (!empty($autoUpdateCfg['enabled'])) {
+        $autoUpdatePoll = isset($autoUpdateCfg['poll_seconds'])
+            && is_int($autoUpdateCfg['poll_seconds']) && $autoUpdateCfg['poll_seconds'] > 0
+            ? $autoUpdateCfg['poll_seconds']
+            : 86400;
+
+        $autoUpdateWorker = new Worker();
+        $autoUpdateWorker->count = 1;
+        $autoUpdateWorker->name = 'phlix-plugin-auto-update';
+        $autoUpdateWorker->onWorkerStart = static function (Worker $w) use ($config, $autoUpdatePoll): void {
+            $container = ContainerFactory::create($config);
+            /** @var \Phlix\Plugins\Catalog\PluginAutoUpdateWorker $pluginAutoUpdateWorker */
+            $pluginAutoUpdateWorker = $container->get(\Phlix\Plugins\Catalog\PluginAutoUpdateWorker::class);
+            $pluginAutoUpdateWorker->start($autoUpdatePoll);
+        };
+    }
 } catch (\Throwable $e) {
     // A misconfigured worker must not stop the HTTP server from booting.
     trigger_error('Failed to set up managed worker processes: ' . $e->getMessage(), E_USER_WARNING);

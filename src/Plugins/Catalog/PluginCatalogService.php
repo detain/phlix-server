@@ -47,6 +47,9 @@ final class PluginCatalogService
     /** Settings key (dotted) for the per-fetch timeout in seconds. */
     public const KEY_TIMEOUT = 'plugins.catalog.fetch_timeout';
 
+    /** Settings key (dotted) for the auto-update toggle. */
+    public const KEY_AUTO_UPDATE = 'plugins.auto_update';
+
     /**
      * Hard-coded fallback used only when `config/plugins.php` is absent (e.g.
      * a partial checkout), so the section is never sourceless.
@@ -88,6 +91,26 @@ final class PluginCatalogService
             return trim($value);
         }
         return self::FALLBACK_DEFAULT_SOURCE;
+    }
+
+    /**
+     * Whether plugins should be auto-updated by the background worker.
+     *
+     * @since 0.39.0
+     */
+    public function autoUpdateEnabled(): bool
+    {
+        return $this->settings->getEffective(self::KEY_AUTO_UPDATE) === true;
+    }
+
+    /**
+     * Persist the auto-update toggle.
+     *
+     * @since 0.39.0
+     */
+    public function setAutoUpdate(bool $enabled): void
+    {
+        $this->settings->set(self::KEY_AUTO_UPDATE, $enabled, 'bool');
     }
 
     /**
@@ -306,7 +329,7 @@ final class PluginCatalogService
      *
      * @return callable(string, int): string
      */
-    private static function defaultFetcher(): callable
+    public static function defaultFetcher(): callable
     {
         return static function (string $url, int $timeout): string {
             $headers = "User-Agent: Phlix-PluginCatalog\r\nAccept: application/json\r\n";

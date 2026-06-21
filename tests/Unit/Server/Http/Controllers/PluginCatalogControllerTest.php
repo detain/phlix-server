@@ -11,6 +11,7 @@ use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Plugins\Catalog\PluginCatalogService;
+use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
@@ -196,7 +197,13 @@ final class PluginCatalogControllerTest extends TestCase
             },
         );
 
-        return new PluginCatalogController($service, $this->loader, $this->audit);
+        $updates = new PluginUpdateService(
+            $this->loader,
+            $service,
+            static fn (string $url, int $timeout): string => throw new \RuntimeException('update fetch disabled'),
+        );
+
+        return new PluginCatalogController($service, $this->loader, $this->audit, $updates);
     }
 
     private function fixturePlugin(string $name, bool $enabled): InstalledPlugin

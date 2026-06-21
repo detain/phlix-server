@@ -29,6 +29,7 @@ use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Plugins\Catalog\PluginCatalogService;
+use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
@@ -88,14 +89,21 @@ final class AdminRoutesTest extends TestCase
         $adminProfileController = new AdminProfileController($profileManager, $this->users);
         // Catalog controller: a real service wired to a stub SettingsRepository
         // and an offline fetcher (the lifecycle tests never hit the network).
+        $catalogService = new PluginCatalogService(
+            new SettingsRepository($this->createMock(Connection::class)),
+            static fn (string $url, int $timeout): string =>
+                throw new \RuntimeException('catalog fetch disabled in tests'),
+        );
         $pluginCatalogController = new PluginCatalogController(
-            new PluginCatalogService(
-                new SettingsRepository($this->createMock(Connection::class)),
-                static fn (string $url, int $timeout): string =>
-                    throw new \RuntimeException('catalog fetch disabled in tests'),
-            ),
+            $catalogService,
             $this->loader,
             $this->audit,
+            new PluginUpdateService(
+                $this->loader,
+                $catalogService,
+                static fn (string $url, int $timeout): string =>
+                    throw new \RuntimeException('update fetch disabled in tests'),
+            ),
         );
 
         $container = new class (
@@ -250,6 +258,24 @@ final class AdminRoutesTest extends TestCase
         $this->assertArrayHasKey('catalogs', $body);
         $this->assertArrayHasKey('errors', $body);
         $this->assertNotEmpty($body['errors']);
+    }
+
+    public function test_updates_route_precedes_plugin_name_route(): void
+    {
+        // `GET /plugins/updates` must hit the catalog controller's update check
+        // (200 + `updates`/`available`), not be captured as a plugin named
+        // "updates". No plugins installed → empty, zero available.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch($this->request('GET', '/api/v1/admin/plugins/updates', 'admin-1'));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('updates', $body);
+        $this->assertArrayHasKey('available', $body);
+        $this->assertArrayHasKey('auto_update', $body);
+        $this->assertSame(0, $body['available']);
     }
 
     public function test_install_then_enable_then_disable_then_uninstall_via_http(): void

@@ -96,16 +96,18 @@ final class ComposerRunnerTest extends TestCase
         );
         chmod($fake, 0755);
 
+        // The fake exits 7 for BOTH `install` and the `dump-autoload` fallback,
+        // so the runner exhausts the fallback and surfaces the install error.
         $logger = $this->createMock(StructuredLogger::class);
         $logger->expects($this->once())
             ->method('error')
             ->with(
-                'composer install failed',
+                'composer install + dump-autoload both failed',
                 $this->callback(static function ($ctx): bool {
                     return is_array($ctx)
-                        && ($ctx['exit_code'] ?? null) === 7
-                        && is_string($ctx['stderr'] ?? null)
-                        && str_contains((string) $ctx['stderr'], 'composer-fake-error');
+                        && ($ctx['install_exit'] ?? null) === 7
+                        && is_string($ctx['install_stderr'] ?? null)
+                        && str_contains((string) $ctx['install_stderr'], 'composer-fake-error');
                 })
             );
 
@@ -114,6 +116,33 @@ final class ComposerRunnerTest extends TestCase
         $this->expectException(PluginInstallException::class);
         $this->expectExceptionMessageMatches('/composer install failed.*exit 7/');
         $runner->install($this->tmpDir);
+    }
+
+    public function test_install_falls_back_to_dump_autoload_when_install_fails(): void
+    {
+        file_put_contents($this->tmpDir . '/composer.json', '{}');
+
+        // A fake composer that FAILS `install` (exit 7) but SUCCEEDS for any
+        // other subcommand (e.g. `dump-autoload`). Mirrors a token-less host
+        // that can't fetch a vcs dep but can still generate the autoloader.
+        $fake = $this->tmpDir . '/fallback-composer.sh';
+        file_put_contents(
+            $fake,
+            "#!/usr/bin/env bash\n"
+            . "if [ \"\$1\" = 'install' ]; then echo 'could not authenticate' 1>&2; exit 7; fi\n"
+            . "exit 0\n"
+        );
+        chmod($fake, 0755);
+
+        $logger = $this->createMock(StructuredLogger::class);
+        // The install failure is a WARNING (not fatal); the fallback's success
+        // is logged via info. No `error` is expected.
+        $logger->expects($this->never())->method('error');
+
+        $runner = new ComposerRunner(30, $fake, $logger);
+        // No exception: the dump-autoload fallback installed the plugin.
+        $runner->install($this->tmpDir);
+        $this->assertTrue(true);
     }
 
     public function test_install_times_out_and_logs_when_timeout_exceeded(): void
@@ -132,7 +161,7 @@ final class ComposerRunnerTest extends TestCase
         $logger->expects($this->once())
             ->method('error')
             ->with(
-                'composer install timed out',
+                'composer timed out',
                 $this->callback(static function ($ctx): bool {
                     return is_array($ctx)
                         && ($ctx['timeout'] ?? null) === 1

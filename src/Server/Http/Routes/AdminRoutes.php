@@ -91,16 +91,22 @@ final class AdminRoutes
                 $r->get('/plugins', [$pluginController, 'index']);
                 $r->post('/plugins/install', [$pluginController, 'install']);
 
-                // Catalog routes must precede `/plugins/{name}` so the literal
-                // `catalog` segment is not captured as a plugin name.
+                // Catalog + update routes must precede `/plugins/{name}` so the
+                // literal `catalog`/`updates`/`auto-update` segments are not
+                // captured as a plugin name.
                 $r->get('/plugins/catalog', [$catalogController, 'index']);
                 $r->post('/plugins/catalog/sources', [$catalogController, 'addSource']);
                 $r->delete('/plugins/catalog/sources', [$catalogController, 'removeSource']);
+                $r->get('/plugins/updates', [$catalogController, 'updates']);
+                $r->post('/plugins/updates/apply', [$catalogController, 'applyUpdates']);
+                $r->get('/plugins/auto-update', [$catalogController, 'autoUpdate']);
+                $r->put('/plugins/auto-update', [$catalogController, 'autoUpdate']);
 
                 $r->get('/plugins/{name}', [$pluginController, 'show']);
                 $r->put('/plugins/{name}/settings', [$pluginController, 'updateSettings']);
                 $r->post('/plugins/{name}/enable', [$pluginController, 'enable']);
                 $r->post('/plugins/{name}/disable', [$pluginController, 'disable']);
+                $r->post('/plugins/{name}/update', [$catalogController, 'updatePlugin']);
                 $r->delete('/plugins/{name}', [$pluginController, 'uninstall']);
 
                 /** @var AuthProviderController $authProviderController */

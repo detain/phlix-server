@@ -45,17 +45,19 @@ final class CatalogSourceResolver
     public const CATALOG_FILE = 'plugins.json';
 
     /**
-     * Rewrite a catalog repository URL to its raw `plugins.json`, or return
-     * the URL unchanged when it already names a `.json` file or is not a
-     * recognised GitHub repository URL.
+     * Rewrite a GitHub repository URL to a raw file in its default branch
+     * (`$file`, default `plugins.json`), or return the URL unchanged when it
+     * already names a `.json` file or is not a recognised GitHub repository URL.
      *
-     * @param string $url The raw catalog source URL as typed by the operator.
+     * @param string $url  The raw repository/source URL.
+     * @param string $file Repo-relative file to resolve to (e.g. `plugin.json`
+     *                     for a plugin's own manifest, used by update checks).
      *
-     * @return string A URL {@see PluginCatalogService} can fetch.
+     * @return string A raw URL the caller can fetch.
      *
      * @since 0.33.0
      */
-    public static function normalize(string $url): string
+    public static function normalize(string $url, string $file = self::CATALOG_FILE): string
     {
         $trimmed = trim($url);
         if ($trimmed === '') {
@@ -80,7 +82,7 @@ final class CatalogSourceResolver
             $owner,
             $name,
             $ref,
-            self::CATALOG_FILE,
+            ltrim($file, '/'),
         );
     }
 

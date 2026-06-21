@@ -26,4 +26,9 @@ return [
         'sources'        => [],
         'fetch_timeout'  => 10,
     ],
+
+    // When true, the plugin auto-update worker periodically re-installs any
+    // installed plugin that a configured catalog reports a newer version for.
+    // Operator-toggleable in the admin Plugins section.
+    'auto_update' => false,
 ];

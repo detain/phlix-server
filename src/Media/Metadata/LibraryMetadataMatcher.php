@@ -122,15 +122,21 @@ class LibraryMetadataMatcher
      *
      * @since 0.21.0
      */
-    public function matchLibrary(string $libraryId): array
+    public function matchLibrary(string $libraryId, ?callable $onProgress = null): array
     {
         $matched = 0;
         $processed = 0;
         $offset = 0;
 
+        // Progress denominator: the count of top-level items (movies + series)
+        // the flat pass visits. Reported via $onProgress so the worker can stamp
+        // it onto the job row and the UI can render a percentage.
+        $total = $this->countMatchable($libraryId);
+
         // A start marker so the log shows the run has begun, not just its end.
         $this->logger->info('LibraryMetadataMatcher: library match started', [
             'library_id' => $libraryId,
+            'total' => $total,
         ]);
 
         while (true) {
@@ -193,6 +199,10 @@ class LibraryMetadataMatcher
                 'matched' => $matched,
             ]);
 
+            if ($onProgress !== null) {
+                $onProgress($processed, max($total, $processed), $matched);
+            }
+
             // The driver may return a short final page; stop once it does.
             if (count($batch) < self::PAGE_SIZE) {
                 break;
@@ -208,6 +218,25 @@ class LibraryMetadataMatcher
         ]);
 
         return ['matched' => $matched, 'processed' => $processed];
+    }
+
+    /**
+     * Count the top-level (movie + series) items a library match will visit —
+     * the denominator for progress reporting. Best-effort: returns 0 on any
+     * query error so a failed count never aborts the match run.
+     */
+    private function countMatchable(string $libraryId): int
+    {
+        try {
+            $result = $this->items->query(['topLevel' => true, 'limit' => 1], $libraryId);
+            $total = $result['total'] ?? 0;
+            if (is_int($total)) {
+                return $total;
+            }
+            return is_numeric($total) ? (int) $total : 0;
+        } catch (Throwable) {
+            return 0;
+        }
     }
 
     /**

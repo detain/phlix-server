@@ -96,7 +96,19 @@ class HttpClient implements HttpClientInterface
      */
     private function request(string $method, string $path, ?array $body, array $headers): HttpResponse
     {
-        $url = $this->baseUrl . '/' . ltrim($path, '/');
+        // Accept an already-absolute URL (scheme://host/…) as `$path` and use it
+        // verbatim — callers that target a specific hub (pairing/heartbeat) pass
+        // the full URL so the request works even when this client was built with
+        // an empty placeholder base. A bare path still resolves against baseUrl.
+        $url = preg_match('#^https?://#i', $path) === 1
+            ? $path
+            : $this->baseUrl . '/' . ltrim($path, '/');
+
+        if ($url === '') {
+            // Empty base + empty path — nothing to call. Fail loudly rather than
+            // handing cURL a hostless URL ("URL rejected: No host part").
+            throw new RuntimeException('Cannot perform HTTP request: empty URL');
+        }
 
         $ch = curl_init();
         if ($ch === false) {

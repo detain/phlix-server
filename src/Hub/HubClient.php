@@ -127,7 +127,13 @@ class HubClient
             'server_name' => $serverName,
         ]);
 
-        $response = $this->httpClient->post('/api/v1/server-claims/new', $payload);
+        // Target the operator-supplied hub explicitly: the injected client is an
+        // empty-base placeholder (PHLIX_HUB_URL is usually unset), so a bare path
+        // would hit cURL with "No host part in the URL". Pass the absolute URL.
+        $response = $this->httpClient->post(
+            rtrim($hubUrl, '/') . '/api/v1/server-claims/new',
+            $payload,
+        );
 
         if (!$response->isSuccess()) {
             $errorCode = $response->getErrorCode() ?? 'UNKNOWN';
@@ -174,7 +180,10 @@ class HubClient
      */
     public function pollClaimStatus(string $claimId, string $hubUrl): ClaimStatusResult
     {
-        $response = $this->httpClient->get("/api/v1/server-claims/{$claimId}");
+        // Absolute URL — the injected client has an empty placeholder base.
+        $response = $this->httpClient->get(
+            rtrim($hubUrl, '/') . "/api/v1/server-claims/{$claimId}",
+        );
 
         $body = $response->body;
         $status = is_string($body['status'] ?? null) ? $body['status'] : 'unknown';

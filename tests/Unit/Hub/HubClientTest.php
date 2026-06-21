@@ -63,6 +63,41 @@ class HubClientTest extends TestCase
         $this->assertEquals('claim-uuid-123', $result->claimId);
     }
 
+    public function test_initiatePairing_posts_to_the_absolute_hub_url(): void
+    {
+        // Regression: the pre-enrollment client has an empty placeholder base, so
+        // a bare path made cURL fail with "URL rejected: No host part in the URL".
+        // The call must carry the operator-supplied hub URL (trailing slash trimmed).
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $httpClient->expects($this->once())
+            ->method('post')
+            ->with('https://hub.example.com/api/v1/server-claims/new', $this->anything())
+            ->willReturn(new HttpResponse(200, [], [
+                'claimCode' => 'X', 'expiresIn' => 1, 'claimId' => 'c', 'hubBaseUrl' => 'https://hub.example.com',
+            ]));
+
+        (new HubClient($keyManager, $httpClient, $logger, $this->tmpDir))
+            ->initiatePairing('https://hub.example.com/', 'Test Server');
+    }
+
+    public function test_pollClaimStatus_gets_the_absolute_hub_url(): void
+    {
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $httpClient->expects($this->once())
+            ->method('get')
+            ->with('https://hub.example.com/api/v1/server-claims/claim-7')
+            ->willReturn(new HttpResponse(200, [], ['status' => 'pending']));
+
+        (new HubClient($keyManager, $httpClient, $logger, $this->tmpDir))
+            ->pollClaimStatus('claim-7', 'https://hub.example.com/');
+    }
+
     public function test_pollClaimStatus_pending_when_not_yet_claimed(): void
     {
         $keyManager = new Ed25519KeyManager($this->keyPath);

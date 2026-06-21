@@ -101,6 +101,37 @@ class MediaItemControllerTest extends TestCase
     }
 
     /**
+     * Test that show() mints a signed, verifiable direct-play stream_url.
+     */
+    public function testShowMintsVerifiableStreamUrl(): void
+    {
+        $db = $this->createMockConnection();
+        $db->method('query')->willReturn([[
+            'id' => 'ep-1',
+            'name' => 'Episode 1',
+            'type' => 'episode',
+            'library_id' => 'lib-1',
+            'path' => '/test/ep.mkv',
+            'metadata_json' => json_encode([]),
+        ]]);
+
+        $itemRepo = new ItemRepository($db);
+        $candidateRepo = new MarkerCandidateRepository($itemRepo);
+        $markerService = new MarkerService($itemRepo, $candidateRepo);
+        $controller = new MediaItemController($itemRepo, $markerService);
+
+        $response = $controller->show(new Request(), ['id' => 'ep-1']);
+        $body = json_decode($response->body, true);
+
+        $this->assertArrayHasKey('stream_url', $body['item']);
+        parse_str((string) parse_url((string) $body['item']['stream_url'], PHP_URL_QUERY), $q);
+        $this->assertTrue(
+            \Phlix\Auth\SignedUrl::fromEnv()->verify('/media/ep-1/stream', (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+            'stream_url must be a verifiable signed URL for /media/ep-1/stream',
+        );
+    }
+
+    /**
      * Test that getPlaybackInfo returns intro_marker with correct structure.
      * Verifies: Positive case - intro marker contains start_seconds and end_seconds.
      */

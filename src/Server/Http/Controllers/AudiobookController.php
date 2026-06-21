@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\AudiobookLibraryManager;
 use Phlix\Media\Library\AudiobookProgress;
 use Phlix\Media\Library\ItemRepository;
@@ -154,6 +155,12 @@ class AudiobookController
         $metadata = is_array($audiobook['metadata'] ?? null) ? $audiobook['metadata'] : [];
         $chapters = $metadata['chapters'] ?? [];
 
+        // Sign the byte-serving URLs: an <audio> element / native player can't
+        // attach a Bearer header, so this gated detail endpoint mints the tokens
+        // the SignedUrlMiddleware verifies.
+        $signer = SignedUrl::fromEnv();
+        $base = '/api/v1/audiobooks/' . $audiobookId;
+
         return (new Response())->json([
             'audiobook' => [
                 'id' => $audiobook['id'],
@@ -166,6 +173,8 @@ class AudiobookController
                 'duration_ms' => $metadata['duration_ms'] ?? null,
                 'language' => $metadata['language'] ?? null,
                 'cover_url' => $metadata['cover_path'] ?? null,
+                'stream_url' => $signer->mint($base . '/stream'),
+                'read_url' => $signer->mint($base . '/read'),
                 'chapters' => $chapters,
             ],
         ]);
@@ -350,7 +359,10 @@ class AudiobookController
         /** @var array<string, mixed> $metadata */
         $metadata = is_array($audiobook['metadata'] ?? null) ? $audiobook['metadata'] : [];
 
-        // Return JSON with audiobook info for client-side player
+        // Return JSON with audiobook info for client-side player. The stream URL
+        // is signed because the <audio> element can't attach a Bearer header.
+        $audiobook['stream_url'] = SignedUrl::fromEnv()->mint('/api/v1/audiobooks/' . $audiobookId . '/stream');
+
         return (new Response())->json([
             'audiobook' => $audiobook,
             'metadata' => $metadata,

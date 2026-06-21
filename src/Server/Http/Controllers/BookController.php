@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
@@ -224,7 +225,31 @@ class BookController
             return (new Response())->status(404)->json(['error' => 'Book not found']);
         }
 
-        return (new Response())->json(['book' => $book]);
+        return (new Response())->json(['book' => $this->withSignedUrls($book, $bookId)]);
+    }
+
+    /**
+     * Adds short-lived signed `cover_url`/`read_url`/`download_url` fields to a
+     * book row.
+     *
+     * The cover/read/download routes can't carry a Bearer header from an
+     * `<img>`/reader/`<a download>`, so this now-gated detail endpoint mints the
+     * tokens the {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware} verifies.
+     *
+     * @param array<string, mixed> $book   The raw book row.
+     * @param string               $bookId The book id (for URL construction).
+     *
+     * @return array<string, mixed> The book row with signed-URL fields added.
+     */
+    private function withSignedUrls(array $book, string $bookId): array
+    {
+        $signer = SignedUrl::fromEnv();
+        $base = '/api/v1/books/' . $bookId;
+        $book['cover_url'] = $signer->mint($base . '/cover');
+        $book['read_url'] = $signer->mint($base . '/read');
+        $book['download_url'] = $signer->mint($base . '/download');
+
+        return $book;
     }
 
     /**
@@ -261,7 +286,7 @@ class BookController
 
         // Return JSON with book info for client-side EPUB rendering
         return (new Response())->json([
-            'book' => $book,
+            'book' => $this->withSignedUrls($book, $bookId),
             'metadata' => $metadata,
             'current_page' => $page,
             'message' => 'EPUB reader rendering not yet implemented',

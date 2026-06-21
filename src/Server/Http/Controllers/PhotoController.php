@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Metadata\ExifProvider;
@@ -64,13 +65,13 @@ class PhotoController
 
         $albums = [];
         foreach ($grouped as $dateKey => $photos) {
-            $firstPhoto = $photos[0];
+            $signedPhotos = array_map([$this, 'withSignedPhotoUrls'], array_values($photos));
             $albums[] = [
                 'id' => md5($dateKey),
                 'date' => $dateKey,
                 'photo_count' => count($photos),
-                'cover_photo' => $firstPhoto,
-                'photos' => $photos,
+                'cover_photo' => $signedPhotos[0] ?? null,
+                'photos' => $signedPhotos,
             ];
         }
 
@@ -127,7 +128,7 @@ class PhotoController
                 'id' => $albumId,
                 'date' => $targetDate,
                 'photo_count' => count($grouped[$targetDate]),
-                'photos' => $grouped[$targetDate],
+                'photos' => array_map([$this, 'withSignedPhotoUrls'], array_values($grouped[$targetDate])),
             ],
         ]);
     }
@@ -171,7 +172,7 @@ class PhotoController
         $photos = array_filter($items, fn($item) => $item['type'] === 'photo');
 
         return (new Response())->json([
-            'photos' => array_values($photos),
+            'photos' => array_map([$this, 'withSignedPhotoUrls'], array_values($photos)),
             'pagination' => [
                 'limit' => $limit,
                 'offset' => $offset,
@@ -212,6 +213,11 @@ class PhotoController
         // Get EXIF metadata
         $exif = $this->exifProvider->getPhotoMetadata($photoId);
 
+        // Sign the image byte URLs: an <img> can't attach a Bearer header, so
+        // this gated detail endpoint mints the tokens the middleware verifies.
+        $signer = SignedUrl::fromEnv();
+        $base = '/api/v1/photo/photos/' . $photoId;
+
         return (new Response())->json([
             'photo' => [
                 'id' => $item['id'],
@@ -219,6 +225,8 @@ class PhotoController
                 'path' => $item['path'],
                 'metadata' => $exif,
                 'exif' => $exif,
+                'thumbnail_url' => $signer->mint($base . '/thumbnail'),
+                'full_url' => $signer->mint($base . '/full'),
             ],
         ]);
     }
@@ -479,10 +487,15 @@ class PhotoController
             /** @var string */
             $photoId = $photo['id'];
 
+            // Signed, correctly-prefixed (/api/v1) image URLs the slideshow's
+            // <img> can load without a Bearer header.
+            $signer = SignedUrl::fromEnv();
+            $base = '/api/v1/photo/photos/' . $photoId;
+
             return [
                 'id' => $photoId,
-                'url' => '/photo/photos/' . $photoId . '/full',
-                'thumbnail_url' => '/photo/photos/' . $photoId . '/thumbnail?w=400&h=400&fit=cover',
+                'url' => $signer->mint($base . '/full'),
+                'thumbnail_url' => $signer->mint($base . '/thumbnail?w=400&h=400&fit=cover'),
                 'caption' => $caption,
                 'interval' => $interval,
             ];
@@ -492,6 +505,34 @@ class PhotoController
             'slideshow' => $slideshow,
             'interval' => $interval,
         ]);
+    }
+
+    /**
+     * Adds short-lived signed `thumbnail_url`/`full_url` fields to a photo row.
+     *
+     * The thumbnail/full image routes can't carry a Bearer header from an
+     * `<img>`, so the gated listing/detail endpoints mint the tokens the
+     * {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware} verifies. Rows
+     * without a usable id are returned unchanged.
+     *
+     * @param array<string, mixed> $photo The raw photo row.
+     *
+     * @return array<string, mixed> The photo row with signed-URL fields added.
+     */
+    private function withSignedPhotoUrls(array $photo): array
+    {
+        $idRaw = $photo['id'] ?? null;
+        $id = is_scalar($idRaw) ? (string) $idRaw : '';
+        if ($id === '') {
+            return $photo;
+        }
+
+        $signer = SignedUrl::fromEnv();
+        $base = '/api/v1/photo/photos/' . $id;
+        $photo['thumbnail_url'] = $signer->mint($base . '/thumbnail');
+        $photo['full_url'] = $signer->mint($base . '/full');
+
+        return $photo;
     }
 
     /**

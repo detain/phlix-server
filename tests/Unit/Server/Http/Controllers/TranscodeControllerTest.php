@@ -40,10 +40,12 @@ class TranscodeControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertSame('job-7', $body['job_id']);
-        $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
-        $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
+        // Streaming URLs are now signed (prefix-scoped to the job dir) so the
+        // player can fetch the manifest/segments/subtitles without a Bearer header.
+        $this->assertSignedUrlFor('/hls/job-7/master.m3u8', $body['master_url']);
+        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
         $this->assertFalse($body['reused']);
-        $this->assertSame('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
+        $this->assertSignedUrlFor('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
         $this->assertSame('English', $body['subtitles'][0]['label']);
         $this->assertTrue($body['subtitles'][0]['default']);
     }
@@ -105,9 +107,26 @@ class TranscodeControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertSame('running', $body['status']);
         $this->assertTrue($body['playlist_ready']);
-        $this->assertSame('/hls/job-7/master.m3u8', $body['master_url']);
-        $this->assertSame('/dash/job-7/manifest.mpd', $body['dash_url']);
-        $this->assertSame('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
+        $this->assertSignedUrlFor('/hls/job-7/master.m3u8', $body['master_url']);
+        $this->assertSignedUrlFor('/dash/job-7/manifest.mpd', $body['dash_url']);
+        $this->assertSignedUrlFor('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
+    }
+
+    /**
+     * Asserts a URL is `$expectedPath` plus a valid `exp`/`sig` signature.
+     */
+    private function assertSignedUrlFor(string $expectedPath, string $url): void
+    {
+        $this->assertStringStartsWith($expectedPath . '?', $url);
+        parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        $this->assertTrue(
+            \Phlix\Auth\SignedUrl::fromEnv()->verify(
+                $expectedPath,
+                (string) ($q['exp'] ?? ''),
+                (string) ($q['sig'] ?? ''),
+            ),
+            "{$url} must carry a valid signature for {$expectedPath}",
+        );
     }
 
     public function testStatusReturns404WhenJobUnknown(): void

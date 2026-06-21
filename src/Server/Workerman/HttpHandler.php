@@ -70,16 +70,6 @@ final class HttpHandler
                 return;
             }
 
-            // Media direct-play byte stream (the web player's <video> source).
-            // Handled with Workerman's native withFile() before the router so
-            // large files stream via the event loop instead of being read into
-            // worker memory.
-            $mediaStream = $this->serveMediaStream($wr);
-            if ($mediaStream !== null) {
-                $connection->send($mediaStream);
-                return;
-            }
-
             $request = Request::fromWorkerman($wr, $connection);
 
             // Bearer-token auth (mirrors the inline check that
@@ -92,7 +82,8 @@ final class HttpHandler
             // {@see AuthController::browserAuthResponse()} on login. We
             // fall back to it here so subsequent page navigations show
             // the user as authenticated without needing client-side JS
-            // to attach a header.
+            // to attach a header. Resolving it here — before the media-stream
+            // handler — also lets that handler authorise via the session.
             $token = $request->getBearerToken();
             if ($token === null || $token === '') {
                 $cookieToken = $request->getCookie(AuthController::SESSION_COOKIE);
@@ -106,6 +97,18 @@ final class HttpHandler
                 if (is_array($auth) && is_string($auth['user_id'] ?? null)) {
                     $request->userId = $auth['user_id'];
                 }
+            }
+
+            // Media direct-play byte stream (the web player's <video> source).
+            // Handled with Workerman's native withFile() before the router so
+            // large files stream via the event loop instead of being read into
+            // worker memory. It bypasses the router (and its middleware), so it
+            // authorises inline — a resolved session OR a signed-URL token,
+            // mirroring SignedUrlMiddleware.
+            $mediaStream = $this->serveMediaStream($wr, $request->userId);
+            if ($mediaStream !== null) {
+                $connection->send($mediaStream);
+                return;
             }
 
             // 1) Try the fully-populated Application router first. It
@@ -212,13 +215,25 @@ final class HttpHandler
      * `Range` requests are honoured (206 + `Content-Range`) so the browser can
      * seek; an unsatisfiable range yields 416.
      */
-    private function serveMediaStream(WorkermanRequest $wr): ?WorkermanResponse
+    private function serveMediaStream(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
     {
         if ($wr->method() !== 'GET') {
             return null;
         }
         if (preg_match('#^/media/(?P<id>[^/]+)/stream$#', $wr->path(), $m) !== 1) {
             return null;
+        }
+
+        // Authorise before touching the filesystem: a resolved session
+        // (Bearer/cookie) OR a valid signed-URL token. Returning a 401 here
+        // (rather than null) stops the request — a null would fall through to the
+        // router and 404, masking the auth failure.
+        if (!$this->isMediaStreamAuthorized($wr, $userId)) {
+            return new WorkermanResponse(
+                401,
+                ['Content-Type' => 'text/plain; charset=utf-8'],
+                'Unauthorized',
+            );
         }
 
         /** @var ItemRepository $repo */
@@ -252,6 +267,30 @@ final class HttpHandler
         $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
         $resp->withFile($path);
         return $resp;
+    }
+
+    /**
+     * Whether a `/media/{id}/stream` request is allowed to proceed.
+     *
+     * Accepts an already-resolved session user id (from the Bearer/cookie block
+     * in {@see self::__invoke()}) OR a valid `?exp&sig` signed-URL token. This is
+     * the inline equivalent of {@see \Phlix\Server\Http\Middleware\SignedUrlMiddleware}
+     * for the one byte-serving route that bypasses the router.
+     */
+    private function isMediaStreamAuthorized(WorkermanRequest $wr, ?string $userId): bool
+    {
+        if ($userId !== null && $userId !== '') {
+            return true;
+        }
+
+        $exp = $wr->get('exp');
+        $sig = $wr->get('sig');
+
+        return \Phlix\Auth\SignedUrl::fromEnv()->verify(
+            $wr->path(),
+            is_string($exp) ? $exp : null,
+            is_string($sig) ? $sig : null,
+        );
     }
 
     /**

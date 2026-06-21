@@ -496,4 +496,36 @@ class PhotoControllerTest extends TestCase
 
         $this->assertEquals(404, $response->statusCode);
     }
+
+    public function testGetPhotoMintsVerifiableSignedImageUrls(): void
+    {
+        $request = new Request();
+        $this->db->method('query')->willReturn([
+            [
+                'id' => 'photo-123',
+                'name' => 'Test Photo',
+                'type' => 'photo',
+                'library_id' => 'lib-1',
+                'path' => '/photos/test.jpg',
+                'metadata_json' => '{}',
+            ],
+        ]);
+
+        $response = $this->controller->getPhoto($request, ['id' => 'photo-123']);
+        $body = json_decode($response->body, true);
+
+        $signer = \Phlix\Auth\SignedUrl::fromEnv();
+        $expected = [
+            'thumbnail_url' => '/api/v1/photo/photos/photo-123/thumbnail',
+            'full_url' => '/api/v1/photo/photos/photo-123/full',
+        ];
+        foreach ($expected as $field => $path) {
+            $this->assertArrayHasKey($field, $body['photo']);
+            parse_str((string) parse_url((string) $body['photo'][$field], PHP_URL_QUERY), $q);
+            $this->assertTrue(
+                $signer->verify($path, (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+                "{$field} must be a verifiable signed URL for {$path}",
+            );
+        }
+    }
 }

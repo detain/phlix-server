@@ -588,4 +588,29 @@ class AudiobookControllerTest extends TestCase
 
         $this->assertEquals(416, $response->statusCode);
     }
+
+    public function testGetAudiobookMintsVerifiableStreamUrl(): void
+    {
+        $itemRepo = $this->createMockItemRepo();
+        $libraryManager = $this->createMockLibraryManager();
+        $itemRepo->method('findById')->willReturn([
+            'id' => 'audiobook-123',
+            'name' => 'Test Audiobook',
+            'type' => 'audiobook',
+            'path' => '/path/to/test.m4b',
+            'metadata' => ['chapters' => []],
+        ]);
+        $controller = new AudiobookController($itemRepo, $libraryManager);
+
+        $response = $controller->getAudiobook(new Request(), ['id' => 'audiobook-123']);
+        $body = json_decode($response->body, true);
+
+        $signer = \Phlix\Auth\SignedUrl::fromEnv();
+        $this->assertArrayHasKey('stream_url', $body['audiobook']);
+        parse_str((string) parse_url((string) $body['audiobook']['stream_url'], PHP_URL_QUERY), $q);
+        $this->assertTrue(
+            $signer->verify('/api/v1/audiobooks/audiobook-123/stream', (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+            'stream_url must be a verifiable signed URL',
+        );
+    }
 }

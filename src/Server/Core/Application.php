@@ -2303,23 +2303,26 @@ class Application
                 'root',
                 'password'
             );
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $libraryManager = new \Phlix\Media\Library\LibraryManager(
                 $db,
                 new \Phlix\Media\Library\MediaScanner(
                     $db,
-                    new \Phlix\Media\Library\ItemRepository($db)
+                    $itemRepository
                 ),
                 new \Phlix\Media\Library\FolderWatcher()
             );
             $scanJobs = new \Phlix\Media\Library\ScanJobRepository($db);
-            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs);
+            return new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs, $itemRepository);
         }
 
         /** @var \Phlix\Media\Library\LibraryManager */
         $libraryManager = $this->container->get(\Phlix\Media\Library\LibraryManager::class);
         /** @var \Phlix\Media\Library\ScanJobRepository */
         $scanJobs = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
-        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs);
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        $controller = new \Phlix\Server\Http\Controllers\LibraryController($libraryManager, $scanJobs, $itemRepository);
 
         // Wire admin middleware if available
         if ($this->container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {

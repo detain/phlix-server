@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Server\Http\Controllers\LibraryController;
@@ -39,7 +40,13 @@ use Phlix\Server\Http\Request;
 class LibraryControllerTest extends TestCase
 {
     /**
-     * Happy path: index() returns 200 with libraries list for authenticated user.
+     * Happy path: index() returns 200 with libraries list for authenticated user,
+     * each enriched with item_count.
+     *
+     * The daemon path (this controller) must mirror the CGI
+     * WebPortalRouter::getLibraries() shape — every library carries a per-row
+     * item_count, counted via the item repository — so both dispatch surfaces
+     * return identical responses.
      */
     public function testIndexReturns200WithLibrariesForAuthenticatedUser(): void
     {
@@ -51,8 +58,18 @@ class LibraryControllerTest extends TestCase
                 ['id' => 'lib-2', 'name' => 'Music', 'type' => 'music'],
             ]);
 
+        // countByType is called once per library with its (id, type), exactly as
+        // WebPortalRouter::getLibraries() does it.
+        $itemRepository = $this->createMock(ItemRepository::class);
+        $itemRepository->expects($this->exactly(2))
+            ->method('countByType')
+            ->willReturnMap([
+                ['lib-1', 'video', 42],
+                ['lib-2', 'music', 7],
+            ]);
+
         $scanJobs = $this->createMock(ScanJobRepository::class);
-        $controller = new LibraryController($libraryManager, $scanJobs);
+        $controller = new LibraryController($libraryManager, $scanJobs, $itemRepository);
 
         $request = new Request();
         $request->userId = 'user-1';
@@ -65,6 +82,42 @@ class LibraryControllerTest extends TestCase
         $this->assertIsArray($body);
         $this->assertArrayHasKey('libraries', $body);
         $this->assertCount(2, $body['libraries']);
+        // item_count must be present per library and match the counted value
+        // (contract parity with the CGI WebPortalRouter path).
+        $this->assertArrayHasKey('item_count', $body['libraries'][0]);
+        $this->assertSame(42, $body['libraries'][0]['item_count']);
+        $this->assertArrayHasKey('item_count', $body['libraries'][1]);
+        $this->assertSame(7, $body['libraries'][1]['item_count']);
+    }
+
+    /**
+     * Back-compat: when no ItemRepository is wired (legacy two-arg
+     * construction), index() still returns 200 with the libraries list but
+     * omits item_count rather than faking a value.
+     */
+    public function testIndexOmitsItemCountWhenItemRepositoryNotWired(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getAllLibraries')
+            ->willReturn([
+                ['id' => 'lib-1', 'name' => 'Movies', 'type' => 'video'],
+            ]);
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        // No ItemRepository injected.
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'user-1';
+
+        $response = $controller->index($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertCount(1, $body['libraries']);
+        $this->assertArrayNotHasKey('item_count', $body['libraries'][0]);
     }
 
     /**

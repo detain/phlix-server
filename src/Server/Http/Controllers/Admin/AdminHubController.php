@@ -181,10 +181,24 @@ final class AdminHubController
             $result = $hubClient->pollClaimStatus($claimId, $hubUrl);
 
             if ($result->status === 'claimed') {
+                // Persist the enrollment server-side NOW. The hub deletes the
+                // one-time claim the instant it returns the JWT, so relying on a
+                // separate client `/complete` call is lossy (a missing field or
+                // closed tab strands the pairing — the claim is already gone and
+                // cannot be re-polled). Storing here makes the poll atomic and
+                // robust for any client; `/complete` remains for back-compat and
+                // is now idempotent.
+                $enrollmentJwt = $result->enrollmentJwt ?? '';
+                $resultJwksUrl = $result->hubJwksUrl ?? '';
+                $resultServerId = $result->serverId ?? '';
+                $hubClient->storeEnrollment($enrollmentJwt, $resultJwksUrl, $resultServerId, $hubUrl);
+
                 return (new Response())->json([
                     'success' => true,
-                    'token' => $result->enrollmentJwt,
-                    'serverId' => $result->serverId,
+                    'paired' => true,
+                    'token' => $enrollmentJwt,
+                    'hubJwksUrl' => $resultJwksUrl,
+                    'serverId' => $resultServerId,
                 ]);
             }
 
@@ -226,6 +240,16 @@ final class AdminHubController
             $hubJwksUrl = is_string($body['hubJwksUrl'] ?? null) ? $body['hubJwksUrl'] : '';
             $serverId = is_string($body['serverId'] ?? null) ? $body['serverId'] : '';
             $hubUrl = is_string($body['hubUrl'] ?? null) ? $body['hubUrl'] : '';
+
+            // Idempotent: hubPoll() now stores the enrollment as soon as the
+            // claim is consumed, so by the time a (possibly older) client calls
+            // /complete the server may already be enrolled. Older clients also
+            // send an empty hubJwksUrl (the poll response historically omitted
+            // it). In either case, if we are already enrolled, report success
+            // rather than 400 on the missing field.
+            if ($hubClient->loadEnrollment() !== null) {
+                return (new Response())->json(['success' => true]);
+            }
 
             if ($enrollmentJwt === '' || $hubJwksUrl === '' || $serverId === '' || $hubUrl === '') {
                 return (new Response())->status(400)->json([

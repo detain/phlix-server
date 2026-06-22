@@ -65,6 +65,9 @@ class HubClient
     /** @var PortForwardService|null Port forward service for hostname discovery. */
     private ?PortForwardService $portForwardService = null;
 
+    /** @var string Configured public base URL (scheme+host); '' when no domain is set. */
+    private string $publicUrl = '';
+
     /**
      * Creates a new HubClient.
      *
@@ -74,6 +77,8 @@ class HubClient
      * @param string                $configDir   Directory for enrollment storage.
      * @param string                $serverVersion Server software version string.
      * @param PortForwardService|null $portForwardService Port forward service for hostname discovery.
+     * @param string                $publicUrl   Configured public base URL (scheme+host) advertised
+     *                                            to the hub as a hostname candidate; '' when unset.
      */
     public function __construct(
         Ed25519KeyManager $keyManager,
@@ -82,6 +87,7 @@ class HubClient
         string $configDir,
         string $serverVersion = '0.11.0',
         ?PortForwardService $portForwardService = null,
+        string $publicUrl = '',
     ) {
         $this->keyManager = $keyManager;
         $this->httpClient = $httpClient;
@@ -89,6 +95,7 @@ class HubClient
         $this->configDir = $configDir;
         $this->serverVersion = $serverVersion;
         $this->portForwardService = $portForwardService;
+        $this->publicUrl = $publicUrl;
         $this->processStartTime = time();
     }
 
@@ -532,6 +539,13 @@ class HubClient
     {
         $candidates = [];
 
+        // The configured public URL (from PHLIX_DOMAIN via config/hub.php) is the
+        // most reliable candidate: under the Workerman daemon the $_SERVER vars
+        // below are empty, so without this the hub records no reachable hostname.
+        if ($this->publicUrl !== '') {
+            $candidates[] = $this->publicUrl;
+        }
+
         $serverName = $_SERVER['SERVER_NAME'] ?? null;
         if (!empty($serverName) && is_string($serverName)) {
             $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
@@ -555,6 +569,6 @@ class HubClient
             }
         }
 
-        return $candidates;
+        return array_values(array_unique($candidates));
     }
 }

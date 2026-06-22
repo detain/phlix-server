@@ -43,6 +43,13 @@ return [
     // rather than only the ad-hoc include bin/phlix does for hwaccel probing.
     'ffmpeg' => require __DIR__ . '/ffmpeg.php',
 
+    // Hub subsystem config (enrollment, heartbeat, the public URL the server
+    // advertises during pairing). Sourced from config/hub.php so the DI layer
+    // (HubServicesProvider reads $config['hub']) gets the real key_path /
+    // config_dir / public_url instead of its bare defaults — previously this
+    // file was never loaded, so the server advertised no hostname candidates.
+    'hub' => require __DIR__ . '/hub.php',
+
     // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
     // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the
     // TranscodeManager writes there and HlsController/HlsStreamer read from the

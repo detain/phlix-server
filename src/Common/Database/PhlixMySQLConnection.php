@@ -110,6 +110,102 @@ final class PhlixMySQLConnection extends Connection
     }
 
     /**
+     * Prepare + bind + execute with TYPE-AWARE binding.
+     *
+     * Emulated prepares (see {@see connect()}) send bound params as STRINGS by
+     * default, so `LIMIT ?`/`OFFSET ?` become `LIMIT '50'` and MySQL 1064-errors
+     * (this codebase has many `LIMIT ? OFFSET ?` queries). This override mirrors
+     * the parent's `execute()` — including the one-shot reconnect on MySQL
+     * "server has gone away" (2006/2013) — but binds each parameter with its
+     * natural PDO type via {@see pdoParamType()} so integers stay unquoted. The
+     * parent's `clearSQuery()` is private, so its single line is inlined as
+     * `$this->sQuery = null`.
+     *
+     * @param string $query
+     * @param mixed  $parameters
+     * @return void
+     */
+    protected function execute($query, $parameters = '')
+    {
+        try {
+            $this->prepareAndBind($query, $parameters);
+            $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
+        } catch (\PDOException $e) {
+            $errno = is_array($e->errorInfo) ? ($e->errorInfo[1] ?? null) : null;
+            if ($errno === 2006 || $errno === 2013) {
+                // "MySQL server has gone away" — drop the dead socket and retry once.
+                $this->closeConnection();
+                try {
+                    $this->prepareAndBind($query, $parameters);
+                    $this->success = $this->sQuery instanceof \PDOStatement && $this->sQuery->execute();
+                } catch (\PDOException $ex) {
+                    $this->rollBackTrans();
+                    throw $ex;
+                }
+            } else {
+                $this->rollBackTrans();
+                throw new \PDOException('SQL:' . $this->lastSQL() . ' ' . $e->getMessage(), (int) $e->getCode());
+            }
+        }
+        $this->parameters = [];
+    }
+
+    /**
+     * Prepare $query and bind the accumulated parameters with their natural PDO
+     * type. Reconnects if the PDO handle is missing. Replaces the parent's
+     * private clearSQuery() with an inline `$this->sQuery = null`.
+     *
+     * @param mixed $parameters
+     */
+    private function prepareAndBind(string $query, mixed $parameters): void
+    {
+        if (!$this->pdo instanceof \PDO) {
+            $this->connect();
+        }
+        if (!$this->pdo instanceof \PDO) {
+            throw new \PDOException('PDO connection is not available.');
+        }
+        $this->sQuery = null;
+        $statement = $this->pdo->prepare($query);
+        if (!$statement instanceof \PDOStatement) {
+            throw new \PDOException('Failed to prepare SQL statement.');
+        }
+        $this->sQuery = $statement;
+        if (is_array($parameters)) {
+            $this->bindMore($parameters);
+        }
+        /** @var mixed $param */
+        foreach ($this->parameters as $param) {
+            if (!is_array($param)) {
+                continue;
+            }
+            $placeholder = $param[0] ?? null;
+            if (!is_int($placeholder) && !is_string($placeholder)) {
+                continue;
+            }
+            /** @var mixed $value */
+            $value = $param[1] ?? null;
+            $statement->bindValue($placeholder, $value, $this->pdoParamType($value));
+        }
+    }
+
+    /**
+     * Map a PHP value to the PDO bind type that keeps it correctly typed under
+     * emulated prepares (integers stay unquoted so `LIMIT ?`/`OFFSET ?` work).
+     *
+     * @param mixed $value
+     */
+    private function pdoParamType(mixed $value): int
+    {
+        return match (true) {
+            is_int($value)  => \PDO::PARAM_INT,
+            is_bool($value) => \PDO::PARAM_BOOL,
+            $value === null => \PDO::PARAM_NULL,
+            default         => \PDO::PARAM_STR,
+        };
+    }
+
+    /**
      * Run a query under the per-connection coroutine mutex so the shared
      * socket is never used by two coroutines at once. `query()` performs the
      * full prepare→execute→fetch internally, so holding the lock across it

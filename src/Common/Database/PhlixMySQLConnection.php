@@ -77,6 +77,39 @@ final class PhlixMySQLConnection extends Connection
     private int $queryLockHolder = -1;
 
     /**
+     * Force emulated + fully-buffered prepared statements.
+     *
+     * The parent connects with NATIVE prepares (`PDO::ATTR_EMULATE_PREPARES =
+     * false`). Under the Swoole event loop the MySQL socket is coroutine-hooked
+     * (mysqlnd uses PHP streams), so a query yields the coroutine while it waits
+     * on the socket. With native prepares each statement keeps per-statement
+     * server-side state on that socket, and that state leaks across coroutine
+     * switches — even when queries are serialised by the mutex below — leaving
+     * the connection wedged so the next `prepare()` silently returns `false`
+     * ("Call to a member function bindParam() on false") or the bound params
+     * desync ("HY093 Invalid parameter number") under concurrent requests.
+     *
+     * Emulated prepares keep `prepare()` purely client-side (no socket round
+     * trip, so it cannot fail at the socket), and buffered queries fetch every
+     * result row immediately, so no pending unbuffered result survives a yield.
+     * Diagnosed + fixed first on phlix-hub (150 concurrent requests → zero
+     * corruption); applied here for parity since this connection class runs the
+     * same native-prepare path under the same coroutine runtime.
+     * Parameterisation stays injection-safe (PDO still quotes bound values) and
+     * the connection charset is utf8mb4 (see the constructor).
+     *
+     * @return void
+     */
+    protected function connect()
+    {
+        parent::connect();
+        if ($this->pdo instanceof \PDO) {
+            $this->pdo->setAttribute(\PDO::ATTR_EMULATE_PREPARES, true);
+            $this->pdo->setAttribute(\PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+        }
+    }
+
+    /**
      * Run a query under the per-connection coroutine mutex so the shared
      * socket is never used by two coroutines at once. `query()` performs the
      * full prepare→execute→fetch internally, so holding the lock across it

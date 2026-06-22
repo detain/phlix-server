@@ -1306,6 +1306,10 @@ PHLIX_DATABASE_USER=${DB_USER}
 # Public hostname for hub-paired subdomains / DLNA / CORS.
 PHLIX_DOMAIN=${PUBLIC_DOMAIN}
 
+# Whether the server is served over TLS (set from --tls/--no-tls). Drives the
+# scheme of the public URL advertised to the hub during pairing.
+PHLIX_TLS_ENABLED=$([ "$TLS_ENABLED" = "yes" ] && echo 1 || echo 0)
+
 # 32-byte hex secret for HMAC-signed cookies / future use.
 PHLIX_SECRET_KEY=${SECRET_KEY}
 

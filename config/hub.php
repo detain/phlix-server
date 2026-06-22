@@ -7,6 +7,17 @@
  * @since 0.11.0
  */
 
+// Public hostname this server is reachable at, set by scripts/install.sh from
+// `--domain` (env `PHLIX_DOMAIN`). Empty when no domain was configured.
+$phlixDomainEnv = getenv('PHLIX_DOMAIN');
+$phlixDomain    = is_string($phlixDomainEnv) ? $phlixDomainEnv : '';
+// Default TLS on when unset; otherwise honour the value (so PHLIX_TLS_ENABLED=0
+// from `--no-tls` is respected — `?: true` would wrongly treat '0' as unset).
+$tlsEnabledEnv  = getenv('PHLIX_TLS_ENABLED');
+$tlsEnabled     = $tlsEnabledEnv === false
+    ? true
+    : filter_var($tlsEnabledEnv, FILTER_VALIDATE_BOOLEAN);
+
 return [
     'hub_url' => getenv('PHLIX_HUB_URL') ?: null,
 
@@ -24,7 +35,15 @@ return [
 
     'subdomain_auto_claim' => (bool)(getenv('PHLIX_SUBDOMAIN_AUTO_CLAIM') ?: true),
 
-    'tls_enabled' => (bool)(getenv('PHLIX_TLS_ENABLED') ?: true),
+    'tls_enabled' => $tlsEnabled,
 
-    'domain' => getenv('PHLIX_DOMAIN') ?: 'phlix.media',
+    'domain' => $phlixDomain !== '' ? $phlixDomain : 'phlix.media',
+
+    // Public base URL (scheme + host) the server advertises to the hub as a
+    // hostname candidate during pairing, so the hub records a reachable URL
+    // (otherwise the daemon has no $_SERVER vars and reports none). Scheme
+    // follows `tls_enabled`. Empty when no real domain is configured.
+    'public_url' => $phlixDomain !== ''
+        ? (($tlsEnabled ? 'https://' : 'http://') . $phlixDomain)
+        : '',
 ];

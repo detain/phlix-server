@@ -63,6 +63,45 @@ class HubClientTest extends TestCase
         $this->assertEquals('claim-uuid-123', $result->claimId);
     }
 
+    public function test_initiatePairing_advertises_configured_public_url_as_hostname_candidate(): void
+    {
+        // Under the Workerman daemon $_SERVER is empty, so the configured public
+        // URL (from PHLIX_DOMAIN via config/hub.php) is what tells the hub a
+        // reachable hostname. It must appear in the claim's hostnameCandidates.
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $capturedPayload = null;
+        $httpClient->method('post')->willReturnCallback(
+            function (string $url, array $payload) use (&$capturedPayload): HttpResponse {
+                $capturedPayload = $payload;
+                return new HttpResponse(200, [], [
+                    'claimCode' => 'ABCD-1234',
+                    'expiresIn' => 600,
+                    'claimId' => 'claim-uuid-123',
+                    'hubBaseUrl' => 'https://hub.example.com',
+                ]);
+            }
+        );
+
+        $client = new HubClient(
+            $keyManager,
+            $httpClient,
+            $logger,
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            'https://intertainer.phlix.interserver.net',
+        );
+        $client->initiatePairing('https://hub.example.com', 'Test Server');
+
+        $this->assertIsArray($capturedPayload);
+        $candidates = $capturedPayload['hostnameCandidates'] ?? null;
+        $this->assertIsArray($candidates);
+        $this->assertContains('https://intertainer.phlix.interserver.net', $candidates);
+    }
+
     public function test_initiatePairing_posts_to_the_absolute_hub_url(): void
     {
         // Regression: the pre-enrollment client has an empty placeholder base, so

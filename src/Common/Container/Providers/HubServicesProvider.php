@@ -61,6 +61,7 @@ final class HubServicesProvider implements ServiceProviderInterface
         $keyPath = is_string($hubConfig['key_path'] ?? null) ? $hubConfig['key_path'] : $defaultKeyPath;
         $heartbeatInterval = is_int($hubConfig['heartbeat_interval'] ?? null) ? $hubConfig['heartbeat_interval'] : 60;
         $cacheTtl = is_int($hubConfig['jwks_cache_ttl'] ?? null) ? $hubConfig['jwks_cache_ttl'] : 900;
+        $publicUrl = is_string($hubConfig['public_url'] ?? null) ? $hubConfig['public_url'] : '';
 
         $builder->addDefinitions([
             Ed25519KeyManager::class => autowire()
@@ -88,7 +89,8 @@ final class HubServicesProvider implements ServiceProviderInterface
             HubClient::class => autowire()
                 ->constructorParameter('logger', get('logger.hub'))
                 ->constructorParameter('configDir', $configDir)
-                ->constructorParameter('httpClient', get(HttpClientInterface::class)),
+                ->constructorParameter('httpClient', get(HttpClientInterface::class))
+                ->constructorParameter('publicUrl', $publicUrl),
 
             HubJwksController::class => autowire()
                 ->constructorParameter('hubClient', get(HubClient::class)),

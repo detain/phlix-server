@@ -378,6 +378,19 @@ class HubClient
             return new HeartbeatResult(false, 'Not enrolled', 'NOT_ENROLLED');
         }
 
+        // Ensure the HTTP client targets the hub with the enrollment token.
+        // The injected $this->httpClient is an empty-base placeholder; the
+        // heartbeat LOOP swaps it for an enrollment-scoped client, but a DIRECT
+        // call — e.g. the admin "Send heartbeat" button, which runs in the HTTP
+        // worker where the loop never ran — would otherwise POST to the
+        // base-less relative path below and fail with cURL "No host part in the
+        // URL". Rebuild from the freshly-loaded enrollment (also picks up a
+        // token renewed by reEnrollIfNeeded()). Only when the client is a real
+        // HttpClient — a test-injected HttpClientInterface mock is left as-is.
+        if ($this->httpClient instanceof HttpClient) {
+            $this->httpClient = new HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
+        }
+
         // Build from the shared HeartbeatDto so the wire payload uses the
         // camelCase keys the hub parses with HeartbeatDto::fromPayload();
         // a snake_case array here is rejected with 400 "Bad Request"

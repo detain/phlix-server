@@ -89,6 +89,29 @@ if (extension_loaded('swoole')) {
 }
 
 // -----------------------------------------------------------------------------
+// 0b. Re-assert the curated coroutine hook mask inside every worker.
+//
+// The curated enableCoroutine() above runs in the MASTER, but Workerman's
+// Swoole event adapter resets the mask back to SWOOLE_HOOK_ALL in its
+// constructor — `Workerman\Events\Swoole::__construct()` calls
+// `Coroutine::set(['hook_flags' => SWOOLE_HOOK_ALL])`. That constructor runs
+// once per worker when `Worker::$globalEvent` is created (in forkOneWorker*),
+// AFTER the master's curated enableCoroutine() and immediately BEFORE the
+// worker's onWorkerStart. Left unchecked it silently re-enables the
+// FILE(io_uring)/PROC/NATIVE_CURL/blocking-function hooks the allowlist exists
+// to avoid — which is exactly what reintroduced the recurring swoole.so
+// general-protection faults (`exit with status 139`) on the PHP 8.5 / Swoole
+// 6.2.1 / kernel-7 io_uring stack. We re-apply the curated mask via the SAME
+// `Coroutine::set(['hook_flags' => ...])` API at the top of every worker's
+// onWorkerStart (the first user code after that constructor), so each worker
+// actually serves traffic with the safe hook set. {@see SwooleRuntime}
+$applyCuratedCoroutineHooks = static function () use ($config): void {
+    if (extension_loaded('swoole') && SwooleRuntime::coroutineEnabled($config)) {
+        \Swoole\Coroutine::set(['hook_flags' => SwooleRuntime::resolveHookFlags($config)]);
+    }
+};
+
+// -----------------------------------------------------------------------------
 // 2. Per-process configuration that the Workerman master needs
 // -----------------------------------------------------------------------------
 
@@ -142,7 +165,8 @@ $publicRoot = __DIR__ . '/public';
 // The container can't be built before fork (it caches workerman/mysql
 // PDO sockets and the like). Build it inside onWorkerStart so each
 // child has its own copy of long-lived state.
-$httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRoot): void {
+$httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRoot, $applyCuratedCoroutineHooks): void {
+    $applyCuratedCoroutineHooks();
     $container = ContainerFactory::create($config);
     /** @var AuthManager $authManager */
     $authManager = $container->get(AuthManager::class);
@@ -197,7 +221,8 @@ try {
         $scanWorker = new Worker();
         $scanWorker->count = $scanCount;
         $scanWorker->name = 'phlix-library-scan';
-        $scanWorker->onWorkerStart = static function (Worker $w) use ($config, $scanPollSeconds): void {
+        $scanWorker->onWorkerStart = static function (Worker $w) use ($config, $scanPollSeconds, $applyCuratedCoroutineHooks): void {
+            $applyCuratedCoroutineHooks();
             // Built inside the fork so each child owns its long-lived state.
             $container = ContainerFactory::create($config);
             /** @var \Phlix\Media\Library\LibraryScanWorker $libraryScanWorker */
@@ -218,7 +243,8 @@ try {
         $autoUpdateWorker = new Worker();
         $autoUpdateWorker->count = 1;
         $autoUpdateWorker->name = 'phlix-plugin-auto-update';
-        $autoUpdateWorker->onWorkerStart = static function (Worker $w) use ($config, $autoUpdatePoll): void {
+        $autoUpdateWorker->onWorkerStart = static function (Worker $w) use ($config, $autoUpdatePoll, $applyCuratedCoroutineHooks): void {
+            $applyCuratedCoroutineHooks();
             $container = ContainerFactory::create($config);
             /** @var \Phlix\Plugins\Catalog\PluginAutoUpdateWorker $pluginAutoUpdateWorker */
             $pluginAutoUpdateWorker = $container->get(\Phlix\Plugins\Catalog\PluginAutoUpdateWorker::class);
@@ -247,7 +273,8 @@ try {
     $hubHeartbeatWorker = new Worker();
     $hubHeartbeatWorker->count = 1;
     $hubHeartbeatWorker->name = 'phlix-hub-heartbeat';
-    $hubHeartbeatWorker->onWorkerStart = static function (Worker $w) use ($config): void {
+    $hubHeartbeatWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
+        $applyCuratedCoroutineHooks();
         // Built inside the fork so the child owns its own DB/HTTP state.
         $container = ContainerFactory::create($config);
         /** @var \Phlix\Hub\HubApplication $hubApp */

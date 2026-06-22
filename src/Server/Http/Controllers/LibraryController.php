@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;
 
@@ -16,12 +17,24 @@ class LibraryController
 
     private ScanJobRepository $scanJobs;
 
+    /**
+     * Counts items per library so the listing can be enriched with
+     * `item_count`. Optional/nullable for back-compat with callers (and unit
+     * tests) constructed before this dependency existed; when null the
+     * `index()` listing omits `item_count` rather than faking a value.
+     */
+    private ?ItemRepository $itemRepository;
+
     private ?AdminMiddleware $adminMiddleware = null;
 
-    public function __construct(LibraryManager $libraryManager, ScanJobRepository $scanJobs)
-    {
+    public function __construct(
+        LibraryManager $libraryManager,
+        ScanJobRepository $scanJobs,
+        ?ItemRepository $itemRepository = null
+    ) {
         $this->libraryManager = $libraryManager;
         $this->scanJobs = $scanJobs;
+        $this->itemRepository = $itemRepository;
     }
 
     /**
@@ -93,7 +106,20 @@ class LibraryController
     }
 
     /**
-     * @param array<string, string> $params
+     * List all libraries, each enriched with a per-library `item_count`.
+     *
+     * Mirrors {@see \Phlix\Server\WebPortal\WebPortalRouter::getLibraries()} so
+     * both dispatch surfaces return the SAME shape: the Workerman daemon routes
+     * `GET /api/v1/libraries` here, while the CGI `public/index.php` path routes
+     * it to WebPortalRouter. `item_count` is the number of media items in the
+     * library, counted via the item repository when it is wired; when no
+     * {@see ItemRepository} was injected (legacy construction) the field is
+     * omitted rather than faked.
+     *
+     * @param array<string, string> $params Route params (unused).
+     *
+     * @return Response `200` `{ libraries: [ { id, name, type, item_count, ... } ] }`
+     *                  · `401` auth-required.
      */
     public function index(Request $request, array $params): Response
     {
@@ -103,6 +129,19 @@ class LibraryController
         }
 
         $libraries = $this->libraryManager->getAllLibraries();
+
+        // Enrich each library with item_count, mirroring
+        // WebPortalRouter::getLibraries() exactly (same is_string guards) so the
+        // daemon and CGI dispatch paths return an identical shape.
+        if ($this->itemRepository !== null) {
+            foreach ($libraries as &$lib) {
+                $libId = is_string($lib['id'] ?? null) ? $lib['id'] : '';
+                $libType = is_string($lib['type'] ?? null) ? $lib['type'] : '';
+                $lib['item_count'] = $this->itemRepository->countByType($libId, $libType);
+            }
+            unset($lib);
+        }
+
         return (new Response())->json(['libraries' => $libraries]);
     }
 

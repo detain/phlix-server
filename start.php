@@ -280,6 +280,25 @@ try {
         /** @var \Phlix\Hub\HubApplication $hubApp */
         $hubApp = $container->get(\Phlix\Hub\HubApplication::class);
         $hubApp->start();
+
+        // If the server isn't enrolled yet, poll for an enrollment that appears
+        // later — i.e. when the operator pairs this RUNNING server — so the
+        // heartbeat loop starts without a process restart. The timer stops once
+        // the loop is running (or self-clears if the worker can't be set up).
+        if (!$hubApp->isRunning()) {
+            $retryTimer = null;
+            $retryTimer = \Workerman\Timer::add(15, static function () use ($hubApp, &$retryTimer): void {
+                if ($hubApp->isRunning()) {
+                    if ($retryTimer !== null) {
+                        \Workerman\Timer::del($retryTimer);
+                    }
+                    return;
+                }
+                if ($hubApp->isEnrolled()) {
+                    $hubApp->start();
+                }
+            });
+        }
     };
 } catch (\Throwable $e) {
     // The heartbeat worker is best-effort; never block the HTTP server.

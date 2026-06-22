@@ -101,4 +101,19 @@ final class HubApplication
     {
         return $this->running;
     }
+
+    /**
+     * Whether a stored enrollment exists (the server has been paired).
+     *
+     * Used by the heartbeat worker to poll for an enrollment that appears
+     * AFTER startup — i.e. when the operator pairs the running server — so the
+     * heartbeat loop can start without a process restart. Quiet (no logging),
+     * unlike {@see start()}, since it is called on a timer.
+     *
+     * @return bool True when `hub-enrollment.json` is present and loadable.
+     */
+    public function isEnrolled(): bool
+    {
+        return $this->hubClient->loadEnrollment() !== null;
+    }
 }

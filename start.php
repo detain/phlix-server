@@ -24,7 +24,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
-use Phlix\Server\Http\Handler\HttpHandler;
+use Phlix\Server\Workerman\HttpHandler;
 use Workerman\Worker;
 
 require __DIR__ . '/vendor/autoload.php';

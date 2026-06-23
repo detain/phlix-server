@@ -20,6 +20,29 @@ use Phlix\Media\Metadata\Dto\MetadataValue;
  */
 class TmdbProvider implements MetadataProviderInterface
 {
+    /**
+     * Crew jobs surfaced as "key crew" on the media-detail page. Anything
+     * outside this allow-list (gaffers, grips, …) is dropped so the crew block
+     * stays short and relevant.
+     *
+     * @var list<string>
+     */
+    private const KEY_CREW_JOBS = [
+        'Director',
+        'Writer',
+        'Screenplay',
+        'Story',
+        'Creator',
+        'Producer',
+        'Executive Producer',
+    ];
+
+    /** Maximum number of cast objects emitted per item. */
+    private const MAX_CAST = 20;
+
+    /** Maximum number of crew objects emitted per item. */
+    private const MAX_CREW = 12;
+
     /** @var MetadataHttpClient HTTP client for TMDB API requests */
     private MetadataHttpClient $http;
 
@@ -250,7 +273,7 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $response = $this->http->get("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
-            'append_to_response' => 'genres,external_ids,content_ratings,aggregate_credits',
+            'append_to_response' => 'genres,external_ids,content_ratings,aggregate_credits,production_companies',
         ]);
         if ($response === null) {
             return [];
@@ -336,7 +359,27 @@ class TmdbProvider implements MetadataProviderInterface
         // `roles[]`; actorNames() only needs `name`.
         $aggregateCredits = MetadataValue::asAssoc($data['aggregate_credits'] ?? null);
         $cast = MetadataValue::asAssocList($aggregateCredits['cast'] ?? null);
-        $actors = MetadataValue::actorNames(array_slice($cast, 0, 20));
+        $actors = MetadataValue::actorNames(array_slice($cast, 0, self::MAX_CAST));
+
+        // Rich cast objects with profile photos for the media-detail page. The
+        // flat `actors` list above is UNCHANGED (cards + the `$.actors[*]`
+        // filter depend on it); these are additive.
+        $castObjects = $this->buildTvCast($cast);
+
+        // Key crew. `aggregate_credits.crew` entries carry `jobs[]`
+        // ([{job, …}, …]) rather than a single `job`; the series-level
+        // `created_by[]` is folded in as job "Creator".
+        $crew = MetadataValue::asAssocList($aggregateCredits['crew'] ?? null);
+        $crewObjects = $this->buildTvCrew($crew, MetadataValue::asAssocList($data['created_by'] ?? null));
+
+        // Studios/networks. For TV, `networks` (the broadcaster) is just as
+        // studio-like as `production_companies`, so both feed the list and the
+        // single `studio` string.
+        $companies = $this->buildProductionCompanies(array_merge(
+            MetadataValue::asAssocList($data['production_companies'] ?? null),
+            MetadataValue::asAssocList($data['networks'] ?? null),
+        ));
+        $studio = $companies[0]['name'] ?? null;
 
         return [
             'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
@@ -347,12 +390,171 @@ class TmdbProvider implements MetadataProviderInterface
             'year' => $year,
             'genres' => $genreNames,
             'actors' => $actors,
+            'cast' => $castObjects,
+            'crew' => $crewObjects,
+            'production_companies' => $companies,
+            'studio' => $studio,
             'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
             'imdb_id' => $imdbId,
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
             'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'number_of_seasons' => MetadataValue::asInt($data['number_of_seasons'] ?? null),
         ];
+    }
+
+    /**
+     * Build rich cast objects from a TMDB `aggregate_credits.cast` list.
+     *
+     * `aggregate_credits` entries carry `name`, `profile_path`, an `order`, and
+     * a `roles[]` array whose first entry's `character` is the displayed role
+     * (a recurring actor may play several characters across seasons).
+     *
+     * @param list<array<string, mixed>> $cast Raw TMDB aggregate cast entries.
+     * @return list<array{name: string, role: string, profile_url: string|null}>
+     */
+    private function buildTvCast(array $cast): array
+    {
+        $out = [];
+        foreach (array_slice($cast, 0, self::MAX_CAST) as $member) {
+            $name = MetadataValue::asString($member['name'] ?? null);
+            if ($name === '') {
+                continue;
+            }
+            $roles = MetadataValue::asAssocList($member['roles'] ?? null);
+            $role = MetadataValue::asString($roles[0]['character'] ?? null);
+            $out[] = [
+                'name' => $name,
+                'role' => $role,
+                'profile_url' => $this->profileUrl(
+                    MetadataValue::asNullableString($member['profile_path'] ?? null),
+                ),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Build key-crew objects from a TMDB `aggregate_credits.crew` list plus the
+     * series-level `created_by[]` (mapped to job "Creator").
+     *
+     * `aggregate_credits.crew` entries carry `jobs[]` ([{job, …}, …]); the
+     * single `job` field is used as a fallback. Filtered to {@see self::KEY_CREW_JOBS},
+     * de-duplicated by name+job and capped at {@see self::MAX_CREW}.
+     *
+     * @param list<array<string, mixed>> $crew      Raw TMDB aggregate crew entries.
+     * @param list<array<string, mixed>> $createdBy Raw TMDB `created_by` entries.
+     * @return list<array{name: string, job: string, profile_url: string|null}>
+     */
+    private function buildTvCrew(array $crew, array $createdBy): array
+    {
+        $normalized = [];
+        foreach ($createdBy as $creator) {
+            $normalized[] = [
+                'name' => MetadataValue::asString($creator['name'] ?? null),
+                'job' => 'Creator',
+                'profile_path' => MetadataValue::asNullableString($creator['profile_path'] ?? null),
+            ];
+        }
+        foreach ($crew as $member) {
+            $jobs = MetadataValue::asAssocList($member['jobs'] ?? null);
+            $job = MetadataValue::asString($jobs[0]['job'] ?? ($member['job'] ?? null));
+            $normalized[] = [
+                'name' => MetadataValue::asString($member['name'] ?? null),
+                'job' => $job,
+                'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+            ];
+        }
+        return $this->filterKeyCrew($normalized);
+    }
+
+    /**
+     * Filter/normalize a flat list of `{name, job, profile_path}` crew rows to
+     * the key-crew allow-list, de-duplicating by name+job and capping the count.
+     *
+     * @param list<array{name: string, job: string, profile_path: string|null}> $rows
+     * @return list<array{name: string, job: string, profile_url: string|null}>
+     */
+    private function filterKeyCrew(array $rows): array
+    {
+        $out = [];
+        $seen = [];
+        foreach ($rows as $row) {
+            $name = $row['name'];
+            $job = $row['job'];
+            if ($name === '' || !in_array($job, self::KEY_CREW_JOBS, true)) {
+                continue;
+            }
+            $key = $name . '|' . $job;
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = [
+                'name' => $name,
+                'job' => $job,
+                'profile_url' => $this->profileUrl($row['profile_path']),
+            ];
+            if (count($out) >= self::MAX_CREW) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Build production-company objects from a TMDB `production_companies` (or
+     * TV `networks`) list. Entries without a name are skipped.
+     *
+     * @param list<array<string, mixed>> $companies Raw TMDB company entries.
+     * @return list<array{name: string, logo_url: string|null, origin_country: string|null}>
+     */
+    private function buildProductionCompanies(array $companies): array
+    {
+        $out = [];
+        $seen = [];
+        foreach ($companies as $company) {
+            $name = MetadataValue::asString($company['name'] ?? null);
+            if ($name === '' || isset($seen[$name])) {
+                continue;
+            }
+            $seen[$name] = true;
+            $out[] = [
+                'name' => $name,
+                'logo_url' => $this->logoUrl(
+                    MetadataValue::asNullableString($company['logo_path'] ?? null),
+                ),
+                'origin_country' => MetadataValue::asNullableString($company['origin_country'] ?? null),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Build a full TMDB profile-photo URL (w185) from a `/path.jpg` fragment.
+     *
+     * @param string|null $path Raw TMDB `profile_path`.
+     * @return string|null Full URL, or null when no path is present.
+     */
+    private function profileUrl(?string $path): ?string
+    {
+        if ($path === null || $path === '') {
+            return null;
+        }
+        return $this->imageBaseUrl . '/w185' . $path;
+    }
+
+    /**
+     * Build a full TMDB logo URL (w185) from a `/path.png` fragment.
+     *
+     * @param string|null $path Raw TMDB `logo_path`.
+     * @return string|null Full URL, or null when no path is present.
+     */
+    private function logoUrl(?string $path): ?string
+    {
+        if ($path === null || $path === '') {
+            return null;
+        }
+        return $this->imageBaseUrl . '/w185' . $path;
     }
 
     /**
@@ -469,6 +671,39 @@ class TmdbProvider implements MetadataProviderInterface
             ];
         }
 
+        // Rich cast objects with profile photos for the media-detail page.
+        // `actors` (above) is left UNCHANGED — the resolver flattens it to names
+        // and the `$.actors[*]` filter / SPA chips depend on that shape; `cast`
+        // is additive. Movie `/credits.cast` carries `character` directly (vs
+        // TV's `roles[].character`).
+        $castObjects = [];
+        foreach (array_slice($cast, 0, self::MAX_CAST) as $member) {
+            $name = MetadataValue::asString($member['name'] ?? null);
+            if ($name === '') {
+                continue;
+            }
+            $castObjects[] = [
+                'name' => $name,
+                'role' => MetadataValue::asString($member['character'] ?? null),
+                'profile_url' => $this->profileUrl(
+                    MetadataValue::asNullableString($member['profile_path'] ?? null),
+                ),
+            ];
+        }
+
+        // Key crew. Movie `/credits.crew` entries carry a single `job` field.
+        $crewRows = [];
+        foreach ($crew as $member) {
+            $crewRows[] = [
+                'name' => MetadataValue::asString($member['name'] ?? null),
+                'job' => MetadataValue::asString($member['job'] ?? null),
+                'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+            ];
+        }
+        $crewObjects = $this->filterKeyCrew($crewRows);
+
+        $companies = $this->buildProductionCompanies($studios);
+
         return [
             'name' => MetadataValue::asString(
                 $data['title'] ?? ($data['name'] ?? null)
@@ -492,6 +727,9 @@ class TmdbProvider implements MetadataProviderInterface
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
             'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'actors' => $actors,
+            'cast' => $castObjects,
+            'crew' => $crewObjects,
+            'production_companies' => $companies,
             'director' => $this->findDirector($crew),
         ];
     }

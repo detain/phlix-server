@@ -204,6 +204,34 @@ class SeriesMetadataResolver
             $result['official_rating'] = $rating;
         }
 
+        // Flat actor names (cards + the `$.actors[*]` filter + SPA chips all
+        // consume this shape — keep it flat). actorNames() tolerates both the
+        // already-flat TV `actors` list and any object form.
+        $actors = MetadataValue::actorNames($details['actors'] ?? null);
+        if ($actors !== []) {
+            $result['actors'] = $actors;
+        }
+
+        // Rich cast/crew/company objects (profile photos, logos) for the
+        // media-detail page. ADDITIVE alongside the flat `actors` above — same
+        // shape TmdbProvider::formatTvDetails emitted. Stored only when present.
+        $cast = MetadataValue::asAssocList($details['cast'] ?? null);
+        if ($cast !== []) {
+            $result['cast'] = $cast;
+        }
+        $crew = MetadataValue::asAssocList($details['crew'] ?? null);
+        if ($crew !== []) {
+            $result['crew'] = $crew;
+        }
+        $companies = MetadataValue::asAssocList($details['production_companies'] ?? null);
+        if ($companies !== []) {
+            $result['production_companies'] = $companies;
+        }
+        $studio = MetadataValue::asNullableString($details['studio'] ?? null);
+        if ($studio !== null) {
+            $result['studio'] = $studio;
+        }
+
         return $result;
     }
 

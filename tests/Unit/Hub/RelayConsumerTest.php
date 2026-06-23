@@ -100,7 +100,7 @@ class RelayConsumerTest extends TestCase
         return $mock;
     }
 
-    private function createConsumer(?RelayConfig $config = null): RelayConsumer
+    private function createConsumer(?RelayConfig $config = null, ?callable $httpDispatcher = null): RelayConsumer
     {
         $config = $config ?? new RelayConfig(
             enabled: true,
@@ -128,6 +128,7 @@ class RelayConsumerTest extends TestCase
                 $locals['local-' . $locals->count()] = $conn;
                 return $conn;
             },
+            httpDispatcher: $httpDispatcher,
         );
     }
 
@@ -546,5 +547,174 @@ class RelayConsumerTest extends TestCase
         $consumer->registerMount('/relay/live/abc', static fn (string $p): ?string => null);
         $consumer->unregisterMount('/relay/live/abc');
         $this->assertFalse($consumer->isConnected());
+    }
+
+    /**
+     * Decode the HTTP_RESPONSE frames the consumer sent (skipping the leading
+     * HELLO at index 0) and reassemble them into [status, headers, body].
+     *
+     * @return array{status: int, headers: array<string, string>, body: string, request_id: int|null}
+     */
+    private function collectHttpResponse(): array
+    {
+        $status = 0;
+        $headers = [];
+        $body = '';
+        $ended = false;
+        $requestId = null;
+
+        foreach ($this->hub->sent as $i => $raw) {
+            if ($i === 0) {
+                continue; // HELLO JSON text
+            }
+            $frame = $this->codec->decode($raw);
+            $this->assertNotNull($frame, 'frame should decode');
+            $this->assertSame(RelayFrameType::HTTP_RESPONSE, $frame->type);
+            $requestId = $frame->channelId();
+
+            $chunk = \Phlix\Shared\Relay\RelayHttpResponseCodec::decode($frame->payload);
+            if ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_HEAD && $chunk->head !== null) {
+                $status = $chunk->head->status;
+                $headers = $chunk->head->headers;
+            } elseif ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_BODY) {
+                $body .= $chunk->body;
+            } elseif ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_END) {
+                $ended = true;
+            }
+        }
+
+        $this->assertTrue($ended, 'response stream should terminate with END');
+
+        return ['status' => $status, 'headers' => $headers, 'body' => $body, 'request_id' => $requestId];
+    }
+
+    public function test_http_request_dispatches_and_streams_response(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            $res = new \Phlix\Server\Http\Response();
+            return $res->json(['libraries' => ['Movies', 'TV']]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            'libraryId=abc',
+            ['Accept' => 'application/json', 'X-Phlix-Relay-User' => 'user-42'],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 0x80000001, $envelope->toJson()));
+
+        // The dispatcher saw a faithfully-rebuilt request.
+        $this->assertNotNull($captured);
+        $this->assertSame('GET', $captured->method);
+        $this->assertSame('/api/v1/libraries', $captured->path);
+        $this->assertSame('libraryId=abc', $captured->queryString);
+        $this->assertSame('abc', $captured->query['libraryId'] ?? null);
+        $this->assertSame('user-42', $captured->userId, 'forwarded relay user should authenticate the request');
+
+        // The response streamed back on the same request id.
+        $result = $this->collectHttpResponse();
+        $this->assertSame(0x80000001, $result['request_id']);
+        $this->assertSame(200, $result['status']);
+        /** @var array<string, mixed> $decoded */
+        $decoded = json_decode($result['body'], true, 8, JSON_THROW_ON_ERROR);
+        $this->assertSame(['libraries' => ['Movies', 'TV']], $decoded);
+    }
+
+    public function test_http_request_without_relay_user_defaults_identity(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/api/v1/libraries', '', [], '');
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 7, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame('hub-relay', $captured->userId);
+    }
+
+    public function test_http_request_large_body_fragments_across_frames(): void
+    {
+        $bigBody = str_repeat('x', 200000); // > 3 frames at 65534 bytes
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use ($bigBody): \Phlix\Server\Http\Response {
+            $res = new \Phlix\Server\Http\Response();
+            $res->body = $bigBody;
+            $res->statusCode = 200;
+            return $res;
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/api/v1/media', '', [], '');
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 42, $envelope->toJson()));
+
+        // HELLO + HEAD + (multiple BODY) + END — proves fragmentation happened.
+        $this->assertGreaterThan(4, count($this->hub->sent));
+        $result = $this->collectHttpResponse();
+        $this->assertSame(200, $result['status']);
+        $this->assertSame($bigBody, $result['body']);
+    }
+
+    public function test_http_request_without_dispatcher_replies_503(): void
+    {
+        $consumer = $this->createConsumer(); // no dispatcher
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest('GET', '/api/v1/libraries', '', [], '');
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 9, $envelope->toJson()));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(503, $result['status']);
+    }
+
+    public function test_http_request_malformed_envelope_replies_400(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 11, 'not json'));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(400, $result['status']);
+    }
+
+    public function test_relay_config_with_auto_enable_derives_ws_url(): void
+    {
+        $config = new RelayConfig(enabled: false);
+        $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
+
+        $this->assertTrue($enabled->enabled);
+        $this->assertSame('wss://hub.phlix.interserver.net:8802', $enabled->buildHubRelayWsUrl());
+    }
+
+    public function test_relay_config_with_auto_enable_uses_ws_for_http_hub(): void
+    {
+        $config = new RelayConfig(enabled: false);
+        $enabled = $config->withAutoEnable('http://localhost:8800');
+        $this->assertSame('ws://localhost:8802', $enabled->buildHubRelayWsUrl());
+    }
+
+    public function test_relay_config_with_auto_enable_keeps_explicit_ws_url(): void
+    {
+        $config = new RelayConfig(enabled: false, hubRelayWsUrl: 'ws://explicit:9999');
+        $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
+        $this->assertSame('ws://explicit:9999', $enabled->buildHubRelayWsUrl());
     }
 }

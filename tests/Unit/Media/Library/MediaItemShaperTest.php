@@ -155,4 +155,122 @@ final class MediaItemShaperTest extends TestCase
         // ...and streams are attached.
         $this->assertSame($streams, $shaped['streams']);
     }
+
+    public function testShapeDetailExposesNormalizedCastCrewCompaniesAndStudio(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'metadata' => [
+                'actors' => ['Keanu Reeves', 'Carrie-Anne Moss'],
+                'director' => 'Lana Wachowski',
+                'cast' => [
+                    ['name' => 'Keanu Reeves', 'role' => 'Neo', 'profile_url' => 'https://i/w185/k.jpg'],
+                    ['name' => '', 'role' => 'Extra'], // dropped (no name)
+                ],
+                'crew' => [
+                    ['name' => 'Lana Wachowski', 'job' => 'Director', 'profile_url' => null],
+                ],
+                'production_companies' => [
+                    ['name' => 'Warner Bros.', 'logo_url' => 'https://i/w185/wb.png', 'origin_country' => 'US'],
+                ],
+                'studio' => 'Warner Bros.',
+            ],
+        ], []);
+
+        // actors stays a flat list of names; director stays a string.
+        $this->assertSame(['Keanu Reeves', 'Carrie-Anne Moss'], $shaped['actors']);
+        $this->assertSame('Lana Wachowski', $shaped['director']);
+
+        // Rich blocks normalized, nameless entries dropped.
+        $this->assertCount(1, $shaped['cast']);
+        $this->assertSame([
+            'name' => 'Keanu Reeves',
+            'role' => 'Neo',
+            'profile_url' => 'https://i/w185/k.jpg',
+        ], $shaped['cast'][0]);
+        $this->assertSame('Director', $shaped['crew'][0]['job']);
+        $this->assertNull($shaped['crew'][0]['profile_url']);
+        $this->assertSame('Warner Bros.', $shaped['production_companies'][0]['name']);
+        $this->assertSame('US', $shaped['production_companies'][0]['origin_country']);
+        $this->assertSame('Warner Bros.', $shaped['studio']);
+    }
+
+    public function testShapeDetailFallsBackToActorObjectsWhenNoCastKey(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Legacy',
+            'type' => 'movie',
+            'metadata' => [
+                // No `cast` key — fall back to object-form actors.
+                'actors' => [
+                    ['name' => 'Old Actor', 'character' => 'Hero'],
+                ],
+            ],
+        ], []);
+
+        $this->assertCount(1, $shaped['cast']);
+        $this->assertSame('Old Actor', $shaped['cast'][0]['name']);
+        $this->assertSame('Hero', $shaped['cast'][0]['role']);
+        $this->assertNull($shaped['cast'][0]['profile_url']);
+    }
+
+    public function testShapeDetailFallsBackToFlatActorNamesForCast(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Flat',
+            'type' => 'movie',
+            'metadata' => ['actors' => ['Solo Name']],
+        ], []);
+
+        $this->assertSame([
+            ['name' => 'Solo Name', 'role' => '', 'profile_url' => null],
+        ], $shaped['cast']);
+    }
+
+    public function testShapeDetailDefensivelyHandlesMalformedRichMetadata(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Bad',
+            'type' => 'movie',
+            'metadata' => [
+                'cast' => 'not-an-array',
+                'crew' => [['no_name' => true], 'scalar'],
+                'production_companies' => ['nope'],
+                'studio' => 42,
+            ],
+        ], []);
+
+        $this->assertSame([], $shaped['cast']);
+        $this->assertSame([], $shaped['crew']);
+        $this->assertSame([], $shaped['production_companies']);
+        $this->assertNull($shaped['studio']);
+    }
+
+    public function testListShapeDoesNotExposeRichDetailFields(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'cast' => [['name' => 'A', 'role' => 'B', 'profile_url' => null]],
+                'crew' => [['name' => 'C', 'job' => 'Director', 'profile_url' => null]],
+                'production_companies' => [['name' => 'D', 'logo_url' => null, 'origin_country' => null]],
+                'studio' => 'D',
+                'actors' => ['A'],
+            ],
+        ]);
+
+        // The lean list shape carries flat actors but NONE of the heavy blocks.
+        $this->assertSame(['A'], $shaped['actors']);
+        $this->assertArrayNotHasKey('cast', $shaped);
+        $this->assertArrayNotHasKey('crew', $shaped);
+        $this->assertArrayNotHasKey('production_companies', $shaped);
+        $this->assertArrayNotHasKey('studio', $shaped);
+    }
 }

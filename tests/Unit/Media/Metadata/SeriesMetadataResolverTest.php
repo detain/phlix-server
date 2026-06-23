@@ -105,4 +105,55 @@ final class SeriesMetadataResolverTest extends TestCase
 
         $this->assertSame([], $season['episodes']);
     }
+
+    public function testResolvePassesThroughRichCastCrewCompaniesWithFlatActors(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'tmdb_id' => '1668',
+            'actors' => ['Kiefer Sutherland'],
+            'cast' => [
+                ['name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer', 'profile_url' => 'https://i/w185/k.jpg'],
+            ],
+            'crew' => [
+                ['name' => 'Joel Surnow', 'job' => 'Creator', 'profile_url' => null],
+            ],
+            'production_companies' => [
+                ['name' => 'FOX', 'logo_url' => 'https://i/w185/fox.png', 'origin_country' => 'US'],
+            ],
+            'studio' => 'FOX',
+        ]);
+
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
+
+        $this->assertNotNull($resolved);
+        // actors stays flat.
+        $this->assertSame(['Kiefer Sutherland'], $resolved['actors']);
+        $this->assertSame('Jack Bauer', $resolved['cast'][0]['role']);
+        $this->assertSame('https://i/w185/k.jpg', $resolved['cast'][0]['profile_url']);
+        $this->assertSame('Creator', $resolved['crew'][0]['job']);
+        $this->assertSame('FOX', $resolved['production_companies'][0]['name']);
+        $this->assertSame('FOX', $resolved['studio']);
+    }
+
+    public function testResolveOmitsRichKeysWhenTvDetailsLacksThem(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'tmdb_id' => '1668',
+        ]);
+
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
+
+        $this->assertNotNull($resolved);
+        $this->assertArrayNotHasKey('cast', $resolved);
+        $this->assertArrayNotHasKey('crew', $resolved);
+        $this->assertArrayNotHasKey('production_companies', $resolved);
+        $this->assertArrayNotHasKey('studio', $resolved);
+        $this->assertArrayNotHasKey('actors', $resolved);
+    }
 }

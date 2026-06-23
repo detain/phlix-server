@@ -731,6 +731,48 @@ class ItemRepositoryTest extends TestCase
         $repo->query(['match' => 'unmatched']);
     }
 
+    public function testQueryWithCompaniesFiltersOnProductionCompaniesOrStudio(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql): bool {
+                    // Matches the rich production_companies[*].name array OR the
+                    // legacy single studio string.
+                    return str_contains($sql, "'\$.production_companies[*].name'")
+                        && str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.studio')) = ?");
+                }),
+                $this->callback(function ($params): bool {
+                    // LIKE wildcard binding for JSON_SEARCH + exact binding for the
+                    // studio comparison, both for "Warner Bros.".
+                    return is_array($params)
+                        && in_array('%Warner Bros.%', $params, true)
+                        && in_array('Warner Bros.', $params, true);
+                }),
+            )
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['companies' => ['Warner Bros.']]);
+    }
+
+    public function testQueryWithMultipleCompaniesCombinesAsOr(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                // Two company clauses OR-ed together (any-match), each itself an
+                // (array-name OR studio) pair.
+                return substr_count($sql, "'\$.production_companies[*].name'") === 2;
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['companies' => ['Warner Bros.', 'FOX']]);
+    }
+
     public function testLetterCountsGroupsByFirstLetterAndShapesRows(): void
     {
         $db = $this->createMock(Connection::class);

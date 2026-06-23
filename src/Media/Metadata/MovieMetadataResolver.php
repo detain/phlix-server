@@ -214,6 +214,27 @@ class MovieMetadataResolver
             $result['director'] = $director;
         }
 
+        // Rich cast/crew/company objects (profile photos, logos) for the
+        // media-detail page. ADDITIVE alongside the flat `actors`/`director`
+        // above — same shape TMDB emitted (see TmdbProvider::formatMovieDetails).
+        // Stored only when non-empty so a thin match leaves the keys absent.
+        $cast = MetadataValue::asAssocList($tmdb['cast'] ?? null);
+        if ($cast !== []) {
+            $result['cast'] = $cast;
+        }
+        $crew = MetadataValue::asAssocList($tmdb['crew'] ?? null);
+        if ($crew !== []) {
+            $result['crew'] = $crew;
+        }
+        $companies = MetadataValue::asAssocList($tmdb['production_companies'] ?? null);
+        if ($companies !== []) {
+            $result['production_companies'] = $companies;
+        }
+        $studio = MetadataValue::asNullableString($tmdb['studio'] ?? null);
+        if ($studio !== null) {
+            $result['studio'] = $studio;
+        }
+
         // Ratings — IMDb-sourced only.
         $imdbRating = MetadataValue::asNullableFloat($imdb['average_rating'] ?? null);
         if ($imdbRating !== null) {

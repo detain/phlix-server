@@ -198,4 +198,67 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertSame(8.5, $result['imdb_rating']);
         $this->assertSame(['Action', 'Science Fiction'], $result['genres']);
     }
+
+    public function testPreservesRichCastCrewCompaniesWhileFlatteningActors(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails([
+            // TMDB returns actor OBJECTS under `actors`; the resolver flattens them.
+            'actors' => [
+                ['name' => 'Keanu Reeves', 'role' => 'Neo', 'order' => 0],
+                ['name' => 'Carrie-Anne Moss', 'role' => 'Trinity', 'order' => 1],
+            ],
+            'director' => 'Lana Wachowski',
+            'cast' => [
+                ['name' => 'Keanu Reeves', 'role' => 'Neo', 'profile_url' => 'https://i/w185/k.jpg'],
+            ],
+            'crew' => [
+                ['name' => 'Lana Wachowski', 'job' => 'Director', 'profile_url' => null],
+            ],
+            'production_companies' => [
+                ['name' => 'Warner Bros.', 'logo_url' => 'https://i/w185/wb.png', 'origin_country' => 'US'],
+            ],
+            'studio' => 'Warner Bros.',
+        ]));
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        // actors is still a FLAT list of names (the landmine guard).
+        $this->assertSame(['Keanu Reeves', 'Carrie-Anne Moss'], $result['actors']);
+        $this->assertSame('Lana Wachowski', $result['director']);
+        // Rich objects passed through verbatim.
+        $this->assertSame('Keanu Reeves', $result['cast'][0]['name']);
+        $this->assertSame('https://i/w185/k.jpg', $result['cast'][0]['profile_url']);
+        $this->assertSame('Director', $result['crew'][0]['job']);
+        $this->assertSame('Warner Bros.', $result['production_companies'][0]['name']);
+        $this->assertSame('Warner Bros.', $result['studio']);
+    }
+
+    public function testOmitsRichKeysWhenTmdbHasNoCastCrewOrCompanies(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        // tmdbDetails() default has none of the rich keys.
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails());
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow());
+
+        $resolver = new MovieMetadataResolver($tmdb, $imdb);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        $this->assertArrayNotHasKey('cast', $result);
+        $this->assertArrayNotHasKey('crew', $result);
+        $this->assertArrayNotHasKey('production_companies', $result);
+        $this->assertArrayNotHasKey('studio', $result);
+    }
 }

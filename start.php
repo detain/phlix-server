@@ -69,20 +69,48 @@ LoggerFactory::init($config['logger_config_path']);
 //    server's async workloads.
 // -----------------------------------------------------------------------------
 
-$applyCuratedCoroutineHooks = static function () use ($config): void {
-    $coroutineConfig = $config['coroutine'] ?? [];
-    if (($coroutineConfig['enabled'] ?? false) === false) {
-        return;
-    }
-    require __DIR__ . '/src/Server/Runtime/SwooleRuntime.php';
-    // Use SwooleRuntime::resolveHookFlags() which safely handles Swoole 5/6
-    // constant differences (e.g. SWOOLE_HOOK_SOCKET was removed in Swoole 6).
-    $hookFlags = \Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config);
-    // Must set Swoole as Workerman's event loop driver BEFORE enabling coroutines.
-    // Using SWOOLE_HOOK_* hooks with Workerman's default select event loop causes
-    // "API must be called in the coroutine" errors because stream_select() gets hooked.
+// Swoole must be Workerman's event loop driver, and Worker::$eventLoopClass MUST
+// be assigned here in the MASTER process — before any Worker exists and before
+// Worker::runAll() — NEVER inside onWorkerStart.
+//
+// Worker::run() dispatches the per-worker callback with
+//   match (Worker::$eventLoopClass) { Swoole::class => Coroutine::create($cb),
+//                                     default => (new \Fiber($cb))->start() }
+// and Workerman\Coroutine\Context::initDriver() picks its context backend
+// (Swoole vs Fiber) from that SAME static. If eventLoopClass is only set later
+// (inside onWorkerStart), run() has already taken the plain-Fiber branch while
+// the context driver resolves to Swoole — so the finally{} Context::destroy()
+// calls Swoole\Coroutine::getContext() OUTSIDE any coroutine, gets null, and
+// fatals: "Call to a member function exchangeArray() on null". Every worker then
+// dies on startup and Workerman re-forks in a tight loop (100% CPU, no service).
+// Setting it in the master keeps dispatch and the context driver consistent: the
+// worker callback runs inside a real Swoole coroutine where getContext() is valid.
+if (extension_loaded('swoole')) {
     Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
-    \Swoole\Runtime::enableCoroutine($hookFlags);
+    if (\Phlix\Server\Runtime\SwooleRuntime::coroutineEnabled($config)) {
+        // Enable the CURATED coroutine hook mask in the master so children inherit
+        // it. resolveHookFlags() handles Swoole 5/6 constant differences (e.g.
+        // SWOOLE_HOOK_SOCKET was removed in Swoole 6).
+        \Swoole\Runtime::enableCoroutine(\Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config));
+    }
+} else {
+    trigger_error(
+        'Swoole extension not detected — coroutine runtime will not be active. Install ext-swoole to enable.',
+        E_USER_WARNING
+    );
+}
+
+// Re-assert the curated coroutine hook mask inside every worker. Workerman's
+// Swoole event adapter constructor resets hook_flags back to SWOOLE_HOOK_ALL once
+// per worker (right before onWorkerStart), which would silently re-enable the
+// FILE(io_uring)/PROC/CURL/blocking-function hooks the allowlist exists to avoid
+// (those reintroduce the swoole.so SIGSEGV on this PHP 8.5 / Swoole 6.2.1 / kernel-7
+// io_uring stack). Re-applying via the same Coroutine::set() API at the top of each
+// worker keeps it on the safe hook set. {@see SwooleRuntime}
+$applyCuratedCoroutineHooks = static function () use ($config): void {
+    if (extension_loaded('swoole') && \Phlix\Server\Runtime\SwooleRuntime::coroutineEnabled($config)) {
+        \Swoole\Coroutine::set(['hook_flags' => \Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config)]);
+    }
 };
 
 // -----------------------------------------------------------------------------

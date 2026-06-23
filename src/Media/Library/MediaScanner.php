@@ -11,6 +11,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Extras\TrailerFinder;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
 use SplFileInfo;
@@ -50,6 +51,26 @@ class MediaScanner
     private ?TrailerFinder $trailerFinder = null;
 
     /**
+     * Optional ffprobe runner used to read each time-based file's total
+     * duration during the scan, so the player's scrubber knows the full
+     * length immediately (rather than growing as an in-progress transcode
+     * manifest fills). Null in tests/callers that do not wire it up; a probe
+     * failure never aborts the scan.
+     *
+     * @var FfmpegRunner|null
+     */
+    private ?FfmpegRunner $ffmpeg = null;
+
+    /**
+     * Concrete media-item types whose source files carry a meaningful total
+     * playback duration worth probing during the scan. Image/book/photo types
+     * have no duration and are never probed.
+     *
+     * @var array<int, string>
+     */
+    private const DURATION_PROBE_TYPES = ['video', 'movie', 'episode', 'audio'];
+
+    /**
      * Library types whose files hold episodic/movie video content and should be
      * organised into a series → season → episode hierarchy when filenames carry
      * an `SxxExx` marker. Other library types (audio, image, book, …) are passed
@@ -83,6 +104,12 @@ class MediaScanner
      *                                       legacy callers and tests not exercising
      *                                       events do not need to wire one up.
      * @param TrailerFinder|null $trailerFinder Optional trailer finder for extras detection
+     * @param FfmpegRunner|null $ffmpeg Optional ffprobe runner; when supplied,
+     *                           each time-based (video/movie/episode/audio) file
+     *                           has its total duration probed during the scan and
+     *                           stored under metadata_json['duration_seconds'].
+     *                           Defaults to null so callers/tests not exercising
+     *                           duration probing need not wire one up.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      */
@@ -91,7 +118,8 @@ class MediaScanner
         ItemRepository $itemRepository,
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
-        ?TrailerFinder $trailerFinder = null
+        ?TrailerFinder $trailerFinder = null,
+        ?FfmpegRunner $ffmpeg = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -99,6 +127,7 @@ class MediaScanner
         $this->namingOptions = $this->loadNamingOptions();
         $this->eventDispatcher = $eventDispatcher;
         $this->trailerFinder = $trailerFinder;
+        $this->ffmpeg = $ffmpeg;
     }
 
     /**
@@ -497,6 +526,11 @@ class MediaScanner
         // Check if already exists
         $existing = $this->itemRepository->findByPath($path);
         if ($existing) {
+            // Re-scan: the row is already indexed, so no new item is added.
+            // Backfill a missing total duration for time-based media so the
+            // scrubber has the true length even for files indexed before this
+            // probe existed (or before they were ever transcoded).
+            $this->backfillDuration($path, $existing);
             return false; // Already scanned
         }
 
@@ -531,6 +565,20 @@ class MediaScanner
         $path = self::toValidUtf8($path);
         $metadata = self::sanitizeMetadata($metadata);
 
+        // Probe and store the precise total duration (seconds) for time-based
+        // media so the player's scrubber knows the full length immediately. An
+        // int is sanitize-safe, so it is added after sanitizeMetadata(). Never
+        // overwrite a duration already present in the parsed metadata.
+        if (
+            in_array($mediaType, self::DURATION_PROBE_TYPES, true)
+            && !(isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds']))
+        ) {
+            $duration = $this->probeDurationSeconds($path);
+            if ($duration !== null) {
+                $metadata['duration_seconds'] = $duration;
+            }
+        }
+
         // Create media item. Guard the write so a single unrepresentable row
         // (or any other per-file failure) is logged and skipped rather than
         // killing the whole library scan.
@@ -561,6 +609,97 @@ class MediaScanner
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
 
         return true;
+    }
+
+    /**
+     * Probe a media file's total duration in whole seconds via ffprobe.
+     *
+     * Returns null when no ffprobe runner is wired, when the probe fails or
+     * yields no positive duration, or when any error occurs — a probe failure
+     * must NEVER abort the scan, so all throwables are caught and logged.
+     * Matches {@see TranscodeManager::persistProbedDuration()}'s key, type and
+     * `(int) round((float) $raw)` rounding so the scan- and transcode-time
+     * paths agree on the stored value.
+     *
+     * @param string $path Absolute filesystem path to the media file.
+     * @return int|null Total duration in seconds (> 0), or null.
+     */
+    private function probeDurationSeconds(string $path): ?int
+    {
+        if ($this->ffmpeg === null) {
+            return null;
+        }
+
+        try {
+            $probe = $this->ffmpeg->probe($path);
+            if (!is_array($probe)) {
+                return null;
+            }
+            $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
+            $rawDuration = $format['duration'] ?? null;
+            if (!is_numeric($rawDuration)) {
+                return null;
+            }
+            $duration = (int) round((float) $rawDuration);
+            return $duration > 0 ? $duration : null;
+        } catch (\Throwable $e) {
+            $this->logger->debug('Duration probe failed; continuing scan', [
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+    }
+
+    /**
+     * Backfill a missing total duration onto an already-indexed media item.
+     *
+     * Invoked on re-scan for rows that {@see processFile()} would otherwise just
+     * skip. Only time-based items (video/movie/episode/audio) that lack a
+     * positive `duration_seconds` are probed; the existing metadata is read,
+     * merged (never clobbering other keys) and written back in full via
+     * {@see ItemRepository::update()}. Fully guarded so a probe or write failure
+     * never aborts the scan.
+     *
+     * @param string               $path     Absolute filesystem path of the file.
+     * @param array<string, mixed> $existing Hydrated existing media-item row.
+     */
+    private function backfillDuration(string $path, array $existing): void
+    {
+        if ($this->ffmpeg === null) {
+            return;
+        }
+
+        try {
+            $type = $existing['type'] ?? null;
+            if (!is_string($type) || !in_array($type, self::DURATION_PROBE_TYPES, true)) {
+                return;
+            }
+
+            $meta = $this->existingMetadata($existing);
+            $existingDuration = $meta['duration_seconds'] ?? null;
+            if (is_numeric($existingDuration) && (int) $existingDuration > 0) {
+                return; // Already has a positive duration — nothing to do.
+            }
+
+            $duration = $this->probeDurationSeconds($path);
+            if ($duration === null) {
+                return;
+            }
+
+            $id = $existing['id'] ?? null;
+            if (!is_string($id) || $id === '') {
+                return;
+            }
+
+            $meta['duration_seconds'] = $duration;
+            $this->itemRepository->update($id, ['metadata_json' => $meta]);
+        } catch (\Throwable $e) {
+            $this->logger->debug('Duration backfill failed; continuing scan', [
+                'path' => $path,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

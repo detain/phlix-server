@@ -5,6 +5,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
@@ -443,6 +444,228 @@ class MediaScannerTest extends TestCase
 
         $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
         $this->assertCount(2, $series, 'distinct basenames => distinct series containers');
+    }
+
+    // --- duration probing --------------------------------------------------
+
+    public function testDurationSecondsPopulatedFromProbeOnNewVideoItem(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->makeFfmpegStub('5432.7'); // → round() = 5433
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies);
+        // (int) round((float) "5432.7") = 5433 — matches persistProbedDuration().
+        $this->assertSame(5433, $movies[0]['metadata_json']['duration_seconds']);
+    }
+
+    public function testDurationSecondsPopulatedForAudioItem(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->makeFfmpegStub('212.0');
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Some Track.mp3']);
+        $scanner->scan('lib-1', $this->tmpDir, 'audio');
+
+        $items = $repo->items();
+        $this->assertCount(1, $items);
+        $this->assertSame('audio', $items[0]['type']);
+        $this->assertSame(212, $items[0]['metadata_json']['duration_seconds']);
+    }
+
+    public function testImageAndBookItemsAreNeverProbedForDuration(): void
+    {
+        $repo = $this->makeFakeRepo();
+        // The runner MUST NOT be probed for non-time-based media.
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        // Image library.
+        $this->tmpDir = $this->makeTempDirWith(['Photo.jpg']);
+        $scanner->scan('lib-img', $this->tmpDir, 'image');
+        $this->removeDir($this->tmpDir);
+
+        // Book library.
+        $this->tmpDir = $this->makeTempDirWith(['Novel.epub']);
+        $scanner->scan('lib-book', $this->tmpDir, 'book');
+
+        foreach ($repo->items() as $item) {
+            $this->assertArrayNotHasKey(
+                'duration_seconds',
+                $item['metadata_json'],
+                'image/book items must carry no probed duration'
+            );
+        }
+    }
+
+    public function testProbeReturningNullLeavesNoDurationAndDoesNotAbort(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturn(null);
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Movie One (2020).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $items = $repo->items();
+        $this->assertCount(1, $items, 'scan still indexes the file when probe yields nothing');
+        $this->assertArrayNotHasKey('duration_seconds', $items[0]['metadata_json']);
+    }
+
+    public function testProbeThrowingDoesNotAbortScanAndLeavesNoDuration(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willThrowException(new \RuntimeException('ffprobe boom'));
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Movie One (2020).mkv', 'Movie Two (2021).mp4']);
+        // Must NOT throw — a probe failure can never abort the scan.
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $items = $repo->items();
+        $this->assertCount(2, $items, 'both files still indexed despite probe throwing');
+        foreach ($items as $item) {
+            $this->assertArrayNotHasKey('duration_seconds', $item['metadata_json']);
+        }
+    }
+
+    public function testRescanBackfillsMissingDurationOnExistingItem(): void
+    {
+        $repo = $this->makeFakeRepo();
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $path = $this->tmpDir . '/Inception (2010).mkv';
+
+        // Simulate a prior scan: the item already exists but has no duration
+        // (indexed before probing existed / never transcoded).
+        $repo->seed([
+            'id' => 'existing-movie',
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'Inception',
+            'type' => 'movie',
+            'path' => $path,
+            'metadata_json' => ['tmdb_id' => 27205],
+        ]);
+
+        $ffmpeg = $this->makeFfmpegStub('8880.4'); // → 8880
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        // No new row added (still the one seeded item).
+        $items = $repo->items();
+        $this->assertCount(1, $items, 'no duplicate item added on rescan');
+
+        // The existing row was updated with the backfilled duration, preserving
+        // other metadata keys.
+        $updates = array_values(array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie'));
+        $this->assertCount(1, $updates, 'exactly one backfill update');
+        $this->assertSame(8880, $updates[0]['data']['metadata_json']['duration_seconds']);
+        $this->assertSame(27205, $updates[0]['data']['metadata_json']['tmdb_id'], 'existing metadata preserved');
+    }
+
+    public function testRescanDoesNotReprobeWhenDurationAlreadyPresent(): void
+    {
+        $repo = $this->makeFakeRepo();
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $path = $this->tmpDir . '/Inception (2010).mkv';
+
+        $repo->seed([
+            'id' => 'existing-movie',
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'Inception',
+            'type' => 'movie',
+            'path' => $path,
+            'metadata_json' => ['duration_seconds' => 1234],
+        ]);
+
+        // Already has a positive duration → never probe again, never update.
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $updates = array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie');
+        $this->assertCount(0, $updates, 'no redundant write when duration already stored');
+    }
+
+    /**
+     * Build a mocked FfmpegRunner whose probe() returns a format.duration of the
+     * given seconds string (mirroring ffprobe's JSON), for every call.
+     */
+    private function makeFfmpegStub(string $durationSeconds): FfmpegRunner
+    {
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturn([
+            'streams' => [],
+            'format' => ['duration' => $durationSeconds],
+        ]);
+        return $ffmpeg;
     }
 
     // --- helpers -----------------------------------------------------------

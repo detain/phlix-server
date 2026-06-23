@@ -531,6 +531,14 @@ class WebPortalRouter
             $params['actors'] = array_filter($actors, 'is_string');
         }
 
+        // `?companies[]=…` filters on production company / studio name (matches
+        // the rich `metadata.production_companies[*].name` array OR the legacy
+        // single `metadata.studio` string — see ItemRepository::buildFilters).
+        $companies = $query['companies'] ?? null;
+        if (is_array($companies) && count($companies) > 0) {
+            $params['companies'] = array_filter($companies, 'is_string');
+        }
+
         // Match status: `?match=matched|unmatched` filters on whether the item
         // has ever been through metadata matching (metadata_refreshed_at).
         $match = $request->queryString('match');

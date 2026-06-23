@@ -430,6 +430,22 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
     }
 
+    public function testGetMediaForwardsCompaniesFilter(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('query')
+            ->with($this->callback(function (array $params): bool {
+                return ($params['companies'] ?? null) === ['Warner Bros.', 'FOX'];
+            }), $this->isNull())
+            ->willReturn(['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0]);
+
+        $request = new Request();
+        $request->query = ['companies' => ['Warner Bros.', 'FOX']];
+
+        $this->assertEquals(200, $this->makeRouter($itemRepo)->getMedia($request, [])->statusCode);
+    }
+
     public function testGetMediaForwardsTopLevelFlag(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);

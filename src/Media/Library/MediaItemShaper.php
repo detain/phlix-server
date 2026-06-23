@@ -128,6 +128,135 @@ final class MediaItemShaper
         $merged = array_merge($item, self::shape($item));
         $merged['streams'] = $streams;
 
+        /** @var array<string, mixed> $metadata */
+        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+
+        // Rich cast/crew/company blocks — exposed ONLY on the detail endpoint
+        // (the list shape stays lean). Defensively normalized so a malformed or
+        // legacy row can't break the contract. `actors` (flat names) +
+        // `director` (string), set by shape(), are left exactly as they are.
+        $merged['cast'] = self::normalizeCast($metadata);
+        $merged['crew'] = self::normalizePeople($metadata['crew'] ?? null, 'job');
+        $merged['production_companies'] = self::normalizeCompanies($metadata['production_companies'] ?? null);
+        $merged['studio'] = is_string($metadata['studio'] ?? null) && $metadata['studio'] !== ''
+            ? $metadata['studio']
+            : null;
+
         return $merged;
+    }
+
+    /**
+     * Normalize the `cast` block for the detail response.
+     *
+     * Prefers the rich `metadata.cast` objects ({name, role, profile_url}).
+     * Falls back to object-form `actors` ([{name, role/character, …}, …]) when
+     * no `cast` is present; a purely flat actor-name list yields cast entries
+     * with empty role + null profile_url. Entries without a name are dropped.
+     *
+     * @param array<string, mixed> $metadata Parsed metadata_json.
+     * @return list<array<string, mixed>>
+     */
+    private static function normalizeCast(array $metadata): array
+    {
+        $cast = $metadata['cast'] ?? null;
+        if (is_array($cast) && $cast !== []) {
+            return self::normalizePeople($cast, 'role');
+        }
+
+        // Fallback to the `actors` key (object form or flat names).
+        $actors = $metadata['actors'] ?? null;
+        if (!is_array($actors)) {
+            return [];
+        }
+        $out = [];
+        foreach ($actors as $entry) {
+            if (is_string($entry)) {
+                $name = trim($entry);
+                $role = '';
+                $profile = null;
+            } elseif (is_array($entry)) {
+                $name = is_scalar($entry['name'] ?? null) ? trim((string) $entry['name']) : '';
+                $roleRaw = $entry['role'] ?? ($entry['character'] ?? null);
+                $role = is_scalar($roleRaw) ? (string) $roleRaw : '';
+                $profile = is_string($entry['profile_url'] ?? null) && $entry['profile_url'] !== ''
+                    ? $entry['profile_url']
+                    : null;
+            } else {
+                continue;
+            }
+            if ($name === '') {
+                continue;
+            }
+            $out[] = ['name' => $name, 'role' => $role, 'profile_url' => $profile];
+        }
+        return $out;
+    }
+
+    /**
+     * Normalize a people list ({name, <$roleKey>, profile_url}) — shared by
+     * cast (role key `role`) and crew (role key `job`). Coerces scalar types,
+     * drops entries without a name.
+     *
+     * @param mixed  $value   Raw cast/crew value from metadata_json.
+     * @param string $roleKey Secondary string field: `role` (cast) or `job` (crew).
+     * @return list<array<string, mixed>>
+     */
+    private static function normalizePeople(mixed $value, string $roleKey): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $name = is_scalar($entry['name'] ?? null) ? trim((string) $entry['name']) : '';
+            if ($name === '') {
+                continue;
+            }
+            $roleRaw = $entry[$roleKey] ?? null;
+            $out[] = [
+                'name' => $name,
+                $roleKey => is_scalar($roleRaw) ? (string) $roleRaw : '',
+                'profile_url' => is_string($entry['profile_url'] ?? null) && $entry['profile_url'] !== ''
+                    ? $entry['profile_url']
+                    : null,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Normalize the `production_companies` block for the detail response.
+     *
+     * @param mixed $value Raw production_companies value from metadata_json.
+     * @return list<array{name: string, logo_url: string|null, origin_country: string|null}>
+     */
+    private static function normalizeCompanies(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $name = is_scalar($entry['name'] ?? null) ? trim((string) $entry['name']) : '';
+            if ($name === '') {
+                continue;
+            }
+            $out[] = [
+                'name' => $name,
+                'logo_url' => is_string($entry['logo_url'] ?? null) && $entry['logo_url'] !== ''
+                    ? $entry['logo_url']
+                    : null,
+                'origin_country' => is_string($entry['origin_country'] ?? null) && $entry['origin_country'] !== ''
+                    ? $entry['origin_country']
+                    : null,
+            ];
+        }
+        return $out;
     }
 }

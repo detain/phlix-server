@@ -1026,6 +1026,7 @@ class ItemRepository
         $yearTo = isset($params['yearTo']) && is_numeric($params['yearTo']) ? (int) $params['yearTo'] : null;
         $ratings = isset($params['ratings']) && is_array($params['ratings']) ? $params['ratings'] : null;
         $actors = isset($params['actors']) && is_array($params['actors']) ? $params['actors'] : null;
+        $companies = isset($params['companies']) && is_array($params['companies']) ? $params['companies'] : null;
         $match = isset($params['match']) && is_string($params['match']) ? $params['match'] : null;
 
         $parentId = isset($params['parentId']) && is_string($params['parentId']) && $params['parentId'] !== ''
@@ -1101,6 +1102,28 @@ class ItemRepository
             }
             if (count($actorWheres) > 0) {
                 $wheres[] = '(' . implode(' OR ', $actorWheres) . ')';
+            }
+        }
+
+        if ($companies !== null && count($companies) > 0) {
+            $companyWheres = [];
+            foreach ($companies as $company) {
+                if (is_string($company) && $company !== '') {
+                    $escapedCompany = addcslashes($company, '%_');
+                    // Match each production_companies array element by name via
+                    // JSON_SEARCH over '$.production_companies[*].name' (the rich
+                    // shape this feature adds), OR the legacy single '$.studio'
+                    // string (exact match), so the filter works before AND after
+                    // a metadata re-match. Multiple companies combine as OR (any).
+                    $companyWheres[] = "(JSON_SEARCH(metadata_json, 'one', ?, NULL,"
+                        . " '\$.production_companies[*].name') IS NOT NULL"
+                        . " OR JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.studio')) = ?)";
+                    $bindings[] = '%' . $escapedCompany . '%';
+                    $bindings[] = $company;
+                }
+            }
+            if (count($companyWheres) > 0) {
+                $wheres[] = '(' . implode(' OR ', $companyWheres) . ')';
             }
         }
 

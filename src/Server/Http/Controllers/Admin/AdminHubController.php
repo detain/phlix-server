@@ -479,18 +479,26 @@ final class AdminHubController
     public function relayStatus(Request $request, array $params): Response
     {
         try {
-            $relayApp = $this->getRelayApplication();
-            $relayConsumer = $this->getRelayConsumer();
+            // The relay tunnel runs as a separate Workerman worker process (phlix-relay-tunnel)
+            // which creates its own RelayConsumer directly. The RelayConsumer from our container
+            // is a different instance that was never started. So we check the actual tunnel
+            // worker process state instead of the container instance.
+            $tunnelRunning = $this->isTunnelWorkerRunning();
+            $tunnelActive = false;
+            $lastActivity = null;
 
-            $running = $relayApp !== null && $relayApp->isRunning();
-            $connected = $relayConsumer !== null && $relayConsumer->isConnected();
-            $active = $relayConsumer !== null && $relayConsumer->isActive();
+            if ($tunnelRunning) {
+                // Check recent logs for tunnel active status
+                $logState = $this->getTunnelLogState();
+                $tunnelActive = $logState['active'];
+                $lastActivity = $logState['lastActivity'];
+            }
 
             return (new Response())->json([
-                'connected' => $running && $connected,
-                'active' => $running && $active,
-                'endpoint' => null, // Not exposed by RelayConsumer
-                'establishedAt' => null, // Not tracked
+                'connected' => $tunnelRunning && $tunnelActive,
+                'active' => $tunnelActive,
+                'endpoint' => null,
+                'establishedAt' => $lastActivity,
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -903,5 +911,67 @@ final class AdminHubController
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Check if the relay tunnel worker process is running.
+     */
+    private function isTunnelWorkerRunning(): bool
+    {
+        // Check for the tunnel worker process
+        $output = [];
+        exec('pgrep -f "phlix-relay-tunnel" 2>/dev/null', $output);
+        return count($output) > 0;
+    }
+
+    /**
+     * Get tunnel connection state from recent log entries.
+     *
+     * @return array{active: bool, lastActivity: ?string}
+     */
+    private function getTunnelLogState(): array
+    {
+        $logFile = defined('PHLIX_LOG_DIR') ? PHLIX_LOG_DIR : __DIR__ . '/../../../../.logs';
+        $logFile = $logFile . '/events-' . date('Y-m-d') . '.log';
+
+        if (!file_exists($logFile)) {
+            return ['active' => false, 'lastActivity' => null];
+        }
+
+        // Read last 50 lines and look for tunnel active status
+        $fp = fopen($logFile, 'r');
+        if ($fp === false) {
+            return ['active' => false, 'lastActivity' => null];
+        }
+
+        $lines = [];
+        while (($line = fgets($fp)) !== false) {
+            $lines[] = $line;
+            if (count($lines) > 50) {
+                array_shift($lines);
+            }
+        }
+        fclose($fp);
+
+        $active = false;
+        $lastActivity = null;
+
+        foreach (array_reverse($lines) as $line) {
+            if (strpos($line, 'RelayConsumer: tunnel active') !== false) {
+                $active = true;
+                // Extract timestamp from log line
+                if (preg_match('/^\[([^\]]+)\]/', $line, $matches)) {
+                    $lastActivity = $matches[1];
+                }
+                break;
+            }
+            if (strpos($line, 'RelayConsumer connected; sending HELLO') !== false && $lastActivity === null) {
+                if (preg_match('/^\[([^\]]+)\]/', $line, $matches)) {
+                    $lastActivity = $matches[1];
+                }
+            }
+        }
+
+        return ['active' => $active, 'lastActivity' => $lastActivity];
     }
 }

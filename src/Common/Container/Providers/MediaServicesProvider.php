@@ -24,6 +24,7 @@ use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Playlists\SmartPlaylistController;
 use Phlix\Playlists\SmartPlaylistEngine;
 use Phlix\Playlists\SmartPlaylistRefreshHandler;
@@ -118,7 +119,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
 
             MediaScanner::class => autowire()
                 ->constructorParameter('logger', get('logger.media'))
-                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class)),
+                ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
+                // Probe each time-based file's total duration during the scan so
+                // the player's scrubber knows the full length immediately. The
+                // FfmpegRunner is registered in TranscodeServicesProvider and is
+                // resolvable from the shared container.
+                ->constructorParameter('ffmpeg', get(FfmpegRunner::class)),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),

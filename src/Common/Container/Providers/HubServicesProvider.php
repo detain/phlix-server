@@ -90,7 +90,32 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.hub'))
                 ->constructorParameter('configDir', $configDir)
                 ->constructorParameter('httpClient', get(HttpClientInterface::class))
-                ->constructorParameter('publicUrl', $publicUrl),
+                ->constructorParameter('publicUrl', $publicUrl)
+                // Advertise this server's libraries in each heartbeat so the hub
+                // caches them (server_libraries) and the owner's dashboard can list
+                // them. Resolved lazily per heartbeat; failures degrade to empty.
+                ->constructorParameter('librariesProvider', factory(
+                    static function (ContainerInterface $c): \Closure {
+                        return static function () use ($c): array {
+                            $manager = $c->get(\Phlix\Media\Library\LibraryManager::class);
+                            if (!$manager instanceof \Phlix\Media\Library\LibraryManager) {
+                                return [];
+                            }
+                            $out = [];
+                            foreach ($manager->getAllLibraries() as $lib) {
+                                if (!is_array($lib)) {
+                                    continue;
+                                }
+                                $id = is_string($lib['id'] ?? null) ? $lib['id'] : '';
+                                $name = is_string($lib['name'] ?? null) ? $lib['name'] : '';
+                                if ($id !== '' && $name !== '') {
+                                    $out[] = ['library_id' => $id, 'library_name' => $name];
+                                }
+                            }
+                            return $out;
+                        };
+                    }
+                )),
 
             HubJwksController::class => autowire()
                 ->constructorParameter('hubClient', get(HubClient::class)),

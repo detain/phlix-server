@@ -274,6 +274,95 @@ class HubClientTest extends TestCase
         $this->assertNull($result->error);
     }
 
+    public function test_sendHeartbeat_advertises_libraries_from_provider(): void
+    {
+        // The hub caches heartbeat-reported libraries in server_libraries so the
+        // owner's dashboard can list them; the payload must carry them.
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $capturedPayload = null;
+        $httpClient->method('post')->willReturnCallback(
+            function (string $url, array $payload) use (&$capturedPayload): HttpResponse {
+                $capturedPayload = $payload;
+                return new HttpResponse(200, [], []);
+            }
+        );
+
+        $client = new HubClient(
+            $keyManager,
+            $httpClient,
+            $logger,
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            static fn (): array => [
+                ['library_id' => 'lib-1', 'library_name' => 'Movies'],
+                ['library_id' => 'lib-2', 'library_name' => 'TV'],
+            ],
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $result = $client->sendHeartbeat();
+
+        $this->assertTrue($result->ok);
+        $this->assertIsArray($capturedPayload);
+        $this->assertSame(
+            [
+                ['library_id' => 'lib-1', 'library_name' => 'Movies'],
+                ['library_id' => 'lib-2', 'library_name' => 'TV'],
+            ],
+            $capturedPayload['libraries'] ?? null,
+        );
+    }
+
+    public function test_sendHeartbeat_survives_a_failing_libraries_provider(): void
+    {
+        // A library-collection failure must never break the heartbeat itself.
+        $keyManager = new Ed25519KeyManager($this->keyPath);
+        $httpClient = $this->createMock(HttpClientInterface::class);
+        $logger = new StructuredLogger('hub', []);
+
+        $capturedPayload = null;
+        $httpClient->method('post')->willReturnCallback(
+            function (string $url, array $payload) use (&$capturedPayload): HttpResponse {
+                $capturedPayload = $payload;
+                return new HttpResponse(200, [], []);
+            }
+        );
+
+        $client = new HubClient(
+            $keyManager,
+            $httpClient,
+            $logger,
+            $this->tmpDir,
+            '0.11.0',
+            null,
+            '',
+            static function (): array {
+                throw new \RuntimeException('db down');
+            },
+        );
+        $client->storeEnrollment(
+            'jwt-token',
+            'https://hub.example.com/.well-known/jwks.json',
+            'server-uuid',
+            'https://hub.example.com',
+        );
+
+        $result = $client->sendHeartbeat();
+
+        $this->assertTrue($result->ok);
+        $this->assertSame([], $capturedPayload['libraries'] ?? null);
+    }
+
     public function test_sendHeartbeat_unauthorized_re_enrolls(): void
     {
         $keyManager = new Ed25519KeyManager($this->keyPath);

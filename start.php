@@ -22,6 +22,7 @@ declare(strict_types=1);
 
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Handler\HttpHandler;
 use Workerman\Worker;

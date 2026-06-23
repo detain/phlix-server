@@ -266,6 +266,12 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // On-demand subtitle tracks for a direct-play client (no HLS sidecars):
+        // list the item's embedded text tracks, and extract one to WebVTT.
+        $subtitleController = $this->getSubtitleController();
+        $this->router->get('/api/v1/media/{id}/subtitles', [$subtitleController, 'listTracks']);
+        $this->router->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
+
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).
         $mediaMatchController = $this->getMediaMatchController();
@@ -2138,6 +2144,55 @@ class Application
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+    }
+
+    /**
+     * Returns a SubtitleController instance (item repo + ffmpeg + extractor).
+     *
+     * @return \Phlix\Server\Http\Controllers\SubtitleController The controller instance.
+     */
+    private function getSubtitleController(): \Phlix\Server\Http\Controllers\SubtitleController
+    {
+        $ffmpegConfig = $this->loadFfmpegConfig();
+        $ffmpegPath = is_string($ffmpegConfig['ffmpeg_path'] ?? null) ? $ffmpegConfig['ffmpeg_path'] : '/usr/bin/ffmpeg';
+        $ffprobePath = is_string($ffmpegConfig['ffprobe_path'] ?? null) ? $ffmpegConfig['ffprobe_path'] : '/usr/bin/ffprobe';
+        $ffmpeg = new \Phlix\Media\Transcoding\FfmpegRunner($ffmpegPath, $ffprobePath);
+        $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
+
+        if ($this->container === null) {
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+        } else {
+            /** @var \Phlix\Media\Library\ItemRepository */
+            $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        }
+
+        return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor);
+    }
+
+    /**
+     * Loads the ffmpeg config array (binary paths), or [] when unavailable.
+     * Values are read defensively by the caller (is_string guards).
+     *
+     * @return array<mixed, mixed>
+     */
+    private function loadFfmpegConfig(): array
+    {
+        $path = \dirname(__DIR__, 3) . '/config/ffmpeg.php';
+        if (is_file($path)) {
+            $config = include $path;
+            if (is_array($config)) {
+                return $config;
+            }
+        }
+
+        return [];
     }
 
     /**

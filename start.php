@@ -78,6 +78,10 @@ $applyCuratedCoroutineHooks = static function () use ($config): void {
     // Use SwooleRuntime::resolveHookFlags() which safely handles Swoole 5/6
     // constant differences (e.g. SWOOLE_HOOK_SOCKET was removed in Swoole 6).
     $hookFlags = \Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config);
+    // Must set Swoole as Workerman's event loop driver BEFORE enabling coroutines.
+    // Using SWOOLE_HOOK_* hooks with Workerman's default select event loop causes
+    // "API must be called in the coroutine" errors because stream_select() gets hooked.
+    Worker::$eventLoopClass = \Workerman\Events\Swoole::class;
     \Swoole\Runtime::enableCoroutine($hookFlags);
 };
 

@@ -69,6 +69,14 @@ class HubClient
     private string $publicUrl = '';
 
     /**
+     * @var (\Closure(): list<array{library_id: string, library_name: string}>)|null
+     *      Lazily returns this server's libraries to advertise in each heartbeat
+     *      so the hub can cache them (server_libraries) and show them to the owner.
+     *      Null leaves the heartbeat's `libraries` empty (backward compatible).
+     */
+    private ?\Closure $librariesProvider = null;
+
+    /**
      * Creates a new HubClient.
      *
      * @param Ed25519KeyManager    $keyManager  Key manager for Ed25519 operations.
@@ -79,6 +87,8 @@ class HubClient
      * @param PortForwardService|null $portForwardService Port forward service for hostname discovery.
      * @param string                $publicUrl   Configured public base URL (scheme+host) advertised
      *                                            to the hub as a hostname candidate; '' when unset.
+     * @param (\Closure(): list<array{library_id: string, library_name: string}>)|null $librariesProvider
+     *                                            Returns the libraries to advertise in heartbeats; null = none.
      */
     public function __construct(
         Ed25519KeyManager $keyManager,
@@ -88,6 +98,7 @@ class HubClient
         string $serverVersion = '0.11.0',
         ?PortForwardService $portForwardService = null,
         string $publicUrl = '',
+        ?\Closure $librariesProvider = null,
     ) {
         $this->keyManager = $keyManager;
         $this->httpClient = $httpClient;
@@ -96,6 +107,7 @@ class HubClient
         $this->serverVersion = $serverVersion;
         $this->portForwardService = $portForwardService;
         $this->publicUrl = $publicUrl;
+        $this->librariesProvider = $librariesProvider;
         $this->processStartTime = time();
     }
 
@@ -403,6 +415,7 @@ class HubClient
             activeSessions: 0,
             activeTranscodes: 0,
             hostnameCandidates: array_values($this->getHostnameCandidates()),
+            libraries: $this->collectLibraries(),
         ))->toPayload();
 
         try {
@@ -422,6 +435,28 @@ class HubClient
         } catch (Throwable $e) {
             $this->logger->error('Heartbeat exception', ['exception' => $e->getMessage()]);
             return new HeartbeatResult(false, $e->getMessage(), 'NETWORK_ERROR');
+        }
+    }
+
+    /**
+     * Collects this server's libraries for the heartbeat payload (best-effort).
+     *
+     * The hub caches these in server_libraries so the owner's dashboard can list
+     * them. A failure here must never break the heartbeat, so any error degrades
+     * to an empty list.
+     *
+     * @return list<array{library_id: string, library_name: string}>
+     */
+    private function collectLibraries(): array
+    {
+        if ($this->librariesProvider === null) {
+            return [];
+        }
+        try {
+            return ($this->librariesProvider)();
+        } catch (Throwable $e) {
+            $this->logger->warning('Failed to collect libraries for heartbeat', ['exception' => $e->getMessage()]);
+            return [];
         }
     }
 

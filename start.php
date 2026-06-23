@@ -76,7 +76,9 @@ $applyCuratedCoroutineHooks = static function () use ($config): void {
     }
     require __DIR__ . '/src/Server/Runtime/SwooleRuntime.php';
     $loopDriver = $coroutineConfig['loop_driver'] ?? 'native';
-    $hookFlags  = $coroutineConfig['hook_flags'] ?? (SWOOLE_HOOK_SOCKET | SWOOLE_HOOK_STREAM | SWOOLE_HOOK_SLEEP);
+    // Use SwooleRuntime::resolveHookFlags() which safely handles Swoole 5/6
+    // constant differences (e.g. SWOOLE_HOOK_SOCKET was removed in Swoole 6).
+    $hookFlags = \Phlix\Server\Runtime\SwooleRuntime::resolveHookFlags($config);
     \Phlix\Server\Runtime\SwooleRuntime::init($loopDriver, $hookFlags);
 };
 

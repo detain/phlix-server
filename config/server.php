@@ -49,6 +49,7 @@ return [
     // config_dir / public_url instead of its bare defaults — previously this
     // file was never loaded, so the server advertised no hostname candidates.
     'hub' => require __DIR__ . '/hub.php',
+    'relay' => require __DIR__ . '/relay.php',
 
     // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
     // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the

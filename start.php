@@ -285,6 +285,76 @@ try {
 }
 
 // -----------------------------------------------------------------------------
+// 4e. Config-driven managed workers (1.1b): library-scan + plugin-auto-update.
+//
+// config/process.php is the single source of truth for these long-running
+// pollers, but this hand-rolled start.php is NOT auto-consumed by Webman, so we
+// read it here and spawn each ENABLED entry as a count-sized sibling Worker
+// under this same Worker::runAll() group — supervised alongside HTTP, restarted
+// as one group, and (critically) running under the service's LimitMEMLOCK +
+// the curated coroutine hooks, so the scan loop no longer dies on Swoole's
+// io_uring ENOMEM the way the standalone `scripts/run-library-scan-worker.php`
+// does under a default RLIMIT_MEMLOCK. The standalone script remains an
+// alternative for operators who isolate the worker; running both is safe
+// because ScanJobRepository::claimNext() is an atomic single-claimer UPDATE.
+//
+// Earlier this spawn loop lived here but was dropped during the Swoole
+// event-loop refactor, leaving the `library_scan_jobs` queue with nothing to
+// drain unless an operator ran the standalone script by hand.
+// -----------------------------------------------------------------------------
+
+/** Managed-worker key → its DI-resolvable class exposing `start(int $pollSeconds)`. */
+$managedWorkerClasses = [
+    'library-scan'       => \Phlix\Media\Library\LibraryScanWorker::class,
+    'plugin-auto-update' => \Phlix\Plugins\Catalog\PluginAutoUpdateWorker::class,
+];
+
+try {
+    /** @var array<string, array{enabled?: bool, count?: int, poll_seconds?: int}> $processConfig */
+    $processConfig = require __DIR__ . '/config/process.php';
+    if (is_array($processConfig)) {
+        foreach ($managedWorkerClasses as $procKey => $workerClass) {
+            $settings = $processConfig[$procKey] ?? null;
+            if (!is_array($settings) || ($settings['enabled'] ?? false) !== true) {
+                continue;
+            }
+            $count = (int) ($settings['count'] ?? 1);
+            $pollSeconds = (int) ($settings['poll_seconds'] ?? 5);
+
+            $managedWorker = new Worker();
+            $managedWorker->count = $count > 0 ? $count : 1;
+            $managedWorker->name = 'phlix-' . $procKey;
+            $managedWorker->onWorkerStart = static function (Worker $w) use (
+                $config,
+                $applyCuratedCoroutineHooks,
+                $workerClass,
+                $pollSeconds
+            ): void {
+                $applyCuratedCoroutineHooks();
+                try {
+                    // Built inside the fork so the child owns its own DB/HTTP state.
+                    $container = ContainerFactory::create($config);
+                    /** @var object $managed */
+                    $managed = $container->get($workerClass);
+                    // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.
+                    $managed->start($pollSeconds);
+                } catch (\Throwable $e) {
+                    // Guard the fork: log and idle rather than exit, so a build
+                    // failure can't put the worker into a tight re-fork loop.
+                    trigger_error(
+                        'Managed worker ' . $workerClass . ' failed to start: ' . $e->getMessage(),
+                        E_USER_WARNING,
+                    );
+                }
+            };
+        }
+    }
+} catch (\Throwable $e) {
+    // Best-effort; never block the HTTP server.
+    trigger_error('Failed to set up managed worker processes: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 5. Run
 // -----------------------------------------------------------------------------
 

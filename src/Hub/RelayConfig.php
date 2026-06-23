@@ -112,6 +112,48 @@ final class RelayConfig
     }
 
     /**
+     * Return a copy with the relay force-enabled for an enrolled server.
+     *
+     * Relay auto-enables once the server is paired with a hub (P1): the
+     * presence of a stored enrollment is sufficient — no `PHLIX_RELAY_ENABLED`
+     * env var is required. When no explicit hub WS endpoint is configured, this
+     * derives one from the enrollment's `hub_base_url` (host + the standard
+     * relay port 8802; scheme `wss` for an https hub, `ws` otherwise) so the
+     * outbound tunnel can connect without any further configuration.
+     *
+     * @param string $hubBaseUrl The hub base URL from the stored enrollment
+     *                            (e.g. https://hub.phlix.interserver.net).
+     *
+     * @return self A new, relay-enabled config.
+     *
+     * @since 0.10.0
+     */
+    public function withAutoEnable(string $hubBaseUrl): self
+    {
+        $hubRelayWsUrl = $this->hubRelayWsUrl;
+
+        if ($hubRelayWsUrl === '' && $hubBaseUrl !== '') {
+            $parts = parse_url($hubBaseUrl);
+            if (is_array($parts) && isset($parts['host']) && is_string($parts['host'])) {
+                $scheme = (isset($parts['scheme']) && $parts['scheme'] === 'https') ? 'wss' : 'ws';
+                $hubRelayWsUrl = $scheme . '://' . $parts['host'] . ':' . self::DEFAULT_HUB_RELAY_WS_PORT;
+            }
+        }
+
+        return new self(
+            enabled: true,
+            hubWssUrl: $this->hubWssUrl,
+            localAddress: $this->localAddress,
+            tunnelHostname: $this->tunnelHostname,
+            reconnectDelay: $this->reconnectDelay,
+            pingInterval: $this->pingInterval,
+            pingTimeout: $this->pingTimeout,
+            hubRelayWsUrl: $hubRelayWsUrl,
+            localHttpAddress: $this->localHttpAddress,
+        );
+    }
+
+    /**
      * Get a boolean environment variable.
      *
      * @param string $key     Env var name.

@@ -5,8 +5,13 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Server\Http\Request as ServerRequest;
+use Phlix\Server\Http\Response as ServerResponse;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
+use Phlix\Shared\Relay\RelayHttpRequest;
+use Phlix\Shared\Relay\RelayHttpResponseCodec;
+use Phlix\Shared\Relay\RelayHttpResponseHead;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
 use Workerman\Connection\ConnectionInterface;
@@ -15,8 +20,14 @@ use Workerman\Timer;
 use function is_array;
 use function is_string;
 use function json_decode;
+use function parse_str;
+use function str_contains;
+use function strcasecmp;
+use function stripos;
 use function strlen;
+use function strpos;
 use function substr;
+use function trim;
 
 /**
  * Server-side relay client implementing the multiplexed WebSocket tunnel.
@@ -130,6 +141,15 @@ final class RelayConsumer
     private $localConnectionFactory;
 
     /**
+     * Dispatcher for HTTP_REQUEST frames: routes a synthetic request through
+     * the server's local app routers and returns the response. When null, the
+     * server cannot service proxied HTTP requests and replies 503.
+     *
+     * @var (callable(ServerRequest): ServerResponse)|null
+     */
+    private $httpDispatcher;
+
+    /**
      * @param RelayConfig      $config                  Relay configuration.
      * @param HubClient        $hubClient               Hub client (for enrollment info).
      * @param StructuredLogger $logger                  Logger instance.
@@ -140,6 +160,10 @@ final class RelayConsumer
      * @param (callable(string): AsyncTcpConnection)|null $localConnectionFactory
      *        Optional local-connection factory override (for testing). Receives the
      *        Workerman tcp:// address and returns a connection.
+     * @param (callable(ServerRequest): ServerResponse)|null $httpDispatcher
+     *        Dispatcher for proxied HTTP_REQUEST frames (routes a synthetic request
+     *        through the local app and returns the response). Null disables HTTP
+     *        proxying (the server replies 503 to HTTP_REQUEST frames).
      */
     public function __construct(
         RelayConfig $config,
@@ -148,6 +172,7 @@ final class RelayConsumer
         string $serverId,
         ?callable $hubConnectionFactory = null,
         ?callable $localConnectionFactory = null,
+        ?callable $httpDispatcher = null,
     ) {
         $this->config = $config;
         $this->hubClient = $hubClient;
@@ -156,6 +181,7 @@ final class RelayConsumer
         $this->codec = new RelayMessageFramer();
         $this->hubConnectionFactory = $hubConnectionFactory;
         $this->localConnectionFactory = $localConnectionFactory;
+        $this->httpDispatcher = $httpDispatcher;
     }
 
     /**
@@ -453,6 +479,7 @@ final class RelayConsumer
             RelayFrameType::CLIENT_CONNECT => $this->onClientConnect($frame),
             RelayFrameType::CLIENT_DISCONNECT => $this->onClientDisconnect($frame),
             RelayFrameType::DATA => $this->onData($frame),
+            RelayFrameType::HTTP_REQUEST => $this->onHttpRequest($frame),
             RelayFrameType::HEARTBEAT => $this->onHeartbeat(),
             RelayFrameType::DISCONNECTED => $this->onDisconnectedFrame($frame),
             RelayFrameType::ERROR => $this->onErrorFrame($frame),
@@ -578,6 +605,235 @@ final class RelayConsumer
         }
 
         $local->send($frame->payload, true);
+    }
+
+    /**
+     * Handle an HTTP_REQUEST frame: dispatch it through the local app router
+     * and stream the response back as HTTP_RESPONSE frames on the same id.
+     *
+     * The frame's `seq` field carries the hub-allocated per-request id; every
+     * HTTP_RESPONSE frame for this request echoes it so the hub correlates the
+     * HEAD/BODY/END chunks back to the originating browser request.
+     *
+     * Trust model: the request arrived over the authenticated tunnel from the
+     * hub, which has already validated the end user and verified they own this
+     * server. The synthetic request is therefore run as the forwarded hub user
+     * (`X-Phlix-Relay-User`) so the server's auth gates pass; binary media
+     * streaming + signed URLs remain out of scope for this phase.
+     *
+     * @param RelayFrame $frame HTTP_REQUEST frame; request id in seq, payload = RelayHttpRequest JSON.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    private function onHttpRequest(RelayFrame $frame): void
+    {
+        $requestId = $frame->channelId();
+
+        if ($this->httpDispatcher === null) {
+            $this->logger->warning('RelayConsumer: HTTP_REQUEST received but no dispatcher configured', [
+                'request_id' => $requestId,
+            ]);
+            $this->sendHttpError($requestId, 503, 'relay proxy not available on this server');
+            return;
+        }
+
+        try {
+            $envelope = RelayHttpRequest::fromJson($frame->payload);
+        } catch (Throwable $e) {
+            $this->logger->warning('RelayConsumer: malformed HTTP_REQUEST envelope', [
+                'request_id' => $requestId,
+                'error' => $e->getMessage(),
+            ]);
+            $this->sendHttpError($requestId, 400, 'malformed relay request');
+            return;
+        }
+
+        try {
+            $response = ($this->httpDispatcher)($this->buildRequest($envelope));
+        } catch (Throwable $e) {
+            $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch failed', [
+                'request_id' => $requestId,
+                'path' => $envelope->path,
+                'error' => $e->getMessage(),
+            ]);
+            $this->sendHttpError($requestId, 500, 'relay dispatch error');
+            return;
+        }
+
+        $this->sendHttpResponse($requestId, $response->statusCode, $response->headers, $response->body);
+
+        $this->logger->info('RelayConsumer: served proxied HTTP request', [
+            'request_id' => $requestId,
+            'method' => $envelope->method,
+            'path' => $envelope->path,
+            'status' => $response->statusCode,
+            'body_len' => strlen($response->body),
+        ]);
+    }
+
+    /**
+     * Build a synthetic {@see ServerRequest} from a relayed request envelope.
+     *
+     * @param RelayHttpRequest $envelope Decoded request envelope.
+     *
+     * @return ServerRequest
+     *
+     * @since 0.10.0
+     */
+    private function buildRequest(RelayHttpRequest $envelope): ServerRequest
+    {
+        $request = new ServerRequest();
+        $request->method = $envelope->method;
+        $request->path = $envelope->path;
+        $request->queryString = $envelope->query;
+        $request->headers = $envelope->headers;
+        $request->rawBody = $envelope->body;
+
+        if ($envelope->query !== '') {
+            $parsedQuery = [];
+            parse_str($envelope->query, $parsedQuery);
+            $request->query = $this->stringKeyed($parsedQuery);
+        }
+
+        $contentType = $this->headerValue($envelope->headers, 'content-type');
+        if ($envelope->body !== '' && stripos($contentType, 'application/json') !== false) {
+            /** @var mixed $decodedBody */
+            $decodedBody = json_decode($envelope->body, true);
+            if (is_array($decodedBody)) {
+                $request->body = $this->stringKeyed($decodedBody);
+            }
+        } elseif ($envelope->body !== '' && stripos($contentType, 'application/x-www-form-urlencoded') !== false) {
+            $parsedBody = [];
+            parse_str($envelope->body, $parsedBody);
+            $request->body = $this->stringKeyed($parsedBody);
+        }
+
+        // Trust the tunnel: run as the hub-validated owner so auth gates pass.
+        $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
+        $request->userId = $relayUser !== '' ? $relayUser : 'hub-relay';
+
+        $forwardedFor = $this->headerValue($envelope->headers, 'x-forwarded-for');
+        if ($forwardedFor !== '') {
+            $request->remoteIp = str_contains($forwardedFor, ',')
+                ? trim(substr($forwardedFor, 0, (int) strpos($forwardedFor, ',')))
+                : trim($forwardedFor);
+        } else {
+            $request->remoteIp = '127.0.0.1';
+        }
+
+        return $request;
+    }
+
+    /**
+     * Coerce an array to string keys so it satisfies the Request's
+     * array<string, mixed> query/body property types.
+     *
+     * @param array<array-key, mixed> $input Source array (e.g. from parse_str / json_decode).
+     *
+     * @return array<string, mixed>
+     *
+     * @since 0.10.0
+     */
+    private function stringKeyed(array $input): array
+    {
+        $out = [];
+        foreach ($input as $key => $value) {
+            $out[(string) $key] = $value;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Look up a header value case-insensitively.
+     *
+     * @param array<string, string> $headers Header map.
+     * @param string                 $name    Lower-case header name to find.
+     *
+     * @return string The value, or '' when absent.
+     *
+     * @since 0.10.0
+     */
+    private function headerValue(array $headers, string $name): string
+    {
+        foreach ($headers as $key => $value) {
+            if (strcasecmp($key, $name) === 0) {
+                return $value;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Stream a full HTTP response back to the hub as HTTP_RESPONSE frames.
+     *
+     * Emits one HEAD chunk (status + headers + total body length), then zero or
+     * more BODY chunks (each <= {@see RelayHttpResponseCodec::MAX_BODY_CHUNK}),
+     * then a terminating END chunk — all tagged with the request id.
+     *
+     * @param int                   $requestId Hub-allocated request id (frame seq).
+     * @param int                   $status    HTTP status code.
+     * @param array<string, string> $headers   Response headers.
+     * @param string                $body      Full response body.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    private function sendHttpResponse(int $requestId, int $status, array $headers, string $body): void
+    {
+        $head = new RelayHttpResponseHead($status, $headers, strlen($body));
+        $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeHead($head));
+
+        foreach (RelayHttpResponseCodec::chunkBody($body) as $chunkPayload) {
+            $this->sendHttpResponseFrame($requestId, $chunkPayload);
+        }
+
+        $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeEnd());
+    }
+
+    /**
+     * Send a minimal plain-text HTTP error response over the tunnel.
+     *
+     * @param int    $requestId Hub-allocated request id.
+     * @param int    $status    HTTP status code.
+     * @param string $message   Plain-text body.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    private function sendHttpError(int $requestId, int $status, string $message): void
+    {
+        $this->sendHttpResponse(
+            $requestId,
+            $status,
+            ['Content-Type' => 'text/plain; charset=utf-8'],
+            $message,
+        );
+    }
+
+    /**
+     * Encode and send one HTTP_RESPONSE frame tagged with the request id.
+     *
+     * @param int    $requestId Hub-allocated request id (carried in the seq field).
+     * @param string $payload   Chunk payload (HEAD/BODY/END) from RelayHttpResponseCodec.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    private function sendHttpResponseFrame(int $requestId, string $payload): void
+    {
+        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
+            return;
+        }
+
+        $encoded = $this->codec->encode(RelayFrameType::HTTP_RESPONSE, $requestId, $payload);
+        $this->connection->send($encoded);
     }
 
     /**

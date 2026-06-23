@@ -246,11 +246,35 @@ try {
         $enrollment = $hubClient->loadEnrollment();
         $serverId = $enrollment !== null ? $enrollment->serverId : '';
 
+        // Auto-enable the relay tunnel once the server is paired with a hub
+        // (P1): the presence of a stored enrollment is enough — no
+        // PHLIX_RELAY_ENABLED env var required. An explicit
+        // PHLIX_RELAY_DISABLED=1 still wins as an operator kill-switch.
+        $relayDisabled = in_array(
+            strtolower((string) (getenv('PHLIX_RELAY_DISABLED') ?: '')),
+            ['1', 'true', 'yes', 'on'],
+            true,
+        );
+        if ($enrollment !== null && !$relayDisabled) {
+            $relayConfig = $relayConfig->withAutoEnable($enrollment->hubBaseUrl);
+        }
+
+        // Build the in-process HTTP dispatcher so HTTP_REQUEST frames route
+        // through the same local app routers the HTTP daemon uses. The
+        // Application constructor only registers routes/middleware (no timers),
+        // so building one here in the relay fork is safe and side-effect-free.
+        $relayApplication = new Application($container, $config);
+        $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
+
         $consumer = new \Phlix\Hub\RelayConsumer(
             $relayConfig,
             $hubClient,
             $logger,
             $serverId,
+            null,
+            null,
+            static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+                => $relayDispatcher->dispatch($req),
         );
 
         $consumer->start();

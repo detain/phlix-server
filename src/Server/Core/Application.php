@@ -266,12 +266,6 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
-        // On-demand subtitle tracks for a direct-play client (no HLS sidecars):
-        // list the item's embedded text tracks, and extract one to WebVTT.
-        $subtitleController = $this->getSubtitleController();
-        $this->router->get('/api/v1/media/{id}/subtitles', [$subtitleController, 'listTracks']);
-        $this->router->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
-
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).
         $mediaMatchController = $this->getMediaMatchController();
@@ -290,15 +284,24 @@ class Application
         // other extras). Require a signed-in user (same as the media listings).
         $markerController = $this->getMarkerController();
         $extrasController = $this->getExtrasController();
-        $this->router->group('', function (Router $r) use ($markerController, $extrasController): void {
-            $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
-            $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
-            $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
-            $r->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
-            $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
-            $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
-            $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
-        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+        $subtitleController = $this->getSubtitleController();
+        $this->router->group(
+            '',
+            function (Router $r) use ($markerController, $extrasController, $subtitleController): void {
+                $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
+                $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
+                $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
+                $r->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
+                $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
+                $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
+                $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+                // On-demand subtitle tracks for a direct-play client (no HLS
+                // sidecars): list embedded text tracks, and extract one to WebVTT.
+                $r->get('/api/v1/media/{id}/subtitles', [$subtitleController, 'listTracks']);
+                $r->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
 
         // Session management endpoints
         $sessionController = $this->getSessionController();
@@ -2154,9 +2157,10 @@ class Application
     private function getSubtitleController(): \Phlix\Server\Http\Controllers\SubtitleController
     {
         $ffmpegConfig = $this->loadFfmpegConfig();
-        $ffmpegPath = is_string($ffmpegConfig['ffmpeg_path'] ?? null) ? $ffmpegConfig['ffmpeg_path'] : '/usr/bin/ffmpeg';
-        $ffprobePath = is_string($ffmpegConfig['ffprobe_path'] ?? null) ? $ffmpegConfig['ffprobe_path'] : '/usr/bin/ffprobe';
-        $ffmpeg = new \Phlix\Media\Transcoding\FfmpegRunner($ffmpegPath, $ffprobePath);
+        $ffmpeg = new \Phlix\Media\Transcoding\FfmpegRunner(
+            $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
+            $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
+        );
         $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
 
         if ($this->container === null) {
@@ -2177,8 +2181,21 @@ class Application
     }
 
     /**
+     * Reads a string value from a config array, or a default when absent / not
+     * a string.
+     *
+     * @param array<mixed, mixed> $config
+     */
+    private function configString(array $config, string $key, string $default): string
+    {
+        $value = $config[$key] ?? null;
+
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
      * Loads the ffmpeg config array (binary paths), or [] when unavailable.
-     * Values are read defensively by the caller (is_string guards).
+     * Values are read defensively by {@see configString()}.
      *
      * @return array<mixed, mixed>
      */

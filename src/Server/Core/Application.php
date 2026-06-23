@@ -284,15 +284,24 @@ class Application
         // other extras). Require a signed-in user (same as the media listings).
         $markerController = $this->getMarkerController();
         $extrasController = $this->getExtrasController();
-        $this->router->group('', function (Router $r) use ($markerController, $extrasController): void {
-            $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
-            $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
-            $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
-            $r->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
-            $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
-            $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
-            $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
-        }, [new \Phlix\Server\Http\Middleware\AuthMiddleware()]);
+        $subtitleController = $this->getSubtitleController();
+        $this->router->group(
+            '',
+            function (Router $r) use ($markerController, $extrasController, $subtitleController): void {
+                $r->get('/api/v1/media/{id}/markers', [$markerController, 'getMarkers']);
+                $r->get('/api/v1/media/{id}/markers/intro', [$markerController, 'getIntroMarker']);
+                $r->get('/api/v1/media/{id}/markers/outro', [$markerController, 'getOutroMarker']);
+                $r->get('/api/v1/shows/{id}/markers/bulk', [$markerController, 'getShowMarkers']);
+                $r->get('/api/v1/media/{id}/extras', [$extrasController, 'getExtras']);
+                $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
+                $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
+                // On-demand subtitle tracks for a direct-play client (no HLS
+                // sidecars): list embedded text tracks, and extract one to WebVTT.
+                $r->get('/api/v1/media/{id}/subtitles', [$subtitleController, 'listTracks']);
+                $r->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
 
         // Session management endpoints
         $sessionController = $this->getSessionController();
@@ -2138,6 +2147,69 @@ class Application
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+    }
+
+    /**
+     * Returns a SubtitleController instance (item repo + ffmpeg + extractor).
+     *
+     * @return \Phlix\Server\Http\Controllers\SubtitleController The controller instance.
+     */
+    private function getSubtitleController(): \Phlix\Server\Http\Controllers\SubtitleController
+    {
+        $ffmpegConfig = $this->loadFfmpegConfig();
+        $ffmpeg = new \Phlix\Media\Transcoding\FfmpegRunner(
+            $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
+            $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
+        );
+        $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
+
+        if ($this->container === null) {
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+        } else {
+            /** @var \Phlix\Media\Library\ItemRepository */
+            $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        }
+
+        return new \Phlix\Server\Http\Controllers\SubtitleController($itemRepository, $ffmpeg, $extractor);
+    }
+
+    /**
+     * Reads a string value from a config array, or a default when absent / not
+     * a string.
+     *
+     * @param array<mixed, mixed> $config
+     */
+    private function configString(array $config, string $key, string $default): string
+    {
+        $value = $config[$key] ?? null;
+
+        return is_string($value) ? $value : $default;
+    }
+
+    /**
+     * Loads the ffmpeg config array (binary paths), or [] when unavailable.
+     * Values are read defensively by {@see configString()}.
+     *
+     * @return array<mixed, mixed>
+     */
+    private function loadFfmpegConfig(): array
+    {
+        $path = \dirname(__DIR__, 3) . '/config/ffmpeg.php';
+        if (is_file($path)) {
+            $config = include $path;
+            if (is_array($config)) {
+                return $config;
+            }
+        }
+
+        return [];
     }
 
     /**

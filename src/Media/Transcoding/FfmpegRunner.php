@@ -774,6 +774,34 @@ class FfmpegRunner
     }
 
     /**
+     * Extracts one embedded TEXT subtitle stream to a WebVTT file, transcoding
+     * the subtitle codec (ASS/SRT/mov_text → WebVTT) rather than copying it.
+     *
+     * Used by the on-demand subtitle endpoint so a direct-play client can fetch
+     * a selectable caption track without a full transcode. Bitmap subtitles
+     * (PGS/VobSub) have no text and will fail (return false).
+     *
+     * @param string $inputPath   Source media path
+     * @param string $outputPath  Destination .vtt path
+     * @param int    $streamIndex Per-type subtitle ordinal (the `0:s:{index}` selector)
+     *
+     * @return bool True when ffmpeg exits cleanly
+     */
+    public function extractSubtitleVtt(string $inputPath, string $outputPath, int $streamIndex = 0): bool
+    {
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -map 0:s:%d -c:s webvtt -f webvtt %s',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($inputPath),
+            $streamIndex,
+            escapeshellarg($outputPath)
+        );
+
+        exec($cmd, $output, $exitCode);
+        return $exitCode === 0;
+    }
+
+    /**
      * Checks if FFmpeg is available and executable.
      *
      * @return bool True if FFmpeg binary exists and is executable

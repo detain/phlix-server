@@ -1,0 +1,42 @@
+name: Web UI
+
+on:
+  push:
+    branches: [ master, main, develop ]
+    paths:
+      - 'web-ui/**'
+      - '.github/workflows/web-ui.yml'
+  pull_request:
+    branches: [ master, main, develop ]
+    paths:
+      - 'web-ui/**'
+      - '.github/workflows/web-ui.yml'
+
+# Least-privilege: a type-check + build needs no write scope and no secrets,
+# so this stays safe for fork PRs (e.g. dependabot bumps).
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Web UI Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web-ui/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web-ui
+
+      - name: Build SPA (vue-tsc --noEmit && vite build)
+        run: npm run build
+        working-directory: web-ui

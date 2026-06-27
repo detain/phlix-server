@@ -29,9 +29,14 @@ class TranscodeController
     /**
      * POST /api/v1/media/{id}/transcode — start (or reuse) an HLS transcode.
      *
-     * Accepts an optional `profile` query/body param (device profile, default
-     * 'web'). Returns the job id, the HLS master playlist URL, the current
-     * status and whether an existing job was reused.
+     * Accepts an optional `profile` query param (device profile). When the
+     * caller passes an explicit non-empty `profile`, it wins (back-compat for
+     * clients that still send `?profile=web`). Otherwise the profile is derived
+     * from the `X-Phlix-Device-Type` header — thin `@phlix/ui` clients send the
+     * header but no `?profile=`, so this gives a Tizen/Roku TV `tv-4k`, mobile
+     * `mobile-high`, etc. instead of always defaulting to `web` (1080p). Returns
+     * the job id, the HLS master playlist URL, the current status and whether an
+     * existing job was reused.
      *
      * @param array<string, string> $params
      */
@@ -42,9 +47,11 @@ class TranscodeController
             return (new Response())->status(400)->json(['error' => 'media id is required']);
         }
 
-        $profile = $request->queryString('profile') ?? 'web';
-        if ($profile === '') {
-            $profile = 'web';
+        $explicit = $request->queryString('profile');
+        if (is_string($explicit) && $explicit !== '') {
+            $profile = $explicit;
+        } else {
+            $profile = $this->mapDeviceTypeToProfile($request->getHeader('X-Phlix-Device-Type') ?? '');
         }
 
         try {
@@ -72,6 +79,37 @@ class TranscodeController
             'reused' => $job['reused'],
             'subtitles' => self::signSubtitleUrls($job['subtitles'], $sign),
         ]);
+    }
+
+    /**
+     * Maps an `X-Phlix-Device-Type` header value to a transcode quality profile.
+     *
+     * Thin `@phlix/ui` clients advertise their platform via the header but don't
+     * pass an explicit `?profile=`; this picks a sensible default profile per
+     * platform. The lookup is case-insensitive. Anything unknown or empty falls
+     * back to `web` (the historical default). Every arm resolves to a profile
+     * defined by {@see \Phlix\Media\Streaming\QualitySelector} (generic,
+     * mobile-low, mobile-high, web, tv-4k); any arm added later must keep that
+     * invariant — the controller test asserts each mapped profile is known.
+     *
+     * Mapping:
+     *   samsung-tizen, tizen, roku → tv-4k
+     *   android, ios               → mobile-high
+     *   windows                    → generic
+     *   (anything else / missing)  → web
+     *
+     * @param string $deviceType The raw header value (may be empty).
+     *
+     * @return string A profile name QualitySelector understands.
+     */
+    private function mapDeviceTypeToProfile(string $deviceType): string
+    {
+        return match (strtolower(trim($deviceType))) {
+            'samsung-tizen', 'tizen', 'roku' => 'tv-4k',
+            'android', 'ios' => 'mobile-high',
+            'windows' => 'generic',
+            default => 'web',
+        };
     }
 
     /**

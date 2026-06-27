@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Request;
@@ -48,6 +49,136 @@ class TranscodeControllerTest extends TestCase
         $this->assertSignedUrlFor('/hls/job-7/sub-0.vtt', $body['subtitles'][0]['url']);
         $this->assertSame('English', $body['subtitles'][0]['label']);
         $this->assertTrue($body['subtitles'][0]['default']);
+    }
+
+    /**
+     * An explicit non-empty `?profile=` wins over any device-type header
+     * (back-compat for clients that still pass the param).
+     */
+    public function testStartExplicitProfileWinsOverDeviceTypeHeader(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureHlsJob')
+            ->with('media-1', 'mobile-low')
+            ->willReturn($this->jobFixture());
+        $controller = new TranscodeController($manager);
+
+        $request = new Request();
+        $request->query = ['profile' => 'mobile-low'];
+        // Header would map to tv-4k, but the explicit param must win.
+        $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen'];
+
+        $response = $controller->start($request, ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * With no explicit `?profile=`, the `X-Phlix-Device-Type` header drives the
+     * profile choice instead of always defaulting to `web`.
+     *
+     * @dataProvider deviceTypeProfileProvider
+     */
+    public function testStartMapsDeviceTypeHeaderToProfile(string $deviceType, string $expectedProfile): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureHlsJob')
+            ->with('media-1', $expectedProfile)
+            ->willReturn($this->jobFixture());
+        $controller = new TranscodeController($manager);
+
+        $request = new Request();
+        $request->headers = ['X-PHLIX-DEVICE-TYPE' => $deviceType];
+
+        $response = $controller->start($request, ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+
+        // Invariant: whatever profile the header maps to must be one that
+        // QualitySelector actually defines (no mapping to a phantom profile).
+        $this->assertNotNull(
+            (new QualitySelector())->getProfile($expectedProfile),
+            "mapped profile '{$expectedProfile}' must be a known QualitySelector profile",
+        );
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function deviceTypeProfileProvider(): array
+    {
+        return [
+            'samsung-tizen → tv-4k' => ['samsung-tizen', 'tv-4k'],
+            'tizen → tv-4k' => ['tizen', 'tv-4k'],
+            'roku → tv-4k' => ['roku', 'tv-4k'],
+            'android → mobile-high' => ['android', 'mobile-high'],
+            'ios → mobile-high' => ['ios', 'mobile-high'],
+            'windows → generic' => ['windows', 'generic'],
+            'unknown → web' => ['some-future-device', 'web'],
+            'empty → web' => ['', 'web'],
+            // Case-insensitivity.
+            'SAMSUNG-TIZEN (upper) → tv-4k' => ['SAMSUNG-TIZEN', 'tv-4k'],
+            'Android (mixed) → mobile-high' => ['Android', 'mobile-high'],
+            'Roku (mixed) → tv-4k' => ['Roku', 'tv-4k'],
+            'iOS (mixed) → mobile-high' => ['iOS', 'mobile-high'],
+        ];
+    }
+
+    /**
+     * No explicit profile AND no device-type header at all → falls back to `web`
+     * (the historical default is preserved).
+     */
+    public function testStartDefaultsToWebWhenNoProfileAndNoHeader(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureHlsJob')
+            ->with('media-1', 'web')
+            ->willReturn($this->jobFixture());
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->start(new Request(), ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * An empty explicit `?profile=` is treated as "not provided" and falls
+     * through to the device-type mapping.
+     */
+    public function testStartEmptyProfileFallsThroughToDeviceType(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureHlsJob')
+            ->with('media-1', 'mobile-high')
+            ->willReturn($this->jobFixture());
+        $controller = new TranscodeController($manager);
+
+        $request = new Request();
+        $request->query = ['profile' => ''];
+        $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'android'];
+
+        $response = $controller->start($request, ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * @return array{
+     *     job_id: string, status: string, master_url: string, hls_url: string,
+     *     dash_url: string, reused: bool, subtitles: array<int, array<string, mixed>>
+     * }
+     */
+    private function jobFixture(): array
+    {
+        return [
+            'job_id' => 'job-7',
+            'status' => 'running',
+            'master_url' => '/hls/job-7/master.m3u8',
+            'hls_url' => '/hls/job-7/master.m3u8',
+            'dash_url' => '/dash/job-7/manifest.mpd',
+            'reused' => false,
+            'subtitles' => [],
+        ];
     }
 
     public function testStartReturns400WhenMediaIdEmpty(): void

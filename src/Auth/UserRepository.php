@@ -652,7 +652,10 @@ class UserRepository
     /**
      * Check if an email is already registered.
      *
-     * @param string $email Email address to check
+     * @param string          $email     Email address to check
+     * @param int|string|null $excludeId Optional user id (UUID string) to
+     *                                   exclude from the match — used when
+     *                                   updating an existing user's email.
      *
      * @return bool True if email exists, false otherwise
      *
@@ -663,7 +666,7 @@ class UserRepository
      * }
      * ```
      */
-    public function emailExists(string $email, ?int $excludeId = null): bool
+    public function emailExists(string $email, int|string|null $excludeId = null): bool
     {
         if ($excludeId !== null) {
             $result = $this->db->query(

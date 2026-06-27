@@ -104,12 +104,40 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn($user);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->get(1);
+        $response = $controller->get($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('user', $body);
+        $this->assertSame('alice', $body['user']['username']);
+    }
+
+    /**
+     * Regression: the daemon Router always invokes a controller method as
+     * `$method($request, $params)`. Before this fix `get()` declared
+     * `int $id` first, so the Router passed a Request where an int was
+     * expected → TypeError → HTTP 500 (observed live). A UUID `$params['id']`
+     * must now be forwarded verbatim to the repository and return a non-500.
+     */
+    public function testGetWithUuidParamsDoesNotTypeError(): void
+    {
+        $uuid = '3f8a1c2d-0b4e-4a6f-9c1d-2e3f4a5b6c7d';
+        $user = ['id' => $uuid, 'username' => 'alice', 'email' => 'alice@example.com', 'is_admin' => 1];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->expects($this->once())
+            ->method('findById')
+            ->with($uuid)
+            ->willReturn($user);
+
+        $controller = new AdminUserController($repo);
+        $response = $controller->get($this->makeRequest(), ['id' => $uuid]);
+
+        $this->assertLessThan(500, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
         $this->assertSame('alice', $body['user']['username']);
     }
 
@@ -122,7 +150,7 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->get(999);
+        $response = $controller->get($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
         /** @var array<string, mixed> */
@@ -247,9 +275,9 @@ final class AdminUserControllerTest extends TestCase
             ->with('1', ['username' => 'alice_updated']);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->update(1, $this->makeRequest([
+        $response = $controller->update($this->makeRequest([
             'username' => 'alice_updated',
-        ]));
+        ]), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -266,7 +294,7 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->update(999, $this->makeRequest(['username' => 'newname']));
+        $response = $controller->update($this->makeRequest(['username' => 'newname']), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -282,13 +310,13 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn($existingUser);
         $repo->expects($this->once())
             ->method('emailExists')
-            ->with('bob@example.com', 1) // excludeId = current user id
+            ->with('bob@example.com', '1') // excludeId = current user id (UUID string)
             ->willReturn(true); // email already taken by another user
 
         $controller = new AdminUserController($repo);
-        $response = $controller->update(1, $this->makeRequest([
+        $response = $controller->update($this->makeRequest([
             'email' => 'bob@example.com',
-        ]));
+        ]), ['id' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -313,9 +341,9 @@ final class AdminUserControllerTest extends TestCase
             }));
 
         $controller = new AdminUserController($repo);
-        $response = $controller->update(1, $this->makeRequest([
+        $response = $controller->update($this->makeRequest([
             'password' => 'newpassword123',
-        ]));
+        ]), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
     }
@@ -341,7 +369,7 @@ final class AdminUserControllerTest extends TestCase
             ->with('2');
 
         $controller = new AdminUserController($repo);
-        $response = $controller->delete(2);
+        $response = $controller->delete($this->makeRequest(), ['id' => '2']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -360,7 +388,7 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->delete(999);
+        $response = $controller->delete($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -380,7 +408,7 @@ final class AdminUserControllerTest extends TestCase
         $repo->expects($this->never())->method('delete');
 
         $controller = new AdminUserController($repo);
-        $response = $controller->delete(1);
+        $response = $controller->delete($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -409,7 +437,7 @@ final class AdminUserControllerTest extends TestCase
         $repo->expects($this->never())->method('delete');
 
         $controller = new AdminUserController($repo);
-        $response = $controller->delete(2);
+        $response = $controller->delete($this->makeRequest(), ['id' => '2']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -437,7 +465,7 @@ final class AdminUserControllerTest extends TestCase
             ->with('2', true);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->setAdmin(2, $this->makeRequest(['is_admin' => true]));
+        $response = $controller->setAdmin($this->makeRequest(['is_admin' => true]), ['id' => '2']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -466,7 +494,7 @@ final class AdminUserControllerTest extends TestCase
             ->with('2', false);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->setAdmin(2, $this->makeRequest(['is_admin' => false]));
+        $response = $controller->setAdmin($this->makeRequest(['is_admin' => false]), ['id' => '2']);
 
         $this->assertSame(200, $response->statusCode);
 
@@ -492,7 +520,7 @@ final class AdminUserControllerTest extends TestCase
         $repo->expects($this->never())->method('setAdmin');
 
         $controller = new AdminUserController($repo);
-        $response = $controller->setAdmin(2, $this->makeRequest(['is_admin' => false]));
+        $response = $controller->setAdmin($this->makeRequest(['is_admin' => false]), ['id' => '2']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -517,7 +545,7 @@ final class AdminUserControllerTest extends TestCase
         $repo->expects($this->never())->method('setAdmin');
 
         $controller = new AdminUserController($repo);
-        $response = $controller->setAdmin(1, $this->makeRequest(['is_admin' => false]));
+        $response = $controller->setAdmin($this->makeRequest(['is_admin' => false]), ['id' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -536,7 +564,7 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->setAdmin(999, $this->makeRequest(['is_admin' => true]));
+        $response = $controller->setAdmin($this->makeRequest(['is_admin' => true]), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -563,7 +591,7 @@ final class AdminUserControllerTest extends TestCase
             }));
 
         $controller = new AdminUserController($repo);
-        $response = $controller->resetPassword(1);
+        $response = $controller->resetPassword($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -584,7 +612,7 @@ final class AdminUserControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminUserController($repo);
-        $response = $controller->resetPassword(999);
+        $response = $controller->resetPassword($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }

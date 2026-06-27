@@ -333,16 +333,33 @@ class PlaybackController
      */
     public function getContinueWatching(string $userId, int $limit = 10): array
     {
+        // A user has one playback_state row per (session, media item), and a
+        // single title is watched across many sessions/devices — so the same
+        // media_item_id appears in several rows. Collapse to one row per media
+        // item (the most recently updated, ties broken by id) BEFORE applying
+        // the limit, otherwise "LIMIT 10" can return ten rows that are all the
+        // same title. The window function keeps the newest row per partition.
         $result = $this->db->query(
-            "SELECT ps.*, mi.name, mi.type, mi.metadata_json
-             FROM playback_state ps
-             INNER JOIN sessions s ON ps.session_id = s.id
-             INNER JOIN media_items mi ON ps.media_item_id = mi.id
-             WHERE s.user_id = ?
-               AND ps.playback_status IN ('playing', 'paused')
-               AND ps.position_ticks > 0
-               AND ps.position_ticks < (ps.duration_ticks * 0.95)
-             ORDER BY ps.updated_at DESC
+            "SELECT ranked.id, ranked.session_id, ranked.media_item_id,
+                    ranked.position_ticks, ranked.duration_ticks,
+                    ranked.playback_status, ranked.updated_at,
+                    ranked.name, ranked.type, ranked.metadata_json
+             FROM (
+                 SELECT ps.*, mi.name, mi.type, mi.metadata_json,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY ps.media_item_id
+                            ORDER BY ps.updated_at DESC, ps.id DESC
+                        ) AS rn
+                 FROM playback_state ps
+                 INNER JOIN sessions s ON ps.session_id = s.id
+                 INNER JOIN media_items mi ON ps.media_item_id = mi.id
+                 WHERE s.user_id = ?
+                   AND ps.playback_status IN ('playing', 'paused')
+                   AND ps.position_ticks > 0
+                   AND ps.position_ticks < (ps.duration_ticks * 0.95)
+             ) ranked
+             WHERE ranked.rn = 1
+             ORDER BY ranked.updated_at DESC
              LIMIT ?",
             [$userId, $limit]
         );

@@ -2,7 +2,7 @@
 
 [![PHPUnit](https://github.com/detain/phlix-server/actions/workflows/phpunit.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/phpunit.yml)
 [![Coding Standards](https://github.com/detain/phlix-server/actions/workflows/coding-standards.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/coding-standards.yml)
-[![Admin UI](https://github.com/detain/phlix-server/actions/workflows/admin-ui.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/admin-ui.yml)
+[![Web UI](https://github.com/detain/phlix-server/actions/workflows/web-ui.yml/badge.svg)](https://github.com/detain/phlix-server/actions/workflows/web-ui.yml)
 [![codecov](https://codecov.io/gh/detain/phlix-server/graph/badge.svg)](https://codecov.io/gh/detain/phlix-server)
 [![PHP](https://img.shields.io/badge/PHP-8.3%2B-777bb4?logo=php&logoColor=white)](https://www.php.net/)
 [![PHPStan](https://img.shields.io/badge/PHPStan-level%209-brightgreen)](https://phpstan.org/)

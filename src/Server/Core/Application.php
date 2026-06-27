@@ -559,30 +559,36 @@ class Application
             return;
         }
 
+        /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+        $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+
+        $controller = new \Phlix\Server\Http\Controllers\Dlna\AdminDlnaServerController();
+
+        // Wiring the optional CdsServer is best-effort: if it is unbound or
+        // fails to construct, the controller keeps a null server and its
+        // status() reports {enabled:false} with a 200. A CdsServer failure
+        // must NOT drop the route group (which would 404 the admin DLNA page),
+        // so guard ONLY this wiring — never the group registration below.
         try {
-            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
-            $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
-
-            $controller = new \Phlix\Server\Http\Controllers\Dlna\AdminDlnaServerController();
-
             if ($this->container->has(\Phlix\Dlna\CdsServer::class)) {
-                /** @var \Phlix\Dlna\CdsServer $cdsServer */
                 $cdsServer = $this->container->get(\Phlix\Dlna\CdsServer::class);
-                $controller->setCdsServer($cdsServer);
+                if ($cdsServer instanceof \Phlix\Dlna\CdsServer) {
+                    $controller->setCdsServer($cdsServer);
+                }
             }
-
-            $this->router->group(
-                '/api/v1/admin/dlna',
-                function (Router $r) use ($controller): void {
-                    $r->get('/status', [$controller, 'status']);
-                    $r->post('/start', [$controller, 'start']);
-                    $r->post('/stop', [$controller, 'stop']);
-                },
-                [$adminMiddleware],
-            );
         } catch (\Throwable) {
-            // DLNA admin not configured — silent ignore
+            // CdsServer unavailable — controller stays null; status() reports disabled.
         }
+
+        $this->router->group(
+            '/api/v1/admin/dlna',
+            function (Router $r) use ($controller): void {
+                $r->get('/status', [$controller, 'status']);
+                $r->post('/start', [$controller, 'start']);
+                $r->post('/stop', [$controller, 'stop']);
+            },
+            [$adminMiddleware],
+        );
     }
 
     /**

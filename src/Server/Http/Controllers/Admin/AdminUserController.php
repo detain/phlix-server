@@ -166,13 +166,15 @@ final class AdminUserController
     /**
      * Get a single user by ID.
      *
-     * @param int $id User ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { user: User } | 404 { error }
      */
-    public function get(int $id): Response
+    public function get(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $id);
+        $id = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $user = $this->userRepository->findById($id);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
@@ -249,21 +251,22 @@ final class AdminUserController
     /**
      * Update an existing user.
      *
-     * @param int     $id  User ID
-     * @param Request $req Request with optional username, email, password
+     * @param Request               $request The HTTP request (optional username, email, password).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message } | 404 | 400 { error }
      */
-    public function update(int $id, Request $req): Response
+    public function update(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $id);
+        $id = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $user = $this->userRepository->findById($id);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        $username = $req->input('username');
-        $email = $req->input('email');
-        $password = $req->input('password');
+        $username = $request->input('username');
+        $email = $request->input('email');
+        $password = $request->input('password');
 
         // Validate username if provided
         if ($username !== null) {
@@ -292,7 +295,7 @@ final class AdminUserController
                 ]);
             }
             // Check email uniqueness (excluding current user)
-            if ($this->userRepository->emailExists($email, (int) $id)) {
+            if ($this->userRepository->emailExists($email, $id)) {
                 return (new Response())->status(400)->json([
                     'error' => 'Email already in use',
                     'field_errors' => ['email' => 'This email is already registered'],
@@ -324,7 +327,7 @@ final class AdminUserController
         }
 
         if ($data !== []) {
-            $this->userRepository->update((string) $id, $data);
+            $this->userRepository->update($id, $data);
         }
 
         return (new Response())->json(['message' => 'User updated successfully']);
@@ -333,20 +336,22 @@ final class AdminUserController
     /**
      * Delete a user.
      *
-     * @param int $id User ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message } | 404 | 400 { error }
      */
-    public function delete(int $id): Response
+    public function delete(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $id);
+        $id = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $user = $this->userRepository->findById($id);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
         // Cannot delete own account
         $currentUserId = RequestContext::getUserId();
-        if ($currentUserId !== null && (int) $currentUserId === $id) {
+        if ($currentUserId !== null && (string) $currentUserId === $id) {
             return (new Response())->status(400)->json(['error' => 'Cannot delete your own account']);
         }
 
@@ -358,30 +363,31 @@ final class AdminUserController
             }
         }
 
-        $this->userRepository->delete((string) $id);
+        $this->userRepository->delete($id);
         return (new Response())->json(['message' => 'User deleted successfully']);
     }
 
     /**
      * Promote or demote a user's admin status.
      *
-     * @param int     $id  User ID
-     * @param Request $req Request with is_admin (bool)
+     * @param Request               $request The HTTP request (is_admin bool).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message } | 404 | 400 { error }
      */
-    public function setAdmin(int $id, Request $req): Response
+    public function setAdmin(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $id);
+        $id = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $user = $this->userRepository->findById($id);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        $isAdmin = (bool) $req->input('is_admin');
+        $isAdmin = (bool) $request->input('is_admin');
 
         // Cannot demote yourself
         $currentUserId = RequestContext::getUserId();
-        if ($currentUserId !== null && (int) $currentUserId === $id && !$isAdmin) {
+        if ($currentUserId !== null && (string) $currentUserId === $id && !$isAdmin) {
             return (new Response())->status(400)->json(['error' => 'Cannot demote yourself']);
         }
 
@@ -393,27 +399,29 @@ final class AdminUserController
             }
         }
 
-        $this->userRepository->setAdmin((string) $id, $isAdmin);
+        $this->userRepository->setAdmin($id, $isAdmin);
         return (new Response())->json(['message' => 'User admin status updated successfully']);
     }
 
     /**
      * Reset a user's password to a randomly generated value.
      *
-     * @param int $id User ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message, new_password: string } | 404
      */
-    public function resetPassword(int $id): Response
+    public function resetPassword(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $id);
+        $id = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $user = $this->userRepository->findById($id);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
         $newPassword = $this->generatePassword();
         $hashedPassword = $this->hashPassword($newPassword);
-        $this->userRepository->update((string) $id, ['password' => $hashedPassword]);
+        $this->userRepository->update($id, ['password' => $hashedPassword]);
 
         return (new Response())->json([
             'message' => 'Password reset successfully',

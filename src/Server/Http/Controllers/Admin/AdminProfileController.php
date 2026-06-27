@@ -58,44 +58,47 @@ final class AdminProfileController
     /**
      * List all profiles for a user.
      *
-     * @param int $userId User ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({userId} — a UUID string).
      *
      * @return Response 200 { profiles: Profile[] } | 404 { error }
      */
-    public function listForUser(int $userId): Response
+    public function listForUser(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $userId);
+        $userId = is_string($params['userId'] ?? null) ? $params['userId'] : '';
+        $user = $this->userRepository->findById($userId);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        $profiles = $this->profileManager->findByUserId((string) $userId);
+        $profiles = $this->profileManager->findByUserId($userId);
         return (new Response())->json(['profiles' => $profiles]);
     }
 
     /**
      * Create a new profile for a user.
      *
-     * @param int     $userId User ID
-     * @param Request $req    Request with name (required) and rating (optional, 0-6)
+     * @param Request               $request The HTTP request (name required, rating optional 0-6).
+     * @param array<string, string> $params  Path parameters ({userId} — a UUID string).
      *
      * @return Response 201 { profile_id: int, message: string }
      *                  | 400 { error: string }
      *                  | 404 { error: string }
      */
-    public function createForUser(int $userId, Request $req): Response
+    public function createForUser(Request $request, array $params): Response
     {
-        $user = $this->userRepository->findById((string) $userId);
+        $userId = is_string($params['userId'] ?? null) ? $params['userId'] : '';
+        $user = $this->userRepository->findById($userId);
         if ($user === null) {
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        $existing = $this->profileManager->findByUserId((string) $userId);
+        $existing = $this->profileManager->findByUserId($userId);
         if (count($existing) >= UserProfileManager::MAX_PROFILES_PER_USER) {
             return (new Response())->status(400)->json(['error' => 'Maximum profiles reached']);
         }
 
-        $name = is_string($req->input('name')) ? trim($req->input('name')) : '';
+        $name = is_string($request->input('name')) ? trim($request->input('name')) : '';
         if (strlen($name) < 1 || strlen($name) > 50) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid name',
@@ -103,7 +106,7 @@ final class AdminProfileController
             ]);
         }
 
-        $rating = $req->input('rating');
+        $rating = $request->input('rating');
         if ($rating !== null && !is_int($rating) && !is_numeric($rating)) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid rating',
@@ -126,7 +129,7 @@ final class AdminProfileController
             $data['content_rating'] = self::RATING_MAP[$ratingInt] ?? 'R';
         }
 
-        $newId = $this->profileManager->create((string) $userId, $data);
+        $newId = $this->profileManager->create($userId, $data);
         return (new Response())->status(201)->json([
             'profile_id' => (int) $newId,
             'message' => 'Profile created successfully',
@@ -136,13 +139,15 @@ final class AdminProfileController
     /**
      * Get a single profile by ID.
      *
-     * @param int $profileId Profile ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { profile: Profile } | 404 { error }
      */
-    public function get(int $profileId): Response
+    public function get(Request $request, array $params): Response
     {
-        $profile = $this->profileManager->findByIdWithSettings((string) $profileId);
+        $profileId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $profile = $this->profileManager->findByIdWithSettings($profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
@@ -152,20 +157,21 @@ final class AdminProfileController
     /**
      * Update an existing profile.
      *
-     * @param int     $profileId Profile ID
-     * @param Request $req       Request with optional name and/or rating
+     * @param Request               $request The HTTP request (optional name and/or rating).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message: string } | 404 { error } | 400 { error }
      */
-    public function update(int $profileId, Request $req): Response
+    public function update(Request $request, array $params): Response
     {
-        $profile = $this->profileManager->findById((string) $profileId);
+        $profileId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $profile = $this->profileManager->findById($profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
 
-        $name = $req->input('name');
-        $rating = $req->input('rating');
+        $name = $request->input('name');
+        $rating = $request->input('rating');
 
         if ($name !== null) {
             $name = is_string($name) ? trim($name) : '';
@@ -203,7 +209,7 @@ final class AdminProfileController
         }
 
         if ($data !== []) {
-            $this->profileManager->update((string) $profileId, $data);
+            $this->profileManager->update($profileId, $data);
         }
 
         return (new Response())->json(['message' => 'Profile updated successfully']);
@@ -212,42 +218,45 @@ final class AdminProfileController
     /**
      * Delete a profile.
      *
-     * @param int $profileId Profile ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message: string } | 404 { error }
      */
-    public function delete(int $profileId): Response
+    public function delete(Request $request, array $params): Response
     {
-        $profile = $this->profileManager->findById((string) $profileId);
+        $profileId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $profile = $this->profileManager->findById($profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
 
-        $this->profileManager->delete((string) $profileId);
+        $this->profileManager->delete($profileId);
         return (new Response())->json(['message' => 'Profile deleted successfully']);
     }
 
     /**
      * Set or clear the PIN for a profile.
      *
-     * @param int     $profileId Profile ID
-     * @param Request $req      Request with optional pin (4 or 6 digits, or null/empty to clear)
+     * @param Request               $request The HTTP request (optional pin: 4 or 6 digits, or null/empty to clear).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message: string }
      *                  | 400 { error: string }
      *                  | 404 { error: string }
      */
-    public function setPin(int $profileId, Request $req): Response
+    public function setPin(Request $request, array $params): Response
     {
-        $profile = $this->profileManager->findById((string) $profileId);
+        $profileId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $profile = $this->profileManager->findById($profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
 
-        $pin = $req->input('pin');
+        $pin = $request->input('pin');
 
         if ($pin === null || $pin === '') {
-            $this->profileManager->removePin((string) $profileId);
+            $this->profileManager->removePin($profileId);
             return (new Response())->json(['message' => 'PIN cleared successfully']);
         }
 
@@ -266,25 +275,27 @@ final class AdminProfileController
             return (new Response())->status(400)->json(['error' => 'PIN must contain only digits']);
         }
 
-        $this->profileManager->setPin((string) $profileId, $pin);
+        $this->profileManager->setPin($profileId, $pin);
         return (new Response())->json(['message' => 'PIN set successfully']);
     }
 
     /**
      * Delete/clear the PIN for a profile.
      *
-     * @param int $profileId Profile ID
+     * @param Request               $request The HTTP request (unused body).
+     * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
      * @return Response 200 { message: string } | 404 { error }
      */
-    public function deletePin(int $profileId): Response
+    public function deletePin(Request $request, array $params): Response
     {
-        $profile = $this->profileManager->findById((string) $profileId);
+        $profileId = is_string($params['id'] ?? null) ? $params['id'] : '';
+        $profile = $this->profileManager->findById($profileId);
         if ($profile === null) {
             return (new Response())->status(404)->json(['error' => 'Profile not found']);
         }
 
-        $this->profileManager->removePin((string) $profileId);
+        $this->profileManager->removePin($profileId);
         return (new Response())->json(['message' => 'PIN deleted successfully']);
     }
 }

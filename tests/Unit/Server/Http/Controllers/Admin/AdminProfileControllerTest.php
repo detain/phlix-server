@@ -53,7 +53,7 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(['id' => '1', 'username' => 'alice']);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->listForUser(1);
+        $response = $controller->listForUser($this->makeRequest(), ['userId' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -74,7 +74,7 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->listForUser(999);
+        $response = $controller->listForUser($this->makeRequest(), ['userId' => '999']);
 
         $this->assertSame(404, $response->statusCode);
         /** @var array<string, mixed> */
@@ -105,10 +105,10 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(['id' => '1', 'username' => 'alice']);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->createForUser(1, $this->makeRequest([
+        $response = $controller->createForUser($this->makeRequest([
             'name' => 'Bob',
             'rating' => 2,
-        ]));
+        ]), ['userId' => '1']);
 
         $this->assertSame(201, $response->statusCode);
         /** @var array<string, mixed> */
@@ -141,7 +141,7 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(['id' => '1']);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->createForUser(1, $this->makeRequest(['name' => 'TooMany']));
+        $response = $controller->createForUser($this->makeRequest(['name' => 'TooMany']), ['userId' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -162,7 +162,7 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(null);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->createForUser(999, $this->makeRequest(['name' => 'Bob']));
+        $response = $controller->createForUser($this->makeRequest(['name' => 'Bob']), ['userId' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -181,9 +181,9 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(['id' => '1']);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->createForUser(1, $this->makeRequest([
+        $response = $controller->createForUser($this->makeRequest([
             'name' => 'This name is way too long and exceeds fifty characters which is the maximum allowed',
-        ]));
+        ]), ['userId' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -206,10 +206,10 @@ final class AdminProfileControllerTest extends TestCase
             ->willReturn(['id' => '1']);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->createForUser(1, $this->makeRequest([
+        $response = $controller->createForUser($this->makeRequest([
             'name' => 'ValidName',
             'rating' => 99,
-        ]));
+        ]), ['userId' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -252,7 +252,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->get(1);
+        $response = $controller->get($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -273,12 +273,65 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->get(999);
+        $response = $controller->get($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
         $this->assertSame('Profile not found', $body['error']);
+    }
+
+    /**
+     * Regression: every id-based profile route 500'd live because the methods
+     * declared `int $profileId` / `int $userId` first while the daemon Router
+     * always calls `$method($request, $params)`. A UUID `$params['id']` /
+     * `$params['userId']` must now flow verbatim to the managers and return a
+     * non-500 response.
+     */
+    public function testGetWithUuidParamsDoesNotTypeError(): void
+    {
+        $uuid = 'prof-7c9e6679-7425-40de-944b-e07fc1f90ae7';
+        $hydratedProfile = ['id' => $uuid, 'user_id' => '1', 'name' => 'Alice', 'rating' => 2];
+
+        $profileManager = $this->createMock(UserProfileManager::class);
+        $profileManager->expects($this->once())
+            ->method('findByIdWithSettings')
+            ->with($uuid)
+            ->willReturn($hydratedProfile);
+
+        $userRepo = $this->createMock(UserRepository::class);
+
+        $controller = new AdminProfileController($profileManager, $userRepo);
+        $response = $controller->get($this->makeRequest(), ['id' => $uuid]);
+
+        $this->assertLessThan(500, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Alice', $body['profile']['name']);
+    }
+
+    public function testListForUserWithUuidParamsDoesNotTypeError(): void
+    {
+        $userUuid = 'd9b2d63d-a233-4123-847b-1ff2da0b9a35';
+
+        $profileManager = $this->createMock(UserProfileManager::class);
+        $profileManager->expects($this->once())
+            ->method('findByUserId')
+            ->with($userUuid)
+            ->willReturn([['id' => 'prof_1', 'user_id' => $userUuid, 'name' => 'Alice']]);
+
+        $userRepo = $this->createMock(UserRepository::class);
+        $userRepo->expects($this->once())
+            ->method('findById')
+            ->with($userUuid)
+            ->willReturn(['id' => $userUuid, 'username' => 'alice']);
+
+        $controller = new AdminProfileController($profileManager, $userRepo);
+        $response = $controller->listForUser($this->makeRequest(), ['userId' => $userUuid]);
+
+        $this->assertLessThan(500, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -301,7 +354,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->update(1, $this->makeRequest(['name' => 'Alice Updated']));
+        $response = $controller->update($this->makeRequest(['name' => 'Alice Updated']), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -320,7 +373,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->update(999, $this->makeRequest(['name' => 'New Name']));
+        $response = $controller->update($this->makeRequest(['name' => 'New Name']), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -345,7 +398,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->delete(1);
+        $response = $controller->delete($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -364,7 +417,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->delete(999);
+        $response = $controller->delete($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -389,7 +442,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(1, $this->makeRequest(['pin' => '1234']));
+        $response = $controller->setPin($this->makeRequest(['pin' => '1234']), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -413,7 +466,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(1, $this->makeRequest(['pin' => '123456']));
+        $response = $controller->setPin($this->makeRequest(['pin' => '123456']), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
     }
@@ -434,7 +487,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(1, $this->makeRequest(['pin' => null]));
+        $response = $controller->setPin($this->makeRequest(['pin' => null]), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -456,7 +509,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(1, $this->makeRequest(['pin' => '12345']));
+        $response = $controller->setPin($this->makeRequest(['pin' => '12345']), ['id' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -478,7 +531,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(1, $this->makeRequest(['pin' => 'abcd']));
+        $response = $controller->setPin($this->makeRequest(['pin' => 'abcd']), ['id' => '1']);
 
         $this->assertSame(400, $response->statusCode);
         /** @var array<string, mixed> */
@@ -497,7 +550,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->setPin(999, $this->makeRequest(['pin' => '1234']));
+        $response = $controller->setPin($this->makeRequest(['pin' => '1234']), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }
@@ -522,7 +575,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->deletePin(1);
+        $response = $controller->deletePin($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
         /** @var array<string, mixed> */
@@ -541,7 +594,7 @@ final class AdminProfileControllerTest extends TestCase
         $userRepo = $this->createMock(UserRepository::class);
 
         $controller = new AdminProfileController($profileManager, $userRepo);
-        $response = $controller->deletePin(999);
+        $response = $controller->deletePin($this->makeRequest(), ['id' => '999']);
 
         $this->assertSame(404, $response->statusCode);
     }

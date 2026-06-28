@@ -14,6 +14,7 @@ use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
@@ -64,13 +65,23 @@ final class HttpHandler
     public function __invoke(TcpConnection $connection, WorkermanRequest $wr): void
     {
         try {
+            $request = Request::fromWorkerman($wr, $connection);
+
+            // CORS: answer a credentialed preflight for an allowlisted origin
+            // before any dispatch (shared seam with public/index.php). With an
+            // empty allowlist this is always null and behavior is unchanged.
+            $cors = CorsManager::fromEnv();
+            $preflight = $cors->preflightResponse($request);
+            if ($preflight !== null) {
+                $connection->send($preflight->toWorkermanResponse());
+                return;
+            }
+
             $static = $this->serveStatic($wr);
             if ($static !== null) {
                 $connection->send($static);
                 return;
             }
-
-            $request = Request::fromWorkerman($wr, $connection);
 
             // Bearer-token auth (mirrors the inline check that
             // public/index.php used to do). Application's router has no
@@ -120,7 +131,7 @@ final class HttpHandler
             //    have `{$theme_css|raw}` / `{$theme_js|raw}` substituted.
             $appResponse = $this->application->dispatch($request);
             if ($appResponse->statusCode !== 404) {
-                $connection->send($appResponse->toWorkermanResponse());
+                $connection->send($cors->decorate($request, $appResponse)->toWorkermanResponse());
                 return;
             }
 
@@ -138,7 +149,7 @@ final class HttpHandler
                 /** @var WebPortalRouter $webPortalRouter */
                 $webPortalRouter = $this->container->get(WebPortalRouter::class);
                 $apiResponse = $webPortalRouter->dispatch($request);
-                $connection->send($apiResponse->toWorkermanResponse());
+                $connection->send($cors->decorate($request, $apiResponse)->toWorkermanResponse());
                 return;
             }
 
@@ -150,7 +161,7 @@ final class HttpHandler
             /** @var ThemeMiddleware $theme */
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
-            $connection->send($response->toWorkermanResponse());
+            $connection->send($cors->decorate($request, $response)->toWorkermanResponse());
         } catch (Throwable $e) {
             LoggerFactory::get(LogChannels::HTTP)->error(
                 'Unhandled exception in HTTP worker',

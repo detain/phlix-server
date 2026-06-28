@@ -35,6 +35,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
@@ -100,6 +101,20 @@ if ($token) {
 }
 
 /**
+ * Credentialed CORS (shared seam with the Workerman daemon — see
+ * {@see \Phlix\Server\Workerman\HttpHandler}). The SAME {@see CorsManager}
+ * answers a cross-origin preflight here and decorates the final response, so
+ * the dual-entry-point behavior cannot drift. With an empty allowlist
+ * (the default) this is a no-op and same-origin behavior is unchanged.
+ */
+$cors = CorsManager::fromEnv();
+$preflight = $cors->preflightResponse($request);
+if ($preflight !== null) {
+    $preflight->send();
+    exit;
+}
+
+/**
  * Route handling
  *
  * Routes are split into three categories:
@@ -123,7 +138,7 @@ AdminRoutes::register($router, $container);
 if (str_starts_with($path, '/api/v1/admin/')) {
     /** @var \Phlix\Server\Http\Response $response */
     $response = $router->dispatch($request);
-    $response->send();
+    $cors->decorate($request, $response)->send();
 } elseif (str_starts_with($path, '/api/')) {
     /**
      * API routes
@@ -145,7 +160,7 @@ if (str_starts_with($path, '/api/v1/admin/')) {
     /** @var WebPortalRouter $webPortalRouter */
     $webPortalRouter = $container->get(WebPortalRouter::class);
     $response = $webPortalRouter->dispatch($request);
-    $response->send();
+    $cors->decorate($request, $response)->send();
 } else {
     /**
      * Page routes
@@ -335,5 +350,5 @@ if (str_starts_with($path, '/api/v1/admin/')) {
         exit;
     }
 
-    $response->send();
+    $cors->decorate($request, $response)->send();
 }

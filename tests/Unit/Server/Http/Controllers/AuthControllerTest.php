@@ -210,7 +210,8 @@ class AuthControllerTest extends TestCase
     }
 
     /**
-     * Negative: refresh() returns 400 when refresh_token field is missing.
+     * Negative: refresh() returns 400 when neither the body field nor the
+     * `phlix_refresh` cookie carries a token.
      */
     public function testRefreshReturns400WhenRefreshTokenMissing(): void
     {
@@ -227,6 +228,107 @@ class AuthControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertSame('refresh_token is required', $body['error']);
+    }
+
+    /**
+     * Cookie-borne refresh: with NO body token, refresh() reads the
+     * `phlix_refresh` HttpOnly cookie and exchanges it. This is the
+     * in-memory-access-token web/native flow where JS can't read the refresh
+     * credential and so can't put it in the body.
+     */
+    public function testRefreshUsesRefreshCookieWhenBodyTokenAbsent(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('refreshToken')
+            ->with('cookie-refresh-tok')
+            ->willReturn([
+                'access_token' => 'new-access',
+                'refresh_token' => 'new-refresh',
+                'expires_in' => 3600,
+            ]);
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = [];
+        $request->cookies = [AuthController::REFRESH_COOKIE => 'cookie-refresh-tok'];
+
+        $response = $controller->refresh($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('new-access', $body['access_token']);
+        $this->assertSame('new-refresh', $body['refresh_token']);
+    }
+
+    /**
+     * Backwards-compat: when BOTH a body token and a refresh cookie are
+     * present, the body token wins (existing CLI/native clients keep working).
+     */
+    public function testRefreshBodyTokenTakesPrecedenceOverCookie(): void
+    {
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('refreshToken')
+            ->with('body-refresh-tok')
+            ->willReturn([
+                'access_token' => 'new-access',
+                'refresh_token' => 'new-refresh',
+                'expires_in' => 3600,
+            ]);
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->body = ['refresh_token' => 'body-refresh-tok'];
+        $request->cookies = [AuthController::REFRESH_COOKIE => 'cookie-refresh-tok'];
+
+        $response = $controller->refresh($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * Cookie rotation: a successful refresh re-issues BOTH auth cookies so the
+     * browser's httpOnly refresh credential is replaced (rotated) with the new
+     * value, using the same HttpOnly/Secure/SameSite attributes as login.
+     */
+    public function testRefreshRotatesAuthCookiesOnSuccess(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('refreshToken')->willReturn([
+            'access_token' => 'new-access',
+            'refresh_token' => 'new-refresh',
+            'expires_in' => 3600,
+        ]);
+
+        $controller = new AuthController($authManager);
+
+        $request = new Request();
+        $request->cookies = [AuthController::REFRESH_COOKIE => 'old-refresh'];
+
+        $response = $controller->refresh($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+
+        $setCookies = $response->toWorkermanResponse()->getHeader('Set-Cookie');
+        $cookieLines = is_array($setCookies) ? $setCookies : [$setCookies];
+
+        $session = $this->findCookieLine($cookieLines, AuthController::SESSION_COOKIE);
+        $refresh = $this->findCookieLine($cookieLines, AuthController::REFRESH_COOKIE);
+
+        // Rotated to the NEW token values.
+        $this->assertStringContainsString('new-access', $session);
+        $this->assertStringContainsString('new-refresh', $refresh);
+
+        foreach ([$session, $refresh] as $line) {
+            $this->assertStringContainsString('Secure', $line);
+            $this->assertStringContainsString('HttpOnly', $line);
+            $this->assertStringContainsString('SameSite=Lax', $line);
+        }
     }
 
     /**

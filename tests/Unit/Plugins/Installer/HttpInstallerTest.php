@@ -575,6 +575,50 @@ final class HttpInstallerTest extends TestCase
         $this->installer()->installFromDirectory($source);
     }
 
+    public function test_install_succeeds_when_artifact_sha256_matches_pin(): void
+    {
+        // SV-S1b happy path: a tarball whose sha256 equals the supplied pin
+        // installs normally.
+        $tarPath = $this->makeTarGzFromDir($this->validPluginSource());
+        $sha = hash_file('sha256', $tarPath);
+        $this->assertIsString($sha);
+
+        [$manifest, $destination] = $this->installer()->install('file://' . $tarPath, $sha);
+
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
+        $this->assertFileExists($destination . '/plugin.json');
+    }
+
+    public function test_install_rejects_artifact_when_sha256_mismatches_pin(): void
+    {
+        // SV-S1b: a tarball whose sha256 != the expected pin must throw and
+        // leave NO var/plugins/<name>/ directory behind.
+        $tarPath = $this->makeTarGzFromDir($this->validPluginSource());
+        $wrongSha = str_repeat('0', 64);
+
+        try {
+            $this->installer()->install('file://' . $tarPath, $wrongSha);
+            $this->fail('Expected PluginInstallException on digest mismatch');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('digest mismatch', $e->getMessage());
+        }
+
+        // The plugin must not have been staged into the install base.
+        $this->assertDirectoryDoesNotExist($this->base . '/phlix-plugin-fromdir');
+    }
+
+    public function test_install_with_zip_artifact_verifies_pin(): void
+    {
+        // The digest gate applies to zip artifacts too (verified before any
+        // ZipArchive::extractTo touches disk).
+        $zipPath = $this->makeZipFromDir($this->validPluginSource());
+        $sha = hash_file('sha256', $zipPath);
+        $this->assertIsString($sha);
+
+        [$manifest] = $this->installer()->install('file://' . $zipPath, $sha);
+        $this->assertSame('phlix-plugin-fromdir', $manifest->name);
+    }
+
     private function validPluginSource(): string
     {
         $source = $this->work . '/plugin-source-' . uniqid('', true);

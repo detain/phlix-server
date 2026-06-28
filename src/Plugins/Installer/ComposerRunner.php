@@ -89,8 +89,13 @@ class ComposerRunner
             'COMPOSER_NO_INTERACTION' => '1',
         ];
 
+        // SECURITY (S1 — RCE kill-switch): `--no-scripts` AND `--no-plugins`
+        // stop any `composer.json` `scripts` hook (post-install-cmd, …) or
+        // third-party composer plugin shipped inside the fetched plugin from
+        // executing arbitrary code as the resident server user. Plugins ship
+        // runtime code only and have no legitimate install-time script need.
         $install = $this->runComposer(
-            ['install', '--no-dev', '--no-interaction', '--no-progress', '--no-ansi'],
+            ['install', '--no-dev', '--no-interaction', '--no-progress', '--no-ansi', '--no-scripts', '--no-plugins'],
             $pluginDir,
             $env,
         );
@@ -114,8 +119,10 @@ class ComposerRunner
             'stderr' => trim($install->getErrorOutput()),
         ]);
 
+        // Same RCE kill-switch on the fallback: dump-autoload must never run
+        // the plugin's scripts/plugins either.
         $dump = $this->runComposer(
-            ['dump-autoload', '--no-dev', '--no-interaction', '--no-ansi'],
+            ['dump-autoload', '--no-dev', '--no-interaction', '--no-ansi', '--no-scripts', '--no-plugins'],
             $pluginDir,
             $env,
         );

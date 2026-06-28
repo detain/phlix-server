@@ -53,24 +53,32 @@ class HttpInstaller
      * (when present) signature, and stage it under
      * `var/plugins/<name>/`.
      *
-     * @param string $sourceUrl HTTPS URL, `file://` URL, or absolute path.
+     * @param string      $sourceUrl     HTTPS URL, `file://` URL, or absolute path.
+     * @param string|null $expectedSha256 When non-null, the lowercase 64-hex
+     *        sha256 the downloaded artifact MUST hash to (SV-S1b). The artifact
+     *        is verified after download and BEFORE extraction; a mismatch
+     *        deletes the temp file and throws. `null` = legacy un-pinned path
+     *        (governed by the loader's default-deny, see SV-S2b).
+     * @param string|null $pinnedRef     When non-null, a GitHub repository URL is
+     *        resolved to `/archive/<pinnedRef>.tar.gz` so the bytes hashed are
+     *        the bytes pinned.
      *
      * @return array{0: Manifest, 1: string} Parsed manifest plus the
      *         absolute install directory.
      *
      * @throws PluginInstallException On any failure (download, validation,
-     *         signature mismatch, IO errors).
+     *         digest mismatch, signature mismatch, IO errors).
      *
      * @since 0.10.0
      */
-    public function install(string $sourceUrl): array
+    public function install(string $sourceUrl, ?string $expectedSha256 = null, ?string $pinnedRef = null): array
     {
-        $sourceUrl = SourceUrlResolver::normalize($sourceUrl);
+        $sourceUrl = SourceUrlResolver::normalize($sourceUrl, $pinnedRef);
         $this->guardScheme($sourceUrl);
 
         $tempDir = $this->createTempDir();
         try {
-            $this->fetchInto($sourceUrl, $tempDir);
+            $this->fetchInto($sourceUrl, $tempDir, $expectedSha256);
 
             $manifestPath = $tempDir . DIRECTORY_SEPARATOR . 'plugin.json';
             if (!is_file($manifestPath)) {
@@ -297,9 +305,12 @@ class HttpInstaller
     /**
      * Download `$sourceUrl` and explode it into `$tempDir`.
      *
+     * @param string|null $expectedSha256 Optional pinned artifact digest
+     *        (SV-S1b); verified after download, before extraction.
+     *
      * @throws PluginInstallException
      */
-    private function fetchInto(string $sourceUrl, string $tempDir): void
+    private function fetchInto(string $sourceUrl, string $tempDir, ?string $expectedSha256 = null): void
     {
         // PharData inspects the file extension to choose a codec, so we
         // need to preserve the source URL's suffix when staging the
@@ -318,6 +329,15 @@ class HttpInstaller
         $localFile = $this->downloadToTemp($sourceUrl, $extension);
 
         try {
+            // SECURITY (SV-S1b): a `.json` stub is an indirection, not the final
+            // artifact — the pinned digest must be checked against the real
+            // archive the stub points at, so defer verification to the recursive
+            // fetch. Every other (terminal) artifact is verified here, BEFORE
+            // any extraction touches the filesystem.
+            if ($extension !== '.json') {
+                $this->verifyArtifactDigest($localFile, $expectedSha256);
+            }
+
             if ($extension === '.zip') {
                 $this->extractZip($localFile, $tempDir);
                 return;
@@ -337,7 +357,7 @@ class HttpInstaller
                 }
                 $stubSource = SourceUrlResolver::normalize($decoded['source']);
                 $this->guardScheme($stubSource);
-                $this->fetchInto($stubSource, $tempDir);
+                $this->fetchInto($stubSource, $tempDir, $expectedSha256);
                 return;
             }
 
@@ -383,6 +403,37 @@ class HttpInstaller
         file_put_contents($localFile, $bytes);
 
         return $localFile;
+    }
+
+    /**
+     * Verify a freshly-downloaded artifact against its pinned sha256 (SV-S1b).
+     *
+     * Called BEFORE extraction so a tampered/substituted archive never touches
+     * the install tree. A mismatch deletes the temp file and throws; a `null`
+     * pin is a no-op (the loader's default-deny in {@see PluginLoader} decides
+     * whether an un-pinned install is allowed at all).
+     *
+     * @param string      $localFile      Absolute path to the downloaded archive.
+     * @param string|null $expectedSha256 Lowercase 64-hex pin, or `null`.
+     *
+     * @throws PluginInstallException On digest mismatch.
+     */
+    private function verifyArtifactDigest(string $localFile, ?string $expectedSha256): void
+    {
+        if ($expectedSha256 === null || $expectedSha256 === '') {
+            return;
+        }
+
+        $expected = strtolower(trim($expectedSha256));
+        $actual = hash_file('sha256', $localFile);
+        if (!is_string($actual) || !hash_equals($expected, strtolower($actual))) {
+            @unlink($localFile);
+            throw new PluginInstallException(sprintf(
+                'Plugin artifact digest mismatch — refusing install (expected sha256 %s, got %s).',
+                $expected,
+                is_string($actual) ? strtolower($actual) : '<unreadable>',
+            ));
+        }
     }
 
     /**

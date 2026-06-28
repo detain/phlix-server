@@ -448,7 +448,7 @@ final class FakePluginLoader extends PluginLoader
         // Skip parent constructor — collaborators not needed in tests.
     }
 
-    public function install(string $sourceUrl): Manifest
+    public function install(string $sourceUrl, ?string $expectedSha256 = null, ?string $pinnedRef = null): Manifest
     {
         $this->installCalls++;
         if ($this->onInstall !== null) {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Fs\LibraryRootGuard;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
@@ -322,7 +323,10 @@ class BookController
         $metadata = is_array($book['metadata'] ?? null) ? $book['metadata'] : [];
         $coverPath = is_string($metadata['cover_path'] ?? null) ? $metadata['cover_path'] : null;
 
-        if ($coverPath === null || !file_exists($coverPath)) {
+        // Jail the (untrusted) stored cover_path within the configured library
+        // roots before reading. realpath()-based containment implies existence,
+        // so a missing OR escaping path yields the same 404 (no disclosure).
+        if ($coverPath === null || !LibraryRootGuard::assertWithinLibraryRoots($coverPath)) {
             return (new Response())->status(404)->json(['error' => 'Cover not found']);
         }
 
@@ -374,7 +378,10 @@ class BookController
 
         $path = is_string($book['path'] ?? null) ? $book['path'] : '';
 
-        if (empty($path) || !file_exists($path)) {
+        // Jail the (untrusted) stored path within the configured library roots
+        // before reading. realpath()-based containment implies existence, so a
+        // missing OR escaping path yields the same 404 (no path disclosure).
+        if ($path === '' || !LibraryRootGuard::assertWithinLibraryRoots($path)) {
             return (new Response())->status(404)->json(['error' => 'File not found']);
         }
 

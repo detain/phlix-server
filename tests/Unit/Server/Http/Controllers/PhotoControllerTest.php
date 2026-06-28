@@ -211,6 +211,12 @@ class PhotoControllerTest extends TestCase
 
         file_put_contents($testFile, $minimalJpeg);
 
+        // Jail the file's directory so the LibraryRootGuard treats it as a
+        // legitimate in-library path regardless of host HOME/tmp layout.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
         try {
             $request = new Request();
             $request->query = ['w' => '100', 'h' => '100'];
@@ -235,6 +241,55 @@ class PhotoControllerTest extends TestCase
             if (file_exists($testFile)) {
                 unlink($testFile);
             }
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * S11/C4 path jail: a poisoned $item['path'] pointing OUTSIDE the configured
+     * library roots (e.g. /etc/passwd) must yield 404 — never serve the file and
+     * never disclose its existence with a 403.
+     */
+    public function testGetThumbnailReturns404WhenPathEscapesLibraryRoots(): void
+    {
+        $request = new Request();
+        $request->query = ['w' => '100', 'h' => '100'];
+        $params = ['id' => 'photo-evil'];
+
+        $this->db->method('query')->willReturn([
+            [
+                'id' => 'photo-evil',
+                'name' => 'Poisoned',
+                'type' => 'photo',
+                'library_id' => 'lib-1',
+                // A real, readable file that is NOT under any library root.
+                'path' => '/etc/passwd',
+                'metadata_json' => '{}',
+            ],
+        ]);
+
+        // Constrain roots to a directory that cannot contain /etc/passwd.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . sys_get_temp_dir());
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->getThumbnail($request, $params);
+            $this->assertEquals(404, $response->statusCode);
+            $body = json_decode($response->body, true);
+            $this->assertArrayHasKey('error', $body);
+        } finally {
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
         }
     }
 

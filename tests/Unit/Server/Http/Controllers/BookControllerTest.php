@@ -169,18 +169,145 @@ class BookControllerTest extends TestCase
         $this->itemRepo->method('findById')
             ->willReturn($book);
 
-        $request = new Request();
-        $params = ['id' => 'book-123'];
-        $response = $this->controller->downloadBook($request, $params);
+        // Jail the file's directory so the LibraryRootGuard treats it as a
+        // legitimate in-library path regardless of host HOME/tmp layout.
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
 
-        $this->assertInstanceOf(Response::class, $response);
-        $this->assertEquals(200, $response->statusCode);
-        $contentDisposition = $response->headers['Content-Disposition'] ?? '';
-        $this->assertStringContainsString('attachment', $contentDisposition);
+        try {
+            $request = new Request();
+            $params = ['id' => 'book-123'];
+            $response = $this->controller->downloadBook($request, $params);
 
-        // Clean up
-        unlink($bookPath);
-        rmdir($tempDir);
+            $this->assertInstanceOf(Response::class, $response);
+            $this->assertEquals(200, $response->statusCode);
+            $contentDisposition = $response->headers['Content-Disposition'] ?? '';
+            $this->assertStringContainsString('attachment', $contentDisposition);
+        } finally {
+            // Clean up
+            unlink($bookPath);
+            rmdir($tempDir);
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * S11/C4 path jail: a poisoned book path pointing OUTSIDE the configured
+     * library roots (e.g. /etc/passwd) must yield 404 on download — never read
+     * the file and never disclose its existence.
+     *
+     * @test
+     */
+    public function testDownloadBookReturns404WhenPathEscapesLibraryRoots(): void
+    {
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-evil',
+            'name' => 'Poisoned',
+            'type' => 'book',
+            // A real, readable file that is NOT under any library root.
+            'path' => '/etc/passwd',
+            'metadata' => [],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . sys_get_temp_dir());
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->downloadBook(new Request(), ['id' => 'book-evil']);
+            $this->assertEquals(404, $response->statusCode);
+            $body = json_decode($response->body, true);
+            $this->assertArrayHasKey('error', $body);
+        } finally {
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * S11/C4 path jail: a legitimate in-library cover_path serves the image.
+     *
+     * @test
+     */
+    public function testGetCoverServesLegitInLibraryCover(): void
+    {
+        $tempDir = sys_get_temp_dir() . '/phlix_cover_' . uniqid();
+        mkdir($tempDir, 0755, true);
+        $coverPath = $tempDir . '/cover.png';
+        file_put_contents($coverPath, 'PNGDATA');
+
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-123',
+            'name' => 'Test Book',
+            'type' => 'book',
+            'path' => $tempDir . '/test.epub',
+            'metadata' => ['cover_path' => $coverPath],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . $tempDir);
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->getCover(new Request(), ['id' => 'book-123']);
+            $this->assertEquals(200, $response->statusCode);
+            $this->assertEquals('image/png', $response->headers['Content-Type'] ?? '');
+            $this->assertEquals('PNGDATA', $response->body);
+        } finally {
+            unlink($coverPath);
+            rmdir($tempDir);
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
+    }
+
+    /**
+     * S11/C4 path jail: a poisoned cover_path pointing OUTSIDE the configured
+     * library roots (e.g. /etc/passwd) must yield 404 on getCover.
+     *
+     * @test
+     */
+    public function testGetCoverReturns404WhenCoverPathEscapesLibraryRoots(): void
+    {
+        $this->itemRepo->method('findById')->willReturn([
+            'id' => 'book-evil',
+            'name' => 'Poisoned',
+            'type' => 'book',
+            'path' => '/books/test.epub',
+            'metadata' => ['cover_path' => '/etc/passwd'],
+        ]);
+
+        $prevRoots = getenv('PHLIX_LIBRARY_ROOTS');
+        putenv('PHLIX_LIBRARY_ROOTS=' . sys_get_temp_dir());
+        \Phlix\Common\Fs\LibraryRootGuard::reset();
+
+        try {
+            $response = $this->controller->getCover(new Request(), ['id' => 'book-evil']);
+            $this->assertEquals(404, $response->statusCode);
+            $body = json_decode($response->body, true);
+            $this->assertArrayHasKey('error', $body);
+        } finally {
+            if ($prevRoots === false) {
+                putenv('PHLIX_LIBRARY_ROOTS');
+            } else {
+                putenv('PHLIX_LIBRARY_ROOTS=' . $prevRoots);
+            }
+            \Phlix\Common\Fs\LibraryRootGuard::reset();
+        }
     }
 
     /**

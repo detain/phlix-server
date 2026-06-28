@@ -287,14 +287,18 @@ class AuthController
         $refresh = is_string($authResponse['refresh_token'] ?? null) ? $authResponse['refresh_token'] : '';
         $expiresIn = is_int($authResponse['expires_in'] ?? null) ? $authResponse['expires_in'] : 3600;
 
+        $secure = self::cookiesSecure();
+
         $response = (new Response())->redirect($redirectTo);
         if ($access !== '') {
+            // Secure so the credential is only ever sent over HTTPS;
             // HttpOnly so XSS can't read it; SameSite=Lax so top-level
             // navigations from /login still carry it.
             $response->cookie(
                 self::SESSION_COOKIE,
                 $access,
                 maxAge: $expiresIn,
+                secure: $secure,
                 httpOnly: true,
                 sameSite: 'Lax',
             );
@@ -304,10 +308,27 @@ class AuthController
                 self::REFRESH_COOKIE,
                 $refresh,
                 maxAge: 7 * 24 * 3600,
+                secure: $secure,
                 httpOnly: true,
                 sameSite: 'Lax',
             );
         }
         return $response;
+    }
+
+    /**
+     * Whether auth cookies should carry the `Secure` attribute.
+     *
+     * Defaults to true so the session/refresh credentials are never
+     * transmitted over plain HTTP. Only a deliberate local-development
+     * opt-out (`PHLIX_COOKIE_INSECURE=1`) disables it, so an HTTP dev
+     * server can still set cookies. Any other value — including unset —
+     * keeps `Secure` on.
+     */
+    private static function cookiesSecure(): bool
+    {
+        $optOut = getenv('PHLIX_COOKIE_INSECURE');
+
+        return $optOut !== '1';
     }
 }

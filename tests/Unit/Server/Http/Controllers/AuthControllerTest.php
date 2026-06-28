@@ -277,4 +277,104 @@ class AuthControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertSame('Unauthorized', $body['error']);
     }
+
+    /**
+     * S4: the browser login flow must set both auth cookies with the
+     * `Secure`, `HttpOnly`, and `SameSite=Lax` attributes so the
+     * session/refresh credentials never traverse plain HTTP and are
+     * unreadable from JavaScript.
+     */
+    public function testBrowserLoginSetsSecureHttpOnlyLaxCookies(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->method('login')->willReturn([
+            'access_token' => 'access-tok',
+            'refresh_token' => 'refresh-tok',
+            'expires_in' => 3600,
+            'user' => ['id' => 'u-1', 'username' => 'alice'],
+        ]);
+
+        $controller = new AuthController($authManager);
+
+        // The `/auth/` path marks this as a browser request → redirect + cookies.
+        $request = new Request();
+        $request->path = '/auth/login';
+        $request->body = ['username' => 'alice', 'password' => 'hunter2hunter2'];
+
+        $response = $controller->login($request, []);
+
+        $this->assertSame(302, $response->statusCode);
+
+        $setCookies = $response->toWorkermanResponse()->getHeader('Set-Cookie');
+        $cookieLines = is_array($setCookies) ? $setCookies : [$setCookies];
+
+        $session = $this->findCookieLine($cookieLines, AuthController::SESSION_COOKIE);
+        $refresh = $this->findCookieLine($cookieLines, AuthController::REFRESH_COOKIE);
+
+        foreach ([$session, $refresh] as $line) {
+            $this->assertStringContainsString('Secure', $line);
+            $this->assertStringContainsString('HttpOnly', $line);
+            $this->assertStringContainsString('SameSite=Lax', $line);
+        }
+    }
+
+    /**
+     * S4: the `PHLIX_COOKIE_INSECURE=1` local-dev opt-out drops the
+     * `Secure` attribute so an HTTP dev server can still set cookies,
+     * while HttpOnly/SameSite stay intact.
+     */
+    public function testBrowserLoginOmitsSecureWhenInsecureOptOut(): void
+    {
+        putenv('PHLIX_COOKIE_INSECURE=1');
+
+        try {
+            $authManager = $this->createMock(AuthManager::class);
+            $authManager->method('login')->willReturn([
+                'access_token' => 'access-tok',
+                'refresh_token' => 'refresh-tok',
+                'expires_in' => 3600,
+                'user' => ['id' => 'u-1', 'username' => 'alice'],
+            ]);
+
+            $controller = new AuthController($authManager);
+
+            $request = new Request();
+            $request->path = '/auth/login';
+            $request->body = ['username' => 'alice', 'password' => 'hunter2hunter2'];
+
+            $response = $controller->login($request, []);
+
+            $setCookies = $response->toWorkermanResponse()->getHeader('Set-Cookie');
+            $cookieLines = is_array($setCookies) ? $setCookies : [$setCookies];
+
+            $session = $this->findCookieLine($cookieLines, AuthController::SESSION_COOKIE);
+            $refresh = $this->findCookieLine($cookieLines, AuthController::REFRESH_COOKIE);
+
+            foreach ([$session, $refresh] as $line) {
+                $this->assertStringNotContainsString('Secure', $line);
+                $this->assertStringContainsString('HttpOnly', $line);
+                $this->assertStringContainsString('SameSite=Lax', $line);
+            }
+        } finally {
+            putenv('PHLIX_COOKIE_INSECURE');
+        }
+    }
+
+    /**
+     * Locate the Set-Cookie line for the given cookie name.
+     *
+     * @param array<int, string> $cookieLines
+     */
+    private function findCookieLine(array $cookieLines, string $name): string
+    {
+        foreach ($cookieLines as $line) {
+            if (str_starts_with($line, $name . '=')) {
+                return $line;
+            }
+        }
+
+        $this->fail("Set-Cookie line for '{$name}' not found");
+    }
 }

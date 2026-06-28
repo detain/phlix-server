@@ -124,7 +124,8 @@ final class PluginAutoUpdateWorkerTest extends TestCase
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]);
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO)->andReturn($manifest);
+        // SV-B2: un-pinned catalog entry → update threads a null pin.
+        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $updates = new PluginUpdateService(
             $loader,

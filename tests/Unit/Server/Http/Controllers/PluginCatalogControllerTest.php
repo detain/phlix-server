@@ -10,6 +10,7 @@ use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\InstalledPlugin;
@@ -51,6 +52,15 @@ final class PluginCatalogControllerTest extends TestCase
         $this->loader = Mockery::mock(PluginLoader::class);
         $this->audit  = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
         $this->store  = [PluginCatalogService::KEY_DEFAULT_SOURCE => self::DEFAULT_SOURCE];
+        // Catalog fetch/add now SSRF-guards URLs. Inject a deterministic public
+        // resolver so the suite never performs a real DNS lookup.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
     }
 
     public function test_index_annotates_install_state(): void

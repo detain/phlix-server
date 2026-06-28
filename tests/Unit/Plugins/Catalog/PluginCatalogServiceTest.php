@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Plugins\Catalog;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\CatalogFetchException;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use PHPUnit\Framework\TestCase;
@@ -15,6 +16,20 @@ use PHPUnit\Framework\TestCase;
 final class PluginCatalogServiceTest extends TestCase
 {
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Deterministic, offline SSRF resolution: all catalog test hosts resolve
+        // to a public IP so addSource()/fetchCatalog() proceed without real DNS.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
+    }
 
     /**
      * A stateful settings double: `getEffective` reads from `$store`, `set`
@@ -129,6 +144,29 @@ final class PluginCatalogServiceTest extends TestCase
             'no scheme' => ['github.com/detain/phlix-plugins'],
             'ftp'     => ['ftp://example.com/c.json'],
         ];
+    }
+
+    public function test_add_source_rejects_private_host_via_ssrf_guard(): void
+    {
+        SsrfGuard::setResolver(static fn (string $host): array => ['10.0.0.5']);
+        $store = [];
+        $this->expectException(\InvalidArgumentException::class);
+        $this->service($this->settings($store))->addSource('http://internal.example/plugins.json');
+    }
+
+    public function test_add_source_rejects_loopback_literal(): void
+    {
+        $store = [];
+        $this->expectException(\InvalidArgumentException::class);
+        $this->service($this->settings($store))->addSource('http://127.0.0.1/plugins.json');
+    }
+
+    public function test_fetch_catalog_rejects_private_resolved_host(): void
+    {
+        SsrfGuard::setResolver(static fn (string $host): array => ['169.254.169.254']);
+        $store = [];
+        $this->expectException(CatalogFetchException::class);
+        $this->service($this->settings($store))->fetchCatalog('https://metadata.example/plugins.json');
     }
 
     public function test_remove_source_drops_the_extra(): void

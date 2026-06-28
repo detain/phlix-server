@@ -4,6 +4,7 @@ namespace Phlix\Tests\Unit\Webhooks;
 
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Webhooks\DispatchResult;
 use Phlix\Webhooks\WebhookDispatcher;
 use Phlix\Webhooks\WebhookEvent;
@@ -22,6 +23,16 @@ class WebhookDispatcherTest extends TestCase
         $this->logger = $this->createMock(StructuredLogger::class);
         $this->logger->method('info');
         $this->dispatcher = new WebhookDispatcher($this->db, $this->logger);
+
+        // Deterministic, offline SSRF-guard resolution: all test hosts map to a
+        // public IP so register()/dispatch() proceed without real DNS.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
     }
 
     public function testRegisterCreatesWebhook(): void
@@ -232,5 +243,56 @@ class WebhookDispatcherTest extends TestCase
         $this->assertInstanceOf(DispatchResult::class, $result);
         $this->assertEquals(0, $result->successCount);
         $this->assertEquals(0, $result->failureCount);
+    }
+
+    public function testRegisterRejectsLoopbackUrlViaSsrfGuard(): void
+    {
+        SsrfGuard::setResolver(static fn (string $host): array => ['127.0.0.1']);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->dispatcher->register(
+            'Evil',
+            'http://127.0.0.1/webhook',
+            'secret',
+            ['playback.started'],
+        );
+    }
+
+    public function testRegisterRejectsMetadataUrlViaSsrfGuard(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->dispatcher->register(
+            'Evil',
+            'http://169.254.169.254/latest/meta-data/',
+            'secret',
+            ['playback.started'],
+        );
+    }
+
+    public function testDispatchBlocksPrivateUrlAtDispatchTime(): void
+    {
+        // A stored row whose host resolves to a private address must be blocked
+        // at dispatch even though it passed (or bypassed) creation validation.
+        SsrfGuard::setResolver(static fn (string $host): array => ['10.0.0.5']);
+
+        $this->db->method('query')
+            ->willReturnCallback(function ($sql) {
+                if (strpos($sql, 'SELECT') !== false && strpos($sql, 'is_active = TRUE') !== false) {
+                    return [[
+                        'id' => 'wh-private',
+                        'name' => 'Internal',
+                        'url' => 'http://internal.example/webhook',
+                        'secret' => 'secret',
+                        'events_json' => '["playback.started"]',
+                    ]];
+                }
+                return [];
+            });
+
+        $event = new WebhookEvent('playback.started', ['media_id' => 'm-1'], new DateTimeImmutable());
+        $result = $this->dispatcher->dispatch($event);
+
+        $this->assertSame(0, $result->successCount);
+        $this->assertSame(1, $result->failureCount);
     }
 }

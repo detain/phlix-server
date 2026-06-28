@@ -82,9 +82,7 @@ class MetadataHttpClient
             $httpOptions['header'] = implode("\r\n", $headerStrings);
         }
 
-        $context = stream_context_create([
-            'http' => $httpOptions,
-        ]);
+        $context = stream_context_create(self::buildStreamContextOptions($httpOptions));
 
         $response = @file_get_contents($url, false, $context);
 
@@ -123,6 +121,31 @@ class MetadataHttpClient
 
         $this->cache[$cacheKey] = $normalized;
         return $normalized;
+    }
+
+    /**
+     * Build the `stream_context_create()` options for an outbound metadata
+     * request, attaching an `ssl` block that verifies the peer certificate and
+     * hostname (F2). Metadata providers (TMDB, TVDB, Fanart, …) are reached over
+     * HTTPS; without TLS verification a MITM could feed forged metadata.
+     *
+     * Exposed (public, static, pure) so it is unit-testable without reflection
+     * or a live network request.
+     *
+     * @param array<string, mixed> $httpOptions The `http` stream-context block.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    public static function buildStreamContextOptions(array $httpOptions): array
+    {
+        return [
+            'http' => $httpOptions,
+            'ssl' => [
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'allow_self_signed' => false,
+            ],
+        ];
     }
 
     /**

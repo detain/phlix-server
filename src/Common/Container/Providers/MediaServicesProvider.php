@@ -90,6 +90,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
             ItemRepository::class => autowire()
                 ->constructorParameter('statsCollector', get(StatsCollector::class)),
 
+            // Per-user favorites + ratings (E10). The repository takes only a
+            // Workerman MySQL Connection; the controller takes ItemRepository +
+            // the repository — both autowirable. Referenced by WebPortalRouter
+            // (the single dispatch point for /api/v1/media/* on both entry points).
+            \Phlix\Media\UserItemDataRepository::class => autowire(),
+            \Phlix\Server\Http\Controllers\MediaUserDataController::class => autowire(),
+
             TmdbProvider::class => factory(static function (ContainerInterface $c) use ($tmdbApiKey): TmdbProvider {
                 // Prefer the admin-managed server setting (set via the admin
                 // UI's Settings → Metadata page, persisted in server_settings)

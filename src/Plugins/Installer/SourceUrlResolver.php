@@ -53,13 +53,17 @@ final class SourceUrlResolver
      * Rewrite a repository URL to a downloadable tarball, or return the URL
      * unchanged when it is already an archive / not a recognised repo URL.
      *
-     * @param string $url The raw source URL as typed by the operator.
+     * @param string      $url      The raw source URL as typed by the operator.
+     * @param string|null $pinnedRef When non-null/non-empty, forces the archive
+     *        ref to this exact commit sha for a recognised GitHub repository URL
+     *        (SV-S1b: install the pinned commit, never `HEAD`). Ignored for URLs
+     *        that already point at a direct archive or are not GitHub repos.
      *
      * @return string A URL {@see HttpInstaller} can fetch and extract.
      *
      * @since 0.31.0
      */
-    public static function normalize(string $url): string
+    public static function normalize(string $url, ?string $pinnedRef = null): string
     {
         $trimmed = trim($url);
         if ($trimmed === '') {
@@ -77,7 +81,14 @@ final class SourceUrlResolver
         }
 
         [$owner, $name, $ref] = $repo;
-        $ref = $ref ?? 'HEAD';
+        // A caller-supplied pinned commit sha (SV-S1b) wins over any ref parsed
+        // from the URL and over the `HEAD` default, so the bytes we download are
+        // exactly the bytes the catalog pinned + hashed.
+        if (is_string($pinnedRef) && $pinnedRef !== '') {
+            $ref = $pinnedRef;
+        } else {
+            $ref = $ref ?? 'HEAD';
+        }
 
         return sprintf('https://github.com/%s/%s/archive/%s.tar.gz', $owner, $name, $ref);
     }

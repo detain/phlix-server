@@ -45,6 +45,30 @@ final class CatalogSourceResolver
     public const CATALOG_FILE = 'plugins.json';
 
     /**
+     * Owner/name of the official, first-party catalog repository. Only this
+     * repo is auto-pinned (SV-S2b) — operator-added catalogs keep `HEAD`.
+     */
+    public const OFFICIAL_OWNER = 'detain';
+    public const OFFICIAL_REPO = 'phlix-plugins';
+
+    /**
+     * The default ref the official catalog is pinned to (SV-S2b). A release
+     * tag/commit of `detain/phlix-plugins` so a malicious merge to the default
+     * branch cannot silently rewrite every operator's targets. Operator-
+     * overridable via the {@see PINNED_REF_ENV} env var.
+     *
+     * NOTE: kept as a release tag (not a moving branch). When phlix-plugins
+     * cuts a new pinned catalog release, bump this constant in lockstep.
+     */
+    public const OFFICIAL_PINNED_REF = 'v2.0.0';
+
+    /**
+     * Env var to override the official catalog pinned ref without a code change
+     * (e.g. to track a newer phlix-plugins release tag, or to roll back).
+     */
+    public const PINNED_REF_ENV = 'PHLIX_PLUGINS_CATALOG_REF';
+
+    /**
      * Rewrite a GitHub repository URL to a raw file in its default branch
      * (`$file`, default `plugins.json`), or return the URL unchanged when it
      * already names a `.json` file or is not a recognised GitHub repository URL.
@@ -75,7 +99,15 @@ final class CatalogSourceResolver
         }
 
         [$owner, $name, $ref] = $repo;
-        $ref = $ref ?? 'HEAD';
+        if ($ref === null || $ref === '') {
+            // SV-S2b: the official catalog resolves to a configurable PINNED ref
+            // (a phlix-plugins release tag), never the moving default branch, so
+            // a malicious merge to `master` cannot silently rewrite every
+            // operator's install targets. Operator-added catalogs (any other
+            // owner/repo) keep `HEAD` but their entries are subject to
+            // default-deny at install time (PluginLoader::assertVerifiedOrOverride).
+            $ref = self::isOfficialRepo($owner, $name) ? self::officialPinnedRef() : 'HEAD';
+        }
 
         return sprintf(
             'https://raw.githubusercontent.com/%s/%s/%s/%s',
@@ -84,6 +116,28 @@ final class CatalogSourceResolver
             $ref,
             ltrim($file, '/'),
         );
+    }
+
+    /**
+     * Whether `$owner/$name` is the first-party catalog repo (case-insensitive).
+     */
+    private static function isOfficialRepo(string $owner, string $name): bool
+    {
+        return strtolower($owner) === self::OFFICIAL_OWNER
+            && strtolower($name) === self::OFFICIAL_REPO;
+    }
+
+    /**
+     * The configured pinned ref for the official catalog: the
+     * {@see PINNED_REF_ENV} env override when set, else {@see OFFICIAL_PINNED_REF}.
+     */
+    public static function officialPinnedRef(): string
+    {
+        $env = getenv(self::PINNED_REF_ENV);
+        if (is_string($env) && trim($env) !== '') {
+            return trim($env);
+        }
+        return self::OFFICIAL_PINNED_REF;
     }
 
     /**

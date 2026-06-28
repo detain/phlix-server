@@ -80,7 +80,8 @@ final class SignedUrl
 
         $secret = (string) (getenv('PHLIX_SIGNED_URL_SECRET') ?: '');
         if ($secret === '') {
-            $jwtSecret = (string) (getenv('JWT_SECRET') ?: 'default-secret-change-me');
+            $jwtSecret = (string) (getenv('JWT_SECRET')
+                ?: \Phlix\Common\Container\Providers\AuthServicesProvider::DEFAULT_JWT_SECRET);
             // Domain-separate from the JWT key: signed-URL tokens and JWTs must
             // never be interchangeable even when only JWT_SECRET is configured.
             $secret = hash_hmac('sha256', self::VERSION, $jwtSecret);

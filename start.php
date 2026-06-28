@@ -22,6 +22,7 @@ declare(strict_types=1);
 
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Workerman\HttpHandler;
@@ -35,6 +36,19 @@ require __DIR__ . '/vendor/autoload.php';
 
 if (!function_exists('pcntl_fork')) {
     echo "ERROR: pcntl extension is required for Workerman.\n";
+    exit(1);
+}
+
+// Refuse to boot with a missing or default JWT signing key (S5). The same secret
+// also derives the media signed-URL key (see Phlix\Auth\SignedUrl::fromEnv), so a
+// default/empty value would make both JWTs and stream URLs forgeable. Skipped in
+// the test environment by AuthServicesProvider::assertSecretConfigured(). This runs
+// before any Worker is created or Worker::runAll() forks, so a misconfigured server
+// fails fast with a clear CRITICAL message instead of serving with a guessable key.
+try {
+    AuthServicesProvider::assertSecretConfigured();
+} catch (\RuntimeException $e) {
+    fwrite(STDERR, $e->getMessage() . "\n");
     exit(1);
 }
 

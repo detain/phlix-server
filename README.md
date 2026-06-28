@@ -388,6 +388,7 @@ return [
 | DELETE | `/api/v1/media/{id}/favorite` | Remove a media item from the user's favorites — auth required |
 | PUT | `/api/v1/media/{id}/rating` | Set the user's personal rating (body `{rating: int 1-10\|null}`; `null` clears) — auth required |
 | DELETE | `/api/v1/media/{id}/rating` | Clear the user's personal rating — auth required |
+| GET | `/api/v1/users/me/favorites` | List the user's favorited items (shaped media items + `user_data`; `?limit=1-100&offset`) — auth required |
 | GET | `/api/v1/admin/settings` | Effective server settings (config default + DB override) — admin-only |
 | PUT | `/api/v1/admin/settings` | Persist server-setting overrides — admin-only |
 | GET | `/api/v1/admin/fs/browse` | List subdirectories under allowed roots (library path picker) — admin-only |

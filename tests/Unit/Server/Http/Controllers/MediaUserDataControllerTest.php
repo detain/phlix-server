@@ -185,4 +185,109 @@ class MediaUserDataControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
     }
+
+    public function testListFavoritesReturns401WhenUnauthenticated(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('getFavorites');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $response = $controller->listFavorites(new Request(), []);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function testListFavoritesReturnsShapedItemsWithUserData(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->method('getFavorites')->willReturn([
+            ['item_id' => 'item-1', 'rating' => 7, 'updated_at' => '2026-06-27 00:00:00'],
+            ['item_id' => 'item-2', 'rating' => null, 'updated_at' => '2026-06-26 00:00:00'],
+        ]);
+
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturnCallback(
+            fn (string $id): ?array => ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie']
+        );
+
+        $controller = new MediaUserDataController($itemRepo, $userData);
+        $response = $controller->listFavorites($this->authedRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertCount(2, $body['items']);
+
+        $first = $body['items'][0];
+        $this->assertSame('item-1', $first['id']);
+        $this->assertSame(['favorite' => true, 'rating' => 7], $first['user_data']);
+
+        $second = $body['items'][1];
+        $this->assertSame(['favorite' => true, 'rating' => null], $second['user_data']);
+
+        $this->assertSame(50, $body['limit']);
+        $this->assertSame(0, $body['offset']);
+    }
+
+    public function testListFavoritesRespectsLimitAndOffset(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        // Limit clamps to 100 (200 requested), offset floors to 0 (negative requested).
+        $userData->expects($this->once())
+            ->method('getFavorites')
+            ->with('user-1', 100, 0)
+            ->willReturn([]);
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = $this->authedRequest();
+        $req->query = ['limit' => '200', 'offset' => '-5'];
+
+        $response = $controller->listFavorites($req, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(100, $body['limit']);
+        $this->assertSame(0, $body['offset']);
+        $this->assertSame([], $body['items']);
+    }
+
+    public function testListFavoritesClampsLimitToAtLeastOne(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->once())
+            ->method('getFavorites')
+            ->with('user-1', 1, 10)
+            ->willReturn([]);
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = $this->authedRequest();
+        $req->query = ['limit' => '0', 'offset' => '10'];
+
+        $response = $controller->listFavorites($req, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(1, json_decode($response->body, true)['limit']);
+    }
+
+    public function testListFavoritesSkipsMissingMediaItems(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->method('getFavorites')->willReturn([
+            ['item_id' => 'gone', 'rating' => null, 'updated_at' => '2026-06-27 00:00:00'],
+            ['item_id' => 'item-2', 'rating' => 5, 'updated_at' => '2026-06-26 00:00:00'],
+        ]);
+
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturnCallback(
+            fn (string $id): ?array => $id === 'item-2' ? ['id' => 'item-2', 'name' => 'Kept'] : null
+        );
+
+        $controller = new MediaUserDataController($itemRepo, $userData);
+        $response = $controller->listFavorites($this->authedRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertCount(1, $body['items']);
+        $this->assertSame('item-2', $body['items'][0]['id']);
+    }
 }

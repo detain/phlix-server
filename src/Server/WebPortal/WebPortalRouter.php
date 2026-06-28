@@ -175,6 +175,7 @@ class WebPortalRouter
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
             $r->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
+            $r->get('/api/v1/users/me/favorites', [$this, 'listFavorites']);
 
             // Watch history routes
             $r->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
@@ -953,6 +954,26 @@ class WebPortalRouter
             ]);
         }
         return $this->mediaUserDataController->clearRating($request, $params);
+    }
+
+    /**
+     * List the authenticated user's favorited media items (E10).
+     *
+     * Thin delegate to {@see MediaUserDataController::listFavorites()}; responds
+     * 503 when the favorites feature is not wired (mirrors history/settings).
+     *
+     * @param array<string, string> $params Route params (unused).
+     *
+     * @api_endpoint GET /api/v1/users/me/favorites
+     */
+    public function listFavorites(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->listFavorites($request, $params);
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -140,6 +141,66 @@ class MediaUserDataController
         $this->userItemData->setRating($userId, $itemId, null);
 
         return (new Response())->json(['message' => 'Rating cleared']);
+    }
+
+    /**
+     * List the authenticated user's favorited media items, most-recently
+     * favorited first, as fully shaped media items.
+     *
+     * Each returned item is hydrated by id and shaped with the SAME
+     * {@see MediaItemShaper::shape()} used by the media-list endpoint, then
+     * carries an add-only `user_data:{favorite:true, rating:int|null}` block.
+     * Rows whose underlying media item no longer exists are skipped defensively
+     * (the FK cascade normally prevents this, but a sparse join is possible
+     * mid-delete). Pagination mirrors `GET /api/v1/media`: `limit` defaults to
+     * 50 and is clamped to 1-100, `offset` defaults to 0 and floors at 0.
+     *
+     * @param array<string, string> $params Route params (unused).
+     *
+     * @api_endpoint GET /api/v1/users/me/favorites
+     */
+    public function listFavorites(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        $limit = $request->queryInt('limit', 50);
+        $limit = max(1, min(100, $limit));
+        $offset = max(0, $request->queryInt('offset', 0));
+
+        $rows = $this->userItemData->getFavorites($userId, $limit, $offset);
+
+        $items = [];
+        foreach ($rows as $row) {
+            $itemId = is_string($row['item_id'] ?? null) ? $row['item_id'] : '';
+            if ($itemId === '') {
+                continue;
+            }
+
+            $item = $this->itemRepository->findById($itemId);
+            if ($item === null) {
+                // Defensive: media item gone since the favorite row was written.
+                continue;
+            }
+
+            $shaped = MediaItemShaper::shape($item);
+            // ADD-ONLY user_data block (mirrors the media-detail endpoint). Every
+            // row from getFavorites() is a favorite by definition (favorite = 1).
+            $rating = $row['rating'] ?? null;
+            $shaped['user_data'] = [
+                'favorite' => true,
+                'rating' => is_numeric($rating) ? (int) $rating : null,
+            ];
+            $items[] = $shaped;
+        }
+
+        return (new Response())->json([
+            'items' => $items,
+            'limit' => $limit,
+            'offset' => $offset,
+        ]);
     }
 
     /**

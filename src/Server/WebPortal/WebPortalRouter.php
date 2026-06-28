@@ -167,8 +167,9 @@ class WebPortalRouter
 
             // Media routes
             $r->get('/api/v1/media', [$this, 'getMedia']);
-            // Static segment registered BEFORE `{id}` so it can't be swallowed as an id.
+            // Static segments registered BEFORE `{id}` so they can't be swallowed as an id.
             $r->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
+            $r->get('/api/v1/media/facets', [$this, 'getMediaFacets']);
             $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
             $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
 
@@ -538,6 +539,37 @@ class WebPortalRouter
         }
 
         return (new Response())->json(['letters' => $letters, 'total' => $offset]);
+    }
+
+    /**
+     * Authoritative filter-facet list for the media surface.
+     *
+     * The SPA derives its genre filter from whatever items happen to be loaded,
+     * which is incomplete under sparse/random-access paging. This returns the
+     * server's full, DISTINCT, sorted genre set so the client can render a
+     * complete filter list (falling back to its derived set when this endpoint
+     * is absent). Scoped to one library with `?libraryId=<uuid>`; absent/blank
+     * → facets span every library the request is allowed to see (the route is
+     * auth-gated, exactly like `GET /api/v1/media`).
+     *
+     * The response is an object so it can grow more facet keys later; this step
+     * populates `genres` only.
+     *
+     * `GET /api/v1/media/facets?libraryId=<id>` → `{ "genres": string[] }`.
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path params (unused).
+     *
+     * @return Response `{ "genres": [...] }` — sorted, de-duplicated, non-empty.
+     */
+    public function getMediaFacets(Request $request, array $params): Response
+    {
+        $libraryIdRaw = $request->queryString('libraryId');
+        $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+        $genres = $this->itemRepository->distinctGenres($libraryId);
+
+        return (new Response())->json(['genres' => $genres]);
     }
 
     /**

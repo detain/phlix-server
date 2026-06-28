@@ -1051,4 +1051,78 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertEquals(['year' => 2020, 'poster_url' => 'http://example.com/poster.jpg', 'genres' => ['Action'], 'rating' => 'PG-13'], $result['items'][0]['metadata']);
     }
+
+    public function testDistinctGenresUnnestsViaJsonTableAndShapesRows(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql): bool {
+                    // Set-based unnest of $.genres via JSON_TABLE — no unbounded
+                    // SELECT * scan into PHP — DISTINCT + ORDER done server-side.
+                    return str_contains($sql, 'JSON_TABLE(')
+                        && str_contains($sql, "'\$.genres[*]'")
+                        && str_contains($sql, 'SELECT DISTINCT')
+                        && str_contains($sql, 'ORDER BY g.genre ASC')
+                        && !str_contains($sql, 'SELECT *');
+                }),
+                $this->callback(fn (array $bindings): bool => $bindings === []),
+            )
+            ->willReturn([
+                ['genre' => 'Action'],
+                ['genre' => 'Drama'],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(['Action', 'Drama'], $repo->distinctGenres());
+    }
+
+    public function testDistinctGenresScopesToLibraryWhenProvided(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(fn (string $sql): bool => str_contains($sql, 'mi.library_id = ?')),
+                $this->callback(fn (array $bindings): bool => $bindings === ['lib-A']),
+            )
+            ->willReturn([['genre' => 'Horror']]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(['Horror'], $repo->distinctGenres('lib-A'));
+    }
+
+    public function testDistinctGenresReturnsEmptyArrayWhenNoGenres(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame([], $repo->distinctGenres('lib-empty'));
+    }
+
+    public function testDistinctGenresDropsNonStringAndBlankRows(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            ['genre' => 'Comedy'],
+            ['genre' => ''],     // blank → dropped
+            ['genre' => null],   // null → dropped
+            ['other' => 'x'],    // missing key → dropped
+            ['genre' => 'Sci-Fi'],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(['Comedy', 'Sci-Fi'], $repo->distinctGenres());
+    }
+
+    public function testDistinctGenresToleratesNonArrayDbResult(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(false);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame([], $repo->distinctGenres());
+    }
 }

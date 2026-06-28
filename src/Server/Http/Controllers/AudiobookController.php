@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Fs\LibraryRootGuard;
 use Phlix\Media\Library\AudiobookLibraryManager;
 use Phlix\Media\Library\AudiobookProgress;
 use Phlix\Media\Library\ItemRepository;
@@ -405,9 +406,10 @@ class AudiobookController
             return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
         }
 
-        // Validate path is within allowed media directory
+        // Validate path is within allowed media directory. Return 404 (not 403)
+        // on failure so a poisoned path cannot be used to probe the filesystem.
         if (!$this->validateMediaPath($path)) {
-            return (new Response())->status(403)->json(['error' => 'Forbidden']);
+            return (new Response())->status(404)->json(['error' => 'Audiobook not found']);
         }
 
         $fileSize = filesize($path);
@@ -556,37 +558,11 @@ class AudiobookController
      */
     private function validateMediaPath(string $path): bool
     {
-        // Resolve symlinks and `../` segments to a canonical absolute path.
-        // realpath() returns false for non-existent paths, which also rejects
-        // any traversal target that does not actually resolve to a real file.
-        $realPath = realpath($path);
-        if ($realPath === false) {
-            return false;
-        }
-
-        // Media files must live UNDER one of the allowed roots. We compare with
-        // str_starts_with() against the canonical real path (not str_contains),
-        // so a path that merely *contains* an allowed segment somewhere in the
-        // middle (e.g. "/etc/passwd" reached via "/home/../etc/passwd", or
-        // "/var/www/home/secrets") cannot escape the allowed roots.
-        //
-        // NOTE: there is currently no configured library-root list available to
-        // this controller; until one is wired in, we fall back to the well-known
-        // mount prefixes. Each prefix ends with a trailing slash so "/home/" can
-        // never match a sibling directory such as "/home-backup/".
-        $allowedRoots = [
-            '/media/',
-            '/mnt/',
-            '/data/',
-            '/home/',
-        ];
-
-        foreach ($allowedRoots as $root) {
-            if (str_starts_with($realPath . '/', $root)) {
-                return true;
-            }
-        }
-
-        return false;
+        // Delegate to the shared central path-jail guard. Behaviour is
+        // unchanged: the guard realpath()s the candidate (rejecting non-existent
+        // or traversal-escaping paths) and verifies containment within the
+        // configured library roots, falling back to the well-known mount
+        // prefixes (/media, /mnt, /data, /home) when none are configured.
+        return LibraryRootGuard::assertWithinLibraryRoots($path);
     }
 }

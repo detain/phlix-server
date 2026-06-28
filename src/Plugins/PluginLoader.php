@@ -584,7 +584,16 @@ class PluginLoader
 
     /**
      * Materialise default settings from the manifest's `settings`
-     * schema, falling back to null for keys without a `default`.
+     * schema, falling back to `null` for keys without a `default`.
+     *
+     * EVERY declared setting key is always given a slot: the declared
+     * `default` when present, otherwise `null`. A `required: true`
+     * setting with no `default` is therefore materialised as `null`
+     * (a slot is still created) — `required` is **advisory** metadata
+     * for the settings UI, not a load-time rejection. This keeps the
+     * materialised array's key-set identical to the manifest's
+     * declared key-set and avoids silently dropping required-but-
+     * defaultless keys.
      *
      * @return array<string, mixed>
      */
@@ -592,9 +601,7 @@ class PluginLoader
     {
         $defaults = [];
         foreach ($manifest->settings as $key => $schema) {
-            if (array_key_exists('default', $schema)) {
-                $defaults[$key] = $schema['default'];
-            }
+            $defaults[$key] = $schema['default'] ?? null;
         }
         return $defaults;
     }

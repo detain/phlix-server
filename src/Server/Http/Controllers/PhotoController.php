@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Fs\LibraryRootGuard;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Metadata\ExifProvider;
@@ -281,7 +282,11 @@ class PhotoController
         /** @var string */
         $path = $item['path'];
 
-        if (!file_exists($path)) {
+        // Jail the (untrusted) stored path within the configured library roots
+        // BEFORE touching the filesystem. realpath()-based containment also
+        // implies existence, so a missing OR escaping path yields the same 404
+        // (no path disclosure).
+        if (!LibraryRootGuard::assertWithinLibraryRoots($path)) {
             return (new Response())->status(404)->json([
                 'error' => 'Photo file not found',
             ]);

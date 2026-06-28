@@ -701,11 +701,65 @@ final class PluginLoaderTest extends TestCase
         $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
         $this->composer->shouldReceive('install')->once();
         $this->repository->shouldReceive('existsByName')->andReturn(false);
+        // `host` is required: true with NO default — it is materialised as a
+        // `null` slot (Option (b) null-fill), NOT dropped. `required` is
+        // advisory metadata for the settings UI, not a load-time rejection.
         $this->repository->shouldReceive('insert')
             ->once()
-            ->with(Mockery::any(), false, ['retries' => 5]);
+            ->with(Mockery::any(), false, ['retries' => 5, 'host' => null]);
 
         $this->makeLoader()->installFromDirectory('/x');
+    }
+
+    public function test_install_null_fills_every_declared_setting_without_a_default(): void
+    {
+        // Covers all three slot shapes:
+        //  - `with_default`    : keeps its declared default.
+        //  - `required_no_def` : required:true but no default → null slot (a slot still exists).
+        //  - `optional_no_def` : non-required, no default → null slot.
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-nullfill',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'notifier',
+            'entry' => FakeLifecyclePlugin::class,
+            'settings' => [
+                'with_default'    => ['type' => 'string', 'required' => false, 'default' => 'keep-me'],
+                'required_no_def' => ['type' => 'string', 'required' => true],
+                'optional_no_def' => ['type' => 'int', 'required' => false],
+            ],
+        ]);
+
+        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->composer->shouldReceive('install')->once();
+        $this->repository->shouldReceive('existsByName')->andReturn(false);
+
+        $captured = null;
+        $this->repository->shouldReceive('insert')
+            ->once()
+            ->with(
+                Mockery::any(),
+                false,
+                Mockery::on(function ($defaults) use (&$captured): bool {
+                    $captured = $defaults;
+                    return is_array($defaults);
+                }),
+            );
+
+        $this->makeLoader()->installFromDirectory('/x');
+
+        // Every declared key has a slot (key-set === manifest key-set).
+        self::assertSame(
+            ['with_default', 'required_no_def', 'optional_no_def'],
+            array_keys((array) $captured),
+        );
+        self::assertSame('keep-me', $captured['with_default']);
+        // Required-but-defaultless and optional-but-defaultless both null-fill.
+        self::assertArrayHasKey('required_no_def', (array) $captured);
+        self::assertNull($captured['required_no_def']);
+        self::assertArrayHasKey('optional_no_def', (array) $captured);
+        self::assertNull($captured['optional_no_def']);
     }
 
     public function test_bootstrapEnabled_logs_errors_for_broken_plugins_and_continues(): void

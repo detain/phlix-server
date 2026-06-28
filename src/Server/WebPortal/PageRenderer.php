@@ -177,6 +177,52 @@ class PageRenderer
     }
 
     /**
+     * Build a Smarty instance for this renderer's template directory with the
+     * server-wide HTML auto-escape policy applied.
+     *
+     * SECURITY (S1): every Smarty instance used to render portal HTML is
+     * created through this factory (or {@see self::newSmartyFor()} for the
+     * static path) so `escape_html = true` is set in exactly one place and
+     * cannot drift. With it on, Smarty wraps every `{$var}` print expression in
+     * `htmlspecialchars(..., ENT_QUOTES)`, which closes both the reflected
+     * (`{$smarty.get.*}`, `?q=`, `?error=`) and stored (media item names,
+     * plugin metadata) XSS holes the portal templates previously left open.
+     *
+     * Because auto-escape runs AFTER any explicit `|escape`/`|escape:'html'`
+     * modifier, those manual modifiers MUST be removed from templates rendered
+     * through this factory — otherwise `<` becomes `&amp;lt;` (double-escape).
+     * `|escape:'url'` is a different context (URL-encoding) and is retained.
+     *
+     * A CI grep guard (coding-standards workflow) fails the build if a raw
+     * `new \Smarty()` reappears outside this factory.
+     */
+    private function newSmarty(): \Smarty
+    {
+        return self::newSmartyFor($this->templateDir);
+    }
+
+    /**
+     * Static counterpart of {@see self::newSmarty()} for the subordinate page
+     * controllers (Music/Photo/Book/Audiobook/Plugins) that render through
+     * {@see self::renderTemplate()} with their own template directory.
+     *
+     * Centralises the single source of truth for the `escape_html = true`
+     * auto-escape policy (S1) so the instance and static render paths cannot
+     * diverge on whether output is escaped.
+     *
+     * @param string $templateDir Absolute path to the template root.
+     */
+    private static function newSmartyFor(string $templateDir): \Smarty
+    {
+        $smarty = new \Smarty();
+        $smarty->setTemplateDir($templateDir);
+        // S1: HTML auto-escape every printed variable. See newSmarty() for the
+        // full policy + the double-escape caveat that drove the template sweep.
+        $smarty->escape_html = true;
+        return $smarty;
+    }
+
+    /**
      * Renders the home page with library overview and user content.
      *
      * The home page displays:
@@ -215,8 +261,7 @@ class PageRenderer
             return (new Response())->redirect('/login');
         }
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
 
         // Load data
         $libraries = $this->libraryManager->getAllLibraries();
@@ -277,8 +322,7 @@ class PageRenderer
         $isFirstUser = $this->userRepository !== null
             && $this->userRepository->countUsers() === 0;
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'register');
         $template->assign('error', $error);
         $template->assign('is_first_user', $isFirstUser);
@@ -324,8 +368,7 @@ class PageRenderer
             $themeMedia = $this->themeMediaRepository->findByLibraryId($libraryId);
         }
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'library');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('library', $library);
@@ -361,8 +404,7 @@ class PageRenderer
             return (new Response())->status(404)->html('<h1>Item not found</h1>');
         }
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         // `library/detail.tpl` formats the resume position with the
         // `count_ticks_to_time` modifier. Smarty compiles the whole template
         // (the `{if resume > 0}` guard is runtime-only), so the modifier must
@@ -431,8 +473,7 @@ class PageRenderer
         $rawError = $request->query['error'] ?? '';
         $error = is_string($rawError) ? $rawError : '';
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'login');
         $template->assign('error', $error);
 
@@ -477,8 +518,7 @@ class PageRenderer
             }
         }
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'library');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('library', ['name' => 'All Libraries']);
@@ -518,8 +558,7 @@ class PageRenderer
             }
         }
 
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'search');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
         $template->assign('query', $query);
@@ -544,8 +583,7 @@ class PageRenderer
      */
     public function renderSettings(Request $request): Response
     {
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'settings');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
 
@@ -563,8 +601,7 @@ class PageRenderer
      */
     public function renderWebAuthnSettings(Request $request): Response
     {
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
         $template->assign('current_page', 'settings');
         $template->assign('user', $this->resolveUserVars($request->userId ?? null));
 
@@ -581,6 +618,14 @@ class PageRenderer
      * don't each have to instantiate Smarty directly and so the
      * default-on `escape_html` policy is applied uniformly.
      *
+     * SECURITY (S1): the Smarty instance is built via {@see self::newSmartyFor()}
+     * which sets `escape_html = true`, so every `{$var}` printed by these
+     * templates is HTML-escaped automatically. Templates rendered through this
+     * helper therefore MUST NOT carry manual `|escape`/`|escape:'html'`
+     * modifiers (auto-escape runs after them → double-escape). Use
+     * `|escape:'url'` only for URL-context values, and `{$x nofilter}` for the
+     * rare value that is intentionally pre-sanitised raw HTML.
+     *
      * @param string               $templateDir Absolute path to the template root.
      * @param string               $template    Template path relative to the root.
      * @param array<string, mixed> $vars        Variables to assign before fetching.
@@ -591,13 +636,7 @@ class PageRenderer
      */
     public static function renderTemplate(string $templateDir, string $template, array $vars): string
     {
-        $smarty = new \Smarty();
-        $smarty->setTemplateDir($templateDir);
-        // Templates MUST use `|escape:'html'` on every user-controlled
-        // value. The admin-plugins templates are audited for this; new
-        // admin pages should follow the same convention rather than
-        // relying on a single "escape everything" toggle which Smarty
-        // applies inconsistently across plugin/function/modifier output.
+        $smarty = self::newSmartyFor($templateDir);
         foreach ($vars as $key => $value) {
             $smarty->assign($key, $value);
         }
@@ -625,8 +664,7 @@ class PageRenderer
      */
     public function renderDashboard(Request $request): Response
     {
-        $template = new \Smarty();
-        $template->setTemplateDir($this->templateDir);
+        $template = $this->newSmarty();
 
         // Assign variables
         $template->assign('current_page', 'dashboard');

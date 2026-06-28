@@ -47,13 +47,13 @@
         </thead>
         <tbody>
         {foreach from=$plugins item=plugin}
-            <tr data-plugin-name="{$plugin.name|escape:'html'}">
+            <tr data-plugin-name="{$plugin.name}">
                 <td>
-                    <a href="/admin/plugins/{$plugin.name|escape:'html'}">{$plugin.name|escape:'html'}</a>
+                    <a href="/admin/plugins/{$plugin.name}">{$plugin.name}</a>
                 </td>
-                <td>{$plugin.version|escape:'html'}</td>
-                <td>{$plugin.type|escape:'html'}</td>
-                <td>{$plugin.installed_at|escape:'html'}</td>
+                <td>{$plugin.version}</td>
+                <td>{$plugin.type}</td>
+                <td>{$plugin.installed_at}</td>
                 <td>{if $plugin.signed}signed{else}unsigned{/if}</td>
                 <td>
                     {if $plugin.enabled}
@@ -66,15 +66,15 @@
                     {if $plugin.enabled}
                         <button class="action-btn"
                                 data-action="disable"
-                                data-plugin="{$plugin.name|escape:'html'}">Disable</button>
+                                data-plugin="{$plugin.name}">Disable</button>
                     {else}
                         <button class="action-btn"
                                 data-action="enable"
-                                data-plugin="{$plugin.name|escape:'html'}">Enable</button>
+                                data-plugin="{$plugin.name}">Enable</button>
                     {/if}
                     <button class="action-btn danger"
                             data-action="uninstall"
-                            data-plugin="{$plugin.name|escape:'html'}">Uninstall</button>
+                            data-plugin="{$plugin.name}">Uninstall</button>
                 </td>
             </tr>
         {/foreach}

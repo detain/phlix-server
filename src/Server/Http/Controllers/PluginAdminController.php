@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -259,13 +260,28 @@ final class PluginAdminController
         // Repository URLs (e.g. https://github.com/owner/repo) are rewritten
         // to a tarball before the scheme is validated, so a scheme-less
         // `github.com/owner/repo` paste is accepted rather than 400-rejected.
-        if (!self::isAllowedInstallUrl(SourceUrlResolver::normalize($url))) {
+        $normalized = SourceUrlResolver::normalize($url);
+        if (!self::isAllowedInstallUrl($normalized)) {
             return $this->jsonError(
                 400,
                 'plugin.url.invalid_scheme',
                 'Install URL must be an https:// archive or repository URL (or file:// for local sources).',
                 ['url'],
             );
+        }
+
+        // SSRF guard on the resolved http(s) install URL: reject loopback/
+        // link-local/private/metadata targets at admin-config time. `file://`
+        // sources are exempt (isAllowedInstallUrl permits them and they are
+        // operator-local). Blocking DNS here is fine — this is an operator
+        // admin action, off the media-serving hot path.
+        $scheme = strtolower((string) (parse_url($normalized, PHP_URL_SCHEME) ?? ''));
+        if ($scheme === 'http' || $scheme === 'https') {
+            try {
+                SsrfGuard::assertPublicUrl($normalized);
+            } catch (\InvalidArgumentException $e) {
+                return $this->jsonError(400, 'plugin.url.blocked', $e->getMessage(), ['url']);
+            }
         }
 
         $actor = $this->actor($request);

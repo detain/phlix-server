@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\InstalledPlugin;
@@ -21,6 +22,20 @@ use PHPUnit\Framework\TestCase;
 final class PluginUpdateServiceTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Catalog fetch now SSRF-guards the resolved URL. Inject a deterministic
+        // public resolver so the suite never performs a real DNS lookup.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
+    }
 
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
     // SV-S2b: the official catalog now resolves to a PINNED ref, not HEAD.

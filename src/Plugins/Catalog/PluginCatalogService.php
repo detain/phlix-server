@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Catalog;
 
 use Phlix\Admin\SettingsRepository;
+use Phlix\Common\Net\SsrfGuard;
 
 /**
  * Fetches and aggregates plugin **catalogs** for the admin Plugins section.
@@ -224,6 +225,16 @@ final class PluginCatalogService
 
         $url = CatalogSourceResolver::normalize($source);
 
+        // SSRF guard at fetch time on the resolved raw URL: the normalizer can
+        // rewrite a repo URL into a different host, so re-validate before the
+        // server-side fetch. Catalog fetch runs in the admin Plugins section,
+        // off the media-serving hot path.
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } catch (\InvalidArgumentException $e) {
+            throw new CatalogFetchException($source, 'Catalog URL is not allowed: ' . $e->getMessage());
+        }
+
         try {
             $body = ($this->fetcher)($url, $this->timeout());
         } catch (\Throwable $e) {
@@ -350,6 +361,10 @@ final class PluginCatalogService
         if ($scheme !== 'http' && $scheme !== 'https') {
             throw new \InvalidArgumentException('Catalog URL must be an http:// or https:// URL.');
         }
+
+        // SSRF guard at config time: reject loopback/link-local/private/metadata
+        // hosts. Admin "add source" action, off the media hot path.
+        SsrfGuard::assertPublicUrl($clean);
 
         return $clean;
     }

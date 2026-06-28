@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Webhooks;
 
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -115,6 +116,17 @@ class WebhookAdminController
         if (!filter_var($url, FILTER_VALIDATE_URL)) {
             return (new Response())->status(400)->json([
                 'error' => 'Invalid URL format',
+            ]);
+        }
+
+        // SSRF guard: reject loopback/link-local/private/metadata targets at
+        // admin-config time. DNS resolution here is blocking, but webhook
+        // creation is an operator-triggered admin action off the media hot path.
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } catch (InvalidArgumentException $e) {
+            return (new Response())->status(400)->json([
+                'error' => $e->getMessage(),
             ]);
         }
 

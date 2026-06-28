@@ -7,6 +7,8 @@ namespace Phlix\Webhooks\Plugins;
 use Phlix\Webhooks\WebhookEvent;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Net\SsrfGuard;
+use InvalidArgumentException;
 
 /**
  * MQTT notification plugin publishing JSON to an MQTT broker.
@@ -72,6 +74,21 @@ class MqttPlugin extends AbstractNotificationPlugin
         // If the broker is a plain MQTT broker without HTTP, this would need
         // a proper MQTT client library. Here we use a webhook approach.
         $url = $this->buildBrokerUrl($broker, $topic);
+
+        // SSRF guard: the broker host is operator-supplied and fetched via a raw
+        // file_get_contents() below — the most exposed outbound surface. Reject
+        // loopback/link-local/metadata/private targets before any request. This
+        // runs in the notification dispatch path, off the media-serving hot path.
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } catch (InvalidArgumentException $e) {
+            $this->getLogger()->warning('MQTT notification blocked by SSRF guard', [
+                'event_type' => $event->eventType,
+                'topic' => $topic,
+                'reason' => $e->getMessage(),
+            ]);
+            return false;
+        }
 
         $headers = [
             'Content-Type: application/json',

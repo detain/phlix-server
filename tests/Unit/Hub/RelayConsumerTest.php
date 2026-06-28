@@ -646,6 +646,84 @@ class RelayConsumerTest extends TestCase
         $this->assertSame('hub-relay', $captured->userId);
     }
 
+    public function test_http_request_strips_smuggled_auth_and_cookie_headers(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        // A relay producer tries to smuggle its own credentials.
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            [
+                'Accept' => 'application/json',
+                'Authorization' => 'Bearer evil',
+                'Cookie' => 'phlix_session=stolen',
+                'X-Phlix-Relay-User' => 'owner-1',
+            ],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 21, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+
+        // Neither the smuggled Authorization nor Cookie may reach the dispatcher,
+        // case-insensitively, so AuthMiddleware cannot be tricked.
+        foreach ($captured->headers as $name => $_value) {
+            $this->assertNotSame('authorization', strtolower($name), 'Authorization must be stripped from relayed request');
+            $this->assertNotSame('cookie', strtolower($name), 'Cookie must be stripped from relayed request');
+            $this->assertNotSame('x-phlix-relay-user', strtolower($name), 'x-phlix-relay-user must not survive as a forwardable header');
+        }
+
+        // The benign header survives.
+        $this->assertSame('application/json', $captured->headers['Accept'] ?? null);
+
+        // The hub-stamped identity is still injected so relay browse works.
+        $this->assertSame('owner-1', $captured->userId);
+    }
+
+    public function test_http_request_ignores_spoofed_x_forwarded_for(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/api/v1/libraries',
+            '',
+            ['X-Forwarded-For' => '203.0.113.7, 10.0.0.1'],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 22, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+
+        // remoteIp must come from the relay session (loopback marker), never the
+        // producer-suppliable x-forwarded-for value.
+        $this->assertNotSame('203.0.113.7', $captured->remoteIp);
+        $this->assertSame('127.0.0.1', $captured->remoteIp);
+
+        // And the spoofable header itself must not be forwarded.
+        foreach ($captured->headers as $name => $_value) {
+            $this->assertNotSame('x-forwarded-for', strtolower($name), 'x-forwarded-for must be stripped from relayed request');
+        }
+    }
+
     public function test_http_request_large_body_fragments_across_frames(): void
     {
         $bigBody = str_repeat('x', 200000); // > 3 frames at 65534 bytes

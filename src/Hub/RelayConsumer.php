@@ -21,13 +21,10 @@ use function is_array;
 use function is_string;
 use function json_decode;
 use function parse_str;
-use function str_contains;
 use function strcasecmp;
 use function stripos;
 use function strlen;
-use function strpos;
 use function substr;
-use function trim;
 
 /**
  * Server-side relay client implementing the multiplexed WebSocket tunnel.
@@ -81,6 +78,15 @@ final class RelayConsumer
 
     /** Tunnel handshake/data state: HELLO_ACK received, binary mode active. */
     private const STATE_ACTIVE = 'active';
+
+    /**
+     * Truthful client IP for every relayed request. All relay traffic egresses
+     * from this server's own loopback HTTP listener, so loopback is the real
+     * origin. We never derive the IP from the producer-suppliable
+     * x-forwarded-for header (stripped via RelayHttpRequest::withoutForbiddenHeaders())
+     * because an untrusted relay producer could spoof it.
+     */
+    private const RELAY_REMOTE_IP = '127.0.0.1';
 
     /** @var RelayConfig */
     private RelayConfig $config;
@@ -684,11 +690,20 @@ final class RelayConsumer
      */
     private function buildRequest(RelayHttpRequest $envelope): ServerRequest
     {
+        // SECURITY: never forward the relay producer's trust-bearing headers.
+        // withoutForbiddenHeaders() drops x-phlix-relay-user, x-forwarded-for,
+        // authorization and cookie (the shared DTO's documented denylist) so a
+        // relayed request cannot smuggle its own Authorization/Cookie to confuse
+        // AuthMiddleware, nor spoof identity/client-IP. We deliberately read
+        // identity/IP from the RAW envelope below and INJECT them ourselves,
+        // ensuring those values never survive as forwardable headers.
+        $safeEnvelope = $envelope->withoutForbiddenHeaders();
+
         $request = new ServerRequest();
         $request->method = $envelope->method;
         $request->path = $envelope->path;
         $request->queryString = $envelope->query;
-        $request->headers = $envelope->headers;
+        $request->headers = $safeEnvelope->headers;
         $request->rawBody = $envelope->body;
 
         if ($envelope->query !== '') {
@@ -697,7 +712,7 @@ final class RelayConsumer
             $request->query = $this->stringKeyed($parsedQuery);
         }
 
-        $contentType = $this->headerValue($envelope->headers, 'content-type');
+        $contentType = $this->headerValue($safeEnvelope->headers, 'content-type');
         if ($envelope->body !== '' && stripos($contentType, 'application/json') !== false) {
             /** @var mixed $decodedBody */
             $decodedBody = json_decode($envelope->body, true);
@@ -710,18 +725,23 @@ final class RelayConsumer
             $request->body = $this->stringKeyed($parsedBody);
         }
 
-        // Trust the tunnel: run as the hub-validated owner so auth gates pass.
+        // Identity injection: we trust the tunnel, NOT the producer. The hub
+        // authenticates the WS relay session and stamps the validated owner on
+        // the inbound x-phlix-relay-user header (and strips any client-supplied
+        // copy on the way in), so reading it from the RAW envelope here is the
+        // one legitimate trust basis. We apply it as $request->userId so auth
+        // gates pass, but because that header is in STRIPPED_HEADERS it was
+        // already removed from $request->headers above — it can never be
+        // re-forwarded downstream. Absent → 'hub-relay' fallback as before.
         $relayUser = $this->headerValue($envelope->headers, 'x-phlix-relay-user');
         $request->userId = $relayUser !== '' ? $relayUser : 'hub-relay';
 
-        $forwardedFor = $this->headerValue($envelope->headers, 'x-forwarded-for');
-        if ($forwardedFor !== '') {
-            $request->remoteIp = str_contains($forwardedFor, ',')
-                ? trim(substr($forwardedFor, 0, (int) strpos($forwardedFor, ',')))
-                : trim($forwardedFor);
-        } else {
-            $request->remoteIp = '127.0.0.1';
-        }
+        // Client IP comes from the relay session, never from the producer-
+        // suppliable x-forwarded-for header (now stripped): an untrusted relay
+        // producer could otherwise spoof its source IP to bypass rate-limits or
+        // IP allowlists. All relayed traffic egresses from this server's own
+        // loopback HTTP listener, so the loopback marker is the truthful origin.
+        $request->remoteIp = self::RELAY_REMOTE_IP;
 
         return $request;
     }

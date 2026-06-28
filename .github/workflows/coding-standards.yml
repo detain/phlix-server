@@ -62,6 +62,50 @@ jobs:
             ./vendor/bin/phpstan analyze src/ --level=9 --no-progress --error-format=github
           fi
 
+  smarty-escape-guard:
+    name: Smarty Auto-Escape Guard (S1)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Assert all WebPortal Smarty instances go through the auto-escape factory
+        run: |
+          # S1: every \Smarty used to render portal HTML must be built by
+          # PageRenderer::newSmartyFor(), which sets escape_html = true. A raw
+          # `new \Smarty()` anywhere else in src/Server/WebPortal would bypass
+          # HTML auto-escaping and reopen the stored/reflected XSS holes.
+          #
+          # Allow exactly ONE real instantiation: the one inside the factory in
+          # PageRenderer.php. Comment/docblock mentions are ignored (only lines
+          # that actually call `new \Smarty(` as an assignment count).
+          matches="$(grep -rnE '=\s*new\s+\\?Smarty\s*\(' src/Server/WebPortal/ || true)"
+          echo "Matched instantiations:"
+          echo "${matches:-<none>}"
+
+          # Every match must live in PageRenderer.php (the factory file).
+          offenders="$(echo "$matches" | grep -v '^$' | grep -v 'src/Server/WebPortal/PageRenderer.php:' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::Raw 'new \\Smarty()' found in src/Server/WebPortal outside PageRenderer's auto-escape factory. Build the instance via PageRenderer::newSmartyFor() (escape_html=true) instead:"
+            echo "$offenders"
+            exit 1
+          fi
+
+          # Exactly one real instantiation (the factory) must remain.
+          count="$(echo "$matches" | grep -c 'src/Server/WebPortal/PageRenderer.php:' || true)"
+          if [ "$count" != "1" ]; then
+            echo "::error::Expected exactly 1 'new \\Smarty()' in src/Server/WebPortal (PageRenderer::newSmartyFor factory), found ${count}. Do not add new inline Smarty instances; route them through the factory."
+            exit 1
+          fi
+
+          # The auto-escape policy itself must not be disabled in WebPortal.
+          if grep -rnE "escape_html\s*=\s*false|setEscapeHtml\s*\(\s*false" src/Server/WebPortal/; then
+            echo "::error::HTML auto-escape is being disabled in src/Server/WebPortal. escape_html must stay true (S1)."
+            exit 1
+          fi
+          echo "Smarty auto-escape guard passed."
+
   psalm:
     name: Psalm Static Analysis
     runs-on: ubuntu-latest

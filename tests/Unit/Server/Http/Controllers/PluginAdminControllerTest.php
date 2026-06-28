@@ -9,6 +9,7 @@ use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -44,6 +45,16 @@ final class PluginAdminControllerTest extends TestCase
         $this->loader = Mockery::mock(PluginLoader::class);
         $this->audit  = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
         $this->controller = new PluginAdminController($this->loader, $this->audit);
+
+        // install() runs SourceUrlResolver::normalize(), which now applies the
+        // SSRF guard to http(s) outputs. Inject a deterministic public resolver.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
     }
 
     public function test_index_returns_plugin_list_as_json(): void
@@ -156,6 +167,21 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
         $body = $this->decode($response->body);
         $this->assertSame('plugin.url.invalid_scheme', $body['code']);
+    }
+
+    public function test_install_blocks_private_host_via_ssrf_guard(): void
+    {
+        SsrfGuard::setResolver(static fn (string $host): array => ['10.0.0.5']);
+        $this->loader->shouldNotReceive('install');
+
+        $response = $this->controller->install(
+            $this->makeRequest('admin-1', ['url' => 'https://internal.example/plugin.tar.gz']),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $body = $this->decode($response->body);
+        $this->assertSame('plugin.url.blocked', $body['code']);
     }
 
     public function test_install_returns_422_on_invalid_manifest_with_field_errors(): void

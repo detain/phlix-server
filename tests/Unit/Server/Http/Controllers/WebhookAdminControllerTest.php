@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Webhooks;
 
+use Phlix\Common\Net\SsrfGuard;
 use Phlix\Server\Http\Controllers\Webhooks\WebhookAdminController;
 use Phlix\Server\Http\Request;
 use Phlix\Webhooks\DispatchResult;
@@ -26,6 +27,16 @@ final class WebhookAdminControllerTest extends TestCase
     {
         $this->dispatcher = new FakeWebhookDispatcher();
         $this->controller = new WebhookAdminController($this->dispatcher);
+
+        // Deterministic, offline SSRF resolution for the create-path guard:
+        // public test hosts resolve to a public IP.
+        SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    protected function tearDown(): void
+    {
+        SsrfGuard::reset();
+        parent::tearDown();
     }
 
     private function decodeBody(string $body): array
@@ -103,6 +114,45 @@ final class WebhookAdminControllerTest extends TestCase
         self::assertSame(400, $response->statusCode);
         $body = $this->decodeBody($response->body);
         self::assertSame('Invalid URL format', $body['error']);
+    }
+
+    public function test_create_rejects_cloud_metadata_url(): void
+    {
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Metadata SSRF',
+            'url' => 'http://169.254.169.254/latest/meta-data/',
+            'secret' => 'secret',
+            'events' => [],
+        ];
+
+        $response = $this->controller->create($request, []);
+
+        self::assertSame(400, $response->statusCode);
+        $body = $this->decodeBody($response->body);
+        self::assertArrayHasKey('error', $body);
+        self::assertStringContainsStringIgnoringCase('non-public', $body['error']);
+    }
+
+    public function test_create_rejects_loopback_url(): void
+    {
+        SsrfGuard::setResolver(static fn (string $host): array => ['127.0.0.1']);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Loopback SSRF',
+            'url' => 'http://127.0.0.1/hook',
+            'secret' => 'secret',
+            'events' => [],
+        ];
+
+        $response = $this->controller->create($request, []);
+
+        self::assertSame(400, $response->statusCode);
+        $body = $this->decodeBody($response->body);
+        self::assertArrayHasKey('error', $body);
     }
 
     public function test_delete_with_valid_id_returns_204(): void

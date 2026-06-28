@@ -7,6 +7,8 @@ namespace Phlix\Webhooks;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Net\SsrfGuard;
+use InvalidArgumentException;
 use Workerman\MySQL\Connection;
 use Workerman\Timer;
 
@@ -28,6 +30,9 @@ class WebhookDispatcher
      */
     public function register(string $name, string $url, string $secret, array $events): string
     {
+        // SSRF guard at config time (admin-triggered, off the media hot path).
+        SsrfGuard::assertPublicUrl($url);
+
         $id = $this->generateUuid();
         $eventsJson = json_encode($events, JSON_THROW_ON_ERROR);
 
@@ -201,6 +206,27 @@ class WebhookDispatcher
      */
     private function sendToWebhook(array $webhook, WebhookEvent $event): array
     {
+        $url = $this->stringFromMixed($webhook['url'] ?? null);
+
+        // SSRF guard at dispatch time: re-validate the stored URL before any
+        // outbound fetch so a row that was poisoned after creation (or via a
+        // direct DB write) cannot reach loopback/link-local/private targets.
+        // The dispatch path runs in the background notification timer, never on
+        // the per-request media-serving hot path.
+        try {
+            SsrfGuard::assertPublicUrl($url);
+        } catch (InvalidArgumentException $e) {
+            $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
+            $this->logDispatch(
+                $webhookId,
+                $event->eventType,
+                null,
+                null,
+                'SSRF guard blocked URL: ' . $e->getMessage(),
+            );
+            return ['success' => false, 'error' => $e->getMessage()];
+        }
+
         $payload = json_encode($event->toArray(), JSON_THROW_ON_ERROR);
         $secret = $this->stringFromMixed($webhook['secret'] ?? null);
         $signature = $event->getSignature($secret);
@@ -228,7 +254,6 @@ class WebhookDispatcher
         $responseCode = null;
 
         do {
-            $url = $this->stringFromMixed($webhook['url'] ?? null);
             $response = @file_get_contents($url, false, $context);
 
             if ($response !== false) {

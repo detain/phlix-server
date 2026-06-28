@@ -439,6 +439,14 @@ class HttpInstaller
     /**
      * Extract a zip archive into the target directory.
      *
+     * SECURITY (S9, zip-slip): `ZipArchive::extractTo($dir)` honours the
+     * literal entry names inside the archive, so an entry like `../evil`
+     * or `/etc/cron.d/x` would be written OUTSIDE `$targetDir`. Unlike the
+     * tar path (which uses PharData strict mode), the zip API has no such
+     * guard, so we validate every entry name first and only extract the
+     * explicit list of validated names. A single malicious entry aborts the
+     * whole install, having written nothing.
+     *
      * @throws PluginInstallException
      */
     private function extractZip(string $zipPath, string $targetDir): void
@@ -451,13 +459,99 @@ class HttpInstaller
         if ($opened !== true) {
             throw new PluginInstallException(sprintf('Cannot open zip archive %s (code %d).', $zipPath, (int) $opened));
         }
-        if (!$zip->extractTo($targetDir)) {
+
+        try {
+            $names = $this->validateZipEntries($zip, $zipPath);
+            if (!$zip->extractTo($targetDir, $names)) {
+                throw new PluginInstallException(sprintf('Failed to extract zip archive %s.', $zipPath));
+            }
+        } finally {
             $zip->close();
-            throw new PluginInstallException(sprintf('Failed to extract zip archive %s.', $zipPath));
         }
-        $zip->close();
 
         $this->flattenSingleRoot($targetDir);
+    }
+
+    /**
+     * Validate every entry name in an open zip archive against zip-slip
+     * (S9) and return the explicit list of safe names to extract.
+     *
+     * An entry is rejected when its name is absolute, starts with a slash
+     * or backslash, contains a backslash separator, or — once URL-decoded
+     * to defeat encoded traversal — resolves (purely lexically, without
+     * touching the filesystem) to a path that escapes `$targetDir` via
+     * `..` segments. The first offending entry aborts the install.
+     *
+     * @return list<string> The validated entry names, in archive order.
+     *
+     * @throws PluginInstallException On any unsafe entry.
+     */
+    private function validateZipEntries(\ZipArchive $zip, string $zipPath): array
+    {
+        $names = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = $zip->getNameIndex($i);
+            if ($name === false) {
+                throw new PluginInstallException(sprintf(
+                    'Cannot read entry %d of zip archive %s.',
+                    $i,
+                    $zipPath,
+                ));
+            }
+            $this->assertSafeArchiveEntry($name, $zipPath);
+            $names[] = $name;
+        }
+        return $names;
+    }
+
+    /**
+     * Reject a single archive entry name that would escape the extraction
+     * root (zip-slip / path-traversal). Pure lexical check — never touches
+     * the filesystem — so it is safe to call before anything is written.
+     *
+     * @throws PluginInstallException
+     */
+    private function assertSafeArchiveEntry(string $name, string $zipPath): void
+    {
+        // Decode once so a single layer of percent-encoded traversal
+        // (e.g. `%2e%2e%2fevil`) is caught.
+        $decoded = rawurldecode($name);
+
+        foreach ([$name, $decoded] as $candidate) {
+            // Normalise separators so a backslash cannot smuggle traversal
+            // past a forward-slash-only check.
+            $normalised = str_replace('\\', '/', $candidate);
+
+            // Absolute paths (POSIX `/foo`, Windows `C:\foo` / `C:/foo`).
+            if (str_starts_with($normalised, '/') || preg_match('#^[A-Za-z]:#', $normalised) === 1) {
+                throw new PluginInstallException(sprintf(
+                    'Refusing zip archive %s: entry "%s" uses an absolute path.',
+                    $zipPath,
+                    $name,
+                ));
+            }
+
+            // Lexically resolve `.`/`..` segments and ensure we never climb
+            // above the (virtual) extraction root.
+            $depth = 0;
+            foreach (explode('/', $normalised) as $segment) {
+                if ($segment === '' || $segment === '.') {
+                    continue;
+                }
+                if ($segment === '..') {
+                    $depth--;
+                    if ($depth < 0) {
+                        throw new PluginInstallException(sprintf(
+                            'Refusing zip archive %s: entry "%s" escapes the extraction directory.',
+                            $zipPath,
+                            $name,
+                        ));
+                    }
+                    continue;
+                }
+                $depth++;
+            }
+        }
     }
 
     /**
@@ -472,15 +566,19 @@ class HttpInstaller
             throw new PluginInstallException('PHP phar extension is required to install tar.gz plugin sources.');
         }
 
+        // PharData::decompress() strips the .gz suffix and writes a sibling
+        // file. For `.tar.gz` -> `.tar`; for `.tgz` -> `.tar`. Pre-compute the
+        // sibling path so the `finally` can clean it up even when decompress(),
+        // `new PharData($tarPath)`, or extractTo() throws (B6: the intermediate
+        // `.tar` must never be left behind in the system temp dir).
+        $tarPath = preg_replace('/\.(tar\.gz|tgz)$/i', '.tar', $tarballPath) ?? ($tarballPath . '.tar');
+        $phar = null;
+        $tar = null;
         try {
-            // PharData::decompress() strips the .gz suffix and writes a
-            // sibling file. For `.tar.gz` -> `.tar`; for `.tgz` -> `.tar`.
             $phar = new \PharData($tarballPath);
             $phar->decompress('.tar');
-            $tarPath = preg_replace('/\.(tar\.gz|tgz)$/i', '.tar', $tarballPath) ?? ($tarballPath . '.tar');
             $tar = new \PharData($tarPath);
             $tar->extractTo($targetDir, null, true);
-            @unlink($tarPath);
         } catch (\Throwable $e) {
             throw new PluginInstallException(
                 sprintf('Failed to extract %s: %s', $tarballPath, $e->getMessage()),
@@ -488,6 +586,12 @@ class HttpInstaller
                 0,
                 $e,
             );
+        } finally {
+            // Release the Phar handles before unlinking: PHP caches PharData by
+            // filename, which can otherwise pin the `.tar` open and defeat the
+            // unlink on some platforms (B6).
+            unset($phar, $tar);
+            @unlink($tarPath);
         }
 
         $this->flattenSingleRoot($targetDir);

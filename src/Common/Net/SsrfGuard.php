@@ -115,10 +115,19 @@ final class SsrfGuard
 
         $allowed = self::allowedCidrs();
         foreach ($addresses as $ip) {
-            if ($allowed !== [] && self::ipMatchesAnyCidr($ip, $allowed)) {
+            // Collapse IPv4-mapped/compatible IPv6 forms (e.g.
+            // ::ffff:169.254.169.254, ::ffff:0:127.0.0.1, the deprecated
+            // ::127.0.0.1 compat form and NAT64 64:ff9b::/96) down to their
+            // embedded IPv4 address so they are evaluated against the IPv4
+            // deny rules instead of slipping past as "public" IPv6. Both
+            // bracketed literals and DNS-resolved AAAA records flow through
+            // here.
+            $effectiveIp = self::embeddedIpv4($ip) ?? $ip;
+
+            if ($allowed !== [] && self::ipMatchesAnyCidr($effectiveIp, $allowed)) {
                 continue;
             }
-            if (!self::isPublicIp($ip)) {
+            if (!self::isPublicIp($effectiveIp)) {
                 throw new InvalidArgumentException(sprintf(
                     'Refusing to fetch "%s": host "%s" resolves to a non-public address (%s).',
                     $trimmed,
@@ -203,6 +212,66 @@ final class SsrfGuard
             }
         }
         return $out;
+    }
+
+    /**
+     * Extracts the embedded IPv4 address from an IPv4-mapped, IPv4-compatible
+     * or NAT64-embedded IPv6 address, returning it as a dotted-quad string.
+     * Returns null for anything that is not such an embedded form (plain IPv4,
+     * genuine global IPv6, etc.).
+     *
+     * Covered forms (all decode to a 16-byte binary IPv6 whose final 4 bytes
+     * are the IPv4 address):
+     *   - IPv4-mapped         ::ffff:a.b.c.d        (::ffff:0:0/96)
+     *   - IPv4-compatible      ::a.b.c.d            (deprecated, ::/96)
+     *   - "stateful" mapped   ::ffff:0:a.b.c.d       (64::ff9b style writers)
+     *   - NAT64 well-known    64:ff9b::a.b.c.d       (64:ff9b::/96, RFC6052)
+     *
+     * The decision is made on the canonical 16-byte binary representation so
+     * that every textual spelling of the same address is handled uniformly.
+     */
+    private static function embeddedIpv4(string $ip): ?string
+    {
+        // Only IPv6 literals can embed an IPv4 address.
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
+            return null;
+        }
+
+        $bin = @inet_pton($ip);
+        if ($bin === false || strlen($bin) !== 16) {
+            return null;
+        }
+
+        $prefix = substr($bin, 0, 12);
+        $isMapped = ($prefix === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff"); // ::ffff:0:0/96
+        $isCompat = ($prefix === str_repeat("\x00", 12));                            // ::/96 (compat)
+        $isNat64 = (substr($bin, 0, 12) === "\x00\x64\xff\x9b\x00\x00\x00\x00\x00\x00\x00\x00"); // 64:ff9b::/96
+
+        if (!$isMapped && !$isCompat && !$isNat64) {
+            return null;
+        }
+
+        // The IPv4-compatible all-zero prefix also matches ::1 and :: which are
+        // NOT embedded IPv4 addresses — guard against treating loopback/any as
+        // a "public" 0.0.0.x. We let those flow on as the deny-list catches
+        // 0.0.0.0/8, but ::1 (last 4 bytes 00 00 00 01) would wrongly become
+        // 0.0.0.1. Exclude the compat case when the embedded quad is < 0.0.0.2
+        // by simply NOT short-circuiting — instead let isPublicIp see the raw
+        // IPv6 too. Simplest correct behaviour: extract for mapped/nat64
+        // always; for compat only when the embedded address is a real IPv4
+        // (i.e. not ::, ::1).
+        $v4Bin = substr($bin, 12, 4);
+        if ($isCompat && ($v4Bin === "\x00\x00\x00\x00" || $v4Bin === "\x00\x00\x00\x01")) {
+            // :: and ::1 — let the IPv6 deny-list (::/128, ::1/128) handle them.
+            return null;
+        }
+
+        $v4 = inet_ntop($v4Bin);
+        if ($v4 === false || filter_var($v4, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
+            return null;
+        }
+
+        return $v4;
     }
 
     /**

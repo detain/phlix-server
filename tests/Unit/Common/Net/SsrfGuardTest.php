@@ -113,6 +113,68 @@ final class SsrfGuardTest extends TestCase
         SsrfGuard::assertPublicUrl($url);
     }
 
+    /**
+     * IPv4-mapped / IPv4-compatible IPv6 literals that embed a denied IPv4
+     * address must be rejected. Without the embedded-IPv4 collapse these all
+     * evaluate as "public" IPv6 (PHP's NO_PRIV_RANGE|NO_RES_RANGE does not
+     * flag mapped addresses, and a 16-byte address never matches a 4-byte v4
+     * deny CIDR in the binary prefix compare).
+     *
+     * @return array<string, array{string}>
+     */
+    public static function ipv4MappedLiteralProvider(): array
+    {
+        return [
+            'mapped loopback ::ffff:127.0.0.1' => ['http://[::ffff:127.0.0.1]/'],
+            'mapped metadata ::ffff:169.254.169.254' => ['http://[::ffff:169.254.169.254]/latest/meta-data/'],
+            'mapped rfc1918 ::ffff:10.0.0.1' => ['http://[::ffff:10.0.0.1]/'],
+            'mapped rfc1918 ::ffff:192.168.1.1' => ['http://[::ffff:192.168.1.1]/'],
+            'mapped rfc1918 ::ffff:172.16.5.5' => ['http://[::ffff:172.16.5.5]/'],
+            'mapped cgnat ::ffff:100.64.0.1' => ['http://[::ffff:100.64.0.1]/'],
+            'compat loopback ::127.0.0.1' => ['http://[::127.0.0.1]/'],
+            'compat metadata ::169.254.169.254' => ['http://[::169.254.169.254]/'],
+            'mapped hex metadata ::ffff:a9fe:a9fe' => ['http://[::ffff:a9fe:a9fe]/'],
+        ];
+    }
+
+    /**
+     * @dataProvider ipv4MappedLiteralProvider
+     */
+    public function test_rejects_ipv4_mapped_ipv6_literal(string $url): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        SsrfGuard::assertPublicUrl($url);
+    }
+
+    public function test_rejects_hostname_resolving_to_mapped_loopback(): void
+    {
+        $this->stubResolver(['evil.example' => ['::ffff:127.0.0.1']]);
+        $this->expectException(InvalidArgumentException::class);
+        SsrfGuard::assertPublicUrl('http://evil.example/');
+    }
+
+    public function test_rejects_hostname_resolving_to_mapped_metadata(): void
+    {
+        // AAAA record that smuggles the cloud-metadata endpoint as a mapped v6.
+        $this->stubResolver(['rebind.example' => ['::ffff:169.254.169.254']]);
+        $this->expectException(InvalidArgumentException::class);
+        SsrfGuard::assertPublicUrl('http://rebind.example/');
+    }
+
+    public function test_rejects_hostname_resolving_to_mapped_rfc1918(): void
+    {
+        $this->stubResolver(['lan.example' => ['::ffff:10.0.0.1']]);
+        $this->expectException(InvalidArgumentException::class);
+        SsrfGuard::assertPublicUrl('http://lan.example/');
+    }
+
+    public function test_mapped_public_ipv4_still_allowed(): void
+    {
+        // ::ffff:8.8.8.8 collapses to a public v4 and must remain permitted.
+        SsrfGuard::assertPublicUrl('http://[::ffff:8.8.8.8]/');
+        $this->addToAssertionCount(1);
+    }
+
     public function test_rejects_hostname_resolving_to_loopback(): void
     {
         $this->stubResolver(['evil.example' => ['127.0.0.1']]);

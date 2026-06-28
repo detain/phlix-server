@@ -210,7 +210,27 @@ class WebhookAdminController
             $updateData['name'] = $data['name'];
         }
         if (isset($data['url'])) {
-            $updateData['url'] = $data['url'];
+            $url = is_string($data['url']) ? trim($data['url']) : '';
+            if ($url === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
+                return (new Response())->status(400)->json([
+                    'error' => 'Invalid URL format',
+                ]);
+            }
+
+            // SSRF guard on the operator surface, mirroring create(): reject
+            // loopback/link-local/private/metadata targets at admin-config
+            // time. (The dispatch path also guards, but keep the operator
+            // surface consistent.) DNS here is blocking but this is an
+            // operator-triggered admin action off the media hot path.
+            try {
+                SsrfGuard::assertPublicUrl($url);
+            } catch (InvalidArgumentException $e) {
+                return (new Response())->status(400)->json([
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            $updateData['url'] = $url;
         }
         if (isset($data['events'])) {
             $updateData['events'] = $data['events'];

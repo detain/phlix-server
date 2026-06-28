@@ -9,7 +9,7 @@
         <form method="get" action="/search" class="search-form">
             <input type="search"
                    name="q"
-                   value="{$query|default:''|escape:'html'}"
+                   value="{$query|default:''}"
                    placeholder="Search movies, shows, music, books..."
                    class="search-input"
                    autofocus>
@@ -19,14 +19,14 @@
 
     {if $query}
         {if $results}
-            <p class="search-summary">{$results|count} result{if $results|count != 1}s{/if} for &ldquo;{$query|escape:'html'}&rdquo;</p>
+            <p class="search-summary">{$results|count} result{if $results|count != 1}s{/if} for &ldquo;{$query}&rdquo;</p>
             <div class="media-grid">
                 {foreach $results as $item}
                     {include file="partials/media_card.tpl" item=$item}
                 {/foreach}
             </div>
         {else}
-            <p class="search-empty">No results for &ldquo;{$query|escape:'html'}&rdquo;.</p>
+            <p class="search-empty">No results for &ldquo;{$query}&rdquo;.</p>
         {/if}
     {else}
         <p class="search-empty">Enter a query above to search your libraries.</p>

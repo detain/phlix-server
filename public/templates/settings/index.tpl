@@ -12,7 +12,7 @@
     {* Section 1: Account *}
     <section class="settings-section">
         <h2>Account</h2>
-        <p>Signed in as <strong>{$user.display_name|default:'User'|escape:'html'}</strong>.</p>
+        <p>Signed in as <strong>{$user.display_name|default:'User'}</strong>.</p>
         <p><a href="/login" class="btn btn-secondary">Sign in / Switch profile</a></p>
     </section>
 

@@ -12,7 +12,7 @@
         </div>
 
         {if $error}
-            <div class="auth-error" role="alert">{$error|escape:'html'}</div>
+            <div class="auth-error" role="alert">{$error}</div>
         {/if}
 
         <form class="auth-form" action="/auth/login" method="post">

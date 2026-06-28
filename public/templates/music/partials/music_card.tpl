@@ -22,7 +22,7 @@
 </div>
 
 {elseif isset($album)}
-<div class="music-card album-card" data-album-name="{$album.name|escape:'html'}">
+<div class="music-card album-card" data-album-name="{$album.name}">
     <div class="card-art">
         <svg viewBox="0 0 100 100" class="music-icon">
             <rect x="10" y="10" width="80" height="80" rx="5" fill="#3b2d5c"/>
@@ -41,7 +41,7 @@
 </div>
 
 {elseif isset($artist)}
-<div class="music-card artist-card" data-artist-name="{$artist.name|escape:'html'}">
+<div class="music-card artist-card" data-artist-name="{$artist.name}">
     <div class="card-art artist-art">
         <svg viewBox="0 0 100 100" class="music-icon">
             <circle cx="50" cy="50" r="45" fill="#3b2d5c"/>

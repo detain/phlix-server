@@ -6,6 +6,7 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Net\SsrfGuard;
+use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -60,12 +61,16 @@ use Phlix\Server\Http\Response;
 final class PluginAdminController
 {
     /**
-     * @param PluginLoader $loader The lifecycle facade from Step A.4.
-     * @param AuditLogger  $audit  Records every admin-initiated lifecycle action.
+     * @param PluginLoader         $loader  The lifecycle facade from Step A.4.
+     * @param AuditLogger          $audit   Records every admin-initiated lifecycle action.
+     * @param PluginCatalogService $catalog Resolves a catalog entry's pinned
+     *        trust metadata (`artifactSha256` + `ref`) so an official, pinned
+     *        plugin install clears the SV-S2b default-deny gate (SV-B2).
      */
     public function __construct(
         private readonly PluginLoader $loader,
         private readonly AuditLogger $audit,
+        private readonly PluginCatalogService $catalog,
     ) {
     }
 
@@ -286,8 +291,18 @@ final class PluginAdminController
 
         $actor = $this->actor($request);
 
+        // SV-B2: resolve the catalog pin for this source (matched by `repo` URL
+        // or manifest `name`) and thread it into the installer. A pinned
+        // official entry passes `[artifactSha256, ref]` so it clears the SV-S2b
+        // default-deny; an operator-added URL not in any catalog yields
+        // `[null, null]`, preserving the existing default-deny behaviour
+        // (install refused unless PHLIX_PLUGINS_ALLOW_UNVERIFIED=1). The
+        // unresolved operator-pasted URL is the lookup key so it matches the
+        // catalog entry's verbatim `repo`.
+        [$sha, $ref] = $this->catalog->pinFor($url);
+
         try {
-            $manifest = $this->loader->install($url);
+            $manifest = $this->loader->install($url, $sha, $ref);
         } catch (PluginInstallException $e) {
             $body = [
                 'error' => $e->getMessage(),

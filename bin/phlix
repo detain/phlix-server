@@ -43,6 +43,7 @@ use Phlix\Console\Commands\UserResetPasswordCommand;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProbe;
 use Phlix\Auth\UserRepository;
+use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\PluginLoader;
 use Psr\Container\ContainerInterface;
 use Webman\Console\Command;
@@ -106,7 +107,10 @@ $cli->add(new LibraryScanCommand(static fn(): LibraryManager => $containerProvid
 $cli->add(new PluginListCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
 $cli->add(new PluginEnableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
 $cli->add(new PluginDisableCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
-$cli->add(new PluginInstallCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
+$cli->add(new PluginInstallCommand(
+    static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class),
+    static fn(): PluginCatalogService => $containerProvider()->get(PluginCatalogService::class),
+));
 $cli->add(new PluginUninstallCommand(static fn(): PluginLoader => $containerProvider()->get(PluginLoader::class)));
 $cli->add(new BackupCreateCommand(static fn(): BackupManager => $containerProvider()->get(BackupManager::class)));
 $cli->add(new BackupListCommand(static fn(): BackupManager => $containerProvider()->get(BackupManager::class)));

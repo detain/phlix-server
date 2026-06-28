@@ -8,8 +8,11 @@ use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use Mockery\MockInterface;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Net\SsrfGuard;
+use Phlix\Plugins\Catalog\CatalogSourceResolver;
+use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -33,6 +36,10 @@ final class PluginAdminControllerTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
 
+    private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
+    private const CATALOG_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugins/'
+        . CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
+
     /** @var PluginLoader&MockInterface */
     private PluginLoader&MockInterface $loader;
     /** @var AuditLogger&MockInterface */
@@ -44,11 +51,57 @@ final class PluginAdminControllerTest extends TestCase
         parent::setUp();
         $this->loader = Mockery::mock(PluginLoader::class);
         $this->audit  = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
-        $this->controller = new PluginAdminController($this->loader, $this->audit);
+        // Default catalog has no plugins, so pinFor() always returns [null, null]
+        // (un-pinned). Tests that assert a pin rebuild the controller with a
+        // populated catalog via controllerWithCatalog().
+        $this->controller = new PluginAdminController(
+            $this->loader,
+            $this->audit,
+            $this->catalogService([]),
+        );
 
         // install() runs SourceUrlResolver::normalize(), which now applies the
         // SSRF guard to http(s) outputs. Inject a deterministic public resolver.
         SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+    }
+
+    /**
+     * Build a real {@see PluginCatalogService} (it is final, so it cannot be
+     * mocked) backed by a stub settings store + offline fetcher that serves a
+     * catalog listing the given plugin entries.
+     *
+     * @param list<array<string, mixed>> $plugins Raw `plugins[]` entries.
+     */
+    private function catalogService(array $plugins): PluginCatalogService
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')->willReturnCallback(
+            static fn (string $key): mixed => $key === PluginCatalogService::KEY_DEFAULT_SOURCE
+                ? self::DEFAULT_SOURCE
+                : null,
+        );
+        $body = json_encode(['name' => 'Official', 'plugins' => $plugins], JSON_THROW_ON_ERROR);
+
+        return new PluginCatalogService(
+            $settings,
+            static fn (string $url, int $t): string => $url === self::CATALOG_RAW
+                ? $body
+                : throw new \RuntimeException("unexpected catalog fetch: $url"),
+        );
+    }
+
+    /**
+     * Swap in a controller whose catalog lists the given plugin entries.
+     *
+     * @param list<array<string, mixed>> $plugins
+     */
+    private function useCatalog(array $plugins): void
+    {
+        $this->controller = new PluginAdminController(
+            $this->loader,
+            $this->audit,
+            $this->catalogService($plugins),
+        );
     }
 
     protected function tearDown(): void
@@ -86,7 +139,7 @@ final class PluginAdminControllerTest extends TestCase
 
         $this->loader->shouldReceive('install')
             ->once()
-            ->with('https://example.com/plugin.json')
+            ->with('https://example.com/plugin.json', null, null)
             ->andReturn($manifest);
 
         $this->audit->shouldReceive('logPluginAction')
@@ -128,7 +181,7 @@ final class PluginAdminControllerTest extends TestCase
 
         $this->loader->shouldReceive('install')
             ->once()
-            ->with('github.com/detain/phlix-plugin-anidb')
+            ->with('github.com/detain/phlix-plugin-anidb', null, null)
             ->andReturn($manifest);
 
         $this->audit->shouldReceive('logPluginAction')->once();
@@ -141,6 +194,78 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertSame(201, $response->statusCode);
         $body = $this->decode($response->body);
         $this->assertSame('phlix-plugin-anidb', $body['plugin']['name']);
+    }
+
+    public function test_install_threads_catalog_pin_for_a_pinned_official_plugin(): void
+    {
+        // SV-B2: a pinned official catalog entry must forward its
+        // artifactSha256 + ref into PluginLoader::install so the SV-S2b
+        // default-deny is cleared (no PHLIX_PLUGINS_ALLOW_UNVERIFIED needed).
+        $repo = 'https://github.com/detain/phlix-plugin-anidb';
+        $sha  = str_repeat('a', 64);
+        $ref  = str_repeat('b', 40);
+
+        $this->useCatalog([[
+            'name' => 'phlix-plugin-anidb',
+            'repo' => $repo,
+            'ref' => $ref,
+            'artifactSha256' => $sha,
+        ]]);
+
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-anidb',
+            'version' => '2.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Phlix\\Anidb\\AnidbMetadataProvider',
+        ]);
+
+        $this->loader->shouldReceive('install')
+            ->once()
+            ->with($repo, $sha, $ref)
+            ->andReturn($manifest);
+
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->install(
+            $this->makeRequest('admin-1', ['url' => $repo]),
+            [],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame('phlix-plugin-anidb', $this->decode($response->body)['plugin']['name']);
+    }
+
+    public function test_install_passes_null_pin_for_an_unpinned_operator_url(): void
+    {
+        // SV-B2: a URL not present in any catalog yields [null, null] from
+        // pinFor(), so install is called un-pinned — preserving the SV-S2b
+        // default-deny behaviour for operator-added sources. (The default
+        // empty catalog from setUp() never matches this URL.)
+        $url = 'https://example.com/operator-plugin.tar.gz';
+
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-operator',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Op\\Plugin',
+        ]);
+
+        $this->loader->shouldReceive('install')
+            ->once()
+            ->with($url, null, null)
+            ->andReturn($manifest);
+
+        $this->audit->shouldReceive('logPluginAction')->once();
+
+        $response = $this->controller->install(
+            $this->makeRequest('admin-1', ['url' => $url]),
+            [],
+        );
+
+        $this->assertSame(201, $response->statusCode);
+        $this->assertSame('phlix-plugin-operator', $this->decode($response->body)['plugin']['name']);
     }
 
     public function test_install_returns_400_on_missing_url(): void

@@ -120,6 +120,7 @@ final class AdminRoutesTest extends TestCase
             $profileManager,
             $adminProfileController,
             $pluginCatalogController,
+            $catalogService,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -138,6 +139,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly FakeUserProfileManager $profileManager,
                 private readonly AdminProfileController $adminProfileController,
                 private readonly PluginCatalogController $pluginCatalogController,
+                private readonly PluginCatalogService $pluginCatalogService,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -156,6 +158,7 @@ final class AdminRoutesTest extends TestCase
                     PluginAdminController::class => new PluginAdminController(
                         $this->loader,
                         $this->audit,
+                        $this->pluginCatalogService,
                     ),
                     PluginCatalogController::class => $this->pluginCatalogController,
                     AdminMiddleware::class => new AdminMiddleware(

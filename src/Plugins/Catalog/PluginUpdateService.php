@@ -128,7 +128,12 @@ final class PluginUpdateService
                 $name,
             ));
         }
-        return $this->loader->install($repo);
+        // SV-B2: thread the catalog pin (artifactSha256 + ref) into the install
+        // so a pinned official plugin clears the SV-S2b default-deny. An
+        // un-pinned (schemaVersion 1 / third-party) entry yields [null, null]
+        // and stays on the default-deny path unchanged.
+        [$sha, $ref] = $this->catalog->pinFor($repo);
+        return $this->loader->install($repo, $sha, $ref);
     }
 
     /**

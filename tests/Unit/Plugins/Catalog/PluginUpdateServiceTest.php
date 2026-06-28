@@ -175,9 +175,59 @@ final class PluginUpdateServiceTest extends TestCase
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]);
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO)->andReturn($manifest);
+        // SV-B2: the un-pinned catalog entry resolves to [null, null], so the
+        // reinstall threads a null pin (stays on the SV-S2b default-deny path).
+        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $result = $this->service($loader, [])->update('phlix-plugin-anidb');
+        self::assertSame('0.2.0', $result->version);
+    }
+
+    public function test_update_threads_the_catalog_pin_for_a_pinned_entry(): void
+    {
+        // SV-B2: when the catalog entry is pinned (schemaVersion 2), update()
+        // must forward [artifactSha256, ref] into PluginLoader::install so the
+        // reinstall clears the SV-S2b default-deny.
+        $sha = str_repeat('a', 64);
+        $ref = str_repeat('b', 40);
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')->willReturnCallback(
+            fn (string $key): mixed => $key === PluginCatalogService::KEY_DEFAULT_SOURCE
+                ? self::DEFAULT_SOURCE
+                : null,
+        );
+        $catalogBody = json_encode([
+            'name' => 'Official',
+            'plugins' => [
+                [
+                    'name' => 'phlix-plugin-anidb',
+                    'repo' => self::ANIDB_REPO,
+                    'ref' => $ref,
+                    'artifactSha256' => $sha,
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR);
+        $catalog = new PluginCatalogService(
+            $settings,
+            fn (string $url, int $t): string => $url === self::CATALOG_RAW
+                ? $catalogBody
+                : throw new \RuntimeException("unexpected catalog fetch: $url"),
+        );
+
+        $loader = Mockery::mock(PluginLoader::class);
+        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-anidb',
+            'version' => '0.2.0',
+            'phlix_min_server_version' => '0.10.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Demo\\Plugin',
+        ]);
+        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, $sha, $ref)->andReturn($manifest);
+
+        $svc = new PluginUpdateService($loader, $catalog, fn (string $u, int $t): string => throw new \RuntimeException('no manifest fetch'));
+        $result = $svc->update('phlix-plugin-anidb');
         self::assertSame('0.2.0', $result->version);
     }
 
@@ -202,7 +252,9 @@ final class PluginUpdateServiceTest extends TestCase
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]);
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO)->andReturn($manifest);
+        // SV-B2: the un-pinned catalog entry resolves to [null, null], so the
+        // reinstall threads a null pin (stays on the SV-S2b default-deny path).
+        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $svc = $this->service($loader, [
             self::ANIDB_MANIFEST_RAW => json_encode(['version' => '0.2.0'], JSON_THROW_ON_ERROR),

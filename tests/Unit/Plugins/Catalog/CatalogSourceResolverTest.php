@@ -13,14 +13,20 @@ use PHPUnit\Framework\TestCase;
 final class CatalogSourceResolverTest extends TestCase
 {
     /**
+     * SV-S2b: the OFFICIAL catalog repo (detain/phlix-plugins) resolves to the
+     * configured PINNED ref, never the moving `HEAD` default branch.
+     *
      * @dataProvider githubRepoUrls
      */
-    public function test_rewrites_github_repo_to_raw_plugins_json(string $input): void
+    public function test_official_repo_resolves_to_pinned_ref_not_head(string $input): void
     {
+        $pinned = CatalogSourceResolver::OFFICIAL_PINNED_REF;
         self::assertSame(
-            'https://raw.githubusercontent.com/detain/phlix-plugins/HEAD/plugins.json',
+            'https://raw.githubusercontent.com/detain/phlix-plugins/' . $pinned . '/plugins.json',
             CatalogSourceResolver::normalize($input),
         );
+        // Explicit guard against regression to HEAD.
+        self::assertStringNotContainsString('/HEAD/', CatalogSourceResolver::normalize($input));
     }
 
     /**
@@ -38,6 +44,30 @@ final class CatalogSourceResolverTest extends TestCase
             'ssh form'             => ['git@github.com:detain/phlix-plugins.git'],
             'surrounding space'    => ['  https://github.com/detain/phlix-plugins  '],
         ];
+    }
+
+    public function test_operator_added_repo_keeps_head(): void
+    {
+        // A non-official (operator-added) catalog repo is NOT auto-pinned; it
+        // keeps HEAD (its entries are still subject to install-time default-deny).
+        self::assertSame(
+            'https://raw.githubusercontent.com/someorg/their-catalog/HEAD/plugins.json',
+            CatalogSourceResolver::normalize('https://github.com/someorg/their-catalog'),
+        );
+    }
+
+    public function test_official_pinned_ref_is_overridable_via_env(): void
+    {
+        putenv(CatalogSourceResolver::PINNED_REF_ENV . '=v9.9.9');
+        try {
+            self::assertSame('v9.9.9', CatalogSourceResolver::officialPinnedRef());
+            self::assertSame(
+                'https://raw.githubusercontent.com/detain/phlix-plugins/v9.9.9/plugins.json',
+                CatalogSourceResolver::normalize('https://github.com/detain/phlix-plugins'),
+            );
+        } finally {
+            putenv(CatalogSourceResolver::PINNED_REF_ENV);
+        }
     }
 
     public function test_tree_url_targets_the_named_branch(): void

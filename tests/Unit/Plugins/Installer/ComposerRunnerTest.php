@@ -180,6 +180,63 @@ final class ComposerRunnerTest extends TestCase
         }
     }
 
+    public function test_install_arg_vector_contains_no_scripts_and_no_plugins(): void
+    {
+        // SV-S1b (RCE kill-switch): the `composer install` invocation MUST pass
+        // --no-scripts AND --no-plugins so a malicious plugin's composer.json
+        // scripts/plugins never execute as the server user. We capture the real
+        // argv via a fake composer that records its arguments to a file.
+        file_put_contents($this->tmpDir . '/composer.json', '{}');
+        $argLog = $this->tmpDir . '/install-args.txt';
+
+        $fake = $this->tmpDir . '/capture-composer.sh';
+        file_put_contents(
+            $fake,
+            "#!/usr/bin/env bash\n"
+            . 'echo "$@" >> ' . escapeshellarg($argLog) . "\n"
+            . "exit 0\n"
+        );
+        chmod($fake, 0755);
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $runner = new ComposerRunner(30, $fake, $logger);
+        $runner->install($this->tmpDir);
+
+        $args = (string) file_get_contents($argLog);
+        $this->assertStringContainsString('install', $args);
+        $this->assertStringContainsString('--no-scripts', $args);
+        $this->assertStringContainsString('--no-plugins', $args);
+    }
+
+    public function test_dump_autoload_fallback_arg_vector_contains_no_scripts_and_no_plugins(): void
+    {
+        // The dump-autoload fallback path (taken when `install` fails) must also
+        // pass --no-scripts AND --no-plugins.
+        file_put_contents($this->tmpDir . '/composer.json', '{}');
+        $argLog = $this->tmpDir . '/dump-args.txt';
+
+        // Fail `install` (exit 7), record + succeed for everything else (the
+        // dump-autoload fallback), so we can inspect the fallback's argv.
+        $fake = $this->tmpDir . '/capture-fallback-composer.sh';
+        file_put_contents(
+            $fake,
+            "#!/usr/bin/env bash\n"
+            . "if [ \"\$1\" = 'install' ]; then echo 'boom' 1>&2; exit 7; fi\n"
+            . 'echo "$@" >> ' . escapeshellarg($argLog) . "\n"
+            . "exit 0\n"
+        );
+        chmod($fake, 0755);
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $runner = new ComposerRunner(30, $fake, $logger);
+        $runner->install($this->tmpDir);
+
+        $args = (string) file_get_contents($argLog);
+        $this->assertStringContainsString('dump-autoload', $args);
+        $this->assertStringContainsString('--no-scripts', $args);
+        $this->assertStringContainsString('--no-plugins', $args);
+    }
+
     public function test_install_logs_info_on_success_path(): void
     {
         file_put_contents($this->tmpDir . '/composer.json', '{}');

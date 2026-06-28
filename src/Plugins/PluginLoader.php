@@ -89,7 +89,11 @@ class PluginLoader
      *  4. Run `composer install --no-dev` via {@see ComposerRunner}.
      *  5. Persist a row in `plugins`.
      *
-     * @param string $sourceUrl HTTPS URL, `file://` URL, or stub `plugin.json` URL.
+     * @param string      $sourceUrl HTTPS URL, `file://` URL, or stub `plugin.json` URL.
+     * @param string|null $expectedSha256 Pinned artifact sha256 from the catalog
+     *        entry (SV-S1b/SV-S2b). `null` = un-pinned install, which is
+     *        refused by default-deny unless `PHLIX_PLUGINS_ALLOW_UNVERIFIED=1`.
+     * @param string|null $pinnedRef Pinned commit sha to download (SV-S1b).
      *
      * @return Manifest Parsed manifest of the installed plugin.
      *
@@ -97,9 +101,17 @@ class PluginLoader
      *
      * @since 0.10.0
      */
-    public function install(string $sourceUrl): Manifest
+    public function install(string $sourceUrl, ?string $expectedSha256 = null, ?string $pinnedRef = null): Manifest
     {
-        [$manifest, $directory] = $this->installer->install($sourceUrl);
+        // SECURITY (SV-S2b, default-deny): an install with no pinned artifact
+        // digest is unverified. Refuse it before we even fetch bytes, unless the
+        // operator has explicitly opted into unverified installs. This is
+        // checked here (the single install chokepoint) so both the admin UI and
+        // the auto-updater inherit it. file:// dev/test sources are exempt — see
+        // assertVerifiedOrOverride().
+        $this->assertVerifiedOrOverride($sourceUrl, $expectedSha256);
+
+        [$manifest, $directory] = $this->installer->install($sourceUrl, $expectedSha256, $pinnedRef);
         return $this->finalizeInstall($manifest, $directory, $sourceUrl);
     }
 
@@ -461,6 +473,61 @@ class PluginLoader
                 ]);
             }
         }
+    }
+
+    /**
+     * Operator override env var that opts back into installing **unverified**
+     * (un-pinned) plugin sources. Mirrors the `PHLIX_PLUGINS_ALLOW_HTTP`
+     * pattern in {@see HttpInstaller}. Default-deny when unset.
+     */
+    public const ALLOW_UNVERIFIED_ENV = 'PHLIX_PLUGINS_ALLOW_UNVERIFIED';
+
+    /**
+     * Default-deny gate (SV-S2b): refuse an install whose artifact is not
+     * pinned by a sha256 digest, unless the operator set
+     * {@see self::ALLOW_UNVERIFIED_ENV}.
+     *
+     * `file://` sources (local dev checkouts, integration-test fixtures) are
+     * always allowed — they are operator-local bytes, not a remote catalog
+     * artifact, so the supply-chain pin does not apply to them.
+     *
+     * @throws PluginInstallException When the source is remote, un-pinned, and
+     *         the override is not enabled.
+     */
+    private function assertVerifiedOrOverride(string $sourceUrl, ?string $expectedSha256): void
+    {
+        if ($expectedSha256 !== null && $expectedSha256 !== '') {
+            return; // pinned — SV-S1b verifies the bytes against this digest.
+        }
+
+        $scheme = strtolower((string) parse_url(trim($sourceUrl), PHP_URL_SCHEME));
+        if ($scheme === 'file' || $scheme === '') {
+            return; // local source — supply-chain pin is not applicable.
+        }
+
+        if (self::allowUnverifiedInstalls()) {
+            $this->logger()->warning('installing UNVERIFIED (un-pinned) plugin source — override is enabled', [
+                'source' => $sourceUrl,
+            ]);
+            return;
+        }
+
+        throw new PluginInstallException(sprintf(
+            'Refusing to install unverified plugin source %s: the catalog entry has no pinned '
+            . 'artifact sha256 (schemaVersion 1 / un-pinned). Set %s=1 to override.',
+            $sourceUrl,
+            self::ALLOW_UNVERIFIED_ENV,
+        ));
+    }
+
+    /**
+     * Whether the operator has opted into unverified installs via the env var.
+     */
+    private static function allowUnverifiedInstalls(): bool
+    {
+        $value = getenv(self::ALLOW_UNVERIFIED_ENV);
+        return $value !== false
+            && in_array(strtolower($value), ['1', 'true', 'yes', 'on'], true);
     }
 
     /**

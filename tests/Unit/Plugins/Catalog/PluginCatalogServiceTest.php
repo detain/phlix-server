@@ -155,7 +155,9 @@ final class PluginCatalogServiceTest extends TestCase
 
     public function test_fetch_catalog_parses_plugins(): void
     {
-        $rawUrl = 'https://raw.githubusercontent.com/detain/phlix-plugins/HEAD/plugins.json';
+        // SV-S2b: the official catalog resolves to the PINNED ref, not HEAD.
+        $rawUrl = 'https://raw.githubusercontent.com/detain/phlix-plugins/'
+            . \Phlix\Plugins\Catalog\CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
         $body = json_encode([
             'schemaVersion' => 1,
             'name' => 'Phlix Official Plugins',
@@ -207,7 +209,8 @@ final class PluginCatalogServiceTest extends TestCase
 
     public function test_aggregate_collects_catalogs_and_per_source_errors(): void
     {
-        $defaultRaw = 'https://raw.githubusercontent.com/detain/phlix-plugins/HEAD/plugins.json';
+        $defaultRaw = 'https://raw.githubusercontent.com/detain/phlix-plugins/'
+            . \Phlix\Plugins\Catalog\CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
         $okBody = json_encode([
             'name' => 'Official',
             'plugins' => [['name' => 'phlix-plugin-anidb', 'repo' => 'https://github.com/detain/phlix-plugin-anidb']],

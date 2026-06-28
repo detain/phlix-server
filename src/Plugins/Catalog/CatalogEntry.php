@@ -51,6 +51,13 @@ final class CatalogEntry
      *                                   from (passed verbatim to the installer).
      * @param string       $author      Catalog-declared author/owner.
      * @param list<string> $tags        Free-form tags.
+     * @param string       $ref         Pinned 40-hex commit sha the entry installs
+     *                                   (schemaVersion 2). Empty for an un-pinned
+     *                                   (v1 / third-party) entry.
+     * @param string       $artifactSha256 Pinned 64-hex sha256 of the codeload
+     *                                   tarball for `$ref`. Empty when un-pinned.
+     * @param string       $version     Plugin semver at the pinned ref (informational;
+     *                                   feeds compat/UI). Empty when unspecified.
      */
     public function __construct(
         public readonly string $name,
@@ -61,7 +68,24 @@ final class CatalogEntry
         public readonly string $repo,
         public readonly string $author,
         public readonly array $tags,
+        public readonly string $ref = '',
+        public readonly string $artifactSha256 = '',
+        public readonly string $version = '',
     ) {
+    }
+
+    /**
+     * Whether this entry carries a verifiable pin (schemaVersion 2):
+     * both a 40-hex commit ref AND a 64-hex artifact sha256. The install path
+     * downloads the pinned ref and verifies the artifact against the sha256;
+     * an entry that is not `verified()` is install-blocked unless the operator
+     * set `PHLIX_PLUGINS_ALLOW_UNVERIFIED=1` (SV-S2b default-deny).
+     *
+     * @since 0.40.0
+     */
+    public function verified(): bool
+    {
+        return $this->ref !== '' && $this->artifactSha256 !== '';
     }
 
     /**
@@ -95,6 +119,14 @@ final class CatalogEntry
             repo: $repo,
             author: self::str($raw, 'author'),
             tags: self::tags($raw['tags'] ?? null),
+            // Trust metadata (schemaVersion 2). Malformed (non-hex / wrong
+            // length) values are coerced to '' so a hand-rolled catalog cannot
+            // smuggle a bogus pin past the installer — an empty pin is treated
+            // as un-pinned and falls under default-deny rather than being
+            // mistaken for a valid one.
+            ref: self::hex($raw, 'ref', 40),
+            artifactSha256: self::hex($raw, 'artifactSha256', 64),
+            version: self::str($raw, 'version'),
         );
     }
 
@@ -103,7 +135,8 @@ final class CatalogEntry
      *
      * @return array{
      *     name: string, title: string, type: string, summary: string,
-     *     description: string, repo: string, author: string, tags: list<string>
+     *     description: string, repo: string, author: string, tags: list<string>,
+     *     ref: string, artifactSha256: string, version: string, verified: bool
      * }
      *
      * @since 0.33.0
@@ -111,14 +144,18 @@ final class CatalogEntry
     public function toArray(): array
     {
         return [
-            'name'        => $this->name,
-            'title'       => $this->title,
-            'type'        => $this->type,
-            'summary'     => $this->summary,
-            'description' => $this->description,
-            'repo'        => $this->repo,
-            'author'      => $this->author,
-            'tags'        => $this->tags,
+            'name'           => $this->name,
+            'title'          => $this->title,
+            'type'           => $this->type,
+            'summary'        => $this->summary,
+            'description'    => $this->description,
+            'repo'           => $this->repo,
+            'author'         => $this->author,
+            'tags'           => $this->tags,
+            'ref'            => $this->ref,
+            'artifactSha256' => $this->artifactSha256,
+            'version'        => $this->version,
+            'verified'       => $this->verified(),
         ];
     }
 
@@ -131,6 +168,23 @@ final class CatalogEntry
     {
         $value = $raw[$key] ?? null;
         return is_string($value) ? trim($value) : '';
+    }
+
+    /**
+     * Read a lowercase hex field of an exact length, coercing anything that is
+     * not exactly `$length` hex chars to `''` (so a malformed pin reads as
+     * "un-pinned" rather than being trusted).
+     *
+     * @param array<array-key, mixed> $raw
+     */
+    private static function hex(array $raw, string $key, int $length): string
+    {
+        $value = self::str($raw, $key);
+        if ($value === '') {
+            return '';
+        }
+        $lower = strtolower($value);
+        return preg_match('/^[0-9a-f]{' . $length . '}$/', $lower) === 1 ? $lower : '';
     }
 
     /**

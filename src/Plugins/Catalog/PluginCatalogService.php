@@ -285,6 +285,40 @@ final class PluginCatalogService
     }
 
     /**
+     * Resolve the pinned trust metadata (`ref` + `artifactSha256`) for a
+     * catalog entry, looked up by its `repo` URL or `name` (SV-S1b/SV-S2b).
+     *
+     * Callers that drive a catalog install thread the returned pin into
+     * {@see PluginLoader::install()} so the installer downloads the pinned
+     * commit and verifies the artifact digest. Returns `[null, null]` when the
+     * identifier is not found in any catalog or the matched entry is un-pinned
+     * (schemaVersion 1) — which leaves the install on the default-deny path.
+     *
+     * @param string $repoOrName A catalog entry `repo` URL or manifest `name`.
+     *
+     * @return array{0: ?string, 1: ?string} `[artifactSha256, ref]` or `[null, null]`.
+     *
+     * @since 0.40.0
+     */
+    public function pinFor(string $repoOrName): array
+    {
+        $needle = trim($repoOrName);
+        if ($needle === '') {
+            return [null, null];
+        }
+
+        foreach ($this->aggregate()['catalogs'] as $catalog) {
+            foreach ($catalog['plugins'] as $entry) {
+                if (($entry->repo === $needle || $entry->name === $needle) && $entry->verified()) {
+                    return [$entry->artifactSha256, $entry->ref];
+                }
+            }
+        }
+
+        return [null, null];
+    }
+
+    /**
      * The configured per-fetch timeout in seconds (≥1).
      */
     private function timeout(): int

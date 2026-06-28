@@ -25,7 +25,9 @@ final class PluginAutoUpdateWorkerTest extends TestCase
     use MockeryPHPUnitIntegration;
 
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
-    private const CATALOG_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugins/HEAD/plugins.json';
+    // SV-S2b: the official catalog now resolves to a PINNED ref, not HEAD.
+    private const CATALOG_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugins/'
+        . \Phlix\Plugins\Catalog\CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
     private const ANIDB_REPO = 'https://github.com/detain/phlix-plugin-anidb';
     private const ANIDB_MANIFEST_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugin-anidb/HEAD/plugin.json';
 

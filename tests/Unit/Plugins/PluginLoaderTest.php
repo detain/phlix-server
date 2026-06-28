@@ -216,19 +216,79 @@ final class PluginLoaderTest extends TestCase
         $this->makeLoader()->installFromDirectory('/x');
     }
 
-    public function test_install_via_url_delegates_to_http_installer(): void
+    public function test_install_via_url_delegates_to_http_installer_with_pin(): void
     {
+        // SV-S1b/SV-S2b: a remote install carries the catalog entry's pinned
+        // sha256 + commit ref, which the loader threads down to the installer.
         $manifest = $this->manifest();
+        $sha = str_repeat('a', 64);
+        $ref = str_repeat('b', 40);
         $this->installer->shouldReceive('install')
             ->once()
-            ->with('https://example.test/plugin.tar.gz')
+            ->with('https://example.test/plugin.tar.gz', $sha, $ref)
             ->andReturn([$manifest, $this->stagedDir]);
         $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
         $this->composer->shouldReceive('install')->once();
         $this->repository->shouldReceive('existsByName')->andReturn(false);
         $this->repository->shouldReceive('insert')->once();
 
-        $returned = $this->makeLoader()->install('https://example.test/plugin.tar.gz');
+        $returned = $this->makeLoader()->install('https://example.test/plugin.tar.gz', $sha, $ref);
+        $this->assertSame($manifest, $returned);
+    }
+
+    public function test_install_via_url_default_denies_unpinned_remote_source(): void
+    {
+        // SV-S2b default-deny: an un-pinned (schemaVersion 1 / third-party)
+        // remote source is refused before any bytes are fetched. The installer
+        // must never be reached.
+        $this->installer->shouldNotReceive('install');
+        $this->composer->shouldNotReceive('install');
+
+        $this->expectException(PluginInstallException::class);
+        $this->expectExceptionMessage('Refusing to install unverified plugin source');
+
+        $this->makeLoader()->install('https://example.test/plugin.tar.gz');
+    }
+
+    public function test_install_via_url_unpinned_succeeds_with_override_env(): void
+    {
+        // With PHLIX_PLUGINS_ALLOW_UNVERIFIED=1 the operator opts back into
+        // un-pinned installs (transition window for v1 catalogs).
+        $manifest = $this->manifest();
+        putenv('PHLIX_PLUGINS_ALLOW_UNVERIFIED=1');
+        try {
+            $this->installer->shouldReceive('install')
+                ->once()
+                ->with('https://example.test/plugin.tar.gz', null, null)
+                ->andReturn([$manifest, $this->stagedDir]);
+            $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
+            $this->composer->shouldReceive('install')->once();
+            $this->repository->shouldReceive('existsByName')->andReturn(false);
+            $this->repository->shouldReceive('insert')->once();
+
+            $returned = $this->makeLoader()->install('https://example.test/plugin.tar.gz');
+            $this->assertSame($manifest, $returned);
+        } finally {
+            putenv('PHLIX_PLUGINS_ALLOW_UNVERIFIED');
+        }
+    }
+
+    public function test_install_via_file_url_is_exempt_from_default_deny(): void
+    {
+        // Local file:// sources (dev checkouts / fixtures) are operator-local
+        // bytes, not a remote catalog artifact — the supply-chain pin does not
+        // apply, so they install un-pinned without the override.
+        $manifest = $this->manifest();
+        $this->installer->shouldReceive('install')
+            ->once()
+            ->with('file:///tmp/plugin.tar.gz', null, null)
+            ->andReturn([$manifest, $this->stagedDir]);
+        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->composer->shouldReceive('install')->once();
+        $this->repository->shouldReceive('existsByName')->andReturn(false);
+        $this->repository->shouldReceive('insert')->once();
+
+        $returned = $this->makeLoader()->install('file:///tmp/plugin.tar.gz');
         $this->assertSame($manifest, $returned);
     }
 

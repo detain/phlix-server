@@ -34,7 +34,9 @@ final class PluginCatalogControllerTest extends TestCase
     use MockeryPHPUnitIntegration;
 
     private const DEFAULT_SOURCE = 'https://github.com/detain/phlix-plugins';
-    private const DEFAULT_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugins/HEAD/plugins.json';
+    // SV-S2b: the official catalog resolves to a PINNED ref, not HEAD.
+    private const DEFAULT_RAW = 'https://raw.githubusercontent.com/detain/phlix-plugins/'
+        . \Phlix\Plugins\Catalog\CatalogSourceResolver::OFFICIAL_PINNED_REF . '/plugins.json';
 
     /** @var PluginLoader&MockInterface */
     private PluginLoader&MockInterface $loader;

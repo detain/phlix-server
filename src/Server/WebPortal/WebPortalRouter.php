@@ -18,6 +18,8 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
+use Phlix\Media\UserItemDataRepository;
+use Phlix\Server\Http\Controllers\MediaUserDataController;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -60,6 +62,12 @@ class WebPortalRouter
 
     /** @var UserProfileManager|null Resolves user profiles; null when not wired */
     private ?UserProfileManager $profileManager;
+
+    /** @var UserItemDataRepository|null Per-user favorites/ratings; null when not wired */
+    private ?UserItemDataRepository $userItemData;
+
+    /** @var MediaUserDataController|null Handles favorite/rating routes; null when not wired */
+    private ?MediaUserDataController $mediaUserDataController;
 
     /**
      * Constructs a new WebPortalRouter instance.
@@ -104,7 +112,9 @@ class WebPortalRouter
         PlaybackMarkerService $playbackMarkerService,
         ?UserRepository $userRepository = null,
         ?WatchHistory $watchHistory = null,
-        ?UserProfileManager $profileManager = null
+        ?UserProfileManager $profileManager = null,
+        ?UserItemDataRepository $userItemData = null,
+        ?MediaUserDataController $mediaUserDataController = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -117,6 +127,8 @@ class WebPortalRouter
         $this->userRepository = $userRepository;
         $this->watchHistory = $watchHistory;
         $this->profileManager = $profileManager;
+        $this->userItemData = $userItemData;
+        $this->mediaUserDataController = $mediaUserDataController;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -167,6 +179,16 @@ class WebPortalRouter
             // Watch history routes
             $r->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
             $r->delete('/api/v1/users/me/history', [$this, 'clearHistory']);
+
+            // Per-user favorites + ratings (E10). Handlers live on
+            // MediaUserDataController (referenced from here, the single place
+            // both entry points dispatch /api/* to). When the controller is not
+            // wired the routes respond 503, mirroring the history/settings
+            // routes' "not configured" behaviour.
+            $r->post('/api/v1/media/{id}/favorite', [$this, 'addFavorite']);
+            $r->delete('/api/v1/media/{id}/favorite', [$this, 'removeFavorite']);
+            $r->put('/api/v1/media/{id}/rating', [$this, 'setRating']);
+            $r->delete('/api/v1/media/{id}/rating', [$this, 'clearRating']);
 
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
@@ -363,7 +385,34 @@ class WebPortalRouter
             $shaped['stream_url'] = \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $itemId . '/stream');
         }
 
+        // Per-user favorite/rating block (E10). ADD-ONLY — never disturb existing
+        // keys (e.g. the flat `actors` landmine). `null` when unauthenticated;
+        // {favorite:false, rating:null} when authenticated but no row exists yet.
+        $shaped['user_data'] = $this->resolveUserData($request, $itemId);
+
         return (new Response())->json(['item' => $shaped]);
+    }
+
+    /**
+     * Resolve the per-user favorite/rating block for a media item.
+     *
+     * @param Request $request The HTTP request (carries the authenticated userId).
+     * @param string  $itemId  The media item UUID (already extracted + validated).
+     *
+     * @return array{favorite: bool, rating: int|null}|null `null` when the
+     *         request is unauthenticated or the favorites store is not wired;
+     *         the user's data otherwise (defaulting to not-favorited/unrated when
+     *         no row exists).
+     */
+    private function resolveUserData(Request $request, string $itemId): ?array
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '' || $itemId === '' || $this->userItemData === null) {
+            return null;
+        }
+
+        return $this->userItemData->getItemData($userId, $itemId)
+            ?? ['favorite' => false, 'rating' => null];
     }
 
     /**
@@ -833,6 +882,77 @@ class WebPortalRouter
         $this->watchHistory->clearHistory($profileId);
 
         return (new Response())->json(['message' => 'Watch history cleared']);
+    }
+
+    /**
+     * Mark a media item as a favorite for the authenticated user (E10).
+     *
+     * Thin delegate to {@see MediaUserDataController::addFavorite()}; responds
+     * 503 when the favorites feature is not wired (mirrors history/settings).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/favorite
+     */
+    public function addFavorite(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->addFavorite($request, $params);
+    }
+
+    /**
+     * Remove a media item from the authenticated user's favorites (E10).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint DELETE /api/v1/media/{id}/favorite
+     */
+    public function removeFavorite(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->removeFavorite($request, $params);
+    }
+
+    /**
+     * Set the authenticated user's personal rating for a media item (E10).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint PUT /api/v1/media/{id}/rating
+     */
+    public function setRating(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->setRating($request, $params);
+    }
+
+    /**
+     * Clear the authenticated user's personal rating for a media item (E10).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint DELETE /api/v1/media/{id}/rating
+     */
+    public function clearRating(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->clearRating($request, $params);
     }
 
     /**

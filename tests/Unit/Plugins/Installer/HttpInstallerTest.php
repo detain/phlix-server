@@ -619,6 +619,114 @@ final class HttpInstallerTest extends TestCase
         $this->assertSame('phlix-plugin-fromdir', $manifest->name);
     }
 
+    public function test_install_rejects_zip_with_parent_traversal_entry(): void
+    {
+        // S9 (zip-slip): an archive whose entry name climbs out of the
+        // extraction dir (`../evil`) must be refused, with nothing written
+        // outside the target tree.
+        $zipPath = $this->work . '/slip-' . uniqid('', true) . '.zip';
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($zipPath, \ZipArchive::CREATE) === true);
+        $zip->addFromString('plugin.json', (string) json_encode($this->validManifest()));
+        $zip->addFromString('../evil.txt', 'pwned');
+        $zip->close();
+
+        $sentinel = dirname($this->base) . '/evil.txt';
+        @unlink($sentinel);
+
+        try {
+            $this->installer()->install('file://' . $zipPath);
+            $this->fail('Expected PluginInstallException on zip-slip entry');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('escapes the extraction directory', $e->getMessage());
+        }
+
+        // No file written above the install base, and nothing staged.
+        $this->assertFileDoesNotExist($sentinel);
+        $this->assertDirectoryDoesNotExist($this->base . '/phlix-plugin-fromdir');
+    }
+
+    public function test_install_rejects_zip_with_absolute_path_entry(): void
+    {
+        // S9: an absolute-path entry (`/tmp/...`) must be refused before any
+        // extraction occurs.
+        $abs = $this->work . '/abs-target-' . uniqid('', true) . '.txt';
+        @unlink($abs);
+
+        $zipPath = $this->work . '/abs-' . uniqid('', true) . '.zip';
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($zipPath, \ZipArchive::CREATE) === true);
+        $zip->addFromString('plugin.json', (string) json_encode($this->validManifest()));
+        // `$abs` is an absolute path (starts with `/`) — used verbatim as the
+        // archive entry name so it trips the absolute-path guard.
+        $zip->addFromString($abs, 'pwned');
+        $zip->close();
+
+        try {
+            $this->installer()->install('file://' . $zipPath);
+            $this->fail('Expected PluginInstallException on absolute-path entry');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('absolute path', $e->getMessage());
+        }
+
+        $this->assertFileDoesNotExist($abs);
+        $this->assertDirectoryDoesNotExist($this->base . '/phlix-plugin-fromdir');
+    }
+
+    public function test_install_rejects_zip_with_encoded_traversal_entry(): void
+    {
+        // S9: a single layer of percent-encoded traversal must also be caught
+        // (decoded once before the lexical climb check).
+        $zipPath = $this->work . '/enc-' . uniqid('', true) . '.zip';
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($zipPath, \ZipArchive::CREATE) === true);
+        $zip->addFromString('plugin.json', (string) json_encode($this->validManifest()));
+        $zip->addFromString('%2e%2e/evil-enc.txt', 'pwned');
+        $zip->close();
+
+        $sentinel = dirname($this->base) . '/evil-enc.txt';
+        @unlink($sentinel);
+
+        $this->expectException(PluginInstallException::class);
+        try {
+            $this->installer()->install('file://' . $zipPath);
+        } finally {
+            $this->assertFileDoesNotExist($sentinel);
+        }
+    }
+
+    public function test_extractTarGz_leaves_no_intermediate_tar_when_extraction_throws(): void
+    {
+        // B6: PharData::decompress('.tar') writes a sibling `.tar` BEFORE the
+        // extraction runs. If extractTo() then throws (here: the target path is
+        // a regular file, not a directory), the `finally` must still unlink that
+        // intermediate `.tar` so it is never leaked into the temp dir.
+        $gzPath = $this->makeTarGzFromDir($this->validPluginSource());
+        $tarSibling = (string) preg_replace('/\.tar\.gz$/', '.tar', $gzPath);
+
+        // Force extractTo() to throw AFTER decompress() succeeds by handing it a
+        // target that is a file rather than a directory.
+        $fileTarget = $this->work . '/not-a-dir-' . uniqid('', true);
+        file_put_contents($fileTarget, 'x');
+
+        $ref = new \ReflectionMethod(HttpInstaller::class, 'extractTarGz');
+        $ref->setAccessible(true);
+
+        try {
+            $ref->invoke($this->installer(), $gzPath, $fileTarget);
+            $this->fail('Expected PluginInstallException from extractTo on a file target');
+        } catch (PluginInstallException $e) {
+            $this->assertStringContainsString('Failed to extract', $e->getMessage());
+        }
+
+        // The decompressed intermediate `.tar` must have been cleaned up by the
+        // `finally`, even though extraction threw.
+        $this->assertFileDoesNotExist(
+            $tarSibling,
+            'extractTarGz leaked the intermediate .tar after the extraction failed',
+        );
+    }
+
     private function validPluginSource(): string
     {
         $source = $this->work . '/plugin-source-' . uniqid('', true);

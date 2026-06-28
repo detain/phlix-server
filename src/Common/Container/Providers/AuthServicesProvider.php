@@ -51,6 +51,72 @@ final class AuthServicesProvider implements ServiceProviderInterface
     public const DEFAULT_JWT_SECRET = 'default-secret-change-me';
 
     /**
+     * Boot-time guard: refuse to serve when the JWT signing key is missing or
+     * still the shipped {@see self::DEFAULT_JWT_SECRET} sentinel.
+     *
+     * The secret protects far more than JWTs: {@see \Phlix\Auth\SignedUrl::fromEnv()}
+     * HMAC-derives the media signed-URL key from `JWT_SECRET` whenever
+     * `PHLIX_SIGNED_URL_SECRET` is unset, so a default/empty `JWT_SECRET` means
+     * forgeable auth tokens AND forgeable stream URLs. We therefore fail fast at
+     * boot (called from `start.php` before `Worker::runAll()`) rather than come up
+     * with a guessable key.
+     *
+     * The check is skipped only in the test environment — when
+     * `PHLIX_ENV === 'test'` or a PHPUnit runtime constant is defined — so the
+     * suite (which never sets a real secret) is unaffected.
+     *
+     * @param string|false|null $secret Override for the configured secret; defaults
+     *                                  to `getenv('JWT_SECRET')`. A test seam — the
+     *                                  string `false`/`null` model an unset env var.
+     *
+     * @throws \RuntimeException When the secret is empty or equals the sentinel in
+     *                           a non-test environment.
+     *
+     * @return void
+     *
+     * @since 0.55.0
+     */
+    public static function assertSecretConfigured(string|false|null $secret = null): void
+    {
+        if (self::isTestEnvironment()) {
+            return;
+        }
+
+        $value = (string) ($secret ?? getenv('JWT_SECRET') ?: '');
+
+        if ($value === '') {
+            throw new \RuntimeException(
+                'CRITICAL: JWT_SECRET is not set. Refusing to start with an empty signing key — '
+                . 'JWTs and media signed URLs would be unsigned/forgeable. '
+                . 'Set a high-entropy JWT_SECRET environment variable (e.g. `openssl rand -hex 32`) '
+                . 'before starting the server.'
+            );
+        }
+
+        if ($value === self::DEFAULT_JWT_SECRET) {
+            throw new \RuntimeException(
+                'CRITICAL: JWT_SECRET is still the shipped default ("' . self::DEFAULT_JWT_SECRET . '"). '
+                . 'Refusing to start with a guessable signing key — JWTs and media signed URLs would be forgeable. '
+                . 'Set a unique high-entropy JWT_SECRET environment variable (e.g. `openssl rand -hex 32`) '
+                . 'before starting the server.'
+            );
+        }
+    }
+
+    /**
+     * Whether the secret guard should be bypassed because the process is running
+     * under the test harness.
+     *
+     * @return bool
+     */
+    private static function isTestEnvironment(): bool
+    {
+        return getenv('PHLIX_ENV') === 'test'
+            || defined('PHPUNIT_COMPOSER_INSTALL')
+            || defined('__PHPUNIT_PHAR__');
+    }
+
+    /**
      * Register the auth bindings.
      *
      * @param ContainerBuilder<\DI\Container> $builder

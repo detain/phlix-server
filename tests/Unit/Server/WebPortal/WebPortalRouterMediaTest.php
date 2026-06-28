@@ -558,4 +558,123 @@ class WebPortalRouterMediaTest extends TestCase
             $this->assertSame(401, $response->statusCode, "{$path} must require auth");
         }
     }
+
+    public function testGetMediaFacetsReturnsGenresList(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('distinctGenres')
+            ->with($this->isNull())
+            ->willReturn(['Action', 'Drama', 'Sci-Fi']);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = [];
+
+        $response = $router->getMediaFacets($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('genres', $body);
+        $this->assertSame(['Action', 'Drama', 'Sci-Fi'], $body['genres']);
+    }
+
+    public function testGetMediaFacetsScopesToLibraryWhenLibraryIdProvided(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('distinctGenres')
+            ->with($this->equalTo('lib-42'))
+            ->willReturn(['Documentary']);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['libraryId' => 'lib-42'];
+
+        $response = $router->getMediaFacets($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(['Documentary'], $body['genres']);
+    }
+
+    public function testGetMediaFacetsTreatsBlankLibraryIdAsUnscoped(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('distinctGenres')
+            ->with($this->isNull())
+            ->willReturn([]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['libraryId' => ''];
+
+        $response = $router->getMediaFacets($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame([], $body['genres']);
+    }
+
+    public function testGetMediaFacetsReturnsEmptyGenresForEmptyLibrary(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('distinctGenres')->willReturn([]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['libraryId' => 'lib-empty'];
+
+        $response = $router->getMediaFacets($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(['genres' => []], $body);
+    }
+
+    public function testDispatchRequiresAuthForMediaFacets(): void
+    {
+        // Same auth gate as the media listing: no userId → 401 and the
+        // repository is never touched (the genre set can't be enumerated
+        // unauthenticated).
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->never())->method('distinctGenres');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media/facets';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(401, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
+    }
+
+    public function testDispatchAllowsMediaFacetsForAuthenticatedUser(): void
+    {
+        // The static `/facets` segment must route to getMediaFacets, not be
+        // swallowed by `/api/v1/media/{id}` (registration order guards this).
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('distinctGenres')
+            ->willReturn(['Action']);
+        $itemRepo->expects($this->never())->method('findById');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media/facets';
+        $request->userId = 'user-1';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(['genres' => ['Action']], $body);
+    }
 }

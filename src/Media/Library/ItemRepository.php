@@ -1193,6 +1193,68 @@ class ItemRepository
     }
 
     /**
+     * The DISTINCT, sorted set of genres present across media items — the
+     * authoritative genre facet list for the media-filter UI.
+     *
+     * Genres live in the `metadata_json` JSON column under `$.genres` (an
+     * array of strings). Rather than load every row into PHP and unpack the
+     * arrays (an unbounded `SELECT *` scan — the P1 finding), this unnests the
+     * array set-side via `JSON_TABLE` (MySQL 8.0+) so the database returns one
+     * already-DISTINCT, already-sorted column. Blank/non-string elements are
+     * filtered out in SQL so the result is non-empty strings only.
+     *
+     * Scoped to one library when `$libraryId` is given (bound, never
+     * interpolated); otherwise it spans every library — the caller is
+     * responsible for the auth gate that decides which libraries the request
+     * may see (mirrors {@see self::query()}, which is likewise unscoped by
+     * default and gated at the route).
+     *
+     * @param string|null $libraryId Optional library UUID to scope the facet
+     *                                set to one library.
+     *
+     * @return list<string> Distinct genre names, ascending, de-duplicated,
+     *                       non-empty. Empty when no items / no genres.
+     */
+    public function distinctGenres(?string $libraryId = null): array
+    {
+        // Unnest metadata_json.$.genres[*] into one row per genre via JSON_TABLE
+        // (MySQL 8.0+), then DISTINCT + ORDER set-side so PHP never materialises
+        // the full media_items table. NULL/missing `$.genres` simply yields no
+        // JSON_TABLE rows for that item. The genre column is bounded to 255 chars
+        // (genre names are short labels); over-long values are truncated, not
+        // dropped, so the facet still appears.
+        $wheres = ["g.genre IS NOT NULL", "g.genre <> ''"];
+        $bindings = [];
+
+        if ($libraryId !== null) {
+            $wheres[] = 'mi.library_id = ?';
+            $bindings[] = $libraryId;
+        }
+
+        $sql = "SELECT DISTINCT g.genre AS genre
+                FROM media_items mi,
+                     JSON_TABLE(
+                         mi.metadata_json,
+                         '\$.genres[*]' COLUMNS (genre VARCHAR(255) PATH '\$')
+                     ) AS g
+                WHERE " . implode(' AND ', $wheres) . "
+                ORDER BY g.genre ASC";
+
+        $rows = $this->db->query($sql, $bindings);
+
+        $genres = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (is_array($row) && isset($row['genre']) && is_string($row['genre']) && $row['genre'] !== '') {
+                    $genres[] = $row['genre'];
+                }
+            }
+        }
+
+        return $genres;
+    }
+
+    /**
      * Normalizes the sort field to a safe column name.
      *
      * @param string $sort Raw sort field from query param

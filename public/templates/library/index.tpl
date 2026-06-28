@@ -22,13 +22,13 @@
             </select>
             <select name="yearFrom" class="filter-select">
                 <option value="">From Year</option>
-                {for $y=2026 downto 1970}
+                {for $y=2026 to 1970 step -1}
                 <option value="{$y}" {if $smarty.get.yearFrom == $y}selected{/if}>{$y}</option>
                 {/for}
             </select>
             <select name="yearTo" class="filter-select">
                 <option value="">To Year</option>
-                {for $y=2026 downto 1970}
+                {for $y=2026 to 1970 step -1}
                 <option value="{$y}" {if $smarty.get.yearTo == $y}selected{/if}>{$y}</option>
                 {/for}
             </select>

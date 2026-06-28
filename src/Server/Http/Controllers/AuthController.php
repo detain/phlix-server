@@ -180,16 +180,40 @@ class AuthController
     /**
      * Handles token refresh requests.
      *
+     * The refresh token is sourced, in priority order, from:
+     *   1. the request body / JSON `refresh_token` field (backwards-compatible
+     *      with existing CLI/native clients that POST the token explicitly), then
+     *   2. the `phlix_refresh` HttpOnly cookie set at login — this is what the
+     *      in-memory-access-token web/native flow uses, where JS never sees the
+     *      refresh credential and so cannot put it in the body.
+     *
+     * On success the response carries a fresh access + refresh token pair AND
+     * re-issues both auth cookies, rotating the refresh cookie so the new
+     * credential replaces the old one (the previous cookie value is overwritten
+     * with the same HttpOnly/Secure/SameSite attributes login uses).
+     *
+     * The raw refresh token is never logged.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters (unused)
      * @return Response JSON response with new tokens or error
      *
-     * @required_fields refresh_token
+     * @required_fields refresh_token (body) OR phlix_refresh (cookie)
      */
     public function refresh(Request $request, array $params): Response
     {
         $data = $request->body;
         $refreshToken = $data['refresh_token'] ?? null;
+
+        // Body token takes precedence (existing clients keep working); fall
+        // back to the HttpOnly refresh cookie when the body omits it — read the
+        // same way the entry points read SESSION_COOKIE (see HttpHandler).
+        if (!is_string($refreshToken) || $refreshToken === '') {
+            $cookieToken = $request->getCookie(self::REFRESH_COOKIE);
+            if (is_string($cookieToken) && $cookieToken !== '') {
+                $refreshToken = $cookieToken;
+            }
+        }
 
         if (!is_string($refreshToken) || $refreshToken === '') {
             return (new Response())->status(400)->json([
@@ -199,7 +223,11 @@ class AuthController
 
         try {
             $result = $this->authManager->refreshToken($refreshToken);
-            return (new Response())->json($result);
+            $response = (new Response())->json($result);
+            // Rotate the auth cookies so the browser/native httpOnly flow keeps
+            // a valid refresh credential without JS ever touching it.
+            $this->attachAuthCookies($response, $result);
+            return $response;
         } catch (InvalidArgumentException $e) {
             return (new Response())->status(401)->json(['error' => $e->getMessage()]);
         }
@@ -283,17 +311,34 @@ class AuthController
      */
     private function browserAuthResponse(array $authResponse, string $redirectTo): Response
     {
+        $response = (new Response())->redirect($redirectTo);
+        $this->attachAuthCookies($response, $authResponse);
+        return $response;
+    }
+
+    /**
+     * Queue the access + refresh auth cookies onto a response.
+     *
+     * Single source of truth for the auth-cookie attributes so the browser
+     * login redirect ({@see self::browserAuthResponse()}) and the token
+     * {@see self::refresh()} rotation set cookies identically — HttpOnly so XSS
+     * can't read them, Secure so they only ride HTTPS, SameSite=Lax so top-level
+     * navigations still carry them. The access cookie expires with the JWT
+     * (`expires_in`); the refresh cookie gets a 7-day lifetime matching the
+     * refresh-token TTL. Empty token values are skipped.
+     *
+     * @param array<string, mixed> $authResponse The shape returned by
+     *        AuthManager (access_token, refresh_token, expires_in, user).
+     */
+    private function attachAuthCookies(Response $response, array $authResponse): void
+    {
         $access = is_string($authResponse['access_token'] ?? null) ? $authResponse['access_token'] : '';
         $refresh = is_string($authResponse['refresh_token'] ?? null) ? $authResponse['refresh_token'] : '';
         $expiresIn = is_int($authResponse['expires_in'] ?? null) ? $authResponse['expires_in'] : 3600;
 
         $secure = self::cookiesSecure();
 
-        $response = (new Response())->redirect($redirectTo);
         if ($access !== '') {
-            // Secure so the credential is only ever sent over HTTPS;
-            // HttpOnly so XSS can't read it; SameSite=Lax so top-level
-            // navigations from /login still carry it.
             $response->cookie(
                 self::SESSION_COOKIE,
                 $access,
@@ -313,7 +358,6 @@ class AuthController
                 sameSite: 'Lax',
             );
         }
-        return $response;
     }
 
     /**

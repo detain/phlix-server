@@ -91,6 +91,9 @@ class SyncPlayManager
     /** @var int Position tolerance in milliseconds for sync detection */
     private int $positionTolerance;
 
+    /** @var SyncPlaySnapshotService|null Snapshot service for DB publishing (SP5) */
+    private ?SyncPlaySnapshotService $snapshotService = null;
+
     public function __construct(
         ?StructuredLogger $logger = null,
         int $positionTolerance = self::DEFAULT_POSITION_TOLERANCE
@@ -119,6 +122,52 @@ class SyncPlayManager
     {
         $this->messageHandler = $messageHandler;
         $this->registerMessageHandlers();
+    }
+
+    /**
+     * Set the snapshot service for DB publishing (SP5).
+     *
+     * The snapshot service is used to publish group state changes to the
+     * database after each mutation. This allows HTTP/REST workers to read
+     * the authoritative state from the WS worker.
+     *
+     * @param SyncPlaySnapshotService $service The snapshot service
+     * @return void
+     */
+    public function setSnapshotService(SyncPlaySnapshotService $service): void
+    {
+        $this->snapshotService = $service;
+    }
+
+    /**
+     * Publish a snapshot for a specific group to the database.
+     *
+     * Called internally after mutations if a snapshot service is configured.
+     *
+     * @param string $groupId The group ID to publish
+     * @return void
+     */
+    private function publishSnapshot(string $groupId): void
+    {
+        if ($this->snapshotService === null) {
+            return;
+        }
+
+        $group = $this->groups[$groupId] ?? null;
+        if ($group !== null) {
+            $this->snapshotService->publishGroup($group);
+        }
+    }
+
+    /**
+     * Remove a group snapshot from the database.
+     *
+     * @param string $groupId The group ID to remove
+     * @return void
+     */
+    private function removeSnapshot(string $groupId): void
+    {
+        $this->snapshotService?->removeGroup($groupId);
     }
 
     /**
@@ -275,6 +324,9 @@ class SyncPlayManager
             'name' => $name,
         ]);
 
+        // SP5: Publish snapshot so HTTP workers can read the authoritative state
+        $this->publishSnapshot($groupId);
+
         return [
             'success' => true,
             'group' => $group->getState(),
@@ -347,6 +399,9 @@ class SyncPlayManager
             'member_name' => $memberName,
         ], [$memberId]);
 
+        // SP5: Publish snapshot so HTTP workers can read the authoritative state
+        $this->publishSnapshot($groupId);
+
         return [
             'success' => true,
             'group' => $group->getState(),
@@ -398,6 +453,8 @@ class SyncPlayManager
         if ($group->getMemberCount() === 0) {
             unset($this->groups[$groupId]);
             $this->log('info', 'Group removed (empty)', ['group_id' => $groupId]);
+            // SP5: Remove snapshot since group is deleted
+            $this->removeSnapshot($groupId);
         } elseif ($wasHost) {
             // Broadcast host change
             $newHostId = $group->getHostId();
@@ -405,6 +462,11 @@ class SyncPlayManager
                 'elected_id' => $newHostId,
                 'elected_by' => $memberId,
             ]);
+            // SP5: Publish snapshot since host changed
+            $this->publishSnapshot($groupId);
+        } else {
+            // SP5: Publish snapshot since member was removed
+            $this->publishSnapshot($groupId);
         }
 
         $this->log('info', 'Member left group', [
@@ -528,6 +590,9 @@ class SyncPlayManager
 
         $group->updatePlayback(GroupState::STATE_PLAYING, $position);
 
+        // SP5: Publish snapshot so HTTP workers can see playback state
+        $this->publishSnapshot($groupId);
+
         $playbackFrame = [
             'member_id' => $memberId,
             'position' => $position,
@@ -577,6 +642,9 @@ class SyncPlayManager
 
         $group->updatePlayback(GroupState::STATE_PAUSED, $position);
 
+        // SP5: Publish snapshot so HTTP workers can see playback state
+        $this->publishSnapshot($groupId);
+
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_PAUSE, [
             'member_id' => $memberId,
             'position' => $position,
@@ -620,6 +688,9 @@ class SyncPlayManager
         $serverTime = self::intFromMixed($payload['server_time'] ?? time());
 
         $group->setPlaybackPosition($toPosition);
+
+        // SP5: Publish snapshot so HTTP workers can see playback state
+        $this->publishSnapshot($groupId);
 
         $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_SEEK, [
             'member_id' => $memberId,

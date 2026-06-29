@@ -8,6 +8,8 @@ use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Session\PlaybackController;
 use Phlix\Session\SessionManager;
+use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Session\SyncPlay\SyncPlaySnapshotService;
 use Phlix\Stats\StatsCollector;
 use Psr\EventDispatcher\EventDispatcherInterface;
 
@@ -15,8 +17,9 @@ use function DI\autowire;
 use function DI\get;
 
 /**
- * Registers session-related services: device-session management and
- * the playback controller used by continue-watching.
+ * Registers session-related services: device-session management,
+ * the playback controller used by continue-watching, and SyncPlay
+ * state management.
  *
  * @internal Phlix-internal service provider.
  *
@@ -50,6 +53,18 @@ final class SessionServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('logger', get('logger.session'))
                 ->constructorParameter('eventDispatcher', get(EventDispatcherInterface::class))
                 ->constructorParameter('statsCollector', get(StatsCollector::class)),
+
+            // SyncPlaySnapshotService: reads SyncPlay state snapshots from DB.
+            // The authoritative state lives in the WS worker's SyncPlayManager;
+            // this service provides a read-only view for HTTP/REST workers.
+            SyncPlaySnapshotService::class => autowire(),
+
+            // SyncPlayManager: registered as a singleton within each worker
+            // process. The WS worker (count=1) owns the authoritative state
+            // and publishes snapshots after each mutation. HTTP workers use
+            // this for local state only (mutations are deprecated in REST).
+            SyncPlayManager::class => autowire()
+                ->constructorParameter('logger', get('logger.session')),
         ]);
     }
 }

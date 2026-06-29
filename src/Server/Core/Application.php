@@ -1246,6 +1246,11 @@ class Application
         // Storage card has data (nothing else writes stats_storage).
         $this->startStorageSnapshotTimer();
 
+        // Start the transcode stale-job reaper so wedged encodes free their
+        // concurrency slot promptly (default: checks every 45 s, kills jobs
+        // older than 120 s or with no segment within 60 s).
+        $this->startTranscodeReaperTimer();
+
         $request = Request::fromGlobals();
 
         // Build the final handler that dispatches to the router
@@ -1674,6 +1679,41 @@ class Application
             );
         } catch (\Throwable $e) {
             $logger->error('Failed to start storage-snapshot timer', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Starts the periodic transcode stale-job reaper.
+     *
+     * Marks 'running' jobs as 'failed' when they exceed the stale age threshold
+     * or fail to produce a segment within the startup window. Prevents ghost
+     * rows from permanently occupying concurrency slots after a worker restart
+     * or a wedged FFmpeg process.
+     *
+     * @return void
+     *
+     * @since 0.26.0
+     */
+    private function startTranscodeReaperTimer(): void
+    {
+        $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::MEDIA);
+
+        try {
+            /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
+            $transcodeManager = $this->container?->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+
+            if ($transcodeManager === null) {
+                $logger->debug('TranscodeManager not available; skipping reaper timer');
+
+                return;
+            }
+
+            $transcodeManager->startReaperTimer();
+            $logger->debug('Transcode reaper timer started');
+        } catch (\Throwable $e) {
+            $logger->error('Failed to start transcode reaper timer', [
                 'error' => $e->getMessage(),
             ]);
         }

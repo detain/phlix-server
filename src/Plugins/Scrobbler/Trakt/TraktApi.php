@@ -161,45 +161,57 @@ class TraktApi
      */
     public function refreshAfterAuthFailure(string $refreshToken): array
     {
-        static $inFlightRefresh = null;
-        static $lockFile = '/tmp/trakt_refresh.lock';
+        static $inFlightRefresh = [];
+        static $lockFile = null;
 
-        // Phase 1: Same-process single-flight (Workerman coroutines on same worker)
-        while ($inFlightRefresh === 'pending') {
-            usleep(5000); // 5ms - yields to event loop in async context
+        if ($lockFile === null) {
+            $lockFile = sys_get_temp_dir() . '/phlix_trakt_refresh.lock';
         }
 
-        if (is_array($inFlightRefresh)) {
+        // Key cache by token hash to avoid cross-token cache pollution
+        $tokenKey = md5($refreshToken);
+
+        // Phase 1: Same-process single-flight (Workerman coroutines on same worker)
+        // Use \Co\sleep to yield to the event loop instead of blocking with usleep()
+        while (isset($inFlightRefresh[$tokenKey]) && $inFlightRefresh[$tokenKey] === 'pending') {
+            if (function_exists('\Co\sleep')) {
+                \Co\sleep(0.005); // 5ms - yields to event loop in async context
+            } else {
+                usleep(5000); // Fallback for non-Swoole (unit tests)
+            }
+        }
+
+        if (isset($inFlightRefresh[$tokenKey]) && is_array($inFlightRefresh[$tokenKey])) {
             /** @var array<string, mixed> $result */
-            $result = $inFlightRefresh;
+            $result = $inFlightRefresh[$tokenKey];
 
             return $result;
         }
 
-        $inFlightRefresh = 'pending';
+        $inFlightRefresh[$tokenKey] = 'pending';
 
         // Phase 2: Cross-process mutex via flock()
         $fp = fopen($lockFile, 'c+');
         if (!$fp) {
-            $inFlightRefresh = null;
+            unset($inFlightRefresh[$tokenKey]);
             throw new TraktApiException('Could not open refresh lock file');
         }
 
         if (!flock($fp, LOCK_EX)) {
             fclose($fp);
-            $inFlightRefresh = null;
+            unset($inFlightRefresh[$tokenKey]);
             throw new TraktApiException('Could not acquire refresh lock');
         }
 
         try {
             $result = $this->refreshAccessToken($refreshToken);
-            $inFlightRefresh = $result;
+            $inFlightRefresh[$tokenKey] = $result;
             flock($fp, LOCK_UN);
             fclose($fp);
 
             return $result;
         } catch (\Throwable $e) {
-            $inFlightRefresh = null;
+            unset($inFlightRefresh[$tokenKey]);
             flock($fp, LOCK_UN);
             fclose($fp);
 

@@ -354,18 +354,25 @@ final class TraktPlugin implements LifecycleInterface
             return false;
         }
 
+        // Key cache by token hash to avoid cross-token cache pollution
+        $tokenKey = md5($this->settings->refreshToken);
+
         // If another call is already refreshing, spin until it completes
-        while ($inFlightRefresh === 'pending') {
-            usleep(5000); // 5ms - yields to event loop in async context
+        // Use \Co\sleep to yield to the event loop instead of blocking with usleep()
+        while (isset($inFlightRefresh[$tokenKey]) && $inFlightRefresh[$tokenKey] === 'pending') {
+            if (function_exists('\Co\sleep')) {
+                \Co\sleep(0.005); // 5ms - yields to event loop in async context
+            } else {
+                usleep(5000); // Fallback for non-Swoole (unit tests)
+            }
         }
 
-        // If we already have a completed refresh result, return it
-        if (is_array($inFlightRefresh)) {
+        if (isset($inFlightRefresh[$tokenKey]) && is_array($inFlightRefresh[$tokenKey])) {
             // Don't null out here - let subsequent calls use the same result
             return true;
         }
 
-        $inFlightRefresh = 'pending';
+        $inFlightRefresh[$tokenKey] = 'pending';
 
         try {
             $refreshResult = $this->api->refreshAfterAuthFailure($this->settings->refreshToken);
@@ -387,20 +394,20 @@ final class TraktPlugin implements LifecycleInterface
                 $this->setRefreshToken($newRefreshToken);
             }
 
-            $inFlightRefresh = $refreshResult;
+            $inFlightRefresh[$tokenKey] = $refreshResult;
 
             $this->logger?->info('Trakt: token refreshed successfully');
 
             return true;
         } catch (TraktApiException $e) {
-            $inFlightRefresh = null;
+            unset($inFlightRefresh[$tokenKey]);
             $this->logger?->warning('Trakt: token refresh failed', [
                 'error' => $e->getMessage(),
             ]);
 
             return false;
         } catch (\Throwable $e) {
-            $inFlightRefresh = null;
+            unset($inFlightRefresh[$tokenKey]);
             $this->logger?->error('Trakt: token refresh threw', [
                 'error' => $e->getMessage(),
             ]);

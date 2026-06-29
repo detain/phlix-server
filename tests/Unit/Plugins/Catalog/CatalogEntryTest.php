@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Plugins\Catalog;
 
 use Phlix\Plugins\Catalog\CatalogEntry;
+use Phlix\Plugins\Catalog\CatalogEntryValidationException;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -72,6 +73,36 @@ final class CatalogEntryTest extends TestCase
             'missing repo'   => [['name' => 'phlix-plugin-anidb']],
             'blank name'     => [['name' => '   ', 'repo' => 'https://github.com/x/y']],
             'non-string name' => [['name' => 123, 'repo' => 'https://github.com/x/y']],
+        ];
+    }
+
+    /**
+     * @dataProvider invalidPluginNames
+     *
+     * @param string $name
+     */
+    public function test_throws_for_plugin_name_not_matching_pattern(string $name): void
+    {
+        $this->expectException(CatalogEntryValidationException::class);
+        $this->expectExceptionMessage('does not match the required pattern "phlix-plugin-…"');
+
+        CatalogEntry::fromArray([
+            'name' => $name,
+            'repo' => 'https://github.com/detain/phlix-plugin-x',
+        ]);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function invalidPluginNames(): array
+    {
+        return [
+            'no prefix'          => ['anidb'],
+            'wrong prefix'       => ['my-plugin-anidb'],
+            'uppercase prefix'   => ['Phlix-plugin-anidb'],
+            'just prefix'        => ['phlix-plugin-'],
+            'extra text before'  => ['x-phlix-plugin-anidb'],
         ];
     }
 

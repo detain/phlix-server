@@ -205,4 +205,48 @@ final class TitleSuffixStripperTest extends TestCase
     {
         $this->assertSame('Blade Runner', TitleSuffixStripper::strip('  Blade Runner Directors Cut  '));
     }
+
+    /**
+     * Step 13.3: an injected (admin-extended) suffix list is honoured — a CUSTOM
+     * phrase not in the built-in const peels when supplied.
+     */
+    public function testInjectedSuffixListStripsCustomPhrase(): void
+    {
+        $custom = ['imax edition', 'remux'];
+        $this->assertSame('Interstellar', TitleSuffixStripper::strip('Interstellar IMAX Edition', false, $custom));
+        $this->assertSame('Dune', TitleSuffixStripper::strip('Dune Remux', false, $custom));
+    }
+
+    /**
+     * When a list is injected, ONLY those phrases peel — a built-in phrase that
+     * the override omits is left intact (the override fully replaces the list).
+     */
+    public function testInjectedSuffixListReplacesBuiltins(): void
+    {
+        $custom = ['remux'];
+        // "directors cut" is a built-in phrase but NOT in the override → kept.
+        $this->assertSame('Blade Runner Directors Cut', TitleSuffixStripper::strip('Blade Runner Directors Cut', false, $custom));
+    }
+
+    /**
+     * A null OR empty injected list falls back to the built-in const — an empty
+     * admin override must never blank the noise list.
+     *
+     * @dataProvider emptyOverrideCases
+     *
+     * @param list<string>|null $suffixes
+     */
+    public function testNullOrEmptyOverrideFallsBackToConst(?array $suffixes): void
+    {
+        $this->assertSame('Blade Runner', TitleSuffixStripper::strip('Blade Runner Directors Cut', false, $suffixes));
+    }
+
+    /** @return array<string, array{0: list<string>|null}> */
+    public static function emptyOverrideCases(): array
+    {
+        return [
+            'null override'  => [null],
+            'empty override' => [[]],
+        ];
+    }
 }

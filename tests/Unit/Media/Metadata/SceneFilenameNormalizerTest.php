@@ -769,4 +769,39 @@ final class SceneFilenameNormalizerTest extends TestCase
 
         $this->assertSame('The Great Uncutting', $result['title']);
     }
+
+    /**
+     * Step 13.3: an injected (admin-extended) noise list strips a CUSTOM phrase
+     * that is not in the built-in const, end-to-end through normalize().
+     */
+    public function testNormalizeStripsInjectedCustomSuffix(): void
+    {
+        $custom = ['imax edition', 'remux'];
+        $result = SceneFilenameNormalizer::normalize('Interstellar IMAX Edition', $custom);
+
+        $this->assertSame('Interstellar', $result['title']);
+    }
+
+    /**
+     * Step 13.3: a CUSTOM suffix peels even after the bracketed-(YYYY) branch,
+     * confirming both strip() call sites thread the injected list.
+     */
+    public function testNormalizeStripsInjectedCustomSuffixWithBracketedYear(): void
+    {
+        $custom = ['imax edition'];
+        $result = SceneFilenameNormalizer::normalize('Interstellar IMAX Edition (2014)', $custom);
+
+        $this->assertSame('Interstellar', $result['title']);
+        $this->assertSame(2014, $result['year']);
+    }
+
+    /**
+     * Step 13.3: a null/empty injected list falls back to the built-in const, so
+     * the canonical phrases still strip (an empty override never blanks them).
+     */
+    public function testNormalizeEmptyInjectedListFallsBackToConst(): void
+    {
+        $this->assertSame('Blade Runner', SceneFilenameNormalizer::normalize('Blade Runner Directors Cut', null)['title']);
+        $this->assertSame('Blade Runner', SceneFilenameNormalizer::normalize('Blade Runner Directors Cut', [])['title']);
+    }
 }

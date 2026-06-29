@@ -6,6 +6,7 @@ namespace Phlix\Server\WebSocket;
 
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
+use Phlix\Auth\JwtHandler;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Session\SyncPlay\SyncPlayManager;
@@ -122,23 +123,47 @@ class WebSocketServer
     /**
      * Called when a new client connects.
      *
-     * Creates a Connection wrapper, adds it to the pool, and sends
-     * a welcome message with the connection ID.
+     * Validates JWT token from query string if present, then creates
+     * a Connection wrapper, adds it to the pool, and sends a welcome
+     * message with the connection ID.
      *
      * @param TcpConnection $connection The Workerman TCP connection
      * @return void
      */
     public function onConnect(TcpConnection $connection): void
     {
+        $token = $_GET['token'] ?? null;
+        $userId = null;
+
+        if (is_string($token) && $token !== '') {
+            $jwtSecret = $this->config['jwt_secret'] ?? null;
+            if (is_string($jwtSecret) && $jwtSecret !== '') {
+                $jwtHandler = new JwtHandler($jwtSecret);
+                $payload = $jwtHandler->validateToken($token);
+                if ($payload === null) {
+                    $connection->close();
+                    return;
+                }
+                $sub = $payload['sub'] ?? null;
+                $userId = is_string($sub) ? $sub : null;
+            }
+        }
+
         $wsConnection = new Connection($connection);
+
+        if (is_string($userId)) {
+            $wsConnection->setAuthenticated(true, $userId);
+        }
+
         $this->connections->add($wsConnection);
 
         $logger = LoggerFactory::get(LogChannels::WEBSOCKET);
         $logger->debug('New WebSocket connection', [
             'connection_id' => $wsConnection->getId(),
+            'authenticated' => $wsConnection->isAuthenticated(),
+            'user_id' => $wsConnection->getUserId(),
         ]);
 
-        // Send welcome message
         $wsConnection->sendMessage('connected', [
             'connection_id' => $wsConnection->getId(),
             'timestamp' => time(),

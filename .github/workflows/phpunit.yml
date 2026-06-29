@@ -143,10 +143,11 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: json, pcntl, posix, swoole
-          # This job only runs the Server unit subset and emits no coverage
-          # report, so skip the coverage driver entirely for speed.
-          coverage: none
+          extensions: json, pcntl, posix, swoole, pcov
+          # phpunit.xml sets failOnWarning="true"; with no coverage driver the
+          # runner emits "No code coverage driver available", which trips that
+          # flag and fails the job. PCOV is cheap, so enable it here too.
+          coverage: pcov
 
       - name: Build and enable php-uv
         run: |

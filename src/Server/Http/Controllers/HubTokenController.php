@@ -86,10 +86,17 @@ final class HubTokenController
                 ]);
         }
 
-        $serverToken = $this->jwtHandler->createAccessToken($claims->userId, [
+        $tokenClaims = [
             'hub_user_id' => $claims->userId,
             'server_id' => $claims->serverId,
-        ]);
+        ];
+
+        // Include the opaque_token claim if the hub JWT contained one
+        if ($claims->token !== '') {
+            $tokenClaims['opaque_token'] = $claims->token;
+        }
+
+        $serverToken = $this->jwtHandler->createAccessToken($claims->userId, $tokenClaims);
 
         return (new Response())->json([
             'server_session_token' => $serverToken,

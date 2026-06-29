@@ -128,6 +128,11 @@ final class HubJwtValidator implements HubJwtValidatorInterface
                 ? $payload['hub_user_id']
                 : (is_string($payload['sub'] ?? null) ? $payload['sub'] : '');
 
+            // Extract token or opaque_token claim from the hub JWT
+            $token = is_string($payload['token'] ?? null)
+                ? $payload['token']
+                : (is_string($payload['opaque_token'] ?? null) ? $payload['opaque_token'] : '');
+
             return new HubUserClaims(
                 userId: $hubUserId,
                 serverId: $payloadServerId,
@@ -135,6 +140,7 @@ final class HubJwtValidator implements HubJwtValidatorInterface
                 issuer: $payloadIss,
                 expiresAt: $payloadExp,
                 scope: $scope,
+                token: $token,
             );
         } catch (Throwable $e) {
             $this->logger->debug('Hub JWT validation failed: unexpected error', [

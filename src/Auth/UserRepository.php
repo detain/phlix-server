@@ -840,6 +840,117 @@ class UserRepository
     }
 
     /**
+     * Set or clear the must_change_password flag on a user account.
+     *
+     * S7+F1: When an admin resets a password, the user is forced to set a new
+     * password on next login before they can access any content.
+     *
+     * @param string $userId         Local user UUID.
+     * @param bool   $mustChange     Whether the user must change their password.
+     *
+     * @return void
+     *
+     * @since S7+F1
+     */
+    public function setMustChangePassword(string $userId, bool $mustChange): void
+    {
+        $this->db->query(
+            "UPDATE users SET must_change_password = ? WHERE id = ?",
+            [$mustChange ? 1 : 0, $userId],
+        );
+    }
+
+    /**
+     * Check if a user must change their password before accessing content.
+     *
+     * S7+F1: Gates login/refresh to require a password change when the flag is set.
+     *
+     * @param string $userId Local user UUID.
+     *
+     * @return bool True when must_change_password = 1, false otherwise.
+     *
+     * @since S7+F1
+     */
+    public function mustChangePassword(string $userId): bool
+    {
+        $result = $this->db->query(
+            "SELECT must_change_password FROM users WHERE id = ?",
+            [$userId],
+        );
+        $row = UserRow::firstFromMixed($result);
+        return UserRow::int($row, 'must_change_password', 0) === 1;
+    }
+
+    /**
+     * Store a one-time password reset token (hashed at rest).
+     *
+     * S7+F1: The token is hashed with password_hash() before storage so raw
+     * tokens never appear in the database. It expires after a configurable
+     * window (default 15 minutes / 900 seconds).
+     *
+     * @param string $userId       Local user UUID.
+     * @param string $hashedToken The hashed reset token (from password_hash).
+     * @param int    $expiresAt    Unix timestamp when this token expires.
+     *
+     * @return void
+     *
+     * @since S7+F1
+     */
+    public function setPasswordResetToken(string $userId, string $hashedToken, int $expiresAt): void
+    {
+        $this->db->query(
+            "UPDATE users SET password_reset_token = ?, password_reset_expires_at = ? WHERE id = ?",
+            [$hashedToken, $expiresAt, $userId],
+        );
+    }
+
+    /**
+     * Get the stored password reset token hash and expiry for a user.
+     *
+     * @param string $userId Local user UUID.
+     *
+     * @return array{token: string|null, expires_at: int|null}|null The stored
+     *         hashed token and expiry timestamp, or null if none set.
+     *
+     * @since S7+F1
+     */
+    public function getPasswordResetData(string $userId): ?array
+    {
+        $result = $this->db->query(
+            "SELECT password_reset_token, password_reset_expires_at FROM users WHERE id = ?",
+            [$userId],
+        );
+        $row = UserRow::firstFromMixed($result);
+        if ($row === null) {
+            return null;
+        }
+        return [
+            'token' => UserRow::string($row, 'password_reset_token'),
+            'expires_at' => UserRow::intOrNull($row, 'password_reset_expires_at'),
+        ];
+    }
+
+    /**
+     * Clear the stored password reset token and expiry.
+     *
+     * Called after a successful password change that was triggered by a
+     * reset token, or when the token expires.
+     *
+     * @param string $userId Local user UUID.
+     *
+     * @return void
+     *
+     * @since S7+F1
+     */
+    public function clearPasswordResetToken(string $userId): void
+    {
+        $this->db->query(
+            "UPDATE users SET password_reset_token = NULL, password_reset_expires_at = NULL WHERE id = ?",
+            [$userId],
+        );
+    }
+
+    /**
      * Generate a UUID v4 string.
      *
      * @return string UUID in standard format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx

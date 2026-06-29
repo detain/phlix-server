@@ -354,6 +354,47 @@ class ScanJobRepository
     }
 
     /**
+     * Return statistics about currently-running scan jobs.
+     *
+     * F6: Back the /admin/health/jobs endpoint alongside
+     * {@see \Phlix\Media\Transcoding\TranscodeManager::getTranscodeJobStats()}.
+     *
+     * @return array{running: int, oldest_age_seconds: int|null, oldest_started_at: string|null}
+     *         running: Number of jobs currently in `running` state.
+     *         oldest_age_seconds: Seconds since the oldest running job started, or null if none.
+     *         oldest_started_at: ISO-8601 timestamp of the oldest running job, or null.
+     *
+     * @since F6
+     */
+    public function getRunningJobStats(): array
+    {
+        $result = $this->db->query(
+            "SELECT id, started_at FROM library_scan_jobs WHERE status = 'running' ORDER BY started_at ASC"
+        );
+
+        if (!is_array($result) || count($result) === 0) {
+            return [
+                'running' => 0,
+                'oldest_age_seconds' => null,
+                'oldest_started_at' => null,
+            ];
+        }
+
+        $oldestRow = is_array($result[0]) ? $result[0] : [];
+        $startedAt = is_string($oldestRow['started_at'] ?? null)
+            ? strtotime((string) $oldestRow['started_at'])
+            : false;
+
+        return [
+            'running' => count($result),
+            'oldest_age_seconds' => $startedAt !== false ? time() - $startedAt : null,
+            'oldest_started_at' => $startedAt !== false
+                ? date('c', $startedAt)
+                : null,
+        ];
+    }
+
+    /**
      * Defensively decode a raw DB row into a typed associative array.
      *
      * Integer counters are cast to int, the `id`/`library_id`/`type`/`status`

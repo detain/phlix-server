@@ -513,6 +513,16 @@ class AuthManager
             throw AccountInactiveException::forStatus($status);
         }
 
+        // S7+F1: if the account has must_change_password set, block normal login
+        // and require the user to set a new password via the reset-token flow.
+        if ($this->userRepository->mustChangePassword($userId)) {
+            $this->auditLogger->logFailedAuth('password_change_required', [
+                'username' => $username,
+                'device_id' => $deviceId,
+            ]);
+            throw new PasswordChangeRequiredException();
+        }
+
         $this->clearRateLimit($clientIp);
 
         // Update last login
@@ -692,6 +702,16 @@ class AuthManager
                 'context' => 'refresh',
             ]);
             throw new \InvalidArgumentException('Account is not active');
+        }
+
+        // S7+F1: if the account has must_change_password set, block token
+        // refresh and require the user to set a new password via the reset-token flow.
+        if ($this->userRepository->mustChangePassword($userId)) {
+            $this->auditLogger->logFailedAuth('password_change_required', [
+                'user_id' => $userId,
+                'context' => 'refresh',
+            ]);
+            throw new \InvalidArgumentException('Password change required');
         }
 
         return $this->createAuthResponse($userId);

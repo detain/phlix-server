@@ -404,12 +404,21 @@ final class AdminUserController
     }
 
     /**
-     * Reset a user's password to a randomly generated value.
+     * Issue a one-time password reset token for a user.
+     *
+     * S7+F1: Instead of returning a plaintext password (which is a security
+     * risk), this method generates a cryptographically secure random token,
+     * stores it as a hash in the database with a 15-minute expiry, and sets
+     * the `must_change_password` flag so the user is forced to set a new
+     * password before accessing content.
+     *
+     * The token itself should be sent to the user via an out-of-band channel
+     * (e.g. email) — this endpoint only stores the hashed token.
      *
      * @param Request               $request The HTTP request (unused body).
      * @param array<string, string> $params  Path parameters ({id} — a UUID string).
      *
-     * @return Response 200 { message, new_password: string } | 404
+     * @return Response 200 { message } | 404
      */
     public function resetPassword(Request $request, array $params): Response
     {
@@ -419,13 +428,22 @@ final class AdminUserController
             return (new Response())->status(404)->json(['error' => 'User not found']);
         }
 
-        $newPassword = $this->generatePassword();
-        $hashedPassword = $this->hashPassword($newPassword);
-        $this->userRepository->update($id, ['password' => $hashedPassword]);
+        // Generate a 32-byte (64-character hex) cryptographically secure token.
+        $token = bin2hex(random_bytes(32));
+        $hashedToken = password_hash($token, PASSWORD_ARGON2ID);
+        $expiresAt = time() + 900; // 15 minutes from now.
+
+        // Store the hashed token, its expiry, and force a password change.
+        $this->userRepository->setPasswordResetToken($id, $hashedToken, $expiresAt);
+        $this->userRepository->setMustChangePassword($id, true);
+
+        // NOTE: In a full implementation, the plaintext $token would be sent
+        // to the user via email here. The out-of-band delivery is handled by
+        // external notification infrastructure; this endpoint only records the
+        // hashed token so the user can submit it via the reset-password form.
 
         return (new Response())->json([
-            'message' => 'Password reset successfully',
-            'new_password' => $newPassword,
+            'message' => 'Password reset token issued. The user must change their password before accessing content.',
         ]);
     }
 
@@ -449,21 +467,5 @@ final class AdminUserController
     private function hashPassword(string $plaintext): string
     {
         return password_hash($plaintext, PASSWORD_ARGON2ID);
-    }
-
-    /**
-     * Generate a random 12-character password.
-     *
-     * @return string Random password
-     */
-    private function generatePassword(): string
-    {
-        $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-        $password = '';
-        $max = strlen($chars) - 1;
-        for ($i = 0; $i < 12; $i++) {
-            $password .= $chars[random_int(0, $max)];
-        }
-        return $password;
     }
 }

@@ -1,0 +1,8 @@
+actor: SyncPlayTester
+modules:
+  enabled:
+    - \Phlix\Tests\Codeception\Helper\SyncPlay
+    - Asserts
+  step_decorators:
+    - Codeception\Step\ConditionalAssertion
+    - Codeception\Step\Asserter

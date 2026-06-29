@@ -32,6 +32,8 @@
         "workerman/workerman": "~5.1"
     },
     "require-dev": {
+        "codeception/codeception": "^5.3",
+        "codeception/module-asserts": "^3.2",
         "mockery/mockery": "^1.6",
         "phpstan/phpstan": "^2.0",
         "phpunit/phpunit": "^10.0",

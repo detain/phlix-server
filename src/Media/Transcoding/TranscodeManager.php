@@ -1021,6 +1021,34 @@ class TranscodeManager
     }
 
     /**
+     * Interval (seconds) between reaper runs — keeps the concurrency gate clean.
+     */
+    public const REAPER_INTERVAL = 45;
+
+    /**
+     * Age after which a still-'running' job is considered stale and reaped.
+     *
+     * Defaults to 120 s so a wedged encode frees its concurrency slot promptly
+     * without being so aggressive that a legitimately slow encode (e.g. 4K on
+     * a low-power machine) is killed mid-flight.
+     *
+     * @var int
+     */
+    public const STALE_JOB_MAX_AGE = 120;
+
+    /**
+     * Window (seconds) within which at least one CMAF segment must appear.
+     *
+     * A job that has been running longer than this without producing any
+     * segment is almost certainly wedged — ffmpeg is stuck and will never make
+     * progress, so the slot is freed immediately rather than waiting for the
+     * stale-age timer to fire.
+     *
+     * @var int
+     */
+    public const SEGMENT_PRODUCTION_TIMEOUT = 60;
+
+    /**
      * Reap DB-recorded 'running' jobs that are no longer alive, marking them
      * 'failed' so they stop counting against {@see $maxConcurrentTranscodes}.
      *
@@ -1035,19 +1063,25 @@ class TranscodeManager
      *
      *   - its working directory is gone (a live job creates that dir before it
      *     inserts the row, so a 'running' row without one is a corpse), or
-     *   - it started more than $maxAgeSeconds ago (a wedged / abandoned encode).
+     *   - it started more than STALE_JOB_MAX_AGE seconds ago (a wedged/abandoned
+     *     encode that has been running too long without completing), or
+     *   - it started more than SEGMENT_PRODUCTION_TIMEOUT seconds ago and has
+     *     produced zero segments (ffmpeg is stuck at the very beginning).
      *
-     * @param int $maxAgeSeconds Age after which a still-'running' job is stale.
+     * @param int $maxAgeSeconds Age after which a still-'running' job is stale
+     *                           (default STALE_JOB_MAX_AGE; pass a higher value
+     *                           to override for one call only).
      *
      * @return int Number of jobs reaped.
      */
-    public function reapStaleRunningJobs(int $maxAgeSeconds = 3600): int
+    public function reapStaleRunningJobs(int $maxAgeSeconds = self::STALE_JOB_MAX_AGE): int
     {
         $result = $this->db->query(
             "SELECT id, hls_dir, output_path, started_at FROM transcode_jobs WHERE status = 'running'"
         );
         $rows = RowMap::listFromMixed($result);
         $cutoff = time() - max(0, $maxAgeSeconds);
+        $segmentTimeoutCutoff = time() - self::SEGMENT_PRODUCTION_TIMEOUT;
         $reaped = 0;
 
         foreach ($rows as $row) {
@@ -1064,13 +1098,26 @@ class TranscodeManager
             $startedAt = is_string($row['started_at'] ?? null) ? strtotime((string) $row['started_at']) : false;
             $tooOld = $startedAt !== false && $startedAt < $cutoff;
 
-            if (!$dirGone && !$tooOld) {
+            // No segment produced within the timeout window → wedged at startup.
+            $noSegmentWithinTimeout = false;
+            if (!$dirGone && $startedAt !== false && $startedAt < $segmentTimeoutCutoff) {
+                $segmentFiles = glob("{$dir}/chunk-*.m4s");
+                $noSegmentWithinTimeout = ($segmentFiles === false || count($segmentFiles) === 0);
+            }
+
+            if (!$dirGone && !$tooOld && !$noSegmentWithinTimeout) {
                 continue;
             }
 
+            $error = match (true) {
+                $dirGone => 'reaped: working directory missing (dead process)',
+                $noSegmentWithinTimeout => 'reaped: no segment produced within ' . self::SEGMENT_PRODUCTION_TIMEOUT . 's (wedged)',
+                default => 'reaped: exceeded max age',
+            };
+
             $this->db->query(
                 "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ? AND status = 'running'",
-                [$dirGone ? 'reaped: working directory missing (dead process)' : 'reaped: exceeded max age', $id]
+                [$error, $id]
             );
             unset($this->activeJobs[$id]);
             $reaped++;
@@ -1145,6 +1192,38 @@ class TranscodeManager
         $result = $this->db->query("SELECT * FROM media_items WHERE id = ?", [$itemId]);
         $rows = RowMap::listFromMixed($result);
         return $rows[0] ?? null;
+    }
+
+    /**
+     * Starts a periodic timer that reaps stale transcode jobs.
+     *
+     * Runs every REAPER_INTERVAL seconds indefinitely via Workerman's
+     * Timer::add. Safe to call multiple times — the timer is self-de-duplicating
+     * by interval on the Workerman side. Logs any reaper errors so a stuck
+     * reaper can never crash the worker.
+     *
+     * @param int|null $interval Override the interval in seconds
+     *
+     * @return void
+     *
+     * @since 0.26.0
+     */
+    public function startReaperTimer(?int $interval = null): void
+    {
+        $intervalSeconds = $interval ?? self::REAPER_INTERVAL;
+
+        \Workerman\Timer::add(
+            $intervalSeconds,
+            function (): void {
+                try {
+                    $this->reapStaleRunningJobs();
+                } catch (\Throwable $e) {
+                    $this->logger->error('Reaper timer failed', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            },
+        );
     }
 
     /**

@@ -327,6 +327,82 @@ class TranscodeManagerTest extends TestCase
         }
     }
 
+    public function testReapStaleRunningJobsReapsJobWithNoSegmentWithinTimeout(): void
+    {
+        // A 'running' job started more than SEGMENT_PRODUCTION_TIMEOUT (60s) ago
+        // but with no CMAF segment files on disk is wedged at startup and must be reaped.
+        $jobDir = $this->segmentDir . '/no-segment-job';
+        mkdir($jobDir, 0755, true);
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        // started_at is set to 90 seconds ago — well past the 60s window.
+        $startedAt = date('Y-m-d H:i:s', strtotime('-90 seconds'));
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $jobDir, $startedAt) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'no-seg-1',
+                        'hls_dir' => $jobDir,
+                        'output_path' => '',
+                        'started_at' => $startedAt,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(1, $reaped);
+        $failUpdate = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, "SET status = 'failed'") && ($params[1] ?? null) === 'no-seg-1') {
+                $failUpdate = $params;
+                break;
+            }
+        }
+        $this->assertNotNull($failUpdate, 'no-segment job must be marked failed');
+        $this->assertStringContainsString('no segment produced within', (string) $failUpdate[0]);
+    }
+
+    public function testReapStaleRunningJobsKeepsJobWithSegmentsAfterTimeout(): void
+    {
+        // A 'running' job started more than SEGMENT_PRODUCTION_TIMEOUT (60s) ago
+        // but that HAS produced at least one segment is alive — the encoder may be
+        // slow (e.g. 4K on low-power hardware) but is not wedged.
+        $jobDir = $this->segmentDir . '/has-segments-job';
+        mkdir($jobDir, 0755, true);
+        // Produce a fake segment file so the job looks alive.
+        file_put_contents("{$jobDir}/chunk-0-00001.m4s", 'fake-segment-data');
+        $captured = [];
+        $db = $this->createMock(Connection::class);
+        $startedAt = date('Y-m-d H:i:s', strtotime('-90 seconds'));
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use (&$captured, $jobDir, $startedAt) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, "WHERE status = 'running'") && str_contains($sql, 'SELECT id')) {
+                    return [[
+                        'id' => 'has-seg-1',
+                        'hls_dir' => $jobDir,
+                        'output_path' => '',
+                        'started_at' => $startedAt,
+                    ]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $reaped = $this->manager($db, $ff)->reapStaleRunningJobs();
+
+        $this->assertSame(0, $reaped, 'job with segments must not be reaped even if old');
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString("SET status = 'failed'", $sql);
+        }
+    }
+
     public function testEnsureHlsJobReEncodes10BitH264InsteadOfCopying(): void
     {
         // A 10-bit (High 10) H.264 stream copies cleanly but won't decode in the

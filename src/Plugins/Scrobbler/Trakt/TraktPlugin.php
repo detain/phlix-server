@@ -165,9 +165,28 @@ final class TraktPlugin implements LifecycleInterface
                 'progress' => $progressSecs,
             ]);
         } catch (TraktAuthenticationException $e) {
-            $this->logger?->warning('Trakt: scrobble start failed (auth)', [
+            $this->logger?->warning('Trakt: scrobble start failed (auth), attempting token refresh', [
                 'error' => $e->getMessage(),
             ]);
+
+            if ($this->ensureFreshToken()) {
+                // Retry once with the new token
+                try {
+                    $api->scrobbleStart($mediaItem, $progressSecs, $this->settings->accessToken ?? '');
+                    $this->logger?->info('Trakt scrobble start submitted after token refresh', [
+                        'title' => $mediaItem->name,
+                        'progress' => $progressSecs,
+                    ]);
+                } catch (TraktAuthenticationException $retryAuthEx) {
+                    $this->logger?->warning('Trakt: scrobble start still failing after refresh', [
+                        'error' => $retryAuthEx->getMessage(),
+                    ]);
+                } catch (TraktApiException $retryEx) {
+                    $this->logger?->warning('Trakt: scrobble start retry failed', [
+                        'error' => $retryEx->getMessage(),
+                    ]);
+                }
+            }
         } catch (TraktApiException $e) {
             $this->logger?->warning('Trakt: scrobble start failed', [
                 'error' => $e->getMessage(),
@@ -217,9 +236,28 @@ final class TraktPlugin implements LifecycleInterface
                 'progress' => $progressSecs,
             ]);
         } catch (TraktAuthenticationException $e) {
-            $this->logger?->warning('Trakt: scrobble stop failed (auth)', [
+            $this->logger?->warning('Trakt: scrobble stop failed (auth), attempting token refresh', [
                 'error' => $e->getMessage(),
             ]);
+
+            if ($this->ensureFreshToken()) {
+                // Retry once with the new token
+                try {
+                    $api->scrobbleStop($mediaItem, $progressSecs, $this->settings->accessToken ?? '');
+                    $this->logger?->info('Trakt scrobble stop submitted after token refresh', [
+                        'title' => $mediaItem->name,
+                        'progress' => $progressSecs,
+                    ]);
+                } catch (TraktAuthenticationException $retryAuthEx) {
+                    $this->logger?->warning('Trakt: scrobble stop still failing after refresh', [
+                        'error' => $retryAuthEx->getMessage(),
+                    ]);
+                } catch (TraktApiException $retryEx) {
+                    $this->logger?->warning('Trakt: scrobble stop retry failed', [
+                        'error' => $retryEx->getMessage(),
+                    ]);
+                }
+            }
         } catch (TraktApiException $e) {
             $this->logger?->warning('Trakt: scrobble stop failed', [
                 'error' => $e->getMessage(),
@@ -285,6 +323,90 @@ final class TraktPlugin implements LifecycleInterface
             scrobbleEnabled: $this->settings->scrobbleEnabled,
             username: $this->settings->username,
         );
+    }
+
+    /**
+     * Refresh the access token after an auth failure, with single-flight guard.
+     *
+     * When multiple concurrent scrobble calls each receive a 401, only one
+     * actual token refresh POST is made. All callers await the same result.
+     *
+     * @return bool True if token was refreshed, false if no refresh token available
+     *
+     * @since 0.14.0
+     */
+    public function ensureFreshToken(): bool
+    {
+        // Single-flight mutex at the plugin level. Since TraktPlugin is a
+        // singleton per plugin loader, this prevents concurrent coroutines
+        // on the same worker from each POSTing a refresh.
+        static $inFlightRefresh = null;
+
+        if ($this->api === null) {
+            $this->logger?->warning('Trakt: API not initialized');
+
+            return false;
+        }
+
+        if ($this->settings->refreshToken === null || $this->settings->refreshToken === '') {
+            $this->logger?->warning('Trakt: no refresh token available');
+
+            return false;
+        }
+
+        // If another call is already refreshing, spin until it completes
+        while ($inFlightRefresh === 'pending') {
+            usleep(5000); // 5ms - yields to event loop in async context
+        }
+
+        // If we already have a completed refresh result, return it
+        if (is_array($inFlightRefresh)) {
+            // Don't null out here - let subsequent calls use the same result
+            return true;
+        }
+
+        $inFlightRefresh = 'pending';
+
+        try {
+            $refreshResult = $this->api->refreshAfterAuthFailure($this->settings->refreshToken);
+
+            /** @var string $newAccessToken */
+            $newAccessToken = is_string($refreshResult['access_token'] ?? null) ? $refreshResult['access_token'] : '';
+            /** @var string $newRefreshToken */
+            $newRefreshToken = is_string($refreshResult['refresh_token'] ?? null) ? $refreshResult['refresh_token'] : '';
+
+            if ($newAccessToken === '') {
+                $this->logger?->warning('Trakt: refresh returned empty access token');
+
+                return false;
+            }
+
+            $this->setAccessToken($newAccessToken);
+
+            if ($newRefreshToken !== '') {
+                $this->setRefreshToken($newRefreshToken);
+            }
+
+            $inFlightRefresh = $refreshResult;
+
+            $this->logger?->info('Trakt: token refreshed successfully');
+
+            return true;
+        } catch (TraktApiException $e) {
+            $inFlightRefresh = null;
+            $this->logger?->warning('Trakt: token refresh failed', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        } catch (\Throwable $e) {
+            $inFlightRefresh = null;
+            $this->logger?->error('Trakt: token refresh threw', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
     /**

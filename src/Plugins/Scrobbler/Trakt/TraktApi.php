@@ -142,6 +142,72 @@ class TraktApi
     }
 
     /**
+     * Refresh access token after an auth failure (401).
+     *
+     * Uses a single-flight mutex so that concurrent 401 responses all await
+     * the same refresh POST rather than each POSTing their own. This prevents
+     * Trakt's rotating refresh tokens from invalidating each other.
+     *
+     * Uses a two-level guard:
+     * 1. Static $inFlightRefresh for same-process concurrency (Workerman coroutines)
+     * 2. flock() for cross-process safety (multiple Workerman workers)
+     *
+     * @param string $refreshToken Current refresh token
+     *
+     * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
+     *
+     * @throws TraktApiException When refresh fails
+     * @since 0.14.0
+     */
+    public function refreshAfterAuthFailure(string $refreshToken): array
+    {
+        static $inFlightRefresh = null;
+        static $lockFile = '/tmp/trakt_refresh.lock';
+
+        // Phase 1: Same-process single-flight (Workerman coroutines on same worker)
+        while ($inFlightRefresh === 'pending') {
+            usleep(5000); // 5ms - yields to event loop in async context
+        }
+
+        if (is_array($inFlightRefresh)) {
+            /** @var array<string, mixed> $result */
+            $result = $inFlightRefresh;
+
+            return $result;
+        }
+
+        $inFlightRefresh = 'pending';
+
+        // Phase 2: Cross-process mutex via flock()
+        $fp = fopen($lockFile, 'c+');
+        if (!$fp) {
+            $inFlightRefresh = null;
+            throw new TraktApiException('Could not open refresh lock file');
+        }
+
+        if (!flock($fp, LOCK_EX)) {
+            fclose($fp);
+            $inFlightRefresh = null;
+            throw new TraktApiException('Could not acquire refresh lock');
+        }
+
+        try {
+            $result = $this->refreshAccessToken($refreshToken);
+            $inFlightRefresh = $result;
+            flock($fp, LOCK_UN);
+            fclose($fp);
+
+            return $result;
+        } catch (\Throwable $e) {
+            $inFlightRefresh = null;
+            flock($fp, LOCK_UN);
+            fclose($fp);
+
+            throw $e;
+        }
+    }
+
+    /**
      * Submit a scrobble start for a media item.
      *
      * Trakt's scrobble API uses a 3-state model. This method sends the

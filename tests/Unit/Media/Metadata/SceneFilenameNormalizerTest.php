@@ -537,4 +537,78 @@ final class SceneFilenameNormalizerTest extends TestCase
         $this->assertSame('Three Wise Men And A Baby', $result['title']);
         $this->assertSame(2022, $result['year']);
     }
+
+    // --- Step 13.1: configurable noise-suffix stripping ---------------------
+
+    /** A trailing "Directors Cut" edition phrase is peeled off the title. */
+    public function testNormalizeStripsDirectorsCutSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Blade Runner Directors Cut');
+
+        $this->assertSame('Blade Runner', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** Edition noise after a detected year does not pollute the parsed title. */
+    public function testNormalizeStripsExtendedCutAfterYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Aliens 1986 Extended Cut 1080p');
+
+        $this->assertSame('Aliens', $result['title']);
+        $this->assertSame(1986, $result['year']);
+    }
+
+    /** A combined "UNCUT & UNRATED" suffix is fully removed. */
+    public function testNormalizeStripsUncutAndUnratedSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Dune UNCUT & UNRATED');
+
+        $this->assertSame('Dune', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** An "ALTERNATE ENDING" suffix is removed without touching the title number. */
+    public function testNormalizeStripsAlternateEndingSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('District 9 ALTERNATE ENDING');
+
+        $this->assertSame('District 9', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** A bare trailing "YIFY" aggregator tag is removed. */
+    public function testNormalizeStripsTrailingYify(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Foo YIFY');
+
+        $this->assertSame('Foo', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** A single-token noise word that IS the whole title must NOT empty it. */
+    public function testNormalizeNoiseTokenDoesNotEmptyTitle(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('DC');
+
+        $this->assertSame('DC', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** Stripping noise suffixes must never mutate the `raw` original filename. */
+    public function testNormalizeNoiseStrippingPreservesRaw(): void
+    {
+        $original = 'Blade Runner Directors Cut';
+        $result = SceneFilenameNormalizer::normalize($original);
+
+        $this->assertSame($original, $result['raw']);
+    }
+
+    /** Stacked trailing edition suffixes are peeled iteratively. */
+    public function testNormalizeStripsStackedNoiseSuffixes(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Highlander Remastered Directors Cut');
+
+        $this->assertSame('Highlander', $result['title']);
+        $this->assertNull($result['year']);
+    }
 }

@@ -1,0 +1,23 @@
+parameters:
+    level: 9
+    paths:
+        - src
+    excludePaths:
+        - src/Server/WebSocket/Events.php
+        - src/Server/Arr/WorkermanArrTransport.php
+    bootstrapFiles:
+        - vendor/autoload.php
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        -
+            message: '#^Call to an undefined method Phlix\\Shared\\Relay\\RelayHttpRequest\:\:withoutForbiddenHeaders\(\)\.$#'
+            identifier: method.notFound
+            count: 1
+            path: src/Hub/RelayConsumer.php
+
+        -
+            message: '#^Class Phlix\\Shared\\Arr\\RadarrClient constructor invoked with 5 parameters, 2-4 required\.$#'
+            identifier: arguments.count
+            count: 1
+            path: src/Server/Core/Application.php
+            reportUnmatched: false

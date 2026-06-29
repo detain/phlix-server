@@ -136,6 +136,42 @@ final class TitleSuffixStripperTest extends TestCase
     }
 
     /**
+     * A MULTI-token noise phrase that is the entire title must also survive when
+     * allowEmpty=false (the guard isn't limited to single-token phrases), and
+     * must collapse to '' under allowEmpty=true. Pins both halves of the guard
+     * on a multi-token input (the single-token case is covered separately).
+     */
+    public function testAllowEmptyFalseKeepsMultiTokenNoiseTitle(): void
+    {
+        $this->assertSame('Directors Cut', TitleSuffixStripper::strip('Directors Cut', false));
+        $this->assertSame('Uncut & Unrated', TitleSuffixStripper::strip('Uncut & Unrated', false));
+        $this->assertSame('', TitleSuffixStripper::strip('Uncut & Unrated', true));
+    }
+
+    /**
+     * Stacked noise tokens joined by the ` -._` separators (and an interior dash)
+     * must all peel in one call — exercises the rescan loop across separators.
+     */
+    public function testStackedSuffixesAcrossSeparators(): void
+    {
+        $this->assertSame('Highlander', TitleSuffixStripper::strip('Highlander - Uncut.Remastered Directors Cut'));
+        $this->assertSame('Aliens', TitleSuffixStripper::strip('Aliens.Extended-Remastered'));
+    }
+
+    /**
+     * A title that legitimately CONTAINS a noise word mid-title (not trailing on
+     * a word boundary) is left fully intact even when a real trailing noise
+     * phrase is also present and peeled.
+     */
+    public function testNoiseWordMidTitleLeftIntact(): void
+    {
+        // "Cut" mid-title kept; trailing "Directors Cut" peeled.
+        $this->assertSame('The Cutting Room', TitleSuffixStripper::strip('The Cutting Room Directors Cut'));
+        // "Extended" as a real mid-title word survives when nothing trails it.
+        $this->assertSame('The Extended Universe Saga', TitleSuffixStripper::strip('The Extended Universe Saga'));
+    }
+
+    /**
      * Mid-string / substring noise must NOT be stripped — only genuine trailing
      * phrases on a word boundary.
      *

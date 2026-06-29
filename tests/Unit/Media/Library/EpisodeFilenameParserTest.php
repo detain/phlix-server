@@ -204,7 +204,22 @@ class EpisodeFilenameParserTest extends TestCase
             'yify series'          => ['Bar YIFY S01E01.mkv', 'Bar', false],
             // Absolute-numbered anime carrying noise on the title segment.
             'remastered absolute'  => ['Baz Remastered - 012 [720p].mkv', 'Baz', true],
+            // STACKED noise tokens (with a dash separator) on the series segment —
+            // all peel before the SxxExx marker is reached.
+            'stacked sep series'   => ['Highlander - Uncut Remastered Directors Cut S03E04.mkv', 'Highlander', false],
         ];
+    }
+
+    /**
+     * A series whose title legitimately CONTAINS a noise word mid-title (not as a
+     * trailing word-boundary phrase) is left intact when there is no trailing
+     * edition phrase to peel.
+     */
+    public function testSeriesTitleContainingNoiseWordLeftIntact(): void
+    {
+        $r = EpisodeFilenameParser::parse('Uncut Gems S01E01.mkv', false);
+        $this->assertNotNull($r);
+        $this->assertSame('Uncut Gems', $r['series']);
     }
 
     /**

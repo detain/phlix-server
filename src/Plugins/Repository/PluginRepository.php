@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Plugins\Repository;
 
 use DateTimeImmutable;
+use Phlix\Common\Uuid;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
@@ -23,13 +24,6 @@ use Workerman\MySQL\Connection;
  */
 class PluginRepository
 {
-    /**
-     * Charset map mirrored from the existing UUID helpers used across
-     * the codebase. Generates an RFC 4122 v4-style identifier without
-     * pulling in an external dependency.
-     */
-    private const UUID_FORMAT = '%04x%04x-%04x-%04x-%04x-%04x%04x%04x';
-
     /**
      * Absolute base directory under which every plugin's install
      * subdirectory lives. Injected so unit tests can swap in a tmpdir.
@@ -282,16 +276,6 @@ class PluginRepository
      */
     public static function generateUuid(): string
     {
-        return sprintf(
-            self::UUID_FORMAT,
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-        );
+        return Uuid::v4();
     }
 }

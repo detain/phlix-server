@@ -205,6 +205,12 @@ try {
         $syncPlayManager = new \Phlix\Session\SyncPlay\SyncPlayManager($logger);
         $syncPlayManager->initialize($messageHandler);
 
+        // SP5: Set the snapshot service so mutations are published to the DB
+        // snapshot table, allowing HTTP workers to read the authoritative state.
+        /** @var \Phlix\Session\SyncPlay\SyncPlaySnapshotService $snapshotService */
+        $snapshotService = $container->get(\Phlix\Session\SyncPlay\SyncPlaySnapshotService::class);
+        $syncPlayManager->setSnapshotService($snapshotService);
+
         // Build and configure the WebSocket server with the shared manager.
         $wsConfigRaw = $config['websocket'] ?? null;
         $wsConfig = is_array($wsConfigRaw) ? $wsConfigRaw : [];

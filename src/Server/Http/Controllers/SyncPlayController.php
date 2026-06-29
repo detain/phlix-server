@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Session\SyncPlay\SyncPlaySnapshotService;
 
 /**
  * Handles SyncPlay group watching HTTP requests.
@@ -14,21 +15,33 @@ use Phlix\Session\SyncPlay\SyncPlayManager;
  * Wraps the SyncPlayManager's WebSocket-based group management
  * with a REST API for the admin UI to create/join/leave groups.
  *
+ * ## Architecture (SP5)
+ *
+ * The authoritative SyncPlay state lives in the WS worker (count=1 process).
+ * This controller reads group state from the database snapshot published by
+ * the WS worker after each mutation. Mutations (create/join/leave) are
+ * handled locally but should be coordinated with the WS worker (SP6).
+ *
  * @since 3.5
  */
 class SyncPlayController
 {
-    /** @var SyncPlayManager The SyncPlay manager instance */
+    /** @var SyncPlayManager The SyncPlay manager instance (for mutations) */
     private SyncPlayManager $syncPlayManager;
+
+    /** @var SyncPlaySnapshotService Reads from WS-published snapshots */
+    private SyncPlaySnapshotService $snapshotService;
 
     /**
      * Creates a new SyncPlayController instance.
      *
-     * @param SyncPlayManager $syncPlayManager The SyncPlay manager
+     * @param SyncPlayManager        $syncPlayManager The SyncPlay manager (mutations)
+     * @param SyncPlaySnapshotService $snapshotService Reads from DB snapshots
      */
-    public function __construct(SyncPlayManager $syncPlayManager)
+    public function __construct(SyncPlayManager $syncPlayManager, SyncPlaySnapshotService $snapshotService)
     {
         $this->syncPlayManager = $syncPlayManager;
+        $this->snapshotService = $snapshotService;
     }
 
     /**
@@ -36,13 +49,15 @@ class SyncPlayController
      *
      * GET /api/v1/syncplay/groups
      *
+     * Reads from the database snapshot published by the authoritative WS worker.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters (unused)
      * @return Response JSON response with groups array
      */
     public function listGroups(Request $request, array $params): Response
     {
-        $groups = $this->syncPlayManager->listGroups();
+        $groups = $this->snapshotService->listGroups();
         return (new Response())->json(['groups' => $groups]);
     }
 
@@ -90,6 +105,8 @@ class SyncPlayController
      *
      * GET /api/v1/syncplay/groups/{id}
      *
+     * Reads from the database snapshot published by the authoritative WS worker.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Path parameters with 'id' for group ID
      * @return Response JSON response with group state
@@ -102,7 +119,7 @@ class SyncPlayController
             return (new Response())->status(400)->json(['error' => 'Group ID is required']);
         }
 
-        $group = $this->syncPlayManager->getGroupState($groupId);
+        $group = $this->snapshotService->getGroupState($groupId);
 
         if ($group === null) {
             return (new Response())->status(404)->json(['error' => 'Group not found']);

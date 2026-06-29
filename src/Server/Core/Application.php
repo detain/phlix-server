@@ -778,14 +778,31 @@ class Application
     /**
      * Returns a SyncPlayController instance.
      *
+     * SP5: Both SyncPlayManager and SyncPlaySnapshotService are now resolved from
+     * the container (singleton within this worker process). The controller reads
+     * from the snapshot service (WS-published state) and writes through the
+     * manager (mutations delegated to WS worker in SP6).
+     *
      * @return SyncPlayController The controller instance.
      *
      * @since 3.5
      */
     private function getSyncPlayController(): SyncPlayController
     {
-        $syncPlayManager = new SyncPlayManager();
-        return new SyncPlayController($syncPlayManager);
+        // SP5: Both services are now obtained from the container singleton,
+        // rather than instantiating a new SyncPlayManager per request.
+        if ($this->container === null) {
+            // Fallback: create with null logger (for legacy/test scenarios)
+            $syncPlayManager = new \Phlix\Session\SyncPlay\SyncPlayManager(null);
+            $snapshotService = new \Phlix\Session\SyncPlay\SyncPlaySnapshotService();
+            return new \Phlix\Server\Http\Controllers\SyncPlayController($syncPlayManager, $snapshotService);
+        }
+
+        /** @var \Phlix\Session\SyncPlay\SyncPlaySnapshotService */
+        $snapshotService = $this->container->get(\Phlix\Session\SyncPlay\SyncPlaySnapshotService::class);
+        /** @var \Phlix\Session\SyncPlay\SyncPlayManager */
+        $syncPlayManager = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayManager::class);
+        return new \Phlix\Server\Http\Controllers\SyncPlayController($syncPlayManager, $snapshotService);
     }
 
     /**

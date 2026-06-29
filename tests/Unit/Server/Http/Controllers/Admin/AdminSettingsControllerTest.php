@@ -57,11 +57,13 @@ final class AdminSettingsControllerTest extends TestCase
             'trakt.client_id'                           => 'string',
             'trakt.client_secret'                       => 'string',
             'trakt.redirect_uri'                        => 'string',
+            // Step 13.3: array-typed noise-suffix list → internal `json`.
+            'matching.noise_suffixes'                   => 'json',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(19, $actual);
+        $this->assertCount(20, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -157,6 +159,76 @@ final class AdminSettingsControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
+    }
+
+    public function testUpdateAcceptsNoiseSuffixesArrayAsJson(): void
+    {
+        // Step 13.3: matching.noise_suffixes is an array-typed (`json`) key in
+        // the vendored schema, so update() must accept an array of phrases and
+        // persist it verbatim with the `json` internal type.
+        $custom = ['unrated directors cut', 'remux', 'imax edition'];
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('matching.noise_suffixes', $custom, 'json');
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => ['matching.noise_suffixes' => $custom],
+            'overridden' => ['matching.noise_suffixes'],
+        ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['matching.noise_suffixes' => $custom]]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+    }
+
+    public function testUpdateRejectsNoiseSuffixesWhenNotAnArray(): void
+    {
+        // A non-array value fails the `json` arm of valueMatchesType() and is
+        // rejected (400) without persisting anything.
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->never())->method('set');
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['matching.noise_suffixes' => 'directors cut']]),
+            [],
+        );
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertFalse($body['success']);
+    }
+
+    public function testIndexReturnsNoiseSuffixesArrayValue(): void
+    {
+        // GET returns the effective array for the noise-suffix key (it is part
+        // of the schema-derived allow-list passed to getEffectiveMany()).
+        $effective = ['unrated directors cut', 'remux'];
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('getEffectiveMany')
+            ->with(array_keys(AdminSettingsController::allowedKeys()))
+            ->willReturn([
+                'values'     => ['matching.noise_suffixes' => $effective],
+                'overridden' => ['matching.noise_suffixes'],
+            ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->index($this->makeRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+        $this->assertSame($effective, $body['data']['settings']['matching.noise_suffixes']);
+        $this->assertSame('json', $body['data']['types']['matching.noise_suffixes']);
     }
 
     public function testUpdateCoercesNumericStringsBeforePersisting(): void

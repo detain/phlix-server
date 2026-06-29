@@ -62,6 +62,20 @@ class MediaScanner
     private ?FfmpegRunner $ffmpeg = null;
 
     /**
+     * Effective trailing-edition noise-suffix list applied to parsed titles
+     * before metadata matching (admin-extensible via the
+     * `matching.noise_suffixes` server setting, merged over the
+     * `config/matching.php` default by the DI provider). Resolved once at
+     * construction and forwarded to {@see SceneFilenameNormalizer::normalize()}
+     * and {@see EpisodeFilenameParser::parse()}; never mutated after construction.
+     * Null when the caller does not inject one — both parsers then fall back to
+     * the built-in {@see \Phlix\Media\Metadata\TitleSuffixStripper::NOISE_SUFFIXES}.
+     *
+     * @var list<string>|null
+     */
+    private ?array $noiseSuffixes = null;
+
+    /**
      * Concrete media-item types whose source files carry a meaningful total
      * playback duration worth probing during the scan. Image/book/photo types
      * have no duration and are never probed.
@@ -110,6 +124,11 @@ class MediaScanner
      *                           stored under metadata_json['duration_seconds'].
      *                           Defaults to null so callers/tests not exercising
      *                           duration probing need not wire one up.
+     * @param list<string>|null $noiseSuffixes Effective trailing-edition noise list
+     *                           (admin-extensible via `matching.noise_suffixes`,
+     *                           merged over `config/matching.php` by the DI
+     *                           provider). Forwarded to the filename parsers; a
+     *                           null/empty value falls back to the built-in const.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      */
@@ -119,7 +138,8 @@ class MediaScanner
         ?StructuredLogger $logger = null,
         ?EventDispatcherInterface $eventDispatcher = null,
         ?TrailerFinder $trailerFinder = null,
-        ?FfmpegRunner $ffmpeg = null
+        ?FfmpegRunner $ffmpeg = null,
+        ?array $noiseSuffixes = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -128,6 +148,11 @@ class MediaScanner
         $this->eventDispatcher = $eventDispatcher;
         $this->trailerFinder = $trailerFinder;
         $this->ffmpeg = $ffmpeg;
+        // Drop a null/empty injected list so the parsers fall back to the
+        // built-in const (an empty admin override must never blank the list).
+        $this->noiseSuffixes = ($noiseSuffixes === null || $noiseSuffixes === [])
+            ? null
+            : array_values($noiseSuffixes);
     }
 
     /**
@@ -1013,7 +1038,7 @@ class MediaScanner
         $metadata = [];
 
         $name = pathinfo($filename, PATHINFO_FILENAME);
-        $normalized = SceneFilenameNormalizer::normalize($name);
+        $normalized = SceneFilenameNormalizer::normalize($name, $this->noiseSuffixes);
 
         $metadata['raw_filename'] = $name;
 
@@ -1031,7 +1056,7 @@ class MediaScanner
         // "S01 E02", "1x02", absolute "Show - 394"/"Show 125"). Absolute
         // numbering is only honoured in series libraries so a movie like
         // "Blade Runner 2049" is never read as episode 2049.
-        $episode = EpisodeFilenameParser::parse($name, $type === 'series');
+        $episode = EpisodeFilenameParser::parse($name, $type === 'series', $this->noiseSuffixes);
         if ($episode !== null) {
             $metadata['name'] = $episode['series'];
             $metadata['season'] = $episode['season'];

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Common\Container\Providers;
 
 use DI\ContainerBuilder;
+use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\Providers\MediaServicesProvider;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -87,5 +89,72 @@ final class MediaServicesProviderTest extends TestCase
 
         // Verify the binding chain: PlaybackMarkerService -> MarkerService -> MarkerCandidateRepository -> ItemRepository
         $this->assertTrue($container->has(ItemRepository::class));
+    }
+
+    /**
+     * Step 13.3: the `matching.noise_suffixes` definition resolves the admin
+     * override (via SettingsRepository::getEffective) and returns it, so a
+     * custom phrase reaches the matching services.
+     */
+    public function test_noise_suffixes_definition_returns_admin_override(): void
+    {
+        $custom = ['imax edition', 'remux'];
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')
+            ->with('matching.noise_suffixes')
+            ->willReturn($custom);
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+        $builder->addDefinitions([SettingsRepository::class => $settings]);
+
+        $container = $builder->build();
+
+        /** @var list<string> $resolved */
+        $resolved = $container->get('matching.noise_suffixes');
+        $this->assertSame($custom, $resolved);
+    }
+
+    /**
+     * Step 13.3: an EMPTY effective value (admin cleared the field, or no
+     * override and an unreadable config) falls back to the built-in const — it
+     * never blanks the noise list.
+     */
+    public function test_noise_suffixes_definition_falls_back_to_const_on_empty(): void
+    {
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getEffective')
+            ->with('matching.noise_suffixes')
+            ->willReturn([]);
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+        $builder->addDefinitions([SettingsRepository::class => $settings]);
+
+        $container = $builder->build();
+
+        /** @var list<string> $resolved */
+        $resolved = $container->get('matching.noise_suffixes');
+        $this->assertSame(array_values(TitleSuffixStripper::NOISE_SUFFIXES), $resolved);
+    }
+
+    /**
+     * Step 13.3: when no SettingsRepository is available at all, the definition
+     * still returns the built-in const (defensive fallback, never crashes).
+     */
+    public function test_noise_suffixes_definition_falls_back_without_settings_repository(): void
+    {
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+
+        $container = $builder->build();
+
+        /** @var list<string> $resolved */
+        $resolved = $container->get('matching.noise_suffixes');
+        $this->assertSame(array_values(TitleSuffixStripper::NOISE_SUFFIXES), $resolved);
     }
 }

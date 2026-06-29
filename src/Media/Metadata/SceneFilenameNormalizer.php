@@ -86,12 +86,20 @@ final class SceneFilenameNormalizer
     /**
      * Normalize a dirty release filename.
      *
-     * @param string $filename Raw filename (with or without extension).
+     * @param string            $filename      Raw filename (with or without extension).
+     * @param list<string>|null $noiseSuffixes Effective trailing-edition noise list
+     *                                          to peel (passed straight to
+     *                                          {@see TitleSuffixStripper::strip()}).
+     *                                          When null (default) the built-in
+     *                                          {@see TitleSuffixStripper::NOISE_SUFFIXES}
+     *                                          const is used, so callers that do not
+     *                                          inject an admin-extended list keep the
+     *                                          canonical behavior.
      *
      * @return array{title: string, year: int|null, raw: string} Cleaned
      *         title, extracted year (or null), and the original filename.
      */
-    public static function normalize(string $filename): array
+    public static function normalize(string $filename, ?array $noiseSuffixes = null): array
     {
         $raw = $filename;
         $lower = mb_strtolower($filename, 'UTF-8');
@@ -118,7 +126,7 @@ final class SceneFilenameNormalizer
                 $titlePart = trim($bracketMatch[1]);
                 $titlePart = self::stripGroupSuffix($titlePart);
                 $title = self::stripBracketedTags($titlePart);
-                $title = TitleSuffixStripper::strip($title);
+                $title = TitleSuffixStripper::strip($title, false, $noiseSuffixes);
                 $title = preg_replace('/\s+/', ' ', $title) ?? $title;
                 $title = trim($title);
 
@@ -207,7 +215,7 @@ final class SceneFilenameNormalizer
 
         $title = self::stripGroupSuffix($title);
         $title = self::stripBracketedTags($title);
-        $title = TitleSuffixStripper::strip($title);
+        $title = TitleSuffixStripper::strip($title, false, $noiseSuffixes);
         $title = preg_replace('/\s+/', ' ', $title) ?? $title;
         $title = trim($title);
 

@@ -1,0 +1,113 @@
+# Phlix Media Server — Deployment Configuration
+# SP7: WebSocket worker port binding documentation
+#
+# This file documents the deployment configuration for exposing the
+# WebSocket worker (SyncPlay) to the external network via HAProxy.
+#
+# Related files:
+#   - deploy/haproxy.cfg  : HAProxy configuration for WS port exposure
+#   - config/server.php  : WS worker port configuration (default: 8097)
+#   - start.php          : WS worker initialization (line ~187)
+
+---
+# Deployment metadata
+deployment:
+  name: phlix-server
+  version: "1.0"
+  last_updated: "2026-06-29"
+
+# WebSocket worker configuration
+websocket:
+  # Internal port where the WS worker listens (configured in config/server.php)
+  internal_port: 8097
+
+  # External exposure via HAProxy
+  exposed_port: 8097
+  exposed_interface: "0.0.0.0"
+
+  # Health check
+  health_check:
+    # Port for external health monitoring (separate from WS traffic)
+    port: 8098
+    # Expected response: 426 Upgrade Required indicates WS worker is alive
+    expected_status: 426
+    path: /
+
+  # Connection settings
+  connection:
+    # Maximum idle time before WS connection is closed
+    idle_timeout: 86400  # 24 hours in seconds
+    # Maximum time for WS handshake
+    handshake_timeout: 5000  # milliseconds
+    # Health check interval
+    check_interval: 10  # seconds
+
+  # Backend (internal WS worker) configuration
+  backend:
+    host: "127.0.0.1"
+    port: 8097
+    # Health check settings
+    check_fall: 2   # Mark down after 2 consecutive failures
+    check_rise: 3  # Mark up after 3 consecutive successes
+
+# HAProxy configuration reference
+haproxy:
+  config_file: "deploy/haproxy.cfg"
+  user: "haproxy"
+  group: "haproxy"
+  max_connections: 4096
+
+  # Statistics endpoint (localhost only)
+  stats:
+    host: "127.0.0.1"
+    port: 8404
+    path: "/stats"
+
+  # Frontend configuration
+  frontend:
+    bind: "*:8097"
+    mode: "http"
+
+  # Backend configuration
+  backend:
+    server: "127.0.0.1:8097"
+    mode: "http"
+
+# Port binding summary
+ports:
+  http:
+    internal: 8096
+    description: "HTTP/REST API worker"
+
+  websocket:
+    internal: 8097
+    external: 8097
+    description: "WebSocket worker for SyncPlay realtime communication"
+
+  websocket_health:
+    port: 8098
+    description: "Health check endpoint for WS worker (returns 426 when healthy)"
+
+  relay:
+    internal: 9443
+    description: "Relay tunnel connection to phlix-hub"
+
+# Verification commands
+verification:
+  # Check WS worker health (from external network)
+  health_check: |
+    curl -s -H "Upgrade: websocket" http://<deploy-host>:8097/
+
+  # Check WS health endpoint
+  health_endpoint: |
+    curl -s http://<deploy-host>:8098/
+
+  # HAProxy stats
+  stats: |
+    curl -s http://localhost:8404/stats
+
+# Dependencies
+depends_on:
+  - "SP6: WebSocket worker implementation (SyncPlayManager, WebSocketServer)"
+  - "config/server.php: websocket.port configuration"
+  - "start.php: WS worker initialization on port 8097"

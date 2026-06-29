@@ -2733,9 +2733,24 @@ class Application
         $radarrUrl = is_string($arrConfig['radarr_url'] ?? null) ? $arrConfig['radarr_url'] : '';
         $radarrApiKey = is_string($arrConfig['radarr_api_key'] ?? null) ? $arrConfig['radarr_api_key'] : '';
 
-        $radarrClient = new \Phlix\Shared\Arr\RadarrClient($radarrUrl, $radarrApiKey);
         $provider = new \Phlix\Shared\Arr\TrashGuidesProvider();
         $logger = new \Phlix\Common\Logger\StructuredLogger('arr-sync', []);
+
+        // Inject the non-blocking Swoole-coroutine transport so the *arr client
+        // does NOT fall back to phlix-shared's blocking CurlArrTransport. The
+        // server runs on Swoole's event loop with native-curl hooks deliberately
+        // OFF ({@see \Phlix\Server\Runtime\SwooleRuntime}), so a blocking
+        // curl_exec() would stall every coroutine on the worker until the (possibly
+        // slow/unreachable) Radarr instance responds. WorkermanArrTransport yields
+        // the coroutine instead. {@see \Phlix\Server\Arr\WorkermanArrTransport}
+        $arrTransport = new \Phlix\Server\Arr\WorkermanArrTransport();
+        $radarrClient = new \Phlix\Shared\Arr\RadarrClient(
+            $radarrUrl,
+            $radarrApiKey,
+            null,
+            30,
+            $arrTransport
+        );
 
         $syncer = new \Phlix\Server\Arr\CustomFormatSyncer(
             $radarrClient,

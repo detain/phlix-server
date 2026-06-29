@@ -199,6 +199,32 @@ confirm() {
 rand_hex() { openssl rand -hex "${1:-32}"; }
 rand_pass() { openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24; }
 
+# Idempotently ensure an env file contains `KEY=VALUE`. Used by the --update
+# path to backfill keys that newer code requires but an older install never
+# wrote (e.g. JWT_SECRET, added in the 0.55.0 boot guard). A line is matched on
+# `^KEY=` so a key that is present but blank (`KEY=`) is treated as MISSING and
+# rewritten — an empty required secret is as fatal as an absent one.
+#
+# Usage: phlix_ensure_env_key <env_file> <KEY> <VALUE> [comment]
+# Returns 0 and prints an info line when it writes; 0 silently when already set.
+phlix_ensure_env_key() {
+  local file="$1" key="$2" value="$3" comment="${4:-}"
+  [ -f "$file" ] || return 0
+  # Present AND non-empty? Leave operator's value untouched.
+  if grep -qE "^${key}=.+" "$file" 2>/dev/null; then
+    return 0
+  fi
+  # Drop any blank `KEY=` line so we don't end up with a duplicate.
+  if grep -qE "^${key}=" "$file" 2>/dev/null; then
+    sed -i "/^${key}=/d" "$file"
+  fi
+  {
+    [ -n "$comment" ] && printf '# %s\n' "$comment"
+    printf '%s=%s\n' "$key" "$value"
+  } >> "$file"
+  info "Backfilled missing $key into $file"
+}
+
 # ---------------------------------------------------------------------------
 # Swoole + php-uv (compiled from source)
 #
@@ -1089,7 +1115,19 @@ do_update() {
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
 
-  # 5. Restart the service. We don't touch the env file.
+  # 4f. Backfill env keys that newer code requires but an older install never
+  # wrote. JWT_SECRET became a hard boot requirement in 0.55.0
+  # (AuthServicesProvider::assertSecretConfigured) — an install that predates it
+  # has only PHLIX_SECRET_KEY and would now refuse to start. Generate a unique
+  # secret and append it (idempotent: a real, non-empty JWT_SECRET is preserved).
+  log "Ensuring required env keys are present"
+  phlix_ensure_env_key "$ENV_FILE" JWT_SECRET "$(rand_hex 32)" \
+    "JWT signing secret (REQUIRED) — auth JWTs + HMAC-derived media signed URLs."
+  # Keep ownership/permissions consistent with the original install.
+  chmod 640 "$ENV_FILE" 2>/dev/null || true
+  chown root:"$SERVICE_USER" "$ENV_FILE" 2>/dev/null || true
+
+  # 5. Restart the service.
   if [ -f "$SERVICE_FILE" ]; then
     log "Restarting $SERVICE_NAME service"
     systemctl daemon-reload >/dev/null 2>&1 || true
@@ -1161,6 +1199,12 @@ PUBLIC_DOMAIN="${DOMAIN:-$(hostname -f 2>/dev/null || hostname)}"
 # Generate a secret key for HMAC-signed cookies / future use. Read by the
 # code via getenv('PHLIX_SECRET_KEY') where applicable.
 SECRET_KEY="$(rand_hex 32)"
+
+# JWT signing secret. REQUIRED: src/Common/Container/Providers/AuthServicesProvider.php
+# refuses to boot (assertSecretConfigured) when JWT_SECRET is unset or still the
+# shipped 'default-secret-change-me' sentinel — JWTs and media signed URLs would
+# otherwise be forgeable. Generate a unique high-entropy value per install.
+JWT_SECRET="$(rand_hex 32)"
 
 echo
 log "Configuration summary"
@@ -1312,6 +1356,12 @@ PHLIX_TLS_ENABLED=$([ "$TLS_ENABLED" = "yes" ] && echo 1 || echo 0)
 
 # 32-byte hex secret for HMAC-signed cookies / future use.
 PHLIX_SECRET_KEY=${SECRET_KEY}
+
+# JWT signing secret (REQUIRED). The server refuses to boot without a unique,
+# non-default value: it signs auth JWTs and (HMAC-derived) media signed URLs,
+# so a missing/guessable key makes both forgeable. Rotate with
+# \`openssl rand -hex 32\` to invalidate all existing tokens.
+JWT_SECRET=${JWT_SECRET}
 
 PHLIX_LOG_LEVEL=info
 PHLIX_ENV=production
@@ -1476,7 +1526,7 @@ else
   [ -n "$DOMAIN" ] || info "Re-run with --domain and --admin-email to enable HTTPS."
 fi
 info "Service       : systemctl status $SERVICE_NAME"
-info "Env file      : ${ENV_FILE}  (DB_PASSWORD + PHLIX_SECRET_KEY stored here)"
+info "Env file      : ${ENV_FILE}  (DB_PASSWORD + JWT_SECRET + PHLIX_SECRET_KEY stored here)"
 info "Database pass : ${DB_PASS}"
 echo
 info "Next:"

@@ -94,6 +94,7 @@ class ConnectionPoolTest extends TestCase
             public function send($data): void {}
             public function close(): void {}
             public function sendMessage($type, $data = []): void {}
+            public function sendFlat($type, $payload): void {}
             public function updateActivity(): void { $this->lastActivity = time(); }
             public function set(string $key, mixed $value): void { $this->sessionData[$key] = $value; }
             public function get(string $key, mixed $default = null): mixed { return $this->sessionData[$key] ?? $default; }

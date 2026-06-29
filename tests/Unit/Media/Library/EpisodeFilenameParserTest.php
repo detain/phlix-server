@@ -244,4 +244,27 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertNotNull($r);
         $this->assertSame('DC', $r['series']);
     }
+
+    /**
+     * Step 13.3: an injected (admin-extended) noise list strips a CUSTOM phrase
+     * from the SERIES segment that is not in the built-in const.
+     */
+    public function testInjectedCustomSuffixStripsFromSeriesSegment(): void
+    {
+        $custom = ['fan edit', 'remux'];
+        $r = EpisodeFilenameParser::parse('Highlander Fan Edit S03E04.mkv', false, $custom);
+        $this->assertNotNull($r);
+        $this->assertSame('Highlander', $r['series']);
+    }
+
+    /**
+     * Step 13.3: a null/empty injected list falls back to the built-in const, so
+     * the canonical series-segment phrases still strip.
+     */
+    public function testInjectedEmptyListFallsBackToConstForSeries(): void
+    {
+        $r = EpisodeFilenameParser::parse('Highlander Directors Cut S03E04.mkv', false, []);
+        $this->assertNotNull($r);
+        $this->assertSame('Highlander', $r['series']);
+    }
 }

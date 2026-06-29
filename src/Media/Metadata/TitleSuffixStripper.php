@@ -63,14 +63,30 @@ final class TitleSuffixStripper
      * `$allowEmpty = true` to permit an empty result (callers that have their own
      * fallback can opt in).
      *
-     * @param string $title      Title to clean (ideally already group/bracket-stripped).
-     * @param bool   $allowEmpty When false (default) a noise phrase never empties
-     *                           the title; when true an empty result is permitted.
+     * @param string             $title      Title to clean (ideally already
+     *                                        group/bracket-stripped).
+     * @param bool               $allowEmpty When false (default) a noise phrase
+     *                                        never empties the title; when true
+     *                                        an empty result is permitted.
+     * @param list<string>|null  $suffixes   Effective noise-suffix list to peel.
+     *                                        When null (default) the built-in
+     *                                        {@see NOISE_SUFFIXES} const is used,
+     *                                        so any caller that does not inject an
+     *                                        admin-extended list still works. Pass
+     *                                        a non-empty list to override (the
+     *                                        list should already be ordered
+     *                                        longest-first by the caller). An
+     *                                        empty array falls back to the const.
      *
      * @return string Title with trailing noise suffixes removed.
      */
-    public static function strip(string $title, bool $allowEmpty = false): string
+    public static function strip(string $title, bool $allowEmpty = false, ?array $suffixes = null): string
     {
+        // An empty or absent override never blanks the noise list: fall back to
+        // the built-in const so un-wired callers and empty admin overrides keep
+        // the canonical behavior.
+        $effective = ($suffixes === null || $suffixes === []) ? self::NOISE_SUFFIXES : $suffixes;
+
         $title = trim($title);
 
         $changed = true;
@@ -81,7 +97,7 @@ final class TitleSuffixStripper
             // (e.g. "Dune UNCUT &" once "UNRATED" was filtered out as a quality token).
             $title = trim(preg_replace('/\s*&\s*$/', '', $title) ?? $title);
 
-            foreach (self::NOISE_SUFFIXES as $suffix) {
+            foreach ($effective as $suffix) {
                 $pattern = '/[\s\-._]*\b' . preg_quote($suffix, '/') . '[\s\-._&]*$/i';
                 $stripped = preg_replace($pattern, '', $title);
                 if ($stripped === null) {

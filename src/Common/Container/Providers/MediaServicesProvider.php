@@ -21,6 +21,7 @@ use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
+use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -83,6 +84,39 @@ final class MediaServicesProvider implements ServiceProviderInterface
             : ((string)(getenv('TMDB_API_KEY') ?: ''));
 
         $builder->addDefinitions([
+            // Effective trailing-edition noise-suffix list, resolved ONCE when
+            // first built (per worker cycle, not per request): the admin-managed
+            // `matching.noise_suffixes` override (server_settings) is read via
+            // SettingsRepository::getEffective(), which already merges the
+            // override OVER the config/matching.php default. An empty/blank
+            // result (no override AND no readable config, or an admin who cleared
+            // the field) falls back to the built-in
+            // TitleSuffixStripper::NOISE_SUFFIXES const — it never blanks the
+            // list. Injected into the matching services below so the same list
+            // drives both scan-time and re-match-time title cleaning. No mutable
+            // static/global state — the value is computed once at construction.
+            'matching.noise_suffixes' => factory(
+                static function (ContainerInterface $c): array {
+                    try {
+                        $settings = $c->get(SettingsRepository::class);
+                        if ($settings instanceof SettingsRepository) {
+                            $effective = self::stringList($settings->getEffective('matching.noise_suffixes'));
+                            if ($effective !== []) {
+                                return $effective;
+                            }
+                        }
+                    } catch (\Throwable) {
+                        // Settings store unavailable — use the in-code default.
+                    }
+
+                    // Defensive fallback: config/matching.php unreadable AND no
+                    // override. Mirror the canonical in-code default so matching
+                    // still peels the standard noise phrases. NOISE_SUFFIXES is
+                    // already a list<string>.
+                    return TitleSuffixStripper::NOISE_SUFFIXES;
+                }
+            ),
+
             // `statsCollector` is named explicitly because PHP-DI skips optional
             // ctor params with defaults during autowiring; without it item
             // add/remove changes never reach stats_library_changes (the admin
@@ -131,7 +165,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // the player's scrubber knows the full length immediately. The
                 // FfmpegRunner is registered in TranscodeServicesProvider and is
                 // resolvable from the shared container.
-                ->constructorParameter('ffmpeg', get(FfmpegRunner::class)),
+                ->constructorParameter('ffmpeg', get(FfmpegRunner::class))
+                // Effective (settings-merged) noise-suffix list; named because
+                // PHP-DI skips defaulted optional ctor params during autowiring.
+                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes')),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),
@@ -169,7 +206,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // API (search/apply). Named because PHP-DI skips defaulted
                 // optional ctor params during autowiring; shares the same
                 // admin-keyed TmdbProvider as the resolvers.
-                ->constructorParameter('tmdb', get(TmdbProvider::class)),
+                ->constructorParameter('tmdb', get(TmdbProvider::class))
+                // Effective (settings-merged) noise-suffix list so re-match-time
+                // title cleaning uses the same list as the scanner.
+                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes')),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`
@@ -219,5 +259,37 @@ final class MediaServicesProvider implements ServiceProviderInterface
             PlaybackMarkerService::class => autowire()
                 ->constructorParameter('marker_service', get(MarkerService::class)),
         ]);
+    }
+
+    /**
+     * Coerce a raw config/setting value into a clean `list<string>` of
+     * non-empty, trimmed suffix phrases. Anything that is not an array yields
+     * an empty list (so the caller falls back to its default); non-string and
+     * blank entries are dropped, and the keys are re-indexed to a list.
+     *
+     * @param mixed $value Raw value from config or the settings store.
+     *
+     * @return list<string>
+     */
+    private static function stringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $entry */
+        foreach ($value as $entry) {
+            if (!is_string($entry)) {
+                continue;
+            }
+            $trimmed = trim($entry);
+            if ($trimmed === '') {
+                continue;
+            }
+            $out[] = $trimmed;
+        }
+
+        return $out;
     }
 }

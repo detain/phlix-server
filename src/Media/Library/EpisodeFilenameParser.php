@@ -46,9 +46,21 @@ final class EpisodeFilenameParser
     ];
 
     /**
+     * @param string            $filename      Raw filename (with or without extension).
+     * @param bool              $allowAbsolute Allow absolute-numbering fallbacks.
+     * @param list<string>|null $noiseSuffixes Effective trailing-edition noise list
+     *                                          applied to the SERIES segment via
+     *                                          {@see TitleSuffixStripper::strip()}.
+     *                                          When null (default) the built-in
+     *                                          {@see TitleSuffixStripper::NOISE_SUFFIXES}
+     *                                          const is used, so callers that do not
+     *                                          inject an admin-extended list keep the
+     *                                          canonical behavior. Episode titles are
+     *                                          never noise-stripped.
+     *
      * @return array{series: string, season: int, episode: int, episode_title: ?string}|null
      */
-    public static function parse(string $filename, bool $allowAbsolute = false): ?array
+    public static function parse(string $filename, bool $allowAbsolute = false, ?array $noiseSuffixes = null): ?array
     {
         $base = self::stripExtension($filename);
         // Underscores are a scene separator; normalise so "Ranma_-_098" parses
@@ -62,22 +74,22 @@ final class EpisodeFilenameParser
 
         // 1. Season + episode: S01E02 / S01 E02 / S1EP17 / S02.E03 / S02SP03 / S05 E16-E17.
         if (preg_match('/^(.+?)[\s._-]*S(\d{1,2})\s*[._x\- ]?\s*(?:EP|SP|E)\s*(\d{1,3})/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
-            return self::build($m[1][0], (int) $m[2][0], (int) $m[3][0], self::remainder($norm, $m));
+            return self::build($m[1][0], (int) $m[2][0], (int) $m[3][0], self::remainder($norm, $m), $noiseSuffixes);
         }
 
         // 2. 1x02 style.
         if (preg_match('/^(.+?)[\s._-]+(\d{1,2})x(\d{1,3})\b/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
-            return self::build($m[1][0], (int) $m[2][0], (int) $m[3][0], self::remainder($norm, $m));
+            return self::build($m[1][0], (int) $m[2][0], (int) $m[3][0], self::remainder($norm, $m), $noiseSuffixes);
         }
 
         if ($allowAbsolute) {
             // 3a. Dash-delimited absolute: "Title - 394", "Title - E29", "Title - Ep. 04".
             if (preg_match('/^(.+?)\s[-–]\s*(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(.\-])/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
-                return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m));
+                return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m), $noiseSuffixes);
             }
             // 3b. Space-delimited trailing number: "Bleach 125", "Show E29".
             if (preg_match('/^(.+?)\s(?:Episode|Ep\.?|EP|E)?\s*(\d{1,4})(?:v\d+)?(?=$|[\s\[\(])/i', $norm, $m, PREG_OFFSET_CAPTURE)) {
-                return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m));
+                return self::build($m[1][0], 1, (int) $m[2][0], self::remainder($norm, $m), $noiseSuffixes);
             }
         }
 
@@ -119,12 +131,19 @@ final class EpisodeFilenameParser
      * Assemble a result, cleaning the series title and pulling an episode title
      * (the free text that follows the marker, minus quality tags) if present.
      *
+     * @param list<string>|null $noiseSuffixes Effective noise list for the series segment.
+     *
      * @return array{series: string, season: int, episode: int, episode_title: ?string}
      */
-    private static function build(string $rawSeries, int $season, int $episode, string $remainder): array
-    {
+    private static function build(
+        string $rawSeries,
+        int $season,
+        int $episode,
+        string $remainder,
+        ?array $noiseSuffixes = null
+    ): array {
         return [
-            'series' => self::cleanSeries($rawSeries),
+            'series' => self::cleanSeries($rawSeries, $noiseSuffixes),
             'season' => $season,
             'episode' => $episode,
             'episode_title' => self::extractEpisodeTitle($remainder),
@@ -136,8 +155,10 @@ final class EpisodeFilenameParser
      * that bled into the capture, and trailing edition/noise suffixes
      * ("Directors Cut", "UNCUT & UNRATED", "YIFY"…) via the shared
      * {@see TitleSuffixStripper} so the show title matches metadata cleanly.
+     *
+     * @param list<string>|null $noiseSuffixes Effective noise list (null → const default).
      */
-    private static function cleanSeries(string $raw): string
+    private static function cleanSeries(string $raw, ?array $noiseSuffixes = null): string
     {
         $title = trim($raw);
         // Cut anything from the first bracket/paren tag onward.
@@ -145,7 +166,7 @@ final class EpisodeFilenameParser
         $title = self::trimSeparators($title);
         // Peel trailing edition/noise phrases (never emptying the title, so a
         // show literally named after a noise token survives).
-        $title = TitleSuffixStripper::strip($title);
+        $title = TitleSuffixStripper::strip($title, false, $noiseSuffixes);
         return $title;
     }
 

@@ -75,6 +75,20 @@ class LibraryMetadataMatcher
     private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
 
     /**
+     * Effective trailing-edition noise-suffix list applied to a parsed title
+     * before metadata matching (admin-extensible via the
+     * `matching.noise_suffixes` server setting, merged over the
+     * `config/matching.php` default by the DI provider). Resolved once at
+     * construction and forwarded to {@see SceneFilenameNormalizer::normalize()};
+     * never mutated afterwards. Null when not injected — the normalizer then
+     * falls back to the built-in
+     * {@see \Phlix\Media\Metadata\TitleSuffixStripper::NOISE_SUFFIXES}.
+     *
+     * @var list<string>|null
+     */
+    private ?array $noiseSuffixes;
+
+    /**
      * @param ItemRepository             $items          Media-item data access.
      * @param MovieMetadataResolver      $resolver       Cross-source movie resolver.
      * @param SeriesMetadataResolver|null $seriesResolver TV series resolver; when
@@ -88,6 +102,13 @@ class LibraryMetadataMatcher
      *                                                   {@see self::searchCandidates()}
      *                                                   / {@see self::applyMatch()}
      *                                                   report TMDB as unconfigured.
+     * @param list<string>|null          $noiseSuffixes  Effective trailing-edition
+     *                                                   noise list (admin-extensible
+     *                                                   via `matching.noise_suffixes`,
+     *                                                   merged over `config/matching.php`
+     *                                                   by the DI provider). A
+     *                                                   null/empty value falls back to
+     *                                                   the built-in const.
      *
      * @since 0.21.0
      */
@@ -96,13 +117,19 @@ class LibraryMetadataMatcher
         MovieMetadataResolver $resolver,
         ?SeriesMetadataResolver $seriesResolver = null,
         ?StructuredLogger $logger = null,
-        ?TmdbProvider $tmdb = null
+        ?TmdbProvider $tmdb = null,
+        ?array $noiseSuffixes = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
         $this->seriesResolver = $seriesResolver;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
         $this->tmdb = $tmdb;
+        // Drop a null/empty injected list so the normalizer falls back to the
+        // built-in const (an empty admin override must never blank the list).
+        $this->noiseSuffixes = ($noiseSuffixes === null || $noiseSuffixes === [])
+            ? null
+            : array_values($noiseSuffixes);
     }
 
     /**
@@ -712,7 +739,7 @@ class LibraryMetadataMatcher
             return false;
         }
 
-        $normalized = SceneFilenameNormalizer::normalize($name);
+        $normalized = SceneFilenameNormalizer::normalize($name, $this->noiseSuffixes);
         if ($normalized['title'] !== '') {
             $name = $normalized['title'];
         }
@@ -778,7 +805,7 @@ class LibraryMetadataMatcher
                 return false;
             }
 
-            $normalized = SceneFilenameNormalizer::normalize($name);
+            $normalized = SceneFilenameNormalizer::normalize($name, $this->noiseSuffixes);
             if ($normalized['title'] !== '') {
                 $name = $normalized['title'];
             }

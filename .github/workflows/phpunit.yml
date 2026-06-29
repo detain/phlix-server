@@ -10,6 +10,7 @@ jobs:
   test:
     name: PHPUnit Test Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     services:
       mysql:

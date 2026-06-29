@@ -22,6 +22,16 @@ use Workerman\MySQL\Connection;
  */
 final class AuthManagerStatsTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // AuthManager throttles logins via a process-wide static store keyed on
+        // client IP (here the default 127.0.0.1). Under executionOrder="random"
+        // failed-login attempts from other auth tests can pre-trip the limiter,
+        // so reset it to keep these cases isolated.
+        AuthManager::resetRateLimitStore();
+    }
+
     private function silentLogger(): StructuredLogger
     {
         return new StructuredLogger('test', [

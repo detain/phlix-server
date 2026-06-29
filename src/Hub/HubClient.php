@@ -448,21 +448,21 @@ class HubClient
      *
      * @return list<LibraryRef>
      */
-     private function collectLibraries(): array
-     {
-         if ($this->librariesProvider === null) {
-             return [];
-         }
-         try {
-             return array_map(
-                 fn(array $item): LibraryRef => LibraryRef::fromPayload($item),
-                 ($this->librariesProvider)()
-             );
-         } catch (Throwable $e) {
-             $this->logger->warning('Failed to collect libraries for heartbeat', ['exception' => $e->getMessage()]);
-             return [];
-         }
-     }
+    private function collectLibraries(): array
+    {
+        if ($this->librariesProvider === null) {
+            return [];
+        }
+        try {
+            return array_map(
+                fn(array $item): LibraryRef => LibraryRef::fromPayload($item),
+                ($this->librariesProvider)()
+            );
+        } catch (Throwable $e) {
+            $this->logger->warning('Failed to collect libraries for heartbeat', ['exception' => $e->getMessage()]);
+            return [];
+        }
+    }
 
     /**
      * Returns the server's public keys as JWK for the JWKS endpoint.

@@ -198,4 +198,48 @@ class CollectionRepositoryTest extends TestCase
         $this->assertEquals('sp-1', $result->smartPlaylistId);
         $this->assertTrue($result->isSmart());
     }
+
+    public function testFindAllIncludesLimitAndOffset(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('LIMIT'),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 2
+                        && $params[0] === 1000
+                        && $params[1] === 0;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new CollectionRepository($db);
+        $result = $repo->findAll();
+
+        $this->assertIsArray($result);
+    }
+
+    public function testFindAllWithCustomLimitAndOffset(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('OFFSET'),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 2
+                        && $params[0] === 50
+                        && $params[1] === 10;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new CollectionRepository($db);
+        $result = $repo->findAll(50, 10);
+
+        $this->assertIsArray($result);
+    }
 }

@@ -110,4 +110,67 @@ class RecorderTest extends TestCase
         $count = $this->recorder->getActiveTimeShiftCount();
         $this->assertEquals(0, $count);
     }
+
+    public function testGetAllRecordingsIncludesLimitAndTimeWindow(): void
+    {
+        $this->mockDb
+            ->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('LIMIT'),
+                $this->callback(function ($params) {
+                    // SQL must contain LIMIT and time window condition
+                    return is_array($params)
+                        && count($params) === 3
+                        && is_int($params[0]) // cutoff time
+                        && $params[1] === 1000 // limit
+                        && $params[2] === 0; // offset
+                })
+            )
+            ->willReturn([]);
+
+        $this->recorder->getAllRecordings();
+    }
+
+    public function testGetAllRecordingsWithStatusIncludesLimitAndTimeWindow(): void
+    {
+        $this->mockDb
+            ->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('LIMIT'),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 4
+                        && $params[0] === 'completed'
+                        && is_int($params[1]) // cutoff time
+                        && $params[2] === 1000 // limit
+                        && $params[3] === 0; // offset
+                })
+            )
+            ->willReturn([]);
+
+        $this->recorder->getAllRecordings('completed');
+    }
+
+    public function testGetAllRecordingsWithPagination(): void
+    {
+        $this->mockDb
+            ->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('OFFSET'),
+                $this->callback(function ($params) {
+                    return is_array($params)
+                        && count($params) === 3
+                        && $params[0] > 0 // valid cutoff time (time() - custom window)
+                        && $params[1] === 50 // limit
+                        && $params[2] === 10; // offset
+                })
+            )
+            ->willReturn([]);
+
+        // Use a reasonable 7-day window (604800 seconds)
+        $this->recorder->getAllRecordings(null, 50, 10, 604800);
+    }
 }

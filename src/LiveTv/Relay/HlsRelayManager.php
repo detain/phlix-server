@@ -109,7 +109,7 @@ class HlsRelayManager
     public function startRelaySession(string $channelId, string $userId): HlsRelaySession
     {
         // Check max concurrent sessions
-        $activeSessions = $this->getActiveSessions();
+        $activeSessions = $this->getActiveSessions($this->maxConcurrentSessions + 1);
         if (count($activeSessions) >= $this->maxConcurrentSessions) {
             throw new \RuntimeException('Maximum concurrent relay sessions reached');
         }
@@ -339,15 +339,18 @@ class HlsRelayManager
     /**
      * Get active relay sessions for the hub.
      *
+     * @param int $limit Maximum number of sessions to return (default: 100)
+     *
      * @return array<int, array<string, mixed>> Active relay sessions.
      *
      * @since 0.12.0
      */
-    public function getActiveSessions(): array
+    public function getActiveSessions(int $limit = 100): array
     {
         /** @var array<int, array<string, mixed>> $result */
         $result = $this->db->query(
-            "SELECT * FROM livetv_relay_sessions ORDER BY started_at DESC"
+            "SELECT * FROM livetv_relay_sessions ORDER BY started_at DESC LIMIT ?",
+            [$limit]
         );
         return $result;
     }

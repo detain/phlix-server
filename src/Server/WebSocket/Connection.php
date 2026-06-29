@@ -97,6 +97,25 @@ class Connection implements ConnectionInterface
     }
 
     /**
+     * Sends a flat canonical message without wrapping payload under 'data'.
+     *
+     * Used for SyncPlay messages which use the flat canonical wire format:
+     * {type, ...payload, timestamp} instead of {type, data: {...}, timestamp}.
+     *
+     * @param string $type The message type/event name
+     * @param array<string, mixed> $payload The flat event payload (sent directly, not under 'data')
+     * @return void
+     */
+    public function sendFlat(string $type, array $payload): void
+    {
+        $this->send(array_merge(
+            ['type' => $type],
+            $payload,
+            ['timestamp' => time()]
+        ));
+    }
+
+    /**
      * Closes the connection.
      *
      * @return void

@@ -42,6 +42,15 @@ interface ConnectionInterface
     public function sendMessage(string $type, array $data = []): void;
 
     /**
+     * Sends a flat canonical message without wrapping payload under 'data'.
+     *
+     * @param string $type The message type/event name
+     * @param array<string, mixed> $payload The flat event payload
+     * @return void
+     */
+    public function sendFlat(string $type, array $payload): void;
+
+    /**
      * Closes the connection.
      *
      * @return void

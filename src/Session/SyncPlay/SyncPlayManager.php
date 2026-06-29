@@ -198,6 +198,10 @@ class SyncPlayManager
         $this->messageHandler->on(Messages::TYPE_CHAT_MESSAGE, $handler);
         $this->messageHandler->on(Messages::TYPE_CHAT_TYPING, $handler);
         $this->messageHandler->on(Messages::TYPE_TIME_PING, $handler);
+        $this->messageHandler->on(Messages::TYPE_HOST_TRANSFER, $handler);
+        $this->messageHandler->on(Messages::TYPE_PLAYBACK_SYNC, $handler);
+        $this->messageHandler->on(Messages::TYPE_TIME_SYNC, $handler);
+        $this->messageHandler->on(Messages::TYPE_GROUP_LIST, $handler);
     }
 
     /**
@@ -252,6 +256,26 @@ class SyncPlayManager
 
                 case Messages::TYPE_TIME_PING:
                     $this->handleTimePing($connection, $payload);
+                    break;
+
+                case Messages::TYPE_CHAT_TYPING:
+                    $this->handleChatTyping($connection, $payload);
+                    break;
+
+                case Messages::TYPE_HOST_TRANSFER:
+                    $this->handleHostTransfer($connection, $payload);
+                    break;
+
+                case Messages::TYPE_PLAYBACK_SYNC:
+                    $this->handlePlaybackSync($connection, $payload);
+                    break;
+
+                case Messages::TYPE_TIME_SYNC:
+                    $this->handleTimeSync($connection, $payload);
+                    break;
+
+                case Messages::TYPE_GROUP_LIST:
+                    $this->handleGroupList($connection, $payload);
                     break;
 
                 default:
@@ -826,6 +850,226 @@ class SyncPlayManager
         $pong = $this->timeSync->processPing($payload);
         $message = Messages::timePong($pong['client_time'], $pong['server_time']);
         $connection->send($message);
+    }
+
+    /**
+     * Handle typing indicator from a group member.
+     *
+     * Broadcasts the typing status to all other group members to show
+     * that a member is composing a message.
+     *
+     * @param ConnectionInterface $connection The WebSocket connection
+     * @param array<string, mixed> $payload Payload containing member_id, is_typing
+     * @return void
+     *
+     * @fires Messages::TYPE_CHAT_TYPING Broadcast to group members (excluding sender)
+     */
+    private function handleChatTyping(ConnectionInterface $connection, array $payload): void
+    {
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            return;
+        }
+        $groupId = $this->memberToGroup[$memberId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
+
+        if ($group === null || $groupId === null) {
+            return;
+        }
+
+        $isTyping = ($payload['is_typing'] ?? false) === true || $payload['is_typing'] === '1';
+
+        $this->broadcastToGroup($groupId, Messages::TYPE_CHAT_TYPING, [
+            'member_id' => $memberId,
+            'is_typing' => $isTyping,
+        ], [$memberId]);
+    }
+
+    /**
+     * Handle voluntary host transfer request from the current host.
+     *
+     * Only the current host can initiate a transfer. The host designation
+     * is passed to the new member and GROUP_STATE is broadcast to all members.
+     * Per SP4 spec, host authorization uses server-derived member_id.
+     *
+     * @param ConnectionInterface $connection The WebSocket connection
+     * @param array<string, mixed> $payload Payload containing new_host_id
+     * @return void
+     *
+     * @fires Messages::TYPE_GROUP_STATE Broadcast to all group members after transfer
+     */
+    private function handleHostTransfer(ConnectionInterface $connection, array $payload): void
+    {
+        $memberId = $connection->getUserId();
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
+            return;
+        }
+
+        $groupId = $this->memberToGroup[$memberId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
+
+        if ($group === null || $groupId === null) {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
+
+        if (!$group->isHost($memberId)) {
+            $this->sendError($connection, 'NOT_HOST', 'Only the host can transfer ownership');
+            return;
+        }
+
+        $newHostId = self::stringFromMixed($payload['new_host_id'] ?? null);
+        if ($newHostId === '') {
+            $this->sendError($connection, 'INVALID_NEW_HOST', 'Missing new host member ID');
+            return;
+        }
+
+        if (!$group->hasMember($newHostId)) {
+            $this->sendError($connection, 'MEMBER_NOT_FOUND', 'New host is not a member of this group');
+            return;
+        }
+
+        if ($newHostId === $memberId) {
+            $this->sendError($connection, 'SAME_HOST', 'Cannot transfer to yourself');
+            return;
+        }
+
+        $group->setHost($newHostId);
+
+        $this->log('info', 'Host transferred', [
+            'group_id' => $groupId,
+            'old_host' => $memberId,
+            'new_host' => $newHostId,
+        ]);
+
+        // SP5: Publish snapshot so HTTP workers can see host change
+        $this->publishSnapshot($groupId);
+
+        $this->broadcastToGroup($groupId, Messages::TYPE_GROUP_STATE, [
+            'group' => $group->getState(),
+        ]);
+    }
+
+    /**
+     * Handle periodic playback sync request from a group member.
+     *
+     * Any member can request a playback sync. The host responds with the
+     * current playback state so the member can synchronize their position.
+     *
+     * @param ConnectionInterface $connection The WebSocket connection
+     * @param array<string, mixed> $payload Payload containing member_id
+     * @return void
+     *
+     * @fires Messages::TYPE_PLAYBACK_SYNC Sent directly to the requesting member
+     */
+    private function handlePlaybackSync(ConnectionInterface $connection, array $payload): void
+    {
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $memberId = $connection->getUserId();
+        }
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
+            return;
+        }
+
+        $groupId = $this->memberToGroup[$memberId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
+
+        if ($group === null || $groupId === null) {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
+
+        $hostId = $group->getHostId();
+        $currentMediaId = $group->getCurrentMediaId();
+        $position = $group->getPlaybackPosition();
+        $isPlaying = $group->isPlaying();
+        $serverTime = time();
+
+        // Broadcast current playback state from host to all members
+        $this->broadcastToGroup($groupId, Messages::TYPE_PLAYBACK_SYNC, [
+            'member_id' => $hostId,
+            'group_id' => $groupId,
+            'current_media_id' => $currentMediaId,
+            'position' => $position,
+            'is_playing' => $isPlaying,
+            'server_time' => $serverTime,
+        ]);
+    }
+
+    /**
+     * Handle time synchronization state request from a group member.
+     *
+     * Returns the current time sync status including clock offset and drift
+     * information for accurate playback position calculation.
+     *
+     * @param ConnectionInterface $connection The WebSocket connection
+     * @param array<string, mixed> $payload Payload containing member_id
+     * @return void
+     *
+     * @see TimeSync::getStatus() For the structure of the time sync status
+     */
+    private function handleTimeSync(ConnectionInterface $connection, array $payload): void
+    {
+        $memberId = self::stringFromMixed($payload['member_id'] ?? null);
+        if ($memberId === '') {
+            $memberId = $connection->getUserId();
+        }
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
+            return;
+        }
+
+        $groupId = $this->memberToGroup[$memberId] ?? null;
+        $group = $groupId !== null ? ($this->groups[$groupId] ?? null) : null;
+
+        if ($group === null || $groupId === null) {
+            $this->sendError($connection, 'NOT_IN_GROUP', 'You are not in a group');
+            return;
+        }
+
+        $timeStatus = $this->timeSync->getStatus();
+
+        $connection->sendFlat(Messages::TYPE_TIME_SYNC, [
+            'member_id' => $memberId,
+            'group_id' => $groupId,
+            'server_time' => time(),
+            'offset_ms' => $timeStatus['offset'],
+            'latency_ms' => $timeStatus['latency'],
+            'drift_rate' => $timeStatus['drift_rate'],
+            'is_stable' => $timeStatus['is_stable'],
+        ]);
+    }
+
+    /**
+     * Handle group list request from a client.
+     *
+     * Returns a list of all available SyncPlay groups that the client
+     * can join. This allows clients to browse available groups before
+     * attempting to join.
+     *
+     * @param ConnectionInterface $connection The WebSocket connection
+     * @param array<string, mixed> $payload Unused payload (member_id derived from connection)
+     * @return void
+     *
+     * @fires Messages::TYPE_GROUP_LIST Sent directly to the requesting member
+     */
+    private function handleGroupList(ConnectionInterface $connection, array $payload): void
+    {
+        $memberId = $connection->getUserId();
+        if ($memberId === null) {
+            $this->sendError($connection, 'NOT_AUTHENTICATED', 'Authentication required');
+            return;
+        }
+
+        $groups = $this->listGroups();
+
+        $connection->sendFlat(Messages::TYPE_GROUP_LIST, [
+            'groups' => $groups,
+            'count' => count($groups),
+        ]);
     }
 
     /**

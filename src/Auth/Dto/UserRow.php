@@ -72,4 +72,22 @@ final class UserRow
         $value = $row[$key];
         return is_numeric($value) ? (int) $value : $default;
     }
+
+    /**
+     * Read an unsigned-int column that may be NULL.
+     *
+     * @param array<string, mixed>|null $row
+     * @return int|null Null when the value is absent, null, or non-numeric.
+     */
+    public static function intOrNull(?array $row, string $key): ?int
+    {
+        if ($row === null || !array_key_exists($key, $row)) {
+            return null;
+        }
+        $value = $row[$key];
+        if ($value === null) {
+            return null;
+        }
+        return is_numeric($value) ? (int) $value : null;
+    }
 }

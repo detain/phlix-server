@@ -573,6 +573,13 @@ final class AdminUserControllerTest extends TestCase
     // resetPassword()
     // ─────────────────────────────────────────────────────────────────
 
+    /**
+     * S7+F1: resetPassword() no longer returns a plaintext password.
+     * Instead it issues a one-time reset token (hashed at rest, with expiry)
+     * and sets the must_change_password flag so the user must change before access.
+     *
+     * @since S7+F1
+     */
     public function testResetPasswordHappyPath(): void
     {
         $user = ['id' => '1', 'username' => 'alice', 'email' => 'alice@example.com', 'is_admin' => 1];
@@ -583,12 +590,26 @@ final class AdminUserControllerTest extends TestCase
             ->with('1')
             ->willReturn($user);
 
-        // Verify update is called with a hashed password (argon2id)
+        // S7+F1: No longer calls update() with a password.
+        // Instead calls setPasswordResetToken() with a hashed token + expiry,
+        // and setMustChangePassword(true) to force a password change.
         $repo->expects($this->once())
-            ->method('update')
-            ->with('1', $this->callback(function (array $data): bool {
-                return isset($data['password']) && str_starts_with($data['password'], '$argon2id$');
-            }));
+            ->method('setPasswordResetToken')
+            ->with(
+                '1',
+                $this->callback(function (string $hashedToken): bool {
+                    // Token should be hashed with Argon2ID (starts with $argon2id$)
+                    return str_starts_with($hashedToken, '$argon2id$');
+                }),
+                $this->callback(function (int $expiresAt): bool {
+                    // Expiry should be ~15 minutes (900 seconds) from now
+                    return $expiresAt > time() + 800 && $expiresAt <= time() + 900;
+                })
+            );
+
+        $repo->expects($this->once())
+            ->method('setMustChangePassword')
+            ->with('1', true);
 
         $controller = new AdminUserController($repo);
         $response = $controller->resetPassword($this->makeRequest(), ['id' => '1']);
@@ -597,10 +618,9 @@ final class AdminUserControllerTest extends TestCase
         /** @var array<string, mixed> */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
-        $this->assertArrayHasKey('new_password', $body);
-        $this->assertSame('Password reset successfully', $body['message']);
-        // new_password should be 12 characters
-        $this->assertSame(12, strlen($body['new_password']));
+        // S7+F1: new_password must NOT be in the response (security fix)
+        $this->assertArrayNotHasKey('new_password', $body);
+        $this->assertStringContainsString('reset token issued', $body['message']);
     }
 
     public function testResetPasswordNotFound(): void

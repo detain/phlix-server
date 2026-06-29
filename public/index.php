@@ -37,6 +37,7 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Controllers\BookController;
@@ -87,16 +88,25 @@ $authManager = $container->get(AuthManager::class);
 $request = Request::fromGlobals();
 
 /**
- * Authenticate request if token provided
+ * C6/B4: Shared request authentication.
  *
- * Checks for Bearer token in Authorization header.
- * If valid, sets userId on request for downstream handlers.
+ * C6/B4: Uses the shared RequestAuthenticator to authenticate requests,
+ * which handles Bearer token AND the phlix_session cookie fallback.
+ * This ensures the same auth behavior as the Workerman daemon.
+ *
+ * S6: After authentication, validates Origin/Referer for cookie-authenticated
+ * state-changing requests to prevent CSRF attacks.
  */
-$token = $request->getBearerToken();
-if ($token) {
-    $auth = $authManager->validateAccessToken($token);
-    if (is_array($auth) && is_string($auth['user_id'] ?? null)) {
-        $request->userId = $auth['user_id'];
+$authenticator = new RequestAuthenticator($authManager);
+$authenticator->authenticate($request);
+
+// S6: CSRF validation for cookie-authenticated state-changing requests.
+if ($authenticator->isCookieAuthenticated($request)) {
+    if (!$authenticator->validateCsrfOrigin($request)) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['error' => 'CSRF validation failed', 'code' => 'csrf.invalid_origin']);
+        exit;
     }
 }
 

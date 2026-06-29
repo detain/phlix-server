@@ -26,9 +26,12 @@ use Phlix\Server\Http\Response;
  * It is dependency-free (only reads the request), so callers can register it as
  * `new AuthMiddleware()` without DI wiring.
  *
- * Note on CSRF: the protected routes are JSON APIs authenticated via the
- * Authorization Bearer header (JWT); browsers do not auto-attach it cross-origin,
- * so no CSRF token is required (same rationale as {@see AdminMiddleware}).
+ * Note on CSRF: For Bearer-token authenticated requests, no CSRF token is
+ * required because browsers never auto-attach the Authorization header
+ * cross-origin. However, for requests authenticated via the `phlix_session`
+ * cookie, CSRF protection IS required — the browser auto-sends cookies on
+ * cross-origin state-changing requests. Both entry points handle this via
+ * {@see \Phlix\Server\Http\RequestAuthenticator::validateCsrfOrigin()}.
  *
  * @package Phlix\Server\Http\Middleware
  * @since 0.39.0

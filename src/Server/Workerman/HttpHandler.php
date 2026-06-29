@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Workerman;
 
-use Phlix\Auth\AuthManager;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Plugins\PluginLoader;
@@ -16,6 +15,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
+use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
@@ -53,7 +53,7 @@ final class HttpHandler
 {
     public function __construct(
         private readonly ContainerInterface $container,
-        private readonly AuthManager $authManager,
+        private readonly RequestAuthenticator $authenticator,
         private readonly string $publicRoot,
         private readonly Application $application,
     ) {
@@ -83,30 +83,26 @@ final class HttpHandler
                 return;
             }
 
-            // Bearer-token auth (mirrors the inline check that
-            // public/index.php used to do). Application's router has no
-            // global auth middleware — controllers check $request->userId
-            // themselves — so we populate it here before dispatch.
-            //
-            // Browser sessions arrive as a `phlix_session` HttpOnly
-            // cookie rather than an Authorization header — set by
-            // {@see AuthController::browserAuthResponse()} on login. We
-            // fall back to it here so subsequent page navigations show
-            // the user as authenticated without needing client-side JS
-            // to attach a header. Resolving it here — before the media-stream
-            // handler — also lets that handler authorise via the session.
-            $token = $request->getBearerToken();
-            if ($token === null || $token === '') {
-                $cookieToken = $request->getCookie(AuthController::SESSION_COOKIE);
-                if (is_string($cookieToken) && $cookieToken !== '') {
-                    $token = $cookieToken;
-                    $request->bearerToken = $cookieToken;
-                }
-            }
-            if ($token !== null && $token !== '') {
-                $auth = $this->authManager->validateAccessToken($token);
-                if (is_array($auth) && is_string($auth['user_id'] ?? null)) {
-                    $request->userId = $auth['user_id'];
+            // C6/B4: Authenticate via the shared collaborator — handles Bearer
+            // token OR the phlix_session cookie fallback. Populates $request->userId.
+            $this->authenticator->authenticate($request);
+
+            // S6: CSRF protection for cookie-authenticated state-changing requests.
+            // Bearer tokens are safe because browsers never auto-attach the
+            // Authorization header cross-origin. Cookie auth is vulnerable since
+            // browsers auto-send cookies on cross-origin requests.
+            if ($this->authenticator->isCookieAuthenticated($request)) {
+                if (!$this->authenticator->validateCsrfOrigin($request)) {
+                    $body = json_encode([
+                        'error' => 'CSRF validation failed',
+                        'code' => 'csrf.invalid_origin',
+                    ]) ?: '{"error":"CSRF validation failed","code":"csrf.invalid_origin"}';
+                    $connection->send(new WorkermanResponse(
+                        403,
+                        ['Content-Type' => 'application/json; charset=utf-8'],
+                        $body,
+                    ));
+                    return;
                 }
             }
 

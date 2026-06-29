@@ -200,6 +200,42 @@ class Application
             ]);
         });
 
+        // F6: Job health endpoint - reports stuck/running transcode + scan job
+        // counts, oldest age, and the last reaper run time.
+        $this->router->get('/admin/health/jobs', function (Request $request): Response {
+            // The container is always set when loadRoutes() is called (from the
+            // constructor), but PHPStan sees the property as ?ContainerInterface.
+            // Guard against null to satisfy the type checker.
+            if ($this->container === null) {
+                return (new Response())->status(500)->json(['error' => 'Server misconfiguration']);
+            }
+
+            /** @var \Phlix\Media\Transcoding\TranscodeManager $transcodeManager */
+            $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+            /** @var \Phlix\Media\Library\ScanJobRepository $scanRepo */
+            $scanRepo = $this->container->get(\Phlix\Media\Library\ScanJobRepository::class);
+
+            $transcodeStats = $transcodeManager->getTranscodeJobStats();
+            $scanStats = $scanRepo->getRunningJobStats();
+            $lastReaperRun = $transcodeManager->getLastReaperRun();
+
+            return (new Response())->json([
+                'transcode_jobs' => [
+                    'running' => $transcodeStats['running'],
+                    'oldest_age_seconds' => $transcodeStats['oldest_age_seconds'],
+                    'oldest_started_at' => $transcodeStats['oldest_started_at'],
+                ],
+                'scan_jobs' => [
+                    'running' => $scanStats['running'],
+                    'oldest_age_seconds' => $scanStats['oldest_age_seconds'],
+                    'oldest_started_at' => $scanStats['oldest_started_at'],
+                ],
+                'reaper' => [
+                    'last_run_at' => $lastReaperRun !== null ? date('c', $lastReaperRun) : null,
+                ],
+            ]);
+        });
+
         // JWKS endpoint for hub-to-server JWT verification
         $this->router->get('/.well-known/jwks.json', function (Request $request, array $params): Response {
             $controller = $this->getHubJwksController();

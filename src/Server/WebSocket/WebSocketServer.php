@@ -8,6 +8,7 @@ use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Phlix\Session\SyncPlay\SyncPlayManager;
 
 /**
  * WebSocket server implementation for real-time communication.
@@ -33,6 +34,9 @@ class WebSocketServer
     /** @var ConnectionPool Manages active WebSocket connections */
     private ConnectionPool $connections;
 
+    /** @var SyncPlayManager|null SyncPlay manager for group state */
+    private ?SyncPlayManager $syncPlayManager = null;
+
     /** @var array<string, mixed> Server configuration */
     private array $config;
 
@@ -40,6 +44,7 @@ class WebSocketServer
      * Creates a new WebSocket server instance.
      *
      * @param array<string, mixed> $config Server configuration with 'host' and 'port' keys
+     * @param MessageHandler|null $handler Optional message handler (for SP1 singletons)
      *
      * @example
      * ```php
@@ -50,11 +55,11 @@ class WebSocketServer
      * $server->run();
      * ```
      */
-    public function __construct(array $config)
+    public function __construct(array $config, ?MessageHandler $handler = null)
     {
         $this->config = $config;
         $this->connections = ConnectionPool::getInstance();
-        $this->handler = new MessageHandler($this->connections);
+        $this->handler = $handler ?? new MessageHandler($this->connections);
 
         $host = $config['host'] ?? '0.0.0.0';
         $port = $config['port'] ?? 8097;
@@ -86,11 +91,31 @@ class WebSocketServer
             'port' => is_numeric($port) ? (int)$port : 8097,
         ]);
 
+        $staleConnectionTimeoutRaw = $this->config['stale_connection_timeout'] ?? 300;
+        $staleConnectionTimeout = is_numeric($staleConnectionTimeoutRaw) ? (int) $staleConnectionTimeoutRaw : 300;
+
+        $staleGroupTimeoutRaw = $this->config['stale_group_timeout'] ?? 3600;
+        $staleGroupTimeout = is_numeric($staleGroupTimeoutRaw) ? (int) $staleGroupTimeoutRaw : 3600;
+
         // Start cleanup timer for stale connections (every 60 seconds)
         if (function_exists('Workerman\Timer')) {
-            \Workerman\Timer::add(60, function (): void {
-                $this->connections->cleanupStaleConnections(300);
+            \Workerman\Timer::add(60, function () use ($staleConnectionTimeout): void {
+                $this->connections->cleanupStaleConnections($staleConnectionTimeout);
             });
+
+            // Start cleanup timer for stale SyncPlay groups (every 5 minutes)
+            $syncPlayManager = $this->syncPlayManager;
+            if ($syncPlayManager !== null) {
+                \Workerman\Timer::add(300, function () use ($syncPlayManager, $staleGroupTimeout): void {
+                    $removed = $syncPlayManager->cleanupStaleGroups($staleGroupTimeout);
+                    if ($removed > 0) {
+                        $logger = LoggerFactory::get(LogChannels::WEBSOCKET);
+                        $logger->info('Cleaned up stale SyncPlay groups', [
+                            'removed' => $removed,
+                        ]);
+                    }
+                });
+            }
         }
     }
 
@@ -216,6 +241,20 @@ class WebSocketServer
     public function getHandler(): MessageHandler
     {
         return $this->handler;
+    }
+
+    /**
+     * Sets the SyncPlay manager for group state management.
+     *
+     * This must be called before onStart() to enable the stale groups
+     * cleanup timer.
+     *
+     * @param \Phlix\Session\SyncPlay\SyncPlayManager $manager The SyncPlay manager
+     * @return void
+     */
+    public function setSyncPlayManager(\Phlix\Session\SyncPlay\SyncPlayManager $manager): void
+    {
+        $this->syncPlayManager = $manager;
     }
 
     /**

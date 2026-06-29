@@ -169,6 +169,71 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
+// 4a. WebSocket worker for SyncPlay realtime communication (SP1).
+//
+// SyncPlay requires exactly ONE authoritative SyncPlayManager shared across all
+// WS connections, so this worker runs as count=1 on port 8097 (separate from the
+// HTTP workers on 8096). The manager is constructed once in onWorkerStart and
+// its state persists for the lifetime of this worker process.
+//
+// Architecture:
+//   - WebSocketServer accepts an injected MessageHandler so the same handler
+//     instance is used for both SyncPlay message routing and general WS events.
+//   - SyncPlayManager::initialize() registers the per-type callbacks that route
+//     incoming SyncPlay messages to the appropriate handler methods.
+//   - ConnectionPool and MessageHandler are singletons shared within this worker.
+// -----------------------------------------------------------------------------
+
+try {
+    $wsWorker = new Worker('websocket://0.0.0.0:8097');
+    $wsWorker->count = 1;
+    $wsWorker->name = 'phlix-server-ws';
+    $wsWorker->onWorkerStart = static function (Worker $w) use ($config, $applyCuratedCoroutineHooks): void {
+        $applyCuratedCoroutineHooks();
+
+        // Build the container inside the fork so each worker owns its own state.
+        $container = ContainerFactory::create($config);
+
+        // Create the shared MessageHandler and ConnectionPool singletons.
+        $connections = \Phlix\Server\WebSocket\ConnectionPool::getInstance();
+        $messageHandler = new \Phlix\Server\WebSocket\MessageHandler($connections);
+
+        // Construct ONE authoritative SyncPlayManager and initialize it with the
+        // message handler so SyncPlay message types are routed to their handlers.
+        /** @var \Phlix\Common\Logger\StructuredLogger $logger */
+        $logger = $container->get('logger.websocket');
+        $syncPlayManager = new \Phlix\Session\SyncPlay\SyncPlayManager($logger);
+        $syncPlayManager->initialize($messageHandler);
+
+        // Build and configure the WebSocket server with the shared manager.
+        $wsConfigRaw = $config['websocket'] ?? null;
+        $wsConfig = is_array($wsConfigRaw) ? $wsConfigRaw : [];
+        $wsConfig['host'] = $wsConfig['host'] ?? '0.0.0.0';
+        $wsConfig['port'] = $wsConfig['port'] ?? 8097;
+        $wsConfig['stale_connection_timeout'] = $wsConfig['stale_connection_timeout'] ?? 300;
+        $wsConfig['stale_group_timeout'] = $wsConfig['stale_group_timeout'] ?? 3600;
+
+        /** @var array<string, mixed> $wsConfig */
+        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler);
+        $wsServer->setSyncPlayManager($syncPlayManager);
+
+        // Trigger onStart to log the startup message and arm cleanup timers.
+        // The actual Workerman worker callbacks (onConnect, onMessage, onClose)
+        // are already bound in the WebSocketServer constructor.
+        $wsServer->onStart();
+
+        /** @var \Phlix\Common\Logger\StructuredLogger $wsLogger */
+        $wsLogger = $container->get('logger.websocket');
+        $wsLogger->info('SyncPlay manager initialized', [
+            'message' => 'One SyncPlayManager instance handles all WS connections',
+        ]);
+    };
+} catch (\Throwable $e) {
+    // The WS worker is best-effort; never block the HTTP server.
+    trigger_error('Failed to set up WebSocket worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 4b. Managed worker processes (1.1b).
 //
 // This app is hand-rolled (no Webman `support\App::run()`), so config/process.php

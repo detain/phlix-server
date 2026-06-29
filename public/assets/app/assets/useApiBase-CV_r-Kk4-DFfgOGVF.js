@@ -1,0 +1,2 @@
+import{C as e,c as t}from"./Icon-ax5k7_G2-BsPiyrnl.js";function n(e){return typeof e==`string`?e:e?.value??``}function r(){let r=e(`apiBase`,``);return t(()=>n(r))}function i(){let r=e(`mediaApiBase`,void 0),i=e(`apiBase`,``);return t(()=>n(r)||n(i))}function a(){let r=e(`mediaDirectBase`,void 0);return t(()=>n(r))}export{i as n,r,a as t};
+//# sourceMappingURL=useApiBase-CV_r-Kk4-DFfgOGVF.js.map

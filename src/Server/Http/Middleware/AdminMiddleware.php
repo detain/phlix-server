@@ -41,11 +41,11 @@ use Phlix\Server\Http\Response;
  * Workerman 5 + Swoole eventLoop runtime introduced in step 0.2; see
  * `phlix-docs/dev/coroutine-runtime.md` for the no-static-state rule.
  *
- * Note on CSRF: the routes this middleware protects are JSON APIs
- * authenticated via the Authorization Bearer header (JWT). Browsers do
- * not auto-attach Authorization headers across origins, so a CSRF
- * token is intentionally NOT required — see also
- * https://detain.github.io/phlix-docs/plugins/install-from-url
+ * Note on CSRF: For Bearer-token authenticated requests, no CSRF token is
+ * required because browsers never auto-attach the Authorization header
+ * cross-origin. However, for requests authenticated via cookie auth,
+ * CSRF protection IS required — see
+ * {@see \Phlix\Server\Http\RequestAuthenticator::validateCsrfOrigin()}.
  *
  * @package Phlix\Server\Http\Middleware
  * @since   0.10.0 (Step A.5)

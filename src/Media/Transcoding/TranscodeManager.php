@@ -63,6 +63,9 @@ class TranscodeManager
     /** @var string Absolute path to the scripts/clean-vtt.php cleaner CLI */
     private string $cleanVttScript;
 
+    /** @var int|null Unix timestamp of the last reaper run, or null if never run. */
+    private ?int $lastReaperRun = null;
+
     /**
      * Profile resolution caps used to decide downscaling for HLS jobs.
      *
@@ -1127,7 +1130,68 @@ class TranscodeManager
             $this->logger->warning('Reaped stale transcode jobs', ['count' => $reaped]);
         }
 
+        // F6: track when the reaper last ran.
+        $this->lastReaperRun = time();
+
         return $reaped;
+    }
+
+    /**
+     * Return statistics about currently-running transcode jobs.
+     *
+     * F6: Back the /admin/health/jobs endpoint. Returns the count of jobs in
+     * the `running` state and the age of the oldest one.
+     *
+     * @return array{running: int, oldest_age_seconds: int|null, oldest_started_at: string|null}
+     *         running: Number of jobs currently in `running` state.
+     *         oldest_age_seconds: Seconds since the oldest running job started, or null if none.
+     *         oldest_started_at: ISO-8601 timestamp of the oldest running job, or null.
+     *
+     * @since F6
+     */
+    public function getTranscodeJobStats(): array
+    {
+        $result = $this->db->query(
+            "SELECT id, started_at FROM transcode_jobs WHERE status = 'running' ORDER BY started_at ASC"
+        );
+        $rows = RowMap::listFromMixed($result);
+        $running = count($rows);
+
+        if ($running === 0) {
+            return [
+                'running' => 0,
+                'oldest_age_seconds' => null,
+                'oldest_started_at' => null,
+            ];
+        }
+
+        $oldestRow = $rows[0];
+        $startedAt = is_string($oldestRow['started_at'] ?? null)
+            ? strtotime((string) $oldestRow['started_at'])
+            : false;
+
+        return [
+            'running' => $running,
+            'oldest_age_seconds' => $startedAt !== false ? time() - $startedAt : null,
+            'oldest_started_at' => $startedAt !== false
+                ? date('c', $startedAt)
+                : null,
+        ];
+    }
+
+    /**
+     * Return the Unix timestamp of when the reaper last ran, or null if never.
+     *
+     * F6: Surface the last reaper run time in the /admin/health/jobs response.
+     *
+     * @return int|null Unix timestamp, or null if reapStaleRunningJobs() has
+     *                  never been called in this process lifetime.
+     *
+     * @since F6
+     */
+    public function getLastReaperRun(): ?int
+    {
+        return $this->lastReaperRun;
     }
 
     /**

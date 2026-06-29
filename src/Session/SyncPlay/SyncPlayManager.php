@@ -75,6 +75,9 @@ class SyncPlayManager
     /** @var array<string, string> Member ID to group ID mapping */
     private array $memberToGroup = [];
 
+    /** @var array<string, string> Connection ID to member ID reverse mapping */
+    private array $connectionToMember = [];
+
     /** @var TimeSync Time synchronization handler for playback sync */
     private TimeSync $timeSync;
 
@@ -235,7 +238,7 @@ class SyncPlayManager
      * $result = $manager->createGroup('Private Watch Party', 'secret123', 'user_1', 'Host');
      * ```
      */
-    public function createGroup(string $name, ?string $password = null, ?string $memberId = null, ?string $memberName = null): array
+    public function createGroup(string $name, ?string $password = null, ?string $memberId = null, ?string $memberName = null, ?string $connectionId = null): array
     {
         if (count($this->groups) >= self::MAX_GROUPS) {
             return ['success' => false, 'error' => 'Maximum group limit reached'];
@@ -255,10 +258,13 @@ class SyncPlayManager
         if ($memberId !== null) {
             $group->addMember($memberId, [
                 'name' => $memberName ?? 'Host',
-                'connection_id' => null,
+                'connection_id' => $connectionId,
             ]);
             $group->setHost($memberId);
             $this->memberToGroup[$memberId] = $groupId;
+            if ($connectionId !== null) {
+                $this->connectionToMember[$connectionId] = $memberId;
+            }
         }
 
         $this->groups[$groupId] = $group;
@@ -294,7 +300,7 @@ class SyncPlayManager
      * $result = $manager->joinGroup('sp_abc123', 'member_2', 'Guest', 'secret');
      * ```
      */
-    public function joinGroup(string $groupId, string $memberId, string $memberName, ?string $password = null): array
+    public function joinGroup(string $groupId, string $memberId, string $memberName, ?string $password = null, ?string $connectionId = null): array
     {
         $group = $this->groups[$groupId] ?? null;
 
@@ -316,7 +322,7 @@ class SyncPlayManager
 
         $memberData = [
             'name' => $memberName,
-            'connection_id' => null,
+            'connection_id' => $connectionId,
         ];
 
         if (!$group->addMember($memberId, $memberData)) {
@@ -324,6 +330,9 @@ class SyncPlayManager
         }
 
         $this->memberToGroup[$memberId] = $groupId;
+        if ($connectionId !== null) {
+            $this->connectionToMember[$connectionId] = $memberId;
+        }
 
         $this->log('info', 'Member joined group', [
             'group_id' => $groupId,
@@ -376,9 +385,13 @@ class SyncPlayManager
         $memberRecord = $group->getMember($memberId);
         $memberName = $memberRecord['name'] ?? 'Unknown';
         $wasHost = $group->isHost($memberId);
+        $connectionId = $memberRecord['connection_id'] ?? null;
 
         $group->removeMember($memberId);
         unset($this->memberToGroup[$memberId]);
+        if ($connectionId !== null) {
+            unset($this->connectionToMember[$connectionId]);
+        }
 
         // Clean up empty groups
         if ($group->getMemberCount() === 0) {
@@ -402,6 +415,26 @@ class SyncPlayManager
             'success' => true,
             'message' => "{$memberName} left the group",
         ];
+    }
+
+    /**
+     * Handle a WebSocket connection close event.
+     *
+     * Called by WebSocketServer when a connection closes. This maps the
+     * connection back to its SyncPlay member (if any) and removes the
+     * member from their group, triggering host re-election if necessary.
+     *
+     * @param string $connectionId The ID of the connection that closed
+     * @return void
+     */
+    public function onConnectionClose(string $connectionId): void
+    {
+        $memberId = $this->connectionToMember[$connectionId] ?? null;
+        if ($memberId === null) {
+            return;
+        }
+
+        $this->leaveGroup($memberId);
     }
 
     /**
@@ -728,7 +761,7 @@ class SyncPlayManager
         $groupName = self::stringFromMixed($payload['group_name'] ?? 'New Group');
         $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
-        $result = $this->createGroup($groupName, $password, $memberId, $memberName);
+        $result = $this->createGroup($groupName, $password, $memberId, $memberName, $connection->getId());
 
         if ($result['success'] === true) {
             $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
@@ -757,7 +790,7 @@ class SyncPlayManager
         $memberName = self::stringFromMixed($payload['member_name'] ?? 'User');
         $password = self::stringOrNullFromMixed($payload['password'] ?? null);
 
-        $result = $this->joinGroup($groupId, $memberId, $memberName, $password);
+        $result = $this->joinGroup($groupId, $memberId, $memberName, $password, $connection->getId());
 
         if ($result['success'] === true) {
             $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
@@ -814,14 +847,16 @@ class SyncPlayManager
      */
     private function broadcastToGroup(string $groupId, string $type, array $data, array $excludeIds = []): void
     {
-        if ($this->messageHandler === null) {
-            return;
-        }
-
         $group = $this->groups[$groupId] ?? null;
         if ($group === null) {
             return;
         }
+
+        $flatFrame = array_merge(
+            ['type' => $type],
+            $data,
+            ['timestamp' => time()]
+        );
 
         foreach ($group->getMembers() as $memberId => $member) {
             if (in_array($memberId, $excludeIds, true)) {
@@ -829,9 +864,16 @@ class SyncPlayManager
             }
 
             $connectionId = $member['connection_id'] ?? null;
-            if ($connectionId !== null) {
-                $this->messageHandler->sendToSession($connectionId, $type, $data);
+            if ($connectionId === null) {
+                continue;
             }
+
+            $connection = ConnectionPool::getInstance()->get($connectionId);
+            if ($connection === null) {
+                continue;
+            }
+
+            $connection->send($flatFrame);
         }
     }
 

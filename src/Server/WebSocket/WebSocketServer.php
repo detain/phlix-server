@@ -184,6 +184,11 @@ class WebSocketServer
                 'authenticated' => $wsConnection->isAuthenticated(),
             ]);
 
+            // Notify SyncPlay manager to vacate member from group
+            if ($this->syncPlayManager !== null) {
+                $this->syncPlayManager->onConnectionClose($wsConnection->getId());
+            }
+
             $this->connections->remove($wsConnection->getId());
 
             // Broadcast disconnection if authenticated

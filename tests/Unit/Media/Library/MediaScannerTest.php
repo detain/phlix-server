@@ -140,6 +140,151 @@ class MediaScannerTest extends TestCase
         $this->assertSame($episodes[0]['parent_id'], $episodes[1]['parent_id']);
     }
 
+    /**
+     * Step 1.2 — canonical-key container resolution. Two episode files whose
+     * series titles slug DIFFERENTLY ("Hunter x Hunter" → "hunter-x-hunter",
+     * "HunterxHunter" → "hunterxhunter") but share the SAME canonical dedup key
+     * ("hunterxhunter") must resolve to ONE series container, not two. The first
+     * file creates the series at its slug-path; the second misses both the path
+     * cache and findByPath() but is reunited via findTopLevelByCanonical().
+     */
+    public function testEpisodesWithDifferentSlugsButSameCanonicalKeyShareOneSeries(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'Hunter x Hunter S01E01.mkv',
+            'HunterxHunter S01E02.mkv',
+            'Hunter.x.Hunter S01E03.mkv',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $items = $repo->items();
+        $series = array_values(array_filter($items, fn ($i) => $i['type'] === 'series'));
+        $episodes = array_values(array_filter($items, fn ($i) => $i['type'] === 'episode'));
+
+        $this->assertCount(1, $series, 'three slug-variant filenames collapse to ONE series container');
+        $this->assertCount(3, $episodes, 'all three episode rows are created');
+        // Every season hangs off the single shared series.
+        $seasons = array_values(array_filter($items, fn ($i) => $i['type'] === 'season'));
+        foreach ($seasons as $season) {
+            $this->assertSame($series[0]['id'], $season['parent_id']);
+        }
+        // The canonical key was persisted onto the container metadata.
+        $this->assertSame('hunterxhunter', $series[0]['metadata_json']['canonical_key'] ?? null);
+    }
+
+    /**
+     * Step 1.2 — legitimately distinct keys stay SEPARATE. Two series whose
+     * folders give the SAME title but DIFFERENT years ("Hunter x Hunter (1999)"
+     * vs "Hunter x Hunter (2011)") canonical-key to "hunterxhunter:1999" vs
+     * "hunterxhunter:2011", so they must remain two distinct containers — the
+     * canonical fallback must NOT merge genuinely different shows.
+     */
+    public function testSameTitleDifferentYearStaysSeparateContainers(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempTree([
+            'Hunter x Hunter (1999)' => ['HxH S01E01.mkv'],
+            'Hunter x Hunter (2011)' => ['HxH S01E01.mkv'],
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'series', true);
+
+        $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(2, $series, 'distinct years must NOT collapse into one container');
+
+        $keys = array_map(fn ($s) => $s['metadata_json']['canonical_key'] ?? null, $series);
+        sort($keys);
+        $this->assertSame(['hunterxhunter:1999', 'hunterxhunter:2011'], $keys);
+    }
+
+    /**
+     * Step 1.2 — canonical fallback reuses a series created by a PRIOR scan that
+     * stored it under a different synthetic path (the cross-scan dedup case: a
+     * flat→per-directory re-scan, or a separator-variant filename). The pre-seeded
+     * row sits at "series:lib-1:hunterxhunter"; the new scan slugs the same show
+     * as "series:lib-1:hunter-x-hunter" — findByPath() misses, but the canonical
+     * key reunites them so no second series is created.
+     */
+    public function testCanonicalFallbackReusesSeriesFromPriorScanAtDifferentPath(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        // Simulate a prior scan: a series stored under the no-separator slug-path
+        // carrying the canonical key, with one existing episode/season subtree.
+        $existingSeriesId = $repo->seed([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'HunterxHunter',
+            'type' => 'series',
+            'path' => 'series:lib-1:hunterxhunter',
+            'metadata_json' => ['name' => 'HunterxHunter', 'canonical_key' => 'hunterxhunter'],
+        ]);
+
+        // New scan uses the spaced title, which slugs to "hunter-x-hunter".
+        $this->tmpDir = $this->makeTempDirWith(['Hunter x Hunter S02E05.mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(1, $series, 'no second series row is forked for the slug variant');
+        $this->assertSame($existingSeriesId, $series[0]['id'], 'the pre-existing series is reused');
+
+        // The new season/episode attach under the REUSED series.
+        $seasons = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'season'));
+        $this->assertCount(1, $seasons);
+        $this->assertSame($existingSeriesId, $seasons[0]['parent_id']);
+    }
+
+    /**
+     * Step 1.2 — canonical fallback on the top-level MOVIE create path. Two movie
+     * files whose titles slug differently ("Mad Max Fury Road (2015)" vs
+     * "MadMaxFuryRoad (2015)") but share the canonical key "madmaxfuryroad:2015"
+     * must produce exactly ONE top-level movie row; the second file is recognised
+     * as the same film and skipped rather than forking a duplicate.
+     */
+    public function testMoviesWithDifferentSlugsButSameCanonicalKeyCreateOneRow(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'Mad Max Fury Road (2015).mkv',
+            'MadMaxFuryRoad (2015).mkv',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies, 'two slug-variant copies collapse to ONE movie row');
+        $this->assertSame('madmaxfuryroad:2015', $movies[0]['metadata_json']['canonical_key'] ?? null);
+    }
+
+    /**
+     * Step 1.2 — movies that are genuinely different (different year → different
+     * canonical key) stay SEPARATE on the top-level movie path.
+     */
+    public function testMoviesWithDistinctCanonicalKeysStaySeparate(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'Dune (1984).mkv',
+            'Dune (2021).mkv',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(2, $movies, 'distinct years must NOT collapse into one movie');
+    }
+
     public function testMovieLibraryStillProducesTopLevelMovies(): void
     {
         $repo = $this->makeFakeRepo();
@@ -799,6 +944,28 @@ class MediaScannerTest extends TestCase
                         $row['metadata'] = is_array($item['metadata_json'] ?? null)
                             ? $item['metadata_json']
                             : [];
+                        return $row;
+                    }
+                }
+                return null;
+            }
+
+            public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array
+            {
+                if ($canonicalKey === '') {
+                    return null;
+                }
+                foreach ($this->store as $item) {
+                    $meta = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
+                    $storedKey = is_string($meta['canonical_key'] ?? null) ? $meta['canonical_key'] : '';
+                    if (
+                        ($item['library_id'] ?? null) === $libraryId
+                        && ($item['type'] ?? null) === $type
+                        && ($item['parent_id'] ?? null) === null
+                        && $storedKey === $canonicalKey
+                    ) {
+                        $row = $item;
+                        $row['metadata'] = $meta;
                         return $row;
                     }
                 }

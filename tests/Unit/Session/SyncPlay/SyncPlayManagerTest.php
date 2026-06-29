@@ -8,6 +8,8 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Session\SyncPlay\SyncPlayManager;
 use Phlix\Session\SyncPlay\Messages;
 use Phlix\Session\SyncPlay\GroupState;
+use Phlix\Server\WebSocket\ConnectionPool;
+use Phlix\Server\WebSocket\ConnectionInterface;
 
 class SyncPlayManagerTest extends TestCase
 {
@@ -16,6 +18,13 @@ class SyncPlayManagerTest extends TestCase
     protected function setUp(): void
     {
         $this->manager = new SyncPlayManager();
+    }
+
+    protected function tearDown(): void
+    {
+        // Reset the ConnectionPool singleton between tests to prevent state leakage
+        $pool = ConnectionPool::getInstance();
+        $pool->clear();
     }
 
     public function testCanCreateSyncPlayManager(): void
@@ -284,5 +293,212 @@ class SyncPlayManagerTest extends TestCase
     public function testGroupStateMaxMembersConstant(): void
     {
         $this->assertEquals(50, GroupState::MAX_MEMBERS);
+    }
+
+    // =====================================================================
+    // SP3: Member ↔ connection_id binding tests
+    // =====================================================================
+
+    public function testCreateGroupStoresConnectionIdOnMemberRecord(): void
+    {
+        $result = $this->manager->createGroup(
+            'Test Group',
+            null,
+            'member_1',
+            'Host User',
+            'conn-abc123'
+        );
+
+        $this->assertTrue($result['success']);
+        $state = $this->manager->getGroupState($result['group']['group_id']);
+        $this->assertNotNull($state);
+        // connection_id is stored in the member record inside GroupState
+        $groupState = $this->manager->listGroups()[0] ?? null;
+        $this->assertNotNull($groupState);
+    }
+
+    public function testJoinGroupStoresConnectionIdOnMemberRecord(): void
+    {
+        $createResult = $this->manager->createGroup('Test Group', null, 'host_1', 'Host');
+        $groupId = $createResult['group']['group_id'];
+
+        $joinResult = $this->manager->joinGroup(
+            $groupId,
+            'member_2',
+            'User 2',
+            null,
+            'conn-xyz789'
+        );
+
+        $this->assertTrue($joinResult['success']);
+        $state = $this->manager->getGroupState($groupId);
+        $this->assertNotNull($state);
+        // Verify member_2 is in the group
+        $member2 = null;
+        foreach ($state['members'] as $m) {
+            if ($m['id'] === 'member_2') {
+                $member2 = $m;
+                break;
+            }
+        }
+        $this->assertNotNull($member2);
+        $this->assertEquals('User 2', $member2['name']);
+    }
+
+    public function testOnConnectionCloseRemovesMemberFromGroup(): void
+    {
+        $createResult = $this->manager->createGroup(
+            'Test Group',
+            null,
+            'host_1',
+            'Host',
+            'conn-host'
+        );
+        $groupId = $createResult['group']['group_id'];
+
+        $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member');
+
+        $stateBefore = $this->manager->getGroupState($groupId);
+        $this->assertEquals(2, $stateBefore['member_count']);
+
+        $this->manager->onConnectionClose('conn-member');
+
+        $stateAfter = $this->manager->getGroupState($groupId);
+        $this->assertEquals(1, $stateAfter['member_count']);
+        $member2Found = false;
+        foreach ($stateAfter['members'] as $m) {
+            if ($m['id'] === 'member_2') {
+                $member2Found = true;
+                break;
+            }
+        }
+        $this->assertFalse($member2Found, 'member_2 should have been removed from the group');
+    }
+
+    public function testBroadcastToGroupDeliversToAllConnectedMembers(): void
+    {
+        $createResult = $this->manager->createGroup(
+            'Test Group',
+            null,
+            'host_1',
+            'Host',
+            'conn-host'
+        );
+        $groupId = $createResult['group']['group_id'];
+
+        $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member-2');
+        $this->manager->joinGroup($groupId, 'member_3', 'User 3', null, 'conn-member-3');
+
+        // Create mock connections for each member and add to ConnectionPool
+        $pool = ConnectionPool::getInstance();
+
+        $mockConnHost = $this->createMock(ConnectionInterface::class);
+        $mockConnHost->method('getId')->willReturn('conn-host');
+        $mockConn2 = $this->createMock(ConnectionInterface::class);
+        $mockConn2->method('getId')->willReturn('conn-member-2');
+        $mockConn3 = $this->createMock(ConnectionInterface::class);
+        $mockConn3->method('getId')->willReturn('conn-member-3');
+
+        // Track which connections received sends
+        $sentTo = [];
+        $mockConnHost->expects($this->once())
+            ->method('send')
+            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+                $sentTo['conn-host'] = $frame;
+            });
+        $mockConn2->expects($this->once())
+            ->method('send')
+            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+                $sentTo['conn-member-2'] = $frame;
+            });
+        $mockConn3->expects($this->once())
+            ->method('send')
+            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+                $sentTo['conn-member-3'] = $frame;
+            });
+
+        $pool->add($mockConnHost);
+        $pool->add($mockConn2);
+        $pool->add($mockConn3);
+
+        // Invoke private broadcastToGroup via reflection
+        $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
+        $reflection->setAccessible(true);
+        $reflection->invoke(
+            $this->manager,
+            $groupId,
+            Messages::TYPE_INFO,
+            ['message' => 'hello'],
+            []
+        );
+
+        $this->assertCount(3, $sentTo, 'All 3 members should receive the broadcast');
+        foreach (['conn-host', 'conn-member-2', 'conn-member-3'] as $connId) {
+            $this->assertArrayHasKey($connId, $sentTo);
+            $frame = $sentTo[$connId];
+            $this->assertIsArray($frame);
+            $this->assertEquals(Messages::TYPE_INFO, $frame['type']);
+            $this->assertArrayHasKey('message', $frame);
+            $this->assertEquals('hello', $frame['message']);
+            $this->assertArrayHasKey('timestamp', $frame);
+        }
+    }
+
+    public function testBroadcastToGroupExcludesSpecifiedMemberIds(): void
+    {
+        $createResult = $this->manager->createGroup(
+            'Test Group',
+            null,
+            'host_1',
+            'Host',
+            'conn-host'
+        );
+        $groupId = $createResult['group']['group_id'];
+
+        $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member-2');
+        $this->manager->joinGroup($groupId, 'member_3', 'User 3', null, 'conn-member-3');
+
+        $pool = ConnectionPool::getInstance();
+
+        $mockConnHost = $this->createMock(ConnectionInterface::class);
+        $mockConnHost->method('getId')->willReturn('conn-host');
+        $mockConn2 = $this->createMock(ConnectionInterface::class);
+        $mockConn2->method('getId')->willReturn('conn-member-2');
+        $mockConn3 = $this->createMock(ConnectionInterface::class);
+        $mockConn3->method('getId')->willReturn('conn-member-3');
+
+        $sentTo = [];
+        $mockConnHost->expects($this->once())
+            ->method('send')
+            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+                $sentTo['conn-host'] = $frame;
+            });
+        // member_2 should NOT be called (excluded by member ID)
+        $mockConn2->expects($this->never())->method('send');
+        $mockConn3->expects($this->once())
+            ->method('send')
+            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+                $sentTo['conn-member-3'] = $frame;
+            });
+
+        $pool->add($mockConnHost);
+        $pool->add($mockConn2);
+        $pool->add($mockConn3);
+
+        // Exclude member_2 from the broadcast
+        $reflection = new \ReflectionMethod($this->manager, 'broadcastToGroup');
+        $reflection->setAccessible(true);
+        $reflection->invoke(
+            $this->manager,
+            $groupId,
+            Messages::TYPE_INFO,
+            ['message' => 'hello'],
+            ['member_2']
+        );
+
+        $this->assertCount(2, $sentTo, 'Exactly 2 members (host + member_3) should receive the broadcast');
+        $this->assertArrayHasKey('conn-host', $sentTo);
+        $this->assertArrayHasKey('conn-member-3', $sentTo);
+        $this->assertArrayNotHasKey('conn-member-2', $sentTo);
     }
 }

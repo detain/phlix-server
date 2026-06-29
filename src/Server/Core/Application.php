@@ -2829,6 +2829,19 @@ class Application
         $provider = new \Phlix\Shared\Arr\TrashGuidesProvider();
         $logger = new \Phlix\Common\Logger\StructuredLogger('arr-sync', []);
 
+        // An unconfigured Arr (Radarr) integration must be INACTIVE, never fatal.
+        // phlix-shared >=0.12.0 RadarrClient strictly validates the baseUrl scheme
+        // and throws on an empty/scheme-less URL. Since this controller is built
+        // eagerly during route registration (loadArrSyncRoutes() -> here), a fresh
+        // install with no Radarr URL configured would otherwise crash bootstrap.
+        // When no valid http/https URL is present we construct the client against a
+        // harmless localhost placeholder and disable the syncer so it never reaches
+        // out — the legitimate scheme validation for *configured* URLs is untouched.
+        $radarrScheme = $radarrUrl !== ''
+            ? parse_url($radarrUrl, PHP_URL_SCHEME)
+            : null;
+        $radarrConfigured = $radarrScheme === 'http' || $radarrScheme === 'https';
+
         // Inject the non-blocking Swoole-coroutine transport so the *arr client
         // does NOT fall back to phlix-shared's blocking CurlArrTransport. The
         // server runs on Swoole's event loop with native-curl hooks deliberately
@@ -2838,7 +2851,7 @@ class Application
         // the coroutine instead. {@see \Phlix\Server\Arr\WorkermanArrTransport}
         $arrTransport = new \Phlix\Server\Arr\WorkermanArrTransport();
         $radarrClient = new \Phlix\Shared\Arr\RadarrClient(
-            $radarrUrl,
+            $radarrConfigured ? $radarrUrl : 'http://localhost',
             $radarrApiKey,
             null,
             30,
@@ -2851,6 +2864,13 @@ class Application
             $db,
             $logger
         );
+
+        // Keep the integration dormant until an operator configures a real
+        // Radarr URL; setEnabled(true) is the explicit opt-in path (admin
+        // PUT /api/v1/admin/sync/enable).
+        if (!$radarrConfigured) {
+            $syncer->setEnabled(false);
+        }
 
         $controller = new \Phlix\Server\Http\Controllers\Arr\SyncController($syncer);
 

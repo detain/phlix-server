@@ -24,7 +24,7 @@ use Workerman\MySQL\Connection;
  * Associative arrays (string keys, e.g. `[':id' => $id]`) pass through
  * untouched.
  */
-final class PhlixMySQLConnection extends Connection
+class PhlixMySQLConnection extends Connection
 {
     /**
      * Default the connection charset to utf8mb4 (the parent defaults to the
@@ -294,8 +294,11 @@ final class PhlixMySQLConnection extends Connection
 
         // Reentrant: same coroutine can nest beginTrans() (savepoint).
         if ($this->transLockHolder === $cid) {
-            $this->transNesting++;
-            return parent::beginTrans();
+            $result = parent::beginTrans();
+            if ($result) {
+                $this->transNesting++;
+            }
+            return $result;
         }
 
         if ($this->transLock === null) {
@@ -304,9 +307,22 @@ final class PhlixMySQLConnection extends Connection
         }
         $this->transLock->pop();
         $this->transLockHolder = $cid;
-        $this->transNesting = 1;
 
-        return parent::beginTrans();
+        $result = parent::beginTrans();
+        if ($result) {
+            $this->transNesting = 1;
+        } else {
+            $this->transLockHolder = -1;
+            // phpstan-ignore-line notIdentical.alwaysTrue -- PHPStan loses
+            // track of the null-assignment below when beginTrans() (an impure
+            // method) controls the failure path.  The logic is sound.
+            if ($this->transLock !== null) { // @phpstan-ignore-line
+                $this->transLock->push(true);
+                $this->transLock = null;
+            }
+        }
+
+        return $result;
     }
 
     /**
@@ -325,16 +341,20 @@ final class PhlixMySQLConnection extends Connection
 
         // Nested transaction: release savepoint but keep the mutex.
         if ($this->transNesting > 1) {
-            $this->transNesting--;
-            return parent::commitTrans();
+            $result = parent::commitTrans();
+            if ($result) {
+                $this->transNesting--;
+            }
+            return $result;
         }
 
         // Outermost: release the transaction mutex.
         $this->transNesting = 0;
         $this->transLockHolder = -1;
         $result = parent::commitTrans();
-        if ($this->transLock !== null) {
-            $this->transLock->push(true);
+        $lock = $this->transLock;
+        if ($lock !== null) {
+            $lock->push(true);
             $this->transLock = null;
         }
 
@@ -357,16 +377,20 @@ final class PhlixMySQLConnection extends Connection
 
         // Nested rollback: roll back savepoint but keep the mutex.
         if ($this->transNesting > 1) {
-            $this->transNesting--;
-            return parent::rollBackTrans();
+            $result = parent::rollBackTrans();
+            if ($result) {
+                $this->transNesting--;
+            }
+            return $result;
         }
 
         // Outermost: release the transaction mutex.
         $this->transNesting = 0;
         $this->transLockHolder = -1;
         $result = parent::rollBackTrans();
-        if ($this->transLock !== null) {
-            $this->transLock->push(true);
+        $lock = $this->transLock;
+        if ($lock !== null) {
+            $lock->push(true);
             $this->transLock = null;
         }
 

@@ -267,4 +267,26 @@ class EpisodeFilenameParserTest extends TestCase
         $this->assertNotNull($r);
         $this->assertSame('Highlander', $r['series']);
     }
+
+    /**
+     * Step 13.3 (replace-not-merge semantics, end-to-end through the series path):
+     * when a non-empty custom override is injected, ONLY its phrases peel — a
+     * built-in const phrase the override omits ("Directors Cut") is NOT stripped
+     * from the series segment, while the override's own phrase ("fan edit") is.
+     * This pins that the injected list REPLACES the const rather than merging.
+     */
+    public function testInjectedCustomOverrideDoesNotStripBuiltinFromSeries(): void
+    {
+        $custom = ['fan edit'];
+
+        // "Directors Cut" is a built-in const phrase but NOT in the override → kept.
+        $kept = EpisodeFilenameParser::parse('Highlander Directors Cut S03E04.mkv', false, $custom);
+        $this->assertNotNull($kept);
+        $this->assertSame('Highlander Directors Cut', $kept['series']);
+
+        // The override's own custom phrase still peels from the series segment.
+        $stripped = EpisodeFilenameParser::parse('Highlander Fan Edit S03E04.mkv', false, $custom);
+        $this->assertNotNull($stripped);
+        $this->assertSame('Highlander', $stripped['series']);
+    }
 }

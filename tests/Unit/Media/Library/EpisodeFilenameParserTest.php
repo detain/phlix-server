@@ -177,4 +177,71 @@ class EpisodeFilenameParserTest extends TestCase
         // allowAbsolute=false (movie library) — a trailing year must not become an episode.
         $this->assertNull(EpisodeFilenameParser::parse('Blade Runner 2049 (2017) [1080p].mkv', false));
     }
+
+    /**
+     * Trailing edition/noise phrases on the SERIES segment must be peeled (via
+     * the shared TitleSuffixStripper) so the show title matches metadata cleanly.
+     *
+     * @dataProvider seriesNoiseCases
+     */
+    public function testSeriesNoiseSuffixesStripped(
+        string $filename,
+        string $expectedSeries,
+        bool $allowAbsolute
+    ): void {
+        $result = EpisodeFilenameParser::parse($filename, $allowAbsolute);
+        $this->assertNotNull($result, "should parse: {$filename}");
+        $this->assertSame($expectedSeries, $result['series']);
+    }
+
+    /** @return array<string, array{0:string,1:string,2:bool}> */
+    public static function seriesNoiseCases(): array
+    {
+        return [
+            // SxxExx series segment carrying an edition suffix.
+            'directors cut series' => ['Highlander Directors Cut S01E02.mkv', 'Highlander', false],
+            'extended series'      => ['Foo Extended S02E03.mkv', 'Foo', false],
+            'yify series'          => ['Bar YIFY S01E01.mkv', 'Bar', false],
+            // Absolute-numbered anime carrying noise on the title segment.
+            'remastered absolute'  => ['Baz Remastered - 012 [720p].mkv', 'Baz', true],
+            // STACKED noise tokens (with a dash separator) on the series segment —
+            // all peel before the SxxExx marker is reached.
+            'stacked sep series'   => ['Highlander - Uncut Remastered Directors Cut S03E04.mkv', 'Highlander', false],
+        ];
+    }
+
+    /**
+     * A series whose title legitimately CONTAINS a noise word mid-title (not as a
+     * trailing word-boundary phrase) is left intact when there is no trailing
+     * edition phrase to peel.
+     */
+    public function testSeriesTitleContainingNoiseWordLeftIntact(): void
+    {
+        $r = EpisodeFilenameParser::parse('Uncut Gems S01E01.mkv', false);
+        $this->assertNotNull($r);
+        $this->assertSame('Uncut Gems', $r['series']);
+    }
+
+    /**
+     * The episode TITLE must keep all its words — TitleSuffixStripper is applied
+     * only to the series segment, never to the episode title.
+     */
+    public function testEpisodeTitleNotNoiseStripped(): void
+    {
+        $r = EpisodeFilenameParser::parse('Show S01E05 - The Extended Mix.mkv', false);
+        $this->assertNotNull($r);
+        $this->assertSame('Show', $r['series']);
+        $this->assertSame('The Extended Mix', $r['episode_title']);
+    }
+
+    /**
+     * A series literally named after a single-token noise word must NOT be
+     * emptied (the TitleSuffixStripper default never empties a title).
+     */
+    public function testSeriesNamedAfterNoiseTokenSurvives(): void
+    {
+        $r = EpisodeFilenameParser::parse('DC S01E01.mkv', false);
+        $this->assertNotNull($r);
+        $this->assertSame('DC', $r['series']);
+    }
 }

@@ -1,0 +1,92 @@
+name: SyncPlay E2E Tests
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+
+env:
+  SYNCPLAY_E2E_TESTS: true
+
+jobs:
+  syncplay-e2e:
+    name: SyncPlay E2E Test Suite
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: phlix_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mysql, pdo, pdo_mysql, json, gd, zip, fileinfo, swoole
+          coverage: xdebug
+
+      - name: Build and enable php-uv
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libuv1-dev
+          git clone --depth=1 https://github.com/bwoebi/php-uv.git /tmp/php-uv
+          cd /tmp/php-uv && phpize && ./configure --with-uv && make -j"$(nproc)" && sudo make install
+          echo "extension=uv.so" | sudo tee "$(php-config --ini-dir 2>/dev/null || php -i | awk -F'=> ' '/Scan this dir/{print $2}')/zz-uv.ini"
+
+      - name: Verify swoole + uv loaded
+        run: php -m | grep -iE '^(swoole|uv)$'
+
+      - name: Get Composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Apply database migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: phlix_test
+          DB_USER: root
+          DB_PASSWORD: root
+        run: php scripts/run-migrations.php
+
+      - name: Run SyncPlay E2E tests
+        run: ./vendor/bin/phpunit tests/E2E/Session/SyncPlay/SyncPlayE2ETest.php --testdox --colors=never
+
+      - name: Run E2E tests 3x consecutively (flakiness check)
+        run: |
+          for i in 1 2 3; do
+            echo "=== E2E Test Run $i/3 ==="
+            ./vendor/bin/phpunit tests/E2E/Session/SyncPlay/SyncPlayE2ETest.php --colors=never || exit 1
+          done
+        shell: bash
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: syncplay-e2e-results
+          path: tests/E2E/Session/SyncPlay/*.xml
+          retention-days: 7

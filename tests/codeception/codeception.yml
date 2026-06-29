@@ -1,0 +1,17 @@
+namespace: Phlix\Tests\Codeception
+actor: SyncPlayTester
+paths:
+  tests: acceptance
+  output: _output
+  data: _data
+  support: _support
+  helpers: Helper
+settings:
+  bootstrap: _bootstrap.php
+  colors: true
+  memory_limit: 512M
+extensions:
+  enabled:
+    - Codeception\Extension\RunFailed
+include:
+  - acceptance.suite.yml

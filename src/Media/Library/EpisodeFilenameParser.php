@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Media\Metadata\TitleSuffixStripper;
+
 /**
  * Parses a media filename into series / season / episode parts.
  *
@@ -130,8 +132,10 @@ final class EpisodeFilenameParser
     }
 
     /**
-     * Clean a series title: drop trailing separators/markers and any quality tag
-     * that bled into the capture.
+     * Clean a series title: drop trailing separators/markers, any quality tag
+     * that bled into the capture, and trailing edition/noise suffixes
+     * ("Directors Cut", "UNCUT & UNRATED", "YIFY"…) via the shared
+     * {@see TitleSuffixStripper} so the show title matches metadata cleanly.
      */
     private static function cleanSeries(string $raw): string
     {
@@ -139,6 +143,9 @@ final class EpisodeFilenameParser
         // Cut anything from the first bracket/paren tag onward.
         $title = (string) preg_replace('/\s*[\[\(].*$/', '', $title);
         $title = self::trimSeparators($title);
+        // Peel trailing edition/noise phrases (never emptying the title, so a
+        // show literally named after a noise token survives).
+        $title = TitleSuffixStripper::strip($title);
         return $title;
     }
 

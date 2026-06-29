@@ -705,7 +705,8 @@ class SyncPlayManager
     private function handleTimePing(Connection $connection, array $payload): void
     {
         $pong = $this->timeSync->processPing($payload);
-        $connection->sendMessage(Messages::TYPE_TIME_PONG, $pong);
+        $message = Messages::timePong($pong['client_time'], $pong['server_time']);
+        $connection->send($message);
     }
 
     /**
@@ -730,7 +731,7 @@ class SyncPlayManager
         $result = $this->createGroup($groupName, $password, $memberId, $memberName);
 
         if ($result['success'] === true) {
-            $connection->sendMessage(Messages::TYPE_GROUP_STATE, [
+            $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
             ]);
@@ -759,7 +760,7 @@ class SyncPlayManager
         $result = $this->joinGroup($groupId, $memberId, $memberName, $password);
 
         if ($result['success'] === true) {
-            $connection->sendMessage(Messages::TYPE_GROUP_STATE, [
+            $connection->sendFlat(Messages::TYPE_GROUP_STATE, [
                 'group' => $result['group'],
                 'your_id' => $memberId,
             ]);
@@ -846,8 +847,8 @@ class SyncPlayManager
      */
     private function sendError(Connection $connection, string $code, string $message): void
     {
-        $connection->sendMessage(Messages::TYPE_ERROR, [
-            'code' => $code,
+        $connection->sendFlat(Messages::TYPE_ERROR, [
+            'error_code' => $code,
             'message' => $message,
         ]);
     }

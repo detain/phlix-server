@@ -108,6 +108,10 @@ class MessageHandler
      * Parses the JSON message, extracts event type and payload,
      * and dispatches to the appropriate handler.
      *
+     * Supports two message formats:
+     * - Flat canonical (SyncPlay): {type, protocol_version, timestamp, ...payload}
+     * - Deprecated Tizen envelope (dashboard): {type, data: {...}, timestamp}
+     *
      * @param Connection $connection The connection that sent the message
      * @param string $data Raw message data (expected JSON)
      * @return void
@@ -124,7 +128,42 @@ class MessageHandler
         }
 
         $event = $message['type'];
-        $payload = $message['data'] ?? [];
+
+        // Handle subscribe_dashboard event - keep BC with deprecated {type,data} envelope
+        if ($event === 'subscribe_dashboard') {
+            $payload = $message['data'] ?? [];
+            $this->connections->add($connection);
+            $payloadMap = [];
+            if (is_array($payload)) {
+                foreach ($payload as $pKey => $pValue) {
+                    if (is_string($pKey)) {
+                        $payloadMap[$pKey] = $pValue;
+                    }
+                }
+            }
+            $this->handleSubscribeDashboard($connection, $payloadMap);
+            return;
+        }
+
+        // For flat canonical messages (SyncPlay), use the whole message as payload.
+        // Tolerant unwrap for deprecated {type,data} envelope for BC.
+        // Syncplay messages have protocol_version but no 'data' key.
+        $hasDataKey = array_key_exists('data', $message);
+        $payload = $hasDataKey
+            ? $message['data']
+            : $message;
+
+        // Validate protocol_version for flat canonical messages
+        if (!$hasDataKey && isset($message['protocol_version'])) {
+            $protocolVersion = $message['protocol_version'];
+            if (!is_int($protocolVersion) || $protocolVersion > \Phlix\Session\SyncPlay\Messages::PROTOCOL_VERSION) {
+                $connection->sendFlat(\Phlix\Session\SyncPlay\Messages::TYPE_ERROR, [
+                    'error_code' => 'PROTOCOL_VERSION_MISMATCH',
+                    'message' => 'Unsupported protocol version',
+                ]);
+                return;
+            }
+        }
 
         $this->connections->add($connection);
 
@@ -140,19 +179,6 @@ class MessageHandler
         } elseif (isset($this->callbacks['*'])) {
             // Wildcard handler
             ($this->callbacks['*'])($connection, $event, $payload);
-        }
-
-        // Handle subscribe_dashboard event
-        if ($event === 'subscribe_dashboard') {
-            $payloadMap = [];
-            if (is_array($payload)) {
-                foreach ($payload as $pKey => $pValue) {
-                    if (is_string($pKey)) {
-                        $payloadMap[$pKey] = $pValue;
-                    }
-                }
-            }
-            $this->handleSubscribeDashboard($connection, $payloadMap);
         }
     }
 

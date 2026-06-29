@@ -8,6 +8,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Network\PortForwardService;
 use Phlix\Shared\Hub\ClaimRequest;
 use Phlix\Shared\Hub\HeartbeatDto;
+use Phlix\Shared\Hub\LibraryRef;
 use Throwable;
 
 /**
@@ -445,20 +446,23 @@ class HubClient
      * them. A failure here must never break the heartbeat, so any error degrades
      * to an empty list.
      *
-     * @return list<array{library_id: string, library_name: string}>
+     * @return list<LibraryRef>
      */
-    private function collectLibraries(): array
-    {
-        if ($this->librariesProvider === null) {
-            return [];
-        }
-        try {
-            return ($this->librariesProvider)();
-        } catch (Throwable $e) {
-            $this->logger->warning('Failed to collect libraries for heartbeat', ['exception' => $e->getMessage()]);
-            return [];
-        }
-    }
+     private function collectLibraries(): array
+     {
+         if ($this->librariesProvider === null) {
+             return [];
+         }
+         try {
+             return array_map(
+                 fn(array $item): LibraryRef => LibraryRef::fromPayload($item),
+                 ($this->librariesProvider)()
+             );
+         } catch (Throwable $e) {
+             $this->logger->warning('Failed to collect libraries for heartbeat', ['exception' => $e->getMessage()]);
+             return [];
+         }
+     }
 
     /**
      * Returns the server's public keys as JWK for the JWKS endpoint.

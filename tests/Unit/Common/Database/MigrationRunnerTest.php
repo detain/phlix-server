@@ -96,6 +96,36 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame([], $result['errors']);
     }
 
+    public function testDoesNotSplitOnSemicolonInsideStringLiteral(): void
+    {
+        // Regression: a `;` inside a column COMMENT string literal must NOT
+        // split the CREATE TABLE — doing so truncates the DDL mid-string and
+        // fails with a 1064 syntax error.
+        $sql = "CREATE TABLE c (\n"
+            . "    id INT COMMENT 'Hard expiry; the token is invalid once this passes'\n"
+            . ");\n"
+            . "INSERT INTO c VALUES (1);";
+        $this->writeMigration('001.sql', $sql);
+
+        $captured = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(function (string $sql) use (&$captured) {
+            $captured[] = $sql;
+            return [];
+        });
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        $this->assertCount(2, $captured);
+        $this->assertStringContainsString(
+            "COMMENT 'Hard expiry; the token is invalid once this passes'",
+            $captured[0],
+        );
+        $this->assertSame('INSERT INTO c VALUES (1)', $captured[1]);
+        $this->assertSame([], $result['errors']);
+    }
+
     /**
      * @return list<array{0: string}>
      */

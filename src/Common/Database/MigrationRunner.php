@@ -153,34 +153,96 @@ final class MigrationRunner
     }
 
     /**
-     * Strip SQL comments and split a file into individual executable
-     * statements. Handles:
-     *   - line `--` comments (the whole line, including any `;` inside it)
-     *   - block `/* ... *\/` comments
-     *   - blank lines after comment removal
-     *
-     * A naive `explode(';', $sql)` shreds files whose comments happen to
-     * contain a semicolon, so comments are removed before splitting.
+     * Split a file into individual executable statements, ignoring any `;`
+     * that lives inside a string literal, a backtick-quoted identifier, a
+     * line `--`/`#` comment, or a C-style block comment. Comment text and
+     * blank fragments are dropped; quoted contents survive verbatim.
      *
      * @return list<string>
      */
     private static function splitStatements(string $sql): array
     {
-        // 1. Drop /* ... */ block comments (non-greedy, multi-line aware).
-        $stripped = preg_replace('#/\*.*?\*/#s', '', $sql) ?? $sql;
-
-        // 2. Drop line-level `--` comments. Anything from `--` on a line
-        //    until end-of-line is comment text. Tolerate both `-- comment`
-        //    and `--comment` and `code -- comment` forms.
-        $stripped = preg_replace('/--[^\n]*/', '', $stripped) ?? $stripped;
-
-        // 3. Split on `;`. Trim each fragment and drop empty ones.
+        // Single-pass, quote/comment-aware scanner. Splitting on `;` with a
+        // plain regex (even after stripping `--`/block comments) still shreds a
+        // statement whose string literal contains a semicolon — e.g. a column
+        // `COMMENT 'Hard expiry; the token is invalid once this passes'`, which
+        // leaves the DDL truncated mid-string and failing with a 1064 syntax
+        // error. This scanner only splits on a `;` outside any string literal
+        // (single/double quoted), backtick-quoted identifier, line comment
+        // (`-- ...` or `# ...`) or C-style block comment. Comment text is
+        // dropped; quoted contents (including embedded `;`) survive verbatim.
         $statements = [];
-        foreach (explode(';', $stripped) as $part) {
-            $part = trim($part);
-            if ($part !== '') {
-                $statements[] = $part;
+        $buffer = '';
+        $len = strlen($sql);
+        // Lexical context: '' (top level), "'"/'"'/'`' (quote), '--' (line
+        // comment) or '/*' (block comment).
+        $context = '';
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $sql[$i];
+            $next = $i + 1 < $len ? $sql[$i + 1] : '';
+
+            switch ($context) {
+                case "'":
+                case '"':
+                case '`':
+                    $buffer .= $ch;
+                    if ($ch === $context && $next === $context) {
+                        // Doubled quote ('' / "" / ``) — an escaped quote.
+                        $buffer .= $next;
+                        $i++;
+                    } elseif ($ch === '\\' && $context !== '`' && $next !== '') {
+                        // Backslash escape inside a string literal.
+                        $buffer .= $next;
+                        $i++;
+                    } elseif ($ch === $context) {
+                        $context = '';
+                    }
+                    break;
+
+                case '--':
+                    if ($ch === "\n") {
+                        $buffer .= $ch;
+                        $context = '';
+                    }
+                    break;
+
+                case '/*':
+                    if ($ch === '*' && $next === '/') {
+                        $i++;
+                        $context = '';
+                    }
+                    break;
+
+                default:
+                    if ($ch === '-' && $next === '-') {
+                        $context = '--';
+                        $i++;
+                    } elseif ($ch === '#') {
+                        // MySQL '#' line comment.
+                        $context = '--';
+                    } elseif ($ch === '/' && $next === '*') {
+                        $context = '/*';
+                        $i++;
+                    } elseif ($ch === "'" || $ch === '"' || $ch === '`') {
+                        $context = $ch;
+                        $buffer .= $ch;
+                    } elseif ($ch === ';') {
+                        $part = trim($buffer);
+                        if ($part !== '') {
+                            $statements[] = $part;
+                        }
+                        $buffer = '';
+                    } else {
+                        $buffer .= $ch;
+                    }
+                    break;
             }
+        }
+
+        $part = trim($buffer);
+        if ($part !== '') {
+            $statements[] = $part;
         }
 
         return $statements;

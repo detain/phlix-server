@@ -130,6 +130,9 @@ class HlsSegmentPrefetcherTest extends TestCase
 
         // Clean up
         $this->prefetcher->stopPrefetch($sessionId);
+
+        // Reaching here means start/stop completed without throwing.
+        $this->assertTrue(true);
     }
 
     public function testStopPrefetchWithoutStartDoesNotThrow(): void

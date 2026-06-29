@@ -305,6 +305,22 @@ class AuthManager
     }
 
     /**
+     * Clears the process-wide login rate-limit store.
+     *
+     * The store is `static` so the throttle survives across the many AuthManager
+     * instances a single Workerman worker creates. In the test runner that same
+     * persistence leaks failed-login counts between unrelated test cases (they
+     * all key on the default 127.0.0.1 IP), so with `executionOrder="random"` a
+     * later auth test can inherit a tripped limiter and fail intermittently. Tests
+     * call this in setUp() to start from a clean slate; it is a no-op for the
+     * limiter's production behaviour.
+     */
+    public static function resetRateLimitStore(): void
+    {
+        self::$rateLimitStore = [];
+    }
+
+    /**
      * Register a new user account.
      *
      * Creates a new user with the provided credentials and returns

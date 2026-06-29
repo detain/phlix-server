@@ -537,4 +537,236 @@ final class SceneFilenameNormalizerTest extends TestCase
         $this->assertSame('Three Wise Men And A Baby', $result['title']);
         $this->assertSame(2022, $result['year']);
     }
+
+    // --- Step 13.1: configurable noise-suffix stripping ---------------------
+
+    /** A trailing "Directors Cut" edition phrase is peeled off the title. */
+    public function testNormalizeStripsDirectorsCutSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Blade Runner Directors Cut');
+
+        $this->assertSame('Blade Runner', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** Edition noise after a detected year does not pollute the parsed title. */
+    public function testNormalizeStripsExtendedCutAfterYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Aliens 1986 Extended Cut 1080p');
+
+        $this->assertSame('Aliens', $result['title']);
+        $this->assertSame(1986, $result['year']);
+    }
+
+    /** A combined "UNCUT & UNRATED" suffix is fully removed. */
+    public function testNormalizeStripsUncutAndUnratedSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Dune UNCUT & UNRATED');
+
+        $this->assertSame('Dune', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** An "ALTERNATE ENDING" suffix is removed without touching the title number. */
+    public function testNormalizeStripsAlternateEndingSuffix(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('District 9 ALTERNATE ENDING');
+
+        $this->assertSame('District 9', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** A bare trailing "YIFY" aggregator tag is removed. */
+    public function testNormalizeStripsTrailingYify(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Foo YIFY');
+
+        $this->assertSame('Foo', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** A single-token noise word that IS the whole title must NOT empty it. */
+    public function testNormalizeNoiseTokenDoesNotEmptyTitle(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('DC');
+
+        $this->assertSame('DC', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /** Stripping noise suffixes must never mutate the `raw` original filename. */
+    public function testNormalizeNoiseStrippingPreservesRaw(): void
+    {
+        $original = 'Blade Runner Directors Cut';
+        $result = SceneFilenameNormalizer::normalize($original);
+
+        $this->assertSame($original, $result['raw']);
+    }
+
+    /** Stacked trailing edition suffixes are peeled iteratively. */
+    public function testNormalizeStripsStackedNoiseSuffixes(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Highlander Remastered Directors Cut');
+
+        $this->assertSame('Highlander', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    // --- Step 13.1 (TestEngineer edge cases) --------------------------------
+
+    /**
+     * Three+ stacked trailing edition suffixes are all peeled in one normalize pass.
+     */
+    public function testNormalizeStripsThreeStackedNoiseSuffixes(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Highlander Uncut Remastered Directors Cut');
+
+        $this->assertSame('Highlander', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /**
+     * Noise-suffix matching is case-insensitive regardless of input casing.
+     *
+     * @dataProvider provideCaseVariantSuffixes
+     */
+    public function testNormalizeStripsNoiseSuffixCaseInsensitively(string $filename): void
+    {
+        $result = SceneFilenameNormalizer::normalize($filename);
+
+        $this->assertSame('Blade Runner', $result['title'], "for input: {$filename}");
+        $this->assertNull($result['year']);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function provideCaseVariantSuffixes(): array
+    {
+        return [
+            'lowercase'   => ['Blade Runner directors cut'],
+            'uppercase'   => ['Blade Runner DIRECTORS CUT'],
+            'titlecase'   => ['Blade Runner Directors Cut'],
+            'mixed-case'  => ['Blade Runner DiReCtOrS cUt'],
+        ];
+    }
+
+    /**
+     * The separator between title and noise suffix may be a space, dash, dot, or
+     * underscore (the ` -._` set the regex peels) — all variants are stripped.
+     *
+     * Uses "Directors Cut" (a pure NOISE_SUFFIX phrase, NOT a QUALITY_TOKEN) so the
+     * assertion isolates the Step 13.1 end-anchored peel from the pre-existing
+     * token-level quality stripping in the no-year branch.
+     *
+     * @dataProvider provideSeparatorVariants
+     */
+    public function testNormalizeStripsNoiseSuffixAcrossSeparatorVariants(string $filename): void
+    {
+        $result = SceneFilenameNormalizer::normalize($filename);
+
+        $this->assertSame('Highlander', $result['title'], "for input: {$filename}");
+        $this->assertNull($result['year']);
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function provideSeparatorVariants(): array
+    {
+        return [
+            // Dotted scene style: "Highlander.Directors.Cut".
+            'dot-separated'        => ['Highlander.Directors.Cut'],
+            // Underscore-delimited release name.
+            'underscore-separated' => ['Highlander_Directors_Cut'],
+            // Dash-attached edition tag.
+            'dash-separated'       => ['Highlander - Directors Cut'],
+            // Plain space.
+            'space-separated'      => ['Highlander Directors Cut'],
+        ];
+    }
+
+    /**
+     * A noise suffix that follows a bracketed (YYYY) year is peeled off while the
+     * bracketed year is still correctly extracted.
+     */
+    public function testNormalizeStripsNoiseSuffixAfterBracketedYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Blade Runner Directors Cut (1982)');
+
+        $this->assertSame('Blade Runner', $result['title']);
+        $this->assertSame(1982, $result['year']);
+    }
+
+    /**
+     * An "Extended" edition tag appearing before a bracketed (YYYY) is also peeled,
+     * exercising the bracketed-year branch's stripNoiseSuffixes() call.
+     */
+    public function testNormalizeStripsExtendedBeforeBracketedYear(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Aliens Extended (1986)');
+
+        $this->assertSame('Aliens', $result['title']);
+        $this->assertSame(1986, $result['year']);
+    }
+
+    /**
+     * A legitimate title that merely CONTAINS a noise word mid-string (not at the
+     * trailing edge) must NOT be stripped — only end-anchored matches are peeled.
+     *
+     * @dataProvider provideMidStringNoiseWordTitles
+     */
+    public function testNormalizeDoesNotStripMidStringNoiseWord(string $filename, string $expectedTitle): void
+    {
+        $result = SceneFilenameNormalizer::normalize($filename);
+
+        $this->assertSame($expectedTitle, $result['title'], "for input: {$filename}");
+    }
+
+    /**
+     * Each input uses a noise word that is NOT also a QUALITY_TOKEN (so the
+     * pre-existing token-level quality stripping cannot remove it), proving the
+     * Step 13.1 end-anchored peel leaves mid-string occurrences untouched.
+     *
+     * @return array<string, array{string, string}>
+     */
+    public static function provideMidStringNoiseWordTitles(): array
+    {
+        return [
+            // "Uncut" as a leading title word followed by more title.
+            'uncut-leading'   => ['Uncut Gems', 'Uncut Gems'],
+            // "Directors Cut" phrase mid-string, with a real word after it.
+            'directors-mid'   => ['The Directors Cut Saga', 'The Directors Cut Saga'],
+            // "Cut" embedded in a longer non-edition word must not partial-match.
+            'cut-substring'   => ['The Cutting Edge', 'The Cutting Edge'],
+            // "DC" as a substring of a larger word must not strip.
+            'dc-substring'    => ['Abducted', 'Abducted'],
+            // "Uncut" embedded mid-word must not partial-match.
+            'uncut-substring' => ['Uncuttable Bonds', 'Uncuttable Bonds'],
+        ];
+    }
+
+    /**
+     * A mid-string noise word does not block stripping a genuine trailing one:
+     * "Uncut Gems Directors Cut" keeps "Uncut Gems" but drops the trailing edition.
+     */
+    public function testNormalizeStripsTrailingButKeepsMidStringNoiseWord(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('Uncut Gems Directors Cut');
+
+        $this->assertSame('Uncut Gems', $result['title']);
+        $this->assertNull($result['year']);
+    }
+
+    /**
+     * A title whose final word legitimately ends with letters that are NOT a
+     * word-boundary match for a noise token (e.g. "...Extendedness") is preserved,
+     * confirming the `\b` word-boundary anchor.
+     */
+    public function testNormalizeRespectsWordBoundaryOnTrailingToken(): void
+    {
+        $result = SceneFilenameNormalizer::normalize('The Great Uncutting');
+
+        $this->assertSame('The Great Uncutting', $result['title']);
+    }
 }

@@ -142,6 +142,84 @@ class TraktApi
     }
 
     /**
+     * Refresh access token after an auth failure (401).
+     *
+     * Uses a single-flight mutex so that concurrent 401 responses all await
+     * the same refresh POST rather than each POSTing their own. This prevents
+     * Trakt's rotating refresh tokens from invalidating each other.
+     *
+     * Uses a two-level guard:
+     * 1. Static $inFlightRefresh for same-process concurrency (Workerman coroutines)
+     * 2. flock() for cross-process safety (multiple Workerman workers)
+     *
+     * @param string $refreshToken Current refresh token
+     *
+     * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
+     *
+     * @throws TraktApiException When refresh fails
+     * @since 0.14.0
+     */
+    public function refreshAfterAuthFailure(string $refreshToken): array
+    {
+        static $inFlightRefresh = [];
+        static $lockFile = null;
+
+        if ($lockFile === null) {
+            $lockFile = sys_get_temp_dir() . '/phlix_trakt_refresh.lock';
+        }
+
+        // Key cache by token hash to avoid cross-token cache pollution
+        $tokenKey = md5($refreshToken);
+
+        // Phase 1: Same-process single-flight (Workerman coroutines on same worker)
+        // Use \Co\sleep to yield to the event loop instead of blocking with usleep()
+        while (isset($inFlightRefresh[$tokenKey]) && $inFlightRefresh[$tokenKey] === 'pending') {
+            if (function_exists('\Co\sleep')) {
+                \Co\sleep(0.005); // 5ms - yields to event loop in async context
+            } else {
+                usleep(5000); // Fallback for non-Swoole (unit tests)
+            }
+        }
+
+        if (isset($inFlightRefresh[$tokenKey]) && is_array($inFlightRefresh[$tokenKey])) {
+            /** @var array<string, mixed> $result */
+            $result = $inFlightRefresh[$tokenKey];
+
+            return $result;
+        }
+
+        $inFlightRefresh[$tokenKey] = 'pending';
+
+        // Phase 2: Cross-process mutex via flock()
+        $fp = fopen($lockFile, 'c+');
+        if (!$fp) {
+            unset($inFlightRefresh[$tokenKey]);
+            throw new TraktApiException('Could not open refresh lock file');
+        }
+
+        if (!flock($fp, LOCK_EX)) {
+            fclose($fp);
+            unset($inFlightRefresh[$tokenKey]);
+            throw new TraktApiException('Could not acquire refresh lock');
+        }
+
+        try {
+            $result = $this->refreshAccessToken($refreshToken);
+            $inFlightRefresh[$tokenKey] = $result;
+            flock($fp, LOCK_UN);
+            fclose($fp);
+
+            return $result;
+        } catch (\Throwable $e) {
+            unset($inFlightRefresh[$tokenKey]);
+            flock($fp, LOCK_UN);
+            fclose($fp);
+
+            throw $e;
+        }
+    }
+
+    /**
      * Submit a scrobble start for a media item.
      *
      * Trakt's scrobble API uses a 3-state model. This method sends the

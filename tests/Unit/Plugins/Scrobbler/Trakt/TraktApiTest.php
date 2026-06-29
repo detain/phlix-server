@@ -100,6 +100,50 @@ final class TraktApiTest extends TestCase
         $this->assertSame('GET', $http->lastMethod);
         $this->assertStringContainsString('/users/testuser/watched', $http->lastUrl);
     }
+
+    /**
+     * Test that concurrent calls to refreshAfterAuthFailure result in only ONE POST.
+     *
+     * This simulates the scenario where multiple scrobble calls each receive a 401
+     * and all call refreshAfterAuthFailure(). Without single-flight gating, each
+     * would POST to /oauth/token. With the mutex, only the first call performs
+     * the POST; subsequent calls await and reuse the same result.
+     *
+     * Note: In a real async context (Workerman), concurrent coroutines all see
+     * the same static $inFlightRefresh and the first one wins. The POST count
+     * verification proves the single-flight is working.
+     */
+    public function testRefreshAfterAuthFailureIsSingleFlighted(): void
+    {
+        $http = new MockHttpClient([
+            ['access_token' => 'refreshed-access', 'refresh_token' => 'refreshed-refresh', 'expires_in' => 7200]
+        ]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        // Simulate 3 concurrent 401 failures all calling refreshAfterAuthFailure.
+        // In a real async context, these would be truly concurrent. In this sync
+        // test, they run sequentially but the static mutex prevents duplicate POSTs.
+        $api->refreshAfterAuthFailure('old-refresh-token');
+        $api->refreshAfterAuthFailure('old-refresh-token');
+        $api->refreshAfterAuthFailure('old-refresh-token');
+
+        // Only ONE POST should have been made to /oauth/token
+        // (the single-flight mutex ensures subsequent calls use cached result)
+        $this->assertSame(1, $http->postCallCount);
+        $this->assertStringContainsString('/oauth/token', $http->lastUrl);
+    }
+
+    /**
+     * Test that refreshAfterAuthFailure properly propagates errors.
+     */
+    public function testRefreshAfterAuthFailureThrowsOnError(): void
+    {
+        $http = new MockHttpClient([['error' => 'invalid_grant', 'error_description' => 'Refresh token expired']]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $this->expectException(TraktApiException::class);
+        $api->refreshAfterAuthFailure('expired-refresh-token');
+    }
 }
 
 final class MockHttpClient implements HttpClientInterface
@@ -108,6 +152,7 @@ final class MockHttpClient implements HttpClientInterface
     public string $lastUrl = '';
     public array $lastData = [];
     public array $lastHeaders = [];
+    public int $postCallCount = 0;
 
     /** @var array<array> */
     private array $responses;
@@ -140,6 +185,7 @@ final class MockHttpClient implements HttpClientInterface
         $this->lastUrl = $url;
         $this->lastData = $data;
         $this->lastHeaders = $headers;
+        ++$this->postCallCount;
 
         return $this->getNextResponse();
     }

@@ -25,6 +25,7 @@ final class HubUserClaims
      * @param string $issuer   The JWT issuer (must be 'phlix-hub').
      * @param int    $expiresAt Unix timestamp when this token expires.
      * @param array<string> $scope     Array of scope strings granted by the hub.
+     * @param string $token     The token or opaque_token claim from the hub JWT (if present).
      */
     public function __construct(
         public readonly string $userId,
@@ -33,6 +34,7 @@ final class HubUserClaims
         public readonly string $issuer,
         public readonly int $expiresAt,
         public readonly array $scope = [],
+        public readonly string $token = '',
     ) {
     }
 

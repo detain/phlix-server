@@ -5,6 +5,7 @@ namespace Phlix\Tests\Unit\Media\Library;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\SeriesContainerNaming;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
@@ -283,6 +284,84 @@ class MediaScannerTest extends TestCase
 
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(2, $movies, 'distinct years must NOT collapse into one movie');
+    }
+
+    /**
+     * Step 1.2 — canonical is STRICTLY a third-tier fallback: the resolution
+     * order is (1) per-scan containerCache → (2) findByPath(synthetic path) →
+     * (3) findTopLevelByCanonical(). When successive episodes of the same show
+     * resolve to the SAME synthetic series path, the canonical fallback must
+     * NEVER be consulted — the first episode creates the series (one canonical
+     * lookup, which misses → create), and every later episode resolves via the
+     * containerCache fast-path with ZERO further canonical lookups. This pins
+     * that exact-path behavior is unchanged and the canonical query is not run
+     * on the hot path for already-resolved containers.
+     */
+    public function testExactPathContainerCacheShortCircuitsCanonicalLookup(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        // Three episodes of ONE show whose titles all slug identically → the
+        // synthetic series path is identical for all three.
+        $this->tmpDir = $this->makeTempDirWith([
+            'Breaking Bad S01E01.mkv',
+            'Breaking Bad S01E02.mkv',
+            'Breaking Bad S01E03.mkv',
+        ]);
+
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(1, $series, 'one series container for three same-path episodes');
+
+        // The series container is resolved exactly ONCE via the create path
+        // (its single canonical lookup misses and falls through to create);
+        // the second and third episodes hit the per-scan containerCache, so the
+        // canonical fallback is consulted AT MOST once for the series container —
+        // never on the cache-hit hot path.
+        $this->assertLessThanOrEqual(
+            1,
+            $repo->canonicalLookupCount,
+            'canonical fallback must not run for containerCache hits (exact-path short-circuit)',
+        );
+    }
+
+    /**
+     * Step 1.2 — exact synthetic-path hit via findByPath() short-circuits BEFORE
+     * the canonical fallback. A prior scan seeded a series at the EXACT synthetic
+     * path the new scan computes; even though that row carries a canonical key
+     * that would ALSO match, the row must be reused via findByPath (tier 2) and
+     * the canonical lookup (tier 3) must never be reached. Proven by reusing the
+     * exact same id AND a zero canonical-lookup count.
+     */
+    public function testExactSyntheticPathHitDoesNotConsultCanonical(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        // Seed the series at the SAME synthetic path the next scan will compute
+        // for "Breaking Bad" (identical slug), carrying a matching canonical key.
+        $existingSeriesId = $repo->seed([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'Breaking Bad',
+            'type' => 'series',
+            'path' => SeriesContainerNaming::seriesPath('lib-1', 'Breaking Bad', null),
+            'metadata_json' => ['name' => 'Breaking Bad', 'canonical_key' => 'breakingbad'],
+        ]);
+
+        $this->tmpDir = $this->makeTempDirWith(['Breaking Bad S01E04.mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'series');
+
+        $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $this->assertCount(1, $series, 'the exact-path row is reused, no second series');
+        $this->assertSame($existingSeriesId, $series[0]['id'], 'reused via findByPath (tier 2)');
+        $this->assertSame(
+            0,
+            $repo->canonicalLookupCount,
+            'tier-3 canonical fallback must NOT run when findByPath (tier 2) already hit',
+        );
     }
 
     public function testMovieLibraryStillProducesTopLevelMovies(): void
@@ -933,6 +1012,8 @@ class MediaScannerTest extends TestCase
             private int $seq = 0;
             /** @var array<int, array{id: string, data: array<string, mixed>}> */
             public array $updates = [];
+            /** Spy: counts how many times the canonical-key fallback was consulted. */
+            public int $canonicalLookupCount = 0;
 
             public function findByPath(string $path): ?array
             {
@@ -952,6 +1033,7 @@ class MediaScannerTest extends TestCase
 
             public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array
             {
+                $this->canonicalLookupCount++;
                 if ($canonicalKey === '') {
                     return null;
                 }

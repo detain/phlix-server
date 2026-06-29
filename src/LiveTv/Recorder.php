@@ -133,6 +133,20 @@ class Recorder
     public const TIMESHIFT_BUFFER_SECONDS = 7200;
 
     /**
+     * Default maximum number of recordings to return in getAllRecordings().
+     *
+     * @var int
+     */
+    public const DEFAULT_RECORDINGS_LIMIT = 1000;
+
+    /**
+     * Default time window in seconds for getAllRecordings() (30 days).
+     *
+     * @var int
+     */
+    public const DEFAULT_RECORDINGS_TIME_WINDOW = 2592000;
+
+    /**
      * Creates a new Recorder instance.
      *
      * @param Connection $db Database connection
@@ -282,18 +296,36 @@ class Recorder
      * Get all recordings, optionally filtered by status.
      *
      * @param string|null $status Optional status filter (one of STATUS_*)
+     * @param int $limit Maximum number of recordings to return (default: DEFAULT_RECORDINGS_LIMIT)
+     * @param int $offset Number of recordings to skip (default: 0)
+     * @param int $timeWindow Time window in seconds (default: DEFAULT_RECORDINGS_TIME_WINDOW)
+     *
      * @return array<int, array<string, mixed>> List of recordings
      */
-    public function getAllRecordings(string $status = null): array
-    {
-        if ($status) {
+    public function getAllRecordings(
+        ?string $status = null,
+        int $limit = self::DEFAULT_RECORDINGS_LIMIT,
+        int $offset = 0,
+        int $timeWindow = self::DEFAULT_RECORDINGS_TIME_WINDOW,
+    ): array {
+        $now = time();
+        $cutoffTime = $now - $timeWindow;
+
+        if ($status !== null) {
             $result = $this->db->query(
-                "SELECT * FROM livetv_recordings WHERE status = ? ORDER BY start_time DESC",
-                [$status]
+                "SELECT * FROM livetv_recordings
+                 WHERE status = ? AND start_time >= ?
+                 ORDER BY start_time DESC
+                 LIMIT ? OFFSET ?",
+                [$status, $cutoffTime, $limit, $offset]
             );
         } else {
             $result = $this->db->query(
-                "SELECT * FROM livetv_recordings ORDER BY start_time DESC"
+                "SELECT * FROM livetv_recordings
+                 WHERE start_time >= ?
+                 ORDER BY start_time DESC
+                 LIMIT ? OFFSET ?",
+                [$cutoffTime, $limit, $offset]
             );
         }
 

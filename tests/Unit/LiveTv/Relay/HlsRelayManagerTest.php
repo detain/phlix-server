@@ -242,7 +242,7 @@ class HlsRelayManagerTest extends TestCase
         $this->assertTrue(true);
     }
 
-    public function testGetActiveSessions(): void
+    public function testGetActiveSessionsIncludesLimit(): void
     {
         $expectedSessions = [
             ['session_id' => 'session-1', 'user_id' => 'user-1'],
@@ -252,13 +252,33 @@ class HlsRelayManagerTest extends TestCase
         $this->mockDb
             ->expects($this->once())
             ->method('query')
-            ->with($this->stringContains('SELECT * FROM livetv_relay_sessions'))
+            ->with(
+                $this->stringContains('LIMIT'),
+                $this->callback(function ($params) {
+                    return is_array($params) && $params[0] === 100;
+                })
+            )
             ->willReturn($expectedSessions);
 
         $sessions = $this->manager->getActiveSessions();
 
         $this->assertCount(2, $sessions);
-        $this->assertEquals($expectedSessions, $sessions);
+    }
+
+    public function testGetActiveSessionsWithCustomLimit(): void
+    {
+        $this->mockDb
+            ->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('LIMIT'),
+                $this->callback(function ($params) {
+                    return is_array($params) && $params[0] === 5;
+                })
+            )
+            ->willReturn([]);
+
+        $this->manager->getActiveSessions(5);
     }
 
     public function testGetUserSessionReturnsActiveSession(): void

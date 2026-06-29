@@ -64,4 +64,16 @@ return [
         // default and keeps the segment count (and per-request overhead) sane.
         'segment_seconds' => 6,
     ],
+
+    // WebSocket server settings for SyncPlay realtime communication.
+    // The WS worker runs as count=1 (one authoritative SyncPlayManager for all
+    // connections) on a dedicated port separate from the HTTP workers.
+    'websocket' => [
+        'host' => '0.0.0.0',
+        'port' => 8097,
+        // Interval for cleaning up stale connections (seconds).
+        'stale_connection_timeout' => 300,
+        // Interval for cleaning up stale SyncPlay groups (seconds).
+        'stale_group_timeout' => 3600,
+    ],
 ];

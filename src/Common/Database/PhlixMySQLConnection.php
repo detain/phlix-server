@@ -24,7 +24,7 @@ use Workerman\MySQL\Connection;
  * Associative arrays (string keys, e.g. `[':id' => $id]`) pass through
  * untouched.
  */
-final class PhlixMySQLConnection extends Connection
+class PhlixMySQLConnection extends Connection
 {
     /**
      * Default the connection charset to utf8mb4 (the parent defaults to the
@@ -75,6 +75,29 @@ final class PhlixMySQLConnection extends Connection
 
     /** @var int Coroutine id currently holding {@see $queryLock}, or -1 when free. */
     private int $queryLockHolder = -1;
+
+    /**
+     * Reentrant mutex that wraps each whole transaction so that concurrent
+     * coroutines can NEVER interleave queries inside a transaction on the
+     * shared socket.
+     *
+     * Created lazily on first use (same reasoning as {@see $queryLock}).
+     *
+     * @var \Swoole\Coroutine\Channel|null
+     */
+    private ?\Swoole\Coroutine\Channel $transLock = null;
+
+    /** @var int Coroutine id currently holding {@see $transLock}, or -1 when free. */
+    private int $transLockHolder = -1;
+
+    /**
+     * Tracks nested transaction depth so that a single coroutine can issue
+     * multiple `beginTrans()` calls (MySQL savepoints) without deadlocking.
+     * Zero means no active transaction.
+     *
+     * @var int
+     */
+    private int $transNesting = 0;
 
     /**
      * Force emulated + fully-buffered prepared statements.
@@ -215,6 +238,11 @@ final class PhlixMySQLConnection extends Connection
      * we run directly. The lock is reentrant per coroutine, so a query issued
      * while this coroutine already holds it (nested call) cannot deadlock.
      *
+     * When inside a transaction (one or more `beginTrans()` calls without the
+     * matching `commitTrans()`/`rollBackTrans()`), the mutex is held for the
+     * entire transaction rather than per-query, preventing concurrent
+     * coroutines from interleaving queries inside our transaction.
+     *
      * @param string                          $query
      * @param array<int|string, mixed>|null    $params
      * @param int                              $fetchmode
@@ -227,6 +255,13 @@ final class PhlixMySQLConnection extends Connection
             return parent::query($query, $params, $fetchmode);
         }
 
+        // Inside a transaction: the transaction lock (acquired in beginTrans)
+        // is already held, so just run the query.  The per-query lock is NOT
+        // released between queries — it stays pinned until commit/rollback.
+        if ($this->transNesting > 0) {
+            return parent::query($query, $params, $fetchmode);
+        }
+
         $acquired = $this->acquireQueryLock($cid);
         try {
             return parent::query($query, $params, $fetchmode);
@@ -235,6 +270,131 @@ final class PhlixMySQLConnection extends Connection
                 $this->releaseQueryLock();
             }
         }
+    }
+
+    /**
+     * Begin a transaction, acquiring the whole-transaction mutex so that no
+     * other coroutine can interleave queries inside this transaction.
+     *
+     * Supports reentrancy: a coroutine that calls `beginTrans()` multiple
+     * times (nested transactions) issues MySQL SAVEPOINTs and the mutex is
+     * held until the outermost `commitTrans()`/`rollBackTrans()`.
+     *
+     * Outside a coroutine the mutex is not applicable; delegation to the
+     * parent is sufficient (no concurrency).
+     *
+     * @return bool
+     */
+    public function beginTrans(): bool
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::beginTrans();
+        }
+
+        // Reentrant: same coroutine can nest beginTrans() (savepoint).
+        if ($this->transLockHolder === $cid) {
+            $result = parent::beginTrans();
+            if ($result) {
+                $this->transNesting++;
+            }
+            return $result;
+        }
+
+        if ($this->transLock === null) {
+            $this->transLock = new \Swoole\Coroutine\Channel(1);
+            $this->transLock->push(true);
+        }
+        $this->transLock->pop();
+        $this->transLockHolder = $cid;
+
+        $result = parent::beginTrans();
+        if ($result) {
+            $this->transNesting = 1;
+        } else {
+            $this->transLockHolder = -1;
+            // phpstan-ignore-line notIdentical.alwaysTrue -- PHPStan loses
+            // track of the null-assignment below when beginTrans() (an impure
+            // method) controls the failure path.  The logic is sound.
+            if ($this->transLock !== null) { // @phpstan-ignore-line
+                $this->transLock->push(true);
+                $this->transLock = null;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Commit the current transaction, releasing the whole-transaction mutex
+     * only when exiting the outermost transaction (nested commits release only
+     * the savepoint).
+     *
+     * @return bool
+     */
+    public function commitTrans(): bool
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::commitTrans();
+        }
+
+        // Nested transaction: release savepoint but keep the mutex.
+        if ($this->transNesting > 1) {
+            $result = parent::commitTrans();
+            if ($result) {
+                $this->transNesting--;
+            }
+            return $result;
+        }
+
+        // Outermost: release the transaction mutex.
+        $this->transNesting = 0;
+        $this->transLockHolder = -1;
+        $result = parent::commitTrans();
+        $lock = $this->transLock;
+        if ($lock !== null) {
+            $lock->push(true);
+            $this->transLock = null;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Roll back the current transaction, releasing the whole-transaction mutex
+     * only when exiting the outermost transaction (nested rollbacks roll back
+     * only the innermost savepoint).
+     *
+     * @return bool
+     */
+    public function rollBackTrans(): bool
+    {
+        $cid = $this->currentCoroutineId();
+        if ($cid < 0) {
+            return parent::rollBackTrans();
+        }
+
+        // Nested rollback: roll back savepoint but keep the mutex.
+        if ($this->transNesting > 1) {
+            $result = parent::rollBackTrans();
+            if ($result) {
+                $this->transNesting--;
+            }
+            return $result;
+        }
+
+        // Outermost: release the transaction mutex.
+        $this->transNesting = 0;
+        $this->transLockHolder = -1;
+        $result = parent::rollBackTrans();
+        $lock = $this->transLock;
+        if ($lock !== null) {
+            $lock->push(true);
+            $this->transLock = null;
+        }
+
+        return $result;
     }
 
     /**

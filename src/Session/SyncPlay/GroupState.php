@@ -651,7 +651,7 @@ class GroupState
     /**
      * Get the full group state for broadcasting to clients.
      *
-     * Returns a comprehensive state array including members list,
+     * Returns a comprehensive state array including members dictionary,
      * playback info, queue, and timestamps.
      *
      * @return array<string, mixed> Full group state
@@ -659,14 +659,14 @@ class GroupState
      * @example
      * ```php
      * $state = $group->getState();
-     * // ['group_id' => 'sp_abc123', 'group_name' => 'Movie Night', 'members' => [...], ...]
+     * // ['group_id' => 'sp_abc123', 'group_name' => 'Movie Night', 'members' => ['member_id' => [...]], ...]
      * ```
      */
     public function getState(): array
     {
-        $membersList = [];
+        $membersDict = [];
         foreach ($this->members as $id => $member) {
-            $membersList[] = [
+            $membersDict[$id] = [
                 'id' => $id,
                 'name' => $member['name'] ?? 'Unknown',
                 'is_host' => $id === $this->hostId,
@@ -678,7 +678,7 @@ class GroupState
             'group_id' => $this->id,
             'group_name' => $this->name,
             'member_count' => $this->getMemberCount(),
-            'members' => $membersList,
+            'members' => $membersDict,
             'host_id' => $this->hostId,
             'current_media_id' => $this->currentMediaId,
             'current_media_duration' => $this->currentMediaDuration,

@@ -71,6 +71,27 @@ final class SceneFilenameNormalizer
     ];
 
     /**
+     * @var list<string> Trailing edition/noise phrases to peel off a title, ordered
+     *      LONGEST-FIRST so multi-word phrases match before their shorter prefixes.
+     *      Matched end-anchored, case-insensitively, on word boundaries, after any
+     *      optional ` -._` separators. Repeatedly peeled by {@see stripNoiseSuffixes()}.
+     */
+    private const NOISE_SUFFIXES = [
+        'unrated directors cut',
+        'uncut & unrated',
+        'alternate ending',
+        'extended cut',
+        'directors cut',
+        "director's cut",
+        'theatrical cut',
+        'remastered',
+        'extended',
+        'uncut',
+        'yify',
+        'dc',
+    ];
+
+    /**
      * @var list<string> File extensions to strip before processing.
      */
     private const EXTENSIONS = [
@@ -118,6 +139,7 @@ final class SceneFilenameNormalizer
                 $titlePart = trim($bracketMatch[1]);
                 $titlePart = self::stripGroupSuffix($titlePart);
                 $title = self::stripBracketedTags($titlePart);
+                $title = self::stripNoiseSuffixes($title);
                 $title = preg_replace('/\s+/', ' ', $title) ?? $title;
                 $title = trim($title);
 
@@ -206,6 +228,7 @@ final class SceneFilenameNormalizer
 
         $title = self::stripGroupSuffix($title);
         $title = self::stripBracketedTags($title);
+        $title = self::stripNoiseSuffixes($title);
         $title = preg_replace('/\s+/', ' ', $title) ?? $title;
         $title = trim($title);
 
@@ -316,5 +339,56 @@ final class SceneFilenameNormalizer
         $title = preg_replace('/\s*【\s*[^\]]*\】\s*/', ' ', $title) ?? $title;
         $title = preg_replace('/\s+/', ' ', $title) ?? $title;
         return trim($title);
+    }
+
+    /**
+     * Repeatedly peel any trailing edition/noise phrase from a title.
+     *
+     * Each iteration strips the LONGEST matching {@see NOISE_SUFFIXES} phrase that
+     * sits at the very end of the title (case-insensitive, on a word boundary,
+     * preceded by optional ` -._` separators), then loops to catch stacked
+     * suffixes (e.g. "Foo Extended Uncut"). A single-token noise phrase is never
+     * allowed to consume the entire title — if peeling it would leave the title
+     * empty, the original is returned so the caller's empty-title fallback and the
+     * "DC" → "DC" guarantee both hold.
+     *
+     * @param string $title Title to clean (already group/bracket-stripped).
+     *
+     * @return string Title with trailing noise suffixes removed.
+     */
+    private static function stripNoiseSuffixes(string $title): string
+    {
+        $title = trim($title);
+
+        $changed = true;
+        while ($changed) {
+            $changed = false;
+
+            // Drop a dangling connector left after token-level quality stripping
+            // (e.g. "Dune UNCUT &" once "UNRATED" was filtered out as a quality token).
+            $title = trim(preg_replace('/\s*&\s*$/', '', $title) ?? $title);
+
+            foreach (self::NOISE_SUFFIXES as $suffix) {
+                $pattern = '/[\s\-._]*\b' . preg_quote($suffix, '/') . '[\s\-._&]*$/i';
+                $stripped = preg_replace($pattern, '', $title);
+                if ($stripped === null) {
+                    continue;
+                }
+                $stripped = trim($stripped);
+                if ($stripped === $title) {
+                    continue;
+                }
+                // Never let a noise token empty the title (e.g. a film literally
+                // named "DC"): keep the original instead of returning ''.
+                if ($stripped === '') {
+                    continue;
+                }
+                $title = $stripped;
+                $changed = true;
+                break;
+            }
+        }
+
+        return $title;
     }
 }

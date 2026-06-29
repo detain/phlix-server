@@ -145,15 +145,21 @@ class CollectionRepository
     }
 
     /**
-     * Get all collections.
+     * Get all collections with pagination.
+     *
+     * @param int $limit Maximum number of collections to return (default: 1000)
+     * @param int $offset Number of collections to skip (default: 0)
      *
      * @return array<int, Collection> Array of all collections
      *
      * @since 0.14.0
      */
-    public function findAll(): array
+    public function findAll(int $limit = 1000, int $offset = 0): array
     {
-        $results = $this->db->query("SELECT * FROM collections ORDER BY sort_order, name");
+        $results = $this->db->query(
+            "SELECT * FROM collections ORDER BY sort_order, name LIMIT ? OFFSET ?",
+            [$limit, $offset]
+        );
 
         if (!is_array($results)) {
             return [];

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "4c9285a42a6b99374302600aa3482cc4",
+    "content-hash": "4bbd8e4f0411c90bc4514f817e400a2f",
     "packages": [
         {
             "name": "brick/math",
@@ -413,20 +413,21 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.11.0",
+            "version": "v0.12.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e"
+                "reference": "ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/c7627ab385f5d65a5f2f73058c860e213cd94a4e",
-                "reference": "c7627ab385f5d65a5f2f73058c860e213cd94a4e",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2",
+                "reference": "ec21cf9e6a894154fc343b8aae9ab8b0e34a5ad2",
                 "shasum": ""
             },
             "require": {
                 "php": "^8.3",
+                "psr/clock": "^1.0",
                 "psr/container": "^2.0",
                 "psr/event-dispatcher": "^1.0",
                 "psr/log": "^3.0"
@@ -471,7 +472,11 @@
                 "MIT"
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
-            "time": "2026-06-28T17:25:38+00:00"
+            "support": {
+                "source": "https://github.com/detain/phlix-shared/tree/v0.12.0",
+                "issues": "https://github.com/detain/phlix-shared/issues"
+            },
+            "time": "2026-06-29T20:51:50+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

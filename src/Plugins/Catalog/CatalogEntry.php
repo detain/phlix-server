@@ -108,6 +108,10 @@ final class CatalogEntry
             return null;
         }
 
+        if (!preg_match('/^phlix-plugin-.+/', $name)) {
+            throw new CatalogEntryValidationException($name);
+        }
+
         $title = self::str($raw, 'title');
 
         return new self(

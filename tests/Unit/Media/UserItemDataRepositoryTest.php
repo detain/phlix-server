@@ -249,6 +249,7 @@ class UserItemDataRepositoryTest extends TestCase
                 $this->logicalAnd(
                     $this->stringContains('JOIN media_items mi ON uid.item_id = mi.id'),
                     $this->stringContains('uid.favorite = 1'),
+                    $this->stringContains('uid.like_level'),
                     $this->stringContains('LIMIT ? OFFSET ?')
                 ),
                 $this->equalTo([self::USER, 25, 50])

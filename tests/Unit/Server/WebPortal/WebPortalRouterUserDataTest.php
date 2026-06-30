@@ -62,7 +62,7 @@ class WebPortalRouterUserDataTest extends TestCase
     {
         $userItemData = $this->createMock(UserItemDataRepository::class);
         $userItemData->method('getItemData')->with('user-1', 'item-1')
-            ->willReturn(['favorite' => true, 'rating' => 9]);
+            ->willReturn(['favorite' => true, 'rating' => 9, 'like_level' => 2]);
 
         $router = $this->makeRouter($this->itemRepoWithItem(), $userItemData);
 
@@ -70,7 +70,10 @@ class WebPortalRouterUserDataTest extends TestCase
         $req->userId = 'user-1';
         $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
 
-        $this->assertSame(['favorite' => true, 'rating' => 9], $body['item']['user_data']);
+        $this->assertSame(
+            ['favorite' => true, 'rating' => 9, 'like_level' => 2],
+            $body['item']['user_data']
+        );
     }
 
     public function testMediaItemUserDataDefaultsWhenNoRow(): void
@@ -84,7 +87,10 @@ class WebPortalRouterUserDataTest extends TestCase
         $req->userId = 'user-1';
         $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
 
-        $this->assertSame(['favorite' => false, 'rating' => null], $body['item']['user_data']);
+        $this->assertSame(
+            ['favorite' => false, 'rating' => null, 'like_level' => 0],
+            $body['item']['user_data']
+        );
     }
 
     public function testMediaItemUserDataIsNullWhenUnauthenticated(): void

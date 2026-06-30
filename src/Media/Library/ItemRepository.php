@@ -212,15 +212,26 @@ class ItemRepository
      */
     public function countDescendants(string $itemId): int
     {
+        // The statement MUST start with `SELECT`: the workerman/mysql driver
+        // (`PhlixMySQLConnection`/base `Connection::query()`) decides whether to
+        // FETCH a result set by inspecting the leading keyword. A statement that
+        // begins with `WITH` is NOT recognised as row-returning, so `query()`
+        // silently returns NULL instead of the count rows → `extractCount()`
+        // yields 0 for every item (live-DB outage; CI missed it because the 1.3
+        // tests drove an in-memory double, never the real SQL). Wrapping the
+        // recursive CTE in an outer `SELECT COUNT(*) FROM (... ) AS t` keeps the
+        // arbitrary-depth recursion while making the driver fetch the rows.
         $result = $this->db->query(
-            "WITH RECURSIVE descendants AS (
-                 SELECT id FROM media_items WHERE parent_id = ?
-                 UNION ALL
-                 SELECT mi.id
-                 FROM media_items mi
-                 JOIN descendants d ON mi.parent_id = d.id
-             )
-             SELECT COUNT(*) AS count FROM descendants",
+            "SELECT COUNT(*) AS count FROM (
+                 WITH RECURSIVE descendants AS (
+                     SELECT id FROM media_items WHERE parent_id = ?
+                     UNION ALL
+                     SELECT mi.id
+                     FROM media_items mi
+                     JOIN descendants d ON mi.parent_id = d.id
+                 )
+                 SELECT id FROM descendants
+             ) AS t",
             [$itemId]
         );
 

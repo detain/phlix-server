@@ -402,10 +402,12 @@ class WebPortalRouter
      * @param Request $request The HTTP request (carries the authenticated userId).
      * @param string  $itemId  The media item UUID (already extracted + validated).
      *
-     * @return array{favorite: bool, rating: int|null}|null `null` when the
-     *         request is unauthenticated or the favorites store is not wired;
-     *         the user's data otherwise (defaulting to not-favorited/unrated when
-     *         no row exists).
+     * @return array{favorite: bool, rating: int|null, like_level: int}|null
+     *         `null` when the request is unauthenticated or the favorites store
+     *         is not wired; the user's data otherwise (defaulting to
+     *         not-favorited/unrated/un-loved when no row exists). `like_level`
+     *         is the 0-3 multi-level Love axis (Feature 10) — ADD-ONLY alongside
+     *         the existing `favorite`/`rating` keys.
      */
     private function resolveUserData(Request $request, string $itemId): ?array
     {
@@ -415,7 +417,7 @@ class WebPortalRouter
         }
 
         return $this->userItemData->getItemData($userId, $itemId)
-            ?? ['favorite' => false, 'rating' => null];
+            ?? ['favorite' => false, 'rating' => null, 'like_level' => 0];
     }
 
     /**

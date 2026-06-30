@@ -195,12 +195,12 @@ class UserItemDataRepository
      * @param int    $offset Rows to skip for pagination.
      *
      * @return list<array<string, mixed>> Joined favorite rows (each carrying the
-     *         media item's id/name/type/metadata_json plus rating).
+     *         media item's id/name/type/metadata_json plus rating and like_level).
      */
     public function getFavorites(string $userId, int $limit = 50, int $offset = 0): array
     {
         $result = $this->db->query(
-            "SELECT uid.item_id, uid.rating, uid.updated_at,
+            "SELECT uid.item_id, uid.rating, uid.like_level, uid.updated_at,
                     mi.id AS media_item_id, mi.name AS media_name,
                     mi.type AS media_type, mi.metadata_json
              FROM user_item_data uid

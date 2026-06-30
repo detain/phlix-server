@@ -368,7 +368,9 @@ class MediaUserDataControllerTest extends TestCase
     {
         $userData = $this->createMock(UserItemDataRepository::class);
         $userData->method('getFavorites')->willReturn([
-            ['item_id' => 'item-1', 'rating' => 7, 'updated_at' => '2026-06-27 00:00:00'],
+            // item-1 carries a real like_level (3); item-2 omits the column entirely
+            // (exercises the default-0 path).
+            ['item_id' => 'item-1', 'rating' => 7, 'like_level' => 3, 'updated_at' => '2026-06-27 00:00:00'],
             ['item_id' => 'item-2', 'rating' => null, 'updated_at' => '2026-06-26 00:00:00'],
         ]);
 
@@ -387,10 +389,17 @@ class MediaUserDataControllerTest extends TestCase
 
         $first = $body['items'][0];
         $this->assertSame('item-1', $first['id']);
-        $this->assertSame(['favorite' => true, 'rating' => 7], $first['user_data']);
+        $this->assertSame(
+            ['favorite' => true, 'rating' => 7, 'like_level' => 3],
+            $first['user_data']
+        );
 
         $second = $body['items'][1];
-        $this->assertSame(['favorite' => true, 'rating' => null], $second['user_data']);
+        // like_level absent on the row → defaults to 0.
+        $this->assertSame(
+            ['favorite' => true, 'rating' => null, 'like_level' => 0],
+            $second['user_data']
+        );
 
         $this->assertSame(50, $body['limit']);
         $this->assertSame(0, $body['offset']);

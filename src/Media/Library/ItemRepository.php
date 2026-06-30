@@ -1186,6 +1186,139 @@ class ItemRepository
     }
 
     /**
+     * Returns distinct value + count pairs for a given field, suitable for
+     * passing to {@see IndexBuckets::build()} to produce the media index rail.
+     *
+     * The same expression is used in both GROUP BY and ORDER BY (via the shared
+     * private helper methods), so they can never drift apart. The result is
+     * sorted by bucket value {asc|desc} and bounded at 200 rows.
+     *
+     * @param string              $field     One of: name|year|rating|runtime|date_added.
+     *                                       Unknown fields default to 'name'.
+     * @param array<string, mixed> $params   Same media-query params as {@see self::query()}.
+     * @param string|null         $libraryId Optional library UUID to scope results.
+     *
+     * @return list<array{value: string|int, count: int}> Bucket values with counts,
+     *                sorted by value {asc|desc} as specified. The caller applies
+     *                {@see IndexBuckets::build()} to produce cumulative offsets.
+     */
+    public function valueBuckets(string $field, array $params, ?string $libraryId = null): array
+    {
+        $order = isset($params['order']) && is_scalar($params['order'])
+            ? strtolower((string) $params['order'])
+            : 'asc';
+        $desc = $order === 'desc';
+
+        $bucketExpr = match ($field) {
+            'name' => SortTitle::letterSqlExpression('name'),
+            'year' => 'YEAR(created_at)',
+            'rating' => 'rating_sort',
+            'runtime' => 'runtime_sort',
+            'date_added' => 'DATE(created_at)',
+            default => SortTitle::letterSqlExpression('name'),
+        };
+
+        // The ORDER BY expression uses the private helper (includes ASC/DESC).
+        // The GROUP BY uses the bare bucket expression.  They share the same
+        // underlying column/expression so can never drift apart.
+        $orderByExpr = match ($field) {
+            'name' => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
+            'year' => $this->yearSortExpression($desc),
+            'rating' => $this->ratingSortExpression($desc),
+            'runtime' => $this->runtimeSortExpression($desc),
+            'date_added' => $this->createdAtSortExpression($desc),
+            default => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
+        };
+
+        ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
+
+        $sql = "SELECT {$bucketExpr} AS bucket_value, COUNT(*) AS item_count"
+            . ' FROM media_items'
+            . ' WHERE ' . implode(' AND ', $wheres)
+            . " GROUP BY {$bucketExpr}"
+            . " ORDER BY {$orderByExpr}"
+            . ' LIMIT 200';
+
+        $rows = $this->db->query($sql, $bindings);
+
+        $out = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $rawValue = $row['bucket_value'];
+                // Normalise to int|string (mysql YEAR() → int; others → string).  A
+                // NULL from a buggy row is cast to '' so the return shape is always
+                // int|string per the docblock and never mixed.
+                $value = is_int($rawValue) ? $rawValue : (is_string($rawValue) ? $rawValue : '');
+                $count = isset($row['item_count']) && is_numeric($row['item_count'])
+                    ? (int) $row['item_count']
+                    : 0;
+                $out[] = ['value' => $value, 'count' => $count];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * YEAR(created_at) expression fragment — shared by GROUP BY and ORDER BY
+     * so they can never drift apart.
+     *
+     * @param bool $desc Sort descending?
+     * @return string SQL expression fragment, e.g. "YEAR(created_at) DESC"
+     */
+    private function yearSortExpression(bool $desc): string
+    {
+        $dir = $desc ? 'DESC' : 'ASC';
+
+        return "YEAR(created_at) {$dir}";
+    }
+
+    /**
+     * rating_sort expression fragment — shared by GROUP BY and ORDER BY
+     * so they can never drift apart.
+     *
+     * @param bool $desc Sort descending?
+     * @return string SQL expression fragment, e.g. "rating_sort DESC"
+     */
+    private function ratingSortExpression(bool $desc): string
+    {
+        $dir = $desc ? 'DESC' : 'ASC';
+
+        return "rating_sort {$dir}";
+    }
+
+    /**
+     * runtime_sort expression fragment — shared by GROUP BY and ORDER BY
+     * so they can never drift apart.
+     *
+     * @param bool $desc Sort descending?
+     * @return string SQL expression fragment, e.g. "runtime_sort DESC"
+     */
+    private function runtimeSortExpression(bool $desc): string
+    {
+        $dir = $desc ? 'DESC' : 'ASC';
+
+        return "runtime_sort {$dir}";
+    }
+
+    /**
+     * created_at expression fragment — shared by GROUP BY and ORDER BY
+     * so they can never drift apart.
+     *
+     * @param bool $desc Sort descending?
+     * @return string SQL expression fragment, e.g. "created_at DESC"
+     */
+    private function createdAtSortExpression(bool $desc): string
+    {
+        $dir = $desc ? 'DESC' : 'ASC';
+
+        return "created_at {$dir}";
+    }
+
+    /**
      * Build the WHERE clause + bindings shared by {@see self::query()} and
      * {@see self::letterCounts()} from the public media-query params. Sorting and
      * paging are NOT included (callers add those).

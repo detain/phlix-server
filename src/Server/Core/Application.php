@@ -299,6 +299,77 @@ class Application
             return $controller->handle($request, $params);
         });
 
+        // Media index endpoint (Step 8.3) — auth-gated, mirrors WebPortalRouter.
+        // Returns bucket metadata for any indexable field (name, year, rating,
+        // runtime, date_added), scoped to the same filters as GET /api/v1/media.
+        if ($this->container !== null) {
+            $container = $this->container;
+            $this->router->group(
+                '',
+                function (Router $r) use ($container): void {
+                    $r->get('/api/v1/media/index', function (Request $request, array $params) use ($container): Response {
+                        // Extract media query params (mirrors WebPortalRouter::extractMediaQueryParams)
+                        $paramsArr = [];
+                        $search = $request->queryString('search');
+                        if ($search !== null && $search !== '') {
+                            $paramsArr['search'] = $search;
+                        }
+                        $genres = $request->query['genres'] ?? null;
+                        if (is_array($genres) && count($genres) > 0) {
+                            $paramsArr['genres'] = array_filter($genres, 'is_string');
+                        }
+                        $yearFrom = $request->queryString('yearFrom');
+                        if ($yearFrom !== null && is_numeric($yearFrom)) {
+                            $paramsArr['yearFrom'] = (int) $yearFrom;
+                        }
+                        $yearTo = $request->queryString('yearTo');
+                        if ($yearTo !== null && is_numeric($yearTo)) {
+                            $paramsArr['yearTo'] = (int) $yearTo;
+                        }
+                        $ratings = $request->query['ratings'] ?? null;
+                        if (is_array($ratings) && count($ratings) > 0) {
+                            $paramsArr['ratings'] = array_filter($ratings, 'is_string');
+                        }
+                        $actors = $request->query['actors'] ?? null;
+                        if (is_array($actors) && count($actors) > 0) {
+                            $paramsArr['actors'] = array_filter($actors, 'is_string');
+                        }
+                        $companies = $request->query['companies'] ?? null;
+                        if (is_array($companies) && count($companies) > 0) {
+                            $paramsArr['companies'] = array_filter($companies, 'is_string');
+                        }
+
+                        $libraryIdRaw = $request->queryString('libraryId');
+                        $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+                        $field = $request->queryString('field') ?? 'name';
+                        $order = strtolower($request->queryString('order') ?? 'asc');
+
+                        try {
+                            /** @var \Phlix\Media\Library\ItemRepository $itemRepository */
+                            $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
+                        } catch (\Throwable) {
+                            return (new Response())->status(503)->json(['error' => 'Service unavailable']);
+                        }
+                        $rawBuckets = $itemRepository->valueBuckets($field, $paramsArr, $libraryId);
+
+                        $indexBuckets = new \Phlix\Media\Library\IndexBuckets();
+                        $buckets = $indexBuckets->build($field, $rawBuckets, $order);
+                        $buckets = $indexBuckets->withOffsets($buckets);
+
+                        $total = array_sum(array_column($buckets, 'count'));
+
+                        return (new Response())->json([
+                            'field' => $field,
+                            'buckets' => $buckets,
+                            'total' => $total,
+                        ]);
+                    });
+                },
+                [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+            );
+        }
+
         // Media item playback-info endpoint
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);

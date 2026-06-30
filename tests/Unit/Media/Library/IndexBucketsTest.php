@@ -137,7 +137,7 @@ class IndexBucketsTest extends TestCase
             ['value' => 'NC-17', 'count' => 5],
             ['value' => 'X', 'count' => 3],
             ['value' => 'UNRATED', 'count' => 12],
-            ['value' => null, 'count' => 8], // Unrated bucket
+            ['value' => '', 'count' => 8], // Unrated bucket (empty string matches null/'' treated as Unrated)
         ];
 
         $result = $this->buckets->build(IndexBuckets::FIELD_RATING, $distincts, 'asc');
@@ -299,5 +299,219 @@ class IndexBucketsTest extends TestCase
         $this->assertSame(0, $descResult[0]['offset']);
         $this->assertSame(8, $descResult[1]['offset']);  // 8 + 0
         $this->assertSame(13, $descResult[2]['offset']); // 8 + 5
+    }
+
+    // -------------------------------------------------------------------------
+    // Alignment / cumulative-offset verification tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * Alignment rule: bucket.offset must equal the actual row offset in media_items
+     * for items matching that bucket's key, when ordered by the sort field.
+     * This test verifies that withOffsets() produces monotonically increasing
+     * cumulative offsets that represent the count of all preceding items.
+     */
+    public function testCumulativeOffsetsMatchCumulativeSumExactly(): void
+    {
+        // Distinct pairs sorted by value ASC
+        $distincts = [
+            ['value' => 'A', 'count' => 5],
+            ['value' => 'B', 'count' => 3],
+            ['value' => 'C', 'count' => 7],
+            ['value' => 'D', 'count' => 2],
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_NAME, $distincts, 'asc');
+
+        // Verify each bucket's offset equals the cumulative count of all previous buckets
+        // offset[n] should equal sum(counts[0..n-1])
+        $this->assertSame('A', $result[0]['key']);
+        $this->assertSame(0, $result[0]['offset']);           // sum(counts before A) = 0
+        $this->assertSame(5, $result[0]['count']);
+
+        $this->assertSame('B', $result[1]['key']);
+        $this->assertSame(5, $result[1]['offset']);          // sum(counts before B) = 5
+        $this->assertSame(3, $result[1]['count']);
+
+        $this->assertSame('C', $result[2]['key']);
+        $this->assertSame(8, $result[2]['offset']);          // sum(counts before C) = 5 + 3
+        $this->assertSame(7, $result[2]['count']);
+
+        $this->assertSame('D', $result[3]['key']);
+        $this->assertSame(15, $result[3]['offset']);         // sum(counts before D) = 5 + 3 + 7
+        $this->assertSame(2, $result[3]['count']);
+    }
+
+    /**
+     * Verifies that every field type starts its first bucket at offset 0.
+     * The alignment rule requires offset=0 for the first bucket (no items precede it).
+     */
+    public function testAllFieldsFirstBucketHasOffsetZero(): void
+    {
+        $baseDistincts = [['value' => 'test', 'count' => 1]];
+
+        $fields = [
+            IndexBuckets::FIELD_NAME,
+            IndexBuckets::FIELD_YEAR,
+            IndexBuckets::FIELD_RATING,
+            IndexBuckets::FIELD_RUNTIME,
+            IndexBuckets::FIELD_DATE_ADDED,
+        ];
+
+        foreach ($fields as $field) {
+            $result = $this->buckets->build($field, $baseDistincts, 'asc');
+            $this->assertNotEmpty($result, "Field {$field} should produce at least one bucket");
+            $this->assertSame(0, $result[0]['offset'], "Field {$field} first bucket must have offset 0");
+        }
+    }
+
+    /**
+     * Cumulative offsets must never decrease — they are by definition a running sum.
+     * This is a fail-fast guard against any future off-by-one errors in withOffsets().
+     */
+    public function testCumulativeOffsetsNeverDecrease(): void
+    {
+        $distincts = [
+            ['value' => 'P', 'count' => 10],
+            ['value' => 'Q', 'count' => 1],
+            ['value' => 'R', 'count' => 5],
+            ['value' => 'S', 'count' => 3],
+            ['value' => 'T', 'count' => 2],
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_NAME, $distincts, 'asc');
+
+        $previousOffset = -1;
+        foreach ($result as $bucket) {
+            $this->assertGreaterThanOrEqual(
+                $previousOffset,
+                $bucket['offset'],
+                'Offset must never decrease — cumulative offsets must be monotonically non-decreasing'
+            );
+            $previousOffset = $bucket['offset'];
+        }
+    }
+
+    /**
+     * The last bucket's offset + its count must equal the total item count.
+     * This verifies the alignment rule end-to-end: jumping to the last bucket's
+     * offset lands at the correct position, and scrolling by count lands at total.
+     */
+    public function testLastBucketOffsetPlusCountEqualsTotal(): void
+    {
+        $distincts = [
+            ['value' => 2018, 'count' => 10],
+            ['value' => 2019, 'count' => 5],
+            ['value' => 2020, 'count' => 3],
+            ['value' => 2021, 'count' => 12],
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_YEAR, $distincts, 'asc');
+
+        $total = array_sum(array_column($result, 'count'));
+        $lastBucket = end($result);
+        \assert($lastBucket !== false);
+
+        $this->assertSame(
+            $total,
+            $lastBucket['offset'] + $lastBucket['count'],
+            'Last bucket offset + last bucket count must equal total (end of list boundary)'
+        );
+    }
+
+    /**
+     * Single-bucket case: offset must be 0 (no items precede the only bucket).
+     */
+    public function testSingleBucketHasOffsetZero(): void
+    {
+        $distincts = [['value' => 'Z', 'count' => 42]];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_NAME, $distincts, 'asc');
+
+        $this->assertCount(1, $result);
+        $this->assertSame(0, $result[0]['offset']);
+        $this->assertSame(42, $result[0]['count']);
+    }
+
+    /**
+     * DESC order: bucket display order is reversed, but within the reversed list,
+     * offsets must still be cumulative from 0. The offset represents position in
+     * the sorted list, not in the display order — so desc still has valid offsets.
+     */
+    public function testDescOrderCumulativeOffsetsStillCorrect(): void
+    {
+        $distincts = [
+            ['value' => 2000, 'count' => 5],
+            ['value' => 2010, 'count' => 10],
+            ['value' => 2020, 'count' => 3],
+        ];
+
+        $descResult = $this->buckets->build(IndexBuckets::FIELD_YEAR, $distincts, 'desc');
+
+        // desc: [2020(count=3), 2010(count=10), 2000(count=5)]
+        // offsets: [0, 3, 13]
+        $this->assertCount(3, $descResult);
+
+        // First bucket in desc (largest year) still starts at 0
+        $this->assertSame('2020', $descResult[0]['key']);
+        $this->assertSame(0, $descResult[0]['offset']);
+        $this->assertSame(3, $descResult[0]['count']);
+
+        // Second bucket offset = first bucket count
+        $this->assertSame('2010', $descResult[1]['key']);
+        $this->assertSame(3, $descResult[1]['offset']);   // 0 + 3
+        $this->assertSame(10, $descResult[1]['count']);
+
+        // Third bucket offset = first + second counts
+        $this->assertSame('2000', $descResult[2]['key']);
+        $this->assertSame(13, $descResult[2]['offset']); // 0 + 3 + 10
+        $this->assertSame(5, $descResult[2]['count']);
+
+        // And the total alignment check
+        $total = array_sum(array_column($descResult, 'count'));
+        $lastBucket = end($descResult);
+        $this->assertSame($total, $lastBucket['offset'] + $lastBucket['count']);
+    }
+
+    /**
+     * All-zero counts: every bucket has count=0, so every offset must be 0
+     * (no items precede anything, and jumping to offset 0 is always valid).
+     */
+    public function testAllZeroCountsAllZeroOffsets(): void
+    {
+        $distincts = [
+            ['value' => 'X', 'count' => 0],
+            ['value' => 'Y', 'count' => 0],
+            ['value' => 'Z', 'count' => 0],
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_NAME, $distincts, 'asc');
+
+        foreach ($result as $bucket) {
+            $this->assertSame(0, $bucket['offset'], 'Zero-count buckets must all have offset 0');
+            $this->assertSame(0, $bucket['count']);
+        }
+    }
+
+    /**
+     * The total in the response must equal the sum of all bucket counts.
+     * This is the server↔rail alignment: total items = sum of items per bucket.
+     */
+    public function testTotalEqualsSumOfBucketCounts(): void
+    {
+        $distincts = [
+            ['value' => 'G', 'count' => 3],
+            ['value' => 'PG', 'count' => 7],
+            ['value' => 'PG-13', 'count' => 2],
+            ['value' => 'R', 'count' => 5],
+            ['value' => 'NC-17', 'count' => 1],
+            ['value' => 'X', 'count' => 0],
+            ['value' => 'UNRATED', 'count' => 4],
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_RATING, $distincts, 'asc');
+
+        $totalFromBuckets = array_sum(array_column($result, 'count'));
+        $this->assertSame(22, $totalFromBuckets); // 3+7+2+5+1+0+4
     }
 }

@@ -8,6 +8,9 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\Resolution\FieldMappers;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use Throwable;
 
 /**
@@ -33,10 +36,33 @@ class SeriesMetadataResolver
     /** @var string Base URL for the TMDB image CDN. */
     private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
 
+    /** @var PriorityConfig Effective per-media-type source priority. */
+    private PriorityConfig $priorityConfig;
+
+    /** @var PriorityFieldResolver Configurable per-field first-non-empty merge engine. */
+    private PriorityFieldResolver $fieldResolver;
+
+    /**
+     * @param TmdbProvider               $tmdb           Online TMDB provider (TV endpoints).
+     * @param StructuredLogger|null      $loggerOverride Optional logger; defaults to the MEDIA channel.
+     * @param PriorityConfig|null        $priorityConfig Effective per-type source priority. When null,
+     *     defaults to a series order of `['tmdb']` — i.e. today's TMDB-only behavior — so output is
+     *     unchanged for callers that do not inject it. Note the series path only ever builds a TMDB
+     *     record, so it stays free of any TVDB-sourced field (e.g. a TVDB site rating mapped into the
+     *     imdb_rating slot) regardless of the configured order.
+     * @param PriorityFieldResolver|null $fieldResolver  The merge engine; a fresh pure instance by default.
+     */
     public function __construct(
         private readonly TmdbProvider $tmdb,
         private readonly ?StructuredLogger $loggerOverride = null,
+        ?PriorityConfig $priorityConfig = null,
+        ?PriorityFieldResolver $fieldResolver = null,
     ) {
+        // Default config reproduces today's TMDB-only series behavior. Even if an
+        // admin order names other sources, the series path below only constructs a
+        // TMDB record, so no other source can contribute a field.
+        $this->priorityConfig = $priorityConfig ?? new PriorityConfig(['series' => ['tmdb']]);
+        $this->fieldResolver = $fieldResolver ?? new PriorityFieldResolver();
     }
 
     private function logger(): StructuredLogger
@@ -162,6 +188,26 @@ class SeriesMetadataResolver
      */
     private function format(string $tmdbId, array $details): array
     {
+        // Per-field selection is delegated to PriorityFieldResolver. The series
+        // path builds ONLY a TMDB record, so it stays TMDB-only — no TVDB/IMDb
+        // source can contribute a field (in particular no TVDB site rating can
+        // surface in the imdb_rating slot), preserving today's output exactly.
+        // FieldMappers::fromTmdb reproduces the live per-field shaping: `name`→
+        // title, `*_path`→`*_url` (/w500), genres→cleaned string list, `year`,
+        // `official_rating`, flat actor names, verbatim cast/crew/companies, studio.
+        // A fixed `['tmdb']` order is used (not the configured series order) so the
+        // series resolver remains robustly TMDB-driven regardless of admin config
+        // until real series sources are registered (Step 3.5).
+        $resolved = $this->fieldResolver->resolve(
+            [FieldMappers::fromTmdb($details)],
+            ['tmdb'],
+            $this->priorityConfig->genresMode(),
+        );
+        // Drop the resolver's provenance/id keys — rebuilt below to match the live
+        // shape exactly (hard-coded sources=['tmdb'], an explicit tmdb_id, and the
+        // tmdb+imdb external_ids derived from the resolved id and the details).
+        unset($resolved['external_ids'], $resolved['sources']);
+
         $result = [
             'external_ids' => array_filter([
                 'tmdb' => $tmdbId,
@@ -171,65 +217,8 @@ class SeriesMetadataResolver
             'sources' => ['tmdb'],
         ];
 
-        $name = MetadataValue::asNullableString($details['name'] ?? null);
-        if ($name !== null) {
-            $result['title'] = $name;
-        }
-        $overview = MetadataValue::asNullableString($details['overview'] ?? null);
-        if ($overview !== null) {
-            $result['overview'] = $overview;
-        }
-        $poster = $this->imageUrl($details['poster_path'] ?? null);
-        if ($poster !== null) {
-            $result['poster_url'] = $poster;
-        }
-        $backdrop = $this->imageUrl($details['backdrop_path'] ?? null);
-        if ($backdrop !== null) {
-            $result['backdrop_url'] = $backdrop;
-        }
-        $genres = MetadataValue::asList($details['genres'] ?? null);
-        $genreNames = array_values(array_filter(
-            array_map(static fn(mixed $g): string => MetadataValue::asString($g), $genres),
-            static fn(string $g): bool => $g !== '',
-        ));
-        if ($genreNames !== []) {
-            $result['genres'] = $genreNames;
-        }
-        $year = MetadataValue::asNullableInt($details['year'] ?? null);
-        if ($year !== null) {
-            $result['year'] = $year;
-        }
-        $rating = MetadataValue::asNullableString($details['official_rating'] ?? null);
-        if ($rating !== null) {
-            $result['official_rating'] = $rating;
-        }
-
-        // Flat actor names (cards + the `$.actors[*]` filter + SPA chips all
-        // consume this shape — keep it flat). actorNames() tolerates both the
-        // already-flat TV `actors` list and any object form.
-        $actors = MetadataValue::actorNames($details['actors'] ?? null);
-        if ($actors !== []) {
-            $result['actors'] = $actors;
-        }
-
-        // Rich cast/crew/company objects (profile photos, logos) for the
-        // media-detail page. ADDITIVE alongside the flat `actors` above — same
-        // shape TmdbProvider::formatTvDetails emitted. Stored only when present.
-        $cast = MetadataValue::asAssocList($details['cast'] ?? null);
-        if ($cast !== []) {
-            $result['cast'] = $cast;
-        }
-        $crew = MetadataValue::asAssocList($details['crew'] ?? null);
-        if ($crew !== []) {
-            $result['crew'] = $crew;
-        }
-        $companies = MetadataValue::asAssocList($details['production_companies'] ?? null);
-        if ($companies !== []) {
-            $result['production_companies'] = $companies;
-        }
-        $studio = MetadataValue::asNullableString($details['studio'] ?? null);
-        if ($studio !== null) {
-            $result['studio'] = $studio;
+        foreach ($resolved as $key => $value) {
+            $result[$key] = $value;
         }
 
         return $result;

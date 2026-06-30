@@ -9,6 +9,9 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
+use Phlix\Media\Metadata\Resolution\FieldMappers;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use Throwable;
 
 /**
@@ -38,21 +41,37 @@ class MovieMetadataResolver
     /** @var StructuredLogger Structured logger instance. */
     private StructuredLogger $logger;
 
-    /** @var string Base URL for TMDB image CDN. */
-    private string $imageBaseUrl = 'https://image.tmdb.org/t/p';
+    /** @var PriorityConfig Effective per-media-type source priority. */
+    private PriorityConfig $priorityConfig;
+
+    /** @var PriorityFieldResolver Configurable per-field first-non-empty merge engine. */
+    private PriorityFieldResolver $fieldResolver;
 
     /**
-     * @param TmdbProvider          $tmdb   Online TMDB provider.
-     * @param ImdbLookup            $imdb   Offline IMDb dataset lookup.
-     * @param StructuredLogger|null $logger Optional logger; defaults to the MEDIA channel.
+     * @param TmdbProvider               $tmdb           Online TMDB provider.
+     * @param ImdbLookup                 $imdb           Offline IMDb dataset lookup.
+     * @param StructuredLogger|null      $logger         Optional logger; defaults to the MEDIA channel.
+     * @param PriorityConfig|null        $priorityConfig Effective per-type source priority. When null,
+     *     defaults to the canonical `['tmdb','imdb']` order — i.e. today's hard-coded precedence — so
+     *     behavior is unchanged for callers that do not inject it.
+     * @param PriorityFieldResolver|null $fieldResolver  The merge engine; a fresh pure instance by default.
      *
      * @since 0.21.0
      */
-    public function __construct(TmdbProvider $tmdb, ImdbLookup $imdb, ?StructuredLogger $logger = null)
-    {
+    public function __construct(
+        TmdbProvider $tmdb,
+        ImdbLookup $imdb,
+        ?StructuredLogger $logger = null,
+        ?PriorityConfig $priorityConfig = null,
+        ?PriorityFieldResolver $fieldResolver = null
+    ) {
         $this->tmdb = $tmdb;
         $this->imdb = $imdb;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
+        // Default config reproduces today's hard-coded `[tmdb, imdb]` precedence,
+        // keeping the merge behavior-identical when no PriorityConfig is injected.
+        $this->priorityConfig = $priorityConfig ?? new PriorityConfig(['movie' => ['tmdb', 'imdb']]);
+        $this->fieldResolver = $fieldResolver ?? new PriorityFieldResolver();
     }
 
     /**
@@ -149,10 +168,37 @@ class MovieMetadataResolver
         ?array $tmdbDetails,
         ?array $imdbData
     ): array {
-        $tmdb = $tmdbDetails ?? [];
-        $imdb = $imdbData ?? [];
+        // Per-field selection is delegated to PriorityFieldResolver, driven by the
+        // configurable source order (PriorityConfig). The 3.1 FieldMappers normalize
+        // each provider's already-formatted payload onto the canonical field set, so
+        // under the default `['tmdb','imdb']` order the resolver makes the SAME
+        // per-field choice the old hand-rolled merge did:
+        //  - title          tmdb `name` else imdb `title`        (first-non-empty)
+        //  - overview/images/cast/crew/companies/actors/director/studio  tmdb only
+        //  - genres         tmdb if non-empty else imdb          (first-non-empty list)
+        //  - year/runtime   tmdb else imdb                       (first-non-empty)
+        //  - imdb_rating/imdb_votes  imdb only
+        // `external_ids` and `sources` are NOT taken from the resolver: they retain
+        // the live construction below to preserve their exact idiosyncrasies (caller-
+        // supplied-under-discovered id layering; provenance keyed on a non-null
+        // payload, not on "contributed a field").
+        $records = [];
+        if ($tmdbDetails !== null) {
+            $records[] = FieldMappers::fromTmdb($tmdbDetails);
+        }
+        if ($imdbData !== null) {
+            $records[] = FieldMappers::fromImdb($imdbData);
+        }
 
-        // external_ids: discovered ids merged OVER caller-supplied ones.
+        $resolved = $this->fieldResolver->resolve(
+            $records,
+            $this->priorityConfig->orderFor('movie'),
+            $this->priorityConfig->genresMode(),
+        );
+        // Drop the resolver's own provenance/id keys — rebuilt below to match live.
+        unset($resolved['external_ids'], $resolved['sources']);
+
+        // external_ids: discovered ids merged OVER caller-supplied ones (unchanged).
         $discovered = array_filter([
             'tmdb' => $tmdbId,
             'imdb' => $imdbId,
@@ -163,89 +209,11 @@ class MovieMetadataResolver
         $result = [];
         $result['external_ids'] = $externalIds;
 
-        // Descriptive fields: TMDB preferred, IMDb fallback.
-        $title = MetadataValue::asNullableString($tmdb['name'] ?? null)
-            ?? MetadataValue::asNullableString($imdb['title'] ?? null);
-        if ($title !== null) {
-            $result['title'] = $title;
+        foreach ($resolved as $key => $value) {
+            $result[$key] = $value;
         }
 
-        $overview = MetadataValue::asNullableString($tmdb['overview'] ?? null);
-        if ($overview !== null) {
-            $result['overview'] = $overview;
-        }
-
-        $posterUrl = $this->imageUrl($tmdb['poster_path'] ?? null);
-        if ($posterUrl !== null) {
-            $result['poster_url'] = $posterUrl;
-        }
-
-        $backdropUrl = $this->imageUrl($tmdb['backdrop_path'] ?? null);
-        if ($backdropUrl !== null) {
-            $result['backdrop_url'] = $backdropUrl;
-        }
-
-        $genres = $this->mergeGenres($tmdb['genres'] ?? null, $imdb['genres'] ?? null);
-        if ($genres !== []) {
-            $result['genres'] = $genres;
-        }
-
-        $year = MetadataValue::asNullableInt($tmdb['year'] ?? null)
-            ?? MetadataValue::asNullableInt($imdb['year'] ?? null);
-        if ($year !== null) {
-            $result['year'] = $year;
-        }
-
-        $runtime = $this->resolveRuntime($tmdb, $imdb);
-        if ($runtime !== null) {
-            $result['runtime'] = $runtime;
-        }
-
-        // Cast & crew — TMDB-sourced. TMDB yields actor objects
-        // ({name, role, order}); the shaper, the `$.actors[*]` filter and the
-        // SPA cast chips all consume a flat list of names, so reduce to names
-        // here. Previously omitted entirely, so bulk-matched movies had no cast.
-        $actors = MetadataValue::actorNames($tmdb['actors'] ?? null);
-        if ($actors !== []) {
-            $result['actors'] = $actors;
-        }
-        $director = MetadataValue::asNullableString($tmdb['director'] ?? null);
-        if ($director !== null) {
-            $result['director'] = $director;
-        }
-
-        // Rich cast/crew/company objects (profile photos, logos) for the
-        // media-detail page. ADDITIVE alongside the flat `actors`/`director`
-        // above — same shape TMDB emitted (see TmdbProvider::formatMovieDetails).
-        // Stored only when non-empty so a thin match leaves the keys absent.
-        $cast = MetadataValue::asAssocList($tmdb['cast'] ?? null);
-        if ($cast !== []) {
-            $result['cast'] = $cast;
-        }
-        $crew = MetadataValue::asAssocList($tmdb['crew'] ?? null);
-        if ($crew !== []) {
-            $result['crew'] = $crew;
-        }
-        $companies = MetadataValue::asAssocList($tmdb['production_companies'] ?? null);
-        if ($companies !== []) {
-            $result['production_companies'] = $companies;
-        }
-        $studio = MetadataValue::asNullableString($tmdb['studio'] ?? null);
-        if ($studio !== null) {
-            $result['studio'] = $studio;
-        }
-
-        // Ratings — IMDb-sourced only.
-        $imdbRating = MetadataValue::asNullableFloat($imdb['average_rating'] ?? null);
-        if ($imdbRating !== null) {
-            $result['imdb_rating'] = $imdbRating;
-        }
-        $imdbVotes = MetadataValue::asNullableInt($imdb['num_votes'] ?? null);
-        if ($imdbVotes !== null) {
-            $result['imdb_votes'] = $imdbVotes;
-        }
-
-        // Which providers contributed.
+        // Which providers contributed (unchanged: keyed on a non-null payload).
         $sources = [];
         if ($tmdbDetails !== null) {
             $sources[] = 'tmdb';
@@ -256,80 +224,6 @@ class MovieMetadataResolver
         $result['sources'] = $sources;
 
         return $result;
-    }
-
-    /**
-     * Determine runtime in minutes, preferring TMDB (stored as ticks) then IMDb.
-     *
-     * @param array<string, mixed> $tmdb Formatted TMDB details.
-     * @param array<string, mixed> $imdb Offline IMDb row.
-     *
-     * @return int|null Runtime in minutes, or null when unknown.
-     */
-    private function resolveRuntime(array $tmdb, array $imdb): ?int
-    {
-        $ticks = MetadataValue::asNullableInt($tmdb['runtime_ticks'] ?? null);
-        if ($ticks !== null && $ticks > 0) {
-            return (int) ($ticks / 600000000);
-        }
-
-        return MetadataValue::asNullableInt($imdb['runtime_minutes'] ?? null);
-    }
-
-    /**
-     * Merge genre lists, preferring TMDB and de-duplicating.
-     *
-     * @param mixed $tmdbGenres Raw TMDB genres.
-     * @param mixed $imdbGenres Raw IMDb genres.
-     *
-     * @return list<string> Merged, de-duplicated genre names.
-     */
-    private function mergeGenres(mixed $tmdbGenres, mixed $imdbGenres): array
-    {
-        $primary = $this->stringList($tmdbGenres);
-        if ($primary !== []) {
-            return $primary;
-        }
-
-        return $this->stringList($imdbGenres);
-    }
-
-    /**
-     * Narrow a mixed value to a de-duplicated list of non-empty strings.
-     *
-     * @param mixed $value Raw value.
-     *
-     * @return list<string> Clean genre list.
-     */
-    private function stringList(mixed $value): array
-    {
-        if (!is_array($value)) {
-            return [];
-        }
-        $out = [];
-        foreach ($value as $entry) {
-            $name = MetadataValue::asNullableString($entry);
-            if ($name !== null && !in_array($name, $out, true)) {
-                $out[] = $name;
-            }
-        }
-        return $out;
-    }
-
-    /**
-     * Build a full TMDB image URL from a `/path.jpg` fragment.
-     *
-     * @param mixed $path Raw TMDB image path.
-     *
-     * @return string|null Full URL, or null when no path is present.
-     */
-    private function imageUrl(mixed $path): ?string
-    {
-        $clean = MetadataValue::asNullableString($path);
-        if ($clean === null) {
-            return null;
-        }
-        return $this->imageBaseUrl . '/w500' . $clean;
     }
 
     /**

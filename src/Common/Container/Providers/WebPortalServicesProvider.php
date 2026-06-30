@@ -10,6 +10,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -140,6 +141,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $userItemData = $c->get(UserItemDataRepository::class);
                     /** @var MediaUserDataController $mediaUserDataController */
                     $mediaUserDataController = $c->get(MediaUserDataController::class);
+                    /** @var AuditLogger $auditLogger */
+                    $auditLogger = $c->get(AuditLogger::class);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -153,6 +156,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $profileManager,
                         $userItemData,
                         $mediaUserDataController,
+                        $auditLogger,
                     );
                 }
             ),

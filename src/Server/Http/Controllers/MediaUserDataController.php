@@ -191,6 +191,46 @@ class MediaUserDataController
     }
 
     /**
+     * Mark a media item as watched for the authenticated user (Step 11.6).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/watched
+     */
+    public function markWatched(Request $request, array $params): Response
+    {
+        $ctx = $this->resolve($request, $params);
+        if ($ctx instanceof Response) {
+            return $ctx;
+        }
+        [$userId, $itemId] = $ctx;
+
+        $this->userItemData->setWatched($userId, $itemId, true);
+
+        return (new Response())->json(['message' => 'Item marked as watched']);
+    }
+
+    /**
+     * Clear the "watched" flag for the authenticated user (Step 11.6).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/unwatched
+     */
+    public function markUnwatched(Request $request, array $params): Response
+    {
+        $ctx = $this->resolve($request, $params);
+        if ($ctx instanceof Response) {
+            return $ctx;
+        }
+        [$userId, $itemId] = $ctx;
+
+        $this->userItemData->setWatched($userId, $itemId, false);
+
+        return (new Response())->json(['message' => 'Item marked as unwatched']);
+    }
+
+    /**
      * List the authenticated user's favorited media items, most-recently
      * favorited first, as fully shaped media items.
      *

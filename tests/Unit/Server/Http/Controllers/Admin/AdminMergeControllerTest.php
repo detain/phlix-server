@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
 use Phlix\Common\Database\PhlixMySQLConnection;
+use Phlix\Common\Database\PooledMySQLConnection;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
@@ -280,6 +281,40 @@ final class AdminMergeControllerTest extends TestCase
         $this->assertNotNull($repo->findById($dup));
     }
 
+    /**
+     * Pool-on mode (`DB_POOL_ENABLED=1`) hands SeriesMerger a
+     * {@see PooledMySQLConnection} (which `extends Connection`, NOT
+     * PhlixMySQLConnection) — and that class fully implements the base
+     * transaction API. After the type-hint was widened to the base
+     * {@see Connection}, the merge must build and succeed in this mode too
+     * (previously it returned 503 ALWAYS). This pins that the pool-on merge
+     * path is no longer dead.
+     */
+    public function testMergeWorksWhenConnectionIsPooled(): void
+    {
+        $repo = $this->makeRepo();
+        $primary = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'movie', 'name' => 'Dune']);
+        $dup = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'movie', 'name' => 'Dune']);
+
+        // A PooledMySQLConnection delegates beginTrans/commit/rollBack to a
+        // leased raw connection; outside a coroutine that is a single CLI lease
+        // drawn from this factory, so we hand it a stub whose txn calls succeed.
+        $controller = new AdminMergeController(
+            $repo,
+            new DuplicateFinder($repo),
+            new SeriesMerger($repo, $this->pooledConnection()),
+        );
+
+        $response = $controller->merge($this->jsonRequest(['primary_id' => $primary, 'duplicate_ids' => [$dup]]));
+
+        $this->assertSame(200, $response->statusCode);
+        $body = $this->decode($response->body);
+        $this->assertSame(0, $body['moved']);
+        $this->assertSame(1, $body['deleted']);
+        $this->assertNotNull($repo->findById($primary));
+        $this->assertNull($repo->findById($dup));
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────
@@ -292,6 +327,31 @@ final class AdminMergeControllerTest extends TestCase
         $conn->method('rollBackTrans')->willReturn(true);
 
         return new AdminMergeController($repo, new DuplicateFinder($repo), new SeriesMerger($repo, $conn));
+    }
+
+    /**
+     * A real {@see PooledMySQLConnection} (the connection the coroutine pool
+     * hands out when `DB_POOL_ENABLED=1`) whose leased raw connection is a stub
+     * with succeeding transaction methods. Used to prove SeriesMerger accepts
+     * the pooled connection via the base-Connection type hint.
+     */
+    private function pooledConnection(): PooledMySQLConnection
+    {
+        $raw = $this->createMock(Connection::class);
+        $raw->method('beginTrans')->willReturn(true);
+        $raw->method('commitTrans')->willReturn(true);
+        $raw->method('rollBackTrans')->willReturn(true);
+
+        return new PooledMySQLConnection(
+            'localhost',
+            3306,
+            'user',
+            'pass',
+            'db',
+            1,
+            'utf8mb4',
+            static fn (): Connection => $raw,
+        );
     }
 
     /**

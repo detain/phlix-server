@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Throwable;
+use Workerman\MySQL\Connection;
 
 /**
  * Folds duplicate top-level media rows (the "100 episodes + 1 episode" symptom)
@@ -36,13 +36,20 @@ use Throwable;
  * overwritten), then DELETE the duplicate movie row.
  *
  * Transactional: the whole merge runs inside ONE real explicit transaction via
- * {@see PhlixMySQLConnection::beginTrans()} / {@see commitTrans()} /
- * {@see rollBackTrans()}. The connection's reentrant whole-transaction coroutine
- * mutex (#333) makes that rollback concurrency-correct on the shared socket. On
- * ANY failure the transaction rolls back so a half-merge never persists. As
- * defense-in-depth the per-duplicate work is still ordered RE-PARENT-BEFORE-
- * DELETE, so even a caller that ran this outside a transaction (an environment
- * without the Swoole coroutine runtime) never orphans a child mid-failure.
+ * {@see Connection::beginTrans()} / {@see Connection::commitTrans()} /
+ * {@see Connection::rollBackTrans()}. The transaction API is declared on the
+ * base {@see Connection} and BOTH connection implementations Phlix ships honour
+ * it correctly: the single-socket {@see \Phlix\Common\Database\PhlixMySQLConnection}
+ * serialises the whole transaction with its reentrant coroutine mutex (#333), and
+ * the {@see \Phlix\Common\Database\PooledMySQLConnection} leases ONE connection
+ * per coroutine for the coroutine's lifetime so a `beginTrans … commitTrans`
+ * stays affine to that lease. Depending on the base type therefore keeps the
+ * merge live in BOTH the default single-connection mode AND the pool-enabled
+ * mode (`DB_POOL_ENABLED=1`). On ANY failure the transaction rolls back so a
+ * half-merge never persists. As defense-in-depth the per-duplicate work is still
+ * ordered RE-PARENT-BEFORE-DELETE, so even a caller that ran this outside a
+ * transaction (an environment without the Swoole coroutine runtime) never orphans
+ * a child mid-failure.
  *
  * IDEMPOTENT-ish: merging an already-merged set is a no-op ({moved:0, deleted:0});
  * a duplicate id that does not exist, is not actually a duplicate, or fails the
@@ -68,15 +75,21 @@ use Throwable;
 final class SeriesMerger
 {
     private ItemRepository $items;
-    private PhlixMySQLConnection $db;
+    private Connection $db;
 
     /**
-     * @param ItemRepository       $items Data-access for find/re-parent/delete.
-     * @param PhlixMySQLConnection $db    Connection providing the transaction API
-     *                                    (begin/commit/rollback with the reentrant
-     *                                    whole-transaction coroutine mutex, #333).
+     * @param ItemRepository $items Data-access for find/re-parent/delete.
+     * @param Connection     $db    Connection providing the transaction API
+     *                              (`beginTrans`/`commitTrans`/`rollBackTrans`,
+     *                              declared on the base Workerman connection).
+     *                              Accepts EITHER concrete connection Phlix wires:
+     *                              {@see \Phlix\Common\Database\PhlixMySQLConnection}
+     *                              (single-socket, reentrant txn coroutine mutex,
+     *                              #333) or {@see \Phlix\Common\Database\PooledMySQLConnection}
+     *                              (per-coroutine leased connection) — so the merge
+     *                              works in both pool-off and pool-on modes.
      */
-    public function __construct(ItemRepository $items, PhlixMySQLConnection $db)
+    public function __construct(ItemRepository $items, Connection $db)
     {
         $this->items = $items;
         $this->db = $db;

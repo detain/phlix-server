@@ -378,12 +378,29 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(100, $count);
 
         $this->assertIsString($capturedSql);
+
+        // OUTAGE GUARD: the statement MUST start with `SELECT`, NOT `WITH`. The
+        // workerman/mysql driver decides whether to FETCH a result set from the
+        // leading keyword; a `WITH RECURSIVE ...` statement is not recognised as
+        // row-returning so `query()` returned NULL → countDescendants() reported
+        // 0 for every item against a live DB. Wrapping the CTE in an outer SELECT
+        // makes the driver fetch the rows. Pin the leading keyword so it can't
+        // regress (CI has no live MySQL to catch it otherwise).
+        $trimmedSql = ltrim($capturedSql);
+        $this->assertStringStartsWith('SELECT', $trimmedSql, 'statement must start with SELECT so the driver fetches rows');
+        $this->assertStringStartsNotWith('WITH', $trimmedSql, 'a leading WITH is not recognised as row-returning by the driver');
+
+        // Still the same arbitrary-depth recursive walk, just wrapped: the CTE
+        // body, anchor, recursion join and count column must all survive.
         $this->assertStringContainsString('WITH RECURSIVE descendants AS', $capturedSql);
         $this->assertStringContainsString('SELECT id FROM media_items WHERE parent_id = ?', $capturedSql);
         $this->assertStringContainsString('UNION ALL', $capturedSql);
         $this->assertStringContainsString('JOIN descendants d ON mi.parent_id = d.id', $capturedSql);
-        $this->assertStringContainsString('SELECT COUNT(*) AS count FROM descendants', $capturedSql);
+        $this->assertStringContainsString('SELECT COUNT(*) AS count FROM (', $capturedSql);
+
+        // Exactly one colon-free positional placeholder.
         $this->assertStringNotContainsString(':', $capturedSql, 'placeholders must be colon-free');
+        $this->assertSame(1, substr_count($capturedSql, '?'), 'exactly one positional placeholder');
         $this->assertSame(['series-big'], $capturedParams);
     }
 

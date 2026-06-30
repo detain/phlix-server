@@ -263,6 +263,7 @@ final class MediaItemShaperTest extends TestCase
                 'production_companies' => [['name' => 'D', 'logo_url' => null, 'origin_country' => null]],
                 'studio' => 'D',
                 'backdrop_url' => 'https://image.tmdb.org/t/p/original/bg.jpg',
+                'theme_audio_url' => 'https://example.com/theme.mp3',
                 'actors' => ['A'],
             ],
         ]);
@@ -274,6 +275,7 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('production_companies', $shaped);
         $this->assertArrayNotHasKey('studio', $shaped);
         $this->assertArrayNotHasKey('backdrop_url', $shaped);
+        $this->assertArrayNotHasKey('theme_audio_url', $shaped);
     }
 
     public function testShapeDetailExposesBackdropUrlWhenSet(): void
@@ -300,5 +302,31 @@ final class MediaItemShaperTest extends TestCase
         ], []);
 
         $this->assertNull($shaped['backdrop_url']);
+    }
+
+    public function testShapeDetailExposesThemeAudioUrlWhenSet(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 's',
+            'name' => 'Theme Series',
+            'type' => 'series',
+            'metadata' => [
+                'theme_audio_url' => 'https://example.com/theme.mp3',
+            ],
+        ], []);
+
+        $this->assertSame('https://example.com/theme.mp3', $shaped['theme_audio_url']);
+    }
+
+    public function testShapeDetailReturnsNullThemeAudioUrlWhenNotSet(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 's',
+            'name' => 'Silent Series',
+            'type' => 'series',
+            'metadata' => [],
+        ], []);
+
+        $this->assertNull($shaped['theme_audio_url']);
     }
 }

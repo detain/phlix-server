@@ -144,6 +144,9 @@ final class MediaItemShaper
         $merged['backdrop_url'] = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
             ? $metadata['backdrop_url']
             : null;
+        $merged['theme_audio_url'] = is_string($metadata['theme_audio_url'] ?? null) && $metadata['theme_audio_url'] !== ''
+            ? $metadata['theme_audio_url']
+            : null;
 
         return $merged;
     }

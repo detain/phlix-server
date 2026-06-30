@@ -579,6 +579,15 @@ class MediaScanner
             $name = is_string($metadata['name'] ?? null) && $metadata['name'] !== ''
                 ? $metadata['name']
                 : $file->getBasename('.' . $file->getExtension());
+
+            // Stamp a canonical dedup key on every TOP-LEVEL (parent-less) item —
+            // here the movie/loose-file path. The key is title + year (no external
+            // ids are known at scan time; metadata matching runs later). It both
+            // persists for the later DuplicateFinder/merge pass AND drives the
+            // canonical-reuse guard below, so two files whose titles slug
+            // differently but key the same do not fork a duplicate top-level row.
+            $movieYear = is_numeric($metadata['year'] ?? null) ? (int) $metadata['year'] : null;
+            $metadata['canonical_key'] = CanonicalKey::forItem($name, $movieYear, []);
         }
 
         // Coerce every string to valid UTF-8 before it reaches the utf8mb4
@@ -601,6 +610,30 @@ class MediaScanner
             $duration = $this->probeDurationSeconds($path);
             if ($duration !== null) {
                 $metadata['duration_seconds'] = $duration;
+            }
+        }
+
+        // Canonical-key fallback for the TOP-LEVEL MOVIE create path: the file's
+        // own path missed findByPath() above, but a top-level movie with the SAME
+        // canonical key may already exist under a different path (e.g. the same
+        // film stored twice with differently-slugging titles, or re-added after a
+        // move). Reuse that existing row rather than creating a second top-level
+        // movie. Only applies to parent-less items with a non-empty key; episodes
+        // keep their season-parent grouping untouched.
+        if ($parentId === null) {
+            $canonicalKey = isset($metadata['canonical_key']) && is_string($metadata['canonical_key'])
+                ? $metadata['canonical_key']
+                : '';
+            if ($canonicalKey !== '') {
+                $byCanonical = $this->itemRepository->findTopLevelByCanonical($libraryId, $mediaType, $canonicalKey);
+                if (is_array($byCanonical) && isset($byCanonical['id']) && is_string($byCanonical['id'])) {
+                    $this->logger->debug('Reusing existing top-level item by canonical key', [
+                        'item_id' => $byCanonical['id'],
+                        'canonical_key' => $canonicalKey,
+                        'path' => $path,
+                    ]);
+                    return false;
+                }
             }
         }
 
@@ -856,6 +889,19 @@ class MediaScanner
             ? (int) $metadata['season']
             : 0;
 
+        // Canonical dedup key for the SERIES container (top-level): the parsed
+        // series title + the folder-derived year (when known). The forced-series
+        // year is the strongest signal we have at this point — episode filenames
+        // carry no external ids, so the key is title-based (+ year). Persisting it
+        // lets a later scan whose filename slugs differently (separators, parse
+        // variance, a flat→per-directory re-scan) resolve to THIS same container
+        // instead of forking a second show. Seasons are NOT keyed (they are not
+        // top-level and are addressed by their stable synthetic season path).
+        $seriesYear = isset($seriesMeta['year']) && is_int($seriesMeta['year'])
+            ? $seriesMeta['year']
+            : null;
+        $seriesMeta['canonical_key'] = CanonicalKey::forItem($seriesName, $seriesYear, []);
+
         $seriesId = $this->findOrCreateContainer(
             $libraryId,
             'series',
@@ -913,6 +959,29 @@ class MediaScanner
             // overview/…), and only writing when it is missing or has changed.
             $this->ensureContainerHint($existing['id'], $existing, $metadata);
             return $existing['id'];
+        }
+
+        // Canonical-key fallback (top-level containers only). The exact synthetic
+        // path missed, but a top-level row with the SAME canonical key may already
+        // exist under a DIFFERENT path — because an earlier scan slugged the title
+        // differently (separators, year bleed, a parse failure, or a
+        // flat→per-directory re-scan). Reuse that existing container instead of
+        // forking a duplicate show, and memoise it under THIS synthetic path so
+        // every later episode in this scan resolves to it without a re-query.
+        // Seasons (parent_id != null) are intentionally excluded — they are
+        // addressed solely by their stable synthetic season path.
+        if ($parentId === null) {
+            $canonicalKey = isset($metadata['canonical_key']) && is_string($metadata['canonical_key'])
+                ? $metadata['canonical_key']
+                : '';
+            if ($canonicalKey !== '') {
+                $byCanonical = $this->itemRepository->findTopLevelByCanonical($libraryId, $type, $canonicalKey);
+                if (is_array($byCanonical) && isset($byCanonical['id']) && is_string($byCanonical['id'])) {
+                    $this->containerCache[$syntheticPath] = $byCanonical['id'];
+                    $this->ensureContainerHint($byCanonical['id'], $byCanonical, $metadata);
+                    return $byCanonical['id'];
+                }
+            }
         }
 
         $id = (string) $this->itemRepository->create([

@@ -113,6 +113,57 @@ class ItemRepository
     }
 
     /**
+     * Finds a TOP-LEVEL (parent-less) media item whose stored canonical dedup
+     * key matches, scoped to one library and type.
+     *
+     * This is the canonical-key fallback for {@see MediaScanner} when an exact
+     * synthetic-path / file-path lookup misses: two rows whose titles slug
+     * differently (separators, year bleed, a parse failure, a flat→per-directory
+     * re-scan) but resolve to the SAME {@see CanonicalKey::forItem()} are in fact
+     * the same show/film, so the scanner reuses the existing container instead of
+     * creating a second top-level row.
+     *
+     * The key currently lives inside the `metadata_json` blob under
+     * `$.canonical_key` (the indexed `canonical_key` column arrives in Step 1.5);
+     * it is read with `JSON_UNQUOTE(JSON_EXTRACT(...))` and matched with a
+     * positional placeholder (colon-free, parameterised — no SQL injection).
+     * Restricting to `parent_id IS NULL` keeps the match to true containers
+     * (series/movie), never a season/episode.
+     *
+     * @param string $libraryId    Owning library UUID — scope the match to one library.
+     * @param string $type         Container type ('series' or 'movie').
+     * @param string $canonicalKey The {@see CanonicalKey::forItem()} value to match.
+     * @return array<string, mixed>|null The first hydrated matching top-level item,
+     *         or null when no match / an empty key is given.
+     */
+    public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array
+    {
+        // An empty key is never a meaningful match (a title with nothing
+        // alphanumeric and no year/external id) — short-circuit so we never
+        // collapse unrelated unkeyable rows together.
+        if ($canonicalKey === '') {
+            return null;
+        }
+
+        $result = $this->db->query(
+            "SELECT * FROM media_items
+             WHERE library_id = ?
+               AND type = ?
+               AND parent_id IS NULL
+               AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.canonical_key')) = ?
+             LIMIT 1",
+            [$libraryId, $type, $canonicalKey]
+        );
+
+        $row = $this->firstRow($result);
+        if ($row === null) {
+            return null;
+        }
+
+        return $this->hydrateItem($row);
+    }
+
+    /**
      * Finds all child items of a parent media item.
      *
      * @param string $parentId The parent media item's unique identifier

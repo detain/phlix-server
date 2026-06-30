@@ -9,6 +9,8 @@ use Phlix\Auth\AuthProviderRegistry;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Media\Library\DuplicateFinder;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
@@ -20,6 +22,7 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -87,6 +90,16 @@ final class AdminRoutesTest extends TestCase
         $adminUserController  = new AdminUserController($this->users);
         $profileManager = new FakeUserProfileManager();
         $adminProfileController = new AdminProfileController($profileManager, $this->users);
+        // Duplicate preview + merge controller (Step 1.6). AdminRoutes::register()
+        // eagerly resolves it at bind time; the plugin-only tests below never
+        // dispatch to /libraries/{id}/duplicates or /media/merge, so a stub
+        // ItemRepository + null merger (preview-only) is sufficient here.
+        $mergeItemRepository = new ItemRepository($this->createMock(Connection::class));
+        $adminMergeController = new AdminMergeController(
+            $mergeItemRepository,
+            new DuplicateFinder($mergeItemRepository),
+            null,
+        );
         // Catalog controller: a real service wired to a stub SettingsRepository
         // and an offline fetcher (the lifecycle tests never hit the network).
         $catalogService = new PluginCatalogService(
@@ -119,6 +132,7 @@ final class AdminRoutesTest extends TestCase
             $adminUserController,
             $profileManager,
             $adminProfileController,
+            $adminMergeController,
             $pluginCatalogController,
             $catalogService,
         ) implements ContainerInterface {
@@ -138,6 +152,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly AdminUserController $adminUserController,
                 private readonly FakeUserProfileManager $profileManager,
                 private readonly AdminProfileController $adminProfileController,
+                private readonly AdminMergeController $adminMergeController,
                 private readonly PluginCatalogController $pluginCatalogController,
                 private readonly PluginCatalogService $pluginCatalogService,
             ) {
@@ -183,6 +198,7 @@ final class AdminRoutesTest extends TestCase
                     AdminUserController::class => $this->adminUserController,
                     UserProfileManager::class => $this->profileManager,
                     AdminProfileController::class => $this->adminProfileController,
+                    AdminMergeController::class => $this->adminMergeController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -205,6 +221,7 @@ final class AdminRoutesTest extends TestCase
                     AdminUserController::class,
                     UserProfileManager::class,
                     AdminProfileController::class,
+                    AdminMergeController::class,
                 ], true);
             }
         };
@@ -226,6 +243,63 @@ final class AdminRoutesTest extends TestCase
         $response = $this->router->dispatch($this->request('GET', '/api/v1/admin/plugins', 'user-2'));
         $this->assertSame(403, $response->statusCode);
         $this->assertSame(1, $this->audit->permissionDenied);
+    }
+
+    public function test_merge_routes_are_registered_and_admin_gated(): void
+    {
+        // Step 1.6: both merge routes must be reachable through
+        // AdminRoutes::register() — the single registration that BOTH entry
+        // points (Application.php daemon + public/index.php web portal) call.
+        // Anonymous callers hit the AdminMiddleware 401 (proving the routes
+        // exist and are inside the admin group, not a 404 from an unregistered
+        // path).
+        $duplicates = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/libraries/lib-1/duplicates', null),
+        );
+        $this->assertSame(401, $duplicates->statusCode);
+
+        $merge = $this->router->dispatch(
+            $this->request('POST', '/api/v1/admin/media/merge', null),
+        );
+        $this->assertSame(401, $merge->statusCode);
+    }
+
+    public function test_duplicates_preview_route_reaches_controller_for_admin(): void
+    {
+        // An admin GET to the preview route must reach AdminMergeController and
+        // return the 200 `{groups: …}` envelope (empty here: the stub repo has
+        // no rows), NOT a 404 — confirming the route binds to the controller.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/libraries/lib-1/duplicates', 'admin-1'),
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('groups', $body);
+        $this->assertSame([], $body['groups']);
+    }
+
+    public function test_merge_apply_route_503_when_no_transactional_merger(): void
+    {
+        // The test container wires AdminMergeController with a null merger
+        // (preview-only), so an admin POST reaches the controller and returns
+        // 503 — proving the route binds to merge() (not a 404).
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch($this->request(
+            'POST',
+            '/api/v1/admin/media/merge',
+            'admin-1',
+            ['primary_id' => 'p-1', 'duplicate_ids' => ['d-1']],
+        ));
+
+        $this->assertSame(503, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('error', $body);
     }
 
     public function test_admin_request_lists_plugins(): void

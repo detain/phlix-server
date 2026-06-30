@@ -9,6 +9,11 @@ use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Database\PhlixMySQLConnection;
+use Phlix\Media\Library\DuplicateFinder;
+use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\SeriesMerger;
+use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
@@ -16,6 +21,8 @@ use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
+use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
 
 use function DI\autowire;
 use function DI\factory;
@@ -92,6 +99,32 @@ final class AdminServicesProvider implements ServiceProviderInterface
             // to). The dir is resolved + jailed inside LogController.
             LogController::class => factory(static function (): LogController {
                 return new LogController(__DIR__ . '/../../../../.logs');
+            }),
+
+            // Duplicate preview + merge controller (Step 1.6, Feature 1).
+            // SeriesMerger requires the transaction-aware PhlixMySQLConnection
+            // (begin/commit/rollBackTrans), but the container binds the base
+            // Workerman Connection::class — and when the coroutine pool is
+            // enabled the pool hands out a PooledMySQLConnection (also extends
+            // the base Connection, NOT PhlixMySQLConnection). So we only build a
+            // real SeriesMerger when the resolved connection IS the
+            // transactional subclass; otherwise the merger is left null and the
+            // controller returns 503 for the apply endpoint (the read-only
+            // preview still works). Mirrors scripts/dedup-series.php's guard.
+            // Both DuplicateFinder and (when available) SeriesMerger are built
+            // once here at construction — no growing static/global state.
+            AdminMergeController::class => factory(static function (ContainerInterface $c): AdminMergeController {
+                /** @var ItemRepository $items */
+                $items = $c->get(ItemRepository::class);
+
+                $finder = new DuplicateFinder($items);
+
+                $connection = $c->get(Connection::class);
+                $merger = $connection instanceof PhlixMySQLConnection
+                    ? new SeriesMerger($items, $connection)
+                    : null;
+
+                return new AdminMergeController($items, $finder, $merger);
             }),
         ]);
     }

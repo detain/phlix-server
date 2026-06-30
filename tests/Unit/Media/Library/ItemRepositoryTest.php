@@ -208,6 +208,73 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals(['year' => 2020], $result['metadata']);
     }
 
+    public function testFindTopLevelByCanonicalReturnsNullForEmptyKeyWithoutQuerying(): void
+    {
+        // An empty canonical key is never a meaningful match, so the method must
+        // short-circuit and NOT hit the database at all (avoids collapsing every
+        // unkeyable row together).
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $repo = new ItemRepository($db);
+        $this->assertNull($repo->findTopLevelByCanonical('lib-1', 'series', ''));
+    }
+
+    public function testFindTopLevelByCanonicalScopesQueryToLibraryTypeParentNullAndKey(): void
+    {
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            )
+            ->willReturn([
+                [
+                    'id' => 'series-1',
+                    'name' => 'Hunter x Hunter',
+                    'type' => 'series',
+                    'library_id' => 'lib-1',
+                    'parent_id' => null,
+                    'path' => 'series:lib-1:hunter-x-hunter',
+                    'metadata_json' => '{"canonical_key": "hunterxhunter"}',
+                ],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->findTopLevelByCanonical('lib-1', 'series', 'hunterxhunter');
+
+        $this->assertIsArray($result);
+        $this->assertSame('series-1', $result['id']);
+        $this->assertSame(['canonical_key' => 'hunterxhunter'], $result['metadata']);
+
+        // Scoped correctly + parameterised with colon-free positional placeholders.
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('parent_id IS NULL', $capturedSql);
+        $this->assertStringContainsString('library_id = ?', $capturedSql);
+        $this->assertStringContainsString('type = ?', $capturedSql);
+        $this->assertStringContainsString("JSON_EXTRACT(metadata_json, '$.canonical_key')", $capturedSql);
+        $this->assertStringNotContainsString(':', $capturedSql, 'placeholders must be colon-free');
+        $this->assertSame(['lib-1', 'series', 'hunterxhunter'], $capturedParams);
+    }
+
+    public function testFindTopLevelByCanonicalReturnsNullWhenNoMatch(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $this->assertNull($repo->findTopLevelByCanonical('lib-1', 'movie', 'nomatch:2020'));
+    }
+
     public function testFindByParentReturnsChildren(): void
     {
         $db = $this->createMock(Connection::class);

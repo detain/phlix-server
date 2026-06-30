@@ -196,7 +196,8 @@ class MediaUserDataController
      *
      * Each returned item is hydrated by id and shaped with the SAME
      * {@see MediaItemShaper::shape()} used by the media-list endpoint, then
-     * carries an add-only `user_data:{favorite:true, rating:int|null}` block.
+     * carries an add-only `user_data:{favorite:true, rating:int|null,
+     * like_level:int}` block.
      * Rows whose underlying media item no longer exists are skipped defensively
      * (the FK cascade normally prevents this, but a sparse join is possible
      * mid-delete). Pagination mirrors `GET /api/v1/media`: `limit` defaults to
@@ -235,10 +236,14 @@ class MediaUserDataController
             $shaped = MediaItemShaper::shape($item);
             // ADD-ONLY user_data block (mirrors the media-detail endpoint). Every
             // row from getFavorites() is a favorite by definition (favorite = 1).
+            // `like_level` is the 0-3 multi-level Love axis (Feature 10),
+            // defaulting to 0 when absent/NULL/non-numeric.
             $rating = $row['rating'] ?? null;
+            $likeLevel = $row['like_level'] ?? null;
             $shaped['user_data'] = [
                 'favorite' => true,
                 'rating' => is_numeric($rating) ? (int) $rating : null,
+                'like_level' => is_numeric($likeLevel) ? (int) $likeLevel : 0,
             ];
             $items[] = $shaped;
         }

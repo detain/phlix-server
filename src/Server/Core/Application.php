@@ -309,6 +309,12 @@ class Application
         $this->router->get('/api/v1/media/{id}/match/search', [$mediaMatchController, 'search']);
         $this->router->post('/api/v1/media/{id}/match/apply', [$mediaMatchController, 'apply']);
 
+        // Candidate poster listing and poster selection (Step 15.1/15.2).
+        // Admin-gated inside the controller.
+        $mediaPosterController = $this->getMediaPosterController();
+        $this->router->get('/api/v1/media/{id}/posters', [$mediaPosterController, 'listPosters']);
+        $this->router->put('/api/v1/media/{id}/poster', [$mediaPosterController, 'setPoster']);
+
         // On-demand transcode: start (or reuse) an HLS job for a media item, and
         // poll its readiness. The web player calls these when a file can't be
         // direct-played; the master playlist URL is served by HlsController.
@@ -2368,6 +2374,38 @@ class Application
         /** @var \Phlix\Media\Metadata\LibraryMetadataMatcher */
         $matcher = $container->get(\Phlix\Media\Metadata\LibraryMetadataMatcher::class);
         $controller = new \Phlix\Server\Http\Controllers\MediaMatchController($itemRepository, $matcher);
+
+        if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */
+            $adminMiddleware = $container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+            $controller->setAdminMiddleware($adminMiddleware);
+        }
+
+        return $controller;
+    }
+
+    /**
+     * Returns a MediaPosterController instance (Step 15.1/15.2).
+     *
+     * @return \Phlix\Server\Http\Controllers\MediaPosterController The controller instance.
+     */
+    private function getMediaPosterController(): \Phlix\Server\Http\Controllers\MediaPosterController
+    {
+        $container = $this->container
+            ?? throw new \RuntimeException('Container required for MediaPosterController');
+
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $itemRepository = $container->get(\Phlix\Media\Library\ItemRepository::class);
+
+        $tmdbConfigRaw = @include __DIR__ . '/../../../config/tmdb.php';
+        $tmdbApiKey = is_array($tmdbConfigRaw)
+            && isset($tmdbConfigRaw['api_key'])
+            && is_string($tmdbConfigRaw['api_key'])
+            ? $tmdbConfigRaw['api_key']
+            : (getenv('TMDB_API_KEY') ?: '');
+        $tmdb = new \Phlix\Media\Metadata\TmdbProvider($tmdbApiKey);
+
+        $controller = new \Phlix\Server\Http\Controllers\MediaPosterController($itemRepository, $tmdb);
 
         if ($container->has(\Phlix\Server\Http\Middleware\AdminMiddleware::class)) {
             /** @var \Phlix\Server\Http\Middleware\AdminMiddleware */

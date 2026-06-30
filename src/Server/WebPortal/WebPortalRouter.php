@@ -8,6 +8,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
+use Phlix\Server\Http\Middleware\SignedUrlMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ItemRepository;
@@ -24,6 +25,7 @@ use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
+use Phlix\Server\Http\Controllers\MediaThemeAudioController;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -234,6 +236,18 @@ class WebPortalRouter
                 [$adminMiddleware]
             );
         }
+
+        // Theme audio streaming (Step 5.2) — uses SignedUrlMiddleware so the
+        // <audio> element (cookieless/headerless) can stream via a signed URL
+        // minted by the series detail endpoint. Mirrors the Application.php route.
+        $themeAudioController = new MediaThemeAudioController($this->itemRepository);
+        $this->router->group(
+            '',
+            function (Router $r) use ($themeAudioController): void {
+                $r->get('/api/v1/media/{id}/theme-audio', [$themeAudioController, 'streamThemeAudio']);
+            },
+            [new SignedUrlMiddleware()]
+        );
     }
 
     /**

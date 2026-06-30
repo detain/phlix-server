@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Routes;
 
+use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -48,6 +49,8 @@ use Psr\Container\ContainerInterface;
  *  - `GET    /api/v1/admin/settings`                 → effective settings
  *  - `PUT    /api/v1/admin/settings`                 → persist overrides
  *  - `GET    /api/v1/admin/fs/browse`                → list subdirectories
+ *  - `GET    /api/v1/admin/libraries/{id}/duplicates` → preview duplicate groups
+ *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -207,6 +210,13 @@ final class AdminRoutes
                 $r->delete('/profiles/{id}', [$adminProfileController, 'delete']);
                 $r->post('/profiles/{id}/pin', [$adminProfileController, 'setPin']);
                 $r->delete('/profiles/{id}/pin', [$adminProfileController, 'deletePin']);
+
+                // Duplicate preview + merge (Step 1.6, Feature 1).
+                /** @var AdminMergeController $adminMergeController */
+                $adminMergeController = $container->get(AdminMergeController::class);
+
+                $r->get('/libraries/{id}/duplicates', [$adminMergeController, 'duplicates']);
+                $r->post('/media/merge', [$adminMergeController, 'merge']);
             },
             [$adminMiddleware],
         );

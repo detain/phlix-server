@@ -26,7 +26,7 @@ class UserItemDataRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with(
-                $this->stringContains('SELECT favorite, rating FROM user_item_data'),
+                $this->stringContains('SELECT favorite, rating, like_level FROM user_item_data'),
                 $this->equalTo([self::USER, self::ITEM])
             )
             ->willReturn([]);
@@ -40,23 +40,54 @@ class UserItemDataRepositoryTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         // The driver returns string column values; the repo must coerce.
-        $db->method('query')->willReturn([['favorite' => '1', 'rating' => '7']]);
+        $db->method('query')->willReturn([['favorite' => '1', 'rating' => '7', 'like_level' => '2']]);
 
         $repo = new UserItemDataRepository($db);
         $data = $repo->getItemData(self::USER, self::ITEM);
 
-        $this->assertSame(['favorite' => true, 'rating' => 7], $data);
+        $this->assertSame(['favorite' => true, 'rating' => 7, 'like_level' => 2], $data);
     }
 
     public function testGetItemDataNullRatingCoercesToNull(): void
     {
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([['favorite' => '0', 'rating' => null]]);
+        $db->method('query')->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '0']]);
 
         $repo = new UserItemDataRepository($db);
         $data = $repo->getItemData(self::USER, self::ITEM);
 
-        $this->assertSame(['favorite' => false, 'rating' => null], $data);
+        $this->assertSame(['favorite' => false, 'rating' => null, 'like_level' => 0], $data);
+    }
+
+    public function testGetItemDataSelectsLikeLevelColumn(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('SELECT favorite, rating, like_level FROM user_item_data'),
+                $this->equalTo([self::USER, self::ITEM])
+            )
+            ->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '3']]);
+
+        $data = (new UserItemDataRepository($db))->getItemData(self::USER, self::ITEM);
+
+        $this->assertSame(3, $data['like_level']);
+    }
+
+    public function testGetItemDataLikeLevelDefaultsToZeroWhenColumnAbsentOrNull(): void
+    {
+        // Column missing from the row entirely → default 0.
+        $dbAbsent = $this->createMock(Connection::class);
+        $dbAbsent->method('query')->willReturn([['favorite' => '1', 'rating' => '5']]);
+        $absent = (new UserItemDataRepository($dbAbsent))->getItemData(self::USER, self::ITEM);
+        $this->assertSame(0, $absent['like_level']);
+
+        // Column present but NULL → default 0.
+        $dbNull = $this->createMock(Connection::class);
+        $dbNull->method('query')->willReturn([['favorite' => '1', 'rating' => '5', 'like_level' => null]]);
+        $null = (new UserItemDataRepository($dbNull))->getItemData(self::USER, self::ITEM);
+        $this->assertSame(0, $null['like_level']);
     }
 
     public function testSetFavoriteUpsertsWithOneAsTrue(): void
@@ -143,6 +174,65 @@ class UserItemDataRepositoryTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         (new UserItemDataRepository($db))->setRating(self::USER, self::ITEM, 11);
+    }
+
+    /**
+     * @return list<array{0:int}>
+     */
+    public static function validLikeLevelProvider(): array
+    {
+        return [[0], [1], [2], [3]];
+    }
+
+    /**
+     * @dataProvider validLikeLevelProvider
+     */
+    public function testSetLikeLevelUpsertsEachValidLevel(int $level): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO user_item_data'),
+                    $this->stringContains('like_level'),
+                    $this->stringContains('ON DUPLICATE KEY UPDATE like_level = VALUES(like_level)')
+                ),
+                $this->equalTo([self::USER, self::ITEM, $level])
+            )
+            ->willReturn(1);
+
+        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, $level);
+    }
+
+    public function testSetLikeLevelAcceptsBoundaryConstants(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn(1);
+        $repo = new UserItemDataRepository($db);
+
+        $repo->setLikeLevel(self::USER, self::ITEM, UserItemDataRepository::MIN_LIKE);
+        $repo->setLikeLevel(self::USER, self::ITEM, UserItemDataRepository::MAX_LIKE);
+
+        $this->addToAssertionCount(1);
+    }
+
+    public function testSetLikeLevelRejectsAboveRange(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $this->expectException(\InvalidArgumentException::class);
+        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, 4);
+    }
+
+    public function testSetLikeLevelRejectsBelowRange(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $this->expectException(\InvalidArgumentException::class);
+        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, -1);
     }
 
     public function testGetFavoritesJoinsMediaItemsAndPaginates(): void

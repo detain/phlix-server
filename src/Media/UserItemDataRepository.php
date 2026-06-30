@@ -12,8 +12,9 @@ use Workerman\MySQL\Connection;
  * Per-user favorites + ratings data access for media items (E10).
  *
  * Persists, for each (user, media item) pair, whether the user has favorited
- * the item and an optional personal rating in the inclusive range 1-10. Backs
- * the favorite/rating endpoints on
+ * the item, an optional personal rating in the inclusive range 1-10, and a love
+ * level in the inclusive range 0-3 (a separate axis from favorite/rating). Backs
+ * the favorite/rating/like endpoints on
  * {@see \Phlix\Server\WebPortal\WebPortalRouter} and the `user_data` block on
  * the media-detail response.
  *
@@ -37,6 +38,12 @@ class UserItemDataRepository
     /** Highest permitted personal rating (inclusive). */
     public const MAX_RATING = 10;
 
+    /** Lowest permitted love level (inclusive; 0 = not loved). */
+    public const MIN_LIKE = 0;
+
+    /** Highest permitted love level (inclusive; 3 = most loved). */
+    public const MAX_LIKE = 3;
+
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
 
@@ -56,14 +63,15 @@ class UserItemDataRepository
      * @param string $userId User UUID.
      * @param string $itemId Media item UUID.
      *
-     * @return array{favorite: bool, rating: int|null}|null The user's data for
-     *         the item, or null when no row exists (the user has never
-     *         favorited or rated it).
+     * @return array{favorite: bool, rating: int|null, like_level: int}|null The
+     *         user's data for the item, or null when no row exists (the user has
+     *         never favorited, rated, or loved it). `like_level` is 0 when the
+     *         column is NULL.
      */
     public function getItemData(string $userId, string $itemId): ?array
     {
         $result = $this->db->query(
-            "SELECT favorite, rating FROM user_item_data WHERE user_id = ? AND item_id = ?",
+            "SELECT favorite, rating, like_level FROM user_item_data WHERE user_id = ? AND item_id = ?",
             [$userId, $itemId]
         );
 
@@ -75,6 +83,7 @@ class UserItemDataRepository
         return [
             'favorite' => (bool) UserRow::int($row, 'favorite', 0),
             'rating' => $this->coerceRating($row['rating'] ?? null),
+            'like_level' => UserRow::int($row, 'like_level', 0),
         ];
     }
 
@@ -131,6 +140,46 @@ class UserItemDataRepository
              VALUES (?, ?, ?)
              ON DUPLICATE KEY UPDATE rating = VALUES(rating)",
             [$userId, $itemId, $rating]
+        );
+    }
+
+    /**
+     * Set the user's love level for an item.
+     *
+     * Love is a separate axis from favorite (bool) and rating (1-10): a TINYINT
+     * in the inclusive range 0-3 (0 = not loved … 3 = most loved). Upserts so
+     * that setting the love level preserves the favorite/rating columns. The
+     * 0-3 range is enforced here in PHP (mirroring {@see self::setRating()}'s
+     * 1-10 enforcement); the DB column has no CHECK constraint.
+     *
+     * @param string $userId User UUID.
+     * @param string $itemId Media item UUID.
+     * @param int    $level  Love level in the inclusive range
+     *                       {@see self::MIN_LIKE}-{@see self::MAX_LIKE}.
+     *
+     * @return void
+     *
+     * @throws \InvalidArgumentException When $level is outside the inclusive
+     *         range {@see self::MIN_LIKE}-{@see self::MAX_LIKE}.
+     */
+    public function setLikeLevel(string $userId, string $itemId, int $level): void
+    {
+        if ($level < self::MIN_LIKE || $level > self::MAX_LIKE) {
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'like_level must be between %d and %d (inclusive), got %d',
+                    self::MIN_LIKE,
+                    self::MAX_LIKE,
+                    $level
+                )
+            );
+        }
+
+        $this->db->query(
+            "INSERT INTO user_item_data (user_id, item_id, like_level)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE like_level = VALUES(like_level)",
+            [$userId, $itemId, $level]
         );
     }
 

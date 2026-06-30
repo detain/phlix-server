@@ -25,6 +25,7 @@ use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
+use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Workerman\HttpHandler;
 use Workerman\Worker;
 
@@ -150,6 +151,12 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     /** @var AuthManager $authManager */
     $authManager = $container->get(AuthManager::class);
 
+    // HttpHandler arg #2 is a RequestAuthenticator (the shared auth
+    // collaborator), NOT the raw AuthManager. Wrap the AuthManager exactly
+    // like the CGI entry point does (see public/index.php) so the daemon and
+    // CGI dispatch paths construct the handler identically and cannot drift.
+    $authenticator = new RequestAuthenticator($authManager);
+
     // Build the full route table + middleware chain once per worker.
     // {@see Application::__construct()} only registers routes/middleware
     // — it does NOT call boot() or run() and therefore does not start
@@ -158,7 +165,7 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // wired below outside this closure so it runs once per worker too.
     $application = new Application($container, $config);
 
-    $w->onMessage = new HttpHandler($container, $authManager, $publicRoot, $application);
+    $w->onMessage = new HttpHandler($container, $authenticator, $publicRoot, $application);
 };
 
 // -----------------------------------------------------------------------------

@@ -425,11 +425,19 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
+        // Determine whether the requesting user is an admin so the shaper can
+        // include the admin-gated `files` block (full paths + file sizes).
+        $isAdmin = $this->isAdminUser($request->userId ?? '');
+
         // Enrich the row into the same shape the list endpoint returns (poster
         // URLs, genres, overview, season/episode numbers, …) PLUS streams, so the
         // detail/player pages render a cover and metadata instead of a blank hero.
         $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
-        $shaped = MediaItemShaper::shapeDetail($item, $this->itemRepository->getItemStreams($itemId));
+        $shaped = MediaItemShaper::shapeDetail(
+            $item,
+            $this->itemRepository->getItemStreams($itemId),
+            $isAdmin
+        );
 
         // Mint a signed direct-play URL. The player's `<video src>` can't attach
         // a Bearer header, and `/media/{id}/stream` is no longer world-readable,
@@ -445,6 +453,24 @@ class WebPortalRouter
         $shaped['user_data'] = $this->resolveUserData($request, $itemId);
 
         return (new Response())->json(['item' => $shaped]);
+    }
+
+    /**
+     * Determines whether the given user ID belongs to an admin user.
+     *
+     * @param string $userId The authenticated user's ID (empty string if unauthenticated).
+     *
+     * @return bool True when the user exists and has is_admin = 1; false otherwise.
+     */
+    private function isAdminUser(string $userId): bool
+    {
+        if ($userId === '' || $this->userRepository === null) {
+            return false;
+        }
+
+        $user = $this->userRepository->findById($userId);
+
+        return $user !== null && ($user['is_admin'] ?? 0) == 1;
     }
 
     /**

@@ -13,6 +13,7 @@ use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
+use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
@@ -127,6 +128,12 @@ final class AdminServicesProvider implements ServiceProviderInterface
 
                 return new AdminMergeController($items, $finder, $merger);
             }),
+
+            // Metadata-source name list for the admin priority editor
+            // (Step 3.6, Feature 3). Its only dependency is the autowired,
+            // container-scoped SourceRegistry (bound in MediaServicesProvider),
+            // so a plain autowire is sufficient.
+            AdminMetadataSourceController::class => autowire(),
         ]);
     }
 }

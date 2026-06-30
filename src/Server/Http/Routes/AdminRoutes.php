@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Routes;
 
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
+use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -51,6 +52,7 @@ use Psr\Container\ContainerInterface;
  *  - `GET    /api/v1/admin/fs/browse`                → list subdirectories
  *  - `GET    /api/v1/admin/libraries/{id}/duplicates` → preview duplicate groups
  *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
+ *  - `GET    /api/v1/admin/metadata/sources`         → available metadata-source names
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -217,6 +219,13 @@ final class AdminRoutes
 
                 $r->get('/libraries/{id}/duplicates', [$adminMergeController, 'duplicates']);
                 $r->post('/media/merge', [$adminMergeController, 'merge']);
+
+                // Available metadata-source names for the priority editor
+                // (Step 3.6, Feature 3): built-ins + registered plugin sources.
+                /** @var AdminMetadataSourceController $adminMetadataSourceController */
+                $adminMetadataSourceController = $container->get(AdminMetadataSourceController::class);
+
+                $r->get('/metadata/sources', [$adminMetadataSourceController, 'index']);
             },
             [$adminMiddleware],
         );

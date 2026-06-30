@@ -118,6 +118,35 @@ class UserItemDataRepositoryTest extends TestCase
         (new UserItemDataRepository($db))->setFavorite(self::USER, self::ITEM, false);
     }
 
+    public function testSetWatchedTrueBindsOne(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO user_item_data'),
+                    $this->stringContains('watched'),
+                    $this->stringContains('ON DUPLICATE KEY UPDATE watched = VALUES(watched)')
+                ),
+                $this->equalTo([self::USER, self::ITEM, 1])
+            )
+            ->willReturn(1);
+
+        (new UserItemDataRepository($db))->setWatched(self::USER, self::ITEM, true);
+    }
+
+    public function testSetWatchedFalseBindsZero(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with($this->anything(), $this->equalTo([self::USER, self::ITEM, 0]))
+            ->willReturn(1);
+
+        (new UserItemDataRepository($db))->setWatched(self::USER, self::ITEM, false);
+    }
+
     public function testSetRatingUpsertsValidRating(): void
     {
         $db = $this->createMock(Connection::class);

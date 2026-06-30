@@ -234,6 +234,29 @@ class UserItemDataRepository
     }
 
     /**
+     * Set the "watched" flag for a user/item pair.
+     *
+     * This persists in the `user_item_data` table (the same row used for
+     * favorites/ratings). A separate `setWatched` upsert is used so that
+     * toggling the watched state does not disturb the user's favorite/rating.
+     *
+     * @param string $userId User UUID.
+     * @param string $itemId Media item UUID.
+     * @param bool   $watched Whether the item has been watched.
+     *
+     * @return void
+     */
+    public function setWatched(string $userId, string $itemId, bool $watched): void
+    {
+        $this->db->query(
+            "INSERT INTO user_item_data (user_id, item_id, watched)
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE watched = VALUES(watched)",
+            [$userId, $itemId, $watched ? 1 : 0]
+        );
+    }
+
+    /**
      * Coerce a raw `rating` column value into an int or null.
      *
      * @param mixed $value Raw column value (string from the driver, int, or null).

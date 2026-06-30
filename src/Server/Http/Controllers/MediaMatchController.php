@@ -32,6 +32,12 @@ use Throwable;
  */
 class MediaMatchController
 {
+    /**
+     * Maximum character length for string values in the context block.
+     * Prevents unbounded string growth from pathological metadata values.
+     */
+    private const MAX_CONTEXT_STRING = 500;
+
     private ItemRepository $items;
 
     private LibraryMetadataMatcher $matcher;
@@ -106,6 +112,15 @@ class MediaMatchController
                 'code' => 'metadata.tmdb_unreachable',
             ]);
         }
+
+        $context = $this->buildContext($item, $query);
+
+        // Attach the same context built from the item-being-searched to every
+        // TMDB candidate result (all candidates are matches against the same item).
+        $results = array_map(
+            static fn (array $result): array => array_merge($result, ['context' => $context]),
+            $results,
+        );
 
         return (new Response())->json([
             'results' => $results,
@@ -224,6 +239,134 @@ class MediaMatchController
             return (int) $year;
         }
         return null;
+    }
+
+    /**
+     * Build the `context` block for the search response from the hydrated item.
+     *
+     * All values are derived from the already-hydrated item (no new I/O).
+     * String values are capped at MAX_CONTEXT_STRING to prevent unbounded growth.
+     *
+     * @param array<string, mixed> $item  Hydrated media item.
+     * @param string               $query The cleaned query string used for the search.
+     *
+     * @return array<string, mixed> Context block with only present (non-null) keys.
+     */
+    private function buildContext(array $item, string $query): array
+    {
+        $metadata = is_array($item['metadata'] ?? null) ? $item['metadata'] : [];
+
+        $originalFilename = $this->extractString($metadata, 'raw_filename');
+        if ($originalFilename === null) {
+            $path = $item['path'] ?? null;
+            if (is_string($path) && $path !== '') {
+                $originalFilename = $this->extractString(['raw_filename' => basename($path)], 'raw_filename');
+            }
+        }
+
+        $context = [];
+
+        if ($originalFilename !== null) {
+            $context['original_filename'] = $originalFilename;
+        }
+
+        $path = $item['path'] ?? null;
+        if (is_string($path) && $path !== '') {
+            $context['path'] = $this->capString($path);
+        }
+
+        if ($query !== '') {
+            $context['parsed_title'] = $this->capString($query);
+        }
+
+        $year = $this->itemYear($item);
+        if ($year !== null) {
+            $context['year'] = $year;
+        }
+
+        $tags = $this->normalizeTags($metadata, is_string($item['type'] ?? null) ? $item['type'] : null);
+        if ($tags !== []) {
+            $context['tags'] = $tags;
+        }
+
+        return $context;
+    }
+
+    /**
+     * Extract a string from an array and cap it at MAX_CONTEXT_STRING.
+     *
+     * @param array<string, mixed> $data Source array.
+     * @param string               $key  Key to extract.
+     *
+     * @return string|null Capped string, or null if absent/empty.
+     */
+    private function extractString(array $data, string $key): ?string
+    {
+        $value = $data[$key] ?? null;
+        if (!is_string($value) || $value === '') {
+            return null;
+        }
+        return $this->capString($value);
+    }
+
+    /**
+     * Cap a string at MAX_CONTEXT_STRING characters.
+     *
+     * @param string $value Raw string value.
+     *
+     * @return string Capped string.
+     */
+    private function capString(string $value): string
+    {
+        if (mb_strlen($value, 'UTF-8') <= self::MAX_CONTEXT_STRING) {
+            return $value;
+        }
+        return mb_substr($value, 0, self::MAX_CONTEXT_STRING, 'UTF-8');
+    }
+
+    /**
+     * Normalize tags from metadata into the standard tags map.
+     *
+     * For series/episode items, extracts: title, year, show, season, episode, episode_title.
+     * For audio items (with id3/Vorbis tags), extracts those fields.
+     * For all other items, returns an empty array (no tags).
+     *
+     * @param array<string, mixed> $metadata Decoded metadata_json.
+     * @param string|null          $type     Item type (e.g. 'series', 'movie', 'audio').
+     *
+     * @return array<string, mixed> Normalized tags map.
+     */
+    private function normalizeTags(array $metadata, ?string $type): array
+    {
+        // Series / episode — extract structured TV metadata fields.
+        if ($type === 'series' || $type === 'episode' || $type === '_episode') {
+            $tags = [];
+            $videoKeys = ['title', 'year', 'show', 'season', 'episode', 'episode_title'];
+            foreach ($videoKeys as $k) {
+                $v = $this->extractString($metadata, $k);
+                if ($v !== null) {
+                    $tags[$k] = $v;
+                }
+            }
+            return $tags;
+        }
+
+        // Audio — extract id3 / Vorbis tag fields.
+        if ($type === 'audio') {
+            $tags = [];
+            $audioKeys = ['id3', 'Vorbis', 'artist', 'album', 'title', 'track', 'genre',
+                'date', 'composer', 'encoded_by', 'copyright', 'comment',
+            ];
+            foreach ($audioKeys as $k) {
+                $v = $this->extractString($metadata, $k);
+                if ($v !== null) {
+                    $tags[$k] = $v;
+                }
+            }
+            return $tags;
+        }
+
+        return [];
     }
 
     /**

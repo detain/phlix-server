@@ -343,4 +343,243 @@ class MediaMatchControllerTest extends TestCase
             new TmdbProvider(''),
         );
     }
+
+    public function testSearchReturnsContextBlock(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'The Matrix',
+            'path' => '/mnt/media/The.Matrix.1999.mkv',
+            'metadata' => ['raw_filename' => 'The.Matrix.1999.mkv', 'year' => 1999],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '603', 'title' => 'The Matrix', 'year' => 1999],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('context', $body['results'][0]);
+        $context = $body['results'][0]['context'];
+        $this->assertArrayHasKey('original_filename', $context);
+        $this->assertArrayHasKey('path', $context);
+        $this->assertArrayHasKey('parsed_title', $context);
+        $this->assertArrayHasKey('year', $context);
+    }
+
+    public function testContextEmptyMetadataSafe(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'No Metadata',
+            'metadata' => [],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '1', 'title' => 'Something', 'year' => 2000],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $context = $body['results'][0]['context'];
+        $this->assertIsArray($context);
+        $this->assertArrayNotHasKey('original_filename', $context);
+        $this->assertArrayNotHasKey('path', $context);
+        $this->assertArrayNotHasKey('year', $context);
+        $this->assertArrayHasKey('parsed_title', $context);
+    }
+
+    public function testContextOriginalFilenameFromRawFilename(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'Film',
+            'path' => '/mnt/media/some/file.mkv',
+            'metadata' => ['raw_filename' => 'My.Movie.2020 PROPER.mkv'],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([['tmdb_id' => '1', 'title' => 'X', 'year' => 2020]]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(
+            'My.Movie.2020 PROPER.mkv',
+            $body['results'][0]['context']['original_filename'],
+        );
+    }
+
+    public function testContextOriginalFilenameFallsBackToBasename(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => 'Film',
+            'path' => '/mnt/media/folders/S01E01.mkv',
+            'metadata' => [],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([['tmdb_id' => '1', 'title' => 'X', 'year' => 2020]]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame(
+            'S01E01.mkv',
+            $body['results'][0]['context']['original_filename'],
+        );
+    }
+
+    public function testContextTagsForSeries(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 's1',
+            'type' => 'series',
+            'name' => 'My Show',
+            'path' => '/mnt/media/My.Show.S01E05.mkv',
+            'metadata' => [
+                'raw_filename' => 'My.Show.S01E05.mkv',
+                'show' => 'My Show',
+                'season' => '1',
+                'episode' => '5',
+                'episode_title' => 'The Episode Title',
+                'year' => 2021,
+            ],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '99', 'title' => 'My Show', 'type' => 'tv', 'year' => 2021],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 's1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $tags = $body['results'][0]['context']['tags'];
+        $this->assertIsArray($tags);
+        $this->assertSame('My Show', $tags['show']);
+        $this->assertSame('1', $tags['season']);
+        $this->assertSame('5', $tags['episode']);
+        $this->assertSame('The Episode Title', $tags['episode_title']);
+        $this->assertArrayNotHasKey('year', $tags);
+    }
+
+    public function testContextTagsForAudio(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'a1',
+            'type' => 'audio',
+            'name' => 'Track Name',
+            'path' => '/mnt/music/Artist/Album/01.mp3',
+            'metadata' => [
+                'raw_filename' => '01 - Artist - Title.mp3',
+                'artist' => 'Artist Name',
+                'album' => 'Album Name',
+                'title' => 'Track Title',
+                'track' => '01',
+                'genre' => 'Rock',
+                'date' => '2023',
+                'id3' => 'ID3v2.4',
+            ],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '1', 'title' => 'Artist Name', 'type' => 'movie', 'year' => 2023],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'a1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $tags = $body['results'][0]['context']['tags'];
+        $this->assertIsArray($tags);
+        $this->assertSame('Artist Name', $tags['artist']);
+        $this->assertSame('Album Name', $tags['album']);
+        $this->assertSame('Track Title', $tags['title']);
+        $this->assertSame('01', $tags['track']);
+        $this->assertSame('Rock', $tags['genre']);
+        $this->assertSame('2023', $tags['date']);
+        $this->assertSame('ID3v2.4', $tags['id3']);
+    }
+
+    public function testContextTagsUnknownType(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'x1',
+            'type' => 'unknown_type',
+            'name' => 'Weird File',
+            'path' => '/mnt/other/file.xyz',
+            'metadata' => ['raw_filename' => 'file.xyz', 'some_field' => 'value'],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '1', 'title' => 'X', 'type' => 'movie', 'year' => 2000],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'x1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $context = $body['results'][0]['context'];
+        $this->assertArrayNotHasKey('tags', $context);
+    }
+
+    public function testContextStringCapping(): void
+    {
+        $longName = str_repeat('x', 600);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'm1',
+            'type' => 'movie',
+            'name' => $longName,
+            'path' => '/mnt/media/' . $longName . '.mkv',
+            'metadata' => ['raw_filename' => $longName . '.mkv', 'year' => 1999],
+        ]);
+
+        $matcher = $this->createMock(LibraryMetadataMatcher::class);
+        $matcher->method('searchCandidates')->willReturn([
+            ['tmdb_id' => '1', 'title' => 'X', 'year' => 1999],
+        ]);
+
+        $controller = new MediaMatchController($items, $matcher);
+        $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $context = $body['results'][0]['context'];
+        $this->assertSame(500, mb_strlen($context['original_filename'], 'UTF-8'));
+        $this->assertSame(500, mb_strlen($context['path'], 'UTF-8'));
+        $this->assertSame(500, mb_strlen($context['parsed_title'], 'UTF-8'));
+    }
 }

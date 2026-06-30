@@ -59,11 +59,15 @@ final class AdminSettingsControllerTest extends TestCase
             'trakt.redirect_uri'                        => 'string',
             // Step 13.3: array-typed noise-suffix list → internal `json`.
             'matching.noise_suffixes'                   => 'json',
+            // Step 3.3: object-typed per-type priority map → internal `json`;
+            // string-typed genres mode → `string`.
+            'metadata.provider_priority'                => 'json',
+            'metadata.genres_mode'                      => 'string',
         ];
 
         $actual = AdminSettingsController::allowedKeys();
 
-        $this->assertCount(20, $actual);
+        $this->assertCount(22, $actual);
         $this->assertEquals($expected, $actual);
     }
 
@@ -229,6 +233,89 @@ final class AdminSettingsControllerTest extends TestCase
         $this->assertTrue($body['success']);
         $this->assertSame($effective, $body['data']['settings']['matching.noise_suffixes']);
         $this->assertSame('json', $body['data']['types']['matching.noise_suffixes']);
+    }
+
+    public function testUpdateAcceptsProviderPriorityMapAsJson(): void
+    {
+        // Step 3.3: metadata.provider_priority is an object-typed (`json`) key in
+        // the vendored schema, so update() must accept a per-type source map and
+        // persist it verbatim with the `json` internal type.
+        $custom = [
+            'movie'  => ['imdb', 'tmdb'],
+            'series' => ['tmdb', 'imdb'],
+        ];
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('metadata.provider_priority', $custom, 'json');
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => ['metadata.provider_priority' => $custom],
+            'overridden' => ['metadata.provider_priority'],
+        ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['metadata.provider_priority' => $custom]]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+    }
+
+    public function testUpdateAcceptsGenresModeString(): void
+    {
+        // metadata.genres_mode is a string-typed key; update() persists it with
+        // the `string` internal type.
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('set')
+            ->with('metadata.genres_mode', 'union', 'string');
+        $repo->method('getEffectiveMany')->willReturn([
+            'values'     => ['metadata.genres_mode' => 'union'],
+            'overridden' => ['metadata.genres_mode'],
+        ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->update(
+            $this->makeRequest(['settings' => ['metadata.genres_mode' => 'union']]),
+            [],
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+    }
+
+    public function testIndexReturnsProviderPriorityMapValue(): void
+    {
+        // GET returns the effective map for the provider-priority key (part of
+        // the schema-derived allow-list) with its `json` type.
+        $effective = [
+            'movie'  => ['tmdb', 'imdb'],
+            'series' => ['tmdb', 'imdb'],
+            'anime'  => ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
+        ];
+
+        $repo = $this->createMock(SettingsRepository::class);
+        $repo->expects($this->once())
+            ->method('getEffectiveMany')
+            ->with(array_keys(AdminSettingsController::allowedKeys()))
+            ->willReturn([
+                'values'     => ['metadata.provider_priority' => $effective],
+                'overridden' => [],
+            ]);
+
+        $controller = new AdminSettingsController($repo);
+        $response = $controller->index($this->makeRequest(), []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertTrue($body['success']);
+        $this->assertSame($effective, $body['data']['settings']['metadata.provider_priority']);
+        $this->assertSame('json', $body['data']['types']['metadata.provider_priority']);
     }
 
     public function testUpdateCoercesNumericStringsBeforePersisting(): void

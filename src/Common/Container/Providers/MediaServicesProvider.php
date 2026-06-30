@@ -20,6 +20,7 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
@@ -114,6 +115,65 @@ final class MediaServicesProvider implements ServiceProviderInterface
                     // still peels the standard noise phrases. NOISE_SUFFIXES is
                     // already a list<string>.
                     return TitleSuffixStripper::NOISE_SUFFIXES;
+                }
+            ),
+
+            // Effective metadata source-priority config (Feature 3), resolved
+            // ONCE when first built (per worker cycle, not per request). The
+            // admin-managed `metadata.provider_priority` override (an object of
+            // media-type => ordered source list) and `metadata.genres_mode`
+            // string are read via SettingsRepository::getEffective(), which
+            // already returns the override when present, else the
+            // config/metadata.php default. The provider_priority override is
+            // merged per-type OVER the config default (REPLACE-not-deep-merge,
+            // mirroring noise_suffixes): a type the override names replaces that
+            // type's default list; a type absent from the override keeps its
+            // default; an empty/absent override leaves all defaults intact. The
+            // constructed PriorityConfig is shared (immutable accessor, no
+            // mutable static/global state). Step 3.4 consumes it in the live
+            // resolvers; 3.3b only constructs + wires it.
+            PriorityConfig::class => factory(
+                static function (ContainerInterface $c): PriorityConfig {
+                    // Config-file defaults (config/metadata.php) AND the admin
+                    // override are read through SettingsRepository: getDefault()
+                    // loads the config default for the per-type base map, and
+                    // getOverride() returns the stored override map (if any) so
+                    // it can be merged per-type OVER the default. genres_mode is
+                    // read via getEffective() (override-or-default wholesale —
+                    // it is a scalar, no per-type merge needed).
+                    $merged = [];
+                    $genresMode = PriorityConfig::DEFAULT_GENRES_MODE;
+
+                    try {
+                        $settings = $c->get(SettingsRepository::class);
+                        if ($settings instanceof SettingsRepository) {
+                            $merged = self::priorityMap($settings->getDefault('metadata.provider_priority'));
+
+                            $overrideRow = $settings->getOverride('metadata.provider_priority');
+                            if (is_array($overrideRow)) {
+                                $override = self::priorityMap($overrideRow['value'] ?? null);
+                                // REPLACE-not-deep-merge per type: a type the
+                                // override names replaces that type's default
+                                // list outright; a type absent from the override
+                                // keeps its default; an empty override leaves all
+                                // defaults intact.
+                                foreach ($override as $type => $order) {
+                                    $merged[$type] = $order;
+                                }
+                            }
+
+                            $modeOverride = $settings->getEffective('metadata.genres_mode');
+                            if (is_string($modeOverride) && $modeOverride !== '') {
+                                $genresMode = $modeOverride;
+                            }
+                        }
+                    } catch (\Throwable) {
+                        // Settings store unavailable — use the in-code defaults
+                        // (PriorityConfig::orderFor() still falls back to the
+                        // canonical [tmdb, imdb] baseline for any type).
+                    }
+
+                    return new PriorityConfig($merged, $genresMode);
                 }
             ),
 
@@ -288,6 +348,40 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 continue;
             }
             $out[] = $trimmed;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Coerce a raw config/setting value into a clean per-media-type source-order
+     * map (`array<string, list<string>>`). The value must be an array keyed by
+     * media-type string; each value is sanitised via {@see self::stringList()}.
+     * A type whose cleaned order is empty is dropped (so it falls back to the
+     * default / baseline rather than being recorded as an empty override).
+     * Anything that is not an array yields an empty map.
+     *
+     * @param mixed $value Raw value from config or the settings store.
+     *
+     * @return array<string, list<string>>
+     */
+    private static function priorityMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $order */
+        foreach ($value as $type => $order) {
+            if (!is_string($type) || $type === '') {
+                continue;
+            }
+            $clean = self::stringList($order);
+            if ($clean === []) {
+                continue;
+            }
+            $out[$type] = $clean;
         }
 
         return $out;

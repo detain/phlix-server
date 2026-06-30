@@ -466,4 +466,108 @@ class MediaUserDataControllerTest extends TestCase
         $this->assertCount(1, $body['items']);
         $this->assertSame('item-2', $body['items'][0]['id']);
     }
+
+    public function testMarkWatchedReturns401WhenUnauthenticated(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('setWatched');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $response = $controller->markWatched(new Request(), ['id' => 'item-1']);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function testMarkWatchedReturns400WhenIdMissing(): void
+    {
+        $controller = new MediaUserDataController(
+            $this->existingItemRepo(),
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $response = $controller->markWatched($this->authedRequest(), ['id' => '']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    public function testMarkWatchedReturns404WhenItemMissing(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturn(null);
+
+        $controller = new MediaUserDataController(
+            $itemRepo,
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $response = $controller->markWatched($this->authedRequest(), ['id' => 'nope']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function testMarkWatchedPersistsTrueAndReturnsMessage(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->once())
+            ->method('setWatched')
+            ->with('user-1', 'item-1', true);
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $response = $controller->markWatched($this->authedRequest(), ['id' => 'item-1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('message', $body);
+        $this->assertSame('Item marked as watched', $body['message']);
+    }
+
+    public function testMarkUnwatchedReturns401WhenUnauthenticated(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('setWatched');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $response = $controller->markUnwatched(new Request(), ['id' => 'item-1']);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function testMarkUnwatchedReturns400WhenIdMissing(): void
+    {
+        $controller = new MediaUserDataController(
+            $this->existingItemRepo(),
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $response = $controller->markUnwatched($this->authedRequest(), ['id' => '']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    public function testMarkUnwatchedReturns404WhenItemMissing(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturn(null);
+
+        $controller = new MediaUserDataController(
+            $itemRepo,
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $response = $controller->markUnwatched($this->authedRequest(), ['id' => 'nope']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    public function testMarkUnwatchedPersistsFalseAndReturnsMessage(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->once())
+            ->method('setWatched')
+            ->with('user-1', 'item-1', false);
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $response = $controller->markUnwatched($this->authedRequest(), ['id' => 'item-1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('message', $body);
+        $this->assertSame('Item marked as unwatched', $body['message']);
+    }
 }

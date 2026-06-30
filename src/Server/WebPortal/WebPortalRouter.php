@@ -7,6 +7,7 @@ namespace Phlix\Server\WebPortal;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
+use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ItemRepository;
@@ -18,6 +19,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
+use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 
@@ -69,6 +71,9 @@ class WebPortalRouter
     /** @var MediaUserDataController|null Handles favorite/rating routes; null when not wired */
     private ?MediaUserDataController $mediaUserDataController;
 
+    /** @var AuditLogger|null Security-event logger for admin-gated operations; null when not wired */
+    private ?AuditLogger $auditLogger;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -87,6 +92,9 @@ class WebPortalRouter
      *        when null the history endpoints respond 503 instead of faking success)
      * @param UserProfileManager|null $profileManager Resolves user profiles (optional;
      *        when null the history endpoints respond 503 instead of faking success)
+     * @param UserItemDataRepository|null $userItemData Per-user favorites/ratings (optional)
+     * @param MediaUserDataController|null $mediaUserDataController Favorite/rating routes (optional)
+     * @param AuditLogger|null $auditLogger Security-event logger for admin operations (optional)
      *
      * @example
      * ```php
@@ -114,7 +122,8 @@ class WebPortalRouter
         ?WatchHistory $watchHistory = null,
         ?UserProfileManager $profileManager = null,
         ?UserItemDataRepository $userItemData = null,
-        ?MediaUserDataController $mediaUserDataController = null
+        ?MediaUserDataController $mediaUserDataController = null,
+        ?AuditLogger $auditLogger = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -129,6 +138,7 @@ class WebPortalRouter
         $this->profileManager = $profileManager;
         $this->userItemData = $userItemData;
         $this->mediaUserDataController = $mediaUserDataController;
+        $this->auditLogger = $auditLogger;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -192,11 +202,27 @@ class WebPortalRouter
             $r->put('/api/v1/media/{id}/rating', [$this, 'setRating']);
             $r->delete('/api/v1/media/{id}/rating', [$this, 'clearRating']);
             $r->put('/api/v1/media/{id}/like', [$this, 'setLikeLevel']);
+            $r->post('/api/v1/media/{id}/watched', [$this, 'markWatched']);
+            $r->post('/api/v1/media/{id}/unwatched', [$this, 'markUnwatched']);
 
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
             $r->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
         }, [$auth]);
+
+        // Admin-only: delete a media item (Step 11.6). Gate with AdminMiddleware
+        // so that unauthenticated (401) and non-admin (403) are rejected before
+        // the handler runs; 404 is produced by the handler when the item is missing.
+        if ($this->userRepository !== null && $this->auditLogger !== null) {
+            $adminMiddleware = new AdminMiddleware($this->userRepository, $this->auditLogger);
+            $this->router->group(
+                '',
+                function (Router $r): void {
+                    $r->delete('/api/v1/media/{id}', [$this, 'deleteMediaItem']);
+                },
+                [$adminMiddleware]
+            );
+        }
     }
 
     /**
@@ -1009,6 +1035,67 @@ class WebPortalRouter
             ]);
         }
         return $this->mediaUserDataController->clearRating($request, $params);
+    }
+
+    /**
+     * Mark a media item as watched for the authenticated user (Step 11.6).
+     *
+     * Thin delegate to {@see MediaUserDataController::markWatched()}.
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/watched
+     */
+    public function markWatched(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->markWatched($request, $params);
+    }
+
+    /**
+     * Clear the "watched" flag for the authenticated user (Step 11.6).
+     *
+     * Thin delegate to {@see MediaUserDataController::markUnwatched()}.
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/unwatched
+     */
+    public function markUnwatched(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->markUnwatched($request, $params);
+    }
+
+    /**
+     * Delete a media item (admin only, Step 11.6).
+     *
+     * Uses the same logic as MediaItemController::delete() since that
+     * controller is not stored in WebPortalRouter.
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint DELETE /api/v1/media/{id}
+     */
+    public function deleteMediaItem(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $this->itemRepository->delete($params['id']);
+
+        return (new Response())->json(['message' => 'Item deleted successfully']);
     }
 
     /**

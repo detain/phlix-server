@@ -12,6 +12,7 @@ use Phlix\Hub\HubApplication;
 use Phlix\Hub\RelayApplication;
 use Phlix\Discovery\DiscoveryServer;
 use Phlix\Server\Http\Controllers\HubJwksController;
+use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\SyncPlayController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
@@ -347,6 +348,42 @@ class Application
         $this->router->get('/api/v1/me/continue-watching', [$sessionController, 'getContinueWatching']);
         $this->router->get('/api/v1/me/sessions', [$sessionController, 'listSessions']);
         $this->router->delete('/api/v1/sessions/{id}', [$sessionController, 'endSession']);
+
+        // Watch state endpoints (Step 11.6) — auth-gated, same as session routes.
+        if ($this->container !== null) {
+            try {
+                /** @var MediaUserDataController $mediaUserDataController */
+                $mediaUserDataController = $this->container->get(MediaUserDataController::class);
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($mediaUserDataController): void {
+                        $r->post('/api/v1/media/{id}/watched', [$mediaUserDataController, 'markWatched']);
+                        $r->post('/api/v1/media/{id}/unwatched', [$mediaUserDataController, 'markUnwatched']);
+                    },
+                    [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+                );
+            } catch (\Throwable) {
+                // MediaUserDataController not available — routes not registered
+            }
+        }
+
+        // DELETE /api/v1/media/{id} — admin only (Step 11.6)
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Server\Http\Middleware\AdminMiddleware $adminMiddleware */
+                $adminMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\AdminMiddleware::class);
+                $mediaItemController = $this->getMediaItemController();
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($mediaItemController): void {
+                        $r->delete('/api/v1/media/{id}', [$mediaItemController, 'delete']);
+                    },
+                    [$adminMiddleware]
+                );
+            } catch (\Throwable) {
+                // AdminMiddleware or controller unavailable — route not registered
+            }
+        }
 
         // WebAuthn / Passkey endpoints
         $webauthn = $this->getWebAuthnController();

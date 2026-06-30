@@ -120,10 +120,13 @@ final class MediaItemShaper
      *
      * @param array<string, mixed>      $item    Raw hydrated media item.
      * @param array<int, array<mixed>>  $streams Stream rows for the item.
+     * @param bool                      $isAdmin Whether the requesting user is an admin.
+     *                                            When true, the `files` block (containing
+     *                                            full paths and file sizes) is included.
      *
      * @return array<string, mixed> The merged, enriched single-item response.
      */
-    public static function shapeDetail(array $item, array $streams): array
+    public static function shapeDetail(array $item, array $streams, bool $isAdmin = false): array
     {
         $merged = array_merge($item, self::shape($item));
         $merged['streams'] = $streams;
@@ -148,7 +151,78 @@ final class MediaItemShaper
             ? $metadata['theme_audio_url']
             : null;
 
+        // Admin-gated `files` block — only surfaced when the requesting user is
+        // an admin. Contains per-file path, size_bytes, container, codec, and
+        // resolution drawn from `metadata_json.files` and the item's streams.
+        if ($isAdmin) {
+            $merged['files'] = self::buildFilesBlock($metadata, $streams);
+        }
+
         return $merged;
+    }
+
+    /**
+     * Build the admin-gated `files` block from metadata and streams.
+     *
+     * @param array<string, mixed>      $metadata Parsed metadata_json.
+     * @param array<int, array<mixed>> $streams  Stream rows for the item.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private static function buildFilesBlock(array $metadata, array $streams): array
+    {
+        $filesMeta = $metadata['files'] ?? null;
+        if (!is_array($filesMeta)) {
+            return [];
+        }
+
+        // Index streams by their numeric index for O(1) lookup.
+        $streamsByIndex = [];
+        foreach ($streams as $stream) {
+            $idx = isset($stream['stream_index']) && is_numeric($stream['stream_index'])
+                ? (int) $stream['stream_index']
+                : -1;
+            $streamsByIndex[$idx] = $stream;
+        }
+
+        $out = [];
+        foreach ($filesMeta as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+
+            $path = is_string($file['path'] ?? null) ? $file['path'] : '';
+            if ($path === '') {
+                continue;
+            }
+
+            // Container derived from file extension.
+            $extension = pathinfo($path, PATHINFO_EXTENSION);
+            $container = $extension !== '' ? strtolower($extension) : null;
+
+            // Look up the stream that corresponds to this file (matched by index).
+            // If no matching stream is found, codec/resolution remain null.
+            $streamIndex = isset($file['stream_index']) && is_numeric($file['stream_index'])
+                ? (int) $file['stream_index']
+                : null;
+            $stream = $streamIndex !== null ? ($streamsByIndex[$streamIndex] ?? null) : null;
+
+            $codec = isset($stream['codec']) && is_string($stream['codec']) ? $stream['codec'] : null;
+            $resolution = isset($stream['width']) && isset($stream['height'])
+                && is_numeric($stream['width']) && is_numeric($stream['height'])
+                ? $stream['width'] . 'x' . $stream['height']
+                : null;
+
+            $out[] = [
+                'path' => $path,
+                'size_bytes' => isset($file['size']) && is_numeric($file['size']) ? (int) $file['size'] : null,
+                'container' => $container,
+                'codec' => $codec,
+                'resolution' => $resolution,
+            ];
+        }
+
+        return $out;
     }
 
     /**

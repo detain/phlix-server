@@ -164,6 +164,67 @@ class ItemRepository
     }
 
     /**
+     * Pages the TOP-LEVEL (parent-less) items of one library in a FIXED batch.
+     *
+     * This is the paging primitive {@see DuplicateFinder} streams a library
+     * through to find merge candidates: it returns one bounded batch of
+     * containers/movies (`parent_id IS NULL`) ordered by a stable key (`id`) so
+     * successive `offset` pages neither skip nor repeat a row, and the whole
+     * library never materialises in memory at once (resident-memory safe in the
+     * long-lived worker). Ordering by `id` (not the article-stripped title) is
+     * deliberate — paging only needs a stable, total order, and `id` is the
+     * primary key, so it is the cheapest non-skewing cursor.
+     *
+     * @param string $libraryId Owning library UUID.
+     * @param int    $limit     Maximum rows in this batch.
+     * @param int    $offset    Rows to skip (page * limit).
+     * @return array<int, array<string, mixed>> Hydrated top-level rows (may be
+     *         fewer than $limit on the final page; empty past the end).
+     */
+    public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
+    {
+        $results = $this->db->query(
+            "SELECT * FROM media_items
+             WHERE library_id = ? AND parent_id IS NULL
+             ORDER BY id ASC
+             LIMIT ? OFFSET ?",
+            [$libraryId, $limit, $offset]
+        );
+
+        return $this->hydrateRows($results);
+    }
+
+    /**
+     * Counts ALL descendants of a media item — its direct children plus every
+     * deeper level (so a series counts its seasons AND every episode).
+     *
+     * Used by {@see DuplicateFinder} to designate the "primary" of a duplicate
+     * group as the richest container (the 100-episode show beats the 1-episode
+     * shell). A single recursive walk over `parent_id` returns the full subtree
+     * size in ONE query per item (no per-level N+1); the tree is shallow
+     * (series → season → episode), so the recursion is bounded.
+     *
+     * @param string $itemId The media item whose descendants to count.
+     * @return int Total number of descendant rows (0 for a leaf/movie).
+     */
+    public function countDescendants(string $itemId): int
+    {
+        $result = $this->db->query(
+            "WITH RECURSIVE descendants AS (
+                 SELECT id FROM media_items WHERE parent_id = ?
+                 UNION ALL
+                 SELECT mi.id
+                 FROM media_items mi
+                 JOIN descendants d ON mi.parent_id = d.id
+             )
+             SELECT COUNT(*) AS count FROM descendants",
+            [$itemId]
+        );
+
+        return $this->extractCount($result);
+    }
+
+    /**
      * Finds all child items of a parent media item.
      *
      * @param string $parentId The parent media item's unique identifier

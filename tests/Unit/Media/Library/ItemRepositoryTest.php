@@ -650,6 +650,44 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame('series-1', $capturedParams[2]);
     }
 
+    public function testUpdateSyncsCanonicalKeyColumnFromRawJsonStringMetadata(): void
+    {
+        // metadata_json may arrive as a pre-encoded JSON STRING (the create()
+        // path already pins this; pin the update() lockstep too): the indexed
+        // column is derived from the decoded string while the string blob is
+        // passed through to `metadata_json = ?` verbatim (not double-encoded).
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('movie-1', [
+            'metadata_json' => '{"canonical_key":"madmaxfuryroad:2015","year":2015}',
+        ]);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('canonical_key = ?', $capturedSql);
+        $this->assertStringContainsString('metadata_json = ?', $capturedSql);
+        $this->assertIsArray($capturedParams);
+        // SET canonical_key = ?, metadata_json = ? WHERE id = ?
+        $this->assertSame('madmaxfuryroad:2015', $capturedParams[0]);
+        // The raw string blob is passed through unchanged (not array-encoded).
+        $this->assertSame('{"canonical_key":"madmaxfuryroad:2015","year":2015}', $capturedParams[1]);
+        $this->assertSame('movie-1', $capturedParams[2]);
+    }
+
     public function testUpdateClearsCanonicalKeyColumnWhenMetadataLosesKey(): void
     {
         $capturedParams = null;

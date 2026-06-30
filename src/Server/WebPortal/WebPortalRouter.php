@@ -11,6 +11,7 @@ use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\SignedUrlMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -184,6 +185,7 @@ class WebPortalRouter
             // Static segments registered BEFORE `{id}` so they can't be swallowed as an id.
             $r->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
             $r->get('/api/v1/media/facets', [$this, 'getMediaFacets']);
+            $r->get('/api/v1/media/index', [$this, 'getMediaIndex']);
             $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
             $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
 
@@ -600,11 +602,16 @@ class WebPortalRouter
         $libraryIdRaw = $request->queryString('libraryId');
         $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
 
+        // Use valueBuckets (same internal query as getMediaIndex) to get per-letter counts.
+        // valueBuckets groups by first-letter expression (article-stripped), matching
+        // the letter-grid's expected sort order.
+        $rawBuckets = $this->itemRepository->valueBuckets('name', $queryParams, $libraryId);
+
         // Fold per-first-character counts into A–Z + a single `#` (non-alpha).
         $byBucket = [];
-        foreach ($this->itemRepository->letterCounts($queryParams, $libraryId) as $row) {
-            $bucket = preg_match('/^[A-Z]$/', $row['letter']) === 1 ? $row['letter'] : '#';
-            $byBucket[$bucket] = ($byBucket[$bucket] ?? 0) + $row['count'];
+        foreach ($rawBuckets as $item) {
+            $bucket = preg_match('/^[A-Z]$/', (string) $item['value']) === 1 ? (string) $item['value'] : '#';
+            $byBucket[$bucket] = ($byBucket[$bucket] ?? 0) + $item['count'];
         }
 
         // Cumulative offsets in name-ascending order: `#` first, then A–Z. Every
@@ -650,6 +657,46 @@ class WebPortalRouter
         $genres = $this->itemRepository->distinctGenres($libraryId);
 
         return (new Response())->json(['genres' => $genres]);
+    }
+
+    /**
+     * Dynamic index bucket endpoint: returns cumulative-offset buckets for any
+     * indexable media field (name, year, rating, runtime, date_added), scoped to
+     * the same filters as `GET /api/v1/media`.
+     *
+     * `GET /api/v1/media/index?field=name&order=asc&libraryId=<uuid>`
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string,string> $params  Path params (unused).
+     *
+     * @return Response `{ "field": string, "buckets": [{key, label, offset, count}], "total": int }`.
+     */
+    public function getMediaIndex(Request $request, array $params): Response
+    {
+        $queryParams = $this->extractMediaQueryParams($request);
+        $libraryIdRaw = $request->queryString('libraryId');
+        $libraryId = ($libraryIdRaw !== null && $libraryIdRaw !== '') ? $libraryIdRaw : null;
+
+        $field = $request->queryString('field') ?? 'name';
+        // Resolve unknown field to the default (same logic as IndexBuckets::build).
+        if (!in_array($field, [IndexBuckets::FIELD_NAME, IndexBuckets::FIELD_YEAR, IndexBuckets::FIELD_RATING, IndexBuckets::FIELD_RUNTIME, IndexBuckets::FIELD_DATE_ADDED], true)) {
+            $field = IndexBuckets::FIELD_NAME;
+        }
+        $order = strtolower($request->queryString('order') ?? 'asc');
+
+        $rawBuckets = $this->itemRepository->valueBuckets($field, $queryParams, $libraryId);
+
+        $indexBuckets = new IndexBuckets();
+        $buckets = $indexBuckets->build($field, $rawBuckets, $order);
+        $buckets = $indexBuckets->withOffsets($buckets);
+
+        $total = array_sum(array_column($buckets, 'count'));
+
+        return (new Response())->json([
+            'field' => $field,
+            'buckets' => $buckets,
+            'total' => $total,
+        ]);
     }
 
     /**

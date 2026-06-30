@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserRepository;
+use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -676,5 +677,169 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $body = json_decode($response->body, true);
         $this->assertSame(['genres' => ['Action']], $body);
+    }
+
+    public function testDispatchRequiresAuthForMediaIndex(): void
+    {
+        // Auth-gated: unauthenticated request → 401, repository never touched.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->never())->method('valueBuckets');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media/index';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(401, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
+    }
+
+    public function testDispatchMediaIndexNotCapturedByMediaId(): void
+    {
+        // The static `/media/index` segment must route to getMediaIndex, not be
+        // swallowed by `/api/v1/media/{id}` with id='index' (route registration
+        // order: index BEFORE {id} guards this).
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('name', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 'A', 'count' => 5],
+                ['value' => 'B', 'count' => 3],
+            ]);
+        $itemRepo->expects($this->never())->method('findById');
+
+        $request = new Request();
+        $request->method = 'GET';
+        $request->path = '/api/v1/media/index';
+        $request->userId = 'user-1';
+
+        $response = $this->makeRouter($itemRepo)->dispatch($request);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('name', $body['field']);
+        $this->assertArrayHasKey('buckets', $body);
+        $this->assertArrayHasKey('total', $body);
+        // findById should never be called (proving {id} route didn't capture 'index')
+        $this->assertIsArray($body['buckets']);
+    }
+
+    public function testGetMediaIndexYearFieldWithCumulativeOffsets(): void
+    {
+        // Year field: IndexBuckets::build('year', ...) produces per-year buckets,
+        // withOffsets() makes offsets cumulative.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('year', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 2020, 'count' => 10],
+                ['value' => 2021, 'count' => 5],
+                ['value' => 2022, 'count' => 3],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'year'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('year', $body['field']);
+        $this->assertSame(18, $body['total']); // 10 + 5 + 3
+
+        // Verify cumulative offsets: 2020 → offset 0, 2021 → offset 10, 2022 → offset 15
+        $buckets = $body['buckets'];
+        $this->assertCount(3, $buckets);
+        $this->assertSame('2020', $buckets[0]['key']);
+        $this->assertSame(0, $buckets[0]['offset']);
+        $this->assertSame(10, $buckets[0]['count']);
+        $this->assertSame('2021', $buckets[1]['key']);
+        $this->assertSame(10, $buckets[1]['offset']); // cumulative: 0 + 10
+        $this->assertSame(5, $buckets[1]['count']);
+        $this->assertSame('2022', $buckets[2]['key']);
+        $this->assertSame(15, $buckets[2]['offset']); // cumulative: 10 + 5
+        $this->assertSame(3, $buckets[2]['count']);
+    }
+
+    public function testGetMediaIndexUnknownFieldDefaultsToName(): void
+    {
+        // Unknown field is resolved to 'name' BEFORE calling valueBuckets, so
+        // the repository is called with field='name' (not the unknown value).
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('name', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 'A', 'count' => 7],
+                ['value' => 'B', 'count' => 2],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'unknown-field-xyz'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        // Unknown field should default to 'name' in the response
+        $this->assertSame('name', $body['field']);
+        $this->assertSame(9, $body['total']); // 7 + 2
+    }
+
+    public function testGetLetterIndexUnchanged(): void
+    {
+        // getLetterIndex must remain behavior-identical: same response shape
+        // {letters: [{letter, offset, count}], total} despite using valueBuckets.
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('name', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 'A', 'count' => 5],
+                ['value' => 'B', 'count' => 3],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = [];
+
+        $response = $router->getLetterIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('letters', $body);
+        $this->assertArrayHasKey('total', $body);
+        $this->assertSame(8, $body['total']); // 5 + 3
+
+        $letters = $body['letters'];
+        // Full alphabet always returned (empty buckets carry 0)
+        $this->assertCount(27, $letters); // # + A-Z
+
+        // Verify the A and B buckets with cumulative offsets
+        $aBucket = null;
+        $bBucket = null;
+        foreach ($letters as $lb) {
+            if ($lb['letter'] === 'A') {
+                $aBucket = $lb;
+            }
+            if ($lb['letter'] === 'B') {
+                $bBucket = $lb;
+            }
+        }
+        $this->assertNotNull($aBucket);
+        $this->assertSame(0, $aBucket['offset']);
+        $this->assertSame(5, $aBucket['count']);
+        $this->assertNotNull($bBucket);
+        $this->assertSame(5, $bBucket['offset']); // cumulative: 0 + 5
+        $this->assertSame(3, $bBucket['count']);
     }
 }

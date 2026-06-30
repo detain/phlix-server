@@ -21,7 +21,9 @@ use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\UserItemDataRepository;
+use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
+use Phlix\Server\Http\Controllers\MediaPosterController;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -217,8 +219,17 @@ class WebPortalRouter
             $adminMiddleware = new AdminMiddleware($this->userRepository, $this->auditLogger);
             $this->router->group(
                 '',
-                function (Router $r): void {
+                function (Router $r) use ($adminMiddleware): void {
                     $r->delete('/api/v1/media/{id}', [$this, 'deleteMediaItem']);
+
+                    // Candidate poster listing (Step 15.1) and poster selection (Step 15.2).
+                    $posterController = new MediaPosterController(
+                        $this->itemRepository,
+                        new TmdbProvider($this->tmdbApiKey()),
+                    );
+                    $posterController->setAdminMiddleware($adminMiddleware);
+                    $r->get('/api/v1/media/{id}/posters', [$posterController, 'listPosters']);
+                    $r->put('/api/v1/media/{id}/poster', [$posterController, 'setPoster']);
                 },
                 [$adminMiddleware]
             );
@@ -1271,5 +1282,18 @@ class WebPortalRouter
         }
 
         return $settings;
+    }
+
+    /**
+     * Returns the configured TMDB API key, or an empty string when not set.
+     */
+    private function tmdbApiKey(): string
+    {
+        $tmdbConfigRaw = @include dirname(__DIR__, 2) . '/../../config/tmdb.php';
+        return is_array($tmdbConfigRaw)
+            && isset($tmdbConfigRaw['api_key'])
+            && is_string($tmdbConfigRaw['api_key'])
+            ? $tmdbConfigRaw['api_key']
+            : (getenv('TMDB_API_KEY') ?: '');
     }
 }

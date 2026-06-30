@@ -329,4 +329,132 @@ final class MediaItemShaperTest extends TestCase
 
         $this->assertNull($shaped['theme_audio_url']);
     }
+
+    public function testShapeDetailExposesFilesBlockWhenAdmin(): void
+    {
+        $streams = [
+            ['stream_index' => 0, 'stream_type' => 'video', 'codec' => 'h264', 'width' => 1920, 'height' => 1080],
+            ['stream_index' => 1, 'stream_type' => 'audio', 'codec' => 'aac'],
+        ];
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Multi File Film',
+            'type' => 'movie',
+            'metadata' => [
+                'files' => [
+                    ['path' => '/mnt/media/movie.mkv', 'size' => 1_500_000_000, 'stream_index' => 0],
+                    ['path' => '/mnt/media/movie.srt', 'size' => 5000, 'stream_index' => null],
+                ],
+            ],
+        ], $streams, true);
+
+        $this->assertArrayHasKey('files', $shaped);
+        $this->assertCount(2, $shaped['files']);
+
+        // First file — video with full path, size, container, codec, resolution.
+        $this->assertSame('/mnt/media/movie.mkv', $shaped['files'][0]['path']);
+        $this->assertSame(1_500_000_000, $shaped['files'][0]['size_bytes']);
+        $this->assertSame('mkv', $shaped['files'][0]['container']);
+        $this->assertSame('h264', $shaped['files'][0]['codec']);
+        $this->assertSame('1920x1080', $shaped['files'][0]['resolution']);
+
+        // Second file — subtitle; no stream so codec/resolution null.
+        $this->assertSame('/mnt/media/movie.srt', $shaped['files'][1]['path']);
+        $this->assertSame(5000, $shaped['files'][1]['size_bytes']);
+        $this->assertSame('srt', $shaped['files'][1]['container']);
+        $this->assertNull($shaped['files'][1]['codec']);
+        $this->assertNull($shaped['files'][1]['resolution']);
+    }
+
+    public function testShapeDetailDoesNotExposeFilesBlockWhenNotAdmin(): void
+    {
+        $streams = [['stream_index' => 0, 'stream_type' => 'video', 'codec' => 'h264']];
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Private Film',
+            'type' => 'movie',
+            'metadata' => [
+                'files' => [
+                    ['path' => '/mnt/media/secret.mkv', 'size' => 2_000_000_000],
+                ],
+            ],
+        ], $streams, false);
+
+        // `files` key must not be present when the user is not an admin.
+        $this->assertArrayNotHasKey('files', $shaped);
+    }
+
+    public function testFilesBlockGracefullyHandlesMissingFilesKey(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Files Film',
+            'type' => 'movie',
+            'metadata' => [],
+        ], [], true);
+
+        $this->assertArrayHasKey('files', $shaped);
+        $this->assertSame([], $shaped['files']);
+    }
+
+    public function testFilesBlockExcludesEntriesWithMissingOrEmptyPath(): void
+    {
+        $streams = [];
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Bad Files Film',
+            'type' => 'movie',
+            'metadata' => [
+                'files' => [
+                    ['path' => '/valid/path.mkv', 'size' => 100],
+                    ['path' => '', 'size' => 200],       // empty path — excluded
+                    ['size' => 300],                      // missing path — excluded
+                    null,                                 // not an array — excluded
+                ],
+            ],
+        ], $streams, true);
+
+        $this->assertCount(1, $shaped['files']);
+        $this->assertSame('/valid/path.mkv', $shaped['files'][0]['path']);
+    }
+
+    public function testListShapeDoesNotExposeFiles(): void
+    {
+        // The list shape must never include `files` — it is a detail-only field.
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'files' => [
+                    ['path' => '/mnt/media/secret.mkv', 'size' => 2_000_000_000],
+                ],
+            ],
+        ]);
+
+        $this->assertArrayNotHasKey('files', $shaped);
+    }
+
+    public function testFilesBlockDerivesContainerFromExtension(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Container Test',
+            'type' => 'movie',
+            'metadata' => [
+                'files' => [
+                    ['path' => '/media/video.mp4', 'size' => 100],
+                    ['path' => '/media/video.avi', 'size' => 200],
+                    ['path' => '/media/video.MKV', 'size' => 300],   // uppercase — lowercased
+                    ['path' => '/media/namedot', 'size' => 400],     // no extension
+                ],
+            ],
+        ], [], true);
+
+        $this->assertCount(4, $shaped['files']);
+        $this->assertSame('mp4', $shaped['files'][0]['container']);
+        $this->assertSame('avi', $shaped['files'][1]['container']);
+        $this->assertSame('mkv', $shaped['files'][2]['container']);
+        $this->assertNull($shaped['files'][3]['container']);
+    }
 }

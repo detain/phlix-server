@@ -166,4 +166,76 @@ class WebPortalRouterUserDataTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
     }
+
+    public function testSetLikeLevelReturns503WhenControllerNotWired(): void
+    {
+        $router = $this->makeRouter($this->itemRepoWithItem());
+
+        $req = new Request();
+        $req->userId = 'user-1';
+        $req->body = ['level' => 2];
+        $response = $router->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(503, $response->statusCode);
+    }
+
+    public function testSetLikeLevelDelegatesToControllerWhenWired(): void
+    {
+        $controller = $this->createMock(MediaUserDataController::class);
+        $controller->expects($this->once())
+            ->method('setLikeLevel')
+            ->willReturn((new \Phlix\Server\Http\Response())->json(['message' => 'Love level saved']));
+
+        $router = $this->makeRouter($this->itemRepoWithItem(), null, $controller);
+
+        $req = new Request();
+        $req->userId = 'user-1';
+        $req->body = ['level' => 2];
+        $response = $router->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testLikeRouteRequiresAuthViaDispatch(): void
+    {
+        // No userId → AuthMiddleware 401 and the controller is never invoked.
+        $controller = $this->createMock(MediaUserDataController::class);
+        $controller->expects($this->never())->method('setLikeLevel');
+
+        $router = $this->makeRouter($this->itemRepoWithItem(), null, $controller);
+
+        $req = new Request();
+        $req->method = 'PUT';
+        $req->path = '/api/v1/media/item-1/like';
+
+        $response = $router->dispatch($req);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    /**
+     * Proves the `PUT /api/v1/media/{id}/like` route is registered on the
+     * single {@see WebPortalRouter} that BOTH HTTP entry points
+     * (public/index.php and the Workerman HttpHandler) dispatch `/api/*` to —
+     * so the route works in both modes, not just one.
+     */
+    public function testLikeRouteDispatchesToHandlerForAuthedUser(): void
+    {
+        $controller = $this->createMock(MediaUserDataController::class);
+        $controller->expects($this->once())
+            ->method('setLikeLevel')
+            ->willReturn((new \Phlix\Server\Http\Response())->json(['message' => 'Love level saved']));
+
+        $router = $this->makeRouter($this->itemRepoWithItem(), null, $controller);
+
+        $req = new Request();
+        $req->method = 'PUT';
+        $req->path = '/api/v1/media/item-1/like';
+        $req->userId = 'user-1';
+        $req->body = ['level' => 3];
+
+        $response = $router->dispatch($req);
+
+        $this->assertSame(200, $response->statusCode);
+    }
 }

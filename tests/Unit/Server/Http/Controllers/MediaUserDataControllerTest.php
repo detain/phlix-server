@@ -173,6 +173,173 @@ class MediaUserDataControllerTest extends TestCase
         $this->assertSame(400, $response->statusCode);
     }
 
+    public function testSetLikeLevelReturns401WhenUnauthenticated(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('setLikeLevel');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = new Request();
+        $req->body = ['level' => 2];
+
+        $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function testSetLikeLevelReturns400WhenIdMissing(): void
+    {
+        $controller = new MediaUserDataController(
+            $this->existingItemRepo(),
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $req = $this->authedRequest();
+        $req->body = ['level' => 2];
+
+        $response = $controller->setLikeLevel($req, ['id' => '']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    public function testSetLikeLevelReturns404WhenItemMissing(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->method('findById')->willReturn(null);
+
+        $controller = new MediaUserDataController(
+            $itemRepo,
+            $this->createMock(UserItemDataRepository::class)
+        );
+        $req = $this->authedRequest();
+        $req->body = ['level' => 2];
+
+        $response = $controller->setLikeLevel($req, ['id' => 'nope']);
+
+        $this->assertSame(404, $response->statusCode);
+    }
+
+    /**
+     * Each valid level 0-3 persists and returns a 200 `{message}` envelope.
+     *
+     * @dataProvider validLikeLevels
+     */
+    public function testSetLikeLevelPersistsValidLevel(int $level): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->once())
+            ->method('setLikeLevel')
+            ->with('user-1', 'item-1', $level);
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = $this->authedRequest();
+        $req->body = ['level' => $level];
+
+        $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('message', $body);
+    }
+
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public static function validLikeLevels(): array
+    {
+        return [
+            'level 0' => [0],
+            'level 1' => [1],
+            'level 2' => [2],
+            'level 3' => [3],
+        ];
+    }
+
+    /**
+     * Non-integer, non-numeric and boolean input are rejected by the
+     * controller's coercion guard up front (400) and never reach the
+     * repository (mirrors setRating's coercion guard — the controller does not
+     * itself enforce the numeric range; that is the repository's job, exactly
+     * like setRating defers the 1-10 range to setRating()).
+     *
+     * @param mixed $level
+     *
+     * @dataProvider malformedLikeLevels
+     */
+    public function testSetLikeLevelRejectsMalformedInput($level): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('setLikeLevel');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = $this->authedRequest();
+        $req->body = ['level' => $level];
+
+        $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function malformedLikeLevels(): array
+    {
+        return [
+            'non-numeric string' => ['x'],
+            'non-integer numeric' => [1.5],
+            'boolean true' => [true],
+        ];
+    }
+
+    /**
+     * Out-of-range but otherwise-integer input (4, -1) is a clean int to the
+     * controller, so it reaches the repository, whose InvalidArgumentException
+     * (0-3 range) is mapped to a 400 — exactly mirroring setRating's
+     * testSetRatingRejectsOutOfRangeFromRepository. Net result for the client:
+     * 4/-1 → 400.
+     *
+     * @dataProvider outOfRangeLikeLevels
+     */
+    public function testSetLikeLevelOutOfRangeReturns400ViaRepository(int $level): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->once())
+            ->method('setLikeLevel')
+            ->with('user-1', 'item-1', $level)
+            ->willThrowException(new \InvalidArgumentException('out of range'));
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        $req = $this->authedRequest();
+        $req->body = ['level' => $level];
+
+        $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public static function outOfRangeLikeLevels(): array
+    {
+        return [
+            'above range (4)' => [4],
+            'below range (-1)' => [-1],
+        ];
+    }
+
+    public function testSetLikeLevelReturns400WhenLevelMissing(): void
+    {
+        $userData = $this->createMock(UserItemDataRepository::class);
+        $userData->expects($this->never())->method('setLikeLevel');
+
+        $controller = new MediaUserDataController($this->existingItemRepo(), $userData);
+        // No `level` key in the body at all.
+        $response = $controller->setLikeLevel($this->authedRequest(), ['id' => 'item-1']);
+
+        $this->assertSame(400, $response->statusCode);
+    }
+
     public function testClearRatingPersistsNull(): void
     {
         $userData = $this->createMock(UserItemDataRepository::class);

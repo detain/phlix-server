@@ -124,6 +124,53 @@ class MediaUserDataController
     }
 
     /**
+     * Set the authenticated user's "love" level for a media item.
+     *
+     * Body: `{ "level": <int 0-3> }`. Unlike the rating, the love level is
+     * non-nullable (0 = not loved) and required: a missing/null, non-numeric,
+     * non-integer, or out-of-range value is a 400. The validation/coercion
+     * mirrors {@see self::setRating()} (bool/non-numeric/non-integer rejected
+     * up front), differing only in the 0-3 range and the absence of a
+     * null-clears branch.
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint PUT /api/v1/media/{id}/like
+     */
+    public function setLikeLevel(Request $request, array $params): Response
+    {
+        $ctx = $this->resolve($request, $params);
+        if ($ctx instanceof Response) {
+            return $ctx;
+        }
+        [$userId, $itemId] = $ctx;
+
+        $raw = $request->input('level');
+        // Reject missing/null and non-integer input up front so only clean ints
+        // reach the repository. Bools are numeric-adjacent in PHP but never a
+        // valid level. The repository enforces the canonical 0-3 range.
+        if (
+            $raw === null
+            || is_bool($raw)
+            || !is_numeric($raw)
+            || (float) $raw !== floor((float) $raw)
+        ) {
+            return (new Response())->status(400)->json(
+                ['error' => 'level must be an integer between 0 and 3']
+            );
+        }
+        $level = (int) $raw;
+
+        try {
+            $this->userItemData->setLikeLevel($userId, $itemId, $level);
+        } catch (\InvalidArgumentException $e) {
+            return (new Response())->status(400)->json(['error' => $e->getMessage()]);
+        }
+
+        return (new Response())->json(['message' => 'Love level saved']);
+    }
+
+    /**
      * Clear the authenticated user's personal rating for a media item.
      *
      * @param array<string, string> $params Route params including 'id'.

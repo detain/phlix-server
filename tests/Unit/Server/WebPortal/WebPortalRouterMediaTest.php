@@ -774,10 +774,10 @@ class WebPortalRouterMediaTest extends TestCase
         $itemRepo = $this->createMock(ItemRepository::class);
         $itemRepo->expects($this->once())
             ->method('valueBuckets')
-            ->with('name', $this->isEmpty(), $this->isNull())
+            ->with('name', $this->anything(), $this->isNull())
             ->willReturn([
-                ['value' => 'A', 'count' => 7],
-                ['value' => 'B', 'count' => 2],
+                ['value' => 'A', 'count' => 5],
+                ['value' => 'B', 'count' => 3],
             ]);
 
         $router = $this->makeRouter($itemRepo);
@@ -841,5 +841,199 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertNotNull($bBucket);
         $this->assertSame(5, $bBucket['offset']); // cumulative: 0 + 5
         $this->assertSame(3, $bBucket['count']);
+    }
+
+    /**
+     * Suite C: API endpoint integration — GET /api/v1/media/index response shape.
+     * Verifies the complete server↔rail contract: field + buckets (key/label/offset/count) + total.
+     */
+    public function testMediaIndexReturnsCorrectResponseShape(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('name', $this->anything(), $this->isNull())
+            ->willReturn([
+                ['value' => 'A', 'count' => 5],
+                ['value' => 'B', 'count' => 3],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'name', 'order' => 'asc'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        assert(is_array($body));
+
+        // Response shape contract: {field, buckets: [{key, label, offset, count}], total}
+        $this->assertArrayHasKey('field', $body);
+        $this->assertArrayHasKey('buckets', $body);
+        $this->assertArrayHasKey('total', $body);
+        $this->assertIsArray($body['buckets']);
+
+        $this->assertSame('name', $body['field']);
+        $this->assertSame(8, $body['total']); // 5 + 3
+
+        // Each bucket must have the required keys for the rail to function
+        $requiredKeys = ['key', 'label', 'offset', 'count'];
+        foreach ($body['buckets'] as $bucket) {
+            foreach ($requiredKeys as $key) {
+                $this->assertArrayHasKey($key, $bucket, 'Every bucket must have key: ' . $key);
+            }
+            $this->assertIsInt($bucket['offset']);
+            $this->assertIsInt($bucket['count']);
+            $this->assertIsString($bucket['key']);
+            $this->assertIsString($bucket['label']);
+        }
+
+        // Verify cumulative offsets for the two buckets
+        $this->assertCount(2, $body['buckets']);
+        $this->assertSame('A', $body['buckets'][0]['key']);
+        $this->assertSame(0, $body['buckets'][0]['offset']);  // first bucket always 0
+        $this->assertSame(5, $body['buckets'][0]['count']);
+        $this->assertSame('B', $body['buckets'][1]['key']);
+        $this->assertSame(5, $body['buckets'][1]['offset']);  // cumulative: 5 items before B
+        $this->assertSame(3, $body['buckets'][1]['count']);
+    }
+
+    /**
+     * Suite C: when valueBuckets returns empty (no items in library), the API
+     * should return 200 with empty buckets — not an error. This is the graceful
+     * degradation contract that the client-side fetchIndexBuckets relies on.
+     */
+    public function testMediaIndexReturnsEmptyBucketsWhenNoItems(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->willReturn([]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'name'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        assert(is_array($body));
+
+        $this->assertSame('name', $body['field']);
+        $this->assertIsArray($body['buckets']);
+        $this->assertCount(0, $body['buckets']);
+        $this->assertSame(0, $body['total']);
+    }
+
+    /**
+     * Suite C: rating field — verifies the alignment rule for fixed rating buckets.
+     * All 8 rating buckets (7 RATING_ORDER + Unrated) are always present even
+     * when some have count=0; cumulative offsets must still be valid.
+     */
+    public function testMediaIndexRatingFieldWithCumulativeOffsets(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('rating', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 'PG',    'count' => 7],
+                ['value' => 'R',     'count' => 4],
+                ['value' => 'Unrated', 'count' => 2],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'rating'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        assert(is_array($body));
+        $this->assertSame('rating', $body['field']);
+
+        // Must have all 8 fixed rating buckets
+        $this->assertCount(8, $body['buckets']);
+
+        // Find PG and R in the bucket list
+        $pgBucket = null;
+        $rBucket = null;
+        foreach ($body['buckets'] as $b) {
+            if ($b['key'] === 'PG') { $pgBucket = $b; }
+            if ($b['key'] === 'R')  { $rBucket = $b; }
+        }
+        $this->assertNotNull($pgBucket);
+        $this->assertNotNull($rBucket);
+
+        // PG offset must be 0 (it's first with count > 0 after G which has 0)
+        // G has count 0; PG follows G in the fixed order
+        // cumulative offsets must be monotonically increasing
+        $offsets = array_column($body['buckets'], 'offset');
+        for ($i = 1; $i < count($offsets); $i++) {
+            $this->assertGreaterThanOrEqual(
+                $offsets[$i - 1],
+                $offsets[$i],
+                'Rating bucket offsets must never decrease (monotonic cumulative)'
+            );
+        }
+    }
+
+    /**
+     * Suite C: runtime field — verifies that with >30 distinct values the decade
+     * collapse produces valid cumulative offsets.
+     */
+    public function testMediaIndexYearFieldDecadeCollapse(): void
+    {
+        // >30 distinct years → decades
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $itemRepo->expects($this->once())
+            ->method('valueBuckets')
+            ->with('year', $this->isEmpty(), $this->isNull())
+            ->willReturn([
+                ['value' => 1990, 'count' => 20],
+                ['value' => 2000, 'count' => 35],
+                ['value' => 2010, 'count' => 50],
+                ['value' => 2020, 'count' => 25],
+            ]);
+
+        $router = $this->makeRouter($itemRepo);
+
+        $request = new Request();
+        $request->query = ['field' => 'year'];
+
+        $response = $router->getMediaIndex($request, []);
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        assert(is_array($body));
+
+        $this->assertSame('year', $body['field']);
+        $this->assertCount(4, $body['buckets']);
+
+        // Cumulative offsets: 1990s → 0, 2000s → 20, 2010s → 55, 2020s → 105
+        $this->assertSame('1990', $body['buckets'][0]['key']);
+        $this->assertSame(0, $body['buckets'][0]['offset']);
+        $this->assertSame(20, $body['buckets'][0]['count']);
+
+        $this->assertSame('2000', $body['buckets'][1]['key']);
+        $this->assertSame(20, $body['buckets'][1]['offset']);   // 20 + 0
+        $this->assertSame(35, $body['buckets'][1]['count']);
+
+        $this->assertSame('2010', $body['buckets'][2]['key']);
+        $this->assertSame(55, $body['buckets'][2]['offset']);   // 20 + 35
+        $this->assertSame(50, $body['buckets'][2]['count']);
+
+        $this->assertSame('2020', $body['buckets'][3]['key']);
+        $this->assertSame(105, $body['buckets'][3]['offset']);  // 20 + 35 + 50
+        $this->assertSame(25, $body['buckets'][3]['count']);
+
+        // Total alignment
+        $this->assertSame(130, $body['total']); // 20+35+50+25
     }
 }

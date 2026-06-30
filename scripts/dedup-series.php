@@ -39,10 +39,10 @@ require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/bootstrap_env.php';
 
 use Phlix\Common\Database\ConnectionPool;
-use Phlix\Common\Database\PhlixMySQLConnection;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
+use Workerman\MySQL\Connection;
 
 $apply = in_array('--apply', $argv, true);
 $libraryFilter = null;
@@ -56,9 +56,11 @@ ConnectionPool::init(__DIR__ . '/../config/database.php');
 $db = ConnectionPool::getConnection('mysql');
 $repo = new ItemRepository($db);
 $finder = new DuplicateFinder($repo);
-// SeriesMerger needs the transaction-aware connection; the default pool
-// connection is a PhlixMySQLConnection (only used on --apply).
-$merger = ($apply && $db instanceof PhlixMySQLConnection) ? new SeriesMerger($repo, $db) : null;
+// SeriesMerger only needs the base-Connection transaction API
+// (begin/commit/rollBackTrans), honoured by BOTH the single-socket
+// PhlixMySQLConnection and the PooledMySQLConnection (DB_POOL_ENABLED=1), so the
+// --apply path works in both pool modes. (Only built on --apply.)
+$merger = ($apply && $db instanceof Connection) ? new SeriesMerger($repo, $db) : null;
 
 echo $apply
     ? "MODE: APPLY (merging duplicate groups)\n"
@@ -72,7 +74,7 @@ if ($apply && $merger === null) {
     fwrite(
         STDERR,
         "ERROR: --apply requires a transaction-capable MySQL connection "
-        . "(PhlixMySQLConnection); got " . get_class($db) . ".\n"
+        . "(Workerman\\MySQL\\Connection); got " . get_class($db) . ".\n"
     );
     exit(1);
 }

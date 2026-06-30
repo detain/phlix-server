@@ -177,6 +177,203 @@ class SeriesMergerTest extends TestCase
         self::assertSame(2021, $meta['year']);
     }
 
+    public function testMovieMergeSkipsCanonicalKeyAndEmptyDuplicateValues(): void
+    {
+        $repo = $this->makeRepo();
+
+        // Primary movie: completely blank metadata so every gap is fillable.
+        $primary = $repo->seed([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => ['canonical_key' => 'movie:keepme', 'overview' => ''],
+        ]);
+        // Duplicate carries: its OWN canonical_key (must NOT be carried to the
+        // primary), an EMPTY overview (must NOT fill the primary's blank gap),
+        // and a real genres value (the only thing that should be carried).
+        $dup = $repo->seed([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => [
+                'canonical_key' => 'movie:loser',
+                'overview' => '',
+                'genres' => ['Sci-Fi'],
+            ],
+        ]);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        self::assertSame(0, $result['moved']);
+        self::assertSame(1, $result['deleted']);
+
+        $meta = $repo->find($primary)['metadata_json'];
+        self::assertIsArray($meta);
+        // canonical_key is the primary's own identity — NEVER overwritten by the
+        // duplicate's (the canonical_key skip branch in fillGaps).
+        self::assertSame('movie:keepme', $meta['canonical_key']);
+        // The duplicate's EMPTY overview must NOT fill the primary's blank one —
+        // it stays '' (the isEmptyValue($value) skip branch in fillGaps).
+        self::assertSame('', $meta['overview']);
+        // The real value IS carried.
+        self::assertSame(['Sci-Fi'], $meta['genres']);
+    }
+
+    public function testMovieMergeDecodesRawMetadataJsonStringFromDuplicate(): void
+    {
+        $repo = $this->makeRepo();
+
+        // Primary has a blank overview; its metadata arrives as a HYDRATED array.
+        $primary = $repo->seed([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => ['overview' => ''],
+        ]);
+        // Duplicate's metadata is ONLY present as a raw JSON STRING in
+        // metadata_json (no hydrated 'metadata' key) — exercises the
+        // metadataOf() json_decode fallback path.
+        $dup = $repo->seedRaw([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => json_encode(['overview' => 'Decoded from JSON.', 'year' => 1984]),
+        ]);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        self::assertSame(0, $result['moved']);
+        self::assertSame(1, $result['deleted']);
+
+        $meta = $repo->find($primary)['metadata_json'];
+        self::assertIsArray($meta);
+        // Values decoded from the duplicate's raw JSON string filled the gaps.
+        self::assertSame('Decoded from JSON.', $meta['overview']);
+        self::assertSame(1984, $meta['year']);
+    }
+
+    public function testMovieMergeHandlesUnhydratedArrayAndAbsentMetadata(): void
+    {
+        $repo = $this->makeRepo();
+
+        // Primary movie whose metadata arrives un-hydrated as a metadata_json
+        // ARRAY (no 'metadata' key) — exercises the metadataOf() is_array($raw)
+        // fallback (vs the json_decode string path).
+        $primary = $repo->seedRaw([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => ['overview' => ''],
+        ]);
+        // Duplicate carries NO metadata at all (null metadata_json, no 'metadata')
+        // — exercises the metadataOf() final empty-return path. With no donor
+        // values the primary is left untouched, only the dup row is removed.
+        $dup = $repo->seedRaw([
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'type' => 'movie',
+            'name' => 'Dune',
+            'metadata_json' => null,
+        ]);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        self::assertSame(0, $result['moved']);
+        self::assertSame(1, $result['deleted']);
+        self::assertNull($repo->find($dup));
+        // Nothing to fill from an empty duplicate — primary metadata unchanged.
+        self::assertSame(['overview' => ''], $repo->find($primary)['metadata_json']);
+    }
+
+    public function testSeasonMatchingDecodesRawMetadataJsonStringForSeasonNumber(): void
+    {
+        $repo = $this->makeRepo();
+
+        // Primary S1 stored with a raw JSON metadata_json string (no hydrated
+        // 'metadata') so seasonNumberOf() -> metadataOf() takes the decode path.
+        $primary = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show']);
+        $primaryS1 = $repo->seedRaw(['library_id' => 'lib-1', 'parent_id' => $primary, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => json_encode(['season' => 1])]);
+
+        // Duplicate S1 also stored as a raw JSON string.
+        $dup = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show.']);
+        $dupS1 = $repo->seedRaw(['library_id' => 'lib-1', 'parent_id' => $dup, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => json_encode(['season' => 1])]);
+        $de1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $dupS1, 'type' => 'episode', 'name' => 'D-E2', 'metadata_json' => ['season' => 1, 'episode' => 2]]);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        // The season numbers decoded from the raw JSON strings MATCH, so the dup
+        // episode is re-parented under the primary's S1 and the dup shells go.
+        self::assertSame(1, $result['moved']);
+        self::assertSame(2, $result['deleted']);
+        self::assertSame($primaryS1, $repo->parentOf($de1));
+        self::assertCount(
+            1,
+            array_filter(
+                $repo->childrenOfType($primary, 'season'),
+                fn (array $s): bool => $repo->seasonNumber($s['id']) === 1
+            )
+        );
+        self::assertSame(0, $repo->orphanCount());
+    }
+
+    public function testIgnoresNonSeasonDirectChildOfPrimaryWhenIndexingSeasons(): void
+    {
+        $repo = $this->makeRepo();
+
+        // The PRIMARY series carries a STRAY direct episode (a non-season direct
+        // child) alongside its season — indexing must skip it, not treat it as a
+        // season.
+        $primary = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show']);
+        $primaryS1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $primary, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => ['season' => 1]]);
+        $primaryStray = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $primary, 'type' => 'episode', 'name' => 'P-Stray', 'metadata_json' => ['episode' => 9]]);
+
+        $dup = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show.']);
+        $dupS1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $dup, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => ['season' => 1]]);
+        $de1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $dupS1, 'type' => 'episode', 'name' => 'D-E2', 'metadata_json' => ['season' => 1, 'episode' => 2]]);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        // The dup S1's episode folds under the primary's existing S1 (the stray
+        // primary episode was correctly NOT mistaken for a same-number season).
+        self::assertSame(1, $result['moved']);
+        self::assertSame(2, $result['deleted']);
+        self::assertSame($primaryS1, $repo->parentOf($de1));
+        // The primary's pre-existing stray episode is untouched.
+        self::assertSame($primary, $repo->parentOf($primaryStray));
+        self::assertSame(0, $repo->orphanCount());
+    }
+
+    public function testSkipsMatchedSeasonEpisodeWithMissingIdWithoutCrashing(): void
+    {
+        $repo = $this->makeRepo();
+
+        // Primary HAS S1 so the duplicate's S1 enters the matched-season episode
+        // re-parent loop.
+        $primary = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show']);
+        $repo->seed(['library_id' => 'lib-1', 'parent_id' => $primary, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => ['season' => 1]]);
+        $dup = $repo->seed(['library_id' => 'lib-1', 'parent_id' => null, 'type' => 'series', 'name' => 'Show.']);
+        $dupS1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $dup, 'type' => 'season', 'name' => 'Season 1', 'metadata_json' => ['season' => 1]]);
+        $de1 = $repo->seed(['library_id' => 'lib-1', 'parent_id' => $dupS1, 'type' => 'episode', 'name' => 'D-E2', 'metadata_json' => ['season' => 1, 'episode' => 2]]);
+
+        // Corrupt the episode's id to a non-string so the defensive empty-id
+        // guard in the matched-season episode loop skips it instead of crashing.
+        $repo->corruptId($de1);
+
+        $result = (new SeriesMerger($repo, $this->mockConn()))->merge($primary, [$dup]);
+
+        // The corrupt-id episode is NOT moved (skipped by the guard), but the now
+        // structurally-empty dup season + dup series shells are still deleted.
+        self::assertSame(0, $result['moved']);
+        self::assertSame(2, $result['deleted']);
+        self::assertNull($repo->find($dup));
+        self::assertNull($repo->find($dupS1));
+    }
+
     public function testRejectsSelfMergeAsNoOp(): void
     {
         $repo = $this->makeRepo();
@@ -300,6 +497,15 @@ class SeriesMergerTest extends TestCase
                 $this->failOnUpdate = $failOnUpdate;
             }
 
+            /**
+             * Ids of rows seeded with a RAW (string) metadata_json — for these
+             * the find* helpers deliberately do NOT inject a hydrated 'metadata'
+             * key, so the production metadataOf() json_decode fallback runs.
+             *
+             * @var array<string, true>
+             */
+            private array $rawMeta = [];
+
             /** @param array<string, mixed> $row */
             public function seed(array $row): string
             {
@@ -316,14 +522,27 @@ class SeriesMergerTest extends TestCase
                 return $id;
             }
 
+            /**
+             * Seed a row whose metadata_json is a RAW JSON string exactly as the
+             * DB column stores it (ItemRepository would normally hydrate it). The
+             * find* helpers leave it un-hydrated so SeriesMerger::metadataOf()
+             * must decode it itself.
+             *
+             * @param array<string, mixed> $row
+             */
+            public function seedRaw(array $row): string
+            {
+                $id = $this->seed($row);
+                $this->rawMeta[$id] = true;
+                return $id;
+            }
+
             public function findById(string $id): ?array
             {
                 if (!isset($this->store[$id])) {
                     return null;
                 }
-                $row = $this->store[$id];
-                $row['metadata'] = is_array($row['metadata_json'] ?? null) ? $row['metadata_json'] : [];
-                return $row;
+                return $this->hydrate($this->store[$id]);
             }
 
             public function findByParent(string $parentId): array
@@ -331,11 +550,28 @@ class SeriesMergerTest extends TestCase
                 $out = [];
                 foreach ($this->store as $row) {
                     if (($row['parent_id'] ?? null) === $parentId) {
-                        $row['metadata'] = is_array($row['metadata_json'] ?? null) ? $row['metadata_json'] : [];
-                        $out[] = $row;
+                        $out[] = $this->hydrate($row);
                     }
                 }
                 return $out;
+            }
+
+            /**
+             * Mimic ItemRepository hydration: a row seeded normally gets a
+             * decoded 'metadata' array; a raw-seeded row is returned verbatim
+             * (string metadata_json, no 'metadata') to drive the decode path.
+             *
+             * @param array<string, mixed> $row
+             * @return array<string, mixed>
+             */
+            private function hydrate(array $row): array
+            {
+                $id = $row['id'] ?? null;
+                if (is_string($id) && isset($this->rawMeta[$id])) {
+                    return $row;
+                }
+                $row['metadata'] = is_array($row['metadata_json'] ?? null) ? $row['metadata_json'] : [];
+                return $row;
             }
 
             public function update(string $id, array $data): void
@@ -368,6 +604,31 @@ class SeriesMergerTest extends TestCase
             {
                 $parent = $this->store[$id]['parent_id'] ?? null;
                 return is_string($parent) ? $parent : null;
+            }
+
+            /**
+             * The season number a stored row carries, decoding a raw JSON
+             * metadata_json string when present (mirrors the production read).
+             */
+            public function seasonNumber(string $id): ?int
+            {
+                $raw = $this->store[$id]['metadata_json'] ?? null;
+                if (is_string($raw) && $raw !== '') {
+                    $decoded = json_decode($raw, true);
+                    $raw = is_array($decoded) ? $decoded : [];
+                }
+                if (!is_array($raw) || !isset($raw['season']) || !is_numeric($raw['season'])) {
+                    return null;
+                }
+                return (int) $raw['season'];
+            }
+
+            /** Replace a stored row's id field with a non-string (corrupt) value. */
+            public function corruptId(string $id): void
+            {
+                if (isset($this->store[$id])) {
+                    $this->store[$id]['id'] = null;
+                }
             }
 
             /** @return list<array<string, mixed>> */

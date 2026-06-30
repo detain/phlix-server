@@ -21,6 +21,7 @@ use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
@@ -287,6 +288,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('metadataMatcher', get(LibraryMetadataMatcher::class)),
 
             MetadataManager::class => autowire(),
+
+            // Process-scoped registry of PLUGIN metadata sources
+            // (MetadataSourceInterface). Single container-scoped instance —
+            // PluginLoader registers a source on plugin-enable and deregisters
+            // it on plugin-disable (no leak). No ctor deps; a plain autowire
+            // yields the singleton PHP-DI binds by default.
+            SourceRegistry::class => autowire(),
 
             QualitySelector::class => factory(static function (): QualitySelector {
                 return new QualitySelector();

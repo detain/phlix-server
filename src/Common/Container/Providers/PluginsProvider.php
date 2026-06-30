@@ -12,6 +12,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Plugins\Catalog\PluginAutoUpdateWorker;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
@@ -149,6 +150,12 @@ final class PluginsProvider implements ServiceProviderInterface
                         $logger = LoggerFactory::get(LogChannels::PLUGINS);
                     }
 
+                    // Step 3.5: the process-scoped metadata-source registry the
+                    // loader (de)registers plugin MetadataSourceInterface
+                    // instances into on enable/disable.
+                    /** @var SourceRegistry $sourceRegistry */
+                    $sourceRegistry = $c->get(SourceRegistry::class);
+
                     return new PluginLoader(
                         $installer,
                         $composer,
@@ -158,6 +165,7 @@ final class PluginsProvider implements ServiceProviderInterface
                         $c,
                         $audit,
                         $logger,
+                        $sourceRegistry,
                     );
                 }
             ),

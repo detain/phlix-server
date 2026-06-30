@@ -1,0 +1,326 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Media\Library;
+
+/**
+ * Pure bucketing helper: transforms pre-sorted distinct value+count pairs into
+ * bucket metadata for the media index rail.
+ *
+ * No I/O, no state — a pure transformation of its inputs.
+ */
+final class IndexBuckets
+{
+    /**
+     * When a field has more than this many distinct values, it collapses into
+     * ranges rather than individual value buckets.
+     */
+    private const DISTINCT_THRESHOLD = 30;
+
+    public const FIELD_NAME = 'name';
+    public const FIELD_YEAR = 'year';
+    public const FIELD_RATING = 'rating';
+    public const FIELD_RUNTIME = 'runtime';
+    public const FIELD_DATE_ADDED = 'date_added';
+
+    /**
+     * Rating order mapping — least to most restrictive.
+     *
+     * @var array<string, int>
+     */
+    private const RATING_ORDER = [
+        'G' => 1,
+        'PG' => 2,
+        'PG-13' => 3,
+        'R' => 4,
+        'NC-17' => 5,
+        'X' => 6,
+        'UNRATED' => 7,
+    ];
+
+    /**
+     * Build bucket metadata for a given field from pre-sorted distinct values.
+     *
+     * @param string $field One of the FIELD_* constants.
+     * @param array<int, array{value: string|int, count: int}> $distincts Pre-sorted by value ASC.
+     * @param string $order 'asc' | 'desc'
+     * @return array<int, array{key: string, label: string, offset: int, count: int}>
+     */
+    public function build(string $field, array $distincts, string $order): array
+    {
+        $field = $field ?: self::FIELD_NAME;
+
+        $buckets = match ($field) {
+            self::FIELD_NAME => $this->bucketsForName($distincts),
+            self::FIELD_YEAR => $this->bucketsForYear($distincts),
+            self::FIELD_RATING => $this->bucketsForRating($distincts),
+            self::FIELD_RUNTIME => $this->bucketsForRuntime($distincts),
+            self::FIELD_DATE_ADDED => $this->bucketsForDateAdded($distincts),
+            default => $this->bucketsForName($distincts),
+        };
+
+        if ($order === 'desc') {
+            $buckets = array_reverse($buckets);
+        }
+
+        return $this->withOffsets($buckets);
+    }
+
+    /**
+     * Compute cumulative offsets from counts (offsets always cumulative from 0).
+     *
+     * @param array<int, array{key: string, label: string, offset?: int, count: int}> $buckets
+     * @return array<int, array{key: string, label: string, offset: int, count: int}>
+     */
+    public function withOffsets(array $buckets): array
+    {
+        $offset = 0;
+        $result = [];
+
+        foreach ($buckets as $bucket) {
+            $result[] = [
+                'key' => $bucket['key'],
+                'label' => $bucket['label'],
+                'offset' => $offset,
+                'count' => $bucket['count'],
+            ];
+            $offset += $bucket['count'];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Name field: always buckets by first letter (A–Z + #). Never collapses.
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForName(array $distincts): array
+    {
+        $buckets = [];
+
+        foreach ($distincts as $item) {
+            $value = (string) $item['value'];
+            $count = $item['count'];
+
+            $letter = $this->firstLetter($value);
+            $letter = $letter !== '' ? $letter : '#';
+
+            if (!isset($buckets[$letter])) {
+                $buckets[$letter] = ['key' => $letter, 'label' => $letter, 'count' => 0];
+            }
+            $buckets[$letter]['count'] += $count;
+        }
+
+        // Sort by key ascending (A before B before ... Z before #)
+        ksort($buckets);
+
+        return array_values($buckets);
+    }
+
+    /**
+     * Year field: one bucket per year if ≤30 distinct; decade ranges if >30 distinct.
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForYear(array $distincts): array
+    {
+        $distinctCount = count($distincts);
+
+        if ($distinctCount <= self::DISTINCT_THRESHOLD) {
+            // One bucket per year
+            $buckets = [];
+            foreach ($distincts as $item) {
+                $year = (int) $item['value'];
+                $buckets[] = [
+                    'key' => (string) $year,
+                    'label' => (string) $year,
+                    'count' => $item['count'],
+                ];
+            }
+            return $buckets;
+        }
+
+        // Collapse into decade buckets
+        return $this->collapseYearsToDecades($distincts);
+    }
+
+    /**
+     * Collapse year distincts into decade buckets.
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function collapseYearsToDecades(array $distincts): array
+    {
+        $decades = [];
+
+        foreach ($distincts as $item) {
+            $year = (int) $item['value'];
+            $decade = (int) floor($year / 10) * 10;
+            $decadeKey = (string) $decade;
+            $decadeLabel = $decade . 's';
+
+            if (!isset($decades[$decadeKey])) {
+                $decades[$decadeKey] = ['key' => $decadeKey, 'label' => $decadeLabel, 'count' => 0];
+            }
+            $decades[$decadeKey]['count'] += $item['count'];
+        }
+
+        // Sort by decade key ascending
+        ksort($decades);
+
+        return array_values($decades);
+    }
+
+    /**
+     * Rating field: always 8 fixed buckets (7 RATING_ORDER groups + Unrated for null/empty).
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForRating(array $distincts): array
+    {
+        // Initialize all 7 RATING_ORDER buckets with 0 count
+        $buckets = [];
+        foreach (self::RATING_ORDER as $rating => $_order) {
+            $buckets[$rating] = ['key' => $rating, 'label' => $rating, 'count' => 0];
+        }
+
+        // Add Unrated bucket for null/empty/missing ratings
+        $buckets['Unrated'] = ['key' => 'Unrated', 'label' => 'Unrated', 'count' => 0];
+
+        // Distribute counts from distincts
+        foreach ($distincts as $item) {
+            $value = $item['value'];
+            $count = $item['count'];
+
+            if ($value === null || $value === '' || $value === 'Unrated') {
+                $buckets['Unrated']['count'] += $count;
+            } elseif (isset($buckets[(string) $value])) {
+                $buckets[(string) $value]['count'] += $count;
+            } else {
+                // Rating value not in RATING_ORDER — treat as Unrated
+                $buckets['Unrated']['count'] += $count;
+            }
+        }
+
+        // Return in RATING_ORDER sequence
+        $result = [];
+        foreach (self::RATING_ORDER as $rating => $_order) {
+            $result[] = $buckets[$rating];
+        }
+        $result[] = $buckets['Unrated'];
+
+        return $result;
+    }
+
+    /**
+     * Runtime field: always 5 fixed ranges (1-30, 31-60, 61-90, 91-120, 120+).
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForRuntime(array $distincts): array
+    {
+        $ranges = [
+            '1-30min' => ['key' => '1-30min', 'label' => '1-30min', 'min' => 1, 'max' => 30, 'count' => 0],
+            '31-60min' => ['key' => '31-60min', 'label' => '31-60min', 'min' => 31, 'max' => 60, 'count' => 0],
+            '61-90min' => ['key' => '61-90min', 'label' => '61-90min', 'min' => 61, 'max' => 90, 'count' => 0],
+            '91-120min' => ['key' => '91-120min', 'label' => '91-120min', 'min' => 91, 'max' => 120, 'count' => 0],
+            '120min+' => ['key' => '120min+', 'label' => '120min+', 'min' => 121, 'max' => PHP_INT_MAX, 'count' => 0],
+        ];
+
+        foreach ($distincts as $item) {
+            $runtime = (int) $item['value'];
+            $count = $item['count'];
+
+            if ($runtime <= 0) {
+                continue;
+            }
+
+            foreach ($ranges as $range) {
+                if ($runtime >= $range['min'] && $runtime <= $range['max']) {
+                    $ranges[$range['key']]['count'] += $count;
+                    break;
+                }
+            }
+        }
+
+        return array_values($ranges);
+    }
+
+    /**
+     * date_added field: always 5 relative buckets (Today, This week, This month, This year, Older).
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForDateAdded(array $distincts): array
+    {
+        $now = time();
+        $todayStart = strtotime('today midnight');
+        $weekStart = strtotime('monday this week midnight');
+        $monthStart = strtotime('first day of this month midnight');
+        $yearStart = strtotime('first day of January this year midnight');
+
+        $buckets = [
+            'Today' => ['key' => 'Today', 'label' => 'Today', 'count' => 0],
+            'This week' => ['key' => 'This week', 'label' => 'This week', 'count' => 0],
+            'This month' => ['key' => 'This month', 'label' => 'This month', 'count' => 0],
+            'This year' => ['key' => 'This year', 'label' => 'This year', 'count' => 0],
+            'Older' => ['key' => 'Older', 'label' => 'Older', 'count' => 0],
+        ];
+
+        foreach ($distincts as $item) {
+            $value = $item['value'];
+            $count = $item['count'];
+
+            if (!is_string($value) || $value === '') {
+                $buckets['Older']['count'] += $count;
+                continue;
+            }
+
+            $timestamp = strtotime($value);
+            if ($timestamp === false) {
+                $buckets['Older']['count'] += $count;
+                continue;
+            }
+
+            if ($timestamp >= $todayStart) {
+                $buckets['Today']['count'] += $count;
+            } elseif ($timestamp >= $weekStart) {
+                $buckets['This week']['count'] += $count;
+            } elseif ($timestamp >= $monthStart) {
+                $buckets['This month']['count'] += $count;
+            } elseif ($timestamp >= $yearStart) {
+                $buckets['This year']['count'] += $count;
+            } else {
+                $buckets['Older']['count'] += $count;
+            }
+        }
+
+        return array_values($buckets);
+    }
+
+    /**
+     * Extract the first letter from a string, uppercased. Returns '' for empty input.
+     */
+    private function firstLetter(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+        $first = mb_substr($value, 0, 1, 'UTF-8');
+        $firstUpper = mb_strtoupper($first, 'UTF-8');
+        // Fold non-A-Z to #
+        if ($firstUpper >= 'A' && $firstUpper <= 'Z') {
+            return $firstUpper;
+        }
+        return '#';
+    }
+}

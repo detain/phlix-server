@@ -11,6 +11,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
@@ -23,6 +24,7 @@ use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
+use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
@@ -100,6 +102,12 @@ final class AdminRoutesTest extends TestCase
             new DuplicateFinder($mergeItemRepository),
             null,
         );
+        // Metadata-source name list controller (Step 3.6). AdminRoutes::register()
+        // eagerly resolves it at bind time; the plugin-only tests below never
+        // dispatch to /metadata/sources, so an empty SourceRegistry is
+        // sufficient here (the dedicated gating tests below DO dispatch to it).
+        $sourceRegistry = new SourceRegistry();
+        $adminMetadataSourceController = new AdminMetadataSourceController($sourceRegistry);
         // Catalog controller: a real service wired to a stub SettingsRepository
         // and an offline fetcher (the lifecycle tests never hit the network).
         $catalogService = new PluginCatalogService(
@@ -133,6 +141,7 @@ final class AdminRoutesTest extends TestCase
             $profileManager,
             $adminProfileController,
             $adminMergeController,
+            $adminMetadataSourceController,
             $pluginCatalogController,
             $catalogService,
         ) implements ContainerInterface {
@@ -153,6 +162,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly FakeUserProfileManager $profileManager,
                 private readonly AdminProfileController $adminProfileController,
                 private readonly AdminMergeController $adminMergeController,
+                private readonly AdminMetadataSourceController $adminMetadataSourceController,
                 private readonly PluginCatalogController $pluginCatalogController,
                 private readonly PluginCatalogService $pluginCatalogService,
             ) {
@@ -199,6 +209,7 @@ final class AdminRoutesTest extends TestCase
                     UserProfileManager::class => $this->profileManager,
                     AdminProfileController::class => $this->adminProfileController,
                     AdminMergeController::class => $this->adminMergeController,
+                    AdminMetadataSourceController::class => $this->adminMetadataSourceController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -222,6 +233,7 @@ final class AdminRoutesTest extends TestCase
                     UserProfileManager::class,
                     AdminProfileController::class,
                     AdminMergeController::class,
+                    AdminMetadataSourceController::class,
                 ], true);
             }
         };
@@ -262,6 +274,38 @@ final class AdminRoutesTest extends TestCase
             $this->request('POST', '/api/v1/admin/media/merge', null),
         );
         $this->assertSame(401, $merge->statusCode);
+    }
+
+    public function test_metadata_sources_route_is_registered_and_admin_gated(): void
+    {
+        // Step 3.6: the metadata-source list route must be reachable through
+        // AdminRoutes::register() — the single registration that BOTH entry
+        // points (Application.php daemon + public/index.php web portal) call.
+        // An anonymous caller hits the AdminMiddleware 401 (proving the route
+        // exists inside the admin group, not a 404 from an unregistered path).
+        $response = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/metadata/sources', null),
+        );
+        $this->assertSame(401, $response->statusCode);
+    }
+
+    public function test_metadata_sources_route_reaches_controller_for_admin(): void
+    {
+        // An admin GET to the route must reach AdminMetadataSourceController and
+        // return the 200 `{sources: …}` envelope with the built-ins (the test
+        // container's SourceRegistry is empty), NOT a 404 — confirming the
+        // route binds to the controller.
+        $this->users->register('admin-1', true);
+
+        $response = $this->router->dispatch(
+            $this->request('GET', '/api/v1/admin/metadata/sources', 'admin-1'),
+        );
+
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('sources', $body);
+        $this->assertSame(['tmdb', 'imdb', 'tvdb', 'fanart', 'local'], $body['sources']);
     }
 
     public function test_duplicates_preview_route_reaches_controller_for_admin(): void

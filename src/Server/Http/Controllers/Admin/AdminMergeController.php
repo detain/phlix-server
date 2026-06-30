@@ -43,9 +43,12 @@ final class AdminMergeController
      * @param ItemRepository    $items  Read-access for primary/duplicate lookup + validation.
      * @param DuplicateFinder   $finder Groups the merge candidates for the preview.
      * @param SeriesMerger|null $merger Applies a merge (re-parent children + delete shells).
-     *        Null when the active DB connection is not the transaction-aware
-     *        {@see \Phlix\Common\Database\PhlixMySQLConnection}; the apply
-     *        endpoint then returns 503 (the read-only preview is unaffected).
+     *        Null when no transaction-capable base
+     *        {@see \Workerman\MySQL\Connection} is bound (the merger is wired
+     *        from whichever connection Phlix ships — {@see \Phlix\Common\Database\PhlixMySQLConnection}
+     *        under `DB_POOL_ENABLED=0` or {@see \Phlix\Common\Database\PooledMySQLConnection}
+     *        under `DB_POOL_ENABLED=1`, both of which expose the transaction API);
+     *        the apply endpoint then returns 503 (the read-only preview is unaffected).
      */
     public function __construct(
         private readonly ItemRepository $items,
@@ -97,7 +100,7 @@ final class AdminMergeController
      * Only when every duplicate is validated against the primary's library +
      * type does it call {@see SeriesMerger::merge()} and return the structural
      * `{moved, deleted}` counts. When no transaction-aware merger is wired
-     * (non-{@see \Phlix\Common\Database\PhlixMySQLConnection} connection), the
+     * (no txn-capable base {@see \Workerman\MySQL\Connection} bound), the
      * endpoint returns 503 before validating, leaving all data untouched.
      *
      * @param Request $request The HTTP request (body {primary_id, duplicate_ids}).

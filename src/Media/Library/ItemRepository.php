@@ -123,12 +123,15 @@ class ItemRepository
      * the same show/film, so the scanner reuses the existing container instead of
      * creating a second top-level row.
      *
-     * The key currently lives inside the `metadata_json` blob under
-     * `$.canonical_key` (the indexed `canonical_key` column arrives in Step 1.5);
-     * it is read with `JSON_UNQUOTE(JSON_EXTRACT(...))` and matched with a
-     * positional placeholder (colon-free, parameterised — no SQL injection).
-     * Restricting to `parent_id IS NULL` keeps the match to true containers
-     * (series/movie), never a season/episode.
+     * Since migration 043 the key is a first-class, INDEXED `canonical_key`
+     * column (the source of truth, kept in lockstep with the
+     * `metadata_json.canonical_key` blob by {@see create()}/{@see update()}). The
+     * match reads that column directly so the index
+     * `(library_id, type, canonical_key)` is used — a `JSON_EXTRACT` predicate
+     * could never be index-covered. The value is bound with a positional
+     * placeholder (colon-free, parameterised — no SQL injection). Restricting to
+     * `parent_id IS NULL` keeps the match to true containers (series/movie),
+     * never a season/episode.
      *
      * @param string $libraryId    Owning library UUID — scope the match to one library.
      * @param string $type         Container type ('series' or 'movie').
@@ -150,7 +153,7 @@ class ItemRepository
              WHERE library_id = ?
                AND type = ?
                AND parent_id IS NULL
-               AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.canonical_key')) = ?
+               AND canonical_key = ?
              LIMIT 1",
             [$libraryId, $type, $canonicalKey]
         );
@@ -380,9 +383,16 @@ class ItemRepository
             ? (is_array($data['metadata_json']) ? json_encode($data['metadata_json']) : $data['metadata_json'])
             : '{}';
 
+        // The indexed `canonical_key` column (migration 043) is the source of
+        // truth for findTopLevelByCanonical(). Mirror the value the Step 1.2
+        // scanner already stamps into `metadata_json.canonical_key` so the
+        // column stays in lockstep with the blob without changing any scanner
+        // call site. NULL when absent/blank (an unkeyable row).
+        $canonicalKey = self::extractCanonicalKey($data['metadata_json'] ?? null);
+
         $this->db->query(
-            "INSERT INTO media_items (id, library_id, parent_id, name, type, path, metadata_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO media_items (id, library_id, parent_id, name, type, path, canonical_key, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $data['library_id'],
@@ -390,6 +400,7 @@ class ItemRepository
                 self::toValidUtf8($data['name'] ?? null),
                 $data['type'],
                 self::toValidUtf8($data['path'] ?? null),
+                $canonicalKey,
                 $metadataJson,
             ]
         );
@@ -426,6 +437,40 @@ class ItemRepository
     }
 
     /**
+     * Extract the `canonical_key` value from a `metadata_json` payload for the
+     * indexed `canonical_key` column (migration 043).
+     *
+     * Accepts the same shapes `create()`/`update()` accept for `metadata_json`:
+     * an already-decoded `array<string, mixed>` (the scanner path) or a raw JSON
+     * string. Returns the trimmed string key when present and non-blank, else
+     * `null` so the column stays NULL for unkeyable rows (a title with nothing
+     * alphanumeric and no year/external id). The blob itself is never mutated —
+     * the key is only COPIED into the column.
+     *
+     * @param mixed $metadataJson Array, JSON string, or anything else (→ null).
+     */
+    private static function extractCanonicalKey(mixed $metadataJson): ?string
+    {
+        if (is_string($metadataJson)) {
+            $decoded = json_decode($metadataJson, true);
+            $metadataJson = is_array($decoded) ? $decoded : null;
+        }
+
+        if (!is_array($metadataJson)) {
+            return null;
+        }
+
+        $key = $metadataJson['canonical_key'] ?? null;
+        if (!is_string($key)) {
+            return null;
+        }
+
+        $key = trim($key);
+
+        return $key === '' ? null : $key;
+    }
+
+    /**
      * Updates an existing media item's properties.
      *
      * @param string $id The media item's unique identifier
@@ -438,6 +483,21 @@ class ItemRepository
         $values = [];
 
         foreach ($data as $key => $value) {
+            // Keep the indexed `canonical_key` column (migration 043) in lockstep
+            // with `metadata_json.canonical_key` whenever the metadata blob is
+            // (re)written, so the column stays the source of truth for
+            // findTopLevelByCanonical(). The caller may pass it explicitly too,
+            // in which case its own `canonical_key` set wins (handled by the
+            // normal loop below) — but a metadata_json update derives the column
+            // unless the caller already set it.
+            if (
+                $key === 'metadata_json'
+                && !array_key_exists('canonical_key', $data)
+            ) {
+                $sets[] = 'canonical_key = ?';
+                $values[] = self::extractCanonicalKey($value);
+            }
+
             $sets[] = "$key = ?";
             if ($key === 'metadata_json' && is_array($value)) {
                 $value = json_encode($value);

@@ -191,6 +191,7 @@ class WebPortalRouter
             $r->delete('/api/v1/media/{id}/favorite', [$this, 'removeFavorite']);
             $r->put('/api/v1/media/{id}/rating', [$this, 'setRating']);
             $r->delete('/api/v1/media/{id}/rating', [$this, 'clearRating']);
+            $r->put('/api/v1/media/{id}/like', [$this, 'setLikeLevel']);
 
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
@@ -969,6 +970,26 @@ class WebPortalRouter
             ]);
         }
         return $this->mediaUserDataController->setRating($request, $params);
+    }
+
+    /**
+     * Set the authenticated user's "love" level for a media item (Feature 10).
+     *
+     * Thin delegate to {@see MediaUserDataController::setLikeLevel()}; responds
+     * 503 when the favorites feature is not wired (mirrors the rating routes).
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint PUT /api/v1/media/{id}/like
+     */
+    public function setLikeLevel(Request $request, array $params): Response
+    {
+        if ($this->mediaUserDataController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Favorites are not configured on this server',
+            ]);
+        }
+        return $this->mediaUserDataController->setLikeLevel($request, $params);
     }
 
     /**

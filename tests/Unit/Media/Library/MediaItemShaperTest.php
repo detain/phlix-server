@@ -262,6 +262,7 @@ final class MediaItemShaperTest extends TestCase
                 'crew' => [['name' => 'C', 'job' => 'Director', 'profile_url' => null]],
                 'production_companies' => [['name' => 'D', 'logo_url' => null, 'origin_country' => null]],
                 'studio' => 'D',
+                'backdrop_url' => 'https://image.tmdb.org/t/p/original/bg.jpg',
                 'actors' => ['A'],
             ],
         ]);
@@ -272,5 +273,32 @@ final class MediaItemShaperTest extends TestCase
         $this->assertArrayNotHasKey('crew', $shaped);
         $this->assertArrayNotHasKey('production_companies', $shaped);
         $this->assertArrayNotHasKey('studio', $shaped);
+        $this->assertArrayNotHasKey('backdrop_url', $shaped);
+    }
+
+    public function testShapeDetailExposesBackdropUrlWhenSet(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Backdrop Film',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://image.tmdb.org/t/p/original/bg.jpg',
+            ],
+        ], []);
+
+        $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $shaped['backdrop_url']);
+    }
+
+    public function testShapeDetailReturnsNullBackdropUrlWhenNotSet(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Backdrop Film',
+            'type' => 'movie',
+            'metadata' => [],
+        ], []);
+
+        $this->assertNull($shaped['backdrop_url']);
     }
 }

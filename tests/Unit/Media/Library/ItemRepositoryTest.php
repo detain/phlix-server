@@ -1581,4 +1581,260 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $this->assertSame([], $repo->distinctGenres());
     }
+
+    // -------------------------------------------------------------------------
+    // valueBuckets() tests
+    // -------------------------------------------------------------------------
+
+    public function testValueBucketsYearFieldParameterized(): void
+    {
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // Year bucket: YEAR(created_at) in GROUP BY and ORDER BY
+                    return str_contains($sql, 'YEAR(created_at) AS bucket_value')
+                        && str_contains($sql, 'GROUP BY YEAR(created_at)')
+                        && str_contains($sql, 'ORDER BY YEAR(created_at) ASC');
+                }),
+                $this->callback(function (array $params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    // libraryId bound as positional placeholder (colon-free)
+                    return is_array($params)
+                        && in_array('lib-year-test', $params, true)
+                        && !str_contains(print_r($params, true), ':');
+                })
+            )
+            ->willReturn([
+                ['bucket_value' => '2020', 'item_count' => 5],
+                ['bucket_value' => '2021', 'item_count' => 3],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->valueBuckets('year', [], 'lib-year-test');
+
+        $this->assertCount(2, $result);
+        $this->assertSame(['value' => '2020', 'count' => 5], $result[0]);
+        $this->assertSame(['value' => '2021', 'count' => 3], $result[1]);
+    }
+
+    public function testValueBucketsRatingFieldCanonicalExpression(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // Rating uses rating_sort column (the pre-computed sort value)
+                    return str_contains($sql, 'rating_sort AS bucket_value')
+                        && str_contains($sql, 'GROUP BY rating_sort')
+                        && str_contains($sql, 'ORDER BY rating_sort ASC');
+                }),
+                $this->anything()
+            )
+            ->willReturn([
+                ['bucket_value' => 'PG', 'item_count' => 10],
+                ['bucket_value' => 'R', 'item_count' => 7],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->valueBuckets('rating', []);
+
+        $this->assertCount(2, $result);
+        $this->assertSame(['value' => 'PG', 'count' => 10], $result[0]);
+    }
+
+    public function testValueBucketsNoSelectStar(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql): bool {
+                    return !str_contains($sql, 'SELECT *')
+                        && str_contains($sql, 'AS bucket_value')
+                        && str_contains($sql, 'COUNT(*) AS item_count');
+                }),
+                $this->anything()
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('year', []);
+    }
+
+    public function testValueBucketsOrderHonored(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // desc order must be reflected in both ORDER BY and GROUP BY (MySQL allows expr DESC in GROUP BY)
+                    return str_contains($sql, 'ORDER BY YEAR(created_at) DESC')
+                        && str_contains($sql, 'GROUP BY YEAR(created_at)');
+                }),
+                $this->anything()
+            )
+            ->willReturn([
+                ['bucket_value' => '2023', 'item_count' => 20],
+                ['bucket_value' => '2020', 'item_count' => 8],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->valueBuckets('year', ['order' => 'desc'], 'lib-desc');
+
+        $this->assertCount(2, $result);
+        // Descending: 2023 first
+        $this->assertSame(['value' => '2023', 'count' => 20], $result[0]);
+    }
+
+    public function testValueBucketsCountSum(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            ['bucket_value' => 'G',      'item_count' => 3],
+            ['bucket_value' => 'PG',    'item_count' => 5],
+            ['bucket_value' => 'PG-13', 'item_count' => 2],
+            ['bucket_value' => 'R',     'item_count' => 10],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->valueBuckets('rating', []);
+
+        $totalFromBuckets = array_sum(array_column($result, 'count'));
+        $this->assertSame(20, $totalFromBuckets);
+        $this->assertCount(4, $result);
+    }
+
+    public function testValueBucketsUnknownFieldDefaultsToName(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // Unknown field 'foobar' falls back to name bucketing (letter expression)
+                    return str_contains($sql, 'UPPER(LEFT(')
+                        && str_contains($sql, 'AS bucket_value')
+                        && str_contains($sql, 'GROUP BY');
+                }),
+                $this->anything()
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->valueBuckets('foobar', []);
+
+        $this->assertIsArray($result);
+    }
+
+    public function testValueBucketsRuntimeFieldUsesRuntimeSort(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return str_contains($sql, 'runtime_sort AS bucket_value')
+                        && str_contains($sql, 'GROUP BY runtime_sort')
+                        && str_contains($sql, 'ORDER BY runtime_sort ASC');
+                }),
+                $this->anything()
+            )
+            ->willReturn([
+                ['bucket_value' => '90', 'item_count' => 4],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('runtime', []);
+    }
+
+    public function testValueBucketsDateAddedFieldUsesDateCreatedAt(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // GROUP BY uses DATE(created_at) for bucketing; ORDER BY uses
+                    // created_at (mirrors buildOrderClause's date_added → created_at mapping).
+                    return str_contains($sql, 'DATE(created_at) AS bucket_value')
+                        && str_contains($sql, 'GROUP BY DATE(created_at)')
+                        && str_contains($sql, 'ORDER BY created_at ASC');
+                }),
+                $this->anything()
+            )
+            ->willReturn([
+                ['bucket_value' => '2024-01-15', 'item_count' => 2],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('date_added', []);
+    }
+
+    public function testValueBucketsBoundedAt200Rows(): void
+    {
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return str_contains($sql, 'LIMIT 200');
+                }),
+                $this->anything()
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('year', []);
+    }
+
+    public function testValueBucketsReusesBuildFiltersWithAllParams(): void
+    {
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    // buildFilters(): libraryId → library_id = ?; search → MATCH/FULLTEXT.
+                    // topLevel is dropped when search is non-empty (matches query() behaviour).
+                    return str_contains($sql, 'library_id = ?')
+                        && str_contains($sql, 'MATCH(name) AGAINST');
+                }),
+                $this->callback(function (array $params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    // libraryId + search term bound as positional placeholders
+                    return is_array($params)
+                        && in_array('lib-multi', $params, true)
+                        && in_array('batman', $params, true);
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->valueBuckets('year', [
+            'topLevel' => true,
+            'search' => 'batman',
+        ], 'lib-multi');
+    }
 }

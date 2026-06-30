@@ -1,0 +1,32 @@
+-- Migration: 044_user_item_like_level.sql
+-- Description: Add `like_level` to user_item_data for the multi-level Love button
+--              (Feature 10).
+--
+-- The per-user Love button has four discrete states (0 = not loved, up to 3 =
+-- most loved). This is a SEPARATE axis from the `favorite` boolean (migration
+-- 039) and from the personal `rating` (1-10, also migration 039): a user can
+-- favorite an item, rate it, and set a like-level independently. `like_level`
+-- is NOT mapped onto `rating` — they are distinct columns with distinct meaning.
+--
+-- It backs:
+--   * PUT /api/v1/media/{id}/like   -- set like_level (body {level:int 0-3})
+--   * GET /api/v1/media/{id}        -- the `user_data` block now carries like_level
+-- via src/Media/UserItemDataRepository.php (Step 10.2+).
+--
+-- NOT NULL DEFAULT 0: every (user, item) row has an explicit like-level; absence
+-- of love is the 0 state, not NULL. Placed AFTER `rating` to keep the per-user
+-- value columns (favorite, rating, like_level) grouped.
+--
+-- The 0-3 range is enforced in PHP (UserItemDataRepository::setLikeLevel throws
+-- InvalidArgumentException, Step 10.2) rather than with a DB CHECK constraint,
+-- matching the 1-10 `rating` range handling in migration 039 (older MySQL
+-- silently ignores CHECK, so DB-level enforcement would be inconsistent).
+--
+-- Idempotent: re-running ADD COLUMN raises "Duplicate column name" error,
+-- which the migration runner downgrades to a note (see
+-- MigrationRunner::isExpectedIdempotentError). MySQL 8 has no IF NOT EXISTS on
+-- ADD COLUMN, so the runner's downgrade is the idempotency mechanism. The single
+-- statement is split on `;` by the quote/comment-aware runner.
+
+ALTER TABLE user_item_data
+    ADD COLUMN like_level TINYINT NOT NULL DEFAULT 0 AFTER rating;

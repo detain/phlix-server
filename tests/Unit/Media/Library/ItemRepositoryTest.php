@@ -257,11 +257,19 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(['canonical_key' => 'hunterxhunter'], $result['metadata']);
 
         // Scoped correctly + parameterised with colon-free positional placeholders.
+        // Since migration 043 the match reads the INDEXED `canonical_key` column
+        // (the source of truth) directly — NOT a JSON_EXTRACT predicate (which
+        // could never use the (library_id, type, canonical_key) index).
         $this->assertIsString($capturedSql);
         $this->assertStringContainsString('parent_id IS NULL', $capturedSql);
         $this->assertStringContainsString('library_id = ?', $capturedSql);
         $this->assertStringContainsString('type = ?', $capturedSql);
-        $this->assertStringContainsString("JSON_EXTRACT(metadata_json, '$.canonical_key')", $capturedSql);
+        $this->assertStringContainsString('canonical_key = ?', $capturedSql);
+        $this->assertStringNotContainsString(
+            'JSON_EXTRACT(metadata_json',
+            $capturedSql,
+            'must match the indexed column, not the JSON blob',
+        );
         $this->assertStringNotContainsString(':', $capturedSql, 'placeholders must be colon-free');
         $this->assertSame(['lib-1', 'series', 'hunterxhunter'], $capturedParams);
     }
@@ -472,11 +480,13 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->stringContains('INSERT INTO media_items'),
                 $this->callback(function ($params) {
-                    return count($params) === 7
+                    // id, library_id, parent_id, name, type, path, canonical_key, metadata_json
+                    return count($params) === 8
                         && $params[1] === 'lib-1'
                         && $params[3] === 'Test Movie'
                         && $params[4] === 'movie'
-                        && $params[5] === '/movies/test.mkv';
+                        && $params[5] === '/movies/test.mkv'
+                        && $params[6] === null; // no canonical_key in metadata → column NULL
                 })
             );
 
@@ -495,6 +505,100 @@ class ItemRepositoryTest extends TestCase
         );
     }
 
+    public function testCreateWritesCanonicalKeyColumnFromMetadataArray(): void
+    {
+        // Migration 043: the scanner stamps metadata_json.canonical_key (Step 1.2);
+        // create() must COPY it into the indexed `canonical_key` column (source of
+        // truth) without disturbing the blob.
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'Hunter x Hunter',
+            'type' => 'series',
+            'path' => 'series:lib-1:hunter-x-hunter',
+            'metadata_json' => ['canonical_key' => 'hunterxhunter', 'name' => 'Hunter x Hunter'],
+        ]);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('canonical_key', $capturedSql);
+        $this->assertIsArray($capturedParams);
+        // canonical_key is the 7th bound value (index 6), the blob the 8th.
+        $this->assertSame('hunterxhunter', $capturedParams[6]);
+        $this->assertIsString($capturedParams[7]);
+        $this->assertStringContainsString('hunterxhunter', $capturedParams[7]); // blob still carries it
+    }
+
+    public function testCreateDerivesCanonicalKeyColumnFromRawJsonStringMetadata(): void
+    {
+        // metadata_json may arrive as a pre-encoded JSON string (legacy callers).
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'Mad Max Fury Road',
+            'type' => 'movie',
+            'path' => '/movies/madmax.mkv',
+            'metadata_json' => '{"canonical_key":"madmaxfuryroad:2015","year":2015}',
+        ]);
+
+        $this->assertIsArray($capturedParams);
+        $this->assertSame('madmaxfuryroad:2015', $capturedParams[6]);
+    }
+
+    public function testCreateLeavesCanonicalKeyColumnNullForBlankOrMissingKey(): void
+    {
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'No Key',
+            'type' => 'movie',
+            'path' => '/movies/nokey.mkv',
+            'metadata_json' => ['canonical_key' => '   ', 'year' => 2000],
+        ]);
+
+        $this->assertIsArray($capturedParams);
+        $this->assertNull($capturedParams[6]);
+    }
+
     public function testUpdateModifiesItem(): void
     {
         $db = $this->createMock(Connection::class);
@@ -509,6 +613,121 @@ class ItemRepositoryTest extends TestCase
 
         $repo = new ItemRepository($db);
         $repo->update('test-id', ['name' => 'New Name']);
+    }
+
+    public function testUpdateSyncsCanonicalKeyColumnWhenMetadataJsonChanges(): void
+    {
+        // A metadata_json (re)write must keep the indexed canonical_key column in
+        // lockstep so findTopLevelByCanonical() never sees a stale column.
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('series-1', [
+            'metadata_json' => ['canonical_key' => 'hunterxhunter:2011', 'year' => 2011],
+        ]);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('canonical_key = ?', $capturedSql);
+        $this->assertStringContainsString('metadata_json = ?', $capturedSql);
+        $this->assertIsArray($capturedParams);
+        // SET canonical_key = ?, metadata_json = ? WHERE id = ?
+        $this->assertSame('hunterxhunter:2011', $capturedParams[0]);
+        $this->assertIsString($capturedParams[1]);
+        $this->assertSame('series-1', $capturedParams[2]);
+    }
+
+    public function testUpdateClearsCanonicalKeyColumnWhenMetadataLosesKey(): void
+    {
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->anything(),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('series-1', [
+            'metadata_json' => ['year' => 2011], // no canonical_key → column NULLed
+        ]);
+
+        $this->assertIsArray($capturedParams);
+        $this->assertNull($capturedParams[0]);
+        $this->assertSame('series-1', $capturedParams[2]);
+    }
+
+    public function testUpdateDoesNotTouchCanonicalKeyColumnWhenMetadataJsonAbsent(): void
+    {
+        // A non-metadata update (e.g. re-parenting) must NOT clobber the column.
+        $capturedSql = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->anything()
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('episode-1', ['parent_id' => 'season-1']);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringNotContainsString('canonical_key', $capturedSql);
+    }
+
+    public function testUpdateHonorsExplicitCanonicalKeyOverDerivedMetadataValue(): void
+    {
+        // If a caller passes canonical_key explicitly AND a metadata_json, the
+        // explicit column value must win (no double-set of the column).
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('series-1', [
+            'metadata_json' => ['canonical_key' => 'from-blob'],
+            'canonical_key' => 'explicit-wins',
+        ]);
+
+        $this->assertIsString($capturedSql);
+        // canonical_key set exactly once (the explicit one), not duplicated.
+        $this->assertSame(1, substr_count($capturedSql, 'canonical_key = ?'));
+        $this->assertIsArray($capturedParams);
+        $this->assertContains('explicit-wins', $capturedParams);
+        $this->assertNotContains('from-blob', $capturedParams);
     }
 
     public function testDeleteRemovesItem(): void

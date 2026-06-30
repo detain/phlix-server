@@ -344,4 +344,47 @@ class DuplicateFinderTest extends TestCase
         sort($duplicateIds);
         $this->assertSame(['s-mid', 's-thin'], $duplicateIds);
     }
+
+    public function testRowsWithBlankOrMissingTypeAreSkippedNotGrouped(): void
+    {
+        // Two rows that would share a canonical key BUT carry a blank/missing
+        // 'type' — the finder skips them (a typeless row can't be classified into
+        // a per-type bucket), so they never collapse into a group.
+        $rows = [
+            $this->row('t-blank', 'Hunter x Hunter', '', ['canonical_key' => 'hunterxhunter']),
+            [
+                'id' => 't-missing',
+                'library_id' => 'lib-1',
+                'parent_id' => null,
+                'name' => 'HunterxHunter',
+                'metadata' => ['canonical_key' => 'hunterxhunter'],
+                // no 'type' key at all
+            ],
+        ];
+        $repo = $this->makeRepo($rows, ['t-blank' => 10, 't-missing' => 10]);
+
+        $groups = (new DuplicateFinder($repo))->findForLibrary('lib-1');
+
+        $this->assertSame([], $groups, 'rows with a blank/missing type must never be grouped');
+    }
+
+    public function testPrimaryTiebreakPicksSmallerIdEvenWhenItAppearsLater(): void
+    {
+        // Equal descendant counts: the deterministic tiebreak must pick the
+        // lexicographically-smallest id REGARDLESS of bucket order. Here the
+        // smaller id ('aaa') is the SECOND row, so the tiebreak must REASSIGN the
+        // primary away from the first row ('zzz') — exercising the equal-count,
+        // smaller-id reassignment branch.
+        $rows = [
+            $this->row('zzz', 'Show', 'series', ['canonical_key' => 'show']),
+            $this->row('aaa', 'SHOW', 'series', ['canonical_key' => 'show']),
+        ];
+        $repo = $this->makeRepo($rows, ['zzz' => 7, 'aaa' => 7]);
+
+        $groups = (new DuplicateFinder($repo))->findForLibrary('lib-1');
+
+        $this->assertCount(1, $groups);
+        $this->assertSame('aaa', $groups[0]['primary']['id'], 'tie → smallest id wins even when it is later');
+        $this->assertSame('zzz', $groups[0]['duplicates'][0]['id']);
+    }
 }

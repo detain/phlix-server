@@ -275,6 +275,121 @@ class ItemRepositoryTest extends TestCase
         $this->assertNull($repo->findTopLevelByCanonical('lib-1', 'movie', 'nomatch:2020'));
     }
 
+    public function testGetTopLevelByLibraryPagesParentlessRowsScopedAndOrdered(): void
+    {
+        // Real getTopLevelByLibrary() body: scoped to library + parent_id IS NULL,
+        // stable id-ASC order (so paging never skips/repeats), colon-free
+        // positional placeholders, LIMIT ? OFFSET ?, hydrated rows.
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            )
+            ->willReturn([
+                [
+                    'id' => 'series-a',
+                    'name' => 'Alpha',
+                    'type' => 'series',
+                    'library_id' => 'lib-1',
+                    'parent_id' => null,
+                    'metadata_json' => '{"canonical_key": "alpha"}',
+                ],
+                [
+                    'id' => 'series-b',
+                    'name' => 'Bravo',
+                    'type' => 'series',
+                    'library_id' => 'lib-1',
+                    'parent_id' => null,
+                    'metadata_json' => '{"year": 2011}',
+                ],
+            ]);
+
+        $repo = new ItemRepository($db);
+        $rows = $repo->getTopLevelByLibrary('lib-1', 2, 4);
+
+        // Hydrated: each row carries a decoded 'metadata' array.
+        $this->assertCount(2, $rows);
+        $this->assertSame('series-a', $rows[0]['id']);
+        $this->assertSame(['canonical_key' => 'alpha'], $rows[0]['metadata']);
+        $this->assertSame(['year' => 2011], $rows[1]['metadata']);
+
+        // SQL contract: scoped, ordered, paged, colon-free positional placeholders.
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('library_id = ?', $capturedSql);
+        $this->assertStringContainsString('parent_id IS NULL', $capturedSql);
+        $this->assertStringContainsString('ORDER BY id ASC', $capturedSql);
+        $this->assertStringContainsString('LIMIT ? OFFSET ?', $capturedSql);
+        $this->assertStringNotContainsString(':', $capturedSql, 'placeholders must be colon-free');
+        $this->assertSame(['lib-1', 2, 4], $capturedParams);
+    }
+
+    public function testGetTopLevelByLibraryReturnsEmptyPastTheEnd(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame([], $repo->getTopLevelByLibrary('lib-1', 500, 1000));
+    }
+
+    public function testCountDescendantsUsesRecursiveCteScopedToTheSubtree(): void
+    {
+        // Real countDescendants() body: a single WITH RECURSIVE walk over
+        // parent_id (anchor = direct children of $itemId, recursive = deeper
+        // levels), counted in one query, colon-free positional placeholder.
+        $capturedSql = null;
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function ($sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            )
+            ->willReturn([['count' => 100]]);
+
+        $repo = new ItemRepository($db);
+        $count = $repo->countDescendants('series-big');
+
+        $this->assertSame(100, $count);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('WITH RECURSIVE descendants AS', $capturedSql);
+        $this->assertStringContainsString('SELECT id FROM media_items WHERE parent_id = ?', $capturedSql);
+        $this->assertStringContainsString('UNION ALL', $capturedSql);
+        $this->assertStringContainsString('JOIN descendants d ON mi.parent_id = d.id', $capturedSql);
+        $this->assertStringContainsString('SELECT COUNT(*) AS count FROM descendants', $capturedSql);
+        $this->assertStringNotContainsString(':', $capturedSql, 'placeholders must be colon-free');
+        $this->assertSame(['series-big'], $capturedParams);
+    }
+
+    public function testCountDescendantsReturnsZeroForALeaf(): void
+    {
+        // A movie/leaf has no children → the CTE yields a 0 count (and a
+        // numeric-string count from the driver is tolerated as int 0).
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['count' => '0']]);
+
+        $repo = new ItemRepository($db);
+        $this->assertSame(0, $repo->countDescendants('movie-1'));
+    }
+
     public function testFindByParentReturnsChildren(): void
     {
         $db = $this->createMock(Connection::class);

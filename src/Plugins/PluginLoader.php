@@ -10,6 +10,7 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Version;
+use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
@@ -18,6 +19,7 @@ use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
 use Phlix\Plugins\Util\RecursiveDelete;
+use Phlix\Shared\Metadata\MetadataSourceInterface;
 use Phlix\Shared\Plugin\EventNameMap;
 use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
@@ -76,6 +78,7 @@ class PluginLoader
         private readonly ContainerInterface $container,
         private readonly AuditLogger $auditLogger,
         private ?StructuredLogger $logger = null,
+        private readonly ?SourceRegistry $sourceRegistry = null,
     ) {
     }
 
@@ -298,6 +301,18 @@ class PluginLoader
         $this->activeSubscriptions[$name] = $subscriptions;
         $this->entryInstances[$name] = $instance;
 
+        // First-class metadata-source registration (Step 3.5). Replaces the
+        // brittle per-plugin `method_exists($manager,'registerProvider')`/FQCN
+        // container-sniffing the anidb/myanimelist plugins used to do in their
+        // own onEnable(): if the entry instance implements the shared typed
+        // contract, the host registers it here, sniff-free. Deregistered in
+        // disable() for a leak-free enable/disable cycle.
+        $registeredSource = null;
+        if ($this->sourceRegistry !== null && $instance instanceof MetadataSourceInterface) {
+            $this->sourceRegistry->register($instance);
+            $registeredSource = $instance->sourceName();
+        }
+
         $this->repository->setEnabled($name, true);
 
         $this->auditLogger->logPluginAction(
@@ -309,6 +324,7 @@ class PluginLoader
         $this->logger()->info('plugin enabled', [
             'plugin' => $name,
             'subscriptions' => count($subscriptions),
+            'metadata_source' => $registeredSource,
         ]);
     }
 
@@ -332,6 +348,13 @@ class PluginLoader
 
         $instance = $this->entryInstances[$name] ?? null;
         if ($instance !== null) {
+            // Deregister the metadata source first (Step 3.5) so the registry
+            // never holds a reference to a plugin that is on its way down — the
+            // mirror of the enable()-time register(). Truly removes the entry
+            // (no leak across enable/disable cycles).
+            if ($this->sourceRegistry !== null && $instance instanceof MetadataSourceInterface) {
+                $this->sourceRegistry->deregisterInstance($instance);
+            }
             try {
                 $instance->onDisable();
             } catch (Throwable $e) {

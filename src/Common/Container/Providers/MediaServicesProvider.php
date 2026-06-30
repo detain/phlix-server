@@ -245,15 +245,23 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // Cross-source movie metadata resolver (TMDB + IMDb). TmdbProvider is
             // built by the factory above (admin-managed key, env/config
             // fallback); ImdbLookup is autowired; the optional logger defaults to
-            // the MEDIA channel.
+            // the MEDIA channel. The effective PriorityConfig (Step 3.3) drives
+            // per-field source precedence (Step 3.4) — named because PHP-DI skips
+            // defaulted optional ctor params during autowiring; the
+            // PriorityFieldResolver is a pure default-constructed instance.
             MovieMetadataResolver::class => autowire()
                 ->constructorParameter('tmdb', get(TmdbProvider::class))
-                ->constructorParameter('imdb', get(ImdbLookup::class)),
+                ->constructorParameter('imdb', get(ImdbLookup::class))
+                ->constructorParameter('priorityConfig', get(PriorityConfig::class)),
 
             // TV series resolver (TMDB TV). Shares the admin-keyed TmdbProvider so
-            // series/season/episode matching uses the same API key as movies.
+            // series/season/episode matching uses the same API key as movies. The
+            // effective PriorityConfig is injected (named) for the genres mode; the
+            // series path stays TMDB-only (Step 3.4), so no other source can
+            // contribute a field regardless of the configured order.
             SeriesMetadataResolver::class => autowire()
-                ->constructorParameter('tmdb', get(TmdbProvider::class)),
+                ->constructorParameter('tmdb', get(TmdbProvider::class))
+                ->constructorParameter('priorityConfig', get(PriorityConfig::class)),
 
             // Background per-library metadata matcher run for `metadata`-type
             // scan jobs. Its ItemRepository + resolver deps are resolvable above;

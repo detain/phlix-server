@@ -89,8 +89,19 @@ public/
   plugin: [`detain/phlix-plugin-example`](https://github.com/detain/phlix-plugin-example).
 - **Shared interfaces / DTOs in `detain/phlix-shared`**: framework-neutral
   Composer package shared with `phlix-hub`. `Phlix\Shared\Plugin\*`,
-  `Phlix\Shared\Events\*`, `Phlix\Shared\Auth\JwtClaims`, and
+  `Phlix\Shared\Events\*`, `Phlix\Shared\Auth\JwtClaims`,
+  `Phlix\Shared\Metadata\MetadataSourceInterface` (the typed metadata-source
+  plugin contract, since `phlix-shared` 0.15.0), and
   `Phlix\Shared\Hub\*` DTOs live there since `phlix-server` 0.11.0.
+- **Library matching & de-duplication**: filename→title cleaning strips
+  multi-word noise suffixes (`Directors Cut`, `YIFY`, …) before metadata
+  matching (admin-tunable via `matching.noise_suffixes`); a canonical-key
+  resolver prevents duplicate top-level series/movies at scan time; and the
+  admin **Duplicates** page + `scripts/dedup-series.php` merge historical
+  duplicates. Metadata source order is configurable per media type via the
+  `metadata.provider_priority` setting. See
+  [phlix-docs / admin / library-management](https://detain.github.io/phlix-docs/admin/library-management)
+  and [phlix-docs / admin / server-settings](https://detain.github.io/phlix-docs/admin/server-settings).
 
 ### Web Portal
 - **Smarty-based Templates**: Server-side rendered HTML pages using Smarty

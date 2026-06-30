@@ -13,6 +13,7 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\MetadataManager;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Playlists\SmartPlaylistController;
@@ -156,5 +157,101 @@ final class MediaServicesProviderTest extends TestCase
         /** @var list<string> $resolved */
         $resolved = $container->get('matching.noise_suffixes');
         $this->assertSame(array_values(TitleSuffixStripper::NOISE_SUFFIXES), $resolved);
+    }
+
+    /**
+     * Step 3.3: the PriorityConfig definition merges the admin
+     * `metadata.provider_priority` override per-type OVER the config default
+     * (REPLACE-not-deep-merge) and applies the `metadata.genres_mode` override.
+     */
+    public function test_priority_config_definition_merges_override_over_default(): void
+    {
+        $defaultMap = [
+            'movie'  => ['tmdb', 'imdb'],
+            'series' => ['tmdb', 'imdb'],
+            'anime'  => ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
+        ];
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getDefault')
+            ->with('metadata.provider_priority')
+            ->willReturn($defaultMap);
+        $settings->method('getOverride')
+            ->with('metadata.provider_priority')
+            ->willReturn(['value' => ['movie' => ['imdb', 'tmdb']], 'type' => 'json']);
+        $settings->method('getEffective')
+            ->with('metadata.genres_mode')
+            ->willReturn('union');
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+        $builder->addDefinitions([SettingsRepository::class => $settings]);
+
+        $container = $builder->build();
+
+        $config = $container->get(PriorityConfig::class);
+        $this->assertInstanceOf(PriorityConfig::class, $config);
+        // Movie order replaced by the override.
+        $this->assertSame(['imdb', 'tmdb'], $config->orderFor('movie'));
+        // Untouched types keep their config default.
+        $this->assertSame(['tmdb', 'imdb'], $config->orderFor('series'));
+        $this->assertSame(
+            ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
+            $config->orderFor('anime'),
+        );
+        $this->assertSame('union', $config->genresMode());
+    }
+
+    /**
+     * Step 3.3: with no override and no genres_mode override, PriorityConfig
+     * uses the config defaults (genres_mode 'first').
+     */
+    public function test_priority_config_definition_uses_config_default_without_override(): void
+    {
+        $defaultMap = [
+            'movie'  => ['tmdb', 'imdb'],
+            'series' => ['tmdb', 'imdb'],
+        ];
+
+        $settings = $this->createMock(SettingsRepository::class);
+        $settings->method('getDefault')
+            ->with('metadata.provider_priority')
+            ->willReturn($defaultMap);
+        $settings->method('getOverride')
+            ->with('metadata.provider_priority')
+            ->willReturn(null);
+        $settings->method('getEffective')
+            ->with('metadata.genres_mode')
+            ->willReturn('first');
+
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+        $builder->addDefinitions([SettingsRepository::class => $settings]);
+
+        $container = $builder->build();
+
+        $config = $container->get(PriorityConfig::class);
+        $this->assertSame(['tmdb', 'imdb'], $config->orderFor('movie'));
+        $this->assertSame('first', $config->genresMode());
+    }
+
+    /**
+     * Step 3.3: without any SettingsRepository, PriorityConfig still resolves and
+     * orderFor() falls back to the canonical [tmdb, imdb] baseline.
+     */
+    public function test_priority_config_definition_falls_back_without_settings_repository(): void
+    {
+        $builder = new ContainerBuilder();
+        $builder->useAutowiring(true);
+        (new MediaServicesProvider())->register($builder, []);
+
+        $container = $builder->build();
+
+        $config = $container->get(PriorityConfig::class);
+        $this->assertInstanceOf(PriorityConfig::class, $config);
+        $this->assertSame(['tmdb', 'imdb'], $config->orderFor('movie'));
+        $this->assertSame('first', $config->genresMode());
     }
 }

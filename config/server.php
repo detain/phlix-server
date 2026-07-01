@@ -56,6 +56,14 @@ return [
     // real enabled/source/cache_dir instead of bare defaults.
     'theme_music' => require __DIR__ . '/theme_music.php',
 
+    // Metrics / live-traffic telemetry config (Step S1). Sourced here so
+    // MetricsServicesProvider (which reads $config['metrics']) constructs the
+    // registry/collector/flush-service/repository with the real
+    // enabled/bucket/retention knobs instead of bare defaults. Reaches BOTH
+    // entry points (public/index.php CGI path and the Workerman daemon in
+    // start.php), exactly like the ffmpeg/hub/relay/theme_music sub-arrays.
+    'metrics' => require __DIR__ . '/metrics.php',
+
     // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
     // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the
     // TranscodeManager writes there and HlsController/HlsStreamer read from the

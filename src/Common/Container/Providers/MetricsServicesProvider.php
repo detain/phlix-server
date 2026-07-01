@@ -1,0 +1,231 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Common\Container\Providers;
+
+use DI\ContainerBuilder;
+use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Stats\Metrics\MetricsCollector;
+use Phlix\Stats\Metrics\MetricsFlushService;
+use Phlix\Stats\Metrics\MetricsRegistry;
+use Phlix\Stats\Metrics\MetricsRepository;
+use Psr\Container\ContainerInterface;
+use Workerman\MySQL\Connection;
+
+use function DI\factory;
+
+/**
+ * Registers the metrics / live-traffic telemetry subsystem
+ * ({@see \Phlix\Stats\Metrics}).
+ *
+ * All four services are registered as SHARED (singleton) instances so that a
+ * single {@see MetricsRegistry} lives per forked worker: the request /
+ * WebSocket hooks (wired in step S2) write into the very same registry that the
+ * per-worker flush timer drains. If any of these were re-instantiated per
+ * resolution the collector's counters would be silently dropped on every flush.
+ *
+ * Configuration is read from `$appConfig['metrics']` (threaded in by
+ * config/server.php so it reaches BOTH entry points — the public/index.php CGI
+ * path and the Workerman daemon in start.php). When that sub-array is absent
+ * (e.g. a bare unit-test container) the provider falls back to a direct include
+ * of config/metrics.php, and finally to the classes' own built-in defaults, so
+ * the bindings always resolve.
+ *
+ * The registry constructor takes decomposed tuning knobs
+ * (`bucket_seconds`, `latency_buckets_ms`, `route_cardinality_cap`); the flush
+ * service and repository take the raw config array (they read
+ * `retention_days` / `connection_ttl_seconds` / `flush_interval_seconds`
+ * themselves). The collector is fed the `enabled` master switch and the default
+ * `time()` clock — tests inject their own registry/clock directly rather than
+ * through the container.
+ *
+ * @internal Phlix-internal service provider; consumed by ContainerFactory only.
+ *
+ * @package Phlix\Common\Container\Providers
+ * @since S1
+ */
+final class MetricsServicesProvider implements ServiceProviderInterface
+{
+    /**
+     * Register the metrics bindings.
+     *
+     * @param ContainerBuilder<\DI\Container> $builder
+     * @param array<string, mixed>            $appConfig
+     *
+     * @return void
+     *
+     * @since S1
+     */
+    public function register(ContainerBuilder $builder, array $appConfig): void
+    {
+        $config = $this->resolveConfig($appConfig);
+
+        $enabled             = $this->cfgBool($config, 'enabled', true);
+        $bucketSeconds       = $this->cfgInt($config, 'bucket_seconds', 10);
+        $routeCardinalityCap = $this->cfgInt($config, 'route_cardinality_cap', 200);
+        $latencyBuckets      = $this->cfgIntList(
+            $config,
+            'latency_buckets_ms',
+            [10, 50, 100, 250, 500, 1000, 2500, 5000]
+        );
+
+        $builder->addDefinitions([
+            // One in-RAM accumulator per worker. SHARED so the hooks and the
+            // flush timer share the same counters (PHP-DI treats factory
+            // definitions as singletons by default).
+            MetricsRegistry::class => factory(
+                static fn (): MetricsRegistry => new MetricsRegistry(
+                    $bucketSeconds,
+                    $latencyBuckets,
+                    $routeCardinalityCap
+                )
+            ),
+
+            // Thin façade over the shared registry, injected into the request /
+            // connection hooks (S2). The `enabled` flag makes every record call a
+            // no-op when metrics are disabled; the clock defaults to time().
+            MetricsCollector::class => factory(
+                static function (ContainerInterface $c) use ($enabled): MetricsCollector {
+                    /** @var MetricsRegistry $registry */
+                    $registry = $c->get(MetricsRegistry::class);
+                    return new MetricsCollector($registry, $enabled);
+                }
+            ),
+
+            // Drains the registry to MySQL on the per-worker flush timer (S2).
+            // Shares the same collector (hence the same registry) and reads its
+            // own tuning knobs from the raw config array.
+            MetricsFlushService::class => factory(
+                static function (ContainerInterface $c) use ($config): MetricsFlushService {
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var MetricsCollector $collector */
+                    $collector = $c->get(MetricsCollector::class);
+                    return new MetricsFlushService($db, $collector, $config);
+                }
+            ),
+
+            // Read side consumed by the admin controller (S2). Aggregates the
+            // per-worker rows written by the flush service.
+            MetricsRepository::class => factory(
+                static function (ContainerInterface $c) use ($config): MetricsRepository {
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    return new MetricsRepository($db, $config);
+                }
+            ),
+        ]);
+    }
+
+    /**
+     * Resolve the effective metrics config array.
+     *
+     * Prefers `$appConfig['metrics']` (threaded in by config/server.php); falls
+     * back to a direct include of config/metrics.php so an entry point that does
+     * not compose the full server.php still gets the real defaults; finally
+     * yields an empty array (the classes supply their own built-in defaults).
+     *
+     * @param array<string, mixed> $appConfig
+     *
+     * @return array<string, mixed>
+     */
+    private function resolveConfig(array $appConfig): array
+    {
+        $raw = $appConfig['metrics'] ?? null;
+        if (!is_array($raw)) {
+            /** @var mixed $included */
+            $included = @include __DIR__ . '/../../../../config/metrics.php';
+            $raw = is_array($included) ? $included : [];
+        }
+
+        /** @var array<string, mixed> $out */
+        $out = [];
+        /** @var mixed $value */
+        foreach ($raw as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Read a boolean config value with a default.
+     *
+     * @param array<string, mixed> $config
+     * @param string               $key
+     * @param bool                 $default
+     *
+     * @return bool
+     */
+    private function cfgBool(array $config, string $key, bool $default): bool
+    {
+        $v = $config[$key] ?? null;
+        if (is_bool($v)) {
+            return $v;
+        }
+        if (is_int($v)) {
+            return $v !== 0;
+        }
+        if (is_string($v)) {
+            return in_array(strtolower($v), ['1', 'true', 'yes', 'on'], true);
+        }
+        return $default;
+    }
+
+    /**
+     * Read an int config value with a default.
+     *
+     * @param array<string, mixed> $config
+     * @param string               $key
+     * @param int                  $default
+     *
+     * @return int
+     */
+    private function cfgInt(array $config, string $key, int $default): int
+    {
+        $v = $config[$key] ?? null;
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_string($v) && is_numeric($v)) {
+            return (int) $v;
+        }
+        return $default;
+    }
+
+    /**
+     * Read a list of ints from config with a default, dropping non-numeric
+     * entries. The registry sorts + de-defaults the list itself, so this only
+     * has to produce a clean `list<int>`.
+     *
+     * @param array<string, mixed> $config
+     * @param string               $key
+     * @param list<int>            $default
+     *
+     * @return list<int>
+     */
+    private function cfgIntList(array $config, string $key, array $default): array
+    {
+        $v = $config[$key] ?? null;
+        if (!is_array($v)) {
+            return $default;
+        }
+
+        $out = [];
+        /** @var mixed $entry */
+        foreach ($v as $entry) {
+            if (is_int($entry)) {
+                $out[] = $entry;
+            } elseif (is_string($entry) && is_numeric($entry)) {
+                $out[] = (int) $entry;
+            } elseif (is_float($entry)) {
+                $out[] = (int) $entry;
+            }
+        }
+
+        return $out !== [] ? $out : $default;
+    }
+}

@@ -25,6 +25,7 @@ use Phlix\Server\WebPortal\Controllers\PluginAdminPageController;
 use Phlix\Server\WebPortal\Controllers\SharedUiController;
 use Phlix\Server\WebPortal\PageRenderer;
 use Phlix\Server\WebPortal\WebPortalRouter;
+use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Theming\ThemeMiddleware;
 use Psr\Container\ContainerInterface;
 use Throwable;
@@ -56,6 +57,7 @@ final class HttpHandler
         private readonly RequestAuthenticator $authenticator,
         private readonly string $publicRoot,
         private readonly Application $application,
+        private readonly ?MetricsCollector $metrics = null,
     ) {
     }
 
@@ -64,6 +66,11 @@ final class HttpHandler
      */
     public function __invoke(TcpConnection $connection, WorkermanRequest $wr): void
     {
+        $startBytesRead = $connection->bytesRead;
+        $startBytesWritten = $connection->bytesWritten;
+        $startTime = microtime(true);
+        $responseStatus = 200;
+
         try {
             $request = Request::fromWorkerman($wr, $connection);
 
@@ -93,6 +100,7 @@ final class HttpHandler
             // browsers auto-send cookies on cross-origin requests.
             if ($this->authenticator->isCookieAuthenticated($request)) {
                 if (!$this->authenticator->validateCsrfOrigin($request)) {
+                    $responseStatus = 403;
                     $body = json_encode([
                         'error' => 'CSRF validation failed',
                         'code' => 'csrf.invalid_origin',
@@ -166,6 +174,7 @@ final class HttpHandler
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
             $connection->send($cors->decorate($request, $response)->toWorkermanResponse());
         } catch (Throwable $e) {
+            $responseStatus = 500;
             LoggerFactory::get(LogChannels::HTTP)->error(
                 'Unhandled exception in HTTP worker',
                 [
@@ -180,6 +189,20 @@ final class HttpHandler
                 ['Content-Type' => 'text/html; charset=utf-8'],
                 '<h1>500 Internal Server Error</h1>',
             ));
+        } finally {
+            if ($this->metrics !== null && $this->metrics->isEnabled()) {
+                $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
+                $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
+                $elapsedMs = (microtime(true) - $startTime) * 1000;
+                $this->metrics->recordRequest(
+                    $request->method ?? 'GET',
+                    $request->path ?? '/',
+                    $responseStatus,
+                    $elapsedMs,
+                    $bytesIn,
+                    $bytesOut,
+                );
+            }
         }
     }
 

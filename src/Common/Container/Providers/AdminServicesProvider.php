@@ -21,6 +21,7 @@ use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
 use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
+use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
@@ -70,6 +71,7 @@ final class AdminServicesProvider implements ServiceProviderInterface
         $builder->addDefinitions([
             StatsCollector::class    => autowire(),
             StatsController::class   => autowire(),
+            MetricsController::class => autowire(),
 
             DashboardService::class    => autowire(),
             DashboardController::class => autowire(),

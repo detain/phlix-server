@@ -344,7 +344,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
             LibraryScanWorker::class => autowire()
                 ->constructorParameter('metadataMatcher', get(LibraryMetadataMatcher::class)),
 
-            MetadataManager::class => autowire(),
+            // Per-provider metadata coordinator. The LibraryManager is injected
+            // (named — PHP-DI skips defaulted optional ctor params) so getImages
+            // results are filtered to the library's enabled `options.image_types`
+            // (M5) before being stored in metadata_json.images.{provider}.
+            MetadataManager::class => autowire()
+                ->constructorParameter('libraries', get(LibraryManager::class)),
 
             // Process-scoped registry of PLUGIN metadata sources
             // (MetadataSourceInterface). Single container-scoped instance —

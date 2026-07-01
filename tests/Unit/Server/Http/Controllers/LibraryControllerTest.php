@@ -558,6 +558,57 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * Regression: clearing metadata_priority AND setting image_types in the SAME
+     * update must not resurrect the cleared priority. Previously the two option
+     * blocks each re-seeded their merge base from the original row, so the
+     * image_types overlay re-introduced the just-cleared metadata_priority.
+     */
+    public function testUpdateClearingPriorityWhileSettingImagesDoesNotResurrectPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'options' => [
+                    'metadata_priority' => ['tmdb', 'local'],
+                    'series_per_directory' => true,
+                ],
+            ]);
+
+        $captured = null;
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function ($data) use (&$captured): bool {
+                $captured = $data;
+                return true;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['metadata_priority' => null, 'image_types' => ['poster' => true]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($captured);
+        $this->assertIsArray($captured['options']);
+        // The cleared priority must be GONE...
+        $this->assertArrayNotHasKey('metadata_priority', $captured['options']);
+        // ...image_types must be persisted...
+        $this->assertArrayHasKey('image_types', $captured['options']);
+        $this->assertTrue($captured['options']['image_types']['poster']);
+        // ...and unrelated options preserved.
+        $this->assertTrue($captured['options']['series_per_directory']);
+    }
+
+    /**
      * Negative: update() returns 404 when library not found.
      */
     public function testUpdateReturns404WhenLibraryNotFound(): void
@@ -1380,5 +1431,227 @@ class LibraryControllerTest extends TestCase
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertStringContainsString('metadata_priority', $body['error']);
+    }
+
+    // ------------------------------------------------------------------
+    // image_types (M5) — per-library artwork selection
+    // ------------------------------------------------------------------
+
+    /**
+     * create() persists an `image_types` selection into options as the canonical
+     * `{type: bool}` storage map (every known type present, unknowns dropped).
+     */
+    public function testCreatePersistsImageTypesSelection(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with(
+                'Movies',
+                'movie',
+                ['/mnt/movies'],
+                $this->callback(static function (mixed $options): bool {
+                    if (!is_array($options) || !isset($options['image_types'])) {
+                        return false;
+                    }
+                    $map = $options['image_types'];
+                    // Storage map: poster ON (sent), backdrop OFF (sent false),
+                    // logo ON (sent), and an unknown key dropped entirely.
+                    return is_array($map)
+                        && ($map['poster'] ?? null) === true
+                        && ($map['backdrop'] ?? null) === false
+                        && ($map['logo'] ?? null) === true
+                        && !array_key_exists('bogus', $map)
+                        // Every canonical type is present with an explicit bool.
+                        && array_key_exists('disc', $map)
+                        && ($map['disc'] ?? null) === false;
+                })
+            )
+            ->willReturn('img-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            'image_types' => [
+                'poster' => true,
+                'backdrop' => false,
+                'logo' => true,
+                'bogus' => true,
+            ],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * update() merges an `image_types` selection into the EXISTING options blob
+     * without clobbering unrelated keys (metadata_priority, series_per_directory).
+     */
+    public function testUpdateMergesImageTypesWithoutClobberingOtherOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Anime',
+                'type' => 'series',
+                'options' => [
+                    'metadata_priority' => ['series' => ['tvdb', 'tmdb']],
+                    'series_per_directory' => true,
+                ],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data) || !is_array($data['options'] ?? null)) {
+                    return false;
+                }
+                $options = $data['options'];
+                // The top-level image_types key is stripped before delegating.
+                if (array_key_exists('image_types', $data)) {
+                    return false;
+                }
+                $map = $options['image_types'] ?? null;
+                return is_array($map)
+                    && ($map['poster'] ?? null) === true
+                    && ($map['backdrop'] ?? null) === false
+                    // Unrelated options are preserved untouched.
+                    && ($options['metadata_priority'] ?? null) === ['series' => ['tvdb', 'tmdb']]
+                    && ($options['series_per_directory'] ?? null) === true;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['image_types' => ['poster' => true, 'backdrop' => false]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() accepts a list-shaped `image_types` nested inside `options` and
+     * stores the canonical storage map, preserving other options.
+     */
+    public function testUpdateAcceptsNestedListShapeImageTypes(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data) || !is_array($data['options'] ?? null)) {
+                    return false;
+                }
+                $options = $data['options'];
+                $map = $options['image_types'] ?? null;
+                return is_array($map)
+                    && ($map['poster'] ?? null) === true
+                    && ($map['banner'] ?? null) === true
+                    && ($map['backdrop'] ?? null) === false
+                    && ($options['scan_interval'] ?? null) === 3600;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        // List shape nested inside options.
+        $request->body = ['options' => ['image_types' => ['poster', 'banner']]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * A null `image_types` CLEARS the selection (removes the key so the library
+     * falls back to ImageType::defaults()).
+     */
+    public function testUpdateNullImageTypesClearsSelection(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['image_types' => ['poster' => true], 'scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data) || !is_array($data['options'] ?? null)) {
+                    return false;
+                }
+                // Key removed; unrelated option preserved.
+                return !array_key_exists('image_types', $data['options'])
+                    && ($data['options']['scan_interval'] ?? null) === 3600;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['image_types' => null];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * A non-array `image_types` value is rejected with 400.
+     */
+    public function testUpdateRejectsMalformedImageTypes(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->method('getLibrary')->with('lib-1')->willReturn([
+            'id' => 'lib-1',
+            'name' => 'Movies',
+            'type' => 'movie',
+            'options' => [],
+        ]);
+        $libraryManager->expects($this->never())->method('updateLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['image_types' => 'not-an-array'];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertStringContainsString('image_types', $body['error']);
     }
 }

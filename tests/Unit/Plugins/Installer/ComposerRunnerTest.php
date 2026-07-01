@@ -258,4 +258,90 @@ final class ComposerRunnerTest extends TestCase
         $runner->install($this->tmpDir);
         $this->assertTrue(true); // reached without exception
     }
+
+    private function okComposer(): string
+    {
+        $fake = $this->tmpDir . '/ok-composer.sh';
+        file_put_contents($fake, "#!/usr/bin/env bash\nexit 0\n");
+        chmod($fake, 0755);
+        return $fake;
+    }
+
+    public function test_install_forces_no_api_on_github_vcs_repositories(): void
+    {
+        // A GitHub vcs repo without no-api is the exact shape that makes a
+        // token-less host hit the API rate limit + SSH fallback. The runner
+        // must rewrite it to no-api:true before invoking composer.
+        file_put_contents(
+            $this->tmpDir . '/composer.json',
+            (string) json_encode([
+                'name' => 'phlix/test',
+                'repositories' => [
+                    ['type' => 'vcs', 'url' => 'https://github.com/detain/phlix-shared.git'],
+                ],
+            ], JSON_PRETTY_PRINT),
+        );
+
+        $runner = new ComposerRunner(30, $this->okComposer(), $this->createMock(StructuredLogger::class));
+        $runner->install($this->tmpDir);
+
+        /** @var array{repositories: array<int, array<string, mixed>>} $data */
+        $data = json_decode((string) file_get_contents($this->tmpDir . '/composer.json'), true);
+        $this->assertTrue($data['repositories'][0]['no-api']);
+    }
+
+    public function test_install_leaves_non_github_and_non_vcs_repositories_untouched(): void
+    {
+        file_put_contents(
+            $this->tmpDir . '/composer.json',
+            (string) json_encode([
+                'name' => 'phlix/test',
+                'repositories' => [
+                    ['type' => 'vcs', 'url' => 'https://gitlab.example.com/foo/bar.git'],
+                    ['type' => 'path', 'url' => '../local-pkg'],
+                ],
+            ], JSON_PRETTY_PRINT),
+        );
+
+        $runner = new ComposerRunner(30, $this->okComposer(), $this->createMock(StructuredLogger::class));
+        $runner->install($this->tmpDir);
+
+        /** @var array{repositories: array<int, array<string, mixed>>} $data */
+        $data = json_decode((string) file_get_contents($this->tmpDir . '/composer.json'), true);
+        $this->assertArrayNotHasKey('no-api', $data['repositories'][0]);
+        $this->assertArrayNotHasKey('no-api', $data['repositories'][1]);
+    }
+
+    public function test_install_seeds_github_https_protocol_config(): void
+    {
+        file_put_contents($this->tmpDir . '/composer.json', '{}');
+
+        $runner = new ComposerRunner(30, $this->okComposer(), $this->createMock(StructuredLogger::class));
+        $runner->install($this->tmpDir);
+
+        $cfgFile = $this->tmpDir . '/.composer/config.json';
+        $this->assertFileExists($cfgFile);
+        /** @var array{config: array{github-protocols: array<int, string>}} $cfg */
+        $cfg = json_decode((string) file_get_contents($cfgFile), true);
+        $this->assertSame(['https'], $cfg['config']['github-protocols']);
+    }
+
+    public function test_install_writes_auth_json_when_github_token_present(): void
+    {
+        file_put_contents($this->tmpDir . '/composer.json', '{}');
+
+        putenv('PHLIX_GITHUB_TOKEN=ghp_testtoken123');
+        try {
+            $runner = new ComposerRunner(30, $this->okComposer(), $this->createMock(StructuredLogger::class));
+            $runner->install($this->tmpDir);
+
+            $authFile = $this->tmpDir . '/.composer/auth.json';
+            $this->assertFileExists($authFile);
+            /** @var array{github-oauth: array{'github.com': string}} $auth */
+            $auth = json_decode((string) file_get_contents($authFile), true);
+            $this->assertSame('ghp_testtoken123', $auth['github-oauth']['github.com']);
+        } finally {
+            putenv('PHLIX_GITHUB_TOKEN');
+        }
+    }
 }

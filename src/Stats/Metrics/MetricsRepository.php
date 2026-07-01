@@ -23,7 +23,7 @@ use Workerman\MySQL\Connection;
  * @package Phlix\Stats\Metrics
  * @since S1
  */
-final class MetricsRepository
+final class MetricsRepository implements MetricsRepositoryInterface
 {
     /**
      * Histogram column name => its upper bound (ms). The final entry is the

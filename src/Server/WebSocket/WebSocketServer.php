@@ -10,6 +10,7 @@ use Phlix\Auth\JwtHandler;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Stats\Metrics\MetricsCollector;
 
 /**
  * WebSocket server implementation for real-time communication.
@@ -40,6 +41,9 @@ class WebSocketServer
 
     /** @var array<string, mixed> Server configuration */
     private array $config;
+
+    /** @var MetricsCollector|null Metrics collector for connection tracking */
+    private ?MetricsCollector $metrics = null;
 
     /**
      * Creates a new WebSocket server instance.
@@ -168,6 +172,18 @@ class WebSocketServer
             'connection_id' => $wsConnection->getId(),
             'timestamp' => time(),
         ]);
+
+        // S2 metrics: track the new connection if metrics is enabled.
+        if ($this->metrics !== null) {
+            $this->metrics->openConnection(
+                $wsConnection->getId(),
+                'websocket',
+                $wsConnection->getUserId(),
+                $connection->getRemoteIp(),
+                null,
+                null,
+            );
+        }
     }
 
     /**
@@ -222,6 +238,16 @@ class WebSocketServer
                     'connection_id' => $wsConnection->getId(),
                     'user_id' => $wsConnection->getUserId(),
                 ], [$wsConnection->getId()]);
+            }
+
+            // S2 metrics: record final bytes and close the connection.
+            if ($this->metrics !== null) {
+                $this->metrics->touchConnection(
+                    $wsConnection->getId(),
+                    $connection->bytesRead,
+                    $connection->bytesWritten,
+                );
+                $this->metrics->closeConnection($wsConnection->getId());
             }
         }
     }
@@ -285,6 +311,17 @@ class WebSocketServer
     public function setSyncPlayManager(\Phlix\Session\SyncPlay\SyncPlayManager $manager): void
     {
         $this->syncPlayManager = $manager;
+    }
+
+    /**
+     * Sets the metrics collector for connection tracking.
+     *
+     * @param MetricsCollector $metrics The metrics collector
+     * @return void
+     */
+    public function setMetricsCollector(MetricsCollector $metrics): void
+    {
+        $this->metrics = $metrics;
     }
 
     /**

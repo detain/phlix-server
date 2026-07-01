@@ -17,6 +17,7 @@ use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
+use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
@@ -146,6 +147,13 @@ final class AdminRoutes
                 $r->get('/stats/top-users', [$statsController, 'topUsers']);
                 $r->get('/stats/top-media', [$statsController, 'topMedia']);
                 $r->get('/stats/storage', [$statsController, 'storage']);
+
+                /** @var MetricsController $metricsController */
+                $metricsController = $container->get(MetricsController::class);
+                $r->get('/metrics/snapshot', [$metricsController, 'snapshot']);
+                $r->get('/metrics/history', [$metricsController, 'history']);
+                $r->get('/metrics/connections', [$metricsController, 'connections']);
+                $r->get('/metrics/routes', [$metricsController, 'routes']);
 
                 /** @var DashboardController $dashboardController */
                 $dashboardController = $container->get(DashboardController::class);

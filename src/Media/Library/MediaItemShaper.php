@@ -151,6 +151,13 @@ final class MediaItemShaper
             ? $metadata['theme_audio_url']
             : null;
 
+        // Curated external provider-id map ({tmdb, imdb, tvdb, anidb, …}) so the
+        // SPA can render "view on TMDB/IMDb/…" links. Detail-only. Assembled from
+        // `metadata_json.external_ids` merged with any top-level `*_id` keys; only
+        // non-empty values survive and every value is stringified. Never exposes
+        // the whole metadata_json — only these curated ids.
+        $merged['external_ids'] = self::normalizeExternalIds($metadata);
+
         // Admin-gated `files` block — only surfaced when the requesting user is
         // an admin. Contains per-file path, size_bytes, container, codec, and
         // resolution drawn from `metadata_json.files` and the item's streams.
@@ -223,6 +230,74 @@ final class MediaItemShaper
         }
 
         return $out;
+    }
+
+    /**
+     * Curated external provider-id map for the detail response.
+     *
+     * Providers store ids under `metadata_json.external_ids` (a
+     * `{tmdb, imdb, tvdb, anidb, …}` map, see {@see \Phlix\Media\Metadata\Resolution\FieldMappers})
+     * AND sometimes as top-level `metadata_json.{tmdb,imdb,tvdb,anidb}_id` scalars.
+     * This merges both sources (the nested `external_ids` map wins on key
+     * collision), stringifies every value, and drops empty/blank entries — so the
+     * SPA gets a stable `{provider: id}` map it can turn into provider links
+     * without ever seeing the raw metadata_json. Returns an empty map when no id
+     * is present (the key stays present for a stable response shape).
+     *
+     * @param array<string, mixed> $metadata Parsed metadata_json.
+     * @return array<string, string> Provider-keyed id map (possibly empty).
+     */
+    private static function normalizeExternalIds(array $metadata): array
+    {
+        $out = [];
+
+        // Top-level `<provider>_id` scalars (lowest precedence). Only the known
+        // provider keys are considered so unrelated `*_id` fields never leak.
+        foreach (['tmdb', 'imdb', 'tvdb', 'anidb'] as $provider) {
+            $value = self::stringOrNull($metadata[$provider . '_id'] ?? null);
+            if ($value !== null) {
+                $out[$provider] = $value;
+            }
+        }
+
+        // Nested `external_ids` map (wins over the top-level scalars). Keys are
+        // provider names (tmdb/imdb/tvdb/anidb/…); every string key is kept so a
+        // future provider id surfaces without a code change.
+        $nested = $metadata['external_ids'] ?? null;
+        if (is_array($nested)) {
+            foreach ($nested as $key => $value) {
+                if (!is_string($key) || $key === '') {
+                    continue;
+                }
+                $clean = self::stringOrNull($value);
+                if ($clean !== null) {
+                    $out[$key] = $clean;
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Coerce a raw external-id value to a non-empty string, or null.
+     *
+     * Accepts strings and numeric scalars (ids are often stored as ints), drops
+     * blanks and non-scalars so only usable ids reach the response.
+     *
+     * @param mixed $value Raw id value.
+     * @return string|null Trimmed non-empty string, or null.
+     */
+    private static function stringOrNull(mixed $value): ?string
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            return $trimmed === '' ? null : $trimmed;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+        return null;
     }
 
     /**

@@ -330,6 +330,84 @@ final class MediaItemShaperTest extends TestCase
         $this->assertNull($shaped['theme_audio_url']);
     }
 
+    public function testShapeDetailExposesExternalIdsFromNestedMap(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Linked Film',
+            'type' => 'movie',
+            'metadata' => [
+                'external_ids' => [
+                    'tmdb' => '603',
+                    'imdb' => 'tt0133093',
+                    'tvdb' => 70327,
+                    'anidb' => '',      // blank → dropped
+                ],
+            ],
+        ], []);
+
+        $this->assertSame([
+            'tmdb' => '603',
+            'imdb' => 'tt0133093',
+            'tvdb' => '70327',          // int coerced to string
+        ], $shaped['external_ids']);
+    }
+
+    public function testShapeDetailMergesTopLevelIdKeysIntoExternalIds(): void
+    {
+        // Top-level `<provider>_id` scalars are merged; the nested `external_ids`
+        // map wins on collision.
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Mixed IDs',
+            'type' => 'series',
+            'metadata' => [
+                'tmdb_id' => 1399,
+                'imdb_id' => 'tt0944947',
+                'external_ids' => [
+                    'imdb' => 'tt-override',   // nested wins over top-level imdb_id
+                    'tvdb' => '121361',
+                ],
+            ],
+        ], []);
+
+        $this->assertSame([
+            'tmdb' => '1399',              // from top-level tmdb_id
+            'imdb' => 'tt-override',       // nested map wins on collision
+            'tvdb' => '121361',            // from nested map
+        ], $shaped['external_ids']);
+    }
+
+    public function testShapeDetailReturnsEmptyExternalIdsWhenNonePresent(): void
+    {
+        // The key is always present (stable shape) even with no ids — an empty map.
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Links',
+            'type' => 'movie',
+            'metadata' => [],
+        ], []);
+
+        $this->assertArrayHasKey('external_ids', $shaped);
+        $this->assertSame([], $shaped['external_ids']);
+    }
+
+    public function testListShapeDoesNotExposeExternalIds(): void
+    {
+        // external_ids is a detail-only field — never on the lean list shape.
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => [
+                'external_ids' => ['tmdb' => '603'],
+                'tmdb_id' => 603,
+            ],
+        ]);
+
+        $this->assertArrayNotHasKey('external_ids', $shaped);
+    }
+
     public function testShapeDetailExposesFilesBlockWhenAdmin(): void
     {
         $streams = [

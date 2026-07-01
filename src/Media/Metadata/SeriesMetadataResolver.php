@@ -73,13 +73,19 @@ class SeriesMetadataResolver
     /**
      * Resolve series-level metadata for a title.
      *
-     * @param string   $title Series name (e.g. "24").
-     * @param int|null $year  Optional first-air year to disambiguate.
+     * @param string              $title            Series name (e.g. "24").
+     * @param int|null            $year             Optional first-air year to disambiguate.
+     * @param PriorityConfig|null $priorityOverride Optional per-library effective
+     *     priority config (library override layered over the global default). When
+     *     provided it drives the genres mode for THIS call instead of the injected
+     *     global `$this->priorityConfig`; null (the default) preserves the existing
+     *     global behaviour, so all existing callers are unaffected. The series path
+     *     stays TMDB-only, so only the genres mode is affected by the override.
      *
      * @return array<string, mixed>|null Metadata to merge (with `external_ids.tmdb`
      *     + `tmdb_id` so the caller can fetch seasons), or null on no match.
      */
-    public function resolve(string $title, ?int $year): ?array
+    public function resolve(string $title, ?int $year, ?PriorityConfig $priorityOverride = null): ?array
     {
         if (trim($title) === '') {
             return null;
@@ -96,7 +102,7 @@ class SeriesMetadataResolver
                 return null;
             }
 
-            return $this->format($tmdbId, $details);
+            return $this->format($tmdbId, $details, $priorityOverride);
         } catch (Throwable $e) {
             $this->logger()->warning('SeriesMetadataResolver: resolve failed', [
                 'title' => $title,
@@ -184,9 +190,11 @@ class SeriesMetadataResolver
      * Shape raw TMDB series details into a mergeable metadata array.
      *
      * @param array<string, mixed> $details
+     * @param PriorityConfig|null  $priorityOverride Per-library override; when null the
+     *     injected global `$this->priorityConfig` drives the genres mode.
      * @return array<string, mixed>
      */
-    private function format(string $tmdbId, array $details): array
+    private function format(string $tmdbId, array $details, ?PriorityConfig $priorityOverride = null): array
     {
         // Per-field selection is delegated to PriorityFieldResolver. The series
         // path builds ONLY a TMDB record, so it stays TMDB-only — no TVDB/IMDb
@@ -198,10 +206,11 @@ class SeriesMetadataResolver
         // A fixed `['tmdb']` order is used (not the configured series order) so the
         // series resolver remains robustly TMDB-driven regardless of admin config
         // until real series sources are registered (Step 3.5).
+        $priority = $priorityOverride ?? $this->priorityConfig;
         $resolved = $this->fieldResolver->resolve(
             [FieldMappers::fromTmdb($details)],
             ['tmdb'],
-            $this->priorityConfig->genresMode(),
+            $priority->genresMode(),
         );
         // Drop the resolver's provenance/id keys — rebuilt below to match the live
         // shape exactly (hard-coded sources=['tmdb'], an explicit tmdb_id, and the

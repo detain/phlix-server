@@ -7,8 +7,11 @@ namespace Phlix\Tests\Unit\Media\Metadata;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use RuntimeException;
 
 /**
@@ -601,5 +604,142 @@ class LibraryMetadataMatcherTest extends TestCase
         );
 
         $this->assertSame(['matched' => 0, 'processed' => 0], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * When the LibraryManager + LibraryPriorityResolver deps are present, the
+     * matcher loads the library's `options.metadata_priority` override, builds
+     * the EFFECTIVE per-library PriorityConfig, and passes it as the resolver's
+     * override argument for every movie in the library (item 5).
+     */
+    public function testMatchLibraryPassesEffectivePriorityToResolver(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'm1', 'type' => 'movie', 'name' => 'The Matrix', 'metadata' => []]],
+            []
+        );
+        $items->method('update');
+
+        // The library carries a per-library override (already surfaced as a
+        // top-level key by LibraryRow::toArray()).
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'type' => 'movie',
+                'metadata_priority' => ['movie' => ['imdb', 'tmdb']],
+            ]);
+
+        // Effective config built by the real resolver over a TMDB-first global.
+        $global = new PriorityConfig(['movie' => ['tmdb', 'imdb']]);
+        $priorityResolver = new LibraryPriorityResolver($global);
+        $expectedEffective = $priorityResolver->effectiveFor(['movie' => ['imdb', 'tmdb']]);
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        // The 4th arg must be the effective (IMDb-first) per-library config.
+        $resolver->expects($this->once())
+            ->method('resolve')
+            ->with(
+                'The Matrix',
+                null,
+                [],
+                $this->callback(static function (mixed $override) use ($expectedEffective): bool {
+                    return $override instanceof PriorityConfig
+                        && $override->orderFor('movie') === $expectedEffective->orderFor('movie')
+                        && $override->orderFor('movie') === ['imdb', 'tmdb'];
+                })
+            )
+            ->willReturn(['external_ids' => ['tmdb' => '603'], 'sources' => ['tmdb']]);
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $resolver,
+            null,
+            $this->makeLogger(),
+            null,
+            null,
+            $libraries,
+            $priorityResolver
+        );
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * A library WITHOUT an override yields the global config unchanged: the
+     * effective config passed to the resolver is the same global instance.
+     */
+    public function testMatchLibraryUsesGlobalWhenNoOverride(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'm1', 'type' => 'movie', 'name' => 'A', 'metadata' => []]],
+            []
+        );
+        $items->method('update');
+
+        $libraries = $this->createMock(LibraryManager::class);
+        $libraries->method('getLibrary')->with('lib-1')->willReturn([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'metadata_priority' => null,
+        ]);
+
+        $global = new PriorityConfig(['movie' => ['tmdb', 'imdb']]);
+        $priorityResolver = new LibraryPriorityResolver($global);
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->expects($this->once())
+            ->method('resolve')
+            ->with(
+                'A',
+                null,
+                [],
+                // No override → the SAME global instance is forwarded.
+                $this->identicalTo($global)
+            )
+            ->willReturn(['external_ids' => ['tmdb' => '1'], 'sources' => ['tmdb']]);
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $resolver,
+            null,
+            $this->makeLogger(),
+            null,
+            null,
+            $libraries,
+            $priorityResolver
+        );
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
+    }
+
+    /**
+     * Backward-compat: with the per-library deps ABSENT (legacy construction),
+     * the resolver is called with a null override — behaviour is exactly as
+     * before and no library is loaded.
+     */
+    public function testMatchLibraryNullOverrideWhenDepsAbsent(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'm1', 'type' => 'movie', 'name' => 'A', 'metadata' => []]],
+            []
+        );
+        $items->method('update');
+
+        $resolver = $this->createMock(MovieMetadataResolver::class);
+        $resolver->expects($this->once())
+            ->method('resolve')
+            ->with('A', null, [], null)
+            ->willReturn(['external_ids' => ['tmdb' => '1'], 'sources' => ['tmdb']]);
+
+        // No LibraryManager / LibraryPriorityResolver injected.
+        $matcher = new LibraryMetadataMatcher($items, $resolver, null, $this->makeLogger());
+
+        $this->assertSame(['matched' => 1, 'processed' => 1], $matcher->matchLibrary('lib-1'));
     }
 }

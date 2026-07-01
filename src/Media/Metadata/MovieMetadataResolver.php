@@ -80,6 +80,11 @@ class MovieMetadataResolver
      * @param string                $title              Raw movie title.
      * @param int|null              $year               Optional release year.
      * @param array<string, string> $existingExternalIds Already-known external ids, e.g. `['imdb' => 'tt…']`.
+     * @param PriorityConfig|null   $priorityOverride   Optional per-library effective
+     *     priority config (library override layered over the global default). When
+     *     provided it drives the source order + genres mode for THIS call instead of
+     *     the injected global `$this->priorityConfig`; null (the default) preserves
+     *     the existing global behaviour, so all existing callers are unaffected.
      *
      * @return array<string, mixed>|null Merged details, or null when neither source matched.
      *     Shape (keys present only when data is available):
@@ -101,8 +106,12 @@ class MovieMetadataResolver
      *
      * @since 0.21.0
      */
-    public function resolve(string $title, ?int $year, array $existingExternalIds = []): ?array
-    {
+    public function resolve(
+        string $title,
+        ?int $year,
+        array $existingExternalIds = [],
+        ?PriorityConfig $priorityOverride = null
+    ): ?array {
         // 1. Seed the IMDb id from caller-provided ids, else attempt an offline
         //    title lookup to discover one.
         $imdbId = $this->extractImdbId($existingExternalIds);
@@ -147,7 +156,14 @@ class MovieMetadataResolver
             return null;
         }
 
-        return $this->merge($existingExternalIds, $tmdbId, $imdbId, $tmdbDetails, $imdbData);
+        return $this->merge(
+            $existingExternalIds,
+            $tmdbId,
+            $imdbId,
+            $tmdbDetails,
+            $imdbData,
+            $priorityOverride,
+        );
     }
 
     /**
@@ -158,6 +174,8 @@ class MovieMetadataResolver
      * @param string|null               $imdbId              Resolved IMDb id.
      * @param array<string, mixed>|null $tmdbDetails         Formatted TMDB details.
      * @param array<string, mixed>|null $imdbData            Offline IMDb row.
+     * @param PriorityConfig|null       $priorityOverride    Per-library override; when
+     *     null the injected global `$this->priorityConfig` drives the order/genres mode.
      *
      * @return array<string, mixed> Merged details.
      */
@@ -166,7 +184,8 @@ class MovieMetadataResolver
         ?string $tmdbId,
         ?string $imdbId,
         ?array $tmdbDetails,
-        ?array $imdbData
+        ?array $imdbData,
+        ?PriorityConfig $priorityOverride = null
     ): array {
         // Per-field selection is delegated to PriorityFieldResolver, driven by the
         // configurable source order (PriorityConfig). The 3.1 FieldMappers normalize
@@ -190,10 +209,11 @@ class MovieMetadataResolver
             $records[] = FieldMappers::fromImdb($imdbData);
         }
 
+        $priority = $priorityOverride ?? $this->priorityConfig;
         $resolved = $this->fieldResolver->resolve(
             $records,
-            $this->priorityConfig->orderFor('movie'),
-            $this->priorityConfig->genresMode(),
+            $priority->orderFor('movie'),
+            $priority->genresMode(),
         );
         // Drop the resolver's own provenance/id keys — rebuilt below to match live.
         unset($resolved['external_ids'], $resolved['sources']);

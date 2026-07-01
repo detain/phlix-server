@@ -316,4 +316,73 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertSame(8.7, $result['imdb_rating']);
         $this->assertSame(['tmdb', 'imdb'], $result['sources']);
     }
+
+    /**
+     * The optional per-library `$priorityOverride` arg on resolve() drives the
+     * source order for THAT call, OVERRIDING the injected global config (item 5).
+     * The resolver is built with a TMDB-first global order; passing an IMDb-first
+     * override flips the shared-field selection to IMDb — proving the override,
+     * not the injected global, is honoured for the call.
+     */
+    public function testResolveHonoursPerCallPriorityOverride(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails([
+            'name' => 'TMDB Title',
+            'overview' => 'TMDB overview (tmdb-only field).',
+        ]));
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow([
+            'title' => 'IMDb Title',
+        ]));
+
+        // Global (injected) order is TMDB-first — without the override the title
+        // would resolve from TMDB.
+        $resolver = new MovieMetadataResolver(
+            $tmdb,
+            $imdb,
+            null,
+            new PriorityConfig(['movie' => ['tmdb', 'imdb']]),
+        );
+
+        // Per-call IMDb-first override — this is what drives the selection now.
+        $override = new PriorityConfig(['movie' => ['imdb', 'tmdb']]);
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093'], $override);
+
+        $this->assertNotNull($result);
+        // Title comes from IMDb because the OVERRIDE order won (not the global).
+        $this->assertSame('IMDb Title', $result['title']);
+        // A TMDB-only field still falls through.
+        $this->assertSame('TMDB overview (tmdb-only field).', $result['overview']);
+    }
+
+    /**
+     * With no override arg the resolver falls back to the injected global config,
+     * preserving existing behaviour (backward compatibility).
+     */
+    public function testResolveWithoutOverrideUsesInjectedGlobal(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $imdb = $this->createMock(ImdbLookup::class);
+
+        $tmdb->method('findByImdbId')
+            ->willReturn(['id' => '603', 'title' => 'The Matrix', 'overview' => '', 'year' => 1999]);
+        $tmdb->method('getDetails')->willReturn($this->tmdbDetails(['name' => 'TMDB Title']));
+        $imdb->method('getByImdbId')->willReturn($this->imdbRow(['title' => 'IMDb Title']));
+
+        // Injected global is TMDB-first; no override passed → TMDB title wins.
+        $resolver = new MovieMetadataResolver(
+            $tmdb,
+            $imdb,
+            null,
+            new PriorityConfig(['movie' => ['tmdb', 'imdb']]),
+        );
+        $result = $resolver->resolve('The Matrix', 1999, ['imdb' => 'tt0133093']);
+
+        $this->assertNotNull($result);
+        $this->assertSame('TMDB Title', $result['title']);
+    }
 }

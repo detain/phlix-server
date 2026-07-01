@@ -47,12 +47,24 @@ final class MetricsRepository
     private Connection $db;
 
     /**
+     * Seconds of inactivity after which a connection row is treated as no longer
+     * live. Drives the "active connections" count so the read-side liveness
+     * window matches the flush service's connection TTL (config
+     * `connection_ttl_seconds`, default 15).
+     *
+     * @var int
+     */
+    private int $connectionTtlSeconds;
+
+    /**
      * @param Connection           $db     MySQL connection.
-     * @param array<string, mixed> $config config/metrics.php array (reserved for future tuning).
+     * @param array<string, mixed> $config config/metrics.php array (reads
+     *        `connection_ttl_seconds` for the live-connection count window).
      */
     public function __construct(Connection $db, array $config = [])
     {
-        $this->db = $db;
+        $this->db                   = $db;
+        $this->connectionTtlSeconds = $this->cfgInt($config, 'connection_ttl_seconds', 15);
     }
 
     /**
@@ -316,11 +328,32 @@ final class MetricsRepository
         $rows = $this->db->query(
             "SELECT COUNT(*) AS c
              FROM metrics_connections
-             WHERE last_seen_at > (NOW() - INTERVAL 15 SECOND)",
-            []
+             WHERE last_seen_at > (NOW() - INTERVAL ? SECOND)",
+            [$this->connectionTtlSeconds]
         );
         $row = is_array($rows) && isset($rows[0]) && is_array($rows[0]) ? $rows[0] : [];
         return $this->toInt($row['c'] ?? 0);
+    }
+
+    /**
+     * Read an int config value with a default.
+     *
+     * @param array<string, mixed> $config
+     * @param string               $key
+     * @param int                  $default
+     *
+     * @return int
+     */
+    private function cfgInt(array $config, string $key, int $default): int
+    {
+        $v = $config[$key] ?? null;
+        if (is_int($v)) {
+            return $v;
+        }
+        if (is_string($v) && is_numeric($v)) {
+            return (int) $v;
+        }
+        return $default;
     }
 
     /**

@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Security
+
+- **systemd unit: extra kernel/privilege hardening (phlix-hub parity).** Adds `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `ProtectHostname`, `ProtectClock`, `RestrictSUIDSGID`, and `RestrictRealtime` to the generated `[Service]` block, on top of the existing `ProtectSystem=strict`/`ProtectHome`/`NoNewPrivileges`/`PrivateTmp`/`RestrictNamespaces`/`LockPersonality`/`RemoveIPC` set. All are safe for the media server (software transcoding shells out to ffmpeg; optional DVB/DLNA needs neither module loading nor clock/hostname/cgroup writes). Deliberately **not** setting `PrivateDevices` (would hide `/dev/dvb` tuners and `/dev/dri`), `MemoryDenyWriteExecute` (breaks PHP JIT/opcache), or `SystemCallFilter` (Swoole io_uring is syscall-sensitive). Verified with `systemd-analyze verify` and a `systemd-run` sandbox on the host.
+
 ### Added
 
 - **Multi-level "Love" for media items (Feature 10).** Builds on the per-user favorites/ratings (E10, below) with a separate 0-3 "Love" axis distinct from `favorite` (boolean) and `rating` (1-10).

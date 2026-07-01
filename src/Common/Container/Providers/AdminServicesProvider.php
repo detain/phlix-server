@@ -8,6 +8,7 @@ use DI\ContainerBuilder;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Admin\WatchHistoryService;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
@@ -19,6 +20,7 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
 use Psr\Container\ContainerInterface;
@@ -71,6 +73,9 @@ final class AdminServicesProvider implements ServiceProviderInterface
 
             DashboardService::class    => autowire(),
             DashboardController::class => autowire(),
+
+            WatchHistoryService::class    => autowire(),
+            WatchHistoryController::class => autowire(),
 
             BackupManager::class    => autowire(),
             BackupController::class => autowire(),

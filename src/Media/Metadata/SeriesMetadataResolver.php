@@ -126,7 +126,10 @@ class SeriesMetadataResolver
      *         overview: string|null,
      *         poster_url: string|null,
      *         air_date: string|null,
-     *         runtime: int|null
+     *         runtime: int|null,
+     *         vote_average: float|null,
+     *         cast: list<array{name: string, role: string, profile_url: string|null}>,
+     *         crew: list<array{name: string, job: string, profile_url: string|null}>
      *     }>
      * } Empty `episodes` when the season is unknown.
      */
@@ -151,12 +154,16 @@ class SeriesMetadataResolver
         $episodes = [];
         foreach ($season['episodes'] ?? [] as $ep) {
             $number = MetadataValue::asInt($ep['episode_number'] ?? null);
+            $vote = MetadataValue::asFloat($ep['vote_average'] ?? null);
             $episodes[$number] = [
                 'episode_title' => MetadataValue::asNullableString($ep['name'] ?? null),
                 'overview' => MetadataValue::asNullableString($ep['overview'] ?? null),
                 'poster_url' => $this->imageUrl($ep['still_path'] ?? null),
                 'air_date' => MetadataValue::asNullableString($ep['air_date'] ?? null),
                 'runtime' => (($r = MetadataValue::asInt($ep['runtime'] ?? null)) > 0) ? $r : null,
+                'vote_average' => $vote > 0.0 ? $vote : null,
+                'cast' => $this->castList($ep['cast'] ?? null),
+                'crew' => $this->crewList($ep['crew'] ?? null),
             ];
         }
 
@@ -230,6 +237,14 @@ class SeriesMetadataResolver
             $result[$key] = $value;
         }
 
+        // Tags/keywords are not part of the canonical merge vocabulary
+        // (SourceRecord::CANONICAL_FIELDS), so carry them straight from the raw
+        // TMDB details. Series-level; episodes inherit them via the matcher.
+        $tags = $this->stringList($details['tags'] ?? null);
+        if ($tags !== []) {
+            $result['tags'] = $tags;
+        }
+
         return $result;
     }
 
@@ -240,5 +255,91 @@ class SeriesMetadataResolver
             return null;
         }
         return $this->imageBaseUrl . '/w500' . $clean;
+    }
+
+    /**
+     * Narrow a mixed value to a de-duplicated list of non-empty strings.
+     *
+     * @param mixed $value
+     * @return list<string>
+     */
+    private function stringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            $name = MetadataValue::asNullableString($entry);
+            if ($name !== null && !in_array($name, $out, true)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Narrow a raw episode cast value to the canonical shape the media-item shaper
+     * renders — `{name, role, profile_url}`. Entries without a name are dropped;
+     * profile URLs are already full TMDB URLs from {@see \Phlix\Media\Metadata\TmdbProvider}.
+     *
+     * @param mixed $value Raw cast list from `getTvSeason()`.
+     * @return list<array{name: string, role: string, profile_url: string|null}>
+     */
+    private function castList(mixed $value): array
+    {
+        $out = [];
+        foreach ($this->namedEntries($value) as $entry) {
+            $out[] = [
+                'name' => MetadataValue::asString($entry['name'] ?? null),
+                'role' => MetadataValue::asString($entry['role'] ?? null),
+                'profile_url' => MetadataValue::asNullableString($entry['profile_url'] ?? null),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Narrow a raw episode crew value to the canonical shape the media-item shaper
+     * renders — `{name, job, profile_url}`. Entries without a name are dropped.
+     *
+     * @param mixed $value Raw crew list from `getTvSeason()`.
+     * @return list<array{name: string, job: string, profile_url: string|null}>
+     */
+    private function crewList(mixed $value): array
+    {
+        $out = [];
+        foreach ($this->namedEntries($value) as $entry) {
+            $out[] = [
+                'name' => MetadataValue::asString($entry['name'] ?? null),
+                'job' => MetadataValue::asString($entry['job'] ?? null),
+                'profile_url' => MetadataValue::asNullableString($entry['profile_url'] ?? null),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Yield the array entries of a raw people list that carry a non-empty `name`.
+     *
+     * @param mixed $value Raw cast/crew list.
+     * @return list<array<string, mixed>>
+     */
+    private function namedEntries(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            if (MetadataValue::asString($entry['name'] ?? null) === '') {
+                continue;
+            }
+            $out[] = $entry;
+        }
+        return $out;
     }
 }

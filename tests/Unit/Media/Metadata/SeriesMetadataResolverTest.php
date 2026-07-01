@@ -126,6 +126,91 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertNull($season['episodes'][2]['runtime']);
     }
 
+    public function testResolveSeasonEpisodesCarriesCastCrewAndVoteAverage(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('getTvSeason')->with('1668', 1)->willReturn([
+            'poster_path' => '/s1.jpg',
+            'overview' => 'Season one.',
+            'episodes' => [
+                [
+                    'episode_number' => 1,
+                    'name' => '12:00 A.M.',
+                    'overview' => 'O1',
+                    'still_path' => '/e1.jpg',
+                    'air_date' => '2001-11-06',
+                    'runtime' => 44,
+                    'vote_average' => 7.8,
+                    'cast' => [
+                        ['name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer', 'profile_url' => 'https://i/w185/k.jpg'],
+                        ['name' => '', 'role' => 'X', 'profile_url' => null], // nameless dropped
+                    ],
+                    'crew' => [
+                        ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_url' => null],
+                    ],
+                ],
+                [
+                    'episode_number' => 2,
+                    'name' => '1:00 A.M.',
+                    'overview' => '',
+                    'still_path' => null,
+                    'air_date' => '',
+                    'runtime' => 0,
+                    'vote_average' => 0.0,
+                    'cast' => [],
+                    'crew' => [],
+                ],
+            ],
+        ]);
+
+        $season = (new SeriesMetadataResolver($tmdb))->resolveSeasonEpisodes('1668', 1);
+
+        // Episode 1: rich cast/crew + vote average carried through in canonical shape.
+        $this->assertSame(7.8, $season['episodes'][1]['vote_average']);
+        $this->assertCount(1, $season['episodes'][1]['cast']);
+        $this->assertSame('Kiefer Sutherland', $season['episodes'][1]['cast'][0]['name']);
+        $this->assertSame('Jack Bauer', $season['episodes'][1]['cast'][0]['role']);
+        $this->assertSame('https://i/w185/k.jpg', $season['episodes'][1]['cast'][0]['profile_url']);
+        $this->assertSame('Director', $season['episodes'][1]['crew'][0]['job']);
+
+        // Episode 2: empty cast/crew + zero vote normalize to []/null.
+        $this->assertSame([], $season['episodes'][2]['cast']);
+        $this->assertSame([], $season['episodes'][2]['crew']);
+        $this->assertNull($season['episodes'][2]['vote_average']);
+    }
+
+    public function testResolveCarriesSeriesTagsFromKeywords(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'tmdb_id' => '1668',
+            'genres' => ['Drama'],
+            'tags' => ['terrorism', 'counter terrorism', 'terrorism'],
+        ]);
+
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
+
+        $this->assertNotNull($resolved);
+        $this->assertSame(['terrorism', 'counter terrorism'], $resolved['tags']);
+    }
+
+    public function testResolveOmitsTagsWhenTvDetailsLacksThem(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'tmdb_id' => '1668',
+        ]);
+
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
+
+        $this->assertNotNull($resolved);
+        $this->assertArrayNotHasKey('tags', $resolved);
+    }
+
     public function testResolveSeasonEpisodesEmptyForBlankTmdbId(): void
     {
         $tmdb = $this->createMock(TmdbProvider::class);

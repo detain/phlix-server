@@ -334,6 +334,102 @@ final class MediaItemShaperTest extends TestCase
         $this->assertNull($shaped['backdrop_url']);
     }
 
+    public function testShapeDetailExposesLargeBackdropAndSrcsetForTmdbBackdrop(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Backdrop Film',
+            'type' => 'movie',
+            'metadata' => [
+                // Backdrops are stored at /w500; the shaper width-swaps to large sizes.
+                'backdrop_url' => 'https://image.tmdb.org/t/p/w500/bg.jpg',
+            ],
+        ], []);
+
+        // Original `backdrop_url` is preserved unchanged.
+        $this->assertSame('https://image.tmdb.org/t/p/w500/bg.jpg', $shaped['backdrop_url']);
+        // Full-resolution page-background variant.
+        $this->assertSame('https://image.tmdb.org/t/p/original/bg.jpg', $shaped['backdrop_url_large']);
+        // Responsive srcset advertises the large widths + original.
+        $this->assertIsString($shaped['backdrop_srcset']);
+        $this->assertStringContainsString('/w1280/bg.jpg 1280w', $shaped['backdrop_srcset']);
+        $this->assertStringContainsString('/original/bg.jpg 1920w', $shaped['backdrop_srcset']);
+    }
+
+    public function testShapeDetailNullsLargeBackdropForNonTmdbBackdrop(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'Local Backdrop',
+            'type' => 'movie',
+            'metadata' => [
+                'backdrop_url' => 'https://example.com/bg.jpg',
+            ],
+        ], []);
+
+        // Non-TMDB backdrop is kept as-is; no large/srcset is synthesized.
+        $this->assertSame('https://example.com/bg.jpg', $shaped['backdrop_url']);
+        $this->assertNull($shaped['backdrop_url_large']);
+        $this->assertNull($shaped['backdrop_srcset']);
+    }
+
+    public function testShapeDetailExposesEpisodeCastCrewAndInheritedTags(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'ep-1',
+            'name' => '12:00 A.M.',
+            'type' => 'episode',
+            'parent_id' => 'season-1',
+            'metadata' => [
+                'season' => 1,
+                'episode' => 1,
+                'genres' => ['Drama'],
+                'tags' => ['terrorism', 'counter terrorism'],
+                'cast' => [
+                    ['name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer', 'profile_url' => 'https://i/w185/k.jpg'],
+                ],
+                'crew' => [
+                    ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_url' => null],
+                ],
+            ],
+        ], []);
+
+        // Episode cast/crew flow through the generic detail shaper unchanged.
+        $this->assertCount(1, $shaped['cast']);
+        $this->assertSame('Kiefer Sutherland', $shaped['cast'][0]['name']);
+        $this->assertSame('Jack Bauer', $shaped['cast'][0]['role']);
+        $this->assertSame('Director', $shaped['crew'][0]['job']);
+        // Inherited genres (list shape) + tags (detail-only).
+        $this->assertSame(['Drama'], $shaped['genres']);
+        $this->assertSame(['terrorism', 'counter terrorism'], $shaped['tags']);
+    }
+
+    public function testShapeDetailReturnsEmptyTagsWhenNoneSet(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'm',
+            'name' => 'No Tags Film',
+            'type' => 'movie',
+            'metadata' => [],
+        ], []);
+
+        $this->assertSame([], $shaped['tags']);
+    }
+
+    public function testListShapeDoesNotExposeTags(): void
+    {
+        $shaped = MediaItemShaper::shape([
+            'id' => 'm',
+            'name' => 'M',
+            'type' => 'movie',
+            'metadata' => ['tags' => ['a', 'b']],
+        ]);
+
+        $this->assertArrayNotHasKey('tags', $shaped);
+        $this->assertArrayNotHasKey('backdrop_url_large', $shaped);
+        $this->assertArrayNotHasKey('backdrop_srcset', $shaped);
+    }
+
     public function testShapeDetailExposesThemeAudioUrlWhenSet(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

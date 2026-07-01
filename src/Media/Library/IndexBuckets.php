@@ -23,6 +23,7 @@ final class IndexBuckets
     public const FIELD_RATING = 'rating';
     public const FIELD_RUNTIME = 'runtime';
     public const FIELD_DATE_ADDED = 'date_added';
+    public const FIELD_GENRE = 'genre';
 
     /**
      * Rating order mapping — least to most restrictive.
@@ -60,6 +61,7 @@ final class IndexBuckets
             self::FIELD_RATING => $this->bucketsForRating($distincts),
             self::FIELD_RUNTIME => $this->bucketsForRuntime($distincts),
             self::FIELD_DATE_ADDED => $this->bucketsForDateAdded($distincts, $now),
+            self::FIELD_GENRE => $this->bucketsForGenre($distincts),
             default => $this->bucketsForName($distincts),
         };
 
@@ -118,6 +120,33 @@ final class IndexBuckets
         }
 
         // Sort by key ascending (A before B before ... Z before #)
+        ksort($buckets);
+
+        return array_values($buckets);
+    }
+
+    /**
+     * Genre field: one bucket per distinct (primary) genre, keyed + labelled by
+     * the genre name and ordered alphabetically (the caller reverses for desc).
+     * Blank/absent genres are skipped. Cumulative offsets are added by
+     * {@see self::withOffsets()} against the genre-sorted grid.
+     *
+     * @param array<int, array{value: string|int, count: int}> $distincts
+     * @return array<int, array{key: string, label: string, count: int}>
+     */
+    private function bucketsForGenre(array $distincts): array
+    {
+        $buckets = [];
+        foreach ($distincts as $item) {
+            $value = trim((string) $item['value']);
+            if ($value === '') {
+                continue;
+            }
+            if (!isset($buckets[$value])) {
+                $buckets[$value] = ['key' => $value, 'label' => $value, 'count' => 0];
+            }
+            $buckets[$value]['count'] += $item['count'];
+        }
         ksort($buckets);
 
         return array_values($buckets);

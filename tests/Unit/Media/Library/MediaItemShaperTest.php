@@ -27,6 +27,36 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('Plot', $shaped['sort_title']);
     }
 
+    public function testShapeExposesAirDateFromTopLevelOrProviderDetails(): void
+    {
+        // Top-level key.
+        $top = MediaItemShaper::shape([
+            'id' => 'ep-1',
+            'name' => 'Pilot',
+            'type' => 'episode',
+            'metadata' => ['air_date' => '2020-01-15'],
+        ]);
+        $this->assertSame('2020-01-15', $top['air_date']);
+
+        // Nested provider block (TVDB first_aired).
+        $nested = MediaItemShaper::shape([
+            'id' => 'ep-2',
+            'name' => 'Two',
+            'type' => 'episode',
+            'metadata' => ['details' => ['tvdb' => ['first_aired' => '2020-02-20']]],
+        ]);
+        $this->assertSame('2020-02-20', $nested['air_date']);
+
+        // Absent → null.
+        $none = MediaItemShaper::shape([
+            'id' => 'ep-3',
+            'name' => 'Three',
+            'type' => 'episode',
+            'metadata' => [],
+        ]);
+        $this->assertNull($none['air_date']);
+    }
+
     public function testShapeSortTitleEqualsNameWhenNoLeadingArticle(): void
     {
         $shaped = MediaItemShaper::shape([

@@ -68,11 +68,13 @@ class UserItemDataRepositoryTest extends TestCase
                 $this->stringContains('SELECT favorite, rating, like_level FROM user_item_data'),
                 $this->equalTo([self::USER, self::ITEM])
             )
-            ->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '3']]);
+            ->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '-2']]);
 
         $data = (new UserItemDataRepository($db))->getItemData(self::USER, self::ITEM);
 
-        $this->assertSame(3, $data['like_level']);
+        // Signed thumbs axis: the driver returns the column as a string; a
+        // negative dislike value must coerce back to a negative int.
+        $this->assertSame(-2, $data['like_level']);
     }
 
     public function testGetItemDataLikeLevelDefaultsToZeroWhenColumnAbsentOrNull(): void
@@ -210,7 +212,7 @@ class UserItemDataRepositoryTest extends TestCase
      */
     public static function validLikeLevelProvider(): array
     {
-        return [[0], [1], [2], [3]];
+        return [[-2], [-1], [0], [1], [2]];
     }
 
     /**
@@ -252,7 +254,8 @@ class UserItemDataRepositoryTest extends TestCase
         $db->expects($this->never())->method('query');
 
         $this->expectException(\InvalidArgumentException::class);
-        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, 4);
+        $this->expectExceptionMessage('like_level must be between -2 and 2 (inclusive), got 3');
+        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, 3);
     }
 
     public function testSetLikeLevelRejectsBelowRange(): void
@@ -261,7 +264,8 @@ class UserItemDataRepositoryTest extends TestCase
         $db->expects($this->never())->method('query');
 
         $this->expectException(\InvalidArgumentException::class);
-        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, -1);
+        $this->expectExceptionMessage('like_level must be between -2 and 2 (inclusive), got -3');
+        (new UserItemDataRepository($db))->setLikeLevel(self::USER, self::ITEM, -3);
     }
 
     public function testGetFavoritesJoinsMediaItemsAndPaginates(): void

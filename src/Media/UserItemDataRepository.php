@@ -12,9 +12,10 @@ use Workerman\MySQL\Connection;
  * Per-user favorites + ratings data access for media items (E10).
  *
  * Persists, for each (user, media item) pair, whether the user has favorited
- * the item, an optional personal rating in the inclusive range 1-10, and a love
- * level in the inclusive range 0-3 (a separate axis from favorite/rating). Backs
- * the favorite/rating/like endpoints on
+ * the item, an optional personal rating in the inclusive range 1-10, and a like
+ * level on the signed thumbs axis in the inclusive range −2..2 (−2 = strongly
+ * dislike, −1 = dislike, 0 = not set, 1 = like, 2 = love; a separate axis from
+ * favorite/rating). Backs the favorite/rating/like endpoints on
  * {@see \Phlix\Server\WebPortal\WebPortalRouter} and the `user_data` block on
  * the media-detail response.
  *
@@ -38,11 +39,11 @@ class UserItemDataRepository
     /** Highest permitted personal rating (inclusive). */
     public const MAX_RATING = 10;
 
-    /** Lowest permitted love level (inclusive; 0 = not loved). */
-    public const MIN_LIKE = 0;
+    /** Lowest permitted like level (inclusive; −2 = strongly dislike) on the thumbs axis. */
+    public const MIN_LIKE = -2;
 
-    /** Highest permitted love level (inclusive; 3 = most loved). */
-    public const MAX_LIKE = 3;
+    /** Highest permitted like level (inclusive; 2 = love) on the thumbs axis. */
+    public const MAX_LIKE = 2;
 
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
@@ -144,23 +145,24 @@ class UserItemDataRepository
     }
 
     /**
-     * Set the user's love level for an item.
+     * Set the user's like level for an item.
      *
-     * Love is a separate axis from favorite (bool) and rating (1-10): a TINYINT
-     * in the inclusive range 0-3 (0 = not loved … 3 = most loved). Upserts so
-     * that setting the love level preserves the favorite/rating columns. The
-     * 0-3 range is enforced here in PHP (mirroring {@see self::setRating()}'s
-     * 1-10 enforcement); the DB column has no CHECK constraint.
+     * Like is a separate axis from favorite (bool) and rating (1-10): a signed
+     * TINYINT on the thumbs axis in the inclusive range −2..2 (−2 = strongly
+     * dislike, −1 = dislike, 0 = not set, 1 = like, 2 = love). Upserts so that
+     * setting the like level preserves the favorite/rating columns. The −2..2
+     * range is enforced here in PHP (mirroring {@see self::setRating()}'s 1-10
+     * enforcement); the DB column has no CHECK constraint.
      *
      * @param string $userId User UUID.
      * @param string $itemId Media item UUID.
-     * @param int    $level  Love level in the inclusive range
-     *                       {@see self::MIN_LIKE}-{@see self::MAX_LIKE}.
+     * @param int    $level  Like level in the inclusive range
+     *                       {@see self::MIN_LIKE}..{@see self::MAX_LIKE} (−2..2).
      *
      * @return void
      *
      * @throws \InvalidArgumentException When $level is outside the inclusive
-     *         range {@see self::MIN_LIKE}-{@see self::MAX_LIKE}.
+     *         range {@see self::MIN_LIKE}..{@see self::MAX_LIKE}.
      */
     public function setLikeLevel(string $userId, string $itemId, int $level): void
     {

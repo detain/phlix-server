@@ -219,7 +219,8 @@ class MediaUserDataControllerTest extends TestCase
     }
 
     /**
-     * Each valid level 0-3 persists and returns a 200 `{message}` envelope.
+     * Each valid level on the signed −2..2 thumbs axis (including the negative
+     * dislike values) persists and returns a 200 `{message}` envelope.
      *
      * @dataProvider validLikeLevels
      */
@@ -247,10 +248,11 @@ class MediaUserDataControllerTest extends TestCase
     public static function validLikeLevels(): array
     {
         return [
-            'level 0' => [0],
-            'level 1' => [1],
-            'level 2' => [2],
-            'level 3' => [3],
+            'level -2 (strongly dislike)' => [-2],
+            'level -1 (dislike)' => [-1],
+            'level 0 (not set)' => [0],
+            'level 1 (like)' => [1],
+            'level 2 (love)' => [2],
         ];
     }
 
@@ -277,6 +279,8 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
 
         $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertSame('level must be an integer between -2 and 2', $body['error']);
     }
 
     /**
@@ -292,11 +296,11 @@ class MediaUserDataControllerTest extends TestCase
     }
 
     /**
-     * Out-of-range but otherwise-integer input (4, -1) is a clean int to the
+     * Out-of-range but otherwise-integer input (3, -3) is a clean int to the
      * controller, so it reaches the repository, whose InvalidArgumentException
-     * (0-3 range) is mapped to a 400 — exactly mirroring setRating's
+     * (−2..2 range) is mapped to a 400 — exactly mirroring setRating's
      * testSetRatingRejectsOutOfRangeFromRepository. Net result for the client:
-     * 4/-1 → 400.
+     * 3/-3 → 400.
      *
      * @dataProvider outOfRangeLikeLevels
      */
@@ -323,8 +327,8 @@ class MediaUserDataControllerTest extends TestCase
     public static function outOfRangeLikeLevels(): array
     {
         return [
-            'above range (4)' => [4],
-            'below range (-1)' => [-1],
+            'above range (3)' => [3],
+            'below range (-3)' => [-3],
         ];
     }
 
@@ -368,9 +372,9 @@ class MediaUserDataControllerTest extends TestCase
     {
         $userData = $this->createMock(UserItemDataRepository::class);
         $userData->method('getFavorites')->willReturn([
-            // item-1 carries a real like_level (3); item-2 omits the column entirely
-            // (exercises the default-0 path).
-            ['item_id' => 'item-1', 'rating' => 7, 'like_level' => 3, 'updated_at' => '2026-06-27 00:00:00'],
+            // item-1 carries a real like_level (2 = love, the thumbs-axis max);
+            // item-2 omits the column entirely (exercises the default-0 path).
+            ['item_id' => 'item-1', 'rating' => 7, 'like_level' => 2, 'updated_at' => '2026-06-27 00:00:00'],
             ['item_id' => 'item-2', 'rating' => null, 'updated_at' => '2026-06-26 00:00:00'],
         ]);
 
@@ -390,7 +394,7 @@ class MediaUserDataControllerTest extends TestCase
         $first = $body['items'][0];
         $this->assertSame('item-1', $first['id']);
         $this->assertSame(
-            ['favorite' => true, 'rating' => 7, 'like_level' => 3],
+            ['favorite' => true, 'rating' => 7, 'like_level' => 2],
             $first['user_data']
         );
 

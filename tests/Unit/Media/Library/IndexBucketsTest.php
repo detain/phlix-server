@@ -83,9 +83,11 @@ class IndexBucketsTest extends TestCase
         $this->assertSame('2022', $result[4]['label']);
     }
 
-    public function testYearBucketsCollapseToDecades(): void
+    public function testYearBucketsSampleRealYearsAcrossRangeWhenMany(): void
     {
-        // 35 distinct years — above threshold → collapse to decades
+        // 35 distinct years (1990-2024) — above the 25-label cap → downsample to
+        // ~25 buckets labelled by REAL years spread across the range (NOT decades,
+        // NOT a single bucket).
         $distincts = [];
         for ($year = 1990; $year <= 2024; $year++) {
             $distincts[] = ['value' => $year, 'count' => 10];
@@ -93,22 +95,27 @@ class IndexBucketsTest extends TestCase
 
         $result = $this->buckets->build(IndexBuckets::FIELD_YEAR, $distincts, 'asc');
 
-        // 1990-2024 = 35 years → decades: 1990s, 2000s, 2010s, 2020s = 4 buckets
-        $this->assertCount(4, $result);
+        // 35 years / ceil(35/25)=2 per bucket → 18 buckets.
+        $this->assertLessThanOrEqual(25, count($result));
+        $this->assertGreaterThan(4, count($result)); // way more granular than decades
+        // Labels are real years, not "1990s"-style decades.
+        foreach ($result as $b) {
+            $this->assertMatchesRegularExpression('/^\d{4}$/', $b['label']);
+        }
+        $this->assertSame('1990', $result[0]['label']); // oldest boundary first (asc)
+        $this->assertSame('2024', $result[count($result) - 1]['label']); // newest last
+        $this->assertSame(0, $result[0]['offset']);
+    }
 
-        $this->assertSame('1990', $result[0]['key']);
-        $this->assertSame('1990s', $result[0]['label']);
-        $this->assertSame(100, $result[0]['count']); // 10 years × 10 each
-
-        $this->assertSame('2000', $result[1]['key']);
-        $this->assertSame('2000s', $result[1]['label']);
-
-        $this->assertSame('2010', $result[2]['key']);
-        $this->assertSame('2010s', $result[2]['label']);
-
-        $this->assertSame('2020', $result[3]['key']);
-        $this->assertSame('2020s', $result[3]['label']);
-        $this->assertSame(50, $result[3]['count']); // 2020-2024 = 5 years × 10 each
+    public function testYearBucketsDropUnknownYears(): void
+    {
+        $result = $this->buckets->build(IndexBuckets::FIELD_YEAR, [
+            ['value' => 0, 'count' => 7],       // unknown → dropped
+            ['value' => 2001, 'count' => 3],
+            ['value' => 1999, 'count' => 2],
+        ], 'asc');
+        $labels = array_map(static fn (array $b): string => $b['label'], $result);
+        $this->assertSame(['1999', '2001'], $labels);
     }
 
     public function testYearBucketsCumulativeOffsets(): void
@@ -384,7 +391,9 @@ class IndexBucketsTest extends TestCase
      */
     public function testAllFieldsFirstBucketHasOffsetZero(): void
     {
-        $baseDistincts = [['value' => 'test', 'count' => 1]];
+        // A value that yields a non-empty bucket for every field (a real year for
+        // FIELD_YEAR, which now drops non-year/0 values).
+        $baseDistincts = [['value' => '2000', 'count' => 1]];
 
         $fields = [
             IndexBuckets::FIELD_NAME,
@@ -392,6 +401,8 @@ class IndexBucketsTest extends TestCase
             IndexBuckets::FIELD_RATING,
             IndexBuckets::FIELD_RUNTIME,
             IndexBuckets::FIELD_DATE_ADDED,
+            IndexBuckets::FIELD_GENRE,
+            IndexBuckets::FIELD_ARTIST,
         ];
 
         foreach ($fields as $field) {

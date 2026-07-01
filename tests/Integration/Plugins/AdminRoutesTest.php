@@ -456,13 +456,18 @@ final class AdminRoutesTest extends TestCase
         $this->assertSame(['phlix-plugin-demo'], $this->loader->disableCalls);
         $this->assertSame(1, $this->audit->pluginActions['disable.ui'] ?? 0);
 
-        // 4. Uninstall
+        // 4. Uninstall — 200 with a JSON body (not 204) so the SPA fetch client
+        //    can parse the response and run its post-uninstall refresh.
         $response = $this->router->dispatch($this->request(
             'DELETE',
             '/api/v1/admin/plugins/phlix-plugin-demo',
             'admin-1',
         ));
-        $this->assertSame(204, $response->statusCode);
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(
+            ['uninstalled' => true, 'name' => 'phlix-plugin-demo'],
+            json_decode((string) $response->body, true),
+        );
         $this->assertSame(['phlix-plugin-demo'], $this->loader->uninstallCalls);
         $this->assertSame(1, $this->audit->pluginActions['uninstall.ui'] ?? 0);
 

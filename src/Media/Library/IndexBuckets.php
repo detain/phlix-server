@@ -45,9 +45,12 @@ final class IndexBuckets
      * @param string $field One of the FIELD_* constants.
      * @param array<int, array{value: string|int, count: int}> $distincts Pre-sorted by value ASC.
      * @param string $order 'asc' | 'desc'
+     * @param int|null $now Reference "now" timestamp for the relative date_added
+     *        buckets (defaults to the current time); injectable so tests are
+     *        deterministic regardless of the calendar day they run on.
      * @return array<int, array{key: string, label: string, offset: int, count: int}>
      */
-    public function build(string $field, array $distincts, string $order): array
+    public function build(string $field, array $distincts, string $order, ?int $now = null): array
     {
         $field = $field ?: self::FIELD_NAME;
 
@@ -56,7 +59,7 @@ final class IndexBuckets
             self::FIELD_YEAR => $this->bucketsForYear($distincts),
             self::FIELD_RATING => $this->bucketsForRating($distincts),
             self::FIELD_RUNTIME => $this->bucketsForRuntime($distincts),
-            self::FIELD_DATE_ADDED => $this->bucketsForDateAdded($distincts),
+            self::FIELD_DATE_ADDED => $this->bucketsForDateAdded($distincts, $now),
             default => $this->bucketsForName($distincts),
         };
 
@@ -257,15 +260,16 @@ final class IndexBuckets
      * date_added field: always 5 relative buckets (Today, This week, This month, This year, Older).
      *
      * @param array<int, array{value: string|int, count: int}> $distincts
+     * @param int|null $now Reference "now" (defaults to the current time).
      * @return array<int, array{key: string, label: string, count: int}>
      */
-    private function bucketsForDateAdded(array $distincts): array
+    private function bucketsForDateAdded(array $distincts, ?int $now = null): array
     {
-        $now = time();
-        $todayStart = strtotime('today midnight');
-        $weekStart = strtotime('monday this week midnight');
-        $monthStart = strtotime('first day of this month midnight');
-        $yearStart = strtotime('first day of January this year midnight');
+        $now = $now ?? time();
+        $todayStart = strtotime('today midnight', $now);
+        $weekStart = strtotime('monday this week midnight', $now);
+        $monthStart = strtotime('first day of this month midnight', $now);
+        $yearStart = strtotime('first day of January this year midnight', $now);
 
         $buckets = [
             'Today' => ['key' => 'Today', 'label' => 'Today', 'count' => 0],

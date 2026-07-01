@@ -791,7 +791,7 @@ class WebPortalRouterMediaTest extends TestCase
         $body = json_decode($response->body, true);
         // Unknown field should default to 'name' in the response
         $this->assertSame('name', $body['field']);
-        $this->assertSame(9, $body['total']); // 7 + 2
+        $this->assertSame(8, $body['total']); // 5 + 3 (sum of the mocked bucket counts)
     }
 
     public function testGetLetterIndexUnchanged(): void

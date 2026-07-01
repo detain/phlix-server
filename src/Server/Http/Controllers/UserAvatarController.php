@@ -72,7 +72,9 @@ class UserAvatarController
             ? $file['error']
             : UPLOAD_ERR_NO_FILE;
         if ($error !== UPLOAD_ERR_OK) {
-            return (new Response())->status(400)->json(['error' => 'Upload error: ' . $this->uploadErrorMessage($error)]);
+            return (new Response())->status(400)->json([
+                'error' => 'Upload error: ' . $this->uploadErrorMessage($error),
+            ]);
         }
 
         $tmpPath = is_array($file) && isset($file['tmp_name']) ? $file['tmp_name'] : '';

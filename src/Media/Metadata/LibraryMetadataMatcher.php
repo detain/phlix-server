@@ -524,10 +524,16 @@ class LibraryMetadataMatcher
 
                 $inheritance = $this->seriesInheritance($resolved);
                 if ($itemType === 'series') {
-                    $this->persistMetadata(
-                        $itemId,
-                        $this->applyThemeAudio($item, array_merge($existing, $resolved))
-                    );
+                    // Resolve + persist the series-root theme (local theme file, else
+                    // the Plex archive via the TVDB id in external_ids), then thread
+                    // the resolved theme url into $inheritance so seasons/episodes
+                    // inherit it — mirroring the batch matchSeries() path exactly.
+                    $themed = $this->applyThemeAudio($item, array_merge($existing, $resolved));
+                    $this->persistMetadata($itemId, $themed);
+                    $seriesTheme = $this->stringOrNull($themed['theme_audio_url'] ?? null);
+                    if ($seriesTheme !== null) {
+                        $inheritance['theme_audio_url'] = $seriesTheme;
+                    }
                     $childrenEnriched = $this->enrichSeriesChildren(
                         $itemId,
                         $tmdbId,
@@ -537,6 +543,15 @@ class LibraryMetadataMatcher
                         $inheritance,
                     );
                 } elseif ($itemType === 'season') {
+                    // Resolve the season's theme (local theme file next to the season
+                    // folder, else the Plex archive via the series' TVDB id) and thread
+                    // it into $inheritance so the season's episodes inherit it on
+                    // interactive re-match too.
+                    $themed = $this->applyThemeAudio($item, array_merge($existing, $resolved));
+                    $seasonTheme = $this->stringOrNull($themed['theme_audio_url'] ?? null);
+                    if ($seasonTheme !== null) {
+                        $inheritance['theme_audio_url'] = $seasonTheme;
+                    }
                     $childrenEnriched = $this->applyToSeason(
                         $itemId,
                         $tmdbId,

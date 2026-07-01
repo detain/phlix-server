@@ -10,6 +10,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MovieMetadataResolver;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
+use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicFetcherInterface;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
@@ -173,5 +174,184 @@ final class LibraryMetadataMatcherThemeMusicTest extends TestCase
 
         $this->assertIsArray($persisted);
         $this->assertArrayNotHasKey('theme_audio_url', $persisted);
+    }
+
+    /**
+     * Interactive re-match on a `series` item must thread the resolved theme into
+     * the child inheritance so episodes inherit `theme_audio_url` — mirroring the
+     * whole-library matchSeries() path (regression for the code-review finding
+     * that applyMatch() themed only the series root, not its children).
+     */
+    public function testInteractiveSeriesApplyPropagatesThemeToChildEpisode(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->with('series-1')->willReturn([
+            'id' => 'series-1',
+            'type' => 'series',
+            'name' => 'Firefly',
+            'path' => '/media/tv/Firefly',
+            'metadata_json' => '{}',
+            'metadata' => [],
+        ]);
+        // Series root has one direct episode child (season number 1, episode 1).
+        $items->method('findByParent')->willReturnCallback(
+            function (string $parentId): array {
+                if ($parentId === 'series-1') {
+                    return [[
+                        'id' => 'ep-1',
+                        'type' => 'episode',
+                        'name' => 'Serenity',
+                        'metadata_json' => '{"season":1,"episode":1}',
+                        'metadata' => ['season' => 1, 'episode' => 1],
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        // Season resolver returns an (empty) season so cachedSeason() succeeds; the
+        // episode still inherits the series theme regardless of season episode data.
+        $seriesResolver = $this->createMock(SeriesMetadataResolver::class);
+        $seriesResolver->method('resolveSeasonEpisodes')->willReturn([
+            'poster_path' => null,
+            'overview' => '',
+            'episodes' => [],
+        ]);
+
+        // Direct TMDB provider drives the interactive apply; details carry the
+        // TVDB id so the theme resolver's Plex fallback fires.
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
+        $tmdb->method('getTvDetails')->with('1437')->willReturn([
+            'name' => 'Firefly',
+            'overview' => 'Space western.',
+            'tvdb_id' => '78874',
+        ]);
+
+        // Plex archive returns audio → theme resolver caches + yields the item URL.
+        $fetcher = $this->createMock(ThemeMusicFetcherInterface::class);
+        $fetcher->method('fetch')
+            ->with('https://tvthemes.plexapp.com/78874.mp3', 5)
+            ->willReturn('THEME-BYTES');
+
+        // Capture the persisted metadata for BOTH the series root and its episode.
+        $persisted = [];
+        $items->method('update')->willReturnCallback(
+            function (string $id, array $data) use (&$persisted): void {
+                if (isset($data['metadata_json'])) {
+                    $persisted[$id] = $data['metadata_json'];
+                }
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->logger(),
+            $tmdb,
+            null,
+            null,
+            null,
+            $this->themeResolver($fetcher),
+        );
+
+        $result = $matcher->applyMatch('series-1', '1437', 'tv');
+
+        $this->assertTrue($result['matched']);
+        // Series root themed.
+        $this->assertArrayHasKey('series-1', $persisted);
+        $this->assertSame('/stream/theme-media/item/series-1', $persisted['series-1']['theme_audio_url']);
+        // Child episode inherited the SERIES theme on interactive re-match.
+        $this->assertArrayHasKey('ep-1', $persisted);
+        $this->assertArrayHasKey('theme_audio_url', $persisted['ep-1']);
+        $this->assertSame('/stream/theme-media/item/series-1', $persisted['ep-1']['theme_audio_url']);
+    }
+
+    /**
+     * Interactive re-match on a `season` item must thread the resolved theme into
+     * the child inheritance so the season's episodes inherit `theme_audio_url`.
+     */
+    public function testInteractiveSeasonApplyPropagatesThemeToChildEpisode(): void
+    {
+        $seriesResolver = $this->createMock(SeriesMetadataResolver::class);
+        $seriesResolver->method('resolveSeasonEpisodes')->willReturn([
+            'poster_path' => null,
+            'overview' => '',
+            'episodes' => [],
+        ]);
+
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('hasApiKey')->willReturn(true);
+        $tmdb->method('getTvDetails')->with('1437')->willReturn([
+            'name' => 'Firefly',
+            'overview' => 'Space western.',
+            'tvdb_id' => '78874',
+        ]);
+
+        // A season item is not series-typed, so resolveForItem() never fires the
+        // Plex fallback for it — its theme must come from a LOCAL Emby/Kodi
+        // theme.mp3 next to the season. Stand up a real one on disk.
+        $seasonDir = sys_get_temp_dir() . '/matcher_season_' . uniqid();
+        @mkdir($seasonDir, 0o775, true);
+        file_put_contents($seasonDir . '/theme.mp3', 'LOCAL-THEME');
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->with('season-1')->willReturn([
+            'id' => 'season-1',
+            'type' => 'season',
+            'name' => 'Season 1',
+            'path' => $seasonDir . '/S01E01.mkv',
+            'metadata_json' => '{"season":1}',
+            'metadata' => ['season' => 1],
+        ]);
+        $items->method('findByParent')->willReturnCallback(
+            function (string $parentId): array {
+                if ($parentId === 'season-1') {
+                    return [[
+                        'id' => 'ep-1',
+                        'type' => 'episode',
+                        'name' => 'Serenity',
+                        'metadata_json' => '{"season":1,"episode":1}',
+                        'metadata' => ['season' => 1, 'episode' => 1],
+                    ]];
+                }
+                return [];
+            }
+        );
+
+        $persisted = [];
+        $items->method('update')->willReturnCallback(
+            function (string $id, array $data) use (&$persisted): void {
+                if (isset($data['metadata_json'])) {
+                    $persisted[$id] = $data['metadata_json'];
+                }
+            }
+        );
+
+        $fetcher = $this->createMock(ThemeMusicFetcherInterface::class);
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->logger(),
+            $tmdb,
+            null,
+            null,
+            null,
+            $this->themeResolver($fetcher),
+        );
+
+        $result = $matcher->applyMatch('season-1', '1437', 'tv');
+
+        // Clean up the temp season theme dir.
+        @unlink($seasonDir . '/theme.mp3');
+        @rmdir($seasonDir);
+
+        $this->assertTrue($result['matched']);
+        // The season's episode inherited the season theme (item URL of the season).
+        $this->assertArrayHasKey('ep-1', $persisted);
+        $this->assertArrayHasKey('theme_audio_url', $persisted['ep-1']);
+        $this->assertSame('/stream/theme-media/item/season-1', $persisted['ep-1']['theme_audio_url']);
     }
 }

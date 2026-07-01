@@ -413,6 +413,87 @@ class LibraryMetadataMatcherTest extends TestCase
     }
 
     /**
+     * Episodes get their own cast/crew + per-episode vote average AND inherit the
+     * parent series' genres, tags and backdrop (episodes carry none of their own).
+     */
+    public function testEpisodeGetsCastCrewVoteAndInheritsGenresTagsBackdrop(): void
+    {
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('getByLibrary')->willReturnOnConsecutiveCalls(
+            [['id' => 'series-1', 'type' => 'series', 'name' => '24', 'metadata' => []]],
+            []
+        );
+        $items->method('findByParent')->willReturnCallback(static function (string $parentId): array {
+            if ($parentId === 'series-1') {
+                return [['id' => 'ep-1', 'type' => 'episode', 'name' => '24', 'metadata' => ['season' => 1, 'episode' => 1]]];
+            }
+            return [];
+        });
+
+        $seriesResolver = $this->createMock(\Phlix\Media\Metadata\SeriesMetadataResolver::class);
+        $seriesResolver->method('resolve')->willReturn([
+            'external_ids' => ['tmdb' => '1668'],
+            'tmdb_id' => '1668',
+            'poster_url' => 'https://image.tmdb.org/t/p/w500/series.jpg',
+            'backdrop_url' => 'https://image.tmdb.org/t/p/w500/back.jpg',
+            'overview' => 'Real-time thriller.',
+            'genres' => ['Drama', 'Action & Adventure'],
+            'tags' => ['terrorism', 'counter terrorism'],
+            'sources' => ['tmdb'],
+        ]);
+        $seriesResolver->method('resolveSeasonEpisodes')->with('1668', 1)->willReturn([
+            'poster_url' => 'https://image.tmdb.org/t/p/w500/s1.jpg',
+            'overview' => 'Season one.',
+            'episodes' => [
+                1 => [
+                    'episode_title' => '12:00 A.M.',
+                    'overview' => 'Jack Bauer.',
+                    'poster_url' => 'https://image.tmdb.org/t/p/w500/e1.jpg',
+                    'air_date' => '2001-11-06',
+                    'runtime' => 44,
+                    'vote_average' => 7.8,
+                    'cast' => [
+                        ['name' => 'Kiefer Sutherland', 'role' => 'Jack Bauer', 'profile_url' => 'https://i/w185/k.jpg'],
+                    ],
+                    'crew' => [
+                        ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_url' => null],
+                    ],
+                ],
+            ],
+        ]);
+
+        $updates = [];
+        $items->method('update')->willReturnCallback(
+            static function (string $id, array $data) use (&$updates): void {
+                $updates[$id] = is_array($data['metadata_json'] ?? null) ? $data['metadata_json'] : [];
+            }
+        );
+
+        $matcher = new LibraryMetadataMatcher(
+            $items,
+            $this->createMock(MovieMetadataResolver::class),
+            $seriesResolver,
+            $this->makeLogger()
+        );
+        $matcher->matchLibrary('lib-1');
+
+        $ep = $updates['ep-1'];
+        // Episode-level cast/crew in the canonical people shape + per-episode rating.
+        $this->assertSame('Kiefer Sutherland', $ep['cast'][0]['name']);
+        $this->assertSame('Jack Bauer', $ep['cast'][0]['role']);
+        $this->assertSame('https://i/w185/k.jpg', $ep['cast'][0]['profile_url']);
+        $this->assertSame('Stephen Hopkins', $ep['crew'][0]['name']);
+        $this->assertSame('Director', $ep['crew'][0]['job']);
+        $this->assertSame(7.8, $ep['vote_average']);
+        // Inherited series-level fields.
+        $this->assertSame(['Drama', 'Action & Adventure'], $ep['genres']);
+        $this->assertSame(['terrorism', 'counter terrorism'], $ep['tags']);
+        $this->assertSame('https://image.tmdb.org/t/p/w500/back.jpg', $ep['backdrop_url']);
+        // The `actors` flat-array landmine is not touched by episode enrichment.
+        $this->assertArrayNotHasKey('actors', $ep);
+    }
+
+    /**
      * An episode whose TMDB still is missing falls back to the series poster so it
      * never renders blank.
      */

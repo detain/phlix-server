@@ -107,6 +107,101 @@ class TmdbProviderTest extends TestCase
         $this->assertSame(44, $season['episodes'][0]['runtime']);
     }
 
+    public function testGetTvSeasonRequestsCreditsAndCapturesGuestStarsCrewAndVote(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->expects($this->once())
+            ->method('get')
+            ->with(
+                '/tv/1668/season/1',
+                $this->callback(static function (array $p): bool {
+                    $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                    return str_contains($append, 'credits');
+                }),
+            )
+            ->willReturn([
+                'poster_path' => '/s1.jpg',
+                'overview' => 'Season one.',
+                // Season-level regular cast (appended credits) — a base for every episode.
+                'credits' => [
+                    'cast' => [
+                        ['name' => 'Kiefer Sutherland', 'character' => 'Jack Bauer', 'profile_path' => '/kiefer.jpg'],
+                    ],
+                ],
+                'episodes' => [
+                    [
+                        'episode_number' => 1,
+                        'name' => '12:00 A.M.',
+                        'overview' => 'O1',
+                        'still_path' => '/e1.jpg',
+                        'air_date' => '2001-11-06',
+                        'runtime' => 44,
+                        'vote_average' => 7.8,
+                        'guest_stars' => [
+                            ['name' => 'Dennis Haysbert', 'character' => 'David Palmer', 'profile_path' => '/dennis.jpg'],
+                            ['name' => 'Kiefer Sutherland', 'character' => 'Jack Bauer'], // dup regular → deduped
+                        ],
+                        'crew' => [
+                            ['name' => 'Stephen Hopkins', 'job' => 'Director', 'profile_path' => '/hopkins.jpg'],
+                            ['name' => 'Some Gaffer', 'job' => 'Gaffer'], // non-key job dropped
+                        ],
+                    ],
+                ],
+            ]);
+
+        $season = (new TmdbProvider('k', $http))->getTvSeason('1668', 1);
+
+        $ep = $season['episodes'][0];
+        $this->assertSame(7.8, $ep['vote_average']);
+
+        // Cast = season regulars ∪ guest stars, de-duplicated by name, canonical shape.
+        $castNames = array_map(static fn(array $c): string => $c['name'], $ep['cast']);
+        $this->assertSame(['Kiefer Sutherland', 'Dennis Haysbert'], $castNames);
+        $this->assertSame('Jack Bauer', $ep['cast'][0]['role']);
+        $this->assertSame('https://image.tmdb.org/t/p/w185/kiefer.jpg', $ep['cast'][0]['profile_url']);
+        $this->assertSame('David Palmer', $ep['cast'][1]['role']);
+
+        // Crew = episode key crew only (Director kept, Gaffer dropped).
+        $this->assertCount(1, $ep['crew']);
+        $this->assertSame('Stephen Hopkins', $ep['crew'][0]['name']);
+        $this->assertSame('Director', $ep['crew'][0]['job']);
+        $this->assertSame('https://image.tmdb.org/t/p/w185/hopkins.jpg', $ep['crew'][0]['profile_url']);
+    }
+
+    public function testGetTvDetailsExposesTagsFromKeywords(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1668,
+            'name' => '24',
+            'first_air_date' => '2001-11-06',
+            // TMDB TV nests keywords under keywords.results[].
+            'keywords' => ['results' => [
+                ['id' => 1, 'name' => 'terrorism'],
+                ['id' => 2, 'name' => 'counter terrorism'],
+                ['id' => 1, 'name' => 'terrorism'], // dup name → de-duped
+            ]],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertSame(['terrorism', 'counter terrorism'], $details['tags']);
+    }
+
+    public function testGetTvDetailsRequestsKeywords(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->expects($this->once())
+            ->method('get')
+            ->with('/tv/1668', $this->callback(static function (array $p): bool {
+                $append = is_string($p['append_to_response'] ?? null) ? $p['append_to_response'] : '';
+                return str_contains($append, 'keywords');
+            }))
+            ->willReturn(['id' => 1668, 'name' => '24']);
+
+        (new TmdbProvider('k', $http))->getTvDetails('1668');
+    }
+
     public function testGetTvDetailsReturnsEmptyOnNullResponse(): void
     {
         $http = $this->createMock(MetadataHttpClient::class);

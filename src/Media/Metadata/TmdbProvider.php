@@ -271,9 +271,10 @@ class TmdbProvider implements MetadataProviderInterface
      */
     public function getTvDetails(string $externalId, array $options = []): array
     {
+        $append = 'genres,external_ids,content_ratings,aggregate_credits,production_companies,keywords';
         $response = $this->http->get("/tv/{$externalId}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
-            'append_to_response' => 'genres,external_ids,content_ratings,aggregate_credits,production_companies',
+            'append_to_response' => $append,
         ]);
         if ($response === null) {
             return [];
@@ -284,6 +285,13 @@ class TmdbProvider implements MetadataProviderInterface
 
     /**
      * Get a TV season's details + episode list from TMDB.
+     *
+     * `append_to_response=credits` pulls the season-level regular cast in the SAME
+     * request (no extra HTTP round-trip). Each episode object in the season
+     * response already carries its own `guest_stars` and `crew`, so per-episode
+     * cast is (season regulars ∪ that episode's guest stars) and per-episode crew
+     * is that episode's crew — richer than a per-episode `/episode/{e}` call and a
+     * single request for the whole season.
      *
      * @param string $externalId   TMDB TV series ID.
      * @param int    $seasonNumber Season number (0 = Specials).
@@ -297,7 +305,10 @@ class TmdbProvider implements MetadataProviderInterface
      *         overview: string,
      *         still_path: string|null,
      *         air_date: string,
-     *         runtime: int
+     *         runtime: int,
+     *         vote_average: float,
+     *         cast: list<array{name: string, role: string, profile_url: string|null}>,
+     *         crew: list<array{name: string, job: string, profile_url: string|null}>
      *     }>
      * } Season details (empty `episodes` when the season is unknown).
      */
@@ -305,13 +316,20 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $response = $this->http->get("/tv/{$externalId}/season/{$seasonNumber}", [
             'language' => MetadataValue::asString($options['language'] ?? null, 'en-US'),
+            'append_to_response' => 'credits',
         ]);
         if ($response === null) {
             return ['poster_path' => null, 'overview' => '', 'episodes' => []];
         }
 
+        // Season-level regular cast (from the appended `credits.cast`), shared by
+        // every episode as a base before each episode's own guest stars are folded in.
+        $seasonCredits = MetadataValue::asAssoc($response['credits'] ?? null);
+        $seasonCast = $this->buildEpisodeCast(MetadataValue::asAssocList($seasonCredits['cast'] ?? null));
+
         $episodes = [];
         foreach (MetadataValue::asAssocList($response['episodes'] ?? null) as $ep) {
+            $guestStars = $this->buildEpisodeCast(MetadataValue::asAssocList($ep['guest_stars'] ?? null));
             $episodes[] = [
                 'episode_number' => MetadataValue::asInt($ep['episode_number'] ?? null),
                 'name' => MetadataValue::asString($ep['name'] ?? null),
@@ -319,6 +337,9 @@ class TmdbProvider implements MetadataProviderInterface
                 'still_path' => MetadataValue::asNullableString($ep['still_path'] ?? null),
                 'air_date' => MetadataValue::asString($ep['air_date'] ?? null),
                 'runtime' => MetadataValue::asInt($ep['runtime'] ?? null),
+                'vote_average' => MetadataValue::asFloat($ep['vote_average'] ?? null),
+                'cast' => $this->mergeCast($seasonCast, $guestStars),
+                'crew' => $this->buildEpisodeCrew(MetadataValue::asAssocList($ep['crew'] ?? null)),
             ];
         }
 
@@ -327,6 +348,80 @@ class TmdbProvider implements MetadataProviderInterface
             'overview' => MetadataValue::asString($response['overview'] ?? null),
             'episodes' => $episodes,
         ];
+    }
+
+    /**
+     * Build rich cast objects from a TMDB season/episode `cast`/`guest_stars`
+     * list. These entries carry `character` + `profile_path` DIRECTLY (movie-style),
+     * unlike the series `aggregate_credits` shape ({@see self::buildTvCast()}).
+     *
+     * @param list<array<string, mixed>> $cast Raw TMDB cast/guest-star entries.
+     * @return list<array{name: string, role: string, profile_url: string|null}>
+     */
+    private function buildEpisodeCast(array $cast): array
+    {
+        $out = [];
+        foreach (array_slice($cast, 0, self::MAX_CAST) as $member) {
+            $name = MetadataValue::asString($member['name'] ?? null);
+            if ($name === '') {
+                continue;
+            }
+            $out[] = [
+                'name' => $name,
+                'role' => MetadataValue::asString($member['character'] ?? null),
+                'profile_url' => $this->profileUrl(
+                    MetadataValue::asNullableString($member['profile_path'] ?? null),
+                ),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Merge season regulars with an episode's guest stars, de-duplicating by
+     * name (a guest star already listed as a regular is not repeated) and capping
+     * at {@see self::MAX_CAST}.
+     *
+     * @param list<array{name: string, role: string, profile_url: string|null}> $base  Season regulars.
+     * @param list<array{name: string, role: string, profile_url: string|null}> $guest Episode guest stars.
+     * @return list<array{name: string, role: string, profile_url: string|null}>
+     */
+    private function mergeCast(array $base, array $guest): array
+    {
+        $out = [];
+        $seen = [];
+        foreach (array_merge($base, $guest) as $member) {
+            if (isset($seen[$member['name']])) {
+                continue;
+            }
+            $seen[$member['name']] = true;
+            $out[] = $member;
+            if (count($out) >= self::MAX_CAST) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Build key-crew objects from a TMDB episode `crew` list. Episode crew entries
+     * carry a single `job` field directly (movie-style); filtered to
+     * {@see self::KEY_CREW_JOBS}, de-duplicated and capped by {@see self::filterKeyCrew()}.
+     *
+     * @param list<array<string, mixed>> $crew Raw TMDB episode crew entries.
+     * @return list<array{name: string, job: string, profile_url: string|null}>
+     */
+    private function buildEpisodeCrew(array $crew): array
+    {
+        $rows = [];
+        foreach ($crew as $member) {
+            $rows[] = [
+                'name' => MetadataValue::asString($member['name'] ?? null),
+                'job' => MetadataValue::asString($member['job'] ?? null),
+                'profile_path' => MetadataValue::asNullableString($member['profile_path'] ?? null),
+            ];
+        }
+        return $this->filterKeyCrew($rows);
     }
 
     /**
@@ -381,6 +476,11 @@ class TmdbProvider implements MetadataProviderInterface
         ));
         $studio = $companies[0]['name'] ?? null;
 
+        // Series-level tags. TMDB TV `keywords` are nested under `keywords.results[]`
+        // (movies use `keywords.keywords[]`); each is `{id, name}`. These flow to
+        // the series record and are inherited by its episodes.
+        $tags = $this->extractKeywords($data['keywords'] ?? null);
+
         return [
             'name' => MetadataValue::asString($data['name'] ?? ($data['original_name'] ?? null)),
             'original_name' => MetadataValue::asString($data['original_name'] ?? null),
@@ -389,6 +489,7 @@ class TmdbProvider implements MetadataProviderInterface
             'vote_average' => MetadataValue::asFloat($data['vote_average'] ?? null),
             'year' => $year,
             'genres' => $genreNames,
+            'tags' => $tags,
             'actors' => $actors,
             'cast' => $castObjects,
             'crew' => $crewObjects,
@@ -573,6 +674,34 @@ class TmdbProvider implements MetadataProviderInterface
             }
         }
         return null;
+    }
+
+    /**
+     * Pull tag names from a TMDB `keywords` block.
+     *
+     * TMDB nests TV keywords under `keywords.results[]` and movie keywords under
+     * `keywords.keywords[]`; both entry shapes are `{id, name}`. Names are
+     * de-duplicated and blanks dropped so only usable tags survive.
+     *
+     * @param mixed $keywords Raw `keywords` payload.
+     * @return list<string> De-duplicated tag names (possibly empty).
+     */
+    private function extractKeywords(mixed $keywords): array
+    {
+        $block = MetadataValue::asAssoc($keywords);
+        $entries = MetadataValue::asAssocList($block['results'] ?? null);
+        if ($entries === []) {
+            $entries = MetadataValue::asAssocList($block['keywords'] ?? null);
+        }
+
+        $out = [];
+        foreach ($entries as $entry) {
+            $name = MetadataValue::asString($entry['name'] ?? null);
+            if ($name !== '' && !in_array($name, $out, true)) {
+                $out[] = $name;
+            }
+        }
+        return $out;
     }
 
     /**

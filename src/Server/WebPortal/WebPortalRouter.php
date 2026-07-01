@@ -27,6 +27,8 @@ use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Controllers\MediaThemeAudioController;
+use Phlix\Server\Http\Controllers\UserAvatarController;
+use Phlix\Media\Storage\AvatarStorage;
 
 /**
  * WebPortalRouter handles API routing for the web portal.
@@ -79,6 +81,12 @@ class WebPortalRouter
     /** @var AuditLogger|null Security-event logger for admin-gated operations; null when not wired */
     private ?AuditLogger $auditLogger;
 
+    /** @var AvatarStorage|null Stores user avatar images; null when not wired */
+    private ?AvatarStorage $avatarStorage;
+
+    /** @var UserAvatarController|null Handles avatar upload/delete routes; null when not wired */
+    private ?UserAvatarController $userAvatarController;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -100,6 +108,8 @@ class WebPortalRouter
      * @param UserItemDataRepository|null $userItemData Per-user favorites/ratings (optional)
      * @param MediaUserDataController|null $mediaUserDataController Favorite/rating routes (optional)
      * @param AuditLogger|null $auditLogger Security-event logger for admin operations (optional)
+     * @param AvatarStorage|null $avatarStorage Stores user avatar images (optional)
+     * @param UserAvatarController|null $userAvatarController Avatar upload/delete routes (optional)
      *
      * @example
      * ```php
@@ -128,7 +138,9 @@ class WebPortalRouter
         ?UserProfileManager $profileManager = null,
         ?UserItemDataRepository $userItemData = null,
         ?MediaUserDataController $mediaUserDataController = null,
-        ?AuditLogger $auditLogger = null
+        ?AuditLogger $auditLogger = null,
+        ?AvatarStorage $avatarStorage = null,
+        ?UserAvatarController $userAvatarController = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -144,6 +156,8 @@ class WebPortalRouter
         $this->userItemData = $userItemData;
         $this->mediaUserDataController = $mediaUserDataController;
         $this->auditLogger = $auditLogger;
+        $this->avatarStorage = $avatarStorage;
+        $this->userAvatarController = $userAvatarController;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -214,6 +228,10 @@ class WebPortalRouter
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
             $r->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
+
+            // Avatar routes (Step 12.3)
+            $r->post('/api/v1/users/me/avatar', [$this, 'uploadAvatar']);
+            $r->delete('/api/v1/users/me/avatar', [$this, 'deleteAvatar']);
         }, [$auth]);
 
         // Admin-only: delete a media item (Step 11.6). Gate with AdminMiddleware
@@ -1318,6 +1336,68 @@ class WebPortalRouter
         $this->userRepository->updateSettings($userId, $settings);
 
         return (new Response())->json(['message' => 'Settings updated']);
+    }
+
+    /**
+     * Upload an avatar for the authenticated user (Step 12.3).
+     *
+     * Thin delegate to {@see UserAvatarController::uploadAvatar()}; responds
+     * 503 when the avatar feature is not wired.
+     *
+     * @param Request              $request The HTTP request (userId set from auth)
+     * @param array<string,string> $params  Route parameters (unused)
+     *
+     * @return Response JSON response with avatar_url or error
+     *
+     * @api_endpoint POST /api/v1/users/me/avatar
+     *
+     * @requires Authentication
+     */
+    public function uploadAvatar(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->avatarStorage === null || $this->userAvatarController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Avatar service not configured',
+            ]);
+        }
+
+        return $this->userAvatarController->uploadAvatar($request, $params);
+    }
+
+    /**
+     * Delete the avatar for the authenticated user (Step 12.3).
+     *
+     * Thin delegate to {@see UserAvatarController::deleteAvatar()}; responds
+     * 503 when the avatar feature is not wired.
+     *
+     * @param Request              $request The HTTP request (userId set from auth)
+     * @param array<string,string> $params  Route parameters (unused)
+     *
+     * @return Response JSON response with success message or error
+     *
+     * @api_endpoint DELETE /api/v1/users/me/avatar
+     *
+     * @requires Authentication
+     */
+    public function deleteAvatar(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if (!$userId) {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->avatarStorage === null || $this->userAvatarController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Avatar service not configured',
+            ]);
+        }
+
+        return $this->userAvatarController->deleteAvatar($request, $params);
     }
 
     /**

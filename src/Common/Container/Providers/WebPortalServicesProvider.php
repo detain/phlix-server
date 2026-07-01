@@ -18,12 +18,14 @@ use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\ExifProvider;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
+use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
@@ -143,6 +145,9 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $mediaUserDataController = $c->get(MediaUserDataController::class);
                     /** @var AuditLogger $auditLogger */
                     $auditLogger = $c->get(AuditLogger::class);
+                    /** @var AvatarStorage $avatarStorage */
+                    $avatarStorage = $c->get(AvatarStorage::class);
+                    $userAvatarController = new UserAvatarController($avatarStorage, $userRepository);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -157,6 +162,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $userItemData,
                         $mediaUserDataController,
                         $auditLogger,
+                        $avatarStorage,
+                        $userAvatarController,
                     );
                 }
             ),

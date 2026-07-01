@@ -508,6 +508,7 @@ class LibraryMetadataMatcher
             if ($details !== []) {
                 $resolved = $this->formatSeriesDetails($tmdbId, $details);
 
+                $inheritance = $this->seriesInheritance($resolved);
                 if ($itemType === 'series') {
                     $this->persistMetadata($itemId, array_merge($existing, $resolved));
                     $childrenEnriched = $this->enrichSeriesChildren(
@@ -516,6 +517,7 @@ class LibraryMetadataMatcher
                         $this->stringOrNull($resolved['poster_url'] ?? null),
                         $this->stringOrNull($resolved['backdrop_url'] ?? null),
                         $this->stringOrNull($resolved['overview'] ?? null),
+                        $inheritance,
                     );
                 } elseif ($itemType === 'season') {
                     $childrenEnriched = $this->applyToSeason(
@@ -525,6 +527,7 @@ class LibraryMetadataMatcher
                         $this->stringOrNull($resolved['poster_url'] ?? null),
                         $this->stringOrNull($resolved['backdrop_url'] ?? null),
                         $this->stringOrNull($resolved['overview'] ?? null),
+                        $inheritance,
                     );
                 } elseif ($itemType === 'episode') {
                     $this->applyToEpisode(
@@ -534,6 +537,7 @@ class LibraryMetadataMatcher
                         $existing,
                         $this->stringOrNull($resolved['poster_url'] ?? null),
                         $this->stringOrNull($resolved['overview'] ?? null),
+                        $inheritance,
                     );
                 } else {
                     // A non-hierarchy item matched against TV: persist series-level metadata.
@@ -571,7 +575,9 @@ class LibraryMetadataMatcher
      * Apply a chosen series id to a single `season` item: persist the season's
      * poster/overview + enrich its episode children.
      *
-     * @param array<string, mixed> $existing Decoded existing season metadata.
+     * @param array<string, mixed> $existing          Decoded existing season metadata.
+     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     *     Series-level fields (genres/tags/backdrop) episodes inherit.
      *
      * @return int Episodes enriched.
      */
@@ -581,7 +587,8 @@ class LibraryMetadataMatcher
         array $existing,
         ?string $seriesPoster,
         ?string $seriesBackdrop,
-        ?string $seriesOverview
+        ?string $seriesOverview,
+        array $seriesInheritance = []
     ): int {
         $seasonNumber = $this->intMeta($existing, 'season');
         $seasonData = ($seasonNumber !== null && $this->seriesResolver !== null)
@@ -595,7 +602,7 @@ class LibraryMetadataMatcher
 
         $enriched = 0;
         foreach ($this->items->findByParent($seasonId) as $episode) {
-            $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+            $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
             $enriched++;
         }
         return $enriched;
@@ -607,6 +614,8 @@ class LibraryMetadataMatcher
      *
      * @param array<string, mixed> $episode  Hydrated episode row.
      * @param array<string, mixed> $existing Decoded existing episode metadata.
+     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     *     Series-level fields (genres/tags/backdrop) the episode inherits.
      */
     private function applyToEpisode(
         string $episodeId,
@@ -614,13 +623,14 @@ class LibraryMetadataMatcher
         string $tmdbId,
         array $existing,
         ?string $seriesPoster,
-        ?string $seriesOverview
+        ?string $seriesOverview,
+        array $seriesInheritance = []
     ): void {
         $seasonNumber = $this->intMeta($existing, 'season');
         $seasonData = ($seasonNumber !== null && $this->seriesResolver !== null)
             ? $this->seriesResolver->resolveSeasonEpisodes($tmdbId, $seasonNumber)
             : null;
-        $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+        $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
     }
 
     /**
@@ -665,6 +675,10 @@ class LibraryMetadataMatcher
         ));
         if ($genreNames !== []) {
             $result['genres'] = $genreNames;
+        }
+        $tags = $this->stringList($details['tags'] ?? null);
+        if ($tags !== []) {
+            $result['tags'] = $tags;
         }
         $year = MetadataValue::asNullableInt($details['year'] ?? null);
         if ($year !== null) {
@@ -928,6 +942,7 @@ class LibraryMetadataMatcher
                 $this->stringOrNull($resolved['poster_url'] ?? null),
                 $this->stringOrNull($resolved['backdrop_url'] ?? null),
                 $this->stringOrNull($resolved['overview'] ?? null),
+                $this->seriesInheritance($resolved),
             );
         }
 
@@ -938,11 +953,13 @@ class LibraryMetadataMatcher
      * Enrich a series' seasons + episodes from TMDB, caching one season fetch per
      * season number.
      *
-     * @param string      $seriesId       The series item id.
-     * @param string      $tmdbId         Resolved TMDB series id.
-     * @param string|null $seriesPoster   Series poster URL (episode/season fallback).
-     * @param string|null $seriesBackdrop Series backdrop URL.
-     * @param string|null $seriesOverview Series overview (episode/season fallback).
+     * @param string      $seriesId          The series item id.
+     * @param string      $tmdbId            Resolved TMDB series id.
+     * @param string|null $seriesPoster      Series poster URL (episode/season fallback).
+     * @param string|null $seriesBackdrop    Series backdrop URL.
+     * @param string|null $seriesOverview    Series overview (episode/season fallback).
+     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     *     Series-level fields (genres, tags, backdrop) inherited by every episode.
      *
      * @return int Number of child nodes (seasons + episodes) enriched.
      */
@@ -951,7 +968,8 @@ class LibraryMetadataMatcher
         string $tmdbId,
         ?string $seriesPoster,
         ?string $seriesBackdrop,
-        ?string $seriesOverview
+        ?string $seriesOverview,
+        array $seriesInheritance = []
     ): int {
         /** @var array<int, array<string, mixed>> $seasonCache */
         $seasonCache = [];
@@ -973,12 +991,12 @@ class LibraryMetadataMatcher
                 );
                 $enriched++;
                 foreach ($this->items->findByParent($childId) as $episode) {
-                    $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview);
+                    $this->enrichEpisode($episode, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
                     $enriched++;
                 }
             } elseif ($childType === 'episode') {
                 $seasonData = $this->cachedSeason($tmdbId, $this->intMeta($childMeta, 'season'), $seasonCache);
-                $this->enrichEpisode($child, $seasonData, $seriesPoster, $seriesOverview);
+                $this->enrichEpisode($child, $seasonData, $seriesPoster, $seriesOverview, $seriesInheritance);
                 $enriched++;
             }
         }
@@ -987,19 +1005,30 @@ class LibraryMetadataMatcher
     }
 
     /**
-     * Persist an episode's TMDB title/still/overview/air-date, falling back to the
+     * Persist an episode's TMDB title/still/overview/air-date + cast/crew/rating,
+     * inheriting the series' genres/tags/backdrop, falling back to the
      * season/series poster + series overview so it never renders blank.
+     *
+     * Episode cast is (season regulars ∪ that episode's guest stars) and crew is
+     * the episode's own key crew — both in the SAME canonical `{name, role/job,
+     * profile_url}` shape movies/series use, so {@see \Phlix\Media\Library\MediaItemShaper}
+     * renders them with no shaper change. `genres`, `tags` and `backdrop_url` are
+     * inherited from the parent series record (episodes carry no TMDB genres/tags
+     * of their own).
      *
      * @param array<string, mixed>      $episode        Hydrated episode row.
      * @param array<string, mixed>|null $seasonData     Resolved season data (or null).
      * @param string|null               $seriesPoster   Series poster fallback.
      * @param string|null               $seriesOverview Series overview fallback.
+     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     *     Series-level fields inherited by the episode.
      */
     private function enrichEpisode(
         array $episode,
         ?array $seasonData,
         ?string $seriesPoster,
-        ?string $seriesOverview
+        ?string $seriesOverview,
+        array $seriesInheritance = []
     ): void {
         $id = is_string($episode['id'] ?? null) ? $episode['id'] : '';
         if ($id === '') {
@@ -1041,9 +1070,93 @@ class LibraryMetadataMatcher
             $patch['poster_url'] = $poster;
         }
 
+        // Episode-level cast/crew (season regulars + guest stars / episode crew).
+        $cast = $this->peopleList($info['cast'] ?? null);
+        if ($cast !== []) {
+            $patch['cast'] = $cast;
+        }
+        $crew = $this->peopleList($info['crew'] ?? null);
+        if ($crew !== []) {
+            $patch['crew'] = $crew;
+        }
+        // Episode rating (TMDB per-episode vote average).
+        if (isset($info['vote_average']) && is_float($info['vote_average']) && $info['vote_average'] > 0.0) {
+            $patch['vote_average'] = $info['vote_average'];
+        }
+
+        // Inherit series-level genres/tags/backdrop (episodes carry none of their
+        // own). Backdrop fallback: season backdrop (if the season resolver ever
+        // supplies one) → series backdrop.
+        $genres = $this->stringList($seriesInheritance['genres'] ?? null);
+        if ($genres !== []) {
+            $patch['genres'] = $genres;
+        }
+        $tags = $this->stringList($seriesInheritance['tags'] ?? null);
+        if ($tags !== []) {
+            $patch['tags'] = $tags;
+        }
+        $backdrop = ($seasonData !== null ? $this->stringOrNull($seasonData['backdrop_url'] ?? null) : null)
+            ?? $this->stringOrNull($seriesInheritance['backdrop_url'] ?? null);
+        if ($backdrop !== null) {
+            $patch['backdrop_url'] = $backdrop;
+        }
+
         if ($patch !== []) {
             $this->persistMetadata($id, array_merge($meta, $patch));
         }
+    }
+
+    /**
+     * Build the series-inheritance context (genres, tags, backdrop) an episode
+     * inherits, from the resolved series metadata array. Absent fields are
+     * omitted so a missing series field never overwrites episode data.
+     *
+     * @param array<string, mixed> $resolved Resolved series metadata.
+     * @return array{genres?: list<string>, tags?: list<string>, backdrop_url?: string}
+     */
+    private function seriesInheritance(array $resolved): array
+    {
+        $context = [];
+        $genres = $this->stringList($resolved['genres'] ?? null);
+        if ($genres !== []) {
+            $context['genres'] = $genres;
+        }
+        $tags = $this->stringList($resolved['tags'] ?? null);
+        if ($tags !== []) {
+            $context['tags'] = $tags;
+        }
+        $backdrop = $this->stringOrNull($resolved['backdrop_url'] ?? null);
+        if ($backdrop !== null) {
+            $context['backdrop_url'] = $backdrop;
+        }
+        return $context;
+    }
+
+    /**
+     * Narrow a raw cast/crew value to the canonical people shape the media-item
+     * shaper renders. The resolver already produces `{name, role|job,
+     * profile_url}` objects; this defensively drops non-array/nameless entries.
+     *
+     * @param mixed $value Raw cast/crew list from the season resolver.
+     * @return list<array<string, mixed>>
+     */
+    private function peopleList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $name = MetadataValue::asString($entry['name'] ?? null);
+            if ($name === '') {
+                continue;
+            }
+            $out[] = $entry;
+        }
+        return $out;
     }
 
     /**

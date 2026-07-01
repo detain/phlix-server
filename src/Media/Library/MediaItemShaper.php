@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Media\Metadata\BackdropSrcset;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\PosterSrcset;
 
@@ -145,13 +146,24 @@ final class MediaItemShaper
         // `director` (string), set by shape(), are left exactly as they are.
         $merged['cast'] = self::normalizeCast($metadata);
         $merged['crew'] = self::normalizePeople($metadata['crew'] ?? null, 'job');
+        // Tags/keywords — detail-only (the list shape stays lean, like cast/crew).
+        // Series carry their own; episodes inherit the series tags at match time.
+        $merged['tags'] = self::normalizeStringList($metadata['tags'] ?? null);
         $merged['production_companies'] = self::normalizeCompanies($metadata['production_companies'] ?? null);
         $merged['studio'] = is_string($metadata['studio'] ?? null) && $metadata['studio'] !== ''
             ? $metadata['studio']
             : null;
-        $merged['backdrop_url'] = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
+        $backdropUrl = is_string($metadata['backdrop_url'] ?? null) && $metadata['backdrop_url'] !== ''
             ? $metadata['backdrop_url']
             : null;
+        $merged['backdrop_url'] = $backdropUrl;
+        // Full-bleed background variants (TMDB width swap). `backdrop_url_large`
+        // is the `/original` full-resolution asset for the page background;
+        // `backdrop_srcset` advertises w780/w1280/original so the client can pick
+        // by viewport. Both null for non-TMDB backdrops → the client uses
+        // `backdrop_url` unchanged.
+        $merged['backdrop_url_large'] = BackdropSrcset::largeUrl($backdropUrl);
+        $merged['backdrop_srcset'] = BackdropSrcset::forBackdropUrl($backdropUrl);
         $merged['theme_audio_url'] = is_string($metadata['theme_audio_url'] ?? null) && $metadata['theme_audio_url'] !== ''
             ? $metadata['theme_audio_url']
             : null;
@@ -417,6 +429,28 @@ final class MediaItemShaper
                     ? $entry['profile_url']
                     : null,
             ];
+        }
+        return $out;
+    }
+
+    /**
+     * Normalize a raw value to a de-duplicated list of non-empty strings (tags).
+     * Non-array inputs and blank/non-scalar entries are dropped.
+     *
+     * @param mixed $value Raw tags value from metadata_json.
+     * @return list<string>
+     */
+    private static function normalizeStringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $entry) {
+            $name = self::stringOrNull($entry);
+            if ($name !== null && !in_array($name, $out, true)) {
+                $out[] = $name;
+            }
         }
         return $out;
     }

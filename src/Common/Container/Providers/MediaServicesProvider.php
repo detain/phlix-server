@@ -24,8 +24,13 @@ use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
+use Phlix\Media\Metadata\ThemeMusic\StreamThemeMusicFetcher;
+use Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig;
+use Phlix\Media\Metadata\ThemeMusic\ThemeMusicFetcherInterface;
+use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -85,6 +90,25 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $tmdbApiKey = is_string($tmdbApiKeyRaw) && $tmdbApiKeyRaw !== ''
             ? $tmdbApiKeyRaw
             : ((string)(getenv('TMDB_API_KEY') ?: ''));
+
+        // Theme-music (M3) config. Prefer $appConfig['theme_music'] (config/server.php
+        // requires config/theme_music.php into it); fall back to a direct include so
+        // an entry point that doesn't compose the full server.php still gets the real
+        // config. Coerced/defaulted by ThemeMusicConfig::fromArray().
+        $themeMusicRaw = $appConfig['theme_music'] ?? null;
+        if (!is_array($themeMusicRaw)) {
+            /** @var mixed $included */
+            $included = @include __DIR__ . '/../../../../config/theme_music.php';
+            $themeMusicRaw = is_array($included) ? $included : [];
+        }
+        /** @var array<string, mixed> $themeMusicConfigArray */
+        $themeMusicConfigArray = [];
+        /** @var mixed $tmValue */
+        foreach ($themeMusicRaw as $tmKey => $tmValue) {
+            if (is_string($tmKey)) {
+                $themeMusicConfigArray[$tmKey] = $tmValue;
+            }
+        }
 
         $builder->addDefinitions([
             // Effective trailing-edition noise-suffix list, resolved ONCE when
@@ -264,6 +288,19 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('imdb', get(ImdbLookup::class))
                 ->constructorParameter('priorityConfig', get(PriorityConfig::class)),
 
+            // Theme-music (M3) producer. The validated config is built once from
+            // the coerced config array; the default fetcher uses the same
+            // verified-TLS stream approach as MetadataHttpClient; ThemeMediaFinder
+            // is shared with the library-level theme routes.
+            ThemeMusicConfig::class => factory(
+                static fn(): ThemeMusicConfig => ThemeMusicConfig::fromArray($themeMusicConfigArray)
+            ),
+            ThemeMusicFetcherInterface::class => autowire(StreamThemeMusicFetcher::class),
+            ThemeMusicResolver::class => autowire()
+                ->constructorParameter('config', get(ThemeMusicConfig::class))
+                ->constructorParameter('finder', get(ThemeMediaFinder::class))
+                ->constructorParameter('fetcher', get(ThemeMusicFetcherInterface::class)),
+
             // TV series resolver (TMDB TV). Shares the admin-keyed TmdbProvider so
             // series/season/episode matching uses the same API key as movies. The
             // effective PriorityConfig is injected (named) for the genres mode; the
@@ -294,7 +331,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // library's effective source order drives its metadata match.
                 // Named because PHP-DI skips defaulted optional ctor params.
                 ->constructorParameter('libraries', get(LibraryManager::class))
-                ->constructorParameter('priorityResolver', get(LibraryPriorityResolver::class)),
+                ->constructorParameter('priorityResolver', get(LibraryPriorityResolver::class))
+                // Theme-music (M3) producer — populates metadata_json.theme_audio_url
+                // at match time (local theme file, else Plex archive by TVDB id).
+                // Named because PHP-DI skips defaulted optional ctor params.
+                ->constructorParameter('themeMusic', get(ThemeMusicResolver::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`

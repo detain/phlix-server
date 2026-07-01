@@ -1096,6 +1096,13 @@ class Application
         $this->router->post('/api/v1/libraries/{id}/theme-media/scan', [$themeMediaController, 'scanThemeMedia']);
         $this->router->delete('/api/v1/libraries/{id}/theme-media', [$themeMediaController, 'deleteThemeMedia']);
 
+        // Item-level theme-audio stream (M3). Registered BEFORE the library-level
+        // `{libraryId}/audio|video` routes so the literal `item` segment wins
+        // (routes match in registration order). Serves the per-item theme
+        // resolved at match time into `metadata_json.theme_audio_url`.
+        $themeMusicStreamController = $this->getThemeMusicStreamController();
+        $this->router->get('/stream/theme-media/item/{mediaItemId}', [$themeMusicStreamController, 'streamItemTheme']);
+
         // Theme media streaming routes
         $this->router->get('/stream/theme-media/{libraryId}/audio', [$themeMediaStreamController, 'streamAudio']);
         $this->router->get('/stream/theme-media/{libraryId}/video', [$themeMediaStreamController, 'streamVideo']);
@@ -2769,6 +2776,67 @@ class Application
         /** @var \Phlix\Theming\ThemeMediaRepository */
         $themeMediaRepository = $this->container->get(\Phlix\Theming\ThemeMediaRepository::class);
         return new \Phlix\Server\Http\Controllers\ThemeMediaStreamController($themeMediaRepository);
+    }
+
+    /**
+     * Returns the item-level theme-music stream controller (M3).
+     *
+     * Serves `GET /stream/theme-media/item/{mediaItemId}` — the route the
+     * `metadata_json.theme_audio_url` slot points at. Falls back to a
+     * default-configured instance (config/theme_music.php) when no container is
+     * present (parity with the other controller factories here).
+     *
+     * @return \Phlix\Server\Http\Controllers\ThemeMusicStreamController
+     */
+    private function getThemeMusicStreamController(): \Phlix\Server\Http\Controllers\ThemeMusicStreamController
+    {
+        if ($this->container === null) {
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $items = new \Phlix\Media\Library\ItemRepository($db);
+            $finder = new \Phlix\Theming\ThemeMediaFinder();
+            $config = \Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig::fromArray(
+                self::loadThemeMusicConfig()
+            );
+            return new \Phlix\Server\Http\Controllers\ThemeMusicStreamController($items, $finder, $config);
+        }
+
+        /** @var \Phlix\Media\Library\ItemRepository */
+        $items = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
+        /** @var \Phlix\Theming\ThemeMediaFinder */
+        $finder = $this->container->get(\Phlix\Theming\ThemeMediaFinder::class);
+        /** @var \Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig */
+        $config = $this->container->get(\Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig::class);
+        return new \Phlix\Server\Http\Controllers\ThemeMusicStreamController($items, $finder, $config);
+    }
+
+    /**
+     * Load the raw `config/theme_music.php` array (M3), or an empty array when the
+     * file is absent/invalid — {@see \Phlix\Media\Metadata\ThemeMusic\ThemeMusicConfig::fromArray()}
+     * then applies its built-in defaults.
+     *
+     * @return array<string, mixed>
+     */
+    private static function loadThemeMusicConfig(): array
+    {
+        /** @var mixed $raw */
+        $raw = @include __DIR__ . '/../../../config/theme_music.php';
+        if (!is_array($raw)) {
+            return [];
+        }
+        $out = [];
+        /** @var mixed $value */
+        foreach ($raw as $key => $value) {
+            if (is_string($key)) {
+                $out[$key] = $value;
+            }
+        }
+        return $out;
     }
 
     /**

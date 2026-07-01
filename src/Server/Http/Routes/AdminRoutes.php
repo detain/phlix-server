@@ -13,6 +13,7 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
@@ -53,6 +54,7 @@ use Psr\Container\ContainerInterface;
  *  - `GET    /api/v1/admin/libraries/{id}/duplicates` → preview duplicate groups
  *  - `POST   /api/v1/admin/media/merge`              → apply a duplicate merge
  *  - `GET    /api/v1/admin/metadata/sources`         → available metadata-source names
+ *  - `GET    /api/v1/admin/watch-history`            → recent watch history (all users)
  *
  * Every route is gated by {@see AdminMiddleware} (which requires a
  * valid JWT in `Authorization: Bearer …` AND `users.is_admin = 1`).
@@ -153,6 +155,11 @@ final class AdminRoutes
                 $r->get('/dashboard/top-media', [$dashboardController, 'topMedia']);
                 $r->get('/dashboard/storage', [$dashboardController, 'storage']);
                 $r->get('/dashboard/activity', [$dashboardController, 'activity']);
+
+                /** @var WatchHistoryController $watchHistoryController */
+                $watchHistoryController = $container->get(WatchHistoryController::class);
+
+                $r->get('/watch-history', [$watchHistoryController, 'index']);
 
                 /** @var BackupController $backupController */
                 $backupController = $container->get(BackupController::class);

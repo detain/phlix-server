@@ -23,6 +23,7 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
+use Phlix\Admin\WatchHistoryService;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
@@ -32,6 +33,7 @@ use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
 use Phlix\Server\Http\Controllers\Admin\LogController;
+use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
@@ -108,6 +110,13 @@ final class AdminRoutesTest extends TestCase
         // sufficient here (the dedicated gating tests below DO dispatch to it).
         $sourceRegistry = new SourceRegistry();
         $adminMetadataSourceController = new AdminMetadataSourceController($sourceRegistry);
+        // Cross-user watch-history controller (Step S4). AdminRoutes::register()
+        // eagerly resolves it at bind time; the plugin-only tests below never
+        // dispatch to /watch-history, so a service over a mocked Connection is
+        // sufficient here.
+        $watchHistoryController = new WatchHistoryController(
+            new WatchHistoryService($this->createMock(Connection::class)),
+        );
         // Catalog controller: a real service wired to a stub SettingsRepository
         // and an offline fetcher (the lifecycle tests never hit the network).
         $catalogService = new PluginCatalogService(
@@ -142,6 +151,7 @@ final class AdminRoutesTest extends TestCase
             $adminProfileController,
             $adminMergeController,
             $adminMetadataSourceController,
+            $watchHistoryController,
             $pluginCatalogController,
             $catalogService,
         ) implements ContainerInterface {
@@ -163,6 +173,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly AdminProfileController $adminProfileController,
                 private readonly AdminMergeController $adminMergeController,
                 private readonly AdminMetadataSourceController $adminMetadataSourceController,
+                private readonly WatchHistoryController $watchHistoryController,
                 private readonly PluginCatalogController $pluginCatalogController,
                 private readonly PluginCatalogService $pluginCatalogService,
             ) {
@@ -210,6 +221,7 @@ final class AdminRoutesTest extends TestCase
                     AdminProfileController::class => $this->adminProfileController,
                     AdminMergeController::class => $this->adminMergeController,
                     AdminMetadataSourceController::class => $this->adminMetadataSourceController,
+                    WatchHistoryController::class => $this->watchHistoryController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -234,6 +246,7 @@ final class AdminRoutesTest extends TestCase
                     AdminProfileController::class,
                     AdminMergeController::class,
                     AdminMetadataSourceController::class,
+                    WatchHistoryController::class,
                 ], true);
             }
         };

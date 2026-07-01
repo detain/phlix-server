@@ -133,4 +133,94 @@ class LibraryRowTest extends TestCase
         $missing = LibraryRow::fromRow(['id' => 'lib-1', 'type' => 'series']);
         $this->assertFalse($missing->seriesPerDirectory());
     }
+
+    /**
+     * metadataPriority() parses a well-formed per-type map (from a JSON string
+     * options column), trimming source names and preserving order.
+     */
+    public function testMetadataPriorityParsesWellFormedMap(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => '{"metadata_priority":{"movie":["imdb"," tmdb "],"series":["tmdb"]}}',
+        ]);
+
+        $this->assertSame(
+            ['movie' => ['imdb', 'tmdb'], 'series' => ['tmdb']],
+            $row->metadataPriority(),
+        );
+    }
+
+    /**
+     * metadataPriority() returns null when the key is absent entirely.
+     */
+    public function testMetadataPriorityNullWhenAbsent(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => ['scan_interval' => 3600],
+        ]);
+
+        $this->assertNull($row->metadataPriority());
+    }
+
+    /**
+     * metadataPriority() returns null for a range of malformed shapes.
+     *
+     * @dataProvider malformedMetadataPriorityProvider
+     */
+    public function testMetadataPriorityNullForMalformedMap(mixed $value): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => ['metadata_priority' => $value],
+        ]);
+
+        $this->assertNull($row->metadataPriority());
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function malformedMetadataPriorityProvider(): array
+    {
+        return [
+            'empty map' => [[]],
+            'not an array (string)' => ['tmdb'],
+            'value not a list' => [['movie' => 'tmdb']],
+            'value list has non-string' => [['movie' => ['tmdb', 5]]],
+            'value list has blank string' => [['movie' => ['tmdb', '  ']]],
+            'value list empty' => [['movie' => []]],
+            'blank type key' => [['' => ['tmdb']]],
+            'numeric type key' => [[0 => ['tmdb']]],
+        ];
+    }
+
+    /**
+     * toArray() surfaces metadata_priority as a top-level key: the decoded map
+     * when well-formed, else null (so index/show responses carry it).
+     */
+    public function testToArraySurfacesMetadataPriority(): void
+    {
+        $withOverride = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => ['metadata_priority' => ['movie' => ['imdb', 'tmdb']]],
+        ]);
+        $arr = $withOverride->toArray();
+        $this->assertArrayHasKey('metadata_priority', $arr);
+        $this->assertSame(['movie' => ['imdb', 'tmdb']], $arr['metadata_priority']);
+
+        $withoutOverride = LibraryRow::fromRow([
+            'id' => 'lib-2',
+            'type' => 'movie',
+            'options' => ['scan_interval' => 3600],
+        ]);
+        $arr2 = $withoutOverride->toArray();
+        $this->assertArrayHasKey('metadata_priority', $arr2);
+        $this->assertNull($arr2['metadata_priority']);
+    }
 }

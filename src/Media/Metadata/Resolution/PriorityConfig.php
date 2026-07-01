@@ -113,4 +113,18 @@ final class PriorityConfig
     {
         return $this->genresMode;
     }
+
+    /**
+     * The full effective per-media-type source-order map, as merged at
+     * construction. Exposed so a per-library override can be layered OVER this
+     * global map with the SAME per-type REPLACE-merge semantics (see
+     * {@see \Phlix\Media\Metadata\Resolution\LibraryPriorityResolver}). The
+     * class stays immutable — the returned array is a copy of internal state.
+     *
+     * @return array<string, list<string>>
+     */
+    public function toArray(): array
+    {
+        return $this->priority;
+    }
 }

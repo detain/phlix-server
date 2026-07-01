@@ -61,11 +61,66 @@ final class LibraryRow
     /**
      * Returns the underlying row with decoded paths/options arrays substituted.
      *
+     * Also surfaces `metadata_priority` as a top-level key so API responses
+     * (index/show) carry the per-library override: the well-formed decoded map
+     * when present (see {@see self::metadataPriority()}), else `null` (the
+     * library falls back to the global `metadata.provider_priority` default).
+     *
      * @return array<string, mixed>
      */
     public function toArray(): array
     {
-        return $this->raw;
+        $row = $this->raw;
+        $row['metadata_priority'] = $this->metadataPriority();
+        return $row;
+    }
+
+    /**
+     * Per-library metadata source-priority override, read from the decoded
+     * options blob's `metadata_priority` key.
+     *
+     * Layered OVER the global `metadata.provider_priority` default at match
+     * time (per-type REPLACE-merge). Returns the map ONLY when it is a
+     * well-formed `array<string, list<string>>` — every key a non-empty
+     * media-type string and every value a list of non-empty, non-blank source
+     * names. A missing key, a malformed shape, or any empty/blank entry yields
+     * `null`, so the library simply falls back to the global default.
+     *
+     * @return array<string, list<string>>|null
+     */
+    public function metadataPriority(): ?array
+    {
+        $raw = $this->options['metadata_priority'] ?? null;
+        if (!is_array($raw) || $raw === []) {
+            return null;
+        }
+
+        $out = [];
+        foreach ($raw as $type => $order) {
+            if (!is_string($type) || trim($type) === '') {
+                return null;
+            }
+            if (!is_array($order)) {
+                return null;
+            }
+            $list = [];
+            foreach ($order as $source) {
+                if (!is_string($source)) {
+                    return null;
+                }
+                $trimmed = trim($source);
+                if ($trimmed === '') {
+                    return null;
+                }
+                $list[] = $trimmed;
+            }
+            if ($list === []) {
+                return null;
+            }
+            $out[$type] = $list;
+        }
+
+        return $out;
     }
 
     /**

@@ -364,11 +364,19 @@ class MediaScanner
      * found is slotted under that one series container instead of a
      * filename-derived series.
      *
+     * When $forcedSeason is non-null (a season/specials subdirectory of a series
+     * dir) every episode's season number is FORCED to it — the directory wins
+     * over any season the filename also parses — so nested season-folder layouts
+     * file correctly even when the filenames carry no (or a wrong) season.
+     *
      * @param array<int, string> $extensions Allowed file extensions.
      * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries
      *        Forced series identity, or null.
      * @param (callable(string): void)|null $onFile Invoked once per processed
      *        media file with its path, for streaming scan progress.
+     * @param int|null $forcedSeason Directory-derived season number to force onto
+     *        every episode found (0 = Specials), or null to keep filename-parsed
+     *        seasons.
      * @return int Number of items added.
      */
     private function scanFlat(
@@ -377,7 +385,8 @@ class MediaScanner
         string $type,
         array $extensions,
         ?array $forcedSeries,
-        ?callable $onFile = null
+        ?callable $onFile = null,
+        ?int $forcedSeason = null
     ): int {
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($path, \RecursiveDirectoryIterator::SKIP_DOTS)
@@ -407,7 +416,7 @@ class MediaScanner
                 continue;
             }
 
-            if ($this->processFile($libraryId, $file, $type, $forcedSeries)) {
+            if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason)) {
                 $added++;
             }
             $scanned++;
@@ -469,7 +478,14 @@ class MediaScanner
                 // "The Office (2001)", "Re:Zero" vs "Re Zero") must NOT collapse
                 // into one container (which would silently merge episodes).
                 $forcedSeries['slug_source'] = $dirName;
-                $added += $this->scanFlat($libraryId, $entry->getPathname(), $type, $extensions, $forcedSeries, $onFile);
+                $added += $this->scanSeriesDir(
+                    $libraryId,
+                    $entry->getPathname(),
+                    $type,
+                    $extensions,
+                    $forcedSeries,
+                    $onFile
+                );
                 continue;
             }
 
@@ -501,6 +517,160 @@ class MediaScanner
         ]);
 
         return $added;
+    }
+
+    /**
+     * Scan ONE series directory, classifying its immediate subdirectories as
+     * season/specials/loose/skip and forcing the season number for episodes that
+     * live inside a season or specials folder.
+     *
+     * Layout handled:
+     *   Series (2000)/
+     *     Season 1/  Specials/  OVAs/        → season-forced episode scans
+     *     Movies (1993-98)/                  → loose scan (no forced season)
+     *     Other Shows You'd Like, HERE/      → skipped (junk pointer dir)
+     *     Series (2000) S01E01.mkv           → files directly under the series dir
+     *
+     * Files sitting directly under the series directory (no season subfolder)
+     * keep today's behaviour: a plain (filename-derived) episode/movie scan under
+     * the forced series. To avoid double-processing, the season/loose SUBDIRS are
+     * scanned explicitly and the series-dir-level files are walked NON-recursively
+     * (the recursive walk would otherwise re-enter the already-scanned subdirs;
+     * findByPath() would dedup them, but the season assignment would be nondeterministic).
+     *
+     * @param array<int, string> $extensions Allowed file extensions.
+     * @param array{title: string, year: int|null, slug_source?: string} $forcedSeries
+     *        Folder-derived series identity for this directory.
+     * @param (callable(string): void)|null $onFile Progress callback.
+     * @return int Number of items added.
+     */
+    private function scanSeriesDir(
+        string $libraryId,
+        string $seriesDir,
+        string $type,
+        array $extensions,
+        array $forcedSeries,
+        ?callable $onFile = null
+    ): int {
+        $added = 0;
+
+        $entries = new \DirectoryIterator($seriesDir);
+        foreach ($entries as $entry) {
+            if ($entry->isDot()) {
+                continue;
+            }
+
+            // Immediate subdirectory → classify as season/specials/loose/skip.
+            if ($entry->isDir()) {
+                $subName = $entry->getFilename();
+                if ($this->shouldSkipFile($subName)) {
+                    continue;
+                }
+                $subPath = $entry->getPathname();
+                // The junk-vs-loose disambiguation needs to know whether the dir
+                // holds any scannable media; compute it lazily only when the name
+                // did not already resolve to season/specials.
+                $classification = SeasonDirectoryClassifier::classify(
+                    $subName,
+                    $this->directoryHasMedia($subPath, $extensions)
+                );
+
+                switch ($classification['type']) {
+                    case 'season':
+                    case 'specials':
+                        $season = $classification['type'] === 'specials'
+                            ? 0
+                            : ($classification['season'] ?? 1);
+                        $added += $this->scanFlat(
+                            $libraryId,
+                            $subPath,
+                            $type,
+                            $extensions,
+                            $forcedSeries,
+                            $onFile,
+                            $season
+                        );
+                        break;
+                    case 'loose':
+                        // Holds media but is not a season — scan without forcing a
+                        // season (filename parsing / today's behaviour).
+                        $added += $this->scanFlat(
+                            $libraryId,
+                            $subPath,
+                            $type,
+                            $extensions,
+                            $forcedSeries,
+                            $onFile
+                        );
+                        break;
+                    case 'skip':
+                    default:
+                        $this->logger->debug('Skipping non-season directory in series dir', [
+                            'series_dir' => $seriesDir,
+                            'subdir' => $subName,
+                        ]);
+                        break;
+                }
+                continue;
+            }
+
+            // A file directly under the series directory (no season subfolder):
+            // keep today's filename-derived behaviour under the forced series.
+            if ($entry->isFile()) {
+                $extension = strtolower($entry->getExtension());
+                if (!in_array($extension, $extensions, true)) {
+                    continue;
+                }
+                if ($this->shouldSkipFile($entry->getFilename())) {
+                    continue;
+                }
+                $file = new SplFileInfo($entry->getPathname());
+                if ($this->processFile($libraryId, $file, $type, $forcedSeries)) {
+                    $added++;
+                }
+                if ($onFile !== null) {
+                    $onFile($entry->getPathname());
+                }
+            }
+        }
+
+        return $added;
+    }
+
+    /**
+     * Whether a directory contains at least one scannable media file anywhere
+     * beneath it. Used only to disambiguate a junk pointer dir (no media → skip)
+     * from a loose media dir in {@see SeasonDirectoryClassifier::classify()}.
+     * Guarded so an unreadable directory never aborts the scan.
+     *
+     * @param array<int, string> $extensions Allowed file extensions.
+     */
+    private function directoryHasMedia(string $dir, array $extensions): bool
+    {
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS)
+            );
+            foreach ($iterator as $file) {
+                if (!$file instanceof SplFileInfo || $file->isDir()) {
+                    continue;
+                }
+                if (!in_array(strtolower($file->getExtension()), $extensions, true)) {
+                    continue;
+                }
+                if ($this->shouldSkipFile($file->getFilename())) {
+                    continue;
+                }
+                return true;
+            }
+        } catch (\Throwable) {
+            // Unreadable dir → treat as "no media" is unsafe (would skip a real
+            // season we just can't read); return true so the caller falls back to
+            // 'loose' and at least attempts a scan rather than silently dropping it.
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -536,6 +706,11 @@ class MediaScanner
      * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries When set
      *        (series-per-directory mode), the episode is grouped under this
      *        folder-derived series identity instead of the filename-derived one.
+     * @param int|null $forcedSeason When set (the file lives in a season/specials
+     *        SUBDIRECTORY of a series dir), the episode's season is FORCED to this
+     *        value (0 = Specials) — the directory wins over any filename-parsed
+     *        season, and the file is treated as an episode even when the filename
+     *        carries no SxxExx marker (it is nested under a season folder).
      *
      * @return bool True when a new item was added to the repository; false
      *              when the file was already known and was skipped.
@@ -544,7 +719,8 @@ class MediaScanner
         string $libraryId,
         SplFileInfo $file,
         string $type,
-        ?array $forcedSeries = null
+        ?array $forcedSeries = null,
+        ?int $forcedSeason = null
     ): bool {
         $path = $file->getPathname();
 
@@ -561,6 +737,20 @@ class MediaScanner
 
         // Parse naming for series/movies (extracts season/episode/episode_title).
         $metadata = $this->parseNaming($file->getFilename(), $type);
+
+        // A season/specials SUBDIRECTORY forces the season number: the directory
+        // is the authoritative season for every file beneath it, overriding any
+        // season the filename also parsed (nested-season layouts often carry a
+        // wrong or absent season in the filename). The file is then treated as an
+        // episode even without a filename SxxExx marker — it is physically nested
+        // under a season folder. A missing episode number falls back to a stable
+        // per-file ordinal derived from the filename so siblings do not collide.
+        if ($forcedSeason !== null && $this->isVideoContentLibrary($type)) {
+            $metadata['season'] = $forcedSeason;
+            if (!isset($metadata['episode']) || !is_numeric($metadata['episode'])) {
+                $metadata['episode'] = 0;
+            }
+        }
 
         // An SxxExx marker in a video-content library means this file is an
         // episode: type it as such and slot it under a (find-or-created) series

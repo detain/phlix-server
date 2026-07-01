@@ -499,12 +499,13 @@ class WebPortalRouter
      * @param Request $request The HTTP request (carries the authenticated userId).
      * @param string  $itemId  The media item UUID (already extracted + validated).
      *
-     * @return array{favorite: bool, rating: int|null, like_level: int}|null
+     * @return array{favorite: bool, rating: int|null, like_level: int, watched: bool}|null
      *         `null` when the request is unauthenticated or the favorites store
      *         is not wired; the user's data otherwise (defaulting to
-     *         not-favorited/unrated/un-loved when no row exists). `like_level`
-     *         is the 0-3 multi-level Love axis (Feature 10) — ADD-ONLY alongside
-     *         the existing `favorite`/`rating` keys.
+     *         not-favorited/unrated/un-loved/un-watched when no row exists).
+     *         `like_level` is the 0-3 multi-level Love axis (Feature 10) and
+     *         `watched` is the seen/unseen flag (Step 11.6) — both ADD-ONLY
+     *         alongside the existing `favorite`/`rating` keys.
      */
     private function resolveUserData(Request $request, string $itemId): ?array
     {
@@ -514,7 +515,7 @@ class WebPortalRouter
         }
 
         return $this->userItemData->getItemData($userId, $itemId)
-            ?? ['favorite' => false, 'rating' => null, 'like_level' => 0];
+            ?? ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false];
     }
 
     /**
@@ -697,7 +698,14 @@ class WebPortalRouter
 
         $field = $request->queryString('field') ?? 'name';
         // Resolve unknown field to the default (same logic as IndexBuckets::build).
-        if (!in_array($field, [IndexBuckets::FIELD_NAME, IndexBuckets::FIELD_YEAR, IndexBuckets::FIELD_RATING, IndexBuckets::FIELD_RUNTIME, IndexBuckets::FIELD_DATE_ADDED], true)) {
+        $validIndexFields = [
+            IndexBuckets::FIELD_NAME,
+            IndexBuckets::FIELD_YEAR,
+            IndexBuckets::FIELD_RATING,
+            IndexBuckets::FIELD_RUNTIME,
+            IndexBuckets::FIELD_DATE_ADDED,
+        ];
+        if (!in_array($field, $validIndexFields, true)) {
             $field = IndexBuckets::FIELD_NAME;
         }
         $order = strtolower($request->queryString('order') ?? 'asc');

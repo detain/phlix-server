@@ -62,7 +62,7 @@ class WebPortalRouterUserDataTest extends TestCase
     {
         $userItemData = $this->createMock(UserItemDataRepository::class);
         $userItemData->method('getItemData')->with('user-1', 'item-1')
-            ->willReturn(['favorite' => true, 'rating' => 9, 'like_level' => 2]);
+            ->willReturn(['favorite' => true, 'rating' => 9, 'like_level' => 2, 'watched' => true]);
 
         $router = $this->makeRouter($this->itemRepoWithItem(), $userItemData);
 
@@ -71,7 +71,7 @@ class WebPortalRouterUserDataTest extends TestCase
         $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
 
         $this->assertSame(
-            ['favorite' => true, 'rating' => 9, 'like_level' => 2],
+            ['favorite' => true, 'rating' => 9, 'like_level' => 2, 'watched' => true],
             $body['item']['user_data']
         );
     }
@@ -88,7 +88,7 @@ class WebPortalRouterUserDataTest extends TestCase
         $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
 
         $this->assertSame(
-            ['favorite' => false, 'rating' => null, 'like_level' => 0],
+            ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false],
             $body['item']['user_data']
         );
     }

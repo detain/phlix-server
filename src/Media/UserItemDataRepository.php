@@ -64,15 +64,15 @@ class UserItemDataRepository
      * @param string $userId User UUID.
      * @param string $itemId Media item UUID.
      *
-     * @return array{favorite: bool, rating: int|null, like_level: int}|null The
+     * @return array{favorite: bool, rating: int|null, like_level: int, watched: bool}|null The
      *         user's data for the item, or null when no row exists (the user has
-     *         never favorited, rated, or loved it). `like_level` is 0 when the
-     *         column is NULL.
+     *         never favorited, rated, loved, or watched it). `like_level` is 0 when
+     *         the column is NULL; `watched` is false when the column is NULL.
      */
     public function getItemData(string $userId, string $itemId): ?array
     {
         $result = $this->db->query(
-            "SELECT favorite, rating, like_level FROM user_item_data WHERE user_id = ? AND item_id = ?",
+            "SELECT favorite, rating, like_level, watched FROM user_item_data WHERE user_id = ? AND item_id = ?",
             [$userId, $itemId]
         );
 
@@ -85,6 +85,8 @@ class UserItemDataRepository
             'favorite' => (bool) UserRow::int($row, 'favorite', 0),
             'rating' => $this->coerceRating($row['rating'] ?? null),
             'like_level' => UserRow::int($row, 'like_level', 0),
+            // NULL/absent watched → false (the column is nullable; migration 045).
+            'watched' => (bool) UserRow::int($row, 'watched', 0),
         ];
     }
 
@@ -197,12 +199,12 @@ class UserItemDataRepository
      * @param int    $offset Rows to skip for pagination.
      *
      * @return list<array<string, mixed>> Joined favorite rows (each carrying the
-     *         media item's id/name/type/metadata_json plus rating and like_level).
+     *         media item's id/name/type/metadata_json plus rating, like_level and watched).
      */
     public function getFavorites(string $userId, int $limit = 50, int $offset = 0): array
     {
         $result = $this->db->query(
-            "SELECT uid.item_id, uid.rating, uid.like_level, uid.updated_at,
+            "SELECT uid.item_id, uid.rating, uid.like_level, uid.watched, uid.updated_at,
                     mi.id AS media_item_id, mi.name AS media_name,
                     mi.type AS media_type, mi.metadata_json
              FROM user_item_data uid

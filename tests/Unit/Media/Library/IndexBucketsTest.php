@@ -194,11 +194,17 @@ class IndexBucketsTest extends TestCase
 
     public function testDateAddedBuckets(): void
     {
-        $today = date('Y-m-d');
-        $thisWeek = date('Y-m-d', strtotime('-1 day')); // Yesterday = Monday this week
-        $thisMonth = date('Y-m-d', strtotime('-10 days'));
-        $thisYear = date('Y-m-d', strtotime('-60 days'));
-        $older = date('Y-m-d', strtotime('-200 days'));
+        // Reference "now" is fixed to a mid-week, mid-month, mid-year day
+        // (Wed 2026-06-17; weekStart Mon 2026-06-15) so each of the five buckets
+        // is cleanly separable and the test is deterministic regardless of the
+        // calendar day it runs on. (Relative offsets like "-10 days" crossed the
+        // month boundary on first-of-month days and emptied "This month".)
+        $now = strtotime('2026-06-17 12:00:00');
+        $today = '2026-06-17'; // == todayStart → Today
+        $thisWeek = '2026-06-16'; // >= weekStart(06-15), < today → This week
+        $thisMonth = '2026-06-05'; // >= monthStart(06-01), < weekStart → This month
+        $thisYear = '2026-03-01'; // >= yearStart(01-01), < monthStart → This year
+        $older = '2024-01-01'; // < yearStart → Older
 
         $distincts = [
             ['value' => $today, 'count' => 5],
@@ -208,7 +214,7 @@ class IndexBucketsTest extends TestCase
             ['value' => $older, 'count' => 25],
         ];
 
-        $result = $this->buckets->build(IndexBuckets::FIELD_DATE_ADDED, $distincts, 'asc');
+        $result = $this->buckets->build(IndexBuckets::FIELD_DATE_ADDED, $distincts, 'asc', $now);
 
         $this->assertCount(5, $result);
 

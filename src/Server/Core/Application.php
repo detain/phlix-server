@@ -307,7 +307,10 @@ class Application
             $this->router->group(
                 '',
                 function (Router $r) use ($container): void {
-                    $r->get('/api/v1/media/index', function (Request $request, array $params) use ($container): Response {
+                    $r->get('/api/v1/media/index', function (
+                        Request $request,
+                        array $params
+                    ) use ($container): Response {
                         // Extract media query params (mirrors WebPortalRouter::extractMediaQueryParams)
                         $paramsArr = [];
                         $search = $request->queryString('search');

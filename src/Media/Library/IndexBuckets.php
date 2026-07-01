@@ -12,18 +12,16 @@ namespace Phlix\Media\Library;
  */
 final class IndexBuckets
 {
-    /**
-     * When a field has more than this many distinct values, it collapses into
-     * ranges rather than individual value buckets.
-     */
-    private const DISTINCT_THRESHOLD = 30;
-
     public const FIELD_NAME = 'name';
     public const FIELD_YEAR = 'year';
     public const FIELD_RATING = 'rating';
     public const FIELD_RUNTIME = 'runtime';
     public const FIELD_DATE_ADDED = 'date_added';
     public const FIELD_GENRE = 'genre';
+    public const FIELD_ARTIST = 'artist';
+
+    /** Max year labels shown on the rail before years are grouped into ranges. */
+    private const MAX_YEAR_BUCKETS = 25;
 
     /**
      * Rating order mapping — least to most restrictive.
@@ -62,6 +60,9 @@ final class IndexBuckets
             self::FIELD_RUNTIME => $this->bucketsForRuntime($distincts),
             self::FIELD_DATE_ADDED => $this->bucketsForDateAdded($distincts, $now),
             self::FIELD_GENRE => $this->bucketsForGenre($distincts),
+            // Artist buckets are A-Z first-letter jumps (same as names), so a
+            // library with hundreds of artists gets a compact letter rail.
+            self::FIELD_ARTIST => $this->bucketsForName($distincts),
             default => $this->bucketsForName($distincts),
         };
 
@@ -160,52 +161,48 @@ final class IndexBuckets
      */
     private function bucketsForYear(array $distincts): array
     {
-        $distinctCount = count($distincts);
+        // Collapse to year → count, dropping unknown/invalid years (0/null) — the
+        // grid files those at the end where the rail can't (and needn't) jump.
+        $years = [];
+        foreach ($distincts as $item) {
+            $year = (int) $item['value'];
+            if ($year <= 0) {
+                continue;
+            }
+            $years[$year] = ($years[$year] ?? 0) + $item['count'];
+        }
+        ksort($years);
+        $distinctYears = array_keys($years);
+        $n = count($distinctYears);
 
-        if ($distinctCount <= self::DISTINCT_THRESHOLD) {
-            // One bucket per year
+        // Few enough distinct years → one bucket per year.
+        if ($n <= self::MAX_YEAR_BUCKETS) {
             $buckets = [];
-            foreach ($distincts as $item) {
-                $year = (int) $item['value'];
-                $buckets[] = [
-                    'key' => (string) $year,
-                    'label' => (string) $year,
-                    'count' => $item['count'],
-                ];
+            foreach ($years as $year => $count) {
+                $buckets[] = ['key' => (string) $year, 'label' => (string) $year, 'count' => $count];
             }
             return $buckets;
         }
 
-        // Collapse into decade buckets
-        return $this->collapseYearsToDecades($distincts);
-    }
-
-    /**
-     * Collapse year distincts into decade buckets.
-     *
-     * @param array<int, array{value: string|int, count: int}> $distincts
-     * @return array<int, array{key: string, label: string, count: int}>
-     */
-    private function collapseYearsToDecades(array $distincts): array
-    {
-        $decades = [];
-
-        foreach ($distincts as $item) {
-            $year = (int) $item['value'];
-            $decade = (int) floor($year / 10) * 10;
-            $decadeKey = (string) $decade;
-            $decadeLabel = $decade . 's';
-
-            if (!isset($decades[$decadeKey])) {
-                $decades[$decadeKey] = ['key' => $decadeKey, 'label' => $decadeLabel, 'count' => 0];
+        // Many years (e.g. 1915–2028) → downsample to ~MAX_YEAR_BUCKETS labelled
+        // by REAL years spread across the range, each covering a contiguous slice
+        // of years so the rail reads like "…'28 '23 '19 …'15" (newest-first when
+        // the caller reverses for desc). Each bucket's label/offset is the FIRST
+        // (oldest) year in its slice, so the cumulative offset lands on that
+        // slice's first item in the year-sorted grid.
+        $perBucket = (int) ceil($n / self::MAX_YEAR_BUCKETS);
+        $buckets = [];
+        for ($i = 0; $i < $n; $i += $perBucket) {
+            $slice = array_slice($distinctYears, $i, $perBucket);
+            $count = 0;
+            foreach ($slice as $year) {
+                $count += $years[$year];
             }
-            $decades[$decadeKey]['count'] += $item['count'];
+            $boundary = (string) $slice[0];
+            $buckets[] = ['key' => $boundary, 'label' => $boundary, 'count' => $count];
         }
 
-        // Sort by decade key ascending
-        ksort($decades);
-
-        return array_values($decades);
+        return $buckets;
     }
 
     /**

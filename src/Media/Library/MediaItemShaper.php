@@ -108,6 +108,10 @@ final class MediaItemShaper
                 ? $metadata['episode_title']
                 : null,
             'air_date' => self::extractAirDate($metadata),
+            // Music metadata (null for non-audio items) so the client can group /
+            // label tracks by artist + album.
+            'artist' => is_string($metadata['artist'] ?? null) ? $metadata['artist'] : null,
+            'album' => is_string($metadata['album'] ?? null) ? $metadata['album'] : null,
             'created_at' => $item['created_at'] ?? null,
             'updated_at' => $item['updated_at'] ?? null,
         ];

@@ -172,12 +172,29 @@ final class PluginCatalogService
     public function addSource(string $url): array
     {
         $clean = self::requireHttpUrl($url);
+        // Compare CANONICAL fetch URLs so trailing-slash / .git / ref variants of
+        // the same repo are recognised (github.com/detain/phlix-plugins,
+        // …/phlix-plugins/, …/phlix-plugins.git all normalise to one raw URL).
+        $normalized = CatalogSourceResolver::normalize($clean);
+
+        // Adding the built-in default (the exact "silent no-op" users hit) — tell
+        // them clearly instead of returning 200 with no visible change.
+        if ($normalized === CatalogSourceResolver::normalize($this->defaultSource())) {
+            throw new \InvalidArgumentException(
+                'That is the built-in default catalog — it is always available and does not need to be added.',
+                409,
+            );
+        }
 
         $extras = $this->extraSources();
-        if ($clean !== $this->defaultSource() && !in_array($clean, $extras, true)) {
-            $extras[] = $clean;
-            $this->settings->set(self::KEY_SOURCES, array_values($extras), 'json');
+        foreach ($extras as $existing) {
+            if (CatalogSourceResolver::normalize($existing) === $normalized) {
+                throw new \InvalidArgumentException('That catalog is already in your list.', 409);
+            }
         }
+
+        $extras[] = $clean;
+        $this->settings->set(self::KEY_SOURCES, array_values($extras), 'json');
 
         return $this->sources();
     }

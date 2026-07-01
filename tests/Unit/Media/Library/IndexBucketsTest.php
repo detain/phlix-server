@@ -234,6 +234,36 @@ class IndexBucketsTest extends TestCase
         $this->assertSame('25', (string) $result[4]['count']);
     }
 
+    public function testGenreBucketsOnePerGenreWithCumulativeOffsets(): void
+    {
+        $distincts = [
+            ['value' => 'Drama', 'count' => 5],
+            ['value' => 'Action', 'count' => 3],
+            ['value' => 'Comedy', 'count' => 2],
+            ['value' => '', 'count' => 4], // no genre → skipped
+        ];
+
+        $result = $this->buckets->build(IndexBuckets::FIELD_GENRE, $distincts, 'asc');
+
+        $labels = array_map(static fn (array $b): string => $b['label'], $result);
+        self::assertSame(['Action', 'Comedy', 'Drama'], $labels); // alphabetical, blank skipped
+        self::assertSame(0, $result[0]['offset']); // Action
+        self::assertSame(3, $result[1]['offset']); // Comedy (after 3 Action)
+        self::assertSame(5, $result[2]['offset']); // Drama (after 3 + 2)
+        self::assertSame(5, $result[2]['count']); // Drama has 5 items
+    }
+
+    public function testGenreBucketsReverseForDesc(): void
+    {
+        $distincts = [
+            ['value' => 'Action', 'count' => 1],
+            ['value' => 'Drama', 'count' => 1],
+        ];
+        $result = $this->buckets->build(IndexBuckets::FIELD_GENRE, $distincts, 'desc');
+        self::assertSame('Drama', $result[0]['label']);
+        self::assertSame('Action', $result[1]['label']);
+    }
+
     public function testUnknownFieldDefaultsToName(): void
     {
         $distincts = [

@@ -228,6 +228,12 @@ final class PluginCatalogController
         try {
             $sources = $this->catalog->addSource($url);
         } catch (\InvalidArgumentException $e) {
+            // 409 marks "already present / is the default" — a distinct, non-fatal
+            // outcome the SPA surfaces with the service's message (rather than the
+            // generic "not a valid URL" copy it uses for `url.invalid`).
+            if ($e->getCode() === 409) {
+                return $this->jsonError(409, 'plugin.catalog.url.duplicate', $e->getMessage(), ['url']);
+            }
             return $this->jsonError(400, 'plugin.catalog.url.invalid', $e->getMessage(), ['url']);
         }
 

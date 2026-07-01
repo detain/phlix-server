@@ -1215,6 +1215,7 @@ class ItemRepository
             'rating' => 'rating_sort',
             'runtime' => 'runtime_sort',
             'date_added' => 'DATE(created_at)',
+            'genre' => self::genrePrimaryExpression(),
             default => SortTitle::letterSqlExpression('name'),
         };
 
@@ -1227,6 +1228,7 @@ class ItemRepository
             'rating' => $this->ratingSortExpression($desc),
             'runtime' => $this->runtimeSortExpression($desc),
             'date_added' => $this->createdAtSortExpression($desc),
+            'genre' => self::genrePrimaryExpression() . ($desc ? ' DESC' : ' ASC'),
             default => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
         };
 
@@ -1584,8 +1586,18 @@ class ItemRepository
             'rating' => 'rating_sort',
             'date_added' => 'created_at',
             'runtime' => 'runtime_sort',
+            'genre' => 'genre_sort',
             default => 'name',
         };
+    }
+
+    /**
+     * SQL expression for an item's PRIMARY (first) genre — shared by the genre
+     * sort ORDER BY and the genre index buckets so they file items identically.
+     */
+    private static function genrePrimaryExpression(): string
+    {
+        return "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.genres[0]'))";
     }
 
     /**
@@ -1681,6 +1693,11 @@ class ItemRepository
 
         if ($sort === 'runtime_sort') {
             return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.runtime')) AS SIGNED) {$direction}, {$titleTie}";
+        }
+
+        if ($sort === 'genre_sort') {
+            // File each item under its primary (first) genre, alphabetically.
+            return self::genrePrimaryExpression() . " {$direction}, {$titleTie}";
         }
 
         // Default name sort files "The Plot" under P. `date_added` (→ created_at)

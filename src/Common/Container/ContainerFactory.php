@@ -11,6 +11,7 @@ use Phlix\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Common\Container\Providers\EventServicesProvider;
 use Phlix\Common\Container\Providers\HubServicesProvider;
 use Phlix\Common\Container\Providers\MediaServicesProvider;
+use Phlix\Common\Container\Providers\MetricsServicesProvider;
 use Phlix\Common\Container\Providers\NetworkServicesProvider;
 use Phlix\Common\Container\Providers\PluginsProvider;
 use Phlix\Common\Container\Providers\SessionServicesProvider;
@@ -115,6 +116,7 @@ final class ContainerFactory
             new AuthServicesProvider(),
             new HubServicesProvider(),
             new MediaServicesProvider(),
+            new MetricsServicesProvider(),
             new TranscodeServicesProvider(),
             new NetworkServicesProvider(),
             new SessionServicesProvider(),

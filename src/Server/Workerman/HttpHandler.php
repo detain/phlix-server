@@ -118,6 +118,13 @@ final class HttpHandler
                 return;
             }
 
+            // Try user avatar serving (signed URL or authed session)
+            $avatarResp = $this->serveUserAvatar($wr, $request->userId);
+            if ($avatarResp !== null) {
+                $connection->send($avatarResp);
+                return;
+            }
+
             // 1) Try the fully-populated Application router first. It
             //    owns every /api/*, /health, /system/info, /.well-known,
             //    /hls/, /dash/, /stream/, /opds/, and the browser-form
@@ -205,6 +212,62 @@ final class HttpHandler
         }
         $resp = new WorkermanResponse(200, ['Content-Type' => self::mimeFor($real)]);
         $resp->withFile($real);
+        return $resp;
+    }
+
+    /**
+     * Byte-serve a user avatar image.
+     *
+     * GET /api/v1/users/{id}/avatar
+     *
+     * Authorised by: resolved session (Bearer/cookie) OR valid signed-URL token
+     * (so <img src="..."> works without a Bearer header).
+     *
+     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the image
+     * streams through the event loop without being read into worker memory.
+     */
+    private function serveUserAvatar(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
+    {
+        if ($wr->method() !== 'GET') {
+            return null;
+        }
+
+        // Match /api/v1/users/{id}/avatar — captures the userId
+        if (preg_match('#^/api/v1/users/([^/]+)/avatar$#', $wr->path(), $m) !== 1) {
+            return null;
+        }
+
+        $targetUserId = $m[1];
+
+        // Authorise: resolved session OR valid signed-URL token.
+        // A missing/invalid/expired token → 401 so the browser shows a broken image
+        // rather than a raw JSON error body on an <img> src.
+        if ($userId === null || $userId === '') {
+            $signer = \Phlix\Auth\SignedUrl::fromEnv();
+            $exp = $wr->get('exp');
+            $sig = $wr->get('sig');
+            if (!$signer->verify($wr->path(), is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
+                return new WorkermanResponse(
+                    401,
+                    ['Content-Type' => 'text/plain; charset=utf-8'],
+                    'Unauthorized',
+                );
+            }
+        }
+
+        // Get avatar path from AvatarStorage
+        /** @var \Phlix\Media\Storage\AvatarStorage $avatarStorage */
+        $avatarStorage = $this->container->get(\Phlix\Media\Storage\AvatarStorage::class);
+        $avatarPath = $avatarStorage->path($targetUserId);
+
+        if ($avatarPath === null || !is_file($avatarPath) || !is_readable($avatarPath)) {
+            return new WorkermanResponse(404, ['Content-Type' => 'text/plain; charset=utf-8'], 'Avatar not found');
+        }
+
+        // Set Content-Type from file extension (.jpg → image/jpeg)
+        $mime = $this->mimeFor(pathinfo($avatarPath, PATHINFO_EXTENSION));
+        $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
+        $resp->withFile($avatarPath);
         return $resp;
     }
 

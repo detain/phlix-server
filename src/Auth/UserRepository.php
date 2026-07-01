@@ -618,6 +618,28 @@ class UserRepository
     }
 
     /**
+     * Clear user avatar URL.
+     *
+     * Sets the avatar_url to NULL for the given user.
+     *
+     * @param string $userId User UUID to clear avatar for
+     *
+     * @return void
+     *
+     * @example
+     * ```php
+     * $repo->clearAvatar('user-uuid-123');
+     * ```
+     */
+    public function clearAvatar(string $userId): void
+    {
+        $this->db->query(
+            "UPDATE users SET avatar_url = NULL WHERE id = ?",
+            [$userId]
+        );
+    }
+
+    /**
      * Verify a user's password.
      *
      * Uses bcrypt/Argon2 to securely compare the provided password

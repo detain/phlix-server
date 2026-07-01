@@ -43,6 +43,27 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertSame('1668', $resolved['external_ids']['tmdb']);
         $this->assertSame('tt0285331', $resolved['external_ids']['imdb']);
         $this->assertSame(['tmdb'], $resolved['sources']);
+        // No tvdb_id supplied by getTvDetails → the external_ids has no tvdb key.
+        $this->assertArrayNotHasKey('tvdb', $resolved['external_ids']);
+    }
+
+    public function testResolveThreadsTvdbIdIntoExternalIds(): void
+    {
+        // M3: when getTvDetails carries a `tvdb_id`, resolve() must expose it under
+        // external_ids.tvdb so the theme-music resolver can key the Plex fallback.
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'tmdb_id' => '1668',
+            'imdb_id' => 'tt0285331',
+            'tvdb_id' => '76290',
+        ]);
+
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
+
+        $this->assertNotNull($resolved);
+        $this->assertSame('76290', $resolved['external_ids']['tvdb']);
     }
 
     /**

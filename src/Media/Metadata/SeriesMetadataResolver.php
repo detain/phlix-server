@@ -228,6 +228,10 @@ class SeriesMetadataResolver
             'external_ids' => array_filter([
                 'tmdb' => $tmdbId,
                 'imdb' => MetadataValue::asNullableString($details['imdb_id'] ?? null),
+                // TheTVDB id (from TmdbProvider::formatTvDetails `external_ids`).
+                // Threaded here so the theme-music resolver (M3) can build the
+                // Plex-archive fallback URL keyed on the TVDB id.
+                'tvdb' => MetadataValue::asNullableString($details['tvdb_id'] ?? null),
             ], static fn(?string $v): bool => $v !== null && $v !== ''),
             'tmdb_id' => $tmdbId,
             'sources' => ['tmdb'],

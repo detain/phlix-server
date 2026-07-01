@@ -448,6 +448,11 @@ class TmdbProvider implements MetadataProviderInterface
 
         $externalIds = MetadataValue::asAssoc($data['external_ids'] ?? null);
         $imdbId = MetadataValue::asNullableString($externalIds['imdb_id'] ?? null);
+        // TheTVDB series id (from `append_to_response=external_ids`). TMDB stores
+        // it as an integer under `tvdb_id`; kept as a string in the record so the
+        // resolver can thread it into `metadata_json.external_ids.tvdb` for the
+        // theme-music (M3) Plex-archive lookup. Non-numeric/absent → null.
+        $tvdbId = MetadataValue::asNullableString($externalIds['tvdb_id'] ?? null);
 
         // Recurring series cast (TMDB `aggregate_credits`, order-sorted), reduced
         // to the top-billed names. `aggregate_credits` entries carry `name` +
@@ -497,6 +502,7 @@ class TmdbProvider implements MetadataProviderInterface
             'studio' => $studio,
             'tmdb_id' => MetadataValue::asNullableString($data['id'] ?? null),
             'imdb_id' => $imdbId,
+            'tvdb_id' => $tvdbId,
             'poster_path' => MetadataValue::asNullableString($data['poster_path'] ?? null),
             'backdrop_path' => MetadataValue::asNullableString($data['backdrop_path'] ?? null),
             'number_of_seasons' => MetadataValue::asInt($data['number_of_seasons'] ?? null),

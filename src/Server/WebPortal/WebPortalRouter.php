@@ -705,6 +705,7 @@ class WebPortalRouter
             IndexBuckets::FIELD_RUNTIME,
             IndexBuckets::FIELD_DATE_ADDED,
             IndexBuckets::FIELD_GENRE,
+            IndexBuckets::FIELD_ARTIST,
         ];
         if (!in_array($field, $validIndexFields, true)) {
             $field = IndexBuckets::FIELD_NAME;

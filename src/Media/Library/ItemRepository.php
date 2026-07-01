@@ -1211,11 +1211,12 @@ class ItemRepository
 
         $bucketExpr = match ($field) {
             'name' => SortTitle::letterSqlExpression('name'),
-            'year' => 'YEAR(created_at)',
-            'rating' => 'rating_sort',
-            'runtime' => 'runtime_sort',
+            'year' => self::yearValueExpression(),
+            'rating' => self::ratingValueExpression(),
+            'runtime' => self::runtimeValueExpression(),
             'date_added' => 'DATE(created_at)',
             'genre' => self::genrePrimaryExpression(),
+            'artist' => self::artistValueExpression(),
             default => SortTitle::letterSqlExpression('name'),
         };
 
@@ -1229,6 +1230,7 @@ class ItemRepository
             'runtime' => $this->runtimeSortExpression($desc),
             'date_added' => $this->createdAtSortExpression($desc),
             'genre' => self::genrePrimaryExpression() . ($desc ? ' DESC' : ' ASC'),
+            'artist' => $this->artistSortExpression($desc),
             default => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
         };
 
@@ -1264,46 +1266,52 @@ class ItemRepository
         return $out;
     }
 
+    /** RELEASE year from metadata (NOT the row's created date). */
+    private static function yearValueExpression(): string
+    {
+        return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
+    }
+    /** Content-rating string (G/PG/…) from metadata. */
+    private static function ratingValueExpression(): string
+    {
+        return "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.rating'))";
+    }
+    /** Runtime minutes from metadata. */
+    private static function runtimeValueExpression(): string
+    {
+        return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.runtime')) AS SIGNED)";
+    }
+    /** Primary artist name from metadata (music libraries). */
+    private static function artistValueExpression(): string
+    {
+        return "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.artist'))";
+    }
+
     /**
-     * YEAR(created_at) expression fragment — shared by GROUP BY and ORDER BY
-     * so they can never drift apart.
-     *
-     * @param bool $desc Sort descending?
-     * @return string SQL expression fragment, e.g. "YEAR(created_at) DESC"
+     * Year ORDER BY fragment — the RELEASE year (was YEAR(created_at), which
+     * filed every recently-added title under one "this year" bucket).
      */
     private function yearSortExpression(bool $desc): string
     {
-        $dir = $desc ? 'DESC' : 'ASC';
-
-        return "YEAR(created_at) {$dir}";
+        return self::yearValueExpression() . ($desc ? ' DESC' : ' ASC');
     }
 
-    /**
-     * rating_sort expression fragment — shared by GROUP BY and ORDER BY
-     * so they can never drift apart.
-     *
-     * @param bool $desc Sort descending?
-     * @return string SQL expression fragment, e.g. "rating_sort DESC"
-     */
+    /** Rating ORDER BY fragment (`rating_sort` was never a real column). */
     private function ratingSortExpression(bool $desc): string
     {
-        $dir = $desc ? 'DESC' : 'ASC';
-
-        return "rating_sort {$dir}";
+        return self::ratingValueExpression() . ($desc ? ' DESC' : ' ASC');
     }
 
-    /**
-     * runtime_sort expression fragment — shared by GROUP BY and ORDER BY
-     * so they can never drift apart.
-     *
-     * @param bool $desc Sort descending?
-     * @return string SQL expression fragment, e.g. "runtime_sort DESC"
-     */
+    /** Runtime ORDER BY fragment (`runtime_sort` was never a real column). */
     private function runtimeSortExpression(bool $desc): string
     {
-        $dir = $desc ? 'DESC' : 'ASC';
+        return self::runtimeValueExpression() . ($desc ? ' DESC' : ' ASC');
+    }
 
-        return "runtime_sort {$dir}";
+    /** Artist ORDER BY fragment (music libraries). */
+    private function artistSortExpression(bool $desc): string
+    {
+        return self::artistValueExpression() . ($desc ? ' DESC' : ' ASC');
     }
 
     /**
@@ -1587,6 +1595,7 @@ class ItemRepository
             'date_added' => 'created_at',
             'runtime' => 'runtime_sort',
             'genre' => 'genre_sort',
+            'artist' => 'artist_sort',
             default => 'name',
         };
     }
@@ -1698,6 +1707,10 @@ class ItemRepository
         if ($sort === 'genre_sort') {
             // File each item under its primary (first) genre, alphabetically.
             return self::genrePrimaryExpression() . " {$direction}, {$titleTie}";
+        }
+
+        if ($sort === 'artist_sort') {
+            return self::artistValueExpression() . " {$direction}, {$titleTie}";
         }
 
         // Default name sort files "The Plot" under P. `date_added` (→ created_at)

@@ -1596,10 +1596,11 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    // Year bucket: YEAR(created_at) in GROUP BY and ORDER BY
-                    return str_contains($sql, 'YEAR(created_at) AS bucket_value')
-                        && str_contains($sql, 'GROUP BY YEAR(created_at)')
-                        && str_contains($sql, 'ORDER BY YEAR(created_at) ASC');
+                    // Year bucket groups/orders by the RELEASE year from metadata.
+                    $e = "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
+                    return str_contains($sql, "{$e} AS bucket_value")
+                        && str_contains($sql, "GROUP BY {$e}")
+                        && str_contains($sql, "ORDER BY {$e} ASC");
                 }),
                 $this->callback(function (array $params) use (&$capturedParams): bool {
                     $capturedParams = $params;
@@ -1631,10 +1632,11 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    // Rating uses rating_sort column (the pre-computed sort value)
-                    return str_contains($sql, 'rating_sort AS bucket_value')
-                        && str_contains($sql, 'GROUP BY rating_sort')
-                        && str_contains($sql, 'ORDER BY rating_sort ASC');
+                    // Rating groups/orders by the rating string from metadata.
+                    $e = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.rating'))";
+                    return str_contains($sql, "{$e} AS bucket_value")
+                        && str_contains($sql, "GROUP BY {$e}")
+                        && str_contains($sql, "ORDER BY {$e} ASC");
                 }),
                 $this->anything()
             )
@@ -1679,8 +1681,9 @@ class ItemRepositoryTest extends TestCase
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
                     // desc order must be reflected in both ORDER BY and GROUP BY (MySQL allows expr DESC in GROUP BY)
-                    return str_contains($sql, 'ORDER BY YEAR(created_at) DESC')
-                        && str_contains($sql, 'GROUP BY YEAR(created_at)');
+                    $e = "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
+                    return str_contains($sql, "ORDER BY {$e} DESC")
+                        && str_contains($sql, "GROUP BY {$e}");
                 }),
                 $this->anything()
             )
@@ -1748,9 +1751,10 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    return str_contains($sql, 'runtime_sort AS bucket_value')
-                        && str_contains($sql, 'GROUP BY runtime_sort')
-                        && str_contains($sql, 'ORDER BY runtime_sort ASC');
+                    $e = "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.runtime')) AS SIGNED)";
+                    return str_contains($sql, "{$e} AS bucket_value")
+                        && str_contains($sql, "GROUP BY {$e}")
+                        && str_contains($sql, "ORDER BY {$e} ASC");
                 }),
                 $this->anything()
             )

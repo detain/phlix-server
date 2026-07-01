@@ -1440,6 +1440,20 @@ ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTAL
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true
+# Extra kernel/privilege protections (parity with phlix-hub). All safe for this
+# service: it does software transcoding (ffmpeg shells out) and optional DVB/DLNA,
+# none of which need to load kernel modules, change the clock/hostname, manage
+# cgroups, create suid files, or use realtime scheduling. Deliberately NOT setting
+# PrivateDevices (would hide /dev/dvb tuners + any /dev/dri), MemoryDenyWriteExecute
+# (breaks PHP JIT/opcache), or SystemCallFilter (Swoole io_uring is syscall-sensitive
+# — cf. the io_uring reboot incident).
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
 
 [Install]
 WantedBy=multi-user.target

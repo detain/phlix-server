@@ -26,7 +26,7 @@ class UserItemDataRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with(
-                $this->stringContains('SELECT favorite, rating, like_level FROM user_item_data'),
+                $this->stringContains('SELECT favorite, rating, like_level, watched FROM user_item_data'),
                 $this->equalTo([self::USER, self::ITEM])
             )
             ->willReturn([]);
@@ -40,23 +40,66 @@ class UserItemDataRepositoryTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         // The driver returns string column values; the repo must coerce.
-        $db->method('query')->willReturn([['favorite' => '1', 'rating' => '7', 'like_level' => '2']]);
+        $db->method('query')->willReturn([
+            ['favorite' => '1', 'rating' => '7', 'like_level' => '2', 'watched' => '1'],
+        ]);
 
         $repo = new UserItemDataRepository($db);
         $data = $repo->getItemData(self::USER, self::ITEM);
 
-        $this->assertSame(['favorite' => true, 'rating' => 7, 'like_level' => 2], $data);
+        $this->assertSame(
+            ['favorite' => true, 'rating' => 7, 'like_level' => 2, 'watched' => true],
+            $data
+        );
     }
 
     public function testGetItemDataNullRatingCoercesToNull(): void
     {
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '0']]);
+        $db->method('query')->willReturn([
+            ['favorite' => '0', 'rating' => null, 'like_level' => '0', 'watched' => '0'],
+        ]);
 
         $repo = new UserItemDataRepository($db);
         $data = $repo->getItemData(self::USER, self::ITEM);
 
-        $this->assertSame(['favorite' => false, 'rating' => null, 'like_level' => 0], $data);
+        $this->assertSame(
+            ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false],
+            $data
+        );
+    }
+
+    public function testGetItemDataSelectsWatchedColumnAndCoercesToBool(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('SELECT favorite, rating, like_level, watched FROM user_item_data'),
+                $this->equalTo([self::USER, self::ITEM])
+            )
+            ->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '0', 'watched' => '1']]);
+
+        $data = (new UserItemDataRepository($db))->getItemData(self::USER, self::ITEM);
+
+        $this->assertTrue($data['watched'], 'string "1" watched column coerces to bool true');
+    }
+
+    public function testGetItemDataWatchedDefaultsToFalseWhenColumnAbsentOrNull(): void
+    {
+        // Column missing entirely → default false.
+        $dbAbsent = $this->createMock(Connection::class);
+        $dbAbsent->method('query')->willReturn([['favorite' => '1', 'rating' => '5', 'like_level' => '0']]);
+        $absent = (new UserItemDataRepository($dbAbsent))->getItemData(self::USER, self::ITEM);
+        $this->assertFalse($absent['watched']);
+
+        // Column present but NULL → default false.
+        $dbNull = $this->createMock(Connection::class);
+        $dbNull->method('query')->willReturn([
+            ['favorite' => '1', 'rating' => '5', 'like_level' => '0', 'watched' => null],
+        ]);
+        $null = (new UserItemDataRepository($dbNull))->getItemData(self::USER, self::ITEM);
+        $this->assertFalse($null['watched']);
     }
 
     public function testGetItemDataSelectsLikeLevelColumn(): void
@@ -65,7 +108,7 @@ class UserItemDataRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with(
-                $this->stringContains('SELECT favorite, rating, like_level FROM user_item_data'),
+                $this->stringContains('SELECT favorite, rating, like_level, watched FROM user_item_data'),
                 $this->equalTo([self::USER, self::ITEM])
             )
             ->willReturn([['favorite' => '0', 'rating' => null, 'like_level' => '-2']]);
@@ -283,6 +326,7 @@ class UserItemDataRepositoryTest extends TestCase
                     $this->stringContains('JOIN media_items mi ON uid.item_id = mi.id'),
                     $this->stringContains('uid.favorite = 1'),
                     $this->stringContains('uid.like_level'),
+                    $this->stringContains('uid.watched'),
                     $this->stringContains('LIMIT ? OFFSET ?')
                 ),
                 $this->equalTo([self::USER, 25, 50])

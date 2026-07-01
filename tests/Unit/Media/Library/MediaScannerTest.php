@@ -670,6 +670,120 @@ class MediaScannerTest extends TestCase
         $this->assertCount(2, $series, 'distinct basenames => distinct series containers');
     }
 
+    public function testSeriesPerDirectoryClassifiesSeasonAndSpecialsSubdirsAndSkipsJunk(): void
+    {
+        // A per-series directory with SEASON subdirectories, a Specials subdir,
+        // and a junk "you might also like" pointer subdir. Episodes must land in
+        // the season number their FOLDER dictates (0 = Specials), and the junk
+        // dir must be skipped entirely.
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $root = sys_get_temp_dir() . '/phlix_scan_seasons_' . uniqid();
+        $this->tmpDir = $root;
+        $seriesDir = $root . '/Series (2000)';
+        $this->mkTree([
+            $seriesDir . '/Season 1' => ['S01E01.mkv', 'S01E02.mkv'],
+            $seriesDir . '/Season 02 - Baby Saga' => ['whatever.mkv'],
+            $seriesDir . '/Specials' => ['a special.mkv'],
+            $seriesDir . "/OTHER Shows You'd Like, HERE" => ['junk.mkv'],
+        ]);
+
+        $scanner->scan('lib-1', $root, 'series', true);
+
+        $items = $repo->items();
+        $series = array_values(array_filter($items, fn ($i) => $i['type'] === 'series'));
+        $seasons = array_values(array_filter($items, fn ($i) => $i['type'] === 'season'));
+        $episodes = array_values(array_filter($items, fn ($i) => $i['type'] === 'episode'));
+
+        // One series container for "Series".
+        $this->assertCount(1, $series, 'one series container');
+
+        // Season numbers come from the directories: 1, 2 and 0 (Specials). The
+        // junk dir contributes NO season and NO episode.
+        $seasonNumbers = array_map(
+            fn ($s) => $s['metadata_json']['season'] ?? null,
+            $seasons
+        );
+        sort($seasonNumbers);
+        $this->assertSame([0, 1, 2], $seasonNumbers, 'season 0 (Specials), 1 and 2 containers');
+
+        // Four episodes total: 2 in season 1, 1 in season 2, 1 in Specials. The
+        // junk dir's file is NOT scanned.
+        $this->assertCount(4, $episodes, 'junk dir file is skipped; 4 real episodes');
+
+        // Every episode's forced season matches its owning season container.
+        $seasonById = [];
+        foreach ($seasons as $s) {
+            $seasonById[$s['id']] = $s['metadata_json']['season'] ?? null;
+        }
+        $episodeSeasons = [];
+        foreach ($episodes as $ep) {
+            $this->assertArrayHasKey($ep['parent_id'], $seasonById, 'episode parent is a season container');
+            $episodeSeasons[] = $ep['metadata_json']['season'] ?? null;
+        }
+        sort($episodeSeasons);
+        $this->assertSame([0, 1, 1, 2], $episodeSeasons, 'episodes inherit their folder season');
+
+        // No file from the junk dir was persisted anywhere.
+        foreach ($items as $item) {
+            $this->assertStringNotContainsString(
+                'junk.mkv',
+                (string) ($item['path'] ?? ''),
+                'the junk pointer dir must not be scanned'
+            );
+        }
+    }
+
+    public function testSeriesPerDirectoryDirectFilesStillWorkAlongsideSeasonSubdirs(): void
+    {
+        // A series dir with BOTH a season subdir AND a loose file directly under
+        // the series dir. The nested file forces season 1; the direct file keeps
+        // today's filename-derived behaviour (parses its own S03E07).
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $root = sys_get_temp_dir() . '/phlix_scan_mixed_' . uniqid();
+        $this->tmpDir = $root;
+        $seriesDir = $root . '/My Show (1999)';
+        $this->mkTree([
+            $seriesDir . '/Season 1' => ['nested.mkv'],
+        ]);
+        // A file directly under the series dir (no season subfolder).
+        file_put_contents($seriesDir . '/My Show S03E07.mkv', 'x');
+
+        $scanner->scan('lib-1', $root, 'series', true);
+
+        $items = $repo->items();
+        $episodes = array_values(array_filter($items, fn ($i) => $i['type'] === 'episode'));
+        $this->assertCount(2, $episodes, 'nested + direct file both indexed as episodes');
+
+        $seasonsSeen = [];
+        foreach ($episodes as $ep) {
+            $seasonsSeen[] = $ep['metadata_json']['season'] ?? null;
+        }
+        sort($seasonsSeen);
+        // Nested file → forced season 1; direct file → filename-parsed season 3.
+        $this->assertSame([1, 3], $seasonsSeen);
+    }
+
+    /**
+     * Build a temp tree from an absolute-dir => [filenames] map. Unlike
+     * {@see makeTempTree()} (root-relative), keys are absolute paths so nested
+     * season subdirectories can be created.
+     *
+     * @param array<string, array<int, string>> $dirs
+     */
+    private function mkTree(array $dirs): void
+    {
+        foreach ($dirs as $dir => $files) {
+            mkdir($dir, 0775, true);
+            foreach ($files as $file) {
+                file_put_contents($dir . '/' . $file, 'x');
+            }
+        }
+    }
+
     // --- duration probing --------------------------------------------------
 
     public function testDurationSecondsPopulatedFromProbeOnNewVideoItem(): void

@@ -432,7 +432,10 @@ final class HttpHandler
         if (isset($byExt[$ext])) {
             return $byExt[$ext];
         }
-        if (function_exists('mime_content_type')) {
+        // Guard is_file(): mime_content_type() emits a "Failed to open stream"
+        // warning (and PHPUnit exits non-zero on warnings) when handed a path that
+        // doesn't exist — fall through to the generic type instead.
+        if (function_exists('mime_content_type') && is_file($path)) {
             $detected = mime_content_type($path);
             if (is_string($detected) && $detected !== '') {
                 return $detected;

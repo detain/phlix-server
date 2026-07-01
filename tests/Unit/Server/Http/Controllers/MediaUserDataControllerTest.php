@@ -372,9 +372,13 @@ class MediaUserDataControllerTest extends TestCase
     {
         $userData = $this->createMock(UserItemDataRepository::class);
         $userData->method('getFavorites')->willReturn([
-            // item-1 carries a real like_level (2 = love, the thumbs-axis max);
-            // item-2 omits the column entirely (exercises the default-0 path).
-            ['item_id' => 'item-1', 'rating' => 7, 'like_level' => 2, 'updated_at' => '2026-06-27 00:00:00'],
+            // item-1 carries a real like_level (2 = love, the thumbs-axis max) and
+            // a truthy watched flag; item-2 omits both columns entirely (exercises
+            // the default-0 like_level and default-false watched paths).
+            [
+                'item_id' => 'item-1', 'rating' => 7, 'like_level' => 2,
+                'watched' => 1, 'updated_at' => '2026-06-27 00:00:00',
+            ],
             ['item_id' => 'item-2', 'rating' => null, 'updated_at' => '2026-06-26 00:00:00'],
         ]);
 
@@ -394,14 +398,14 @@ class MediaUserDataControllerTest extends TestCase
         $first = $body['items'][0];
         $this->assertSame('item-1', $first['id']);
         $this->assertSame(
-            ['favorite' => true, 'rating' => 7, 'like_level' => 2],
+            ['favorite' => true, 'rating' => 7, 'like_level' => 2, 'watched' => true],
             $first['user_data']
         );
 
         $second = $body['items'][1];
-        // like_level absent on the row → defaults to 0.
+        // like_level + watched absent on the row → default to 0 and false.
         $this->assertSame(
-            ['favorite' => true, 'rating' => null, 'like_level' => 0],
+            ['favorite' => true, 'rating' => null, 'like_level' => 0, 'watched' => false],
             $second['user_data']
         );
 

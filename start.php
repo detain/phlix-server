@@ -27,6 +27,8 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Workerman\HttpHandler;
+use Phlix\Stats\Metrics\MetricsCollector;
+use Phlix\Stats\Metrics\MetricsFlushService;
 use Workerman\Worker;
 
 require __DIR__ . '/vendor/autoload.php';
@@ -165,7 +167,31 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // wired below outside this closure so it runs once per worker too.
     $application = new Application($container, $config);
 
-    $w->onMessage = new HttpHandler($container, $authenticator, $publicRoot, $application);
+    /** @var MetricsCollector $metricsCollector */
+    $metricsCollector = $container->get(MetricsCollector::class);
+
+    $w->onMessage = new HttpHandler(
+        $container,
+        $authenticator,
+        $publicRoot,
+        $application,
+        $metricsCollector,
+    );
+
+    // S2 metrics: arm the flush timer in this HTTP worker.
+    if ($metricsCollector->isEnabled()) {
+        /** @var array{flush_interval_seconds?: int} $metricsConfig */
+        $metricsConfig = $config['metrics'] ?? [];
+        /** @var MetricsFlushService $flushService */
+        $flushService = $container->get(MetricsFlushService::class);
+        $flushInterval = (int) ($metricsConfig['flush_interval_seconds'] ?? 5);
+        \Workerman\Timer::add(
+            $flushInterval,
+            static function () use ($flushService, $w): void {
+                $flushService->flush((int) $w->id, (int) time());
+            },
+        );
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -230,10 +256,32 @@ try {
         $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler);
         $wsServer->setSyncPlayManager($syncPlayManager);
 
+        // S2 metrics: wire the metrics collector into the WS server.
+        /** @var MetricsCollector $wsMetricsCollector */
+        $wsMetricsCollector = $container->get(MetricsCollector::class);
+        if ($wsMetricsCollector->isEnabled()) {
+            $wsServer->setMetricsCollector($wsMetricsCollector);
+        }
+
         // Trigger onStart to log the startup message and arm cleanup timers.
         // The actual Workerman worker callbacks (onConnect, onMessage, onClose)
         // are already bound in the WebSocketServer constructor.
         $wsServer->onStart();
+
+        // S2 metrics: arm the flush timer in the WS worker.
+        if ($wsMetricsCollector->isEnabled()) {
+            /** @var MetricsFlushService $wsFlushService */
+            $wsFlushService = $container->get(MetricsFlushService::class);
+            /** @var array{flush_interval_seconds?: int} $wsMetricsConfig */
+            $wsMetricsConfig = $config['metrics'] ?? [];
+            $wsFlushInterval = (int) ($wsMetricsConfig['flush_interval_seconds'] ?? 5);
+            \Workerman\Timer::add(
+                $wsFlushInterval,
+                static function () use ($wsFlushService, $w): void {
+                    $wsFlushService->flush((int) $w->id, (int) time());
+                },
+            );
+        }
 
         /** @var \Phlix\Common\Logger\StructuredLogger $wsLogger */
         $wsLogger = $container->get('logger.websocket');
@@ -426,7 +474,7 @@ try {
                 try {
                     // Built inside the fork so the child owns its own DB/HTTP state.
                     $container = ContainerFactory::create($config);
-                    /** @var object $managed */
+                    /** @var \Phlix\Media\Library\LibraryScanWorker|\Phlix\Plugins\Catalog\PluginAutoUpdateWorker $managed */
                     $managed = $container->get($workerClass);
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.
                     $managed->start($pollSeconds);

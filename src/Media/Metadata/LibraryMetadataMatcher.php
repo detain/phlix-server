@@ -125,6 +125,32 @@ class LibraryMetadataMatcher
     private ?ThemeMusicResolver $themeMusic;
 
     /**
+     * The image types (M5) enabled for the CURRENT match run/item, used to gate
+     * the flat `poster_url` / `backdrop_url` metadata keys in
+     * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
+     * LibraryManager wired, or the enabled set could not be loaded) — behaviour
+     * is then exactly as before. Set once per {@see matchLibrary()} run and
+     * per-item in {@see applyMatch()}; reset to null when the run finishes so a
+     * later call without a computed set never inherits a stale filter.
+     *
+     * @var list<string>|null
+     */
+    private ?array $activeImageTypes = null;
+
+    /**
+     * Map of flat metadata image KEY => the canonical {@see ImageType} const it
+     * carries. Only keys in this map are gated by the per-library selection; any
+     * image key NOT listed here passes through unfiltered (we only filter the
+     * types we know — see the M5 spec's "pass through unmapped" rule).
+     *
+     * @var array<string, string>
+     */
+    private const FLAT_IMAGE_KEY_TYPES = [
+        'poster_url' => ImageType::POSTER,
+        'backdrop_url' => ImageType::BACKDROP,
+    ];
+
+    /**
      * @param ItemRepository             $items          Media-item data access.
      * @param MovieMetadataResolver      $resolver       Cross-source movie resolver.
      * @param SeriesMetadataResolver|null $seriesResolver TV series resolver; when
@@ -218,7 +244,19 @@ class LibraryMetadataMatcher
         // (legacy construction / unit tests) OR the library has no override, in
         // which case the resolvers fall back to their injected global config —
         // behaviour is then exactly as before.
-        $effective = $this->effectivePriorityFor($libraryId);
+        // Load the library row ONCE per run (best-effort) and derive both the
+        // per-library metadata-priority override AND the image-type selection
+        // from it, so a single getLibrary() call serves both features.
+        $libraryRow = $this->loadLibraryRow($libraryId);
+        $effective = $this->effectivePriorityFor($libraryRow);
+
+        // Effective per-library image-type selection (M5): the library's
+        // `options.image_types` (defaults when absent). Computed ONCE here and
+        // consulted by persistMetadata() to drop disabled flat image keys
+        // (poster_url/backdrop_url) for every item persisted in this run. Null
+        // when the LibraryManager dep is absent (legacy) or the library cannot
+        // be loaded — persistMetadata() then filters nothing, exactly as before.
+        $this->activeImageTypes = $this->enabledImageTypesFor($libraryRow);
 
         // Progress denominator: the count of top-level items (movies + series)
         // the flat pass visits. Reported via $onProgress so the worker can stamp
@@ -311,49 +349,92 @@ class LibraryMetadataMatcher
             'matched' => $matched,
         ]);
 
+        // Clear the per-run image-type filter so a later call (e.g. an
+        // interactive applyMatch on an item from a different library) never
+        // inherits this run's selection.
+        $this->activeImageTypes = null;
+
         return ['matched' => $matched, 'processed' => $processed];
     }
 
     /**
-     * Build the effective per-library {@see PriorityConfig} for a match run
-     * (item 5): the library's `options.metadata_priority` override layered over
-     * the global default.
-     *
-     * Returns null when the per-library deps are absent (legacy construction /
-     * unit tests) OR when the library cannot be loaded — the resolvers then use
-     * their injected global config, so behaviour is exactly as before. Loading
-     * the library is best-effort: any error is swallowed and null returned, so a
-     * settings-store hiccup never aborts the match.
+     * Load a library row (best-effort) for the per-library override + image-type
+     * selection. Returns null when the {@see LibraryManager} dep is absent
+     * (legacy construction / unit tests) or the load fails — both derivations
+     * then fall back to their global/no-filter defaults. Called ONCE per run so
+     * a single getLibrary() serves both features.
      *
      * @param string $libraryId Target library UUID.
      *
-     * @return PriorityConfig|null Effective config, or null to use the global.
+     * @return array<string, mixed>|null The hydrated library row, or null.
      */
-    private function effectivePriorityFor(string $libraryId): ?PriorityConfig
+    private function loadLibraryRow(string $libraryId): ?array
     {
-        if ($this->libraries === null || $this->priorityResolver === null) {
+        if ($this->libraries === null) {
             return null;
         }
-
         try {
             $row = $this->libraries->getLibrary($libraryId);
-            $override = null;
-            if (is_array($row)) {
-                $candidate = $row['metadata_priority'] ?? null;
-                if (is_array($candidate) && $candidate !== []) {
-                    /** @var array<string, list<string>> $candidate */
-                    $override = $candidate;
-                }
-            }
-
-            return $this->priorityResolver->effectiveFor($override);
+            return is_array($row) ? $row : null;
         } catch (Throwable $e) {
-            $this->logger->warning('LibraryMetadataMatcher: effective priority load failed; using global', [
+            $this->logger->warning('LibraryMetadataMatcher: library load failed; using global/no-filter defaults', [
                 'library_id' => $libraryId,
                 'error' => $e->getMessage(),
             ]);
             return null;
         }
+    }
+
+    /**
+     * Build the effective per-library {@see PriorityConfig} for a match run
+     * (item 5): the library's `options.metadata_priority` override layered over
+     * the global default, from an already-loaded library row.
+     *
+     * Returns null when the priority-resolver dep is absent (legacy construction
+     * / unit tests) OR no row was loaded — the resolvers then use their injected
+     * global config, so behaviour is exactly as before.
+     *
+     * @param array<string, mixed>|null $libraryRow Pre-loaded library row (or null).
+     *
+     * @return PriorityConfig|null Effective config, or null to use the global.
+     */
+    private function effectivePriorityFor(?array $libraryRow): ?PriorityConfig
+    {
+        if ($this->priorityResolver === null) {
+            return null;
+        }
+
+        $override = null;
+        if ($libraryRow !== null) {
+            $candidate = $libraryRow['metadata_priority'] ?? null;
+            if (is_array($candidate) && $candidate !== []) {
+                /** @var array<string, list<string>> $candidate */
+                $override = $candidate;
+            }
+        }
+
+        return $this->priorityResolver->effectiveFor($override);
+    }
+
+    /**
+     * The image types (M5) enabled for a library, from an already-loaded library
+     * row's `options.image_types` selection (defaults when absent). Returns null
+     * when no row was loaded (LibraryManager dep absent / load failed) —
+     * {@see persistMetadata()} then does NOT filter image keys, so behaviour is
+     * exactly as before.
+     *
+     * @param array<string, mixed>|null $libraryRow Pre-loaded library row (or null).
+     *
+     * @return list<string>|null Enabled image types, or null to skip filtering.
+     */
+    private function enabledImageTypesFor(?array $libraryRow): ?array
+    {
+        if ($libraryRow === null) {
+            return null;
+        }
+        $options = $libraryRow['options'] ?? null;
+        $options = is_array($options) ? $this->stringKeyed($options) : [];
+        return ImageType::enabledForOptions($options);
     }
 
     /**
@@ -511,6 +592,49 @@ class LibraryMetadataMatcher
             return ['item_id' => $itemId, 'mode' => $type, 'tmdb_id' => $tmdbId, 'matched' => false, 'children_enriched' => 0];
         }
 
+        // Apply the item's library's image-type selection (M5) for the duration
+        // of this interactive apply so persistMetadata() drops disabled flat
+        // image keys (poster_url/backdrop_url) here too — not just in the batch
+        // matchLibrary() run. Reset in the finally so it never leaks to a later
+        // call. Null (no LibraryManager / unloadable library) → no filtering.
+        $libraryId = is_string($item['library_id'] ?? null) ? $item['library_id'] : '';
+        $this->activeImageTypes = $libraryId !== ''
+            ? $this->enabledImageTypesFor($this->loadLibraryRow($libraryId))
+            : null;
+
+        try {
+            return $this->applyMatchResolved($item, $itemId, $tmdbId, $tmdb, $type);
+        } finally {
+            $this->activeImageTypes = null;
+        }
+    }
+
+    /**
+     * Inner body of {@see applyMatch()} — resolves + persists the chosen TMDB
+     * match. Split out so {@see applyMatch()} can wrap it in a try/finally that
+     * always clears the per-run image-type filter ({@see $activeImageTypes}).
+     *
+     * @param array<string, mixed> $item   Hydrated media-item row (already loaded).
+     * @param string               $itemId Target media-item id.
+     * @param string               $tmdbId Chosen TMDB id (already trimmed, non-empty).
+     * @param TmdbProvider         $tmdb   The wired TMDB provider.
+     * @param string               $type   `'tv'` or `'movie'`.
+     *
+     * @return array{
+     *     item_id: string,
+     *     mode: string,
+     *     tmdb_id: string,
+     *     matched: bool,
+     *     children_enriched: int
+     * }
+     */
+    private function applyMatchResolved(
+        array $item,
+        string $itemId,
+        string $tmdbId,
+        TmdbProvider $tmdb,
+        string $type
+    ): array {
         $itemType = $item['type'] ?? null;
         $mode = $type === 'tv' ? 'tv' : 'movie';
         $existing = $this->extractMetadata($item);
@@ -1371,14 +1495,47 @@ class LibraryMetadataMatcher
     /**
      * Persist a merged metadata array onto an item, stamping the refresh time.
      *
+     * Before persisting, the flat image keys (`poster_url` / `backdrop_url`) are
+     * dropped when their canonical {@see ImageType} is DISABLED for the current
+     * library (M5). Only mapped keys are gated; every other key (including any
+     * unmapped image key) passes through untouched. When no image-type selection
+     * is active ({@see $activeImageTypes} is null — legacy construction /
+     * unloadable library), nothing is filtered — behaviour is exactly as before.
+     *
      * @param array<string, mixed> $merged
      */
     private function persistMetadata(string $id, array $merged): void
     {
         $this->items->update($id, [
-            'metadata_json' => $merged,
+            'metadata_json' => $this->filterDisabledImageKeys($merged),
             'metadata_refreshed_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    /**
+     * Drop the flat image keys whose canonical {@see ImageType} is disabled for
+     * the current library's {@see $activeImageTypes} selection (M5).
+     *
+     * A null selection (no LibraryManager wired, or the library could not be
+     * loaded) is a no-op — the array is returned unchanged. Only keys listed in
+     * {@see FLAT_IMAGE_KEY_TYPES} are considered; unmapped image keys pass
+     * through so an unknown/new key is never silently dropped.
+     *
+     * @param array<string, mixed> $merged
+     *
+     * @return array<string, mixed>
+     */
+    private function filterDisabledImageKeys(array $merged): array
+    {
+        if ($this->activeImageTypes === null) {
+            return $merged;
+        }
+        foreach (self::FLAT_IMAGE_KEY_TYPES as $key => $imageType) {
+            if (array_key_exists($key, $merged) && !in_array($imageType, $this->activeImageTypes, true)) {
+                unset($merged[$key]);
+            }
+        }
+        return $merged;
     }
 
     /** A non-empty string value, or null. */

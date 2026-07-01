@@ -10,6 +10,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Metadata\ImageType;
 
 class LibraryController
 {
@@ -141,6 +142,44 @@ class LibraryController
         return (new Response())->status(400)->json([
             'error' => 'metadata_priority must be a map of media type to an ordered list of source names',
         ]);
+    }
+
+    /**
+     * Validate and apply a per-library `image_types` selection (M5) onto the
+     * options blob being persisted.
+     *
+     * Accepts EITHER a `{type: bool}` map or a `list<string>` of enabled type
+     * names; unknown types are dropped by {@see ImageType::normalize()}. The
+     * result is stored under `options.image_types` as the canonical
+     * `{type: bool}` storage map (every known type present with an explicit
+     * on/off state — see {@see ImageType} docs). A `null` value CLEARS the
+     * selection (the key is removed → the library falls back to
+     * {@see ImageType::defaults()}); an empty list/map is a VALID selection that
+     * disables every type (stored, not cleared).
+     *
+     * Returns a `400` {@see Response} when the value is present but malformed
+     * (not an array); returns null when applied successfully (including clear).
+     *
+     * @param array<string, mixed> $options Options blob to mutate in place.
+     * @param mixed                $raw     Raw `image_types` value from the body.
+     */
+    private function applyImageTypes(array &$options, mixed $raw): ?Response
+    {
+        // Null → clear the override (fall back to the default image-type set).
+        if ($raw === null) {
+            unset($options['image_types']);
+            return null;
+        }
+
+        if (!is_array($raw)) {
+            return (new Response())->status(400)->json([
+                'error' => 'image_types must be a map of type to boolean, or a list of enabled type names',
+            ]);
+        }
+
+        // Store the canonical {type: bool} map (every known type present).
+        $options['image_types'] = ImageType::toStorageMap($raw);
+        return null;
     }
 
     /**
@@ -325,6 +364,24 @@ class LibraryController
             }
         }
 
+        // `image_types` (M5, per-library artwork selection): accept it at the body
+        // top level OR nested inside `options`, normalise against the canonical
+        // catalogue, and persist the `{type: bool}` storage map into the options
+        // blob. Absent → the library falls back to ImageType::defaults() at scan
+        // time (no key stored). The top-level value wins over a nested one,
+        // mirroring series_per_directory / metadata_priority.
+        if (array_key_exists('image_types', $data)) {
+            $imageTypesError = $this->applyImageTypes($options, $data['image_types']);
+            if ($imageTypesError !== null) {
+                return $imageTypesError;
+            }
+        } elseif (array_key_exists('image_types', $options)) {
+            $imageTypesError = $this->applyImageTypes($options, $options['image_types']);
+            if ($imageTypesError !== null) {
+                return $imageTypesError;
+            }
+        }
+
         $libraryId = $this->libraryManager->createLibrary(
             $name,
             $type,
@@ -404,16 +461,21 @@ class LibraryController
             unset($data['series_per_directory']);
         }
 
-        // `metadata_priority` on update, SYMMETRICALLY with create(): accept it
-        // at the body top level OR nested inside `options`, validate the shape,
-        // and merge it into the EXISTING options blob (preserving unrelated
-        // options). An explicit null / empty map CLEARS the override (removes the
-        // key → falls back to the global default). Applies to every library type.
-        $bodyOptionsForPriority = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        // Unified options-merge pass for `metadata_priority` (SYMMETRICALLY with
+        // create()) and `image_types` (M5). Each may arrive at the body top level
+        // OR nested inside `options`. We rebuild the options blob ONCE (existing
+        // row overlaid with any explicit body `options`) and then apply BOTH
+        // edits to that single blob — so clearing one (null/empty) while editing
+        // the other can't resurrect the cleared key from the original row. Each
+        // edit: an explicit null / empty map CLEARS its key (falls back to the
+        // global default / type defaults). Applies to every library type.
+        $bodyOptions = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
         $hasTopLevelPriority = array_key_exists('metadata_priority', $data);
-        $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptionsForPriority);
+        $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptions);
+        $hasTopLevelImages = array_key_exists('image_types', $data);
+        $hasNestedImages = array_key_exists('image_types', $bodyOptions);
 
-        if ($hasTopLevelPriority || $hasNestedPriority) {
+        if ($hasTopLevelPriority || $hasNestedPriority || $hasTopLevelImages || $hasNestedImages) {
             $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
             $mergedOptions = [];
             foreach ($existingOptions as $optKey => $optVal) {
@@ -422,22 +484,35 @@ class LibraryController
                 }
             }
             // An explicit `options` in the body still wins as the base.
-            foreach ($bodyOptionsForPriority as $optKey => $optVal) {
+            foreach ($bodyOptions as $optKey => $optVal) {
                 if (is_string($optKey)) {
                     $mergedOptions[$optKey] = $optVal;
                 }
             }
 
-            $rawPriority = $hasTopLevelPriority
-                ? $data['metadata_priority']
-                : $bodyOptionsForPriority['metadata_priority'];
-            $priorityError = $this->applyMetadataPriority($mergedOptions, $rawPriority);
-            if ($priorityError !== null) {
-                return $priorityError;
+            if ($hasTopLevelPriority || $hasNestedPriority) {
+                $rawPriority = $hasTopLevelPriority
+                    ? $data['metadata_priority']
+                    : $bodyOptions['metadata_priority'];
+                $priorityError = $this->applyMetadataPriority($mergedOptions, $rawPriority);
+                if ($priorityError !== null) {
+                    return $priorityError;
+                }
+                unset($data['metadata_priority']);
+            }
+
+            if ($hasTopLevelImages || $hasNestedImages) {
+                $rawImages = $hasTopLevelImages
+                    ? $data['image_types']
+                    : $bodyOptions['image_types'];
+                $imageTypesError = $this->applyImageTypes($mergedOptions, $rawImages);
+                if ($imageTypesError !== null) {
+                    return $imageTypesError;
+                }
+                unset($data['image_types']);
             }
 
             $data['options'] = $mergedOptions;
-            unset($data['metadata_priority']);
         }
 
         $this->libraryManager->updateLibrary($params['id'], $data);

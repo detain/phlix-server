@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library\Dto;
 
+use Phlix\Media\Metadata\ImageType;
+
 /**
  * Typed value object representing a hydrated row from the `libraries` table.
  *
@@ -66,13 +68,34 @@ final class LibraryRow
      * when present (see {@see self::metadataPriority()}), else `null` (the
      * library falls back to the global `metadata.provider_priority` default).
      *
+     * Additionally surfaces `image_types` (M5) as a top-level `{available,
+     * enabled}` block so the library-detail payload carries BOTH the full
+     * catalogue of image types (for the U5 checkbox UI) and this library's
+     * enabled selection (or the sensible defaults when none is stored).
+     *
      * @return array<string, mixed>
      */
     public function toArray(): array
     {
         $row = $this->raw;
         $row['metadata_priority'] = $this->metadataPriority();
+        $row['image_types'] = [
+            'available' => ImageType::catalog(),
+            'enabled' => $this->enabledImageTypes(),
+        ];
         return $row;
+    }
+
+    /**
+     * The image types (M5) enabled for this library, read from the decoded
+     * `options.image_types` selection. Falls back to {@see ImageType::defaults()}
+     * when the key is absent so existing (un-migrated) libraries behave sensibly.
+     *
+     * @return list<string> Enabled canonical image types (catalogue-ordered).
+     */
+    public function enabledImageTypes(): array
+    {
+        return ImageType::enabledForOptions($this->options);
     }
 
     /**

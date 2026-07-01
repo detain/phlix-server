@@ -421,7 +421,7 @@ final class PluginAdminController
      * @param Request              $request The HTTP request.
      * @param array<string,string> $params  Path parameters; `name` is the manifest name.
      *
-     * @return Response 204 on success, 404 if unknown.
+     * @return Response 200 `{uninstalled:true,name}` on success, 404 if unknown.
      *
      * @since 0.10.0 (Step A.5)
      */
@@ -445,7 +445,7 @@ final class PluginAdminController
             ['source' => 'ui'],
         );
 
-        return (new Response())->status(204)->json([]);
+        return (new Response())->status(200)->json(['uninstalled' => true, 'name' => $name]);
     }
 
     /**

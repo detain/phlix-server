@@ -79,15 +79,30 @@ class ComposerRunner
         // Composer needs a writable HOME for its config + cache. The server
         // user's real $HOME/.cache is read-only under the systemd sandbox
         // (ProtectSystem=strict / ProtectHome), so point COMPOSER_HOME +
-        // COMPOSER_CACHE_DIR at a writable dir inside the plugin. (A token in
-        // the inherited env — e.g. GITHUB_TOKEN — is still passed through.)
+        // COMPOSER_CACHE_DIR at a writable dir inside the plugin. HOME is
+        // pointed there too so any git/ssh subprocess never reaches into the
+        // daemon user's real (often absent, root-owned) ~/.ssh.
         $composerHome = $pluginDir . DIRECTORY_SEPARATOR . '.composer';
-        @mkdir($composerHome, 0750, true);
+        @mkdir($composerHome . DIRECTORY_SEPARATOR . 'cache', 0750, true);
         $env = [
+            'HOME' => $composerHome,
             'COMPOSER_HOME' => $composerHome,
             'COMPOSER_CACHE_DIR' => $composerHome . DIRECTORY_SEPARATOR . 'cache',
             'COMPOSER_NO_INTERACTION' => '1',
         ];
+
+        // First-party deps (e.g. detain/phlix-shared) are declared via a GitHub
+        // `vcs` repository. A resident, token-less host cannot install them:
+        // composer hits the anonymous GitHub API rate limit ("Could not
+        // authenticate against github.com"), then falls back to an SSH source
+        // clone (git@github.com:…) that fails because the daemon user has no
+        // writable ~/.ssh (Host key verification failed). Fix both, offline-safe:
+        //  (1) force `no-api` on GitHub vcs repos so composer git-clones the repo
+        //      over HTTPS directly — no API call, no rate limit, no SSH; and
+        //  (2) seed COMPOSER_HOME with github-protocols=https plus an auth.json
+        //      when a token is present (raises the API limit / unlocks private).
+        $this->seedComposerHome($composerHome);
+        $this->forceHttpsGithubVcs($composerJson);
 
         // SECURITY (S1 — RCE kill-switch): `--no-scripts` AND `--no-plugins`
         // stop any `composer.json` `scripts` hook (post-install-cmd, …) or
@@ -184,6 +199,119 @@ class ComposerRunner
         }
 
         return $process;
+    }
+
+    /**
+     * Patch the plugin's composer.json so every GitHub `vcs` repository is
+     * fetched with `no-api: true`. Composer then git-clones the repo over the
+     * declared HTTPS url instead of calling the (anonymously rate-limited)
+     * GitHub API and falling back to an SSH clone the daemon user cannot do.
+     *
+     * Idempotent and defensive: malformed JSON, a missing `repositories` key,
+     * non-array/non-vcs entries, and non-GitHub urls are all left untouched.
+     * Only writes the file when something actually changed.
+     *
+     * @param string $composerJsonPath Absolute path to the plugin composer.json.
+     */
+    private function forceHttpsGithubVcs(string $composerJsonPath): void
+    {
+        $raw = @file_get_contents($composerJsonPath);
+        if ($raw === false) {
+            return;
+        }
+
+        /** @var mixed $data */
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
+            return;
+        }
+        $repositories = $data['repositories'] ?? null;
+        if (!is_array($repositories)) {
+            return;
+        }
+
+        $changed = false;
+        foreach ($repositories as $key => $repo) {
+            if (!is_array($repo)) {
+                continue;
+            }
+            $url = $repo['url'] ?? null;
+            if (
+                ($repo['type'] ?? null) === 'vcs'
+                && is_string($url)
+                && str_contains($url, 'github.com')
+                && ($repo['no-api'] ?? null) !== true
+            ) {
+                $repo['no-api'] = true;
+                $repositories[$key] = $repo;
+                $changed = true;
+            }
+        }
+
+        if (!$changed) {
+            return;
+        }
+
+        $data['repositories'] = $repositories;
+        $encoded = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false) {
+            return;
+        }
+        @file_put_contents($composerJsonPath, $encoded . "\n");
+        $this->logger()->info('composer: forced no-api on github vcs repositories', [
+            'composer_json' => $composerJsonPath,
+        ]);
+    }
+
+    /**
+     * Seed COMPOSER_HOME with a config.json that prefers HTTPS for GitHub source
+     * clones (belt-and-suspenders against an SSH fallback), and — when a GitHub
+     * token is present in the environment — an auth.json so the API is
+     * authenticated (5000/hr instead of 60/hr, and private repos unlocked).
+     *
+     * @param string $composerHome Writable COMPOSER_HOME directory.
+     */
+    private function seedComposerHome(string $composerHome): void
+    {
+        $configPath = $composerHome . DIRECTORY_SEPARATOR . 'config.json';
+        if (!is_file($configPath)) {
+            @file_put_contents(
+                $configPath,
+                json_encode(
+                    ['config' => ['github-protocols' => ['https']]],
+                    JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES,
+                ) . "\n",
+            );
+        }
+
+        $token = $this->discoverGithubToken();
+        if ($token === null) {
+            return;
+        }
+        $authPath = $composerHome . DIRECTORY_SEPARATOR . 'auth.json';
+        @file_put_contents(
+            $authPath,
+            json_encode(
+                ['github-oauth' => ['github.com' => $token]],
+                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES,
+            ) . "\n",
+        );
+        @chmod($authPath, 0600);
+    }
+
+    /**
+     * Discover a GitHub token from the environment, in priority order. Returns
+     * null when none is set (the token-less path stays fully functional).
+     */
+    private function discoverGithubToken(): ?string
+    {
+        foreach (['PHLIX_GITHUB_TOKEN', 'GITHUB_TOKEN', 'GH_TOKEN'] as $var) {
+            $val = getenv($var);
+            if (is_string($val) && trim($val) !== '') {
+                return trim($val);
+            }
+        }
+        return null;
     }
 
     /**

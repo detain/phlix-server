@@ -698,7 +698,14 @@ class WebPortalRouter
 
         $field = $request->queryString('field') ?? 'name';
         // Resolve unknown field to the default (same logic as IndexBuckets::build).
-        if (!in_array($field, [IndexBuckets::FIELD_NAME, IndexBuckets::FIELD_YEAR, IndexBuckets::FIELD_RATING, IndexBuckets::FIELD_RUNTIME, IndexBuckets::FIELD_DATE_ADDED], true)) {
+        $validIndexFields = [
+            IndexBuckets::FIELD_NAME,
+            IndexBuckets::FIELD_YEAR,
+            IndexBuckets::FIELD_RATING,
+            IndexBuckets::FIELD_RUNTIME,
+            IndexBuckets::FIELD_DATE_ADDED,
+        ];
+        if (!in_array($field, $validIndexFields, true)) {
             $field = IndexBuckets::FIELD_NAME;
         }
         $order = strtolower($request->queryString('order') ?? 'asc');

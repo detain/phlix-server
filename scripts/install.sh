@@ -1404,6 +1404,13 @@ Group=${SERVICE_USER}
 WorkingDirectory=${INSTALL_PATH}
 EnvironmentFile=${ENV_FILE}
 Environment="PHLIX_ENV=production"
+# Swoole's RemoteObject bridge (used when a coroutine runs a hooked stream op,
+# e.g. the plugin catalog/install HTTPS fetch) writes a lock to \$HOME/.swoole.
+# The user's real home (/home/${SERVICE_USER}) is hidden by ProtectHome=true, so
+# point HOME at a ReadWritePath (${INSTALL_PATH}/var) — otherwise Swoole throws
+# "failed to open lock file[…/.swoole/remote-object-server.lock]" and the Plugins
+# page blanks out.
+Environment="HOME=${INSTALL_PATH}/var"
 # Workerman daemon — start.php is the root-level bootstrap (mirrors
 # webman's pattern: thin entry → boot HTTP/WebSocket workers from
 # config). public/ remains the document root for static assets.
@@ -1429,7 +1436,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c
+ReadWritePaths=${DATA_ROOT} ${LOG_DIR} ${RUN_DIR} ${INSTALL_PATH}/.logs ${INSTALL_PATH}/templates_c ${INSTALL_PATH}/var
 RestrictNamespaces=true
 LockPersonality=true
 RemoveIPC=true

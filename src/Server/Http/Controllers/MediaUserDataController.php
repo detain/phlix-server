@@ -124,14 +124,15 @@ class MediaUserDataController
     }
 
     /**
-     * Set the authenticated user's "love" level for a media item.
+     * Set the authenticated user's "like" level for a media item.
      *
-     * Body: `{ "level": <int 0-3> }`. Unlike the rating, the love level is
-     * non-nullable (0 = not loved) and required: a missing/null, non-numeric,
-     * non-integer, or out-of-range value is a 400. The validation/coercion
-     * mirrors {@see self::setRating()} (bool/non-numeric/non-integer rejected
-     * up front), differing only in the 0-3 range and the absence of a
-     * null-clears branch.
+     * Body: `{ "level": <int −2..2> }` on the thumbs axis (−2 = strongly
+     * dislike, −1 = dislike, 0 = not set, 1 = like, 2 = love). Unlike the
+     * rating, the like level is non-nullable (0 = not set) and required: a
+     * missing/null, non-numeric, non-integer, or out-of-range value is a 400.
+     * The validation/coercion mirrors {@see self::setRating()}
+     * (bool/non-numeric/non-integer rejected up front), differing only in the
+     * −2..2 range and the absence of a null-clears branch.
      *
      * @param array<string, string> $params Route params including 'id'.
      *
@@ -148,7 +149,7 @@ class MediaUserDataController
         $raw = $request->input('level');
         // Reject missing/null and non-integer input up front so only clean ints
         // reach the repository. Bools are numeric-adjacent in PHP but never a
-        // valid level. The repository enforces the canonical 0-3 range.
+        // valid level. The repository enforces the canonical −2..2 range.
         if (
             $raw === null
             || is_bool($raw)
@@ -156,7 +157,7 @@ class MediaUserDataController
             || (float) $raw !== floor((float) $raw)
         ) {
             return (new Response())->status(400)->json(
-                ['error' => 'level must be an integer between 0 and 3']
+                ['error' => 'level must be an integer between -2 and 2']
             );
         }
         $level = (int) $raw;
@@ -276,7 +277,8 @@ class MediaUserDataController
             $shaped = MediaItemShaper::shape($item);
             // ADD-ONLY user_data block (mirrors the media-detail endpoint). Every
             // row from getFavorites() is a favorite by definition (favorite = 1).
-            // `like_level` is the 0-3 multi-level Love axis (Feature 10),
+            // `like_level` is the signed −2..2 thumbs axis (−2 = strongly dislike,
+            // −1 = dislike, 0 = not set, 1 = like, 2 = love; Feature 10),
             // defaulting to 0 when absent/NULL/non-numeric.
             $rating = $row['rating'] ?? null;
             $likeLevel = $row['like_level'] ?? null;

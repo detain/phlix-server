@@ -66,6 +66,84 @@ class LibraryController
     }
 
     /**
+     * Validate and apply a per-library `metadata_priority` override onto the
+     * options blob being persisted.
+     *
+     * A null value or an explicit empty map CLEARS the override — the
+     * `metadata_priority` key is removed from `$options` so the library falls
+     * back to the global `metadata.provider_priority` default. A well-formed map
+     * (media-type string => ordered list of non-empty source-name strings) is
+     * sanitised (types/sources trimmed, empty lists dropped) and stored under
+     * `metadata_priority`; if every type sanitised away, the key is removed
+     * (equivalent to clearing). Source names are NOT restricted — the source
+     * list is dynamic (plugins register their own), so only the SHAPE is checked.
+     *
+     * Returns a `400` {@see Response} when the value is present but malformed
+     * (not a map, or a value that is not a list of source-name strings); returns
+     * null when applied successfully (including the clear case).
+     *
+     * @param array<string, mixed> $options Options blob to mutate in place.
+     * @param mixed                $raw     Raw `metadata_priority` value from the body.
+     */
+    private function applyMetadataPriority(array &$options, mixed $raw): ?Response
+    {
+        // Null / explicit empty map → clear the override (fall back to global).
+        if ($raw === null || $raw === []) {
+            unset($options['metadata_priority']);
+            return null;
+        }
+
+        if (!is_array($raw)) {
+            return $this->metadataPriorityError();
+        }
+
+        $clean = [];
+        foreach ($raw as $type => $order) {
+            if (!is_string($type) || trim($type) === '') {
+                return $this->metadataPriorityError();
+            }
+            if (!is_array($order)) {
+                return $this->metadataPriorityError();
+            }
+            $list = [];
+            foreach ($order as $source) {
+                if (!is_string($source)) {
+                    return $this->metadataPriorityError();
+                }
+                $trimmed = trim($source);
+                if ($trimmed === '') {
+                    return $this->metadataPriorityError();
+                }
+                $list[] = $trimmed;
+            }
+            // A type whose list sanitised to empty is dropped (falls back to
+            // the global list for that type) rather than stored as empty.
+            if ($list !== []) {
+                $clean[trim($type)] = $list;
+            }
+        }
+
+        if ($clean === []) {
+            // Everything sanitised away → clear the override entirely.
+            unset($options['metadata_priority']);
+            return null;
+        }
+
+        $options['metadata_priority'] = $clean;
+        return null;
+    }
+
+    /**
+     * The canonical 400 response for a malformed `metadata_priority` value.
+     */
+    private function metadataPriorityError(): Response
+    {
+        return (new Response())->status(400)->json([
+            'error' => 'metadata_priority must be a map of media type to an ordered list of source names',
+        ]);
+    }
+
+    /**
      * Require authentication for the request.
      */
     private function requireAuth(Request $request): ?Response
@@ -226,6 +304,27 @@ class LibraryController
             unset($options['series_per_directory']);
         }
 
+        // `metadata_priority` (per-library provider-priority override): a map of
+        // media-type => ordered source-name list, layered OVER the global
+        // `metadata.provider_priority` default at match time. Accept it at the
+        // body top level OR nested inside `options`, validate the SHAPE (source
+        // names are dynamic incl. plugins, so we do NOT restrict which names are
+        // allowed), and persist it into the options blob. An explicit null or
+        // empty map CLEARS the override (the key is removed → falls back to the
+        // global default). The top-level value (when present) wins over a nested
+        // one, mirroring series_per_directory.
+        if (array_key_exists('metadata_priority', $data)) {
+            $priorityError = $this->applyMetadataPriority($options, $data['metadata_priority']);
+            if ($priorityError !== null) {
+                return $priorityError;
+            }
+        } elseif (array_key_exists('metadata_priority', $options)) {
+            $priorityError = $this->applyMetadataPriority($options, $options['metadata_priority']);
+            if ($priorityError !== null) {
+                return $priorityError;
+            }
+        }
+
         $libraryId = $this->libraryManager->createLibrary(
             $name,
             $type,
@@ -303,6 +402,42 @@ class LibraryController
                 }
             }
             unset($data['series_per_directory']);
+        }
+
+        // `metadata_priority` on update, SYMMETRICALLY with create(): accept it
+        // at the body top level OR nested inside `options`, validate the shape,
+        // and merge it into the EXISTING options blob (preserving unrelated
+        // options). An explicit null / empty map CLEARS the override (removes the
+        // key → falls back to the global default). Applies to every library type.
+        $bodyOptionsForPriority = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        $hasTopLevelPriority = array_key_exists('metadata_priority', $data);
+        $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptionsForPriority);
+
+        if ($hasTopLevelPriority || $hasNestedPriority) {
+            $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
+            $mergedOptions = [];
+            foreach ($existingOptions as $optKey => $optVal) {
+                if (is_string($optKey)) {
+                    $mergedOptions[$optKey] = $optVal;
+                }
+            }
+            // An explicit `options` in the body still wins as the base.
+            foreach ($bodyOptionsForPriority as $optKey => $optVal) {
+                if (is_string($optKey)) {
+                    $mergedOptions[$optKey] = $optVal;
+                }
+            }
+
+            $rawPriority = $hasTopLevelPriority
+                ? $data['metadata_priority']
+                : $bodyOptionsForPriority['metadata_priority'];
+            $priorityError = $this->applyMetadataPriority($mergedOptions, $rawPriority);
+            if ($priorityError !== null) {
+                return $priorityError;
+            }
+
+            $data['options'] = $mergedOptions;
+            unset($data['metadata_priority']);
         }
 
         $this->libraryManager->updateLibrary($params['id'], $data);

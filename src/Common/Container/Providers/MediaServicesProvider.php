@@ -20,6 +20,7 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
@@ -178,6 +179,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 }
             ),
 
+            // Per-library provider-priority resolver (item 5): layers a library's
+            // `options.metadata_priority` override OVER the shared global
+            // PriorityConfig (the fallback base above stays intact) with the SAME
+            // per-type REPLACE-merge. Its only dep is that global PriorityConfig,
+            // so a plain autowire binds the single shared instance.
+            LibraryPriorityResolver::class => autowire()
+                ->constructorParameter('globalPriority', get(PriorityConfig::class)),
+
             // `statsCollector` is named explicitly because PHP-DI skips optional
             // ctor params with defaults during autowiring; without it item
             // add/remove changes never reach stats_library_changes (the admin
@@ -278,7 +287,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('tmdb', get(TmdbProvider::class))
                 // Effective (settings-merged) noise-suffix list so re-match-time
                 // title cleaning uses the same list as the scanner.
-                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes')),
+                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes'))
+                // Per-library provider-priority (item 5): the LibraryManager loads
+                // the library's `options.metadata_priority` override and the
+                // LibraryPriorityResolver layers it over the global default so a
+                // library's effective source order drives its metadata match.
+                // Named because PHP-DI skips defaulted optional ctor params.
+                ->constructorParameter('libraries', get(LibraryManager::class))
+                ->constructorParameter('priorityResolver', get(LibraryPriorityResolver::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`

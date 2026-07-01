@@ -8,8 +8,11 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
+use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Throwable;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 
@@ -89,6 +92,27 @@ class LibraryMetadataMatcher
     private ?array $noiseSuffixes;
 
     /**
+     * Library data access used to load a library's `options.metadata_priority`
+     * override so {@see matchLibrary()} can build the effective per-library
+     * {@see PriorityConfig}. Nullable for back-compat: when null (legacy
+     * construction / unit tests), no override is loaded and matching uses the
+     * resolvers' injected global priority config exactly as before.
+     *
+     * @var LibraryManager|null
+     */
+    private ?LibraryManager $libraries;
+
+    /**
+     * Builds the effective per-library {@see PriorityConfig} (library override
+     * layered over the global default). Nullable for back-compat alongside
+     * {@see self::$libraries}; both must be present for a per-library override to
+     * take effect.
+     *
+     * @var LibraryPriorityResolver|null
+     */
+    private ?LibraryPriorityResolver $priorityResolver;
+
+    /**
      * @param ItemRepository             $items          Media-item data access.
      * @param MovieMetadataResolver      $resolver       Cross-source movie resolver.
      * @param SeriesMetadataResolver|null $seriesResolver TV series resolver; when
@@ -109,6 +133,20 @@ class LibraryMetadataMatcher
      *                                                   by the DI provider). A
      *                                                   null/empty value falls back to
      *                                                   the built-in const.
+     * @param LibraryManager|null        $libraries      Library data access used to
+     *                                                   load a library's
+     *                                                   `options.metadata_priority`
+     *                                                   override. Nullable for
+     *                                                   back-compat — when null (with
+     *                                                   or without $priorityResolver)
+     *                                                   matching uses the resolvers'
+     *                                                   injected global priority config.
+     * @param LibraryPriorityResolver|null $priorityResolver Builds the effective
+     *                                                   per-library priority config
+     *                                                   (override over global default).
+     *                                                   Nullable for back-compat; both
+     *                                                   this and $libraries must be
+     *                                                   present for an override to apply.
      *
      * @since 0.21.0
      */
@@ -118,7 +156,9 @@ class LibraryMetadataMatcher
         ?SeriesMetadataResolver $seriesResolver = null,
         ?StructuredLogger $logger = null,
         ?TmdbProvider $tmdb = null,
-        ?array $noiseSuffixes = null
+        ?array $noiseSuffixes = null,
+        ?LibraryManager $libraries = null,
+        ?LibraryPriorityResolver $priorityResolver = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -130,6 +170,8 @@ class LibraryMetadataMatcher
         $this->noiseSuffixes = ($noiseSuffixes === null || $noiseSuffixes === [])
             ? null
             : array_values($noiseSuffixes);
+        $this->libraries = $libraries;
+        $this->priorityResolver = $priorityResolver;
     }
 
     /**
@@ -154,6 +196,15 @@ class LibraryMetadataMatcher
         $matched = 0;
         $processed = 0;
         $offset = 0;
+
+        // Effective per-library priority config (item 5): the library's
+        // `options.metadata_priority` override layered over the global default.
+        // Computed ONCE here (not per item/page) and passed into every
+        // resolve() call in this run. Stays null when the deps are absent
+        // (legacy construction / unit tests) OR the library has no override, in
+        // which case the resolvers fall back to their injected global config —
+        // behaviour is then exactly as before.
+        $effective = $this->effectivePriorityFor($libraryId);
 
         // Progress denominator: the count of top-level items (movies + series)
         // the flat pass visits. Reported via $onProgress so the worker can stamp
@@ -187,7 +238,9 @@ class LibraryMetadataMatcher
                 $name = is_string($item['name'] ?? null) ? $item['name'] : '';
 
                 try {
-                    $hit = $isSeries ? $this->matchSeries($item) : $this->matchItem($item);
+                    $hit = $isSeries
+                        ? $this->matchSeries($item, $effective)
+                        : $this->matchItem($item, $effective);
                     if ($hit) {
                         $matched++;
                         // Per-item line (DEBUG) so progress is visible as items
@@ -245,6 +298,48 @@ class LibraryMetadataMatcher
         ]);
 
         return ['matched' => $matched, 'processed' => $processed];
+    }
+
+    /**
+     * Build the effective per-library {@see PriorityConfig} for a match run
+     * (item 5): the library's `options.metadata_priority` override layered over
+     * the global default.
+     *
+     * Returns null when the per-library deps are absent (legacy construction /
+     * unit tests) OR when the library cannot be loaded — the resolvers then use
+     * their injected global config, so behaviour is exactly as before. Loading
+     * the library is best-effort: any error is swallowed and null returned, so a
+     * settings-store hiccup never aborts the match.
+     *
+     * @param string $libraryId Target library UUID.
+     *
+     * @return PriorityConfig|null Effective config, or null to use the global.
+     */
+    private function effectivePriorityFor(string $libraryId): ?PriorityConfig
+    {
+        if ($this->libraries === null || $this->priorityResolver === null) {
+            return null;
+        }
+
+        try {
+            $row = $this->libraries->getLibrary($libraryId);
+            $override = null;
+            if (is_array($row)) {
+                $candidate = $row['metadata_priority'] ?? null;
+                if (is_array($candidate) && $candidate !== []) {
+                    /** @var array<string, list<string>> $candidate */
+                    $override = $candidate;
+                }
+            }
+
+            return $this->priorityResolver->effectiveFor($override);
+        } catch (Throwable $e) {
+            $this->logger->warning('LibraryMetadataMatcher: effective priority load failed; using global', [
+                'library_id' => $libraryId,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
     }
 
     /**
@@ -720,12 +815,15 @@ class LibraryMetadataMatcher
     /**
      * Resolve + persist metadata for a single (already movie-typed) item.
      *
-     * @param array<string, mixed> $item Hydrated media-item row.
+     * @param array<string, mixed> $item             Hydrated media-item row.
+     * @param PriorityConfig|null  $priorityOverride Effective per-library priority
+     *     config (item 5); when null the resolver's injected global config drives
+     *     the source order.
      *
      * @return bool `true` when the resolver matched and the item was persisted,
      *              `false` when there was no usable id/name or no match.
      */
-    private function matchItem(array $item): bool
+    private function matchItem(array $item, ?PriorityConfig $priorityOverride = null): bool
     {
         $id = $item['id'] ?? null;
         if (!is_string($id) || $id === '') {
@@ -751,7 +849,7 @@ class LibraryMetadataMatcher
 
         $externalIds = $this->extractExternalIds($existingMetadata);
 
-        $resolved = $this->resolver->resolve($name, $year, $externalIds);
+        $resolved = $this->resolver->resolve($name, $year, $externalIds, $priorityOverride);
         if ($resolved === null) {
             return false;
         }
@@ -771,11 +869,14 @@ class LibraryMetadataMatcher
      * overview, and each episode gets its TMDB title/still/overview/air-date —
      * falling back to the series poster so nothing in the tree renders blank.
      *
-     * @param array<string, mixed> $seriesItem Hydrated `series`-type row.
+     * @param array<string, mixed> $seriesItem       Hydrated `series`-type row.
+     * @param PriorityConfig|null  $priorityOverride Effective per-library priority
+     *     config (item 5); when null the series resolver's injected global config
+     *     drives the genres mode.
      *
      * @return bool True when the series matched (and its subtree was enriched).
      */
-    private function matchSeries(array $seriesItem): bool
+    private function matchSeries(array $seriesItem, ?PriorityConfig $priorityOverride = null): bool
     {
         $resolver = $this->seriesResolver;
         if ($resolver === null) {
@@ -812,7 +913,7 @@ class LibraryMetadataMatcher
             $year = $this->extractYear($existing) ?? $normalized['year'];
         }
 
-        $resolved = $resolver->resolve($name, $year);
+        $resolved = $resolver->resolve($name, $year, $priorityOverride);
         if ($resolved === null) {
             return false;
         }

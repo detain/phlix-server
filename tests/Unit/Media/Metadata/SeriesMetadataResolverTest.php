@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Metadata;
 
+use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Metadata\Resolution\PriorityFieldResolver;
 use Phlix\Media\Metadata\SeriesMetadataResolver;
 use Phlix\Media\Metadata\TmdbProvider;
 use PHPUnit\Framework\TestCase;
@@ -40,6 +42,34 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertSame('1668', $resolved['tmdb_id']);
         $this->assertSame('1668', $resolved['external_ids']['tmdb']);
         $this->assertSame('tt0285331', $resolved['external_ids']['imdb']);
+        $this->assertSame(['tmdb'], $resolved['sources']);
+    }
+
+    /**
+     * resolve() accepts the optional per-library `$priorityOverride` arg (item 5)
+     * and threads its genres mode into shaping. The series path stays TMDB-only,
+     * so the metadata shape is unchanged, but the call must succeed exactly as it
+     * does without an override (backward-compatible new param).
+     */
+    public function testResolveAcceptsPerLibraryPriorityOverride(): void
+    {
+        $tmdb = $this->createMock(TmdbProvider::class);
+        $tmdb->method('searchTv')->willReturn([['id' => '1668', 'name' => '24']]);
+        $tmdb->method('getTvDetails')->with('1668')->willReturn([
+            'name' => '24',
+            'overview' => 'Real-time thriller.',
+            'year' => 2001,
+            'genres' => ['Drama', 'Action & Adventure'],
+            'poster_path' => '/poster.jpg',
+            'tmdb_id' => '1668',
+        ]);
+
+        $override = new PriorityConfig(['series' => ['tmdb']], PriorityFieldResolver::GENRES_UNION);
+        $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001, $override);
+
+        $this->assertNotNull($resolved);
+        $this->assertSame('1668', $resolved['tmdb_id']);
+        $this->assertSame(['Drama', 'Action & Adventure'], $resolved['genres']);
         $this->assertSame(['tmdb'], $resolved['sources']);
     }
 

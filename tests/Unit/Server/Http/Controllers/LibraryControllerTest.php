@@ -1107,4 +1107,278 @@ class LibraryControllerTest extends TestCase
 
         $this->assertSame(401, $response->statusCode);
     }
+
+    /**
+     * create() persists a top-level metadata_priority override into options
+     * (sanitised: source names trimmed, order preserved). Item 5.
+     */
+    public function testCreatePersistsTopLevelMetadataPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/mnt/movies'], [
+                'metadata_priority' => ['movie' => ['imdb', 'tmdb']],
+            ])
+            ->willReturn('movie-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            'metadata_priority' => ['movie' => ['imdb', ' tmdb ']],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * create() also accepts metadata_priority nested inside `options`.
+     */
+    public function testCreateAcceptsNestedMetadataPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/mnt/movies'], [
+                'metadata_priority' => ['movie' => ['imdb']],
+            ])
+            ->willReturn('movie-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            'options' => ['metadata_priority' => ['movie' => ['imdb']]],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * create() rejects a malformed metadata_priority with 400 and never persists.
+     */
+    public function testCreateRejectsMalformedMetadataPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->never())->method('createLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            // A list value is required per type — a string is malformed.
+            'metadata_priority' => ['movie' => 'tmdb'],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertStringContainsString('metadata_priority', $body['error']);
+    }
+
+    /**
+     * create() treats an explicit empty map as clearing the override (the key is
+     * NOT persisted → falls back to the global default).
+     */
+    public function testCreateEmptyMetadataPriorityClearsOverride(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('createLibrary')
+            ->with('Movies', 'movie', ['/mnt/movies'], [])
+            ->willReturn('movie-lib');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $scanJobs->method('enqueue')->willReturn('job-1');
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = [
+            'name' => 'Movies',
+            'type' => 'movie',
+            'paths' => ['/mnt/movies'],
+            'metadata_priority' => [],
+        ];
+
+        $response = $controller->create($request, []);
+
+        $this->assertSame(201, $response->statusCode);
+    }
+
+    /**
+     * update() merges a metadata_priority override into the EXISTING options blob
+     * (preserving unrelated options), sanitising the map. Item 5.
+     */
+    public function testUpdateMergesMetadataPriorityIntoExistingOptions(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                if (!is_array($data)) {
+                    return false;
+                }
+                return !array_key_exists('metadata_priority', $data)
+                    && is_array($data['options'] ?? null)
+                    && $data['options']['scan_interval'] === 3600
+                    && $data['options']['metadata_priority'] === ['movie' => ['imdb', 'tmdb']];
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['metadata_priority' => ['movie' => ['imdb', 'tmdb']]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() also accepts metadata_priority nested inside `options`.
+     */
+    public function testUpdatePersistsNestedMetadataPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                return is_array($data)
+                    && !array_key_exists('metadata_priority', $data)
+                    && is_array($data['options'] ?? null)
+                    && $data['options']['scan_interval'] === 3600
+                    && $data['options']['metadata_priority'] === ['series' => ['tmdb']];
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['options' => ['metadata_priority' => ['series' => ['tmdb']]]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() with an explicit null CLEARS the override — the key is removed
+     * from the merged options blob (falls back to the global default).
+     */
+    public function testUpdateNullMetadataPriorityClearsOverride(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => [
+                    'scan_interval' => 3600,
+                    'metadata_priority' => ['movie' => ['imdb']],
+                ],
+            ]);
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function (mixed $data): bool {
+                return is_array($data)
+                    && !array_key_exists('metadata_priority', $data)
+                    && is_array($data['options'] ?? null)
+                    && $data['options']['scan_interval'] === 3600
+                    // The override key was dropped from the merged options.
+                    && !array_key_exists('metadata_priority', $data['options']);
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['metadata_priority' => null];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    /**
+     * update() rejects a malformed metadata_priority with 400 and never persists.
+     */
+    public function testUpdateRejectsMalformedMetadataPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'movie',
+                'options' => ['scan_interval' => 3600],
+            ]);
+        $libraryManager->expects($this->never())->method('updateLibrary');
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        // Blank source name is malformed.
+        $request->body = ['metadata_priority' => ['movie' => ['tmdb', '  ']]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(400, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertIsArray($body);
+        $this->assertStringContainsString('metadata_priority', $body['error']);
+    }
 }

@@ -403,7 +403,7 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertSame(404, $response->statusCode);
     }
 
-    public function test_uninstall_returns_204(): void
+    public function test_uninstall_returns_200_with_body(): void
     {
         $this->loader->shouldReceive('uninstall')->once()->with('phlix-plugin-demo');
         $this->audit->shouldReceive('logPluginAction')
@@ -417,7 +417,14 @@ final class PluginAdminControllerTest extends TestCase
 
         $response = $this->controller->uninstall($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
-        $this->assertSame(204, $response->statusCode);
+        // A 200 with a JSON body (not 204) so the SPA fetch client can parse the
+        // response and run its post-uninstall refresh instead of throwing on an
+        // empty body and leaving the plugin lingering until a page reload.
+        $this->assertSame(200, $response->statusCode);
+        $this->assertSame(
+            ['uninstalled' => true, 'name' => 'phlix-plugin-demo'],
+            $this->decode($response->body),
+        );
     }
 
     public function test_uninstall_returns_404_when_plugin_not_found(): void

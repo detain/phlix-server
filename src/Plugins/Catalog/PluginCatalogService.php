@@ -370,44 +370,124 @@ final class PluginCatalogService
     }
 
     /**
-     * Build the default `file_get_contents`-based fetcher.
+     * Build the default catalog fetcher.
+     *
+     * The GET is issued with **cURL** rather than `file_get_contents` + a
+     * `stream_context_create()` SSL/HTTP context. Under Swoole's coroutine
+     * runtime hooks the custom stream-context path marshals through the
+     * `Swoole\RemoteObject` bridge and throws `Swoole\RemoteObject\Exception`
+     * (`@swoole/library/core/RemoteObject/Client.php`), which crashes the
+     * catalog fetch — including the always-present default catalog, blanking
+     * the Plugins listings. cURL is coroutine-safe under
+     * `SWOOLE_HOOK_NATIVE_CURL` (in the runtime allowlist) and remains correct
+     * in plain CLI, so it is the primary path.
      *
      * Sends a Phlix User-Agent + `Accept: application/json`, follows up to 3
-     * redirects, and verifies TLS. Under Swoole the stream-function hook
-     * (in the runtime allowlist) makes this coroutine-friendly.
+     * redirects (restricted to http/https so a redirect cannot downgrade to
+     * `file://` etc.), and verifies TLS. When ext-curl is unavailable the
+     * fetcher falls back to the previous stream-context implementation so
+     * curl-less environments still work.
      *
      * @return callable(string, int): string
      */
     public static function defaultFetcher(): callable
     {
         return static function (string $url, int $timeout): string {
-            $headers = "User-Agent: Phlix-PluginCatalog\r\nAccept: application/json\r\n";
-            $http = [
-                'timeout'        => $timeout,
-                'follow_location' => 1,
-                'max_redirects'  => 3,
-                'header'         => $headers,
-                'ignore_errors'  => false,
-            ];
-            $context = stream_context_create([
-                'http'  => $http,
-                'https' => $http,
-                'ssl'   => ['verify_peer' => true, 'verify_peer_name' => true],
+            if (function_exists('curl_init')) {
+                return self::curlFetch($url, $timeout);
+            }
+            return self::streamFetch($url, $timeout);
+        };
+    }
+
+    /**
+     * Coroutine-safe cURL GET. Follows ≤3 http/https redirects, verifies TLS.
+     *
+     * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
+     */
+    private static function curlFetch(string $url, int $timeout): string
+    {
+        $protocols = CURLPROTO_HTTP | CURLPROTO_HTTPS;
+
+        // Pass the URL to curl_init() (not CURLOPT_URL) so the handle is bound
+        // to the target from the start, keeping the type as a plain string.
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new \RuntimeException('request failed or timed out: curl_init failed');
+        }
+        try {
+            curl_setopt_array($ch, [
+                CURLOPT_HTTPGET         => true,
+                CURLOPT_RETURNTRANSFER  => true,
+                CURLOPT_HTTPHEADER      => [
+                    'User-Agent: Phlix-PluginCatalog',
+                    'Accept: application/json',
+                ],
+                CURLOPT_FOLLOWLOCATION  => true,
+                CURLOPT_MAXREDIRS       => 3,
+                CURLOPT_PROTOCOLS       => $protocols,
+                CURLOPT_REDIR_PROTOCOLS => $protocols,
+                CURLOPT_SSL_VERIFYPEER  => true,
+                CURLOPT_SSL_VERIFYHOST  => 2,
+                CURLOPT_TIMEOUT         => $timeout,
+                CURLOPT_CONNECTTIMEOUT  => $timeout,
             ]);
 
-            $body = @file_get_contents($url, false, $context);
+            $body = curl_exec($ch);
             if ($body === false) {
-                // `$http_response_header` is populated by the HTTP stream
-                // wrapper only when a response was received; read it via
-                // get_defined_vars() so it is absent (not assumed-set) when
-                // the failure was at the transport layer.
-                $status = self::lastHttpStatus(get_defined_vars()['http_response_header'] ?? null);
+                $err = curl_error($ch);
                 throw new \RuntimeException(
-                    $status !== null ? 'HTTP ' . $status : 'request failed or timed out',
+                    'request failed or timed out' . ($err !== '' ? ': ' . $err : ''),
                 );
             }
-            return $body;
-        };
+
+            $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            if ($status >= 400) {
+                throw new \RuntimeException('HTTP ' . $status);
+            }
+
+            // With CURLOPT_RETURNTRANSFER the body is a string; guard for the
+            // (true) transfer-to-stdout mode that we never enable.
+            return is_string($body) ? $body : '';
+        } finally {
+            curl_close($ch);
+        }
+    }
+
+    /**
+     * Fallback `file_get_contents` + stream-context GET, used only when
+     * ext-curl is unavailable. Follows ≤3 redirects and verifies TLS.
+     *
+     * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
+     */
+    private static function streamFetch(string $url, int $timeout): string
+    {
+        $headers = "User-Agent: Phlix-PluginCatalog\r\nAccept: application/json\r\n";
+        $http = [
+            'timeout'        => $timeout,
+            'follow_location' => 1,
+            'max_redirects'  => 3,
+            'header'         => $headers,
+            'ignore_errors'  => false,
+        ];
+        $context = stream_context_create([
+            'http'  => $http,
+            'https' => $http,
+            'ssl'   => ['verify_peer' => true, 'verify_peer_name' => true],
+        ]);
+
+        $body = @file_get_contents($url, false, $context);
+        if ($body === false) {
+            // `$http_response_header` is populated by the HTTP stream
+            // wrapper only when a response was received; read it via
+            // get_defined_vars() so it is absent (not assumed-set) when
+            // the failure was at the transport layer.
+            $status = self::lastHttpStatus(get_defined_vars()['http_response_header'] ?? null);
+            throw new \RuntimeException(
+                $status !== null ? 'HTTP ' . $status : 'request failed or timed out',
+            );
+        }
+        return $body;
     }
 
     /**

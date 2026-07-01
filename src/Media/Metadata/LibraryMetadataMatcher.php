@@ -13,6 +13,7 @@ use Phlix\Media\Metadata\Dto\MetadataValue;
 use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
+use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Throwable;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 
@@ -113,6 +114,17 @@ class LibraryMetadataMatcher
     private ?LibraryPriorityResolver $priorityResolver;
 
     /**
+     * Theme-music (M3) producer. When present, series/movie matches call it after
+     * resolving to populate `metadata_json.theme_audio_url` (local theme file,
+     * else Plex archive by TVDB id). Null in legacy construction / unit tests that
+     * do not exercise theme music — the theme_audio_url slot then stays unset,
+     * exactly as before.
+     *
+     * @var ThemeMusicResolver|null
+     */
+    private ?ThemeMusicResolver $themeMusic;
+
+    /**
      * @param ItemRepository             $items          Media-item data access.
      * @param MovieMetadataResolver      $resolver       Cross-source movie resolver.
      * @param SeriesMetadataResolver|null $seriesResolver TV series resolver; when
@@ -158,7 +170,8 @@ class LibraryMetadataMatcher
         ?TmdbProvider $tmdb = null,
         ?array $noiseSuffixes = null,
         ?LibraryManager $libraries = null,
-        ?LibraryPriorityResolver $priorityResolver = null
+        ?LibraryPriorityResolver $priorityResolver = null,
+        ?ThemeMusicResolver $themeMusic = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -172,6 +185,7 @@ class LibraryMetadataMatcher
             : array_values($noiseSuffixes);
         $this->libraries = $libraries;
         $this->priorityResolver = $priorityResolver;
+        $this->themeMusic = $themeMusic;
     }
 
     /**
@@ -510,7 +524,10 @@ class LibraryMetadataMatcher
 
                 $inheritance = $this->seriesInheritance($resolved);
                 if ($itemType === 'series') {
-                    $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                    $this->persistMetadata(
+                        $itemId,
+                        $this->applyThemeAudio($item, array_merge($existing, $resolved))
+                    );
                     $childrenEnriched = $this->enrichSeriesChildren(
                         $itemId,
                         $tmdbId,
@@ -540,8 +557,14 @@ class LibraryMetadataMatcher
                         $inheritance,
                     );
                 } else {
-                    // A non-hierarchy item matched against TV: persist series-level metadata.
-                    $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                    // A non-hierarchy item matched against TV: persist series-level
+                    // metadata (with theme_audio_url — it is series-typed for the
+                    // resolver's Plex-fallback gate only when $itemType==='series',
+                    // so this path stays local-theme-only unless it is a series).
+                    $this->persistMetadata(
+                        $itemId,
+                        $this->applyThemeAudio($item, array_merge($existing, $resolved))
+                    );
                 }
                 $matched = true;
             }
@@ -549,7 +572,11 @@ class LibraryMetadataMatcher
             $details = $tmdb->getDetails($tmdbId);
             if ($details !== []) {
                 $resolved = $this->formatMovieDetails($tmdbId, $details, $existing);
-                $this->persistMetadata($itemId, array_merge($existing, $resolved));
+                // Movie interactive apply: local theme only (non-series type).
+                $this->persistMetadata(
+                    $itemId,
+                    $this->applyThemeAudio($item, array_merge($existing, $resolved))
+                );
                 $matched = true;
             }
         }
@@ -576,7 +603,12 @@ class LibraryMetadataMatcher
      * poster/overview + enrich its episode children.
      *
      * @param array<string, mixed> $existing          Decoded existing season metadata.
-     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     * @param array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * } $seriesInheritance
      *     Series-level fields (genres/tags/backdrop) episodes inherit.
      *
      * @return int Episodes enriched.
@@ -614,7 +646,12 @@ class LibraryMetadataMatcher
      *
      * @param array<string, mixed> $episode  Hydrated episode row.
      * @param array<string, mixed> $existing Decoded existing episode metadata.
-     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     * @param array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * } $seriesInheritance
      *     Series-level fields (genres/tags/backdrop) the episode inherits.
      */
     private function applyToEpisode(
@@ -647,6 +684,10 @@ class LibraryMetadataMatcher
             'external_ids' => array_filter([
                 'tmdb' => $tmdbId,
                 'imdb' => MetadataValue::asNullableString($details['imdb_id'] ?? null),
+                // TheTVDB id (from getTvDetails `external_ids`) — powers the
+                // theme-music (M3) Plex-archive fallback in the interactive apply
+                // path, matching the whole-library SeriesMetadataResolver output.
+                'tvdb' => MetadataValue::asNullableString($details['tvdb_id'] ?? null),
             ], static fn(?string $v): bool => $v !== null && $v !== ''),
             'tmdb_id' => $tmdbId,
             'sources' => ['tmdb'],
@@ -870,7 +911,10 @@ class LibraryMetadataMatcher
 
         $merged = array_merge($existingMetadata, $resolved);
 
-        $this->persistMetadata($id, $merged);
+        // Movies: local theme file only (the resolver skips the Plex fallback for
+        // non-series types), populating theme_audio_url (M3) when a theme.* sits
+        // next to the film.
+        $this->persistMetadata($id, $this->applyThemeAudio($item, $merged));
 
         return true;
     }
@@ -932,17 +976,27 @@ class LibraryMetadataMatcher
             return false;
         }
 
-        $this->persistMetadata($id, array_merge($existing, $resolved));
+        // Populate theme_audio_url (M3) on the series root before persisting —
+        // local theme file next to the series folder, else the Plex archive keyed
+        // on the TVDB id the series resolver threaded into external_ids. The themed
+        // metadata is also the source of the theme url episodes/seasons inherit.
+        $themed = $this->applyThemeAudio($seriesItem, array_merge($existing, $resolved));
+        $this->persistMetadata($id, $themed);
 
         $tmdbId = $this->resolvedTmdbId($resolved);
         if ($tmdbId !== '') {
+            $inheritance = $this->seriesInheritance($resolved);
+            $seriesTheme = $this->stringOrNull($themed['theme_audio_url'] ?? null);
+            if ($seriesTheme !== null) {
+                $inheritance['theme_audio_url'] = $seriesTheme;
+            }
             $this->enrichSeriesChildren(
                 $id,
                 $tmdbId,
                 $this->stringOrNull($resolved['poster_url'] ?? null),
                 $this->stringOrNull($resolved['backdrop_url'] ?? null),
                 $this->stringOrNull($resolved['overview'] ?? null),
-                $this->seriesInheritance($resolved),
+                $inheritance,
             );
         }
 
@@ -958,7 +1012,12 @@ class LibraryMetadataMatcher
      * @param string|null $seriesPoster      Series poster URL (episode/season fallback).
      * @param string|null $seriesBackdrop    Series backdrop URL.
      * @param string|null $seriesOverview    Series overview (episode/season fallback).
-     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     * @param array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * } $seriesInheritance
      *     Series-level fields (genres, tags, backdrop) inherited by every episode.
      *
      * @return int Number of child nodes (seasons + episodes) enriched.
@@ -1020,7 +1079,12 @@ class LibraryMetadataMatcher
      * @param array<string, mixed>|null $seasonData     Resolved season data (or null).
      * @param string|null               $seriesPoster   Series poster fallback.
      * @param string|null               $seriesOverview Series overview fallback.
-     * @param array{genres?: list<string>, tags?: list<string>, backdrop_url?: string} $seriesInheritance
+     * @param array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * } $seriesInheritance
      *     Series-level fields inherited by the episode.
      */
     private function enrichEpisode(
@@ -1101,6 +1165,13 @@ class LibraryMetadataMatcher
             $patch['backdrop_url'] = $backdrop;
         }
 
+        // Inherit the series theme-audio url (M3) — episodes carry no theme of
+        // their own, so they play the series theme on their detail page.
+        $themeAudio = $this->stringOrNull($seriesInheritance['theme_audio_url'] ?? null);
+        if ($themeAudio !== null) {
+            $patch['theme_audio_url'] = $themeAudio;
+        }
+
         if ($patch !== []) {
             $this->persistMetadata($id, array_merge($meta, $patch));
         }
@@ -1112,7 +1183,12 @@ class LibraryMetadataMatcher
      * omitted so a missing series field never overwrites episode data.
      *
      * @param array<string, mixed> $resolved Resolved series metadata.
-     * @return array{genres?: list<string>, tags?: list<string>, backdrop_url?: string}
+     * @return array{
+     *     genres?: list<string>,
+     *     tags?: list<string>,
+     *     backdrop_url?: string,
+     *     theme_audio_url?: string
+     * }
      */
     private function seriesInheritance(array $resolved): array
     {
@@ -1216,6 +1292,65 @@ class LibraryMetadataMatcher
             return $ext['tmdb'];
         }
         return $this->stringOrNull($resolved['tmdb_id'] ?? null) ?? '';
+    }
+
+    /**
+     * Resolve + write `theme_audio_url` (M3) into a metadata array for an item.
+     *
+     * No-op (returns $merged unchanged) when the theme-music producer is not wired
+     * or it produces no url. The TVDB id used for the Plex-archive fallback is
+     * read from the merged metadata's `external_ids.tvdb` (threaded there by the
+     * series resolver). Movies pass a non-series `type`, so the resolver only ever
+     * checks the local theme file for them. Never throws — the resolver already
+     * swallows its own failures, and this method adds a defensive guard.
+     *
+     * @param array<string, mixed> $item   Hydrated media-item row (for `path`/`type`).
+     * @param array<string, mixed> $merged Metadata about to be persisted.
+     *
+     * @return array<string, mixed> $merged, with `theme_audio_url` set when found.
+     */
+    private function applyThemeAudio(array $item, array $merged): array
+    {
+        if ($this->themeMusic === null) {
+            return $merged;
+        }
+
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        if ($itemId === '') {
+            return $merged;
+        }
+
+        $type = is_string($item['type'] ?? null) ? $item['type'] : '';
+        $path = is_string($item['path'] ?? null) ? $item['path'] : null;
+
+        $tvdbId = null;
+        $external = $merged['external_ids'] ?? null;
+        if (is_array($external)) {
+            $tvdbRaw = $external['tvdb'] ?? null;
+            if (is_string($tvdbRaw) || is_int($tvdbRaw)) {
+                $tvdbId = $tvdbRaw;
+            }
+        }
+
+        try {
+            $url = $this->themeMusic->resolveForItem([
+                'item_id' => $itemId,
+                'type' => $type,
+                'path' => $path,
+                'tvdb_id' => $tvdbId,
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->debug('LibraryMetadataMatcher: theme-music resolve failed; skipping', [
+                'item_id' => $itemId,
+                'error' => $e->getMessage(),
+            ]);
+            return $merged;
+        }
+
+        if ($url !== null) {
+            $merged['theme_audio_url'] = $url;
+        }
+        return $merged;
     }
 
     /**

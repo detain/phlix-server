@@ -87,6 +87,37 @@ class TmdbProviderTest extends TestCase
         $this->assertSame('1668', $details['tmdb_id']);
     }
 
+    public function testGetTvDetailsThreadsTvdbIdFromExternalIds(): void
+    {
+        // M3: the TheTVDB id (integer in TMDB's external_ids) must surface as a
+        // string `tvdb_id` on the formatted record so the theme-music resolver
+        // can build the Plex-archive fallback URL.
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1668,
+            'name' => '24',
+            'external_ids' => ['imdb_id' => 'tt0285331', 'tvdb_id' => 76290],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertSame('76290', $details['tvdb_id']);
+    }
+
+    public function testGetTvDetailsTvdbIdNullWhenAbsent(): void
+    {
+        $http = $this->createMock(MetadataHttpClient::class);
+        $http->method('get')->willReturn([
+            'id' => 1668,
+            'name' => '24',
+            'external_ids' => ['imdb_id' => 'tt0285331'],
+        ]);
+
+        $details = (new TmdbProvider('k', $http))->getTvDetails('1668');
+
+        $this->assertNull($details['tvdb_id']);
+    }
+
     public function testGetTvSeasonMapsEpisodesAndPoster(): void
     {
         $http = $this->createMock(MetadataHttpClient::class);

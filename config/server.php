@@ -51,6 +51,11 @@ return [
     'hub' => require __DIR__ . '/hub.php',
     'relay' => require __DIR__ . '/relay.php',
 
+    // Theme-music (M3) producer config. Sourced here so MediaServicesProvider
+    // (which reads $config['theme_music']) builds the ThemeMusicConfig with the
+    // real enabled/source/cache_dir instead of bare defaults.
+    'theme_music' => require __DIR__ . '/theme_music.php',
+
     // HLS streaming settings. `segment_dir` is the SINGLE source of truth for
     // where transcoded HLS variants (stream_0.m3u8 + segment_0_NNN.ts) live: the
     // TranscodeManager writes there and HlsController/HlsStreamer read from the

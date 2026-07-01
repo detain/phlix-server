@@ -558,6 +558,57 @@ class LibraryControllerTest extends TestCase
     }
 
     /**
+     * Regression: clearing metadata_priority AND setting image_types in the SAME
+     * update must not resurrect the cleared priority. Previously the two option
+     * blocks each re-seeded their merge base from the original row, so the
+     * image_types overlay re-introduced the just-cleared metadata_priority.
+     */
+    public function testUpdateClearingPriorityWhileSettingImagesDoesNotResurrectPriority(): void
+    {
+        $libraryManager = $this->createMock(LibraryManager::class);
+        $libraryManager->expects($this->once())
+            ->method('getLibrary')
+            ->with('lib-1')
+            ->willReturn([
+                'id' => 'lib-1',
+                'name' => 'Movies',
+                'type' => 'video',
+                'options' => [
+                    'metadata_priority' => ['tmdb', 'local'],
+                    'series_per_directory' => true,
+                ],
+            ]);
+
+        $captured = null;
+        $libraryManager->expects($this->once())
+            ->method('updateLibrary')
+            ->with('lib-1', $this->callback(static function ($data) use (&$captured): bool {
+                $captured = $data;
+                return true;
+            }));
+
+        $scanJobs = $this->createMock(ScanJobRepository::class);
+        $controller = new LibraryController($libraryManager, $scanJobs);
+
+        $request = new Request();
+        $request->userId = 'admin-1';
+        $request->body = ['metadata_priority' => null, 'image_types' => ['poster' => true]];
+
+        $response = $controller->update($request, ['id' => 'lib-1']);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->assertIsArray($captured);
+        $this->assertIsArray($captured['options']);
+        // The cleared priority must be GONE...
+        $this->assertArrayNotHasKey('metadata_priority', $captured['options']);
+        // ...image_types must be persisted...
+        $this->assertArrayHasKey('image_types', $captured['options']);
+        $this->assertTrue($captured['options']['image_types']['poster']);
+        // ...and unrelated options preserved.
+        $this->assertTrue($captured['options']['series_per_directory']);
+    }
+
+    /**
      * Negative: update() returns 404 when library not found.
      */
     public function testUpdateReturns404WhenLibraryNotFound(): void

@@ -461,54 +461,21 @@ class LibraryController
             unset($data['series_per_directory']);
         }
 
-        // `metadata_priority` on update, SYMMETRICALLY with create(): accept it
-        // at the body top level OR nested inside `options`, validate the shape,
-        // and merge it into the EXISTING options blob (preserving unrelated
-        // options). An explicit null / empty map CLEARS the override (removes the
-        // key → falls back to the global default). Applies to every library type.
-        $bodyOptionsForPriority = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        // Unified options-merge pass for `metadata_priority` (SYMMETRICALLY with
+        // create()) and `image_types` (M5). Each may arrive at the body top level
+        // OR nested inside `options`. We rebuild the options blob ONCE (existing
+        // row overlaid with any explicit body `options`) and then apply BOTH
+        // edits to that single blob — so clearing one (null/empty) while editing
+        // the other can't resurrect the cleared key from the original row. Each
+        // edit: an explicit null / empty map CLEARS its key (falls back to the
+        // global default / type defaults). Applies to every library type.
+        $bodyOptions = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
         $hasTopLevelPriority = array_key_exists('metadata_priority', $data);
-        $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptionsForPriority);
-
-        if ($hasTopLevelPriority || $hasNestedPriority) {
-            $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
-            $mergedOptions = [];
-            foreach ($existingOptions as $optKey => $optVal) {
-                if (is_string($optKey)) {
-                    $mergedOptions[$optKey] = $optVal;
-                }
-            }
-            // An explicit `options` in the body still wins as the base.
-            foreach ($bodyOptionsForPriority as $optKey => $optVal) {
-                if (is_string($optKey)) {
-                    $mergedOptions[$optKey] = $optVal;
-                }
-            }
-
-            $rawPriority = $hasTopLevelPriority
-                ? $data['metadata_priority']
-                : $bodyOptionsForPriority['metadata_priority'];
-            $priorityError = $this->applyMetadataPriority($mergedOptions, $rawPriority);
-            if ($priorityError !== null) {
-                return $priorityError;
-            }
-
-            $data['options'] = $mergedOptions;
-            unset($data['metadata_priority']);
-        }
-
-        // `image_types` (M5) on update, SYMMETRICALLY with create(): accept it at
-        // the body top level OR nested inside `options`, normalise against the
-        // canonical catalogue, and merge the `{type: bool}` storage map into the
-        // EXISTING options blob (preserving unrelated keys like metadata_priority
-        // and series_per_directory). A null value CLEARS the selection (falls back
-        // to defaults); an empty list/map disables every type. Applies to every
-        // library type.
-        $bodyOptionsForImages = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        $hasNestedPriority = array_key_exists('metadata_priority', $bodyOptions);
         $hasTopLevelImages = array_key_exists('image_types', $data);
-        $hasNestedImages = array_key_exists('image_types', $bodyOptionsForImages);
+        $hasNestedImages = array_key_exists('image_types', $bodyOptions);
 
-        if ($hasTopLevelImages || $hasNestedImages) {
+        if ($hasTopLevelPriority || $hasNestedPriority || $hasTopLevelImages || $hasNestedImages) {
             $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
             $mergedOptions = [];
             foreach ($existingOptions as $optKey => $optVal) {
@@ -517,22 +484,35 @@ class LibraryController
                 }
             }
             // An explicit `options` in the body still wins as the base.
-            foreach ($bodyOptionsForImages as $optKey => $optVal) {
+            foreach ($bodyOptions as $optKey => $optVal) {
                 if (is_string($optKey)) {
                     $mergedOptions[$optKey] = $optVal;
                 }
             }
 
-            $rawImages = $hasTopLevelImages
-                ? $data['image_types']
-                : $bodyOptionsForImages['image_types'];
-            $imageTypesError = $this->applyImageTypes($mergedOptions, $rawImages);
-            if ($imageTypesError !== null) {
-                return $imageTypesError;
+            if ($hasTopLevelPriority || $hasNestedPriority) {
+                $rawPriority = $hasTopLevelPriority
+                    ? $data['metadata_priority']
+                    : $bodyOptions['metadata_priority'];
+                $priorityError = $this->applyMetadataPriority($mergedOptions, $rawPriority);
+                if ($priorityError !== null) {
+                    return $priorityError;
+                }
+                unset($data['metadata_priority']);
+            }
+
+            if ($hasTopLevelImages || $hasNestedImages) {
+                $rawImages = $hasTopLevelImages
+                    ? $data['image_types']
+                    : $bodyOptions['image_types'];
+                $imageTypesError = $this->applyImageTypes($mergedOptions, $rawImages);
+                if ($imageTypesError !== null) {
+                    return $imageTypesError;
+                }
+                unset($data['image_types']);
             }
 
             $data['options'] = $mergedOptions;
-            unset($data['image_types']);
         }
 
         $this->libraryManager->updateLibrary($params['id'], $data);

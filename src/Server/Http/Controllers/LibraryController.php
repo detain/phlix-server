@@ -10,6 +10,7 @@ use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Metadata\ImageType;
 
 class LibraryController
 {
@@ -141,6 +142,44 @@ class LibraryController
         return (new Response())->status(400)->json([
             'error' => 'metadata_priority must be a map of media type to an ordered list of source names',
         ]);
+    }
+
+    /**
+     * Validate and apply a per-library `image_types` selection (M5) onto the
+     * options blob being persisted.
+     *
+     * Accepts EITHER a `{type: bool}` map or a `list<string>` of enabled type
+     * names; unknown types are dropped by {@see ImageType::normalize()}. The
+     * result is stored under `options.image_types` as the canonical
+     * `{type: bool}` storage map (every known type present with an explicit
+     * on/off state — see {@see ImageType} docs). A `null` value CLEARS the
+     * selection (the key is removed → the library falls back to
+     * {@see ImageType::defaults()}); an empty list/map is a VALID selection that
+     * disables every type (stored, not cleared).
+     *
+     * Returns a `400` {@see Response} when the value is present but malformed
+     * (not an array); returns null when applied successfully (including clear).
+     *
+     * @param array<string, mixed> $options Options blob to mutate in place.
+     * @param mixed                $raw     Raw `image_types` value from the body.
+     */
+    private function applyImageTypes(array &$options, mixed $raw): ?Response
+    {
+        // Null → clear the override (fall back to the default image-type set).
+        if ($raw === null) {
+            unset($options['image_types']);
+            return null;
+        }
+
+        if (!is_array($raw)) {
+            return (new Response())->status(400)->json([
+                'error' => 'image_types must be a map of type to boolean, or a list of enabled type names',
+            ]);
+        }
+
+        // Store the canonical {type: bool} map (every known type present).
+        $options['image_types'] = ImageType::toStorageMap($raw);
+        return null;
     }
 
     /**
@@ -325,6 +364,24 @@ class LibraryController
             }
         }
 
+        // `image_types` (M5, per-library artwork selection): accept it at the body
+        // top level OR nested inside `options`, normalise against the canonical
+        // catalogue, and persist the `{type: bool}` storage map into the options
+        // blob. Absent → the library falls back to ImageType::defaults() at scan
+        // time (no key stored). The top-level value wins over a nested one,
+        // mirroring series_per_directory / metadata_priority.
+        if (array_key_exists('image_types', $data)) {
+            $imageTypesError = $this->applyImageTypes($options, $data['image_types']);
+            if ($imageTypesError !== null) {
+                return $imageTypesError;
+            }
+        } elseif (array_key_exists('image_types', $options)) {
+            $imageTypesError = $this->applyImageTypes($options, $options['image_types']);
+            if ($imageTypesError !== null) {
+                return $imageTypesError;
+            }
+        }
+
         $libraryId = $this->libraryManager->createLibrary(
             $name,
             $type,
@@ -438,6 +495,44 @@ class LibraryController
 
             $data['options'] = $mergedOptions;
             unset($data['metadata_priority']);
+        }
+
+        // `image_types` (M5) on update, SYMMETRICALLY with create(): accept it at
+        // the body top level OR nested inside `options`, normalise against the
+        // canonical catalogue, and merge the `{type: bool}` storage map into the
+        // EXISTING options blob (preserving unrelated keys like metadata_priority
+        // and series_per_directory). A null value CLEARS the selection (falls back
+        // to defaults); an empty list/map disables every type. Applies to every
+        // library type.
+        $bodyOptionsForImages = isset($data['options']) && is_array($data['options']) ? $data['options'] : [];
+        $hasTopLevelImages = array_key_exists('image_types', $data);
+        $hasNestedImages = array_key_exists('image_types', $bodyOptionsForImages);
+
+        if ($hasTopLevelImages || $hasNestedImages) {
+            $existingOptions = is_array($library['options'] ?? null) ? $library['options'] : [];
+            $mergedOptions = [];
+            foreach ($existingOptions as $optKey => $optVal) {
+                if (is_string($optKey)) {
+                    $mergedOptions[$optKey] = $optVal;
+                }
+            }
+            // An explicit `options` in the body still wins as the base.
+            foreach ($bodyOptionsForImages as $optKey => $optVal) {
+                if (is_string($optKey)) {
+                    $mergedOptions[$optKey] = $optVal;
+                }
+            }
+
+            $rawImages = $hasTopLevelImages
+                ? $data['image_types']
+                : $bodyOptionsForImages['image_types'];
+            $imageTypesError = $this->applyImageTypes($mergedOptions, $rawImages);
+            if ($imageTypesError !== null) {
+                return $imageTypesError;
+            }
+
+            $data['options'] = $mergedOptions;
+            unset($data['image_types']);
         }
 
         $this->libraryManager->updateLibrary($params['id'], $data);

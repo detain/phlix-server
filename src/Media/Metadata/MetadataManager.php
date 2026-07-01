@@ -9,6 +9,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
@@ -54,15 +55,33 @@ class MetadataManager
     private \Phlix\Common\Logger\StructuredLogger $logger;
 
     /**
+     * Library data access used to load a library's `options.image_types`
+     * selection (M5) so {@see tryProvider()} can filter the stored per-provider
+     * image blob to the enabled artwork types. Nullable for back-compat: when
+     * null (legacy construction / unit tests) NO image filtering happens and the
+     * full provider image set is stored, exactly as before.
+     *
+     * @var LibraryManager|null
+     */
+    private ?LibraryManager $libraries;
+
+    /**
      * Constructor for MetadataManager.
      *
      * @param Connection $db Database connection for media item queries
      * @param ItemRepository $itemRepository Repository for media item operations
+     * @param LibraryManager|null $libraries Library data access used to load the
+     *     per-library `options.image_types` selection (M5); when null, provider
+     *     image sets are stored unfiltered (back-compat).
      */
-    public function __construct(Connection $db, ItemRepository $itemRepository)
-    {
+    public function __construct(
+        Connection $db,
+        ItemRepository $itemRepository,
+        ?LibraryManager $libraries = null
+    ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
+        $this->libraries = $libraries;
         $this->logger = LoggerFactory::get(LogChannels::MEDIA);
     }
 
@@ -257,8 +276,11 @@ class MetadataManager
             return false;
         }
 
-        // Fetch images
-        $images = $provider->getImages($externalId);
+        // Fetch images, then filter the per-provider image set to the artwork
+        // types enabled for this item's library (M5). A disabled type's image
+        // list is dropped before storage; unmapped keys pass through. When no
+        // LibraryManager is wired (back-compat) the full set is kept.
+        $images = $this->filterProviderImages($item, $provider->getImages($externalId));
 
         // Build external IDs tracking
         $externalIds = MetadataValue::asAssoc($metadata['external_ids'] ?? null);
@@ -300,6 +322,52 @@ class MetadataManager
         ]);
 
         return true;
+    }
+
+    /**
+     * Filter a per-provider image-set blob to the artwork types enabled for the
+     * item's library (M5).
+     *
+     * Reads the item's `library_id`, loads that library's `options.image_types`
+     * selection via the injected {@see LibraryManager} (defaults when the key is
+     * absent), and drops disabled mapped image keys via
+     * {@see ImageType::filterProviderImages()}. Best-effort: when no
+     * LibraryManager is wired, the library has no id, or loading fails, the FULL
+     * image set is returned unchanged (behaviour exactly as before).
+     *
+     * @param array<string, mixed> $item   The media item being refreshed.
+     * @param array<string, mixed> $images The provider image-set blob.
+     *
+     * @return array<string, mixed> The blob with disabled mapped keys removed.
+     */
+    private function filterProviderImages(array $item, array $images): array
+    {
+        if ($this->libraries === null || $images === []) {
+            return $images;
+        }
+
+        $libraryId = MetadataValue::asNullableString($item['library_id'] ?? null);
+        if ($libraryId === null || $libraryId === '') {
+            return $images;
+        }
+
+        try {
+            $library = $this->libraries->getLibrary($libraryId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('MetadataManager: image-type load failed; storing full image set', [
+                'library_id' => $libraryId,
+                'error' => $e->getMessage(),
+            ]);
+            return $images;
+        }
+
+        if (!is_array($library)) {
+            return $images;
+        }
+        $options = MetadataValue::asAssoc($library['options'] ?? null);
+        $enabled = ImageType::enabledForOptions($options);
+
+        return ImageType::filterProviderImages($images, $enabled);
     }
 
     /**

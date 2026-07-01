@@ -223,4 +223,52 @@ class LibraryRowTest extends TestCase
         $this->assertArrayHasKey('metadata_priority', $arr2);
         $this->assertNull($arr2['metadata_priority']);
     }
+
+    /**
+     * toArray() surfaces an `image_types` block with the FULL available
+     * catalogue plus the library's enabled selection (M5).
+     */
+    public function testToArraySurfacesImageTypesSelection(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-1',
+            'type' => 'movie',
+            'options' => '{"image_types":{"poster":true,"backdrop":false,"logo":true}}',
+        ]);
+        $arr = $row->toArray();
+
+        $this->assertArrayHasKey('image_types', $arr);
+        $this->assertArrayHasKey('available', $arr['image_types']);
+        $this->assertArrayHasKey('enabled', $arr['image_types']);
+
+        // Every canonical type is offered in `available`.
+        $availableTypes = array_map(
+            static fn(array $e): string => $e['type'],
+            $arr['image_types']['available']
+        );
+        $this->assertContains('poster', $availableTypes);
+        $this->assertContains('character_art', $availableTypes);
+
+        // `enabled` reflects the stored selection (catalogue-ordered).
+        $this->assertSame(['poster', 'logo'], $arr['image_types']['enabled']);
+    }
+
+    /**
+     * A library with NO stored image_types selection falls back to the defaults
+     * in `image_types.enabled` (no migration needed).
+     */
+    public function testToArrayImageTypesFallsBackToDefaults(): void
+    {
+        $row = LibraryRow::fromRow([
+            'id' => 'lib-2',
+            'type' => 'movie',
+            'options' => '{"scan_interval":3600}',
+        ]);
+        $arr = $row->toArray();
+
+        $this->assertSame(
+            ['poster', 'backdrop', 'logo', 'banner', 'thumb', 'season_poster', 'episode_still'],
+            $arr['image_types']['enabled']
+        );
+    }
 }

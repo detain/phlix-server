@@ -107,6 +107,7 @@ final class MediaItemShaper
             'episode_title' => is_string($metadata['episode_title'] ?? null)
                 ? $metadata['episode_title']
                 : null,
+            'air_date' => self::extractAirDate($metadata),
             'created_at' => $item['created_at'] ?? null,
             'updated_at' => $item['updated_at'] ?? null,
         ];
@@ -288,6 +289,40 @@ final class MediaItemShaper
      * @param mixed $value Raw id value.
      * @return string|null Trimmed non-empty string, or null.
      */
+    /**
+     * Extract the original air/release date (YYYY-MM-DD) an item was matched to.
+     * Checks the common top-level metadata keys first, then per-provider blocks
+     * under `metadata_json.details.*` (TVDB `first_aired`, NFO `aired`, …).
+     * Returns null when nothing datelike is present.
+     *
+     * @param array<string, mixed> $metadata Parsed metadata_json.
+     */
+    private static function extractAirDate(array $metadata): ?string
+    {
+        foreach (['air_date', 'first_aired', 'aired', 'premiered', 'release_date'] as $key) {
+            $v = self::stringOrNull($metadata[$key] ?? null);
+            if ($v !== null) {
+                return $v;
+            }
+        }
+        $details = $metadata['details'] ?? null;
+        if (is_array($details)) {
+            foreach (['tvdb', 'local', 'fanart', 'tmdb'] as $provider) {
+                $block = $details[$provider] ?? null;
+                if (!is_array($block)) {
+                    continue;
+                }
+                foreach (['first_aired', 'aired', 'air_date', 'premiered', 'release_date'] as $key) {
+                    $v = self::stringOrNull($block[$key] ?? null);
+                    if ($v !== null) {
+                        return $v;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     private static function stringOrNull(mixed $value): ?string
     {
         if (is_string($value)) {

@@ -112,15 +112,26 @@ final class PluginCatalogServiceTest extends TestCase
         self::assertSame(['https://example.com/extra.json'], $store[PluginCatalogService::KEY_SOURCES]);
     }
 
-    public function test_add_source_ignores_duplicate_of_default(): void
+    public function test_add_source_rejects_the_default_with_a_clear_409(): void
     {
         $store = [PluginCatalogService::KEY_DEFAULT_SOURCE => self::DEFAULT_SOURCE];
         $service = $this->service($this->settings($store));
 
-        $result = $service->addSource(self::DEFAULT_SOURCE);
+        // Adding the built-in default now surfaces a clear error (409) instead of
+        // silently no-opping and returning 200 with no visible change.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionCode(409);
+        $service->addSource(self::DEFAULT_SOURCE);
+    }
 
-        self::assertSame([self::DEFAULT_SOURCE], $result);
-        self::assertSame([], $store[PluginCatalogService::KEY_SOURCES] ?? []);
+    public function test_add_source_rejects_a_duplicate_extra_with_409(): void
+    {
+        $store = [PluginCatalogService::KEY_SOURCES => ['https://example.com/extra.json']];
+        $service = $this->service($this->settings($store));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionCode(409);
+        $service->addSource('https://example.com/extra.json');
     }
 
     /**

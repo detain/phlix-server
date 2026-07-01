@@ -377,19 +377,6 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
-        // Theme audio streaming (Step 5.2) — gated by SignedUrlMiddleware so
-        // the <audio> element (cookieless/headerless) can stream via a signed URL
-        // minted by the series detail endpoint. Uses WorkermanResponse::withFile()
-        // for Range-aware seeking with no worker-memory buffering.
-        $mediaThemeAudioController = $this->getMediaThemeAudioController();
-        $this->router->group(
-            '',
-            function (Router $r) use ($mediaThemeAudioController): void {
-                $r->get('/api/v1/media/{id}/theme-audio', [$mediaThemeAudioController, 'streamThemeAudio']);
-            },
-            [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]
-        );
-
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).
         $mediaMatchController = $this->getMediaMatchController();
@@ -2383,32 +2370,6 @@ class Application
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
-    }
-
-    /**
-     * Returns a MediaThemeAudioController instance.
-     *
-     * @return \Phlix\Server\Http\Controllers\MediaThemeAudioController The controller instance.
-     */
-    private function getMediaThemeAudioController(): \Phlix\Server\Http\Controllers\MediaThemeAudioController
-    {
-        if ($this->container === null) {
-            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
-                '127.0.0.1',
-                3306,
-                'phlix',
-                'root',
-                'password'
-            );
-            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
-
-            return new \Phlix\Server\Http\Controllers\MediaThemeAudioController($itemRepository);
-        }
-
-        /** @var \Phlix\Media\Library\ItemRepository */
-        $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
-
-        return new \Phlix\Server\Http\Controllers\MediaThemeAudioController($itemRepository);
     }
 
     /**

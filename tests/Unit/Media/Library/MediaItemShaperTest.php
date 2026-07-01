@@ -444,6 +444,26 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('https://example.com/theme.mp3', $shaped['theme_audio_url']);
     }
 
+    /**
+     * The theme-music producer (M3) stores the canonical item-level stream route
+     * `/stream/theme-media/item/{id}` in `metadata_json.theme_audio_url`; the
+     * detail shaper must surface that exact value so the web player plays it
+     * directly (no derived/legacy `/api/v1/media/{id}/theme-audio` endpoint).
+     */
+    public function testShapeDetailExposesM3StreamRouteAsThemeAudioUrl(): void
+    {
+        $shaped = MediaItemShaper::shapeDetail([
+            'id' => 'series-1',
+            'name' => 'Firefly',
+            'type' => 'series',
+            'metadata' => [
+                'theme_audio_url' => '/stream/theme-media/item/series-1',
+            ],
+        ], []);
+
+        $this->assertSame('/stream/theme-media/item/series-1', $shaped['theme_audio_url']);
+    }
+
     public function testShapeDetailReturnsNullThemeAudioUrlWhenNotSet(): void
     {
         $shaped = MediaItemShaper::shapeDetail([

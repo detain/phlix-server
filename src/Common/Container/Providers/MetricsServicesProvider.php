@@ -34,9 +34,10 @@ use function DI\get;
  * of config/metrics.php, and finally to the classes' own built-in defaults, so
  * the bindings always resolve.
  *
- * The registry constructor takes decomposed tuning knobs
- * (`bucket_seconds`, `latency_buckets_ms`, `route_cardinality_cap`); the flush
- * service and repository take the raw config array (they read
+ * The registry constructor takes decomposed tuning knobs (`bucket_seconds`,
+ * `route_cardinality_cap`; the latency histogram is schema-locked to
+ * {@see MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS} and NOT config-driven);
+ * the flush service and repository take the raw config array (they read
  * `retention_days` / `connection_ttl_seconds` / `flush_interval_seconds`
  * themselves). The collector is fed the `enabled` master switch and the default
  * `time()` clock — tests inject their own registry/clock directly rather than
@@ -66,20 +67,23 @@ final class MetricsServicesProvider implements ServiceProviderInterface
         $enabled             = $this->cfgBool($config, 'enabled', true);
         $bucketSeconds       = $this->cfgInt($config, 'bucket_seconds', 10);
         $routeCardinalityCap = $this->cfgInt($config, 'route_cardinality_cap', 200);
-        $latencyBuckets      = $this->cfgIntList(
-            $config,
-            'latency_buckets_ms',
-            [10, 50, 100, 250, 500, 1000, 2500, 5000]
-        );
 
         $builder->addDefinitions([
             // One in-RAM accumulator per worker. SHARED so the hooks and the
             // flush timer share the same counters (PHP-DI treats factory
             // definitions as singletons by default).
+            //
+            // The latency histogram bounds are NOT read from config: they are
+            // locked to MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS, which maps 1:1
+            // onto the fixed h_le_*/h_gt_5000 columns the flush service writes and
+            // the repository reads. A config override would silently zero every
+            // histogram column (the flush service references $h[10], $h[50], …),
+            // so bucket_seconds / route_cardinality_cap stay tunable but the
+            // histogram is schema-locked.
             MetricsRegistry::class => factory(
                 static fn (): MetricsRegistry => new MetricsRegistry(
                     $bucketSeconds,
-                    $latencyBuckets,
+                    MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS,
                     $routeCardinalityCap
                 )
             ),
@@ -207,38 +211,5 @@ final class MetricsServicesProvider implements ServiceProviderInterface
             return (int) $v;
         }
         return $default;
-    }
-
-    /**
-     * Read a list of ints from config with a default, dropping non-numeric
-     * entries. The registry sorts + de-defaults the list itself, so this only
-     * has to produce a clean `list<int>`.
-     *
-     * @param array<string, mixed> $config
-     * @param string               $key
-     * @param list<int>            $default
-     *
-     * @return list<int>
-     */
-    private function cfgIntList(array $config, string $key, array $default): array
-    {
-        $v = $config[$key] ?? null;
-        if (!is_array($v)) {
-            return $default;
-        }
-
-        $out = [];
-        /** @var mixed $entry */
-        foreach ($v as $entry) {
-            if (is_int($entry)) {
-                $out[] = $entry;
-            } elseif (is_string($entry) && is_numeric($entry)) {
-                $out[] = (int) $entry;
-            } elseif (is_float($entry)) {
-                $out[] = (int) $entry;
-            }
-        }
-
-        return $out !== [] ? $out : $default;
     }
 }

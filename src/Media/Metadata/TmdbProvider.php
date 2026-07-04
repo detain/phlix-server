@@ -391,10 +391,14 @@ class TmdbProvider implements MetadataProviderInterface
         $out = [];
         $seen = [];
         foreach (array_merge($base, $guest) as $member) {
-            if (isset($seen[$member['name']])) {
+            // De-duplicate case- and whitespace-insensitively so a guest star already
+            // listed as a season regular (e.g. "John Smith" vs " john smith ") is not
+            // repeated. The first occurrence's original name/role is preserved.
+            $key = mb_strtolower(trim($member['name']));
+            if (isset($seen[$key])) {
                 continue;
             }
-            $seen[$member['name']] = true;
+            $seen[$key] = true;
             $out[] = $member;
             if (count($out) >= self::MAX_CAST) {
                 break;

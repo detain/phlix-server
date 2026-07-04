@@ -80,12 +80,14 @@ final class HttpHandler
             $cors = CorsManager::fromEnv();
             $preflight = $cors->preflightResponse($request);
             if ($preflight !== null) {
+                $responseStatus = $preflight->statusCode;
                 $connection->send($preflight->toWorkermanResponse());
                 return;
             }
 
             $static = $this->serveStatic($wr);
             if ($static !== null) {
+                $responseStatus = $static->getStatusCode();
                 $connection->send($static);
                 return;
             }
@@ -122,6 +124,7 @@ final class HttpHandler
             // mirroring SignedUrlMiddleware.
             $mediaStream = $this->serveMediaStream($wr, $request->userId);
             if ($mediaStream !== null) {
+                $responseStatus = $mediaStream->getStatusCode();
                 $connection->send($mediaStream);
                 return;
             }
@@ -129,6 +132,7 @@ final class HttpHandler
             // Try user avatar serving (signed URL or authed session)
             $avatarResp = $this->serveUserAvatar($wr, $request->userId);
             if ($avatarResp !== null) {
+                $responseStatus = $avatarResp->getStatusCode();
                 $connection->send($avatarResp);
                 return;
             }
@@ -142,6 +146,7 @@ final class HttpHandler
             //    have `{$theme_css|raw}` / `{$theme_js|raw}` substituted.
             $appResponse = $this->application->dispatch($request);
             if ($appResponse->statusCode !== 404) {
+                $responseStatus = $appResponse->statusCode;
                 $connection->send($cors->decorate($request, $appResponse)->toWorkermanResponse());
                 return;
             }
@@ -160,6 +165,7 @@ final class HttpHandler
                 /** @var WebPortalRouter $webPortalRouter */
                 $webPortalRouter = $this->container->get(WebPortalRouter::class);
                 $apiResponse = $webPortalRouter->dispatch($request);
+                $responseStatus = $apiResponse->statusCode;
                 $connection->send($cors->decorate($request, $apiResponse)->toWorkermanResponse());
                 return;
             }
@@ -172,6 +178,7 @@ final class HttpHandler
             /** @var ThemeMiddleware $theme */
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
+            $responseStatus = $response->statusCode;
             $connection->send($cors->decorate($request, $response)->toWorkermanResponse());
         } catch (Throwable $e) {
             $responseStatus = 500;
@@ -190,20 +197,98 @@ final class HttpHandler
                 '<h1>500 Internal Server Error</h1>',
             ));
         } finally {
-            if ($this->metrics !== null && $this->metrics->isEnabled()) {
-                $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
-                $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
-                $elapsedMs = (microtime(true) - $startTime) * 1000;
-                $this->metrics->recordRequest(
-                    $request->method ?? 'GET',
-                    $request->path ?? '/',
-                    $responseStatus,
-                    $elapsedMs,
-                    $bytesIn,
-                    $bytesOut,
-                );
+            // Record on EVERY path — success, early return, or exception. Uses the
+            // always-defined Workerman request ($wr) for method/route so a throw in
+            // Request::fromWorkerman() above cannot leave $request undefined here.
+            $this->recordRequestMetrics(
+                $connection,
+                $wr,
+                $responseStatus,
+                $startTime,
+                $startBytesRead,
+                $startBytesWritten,
+            );
+        }
+    }
+
+    /**
+     * Record the just-completed request into the metrics subsystem.
+     *
+     * No-op when metrics is absent/disabled. Computes the per-request byte deltas
+     * from the connection counters and the wall-clock duration, and records against
+     * the low-cardinality route template (see {@see routeTemplate()}) plus the real
+     * captured HTTP status. Method/path come from the Workerman request, which is
+     * always in scope in the caller's `finally` even if request parsing threw.
+     */
+    private function recordRequestMetrics(
+        TcpConnection $connection,
+        WorkermanRequest $wr,
+        int $status,
+        float $startTime,
+        int $startBytesRead,
+        int $startBytesWritten,
+    ): void {
+        if ($this->metrics === null || !$this->metrics->isEnabled()) {
+            return;
+        }
+        $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
+        $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
+        $elapsedMs = (microtime(true) - $startTime) * 1000;
+        $this->metrics->recordRequest(
+            $wr->method(),
+            self::routeTemplate($wr->path()),
+            $status,
+            $elapsedMs,
+            $bytesIn,
+            $bytesOut,
+        );
+    }
+
+    /**
+     * Collapse a concrete request path into a low-cardinality route template.
+     *
+     * The per-route rollup (`metrics_route_rollup`) groups by (method, route);
+     * recording the raw path lets every distinct uuid / numeric id / asset hash
+     * mint its own row and exhaust the route-cardinality cap, folding every real
+     * endpoint into "__other__". Replacing variable-looking segments with "{id}"
+     * keeps `/api/v1/media/<uuid>/stream` as `/api/v1/media/{id}/stream` so the
+     * slow-call table and per-route timings stay meaningful. Path only — Workerman's
+     * `$wr->path()` never carries the query string.
+     */
+    private static function routeTemplate(string $path): string
+    {
+        if ($path === '' || $path === '/') {
+            return '/';
+        }
+        $segments = explode('/', $path);
+        foreach ($segments as $i => $segment) {
+            if ($segment !== '' && self::isVariableSegment($segment)) {
+                $segments[$i] = '{id}';
             }
         }
+        return implode('/', $segments);
+    }
+
+    /**
+     * Whether a single path segment looks like a variable (id / hash / token)
+     * rather than a stable route word — used by {@see routeTemplate()}.
+     *
+     * Matches a purely numeric id, a canonical UUID, or any 8+ character token
+     * carrying BOTH a letter and a digit (hex object ids, Vite asset fingerprints,
+     * urlencoded names). Short stable words ("api", "v1", "media", "s01e02") lack
+     * that letter-and-digit-over-8 combination and are preserved verbatim.
+     */
+    private static function isVariableSegment(string $segment): bool
+    {
+        if (ctype_digit($segment)) {
+            return true;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $segment) === 1) {
+            return true;
+        }
+        return strlen($segment) >= 8
+            && preg_match('/[A-Za-z]/', $segment) === 1
+            && preg_match('/\d/', $segment) === 1;
     }
 
     /**

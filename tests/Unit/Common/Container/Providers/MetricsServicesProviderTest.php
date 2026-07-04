@@ -10,6 +10,7 @@ use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Stats\Metrics\MetricsFlushService;
 use Phlix\Stats\Metrics\MetricsRegistry;
 use Phlix\Stats\Metrics\MetricsRepository;
+use Phlix\Stats\Metrics\MetricsRepositoryInterface;
 use PHPUnit\Framework\TestCase;
 use ReflectionClass;
 use Workerman\MySQL\Connection;
@@ -67,6 +68,37 @@ final class MetricsServicesProviderTest extends TestCase
         $this->assertInstanceOf(MetricsCollector::class, $container->get(MetricsCollector::class));
         $this->assertInstanceOf(MetricsFlushService::class, $container->get(MetricsFlushService::class));
         $this->assertInstanceOf(MetricsRepository::class, $container->get(MetricsRepository::class));
+    }
+
+    /**
+     * Regression guard: the admin MetricsController type-hints
+     * MetricsRepositoryInterface and AdminRoutes resolves the controller at
+     * route registration, so the interface MUST resolve. Without the
+     * interface->concrete alias PHP-DI throws "MetricsRepositoryInterface cannot
+     * be resolved: the class is not instantiable" (which surfaced live as a
+     * "Couldn't execute method Error::__toString" fatal).
+     */
+    public function test_repository_interface_resolves_to_concrete_repository(): void
+    {
+        $container = $this->container();
+
+        $this->assertTrue($container->has(MetricsRepositoryInterface::class));
+        $this->assertInstanceOf(
+            MetricsRepository::class,
+            $container->get(MetricsRepositoryInterface::class),
+        );
+    }
+
+    public function test_interface_and_concrete_share_the_same_singleton(): void
+    {
+        $container = $this->container();
+
+        // The alias must reuse the shared concrete instance, not build a second
+        // repository (all metrics services are SHARED per worker).
+        $this->assertSame(
+            $container->get(MetricsRepository::class),
+            $container->get(MetricsRepositoryInterface::class),
+        );
     }
 
     public function test_registry_is_shared_singleton(): void

@@ -3,10 +3,14 @@
 namespace Phlix\Tests\Unit\Server\WebSocket;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Server\WebSocket\Connection;
 use Phlix\Server\WebSocket\ConnectionPool;
 use Phlix\Server\WebSocket\MessageHandler;
 use Phlix\Server\WebSocket\WebSocketServer;
 use Phlix\Session\SyncPlay\SyncPlayManager;
+use Phlix\Stats\Metrics\MetricsCollector;
+use Phlix\Stats\Metrics\MetricsRegistry;
+use Workerman\Connection\TcpConnection;
 
 /**
  * Unit tests for WebSocketServer and SyncPlayManager initialization.
@@ -219,5 +223,49 @@ class WebSocketServerTest extends TestCase
         $server->onStart();
 
         $this->assertTrue(true); // If we get here, no exception was thrown
+    }
+
+    /**
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::touchActiveConnections
+     */
+    public function testTouchActiveConnectionsRecordsLiveConnectionBytes(): void
+    {
+        $registry = new MetricsRegistry();
+        $collector = new MetricsCollector($registry, true, static fn (): int => 1_725_000_000);
+
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);
+        $server->setMetricsCollector($collector);
+
+        $tcp = $this->createMock(TcpConnection::class);
+        $tcp->bytesRead = 1234;
+        $tcp->bytesWritten = 5678;
+        $wsConnection = new Connection($tcp);
+        ConnectionPool::getInstance()->add($wsConnection);
+
+        // Between flushes the touch timer calls this; the live connection's current
+        // cumulative bytes must land in the registry (previously stayed a zero row
+        // until close, then were deleted before any flush persisted them).
+        $server->touchActiveConnections();
+
+        $snapshot = $registry->snapshotConnections();
+        $this->assertArrayHasKey($wsConnection->getId(), $snapshot);
+        $this->assertSame(1234, $snapshot[$wsConnection->getId()]['bytes_in']);
+        $this->assertSame(5678, $snapshot[$wsConnection->getId()]['bytes_out']);
+    }
+
+    /**
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::touchActiveConnections
+     */
+    public function testTouchActiveConnectionsIsNoOpWithoutCollector(): void
+    {
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);
+
+        $tcp = $this->createMock(TcpConnection::class);
+        ConnectionPool::getInstance()->add(new Connection($tcp));
+
+        // No collector wired -> must not throw / dereference null.
+        $server->touchActiveConnections();
+
+        $this->assertTrue(true);
     }
 }

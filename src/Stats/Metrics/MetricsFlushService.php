@@ -91,11 +91,15 @@ final class MetricsFlushService
         $this->flushRoutes($workerId, $drained['routes']);
         $this->flushConnections($workerId, $registry->snapshotConnections(), $nowTs);
 
-        // Prune roughly once per minute rather than every flush.
+        // Prune roughly once per minute rather than every flush. Evict stale rows
+        // from BOTH the persisted tables and the in-RAM connection map (the latter
+        // now that the WS close hook records a final touch instead of an immediate
+        // delete — see MetricsRegistry::pruneStaleConnections()).
         $this->flushTick++;
         $ticksPerMinute = max(1, (int) round(60 / $this->flushIntervalSeconds));
         if ($this->flushTick % $ticksPerMinute === 0) {
             $this->prune($nowTs);
+            $registry->pruneStaleConnections($nowTs - $this->connectionTtlSeconds);
         }
     }
 

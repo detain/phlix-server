@@ -268,17 +268,39 @@ try {
         // are already bound in the WebSocketServer constructor.
         $wsServer->onStart();
 
-        // S2 metrics: arm the flush timer in the WS worker.
+        // S2 metrics: arm the live-connection touch timer + the flush timer in the
+        // WS worker.
         if ($wsMetricsCollector->isEnabled()) {
             /** @var MetricsFlushService $wsFlushService */
             $wsFlushService = $container->get(MetricsFlushService::class);
             /** @var array{flush_interval_seconds?: int} $wsMetricsConfig */
             $wsMetricsConfig = $config['metrics'] ?? [];
             $wsFlushInterval = (int) ($wsMetricsConfig['flush_interval_seconds'] ?? 5);
+
+            // The WS worker is its own count=1 group, so $w->id is 0 — the SAME id
+            // as HTTP worker 0. That collides in the metrics_rollup PK
+            // (bucket_started_at, worker_id) and mislabels metrics_connections.worker_id.
+            // Namespace the WS worker above the HTTP id space (worker_id is SMALLINT,
+            // signed cap 32767; the HTTP pool is count=14 → ids 0-13).
+            $wsWorkerId = 10000 + (int) $w->id;
+
+            // Between flushes, push each live connection's current cumulative bytes
+            // into the registry so the live-connection panel shows real throughput
+            // for the whole connection lifetime (not a zero row until it closes).
+            // Touch at least twice per flush window so the flush always sees fresh
+            // totals when it computes per-connection rates.
+            $wsTouchInterval = max(1, intdiv($wsFlushInterval, 2));
+            \Workerman\Timer::add(
+                $wsTouchInterval,
+                static function () use ($wsServer): void {
+                    $wsServer->touchActiveConnections();
+                },
+            );
+
             \Workerman\Timer::add(
                 $wsFlushInterval,
-                static function () use ($wsFlushService, $w): void {
-                    $wsFlushService->flush((int) $w->id, (int) time());
+                static function () use ($wsFlushService, $wsWorkerId): void {
+                    $wsFlushService->flush($wsWorkerId, (int) time());
                 },
             );
         }

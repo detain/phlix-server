@@ -279,6 +279,24 @@ final class MetricsRegistryTest extends TestCase
         $this->assertArrayHasKey('0-2', $snap);
     }
 
+    public function test_prune_stale_connections_evicts_only_aged_rows(): void
+    {
+        $reg = $this->registry(10);
+        // 'idle' opened at 900 and never touched again; 'live' touched up to 1000.
+        $reg->openConnection('idle', 'websocket', null, null, null, null, 900);
+        $reg->openConnection('live', 'websocket', null, null, null, null, 900);
+        $reg->touchConnection('live', 10, 20, 1000);
+        // 'edge' sits exactly at the cutoff — must be retained (strict less-than).
+        $reg->touchConnection('edge', 0, 0, 990);
+
+        $reg->pruneStaleConnections(990);
+
+        $snap = $reg->snapshotConnections();
+        $this->assertArrayNotHasKey('idle', $snap, 'A connection idle past the cutoff is evicted.');
+        $this->assertArrayHasKey('live', $snap, 'A recently-touched connection survives.');
+        $this->assertArrayHasKey('edge', $snap, 'last_seen_at == cutoff is retained (strict <).');
+    }
+
     public function test_snapshot_does_not_reset_connections(): void
     {
         $reg = $this->registry(10);

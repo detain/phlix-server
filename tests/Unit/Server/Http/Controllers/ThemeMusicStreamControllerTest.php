@@ -29,12 +29,10 @@ final class ThemeMusicStreamControllerTest extends TestCase
         parent::setUp();
         $this->tmpRoot = sys_get_temp_dir() . '/theme_music_ctrl_' . uniqid();
         mkdir($this->tmpRoot, 0o775, true);
-        unset($_SERVER['HTTP_RANGE']);
     }
 
     protected function tearDown(): void
     {
-        unset($_SERVER['HTTP_RANGE']);
         $this->removeDir($this->tmpRoot);
         parent::tearDown();
     }
@@ -57,6 +55,40 @@ final class ThemeMusicStreamControllerTest extends TestCase
     private function config(string $cacheDir): ThemeMusicConfig
     {
         return ThemeMusicConfig::fromArray(['cache_dir' => $cacheDir]);
+    }
+
+    /**
+     * A Request carrying a Range header in its PARSED headers — the shape
+     * Request::fromWorkerman() produces on the daemon (NOT $_SERVER).
+     */
+    private function rangeRequest(string $range): Request
+    {
+        $request = new Request();
+        $request->headers['Range'] = $range;
+        return $request;
+    }
+
+    /**
+     * Controller wired to serve a cached Plex theme of the given bytes for the
+     * tvdb id 81797, used by the range tests.
+     */
+    private function cachedThemeController(string $bytes): ThemeMusicStreamController
+    {
+        $cacheDir = $this->tmpRoot . '/cache';
+        if (!is_dir($cacheDir)) {
+            mkdir($cacheDir, 0o775, true);
+        }
+        file_put_contents($cacheDir . '/81797.mp3', $bytes);
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('findById')->willReturn([
+            'id' => 'series-1',
+            'type' => 'series',
+            'path' => null,
+            'metadata' => ['external_ids' => ['tvdb' => 81797]],
+        ]);
+
+        return new ThemeMusicStreamController($items, new ThemeMediaFinder(), $this->config($cacheDir));
     }
 
     public function testServesCachedPlexThemeAsAudioMpeg(): void
@@ -84,27 +116,63 @@ final class ThemeMusicStreamControllerTest extends TestCase
 
     public function testServesRangeRequest(): void
     {
-        $cacheDir = $this->tmpRoot . '/cache';
-        mkdir($cacheDir, 0o775, true);
-        file_put_contents($cacheDir . '/81797.mp3', '0123456789');
-
-        $items = $this->createMock(ItemRepository::class);
-        $items->method('findById')->willReturn([
-            'id' => 'series-1',
-            'type' => 'series',
-            'path' => null,
-            'metadata' => ['external_ids' => ['tvdb' => 81797]],
-        ]);
-
-        $_SERVER['HTTP_RANGE'] = 'bytes=2-5';
-
-        $controller = new ThemeMusicStreamController($items, new ThemeMediaFinder(), $this->config($cacheDir));
-        $response = $controller->streamItemTheme(new Request(), ['mediaItemId' => 'series-1']);
+        // Range comes from the parsed request header (daemon path), NOT $_SERVER.
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=2-5'), ['mediaItemId' => 'series-1']);
 
         $this->assertSame(206, $response->statusCode);
         $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
         $this->assertSame('2345', $response->body);
         $this->assertSame('bytes 2-5/10', $response->headers['Content-Range']);
+    }
+
+    public function testServesOpenEndedRange(): void
+    {
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=7-'), ['mediaItemId' => 'series-1']);
+
+        $this->assertSame(206, $response->statusCode);
+        $this->assertSame('789', $response->body);
+        $this->assertSame('bytes 7-9/10', $response->headers['Content-Range']);
+    }
+
+    public function testServesSuffixRange(): void
+    {
+        // "bytes=-3" => the last 3 bytes. Previously suffix ranges 416'd.
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=-3'), ['mediaItemId' => 'series-1']);
+
+        $this->assertSame(206, $response->statusCode);
+        $this->assertSame('789', $response->body);
+        $this->assertSame('bytes 7-9/10', $response->headers['Content-Range']);
+    }
+
+    public function testClampsRangeEndBeyondEof(): void
+    {
+        // "bytes=8-100" clamps the end to EOF instead of 416'ing.
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=8-100'), ['mediaItemId' => 'series-1']);
+
+        $this->assertSame(206, $response->statusCode);
+        $this->assertSame('89', $response->body);
+        $this->assertSame('bytes 8-9/10', $response->headers['Content-Range']);
+    }
+
+    public function testMalformedRangeReturns416(): void
+    {
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=abc'), ['mediaItemId' => 'series-1']);
+
+        $this->assertSame(416, $response->statusCode);
+        $this->assertSame('bytes */10', $response->headers['Content-Range']);
+    }
+
+    public function testUnsatisfiableRangeStartReturns416(): void
+    {
+        $controller = $this->cachedThemeController('0123456789');
+        $response = $controller->streamItemTheme($this->rangeRequest('bytes=50-60'), ['mediaItemId' => 'series-1']);
+
+        $this->assertSame(416, $response->statusCode);
     }
 
     public function testServesLocalThemeWhenPresent(): void

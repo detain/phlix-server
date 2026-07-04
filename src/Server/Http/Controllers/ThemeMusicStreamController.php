@@ -60,7 +60,10 @@ final class ThemeMusicStreamController
             return (new Response())->status(404)->json(['error' => 'Theme audio not found']);
         }
 
-        return $this->streamFile($file, $this->contentTypeFor($file));
+        // Read the Range from the PARSED request headers, never $_SERVER — under the
+        // Workerman daemon $_SERVER is not repopulated per request, so a $_SERVER
+        // read left seeking dead (every ranged request fell through to a full 200).
+        return $this->streamFile($file, $this->contentTypeFor($file), $request->getHeader('Range'));
     }
 
     /**
@@ -135,19 +138,21 @@ final class ThemeMusicStreamController
     }
 
     /**
-     * Serve a file with Content-Type + HTTP Range support (mirrors
-     * {@see ThemeMediaStreamController::streamFile()}).
+     * Serve a file with Content-Type + HTTP Range support.
+     *
+     * @param ?string $rangeHeader The request's Range header value ({@see Request::getHeader()}),
+     *                             or null when absent. Passed in rather than read from
+     *                             $_SERVER so it works under the Workerman daemon.
      */
-    private function streamFile(string $filePath, string $contentType): Response
+    private function streamFile(string $filePath, string $contentType, ?string $rangeHeader): Response
     {
         $fileSize = filesize($filePath);
         if ($fileSize === false) {
             return (new Response())->status(500)->json(['error' => 'Could not determine file size']);
         }
 
-        $rangeHeader = $_SERVER['HTTP_RANGE'] ?? null;
-        if ($rangeHeader !== null) {
-            return $this->handleRangeRequest($filePath, $fileSize, $contentType);
+        if ($rangeHeader !== null && $rangeHeader !== '') {
+            return $this->handleRangeRequest($filePath, $fileSize, $contentType, $rangeHeader);
         }
 
         $content = file_get_contents($filePath);
@@ -166,21 +171,48 @@ final class ThemeMusicStreamController
 
     /**
      * Serve a byte range (HTTP 206) for seeking.
+     *
+     * Accepts `bytes=start-end`, open-ended `bytes=start-`, and suffix `bytes=-N`
+     * (the last N bytes). An end that runs past EOF is clamped rather than rejected
+     * (RFC 7233); a malformed or unsatisfiable range yields 416 with
+     * `Content-Range: bytes * /{size}`. $fileSize is passed in so filesize() is
+     * only stat'd once by the caller.
      */
-    private function handleRangeRequest(string $filePath, int $fileSize, string $contentType): Response
-    {
-        $rangeHeader = is_string($_SERVER['HTTP_RANGE'] ?? null) ? $_SERVER['HTTP_RANGE'] : '';
-        if (!preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $matches)) {
+    private function handleRangeRequest(
+        string $filePath,
+        int $fileSize,
+        string $contentType,
+        string $rangeHeader
+    ): Response {
+        if ($fileSize <= 0 || preg_match('/^bytes=(\d*)-(\d*)$/', trim($rangeHeader), $matches) !== 1) {
             return (new Response())
                 ->status(416)
                 ->header('Content-Range', "bytes */{$fileSize}");
         }
 
-        /** @var int $start */
-        $start = (int) $matches[1];
-        $end = ($matches[2] !== '' ? (int) $matches[2] : $fileSize - 1);
+        $startRaw = $matches[1];
+        $endRaw   = $matches[2];
 
-        if ($start >= $fileSize || $end >= $fileSize || $start > $end) {
+        if ($startRaw === '') {
+            // Suffix range "bytes=-N": the last N bytes (N >= file size => whole file).
+            $suffix = (int) $endRaw;
+            if ($suffix <= 0) {
+                return (new Response())
+                    ->status(416)
+                    ->header('Content-Range', "bytes */{$fileSize}");
+            }
+            $start = max(0, $fileSize - $suffix);
+            $end   = $fileSize - 1;
+        } else {
+            $start = (int) $startRaw;
+            $end   = ($endRaw !== '') ? (int) $endRaw : $fileSize - 1;
+            // Clamp an end that runs past EOF instead of rejecting the request.
+            if ($end > $fileSize - 1) {
+                $end = $fileSize - 1;
+            }
+        }
+
+        if ($start > $end || $start >= $fileSize) {
             return (new Response())
                 ->status(416)
                 ->header('Content-Range', "bytes */{$fileSize}");
@@ -193,7 +225,6 @@ final class ThemeMusicStreamController
         if ($handle === false) {
             return (new Response())->status(500)->json(['error' => 'Could not open file']);
         }
-
         fseek($handle, $start);
         $content = fread($handle, $length);
         fclose($handle);

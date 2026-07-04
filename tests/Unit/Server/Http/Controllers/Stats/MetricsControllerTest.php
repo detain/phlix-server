@@ -60,6 +60,24 @@ final class MetricsControllerTest extends TestCase
         $this->assertArrayHasKey('data', $body);
     }
 
+    public function testResponsesUseSuccessDataEnvelope(): void
+    {
+        // The envelope is {success:true, data:...} — matching the spec and the hub
+        // controller (the server had drifted to a bare {data}).
+        $repo = $this->mockRepo();
+        $repo->method('snapshot')->willReturn(['bytes_in_per_sec' => 1]);
+
+        $controller = new MetricsController($repo);
+        $request = new Request();
+        $request->body = [];
+
+        $body = json_decode($controller->snapshot($request, [])->body, true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('success', $body);
+        $this->assertTrue($body['success']);
+        $this->assertSame(['bytes_in_per_sec' => 1], $body['data']);
+    }
+
     public function testHistoryCallsRepoWithDefaultArgs(): void
     {
         $expectedRows = [

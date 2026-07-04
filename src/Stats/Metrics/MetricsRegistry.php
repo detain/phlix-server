@@ -32,6 +32,21 @@ final class MetricsRegistry
      */
     public const OTHER_ROUTE = '__other__';
 
+    /**
+     * Canonical latency-histogram upper bounds (ms), ascending.
+     *
+     * This is the SINGLE SOURCE OF TRUTH for the histogram buckets and is
+     * schema-locked: the values map 1:1 onto the fixed `h_le_10 … h_le_5000`
+     * (+ `h_gt_5000` overflow) columns in migration 046, which
+     * {@see MetricsFlushService::flushOverall()} writes and
+     * {@see MetricsRepository::HISTOGRAM} reads by name. Changing the buckets
+     * therefore requires a schema migration AND updating those two classes — it
+     * is NOT an independently tunable config knob (a mismatched config would
+     * silently zero every histogram column and break percentiles), so the DI
+     * provider constructs the registry with exactly these bounds.
+     */
+    public const DEFAULT_LATENCY_BUCKETS_MS = [10, 50, 100, 250, 500, 1000, 2500, 5000];
+
     /** @var int Bucket granularity in seconds (buckets aligned to floor(ts/N)*N). */
     private int $bucketSeconds;
 
@@ -96,7 +111,7 @@ final class MetricsRegistry
      */
     public function __construct(
         int $bucketSeconds = 10,
-        array $latencyBucketsMs = [10, 50, 100, 250, 500, 1000, 2500, 5000],
+        array $latencyBucketsMs = self::DEFAULT_LATENCY_BUCKETS_MS,
         int $routeCardinalityCap = 200
     ) {
         $this->bucketSeconds = max(1, $bucketSeconds);
@@ -106,7 +121,7 @@ final class MetricsRegistry
             $bounds[] = (int) $bound;
         }
         sort($bounds);
-        $this->latencyBucketsMs = $bounds !== [] ? $bounds : [10, 50, 100, 250, 500, 1000, 2500, 5000];
+        $this->latencyBucketsMs = $bounds !== [] ? $bounds : self::DEFAULT_LATENCY_BUCKETS_MS;
 
         $this->routeCardinalityCap = max(1, $routeCardinalityCap);
     }

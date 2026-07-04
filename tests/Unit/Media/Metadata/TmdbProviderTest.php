@@ -382,4 +382,33 @@ class TmdbProviderTest extends TestCase
         $this->assertSame(['Imagine Television', 'FOX'], $names);
         $this->assertSame('Imagine Television', $details['studio']);
     }
+
+    public function testMergeCastDedupIsCaseAndWhitespaceInsensitive(): void
+    {
+        $ref = new \ReflectionMethod(TmdbProvider::class, 'mergeCast');
+        $ref->setAccessible(true);
+
+        $base = [
+            ['name' => 'John Smith', 'role' => 'Lead', 'profile_url' => null],
+        ];
+        $guest = [
+            // Same person as the regular, differing only by case + surrounding
+            // whitespace — must NOT be duplicated in the merged cast.
+            ['name' => ' john smith ', 'role' => 'Guest', 'profile_url' => 'p.jpg'],
+            ['name' => 'Jane Doe', 'role' => 'Guest Star', 'profile_url' => null],
+        ];
+
+        /** @var list<array{name: string, role: string, profile_url: string|null}> $merged */
+        $merged = $ref->invoke(new TmdbProvider('k'), $base, $guest);
+
+        // First occurrence (the regular) kept verbatim; the case/space variant
+        // dropped; the genuinely different guest survives.
+        $this->assertSame(
+            [
+                ['name' => 'John Smith', 'role' => 'Lead', 'profile_url' => null],
+                ['name' => 'Jane Doe', 'role' => 'Guest Star', 'profile_url' => null],
+            ],
+            $merged,
+        );
+    }
 }

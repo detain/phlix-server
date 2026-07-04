@@ -10,10 +10,12 @@ use Phlix\Stats\Metrics\MetricsCollector;
 use Phlix\Stats\Metrics\MetricsFlushService;
 use Phlix\Stats\Metrics\MetricsRegistry;
 use Phlix\Stats\Metrics\MetricsRepository;
+use Phlix\Stats\Metrics\MetricsRepositoryInterface;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
+use function DI\get;
 
 /**
  * Registers the metrics / live-traffic telemetry subsystem
@@ -115,6 +117,17 @@ final class MetricsServicesProvider implements ServiceProviderInterface
                     return new MetricsRepository($db, $config);
                 }
             ),
+
+            // Bind the read-side interface to the concrete repository. The admin
+            // MetricsController type-hints MetricsRepositoryInterface and
+            // AdminRoutes resolves get(MetricsController::class) at route
+            // registration; without this alias PHP-DI tries to instantiate the
+            // interface directly and throws "MetricsRepositoryInterface cannot be
+            // resolved: the class is not instantiable" (surfacing on the server
+            // as a mangled "Couldn't execute method Error::__toString" fatal from
+            // the Workerman error handler). The alias reuses the shared concrete
+            // singleton.
+            MetricsRepositoryInterface::class => get(MetricsRepository::class),
         ]);
     }
 

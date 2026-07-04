@@ -39,7 +39,9 @@ use Phlix\Plugins\Catalog\PluginCatalogService;
 use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Server\Http\Controllers\PluginAdminController;
 use Phlix\Server\Http\Controllers\PluginCatalogController;
+use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
+use Phlix\Stats\Metrics\MetricsRepositoryInterface;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Router;
@@ -136,6 +138,14 @@ final class AdminRoutesTest extends TestCase
             ),
         );
 
+        // Metrics controller (Step S2). AdminRoutes::register() eagerly resolves
+        // it at bind time; the plugin-only tests below never dispatch to
+        // /metrics/*, so a MetricsController over a mocked repository interface
+        // is sufficient here.
+        $metricsController = new MetricsController(
+            $this->createMock(MetricsRepositoryInterface::class),
+        );
+
         $container = new class (
             $this->loader,
             $this->users,
@@ -154,6 +164,7 @@ final class AdminRoutesTest extends TestCase
             $watchHistoryController,
             $pluginCatalogController,
             $catalogService,
+            $metricsController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -176,6 +187,7 @@ final class AdminRoutesTest extends TestCase
                 private readonly WatchHistoryController $watchHistoryController,
                 private readonly PluginCatalogController $pluginCatalogController,
                 private readonly PluginCatalogService $pluginCatalogService,
+                private readonly MetricsController $metricsController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -222,6 +234,7 @@ final class AdminRoutesTest extends TestCase
                     AdminMergeController::class => $this->adminMergeController,
                     AdminMetadataSourceController::class => $this->adminMetadataSourceController,
                     WatchHistoryController::class => $this->watchHistoryController,
+                    MetricsController::class => $this->metricsController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -247,6 +260,7 @@ final class AdminRoutesTest extends TestCase
                     AdminMergeController::class,
                     AdminMetadataSourceController::class,
                     WatchHistoryController::class,
+                    MetricsController::class,
                 ], true);
             }
         };

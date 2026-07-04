@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Metrics: admin `/api/v1/admin/metrics/*` no longer 500s with a "Couldn't execute method `Error::__toString`" fatal.** The S2 metrics wiring registered the concrete `MetricsRepository` but never bound the read-side `MetricsRepositoryInterface`, while `MetricsController` type-hints the interface and `AdminRoutes` resolves `get(MetricsController::class)` at route registration. PHP-DI then tried to instantiate the interface directly and threw `InvalidDefinition` ("the class is not instantiable"), which the Workerman error handler surfaced as the mangled `Error::__toString` fatal. `MetricsServicesProvider` now aliases `MetricsRepositoryInterface::class => get(MetricsRepository::class)` (reusing the shared concrete singleton); a new regression test asserts the interface resolves.
+
 ### Security
 
 - **systemd unit: extra kernel/privilege hardening (phlix-hub parity).** Adds `ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `ProtectHostname`, `ProtectClock`, `RestrictSUIDSGID`, and `RestrictRealtime` to the generated `[Service]` block, on top of the existing `ProtectSystem=strict`/`ProtectHome`/`NoNewPrivileges`/`PrivateTmp`/`RestrictNamespaces`/`LockPersonality`/`RemoveIPC` set. All are safe for the media server (software transcoding shells out to ffmpeg; optional DVB/DLNA needs neither module loading nor clock/hostname/cgroup writes). Deliberately **not** setting `PrivateDevices` (would hide `/dev/dvb` tuners and `/dev/dri`), `MemoryDenyWriteExecute` (breaks PHP JIT/opcache), or `SystemCallFilter` (Swoole io_uring is syscall-sensitive). Verified with `systemd-analyze verify` and a `systemd-run` sandbox on the host.

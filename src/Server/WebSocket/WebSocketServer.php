@@ -240,15 +240,52 @@ class WebSocketServer
                 ], [$wsConnection->getId()]);
             }
 
-            // S2 metrics: record final bytes and close the connection.
+            // S2 metrics: record the FINAL cumulative byte counts. We deliberately
+            // do NOT closeConnection() here — that unset the registry row before the
+            // next flush could persist it, so a WebSocket's bytes never reached
+            // metrics_connections. Leaving the final touch in place lets the coming
+            // flush write the real totals; the flush service then TTL-prunes the now
+            // idle row (its last_seen_at ages past connection_ttl) from the registry
+            // AND the table, so it drops out of the live panel ~ttl seconds after
+            // close without leaking worker memory.
             if ($this->metrics !== null) {
                 $this->metrics->touchConnection(
                     $wsConnection->getId(),
                     $connection->bytesRead,
                     $connection->bytesWritten,
                 );
-                $this->metrics->closeConnection($wsConnection->getId());
             }
+        }
+    }
+
+    /**
+     * Push the current cumulative byte counts of every live WebSocket connection
+     * into the metrics registry.
+     *
+     * Armed on a periodic timer by start.php's WS worker (between flushes) so the
+     * admin live-connection panel reflects real per-connection throughput for the
+     * whole connection lifetime — previously the only touch was in
+     * {@see onClose()}, so an open connection showed a permanent zero row and its
+     * bytes were then deleted before any flush could persist them. No-op when the
+     * collector is absent; the collector itself no-ops when metrics is disabled.
+     *
+     * @return void
+     */
+    public function touchActiveConnections(): void
+    {
+        if ($this->metrics === null) {
+            return;
+        }
+        foreach ($this->connections->all() as $wsConnection) {
+            if (!$wsConnection instanceof Connection) {
+                continue;
+            }
+            $tcp = $wsConnection->getConnection();
+            $this->metrics->touchConnection(
+                $wsConnection->getId(),
+                $tcp->bytesRead,
+                $tcp->bytesWritten,
+            );
         }
     }
 

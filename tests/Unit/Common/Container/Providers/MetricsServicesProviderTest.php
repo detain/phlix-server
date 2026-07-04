@@ -153,8 +153,12 @@ final class MetricsServicesProviderTest extends TestCase
         $this->assertFalse($collector->isEnabled());
     }
 
-    public function test_registry_tuning_knobs_from_config_are_applied(): void
+    public function test_latency_buckets_are_schema_locked_ignoring_config(): void
     {
+        // A stray latency_buckets_ms override in config MUST be ignored: the
+        // histogram columns are fixed by migration 046, so honouring arbitrary
+        // bounds would silently zero every column and break percentiles. The
+        // registry always receives the canonical schema-locked set.
         $container = $this->container(['metrics' => [
             'bucket_seconds'        => 30,
             'route_cardinality_cap' => 12,
@@ -164,8 +168,11 @@ final class MetricsServicesProviderTest extends TestCase
         /** @var MetricsRegistry $registry */
         $registry = $container->get(MetricsRegistry::class);
 
-        // The registry sorts + exposes its configured bounds.
-        $this->assertSame([5, 25, 75], $registry->latencyBounds());
+        $this->assertSame(
+            MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS,
+            $registry->latencyBounds(),
+            'Config latency_buckets_ms must not reach the registry (schema-locked).',
+        );
     }
 
     public function test_flush_service_reads_config_knobs(): void

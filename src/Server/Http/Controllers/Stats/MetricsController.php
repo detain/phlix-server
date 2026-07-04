@@ -36,7 +36,7 @@ final class MetricsController
      * Get a snapshot of current metrics.
      *
      * `GET /api/v1/admin/metrics/snapshot?window=60` →
-     * `200 { "data": { bytes_in_per_sec, bytes_out_per_sec, active_connections,
+     * `200 { "success": true, "data":{ bytes_in_per_sec, bytes_out_per_sec, active_connections,
      *                  requests_per_sec, error_rate, p50_ms, p95_ms, p99_ms } }`
      *
      * @param Request              $request The HTTP request (query.window seconds)
@@ -49,14 +49,14 @@ final class MetricsController
         $window = max(1, $this->parseInt($request->input('window'), 60));
         $data = $this->repo->snapshot($window);
 
-        return (new Response())->json(['data' => $data]);
+        return (new Response())->json(['success' => true, 'data' => $data]);
     }
 
     /**
      * Get historical metrics time-series.
      *
      * `GET /api/v1/admin/metrics/history?minutes=60&resolution=60` →
-     * `200 { "data": [{ bucket, bytes_in, bytes_out, requests, errors,
+     * `200 { "success": true, "data":[{ bucket, bytes_in, bytes_out, requests, errors,
      *                   p50_ms, p95_ms }, ...] }`
      *
      * @param Request              $request The HTTP request
@@ -71,14 +71,14 @@ final class MetricsController
         $resolution = max(1, $this->parseInt($request->input('resolution'), 60));
         $data = $this->repo->history($minutes, $resolution);
 
-        return (new Response())->json(['data' => $data]);
+        return (new Response())->json(['success' => true, 'data' => $data]);
     }
 
     /**
      * Get live WebSocket connections.
      *
      * `GET /api/v1/admin/metrics/connections?ttl=15` →
-     * `200 { "data": [{ id, kind, user_id, remote_ip, opened_at }, ...] }`
+     * `200 { "success": true, "data":[{ id, kind, user_id, remote_ip, opened_at }, ...] }`
      *
      * @param Request              $request The HTTP request (query.ttl seconds)
      * @param array<string,string> $params  Path parameters (unused)
@@ -90,14 +90,14 @@ final class MetricsController
         $ttl = max(1, $this->parseInt($request->input('ttl'), 15));
         $data = $this->repo->liveConnections($ttl);
 
-        return (new Response())->json(['data' => $data]);
+        return (new Response())->json(['success' => true, 'data' => $data]);
     }
 
     /**
      * Get top routes by request count.
      *
      * `GET /api/v1/admin/metrics/routes?minutes=15&limit=20` →
-     * `200 { "data": [{ route, method, request_count, error_count,
+     * `200 { "success": true, "data":[{ route, method, request_count, error_count,
      *                   avg_latency_ms, p95_ms }, ...] }`
      *
      * @param Request              $request The HTTP request
@@ -112,7 +112,7 @@ final class MetricsController
         $limit = max(1, $this->parseInt($request->input('limit'), 20));
         $data = $this->repo->topRoutes($minutes, $limit);
 
-        return (new Response())->json(['data' => $data]);
+        return (new Response())->json(['success' => true, 'data' => $data]);
     }
 
     /**

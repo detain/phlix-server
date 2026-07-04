@@ -14,14 +14,17 @@ declare(strict_types=1);
  * All knobs accept an environment-variable override with a sane default so the
  * feature works out of the box and can be tuned / disabled without editing code.
  *
+ * The latency histogram bounds are deliberately absent — they are schema-locked
+ * in {@see \Phlix\Stats\Metrics\MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS} (see
+ * the note at the bottom of the returned array).
+ *
  * @return array{
  *     enabled: bool,
  *     flush_interval_seconds: int,
  *     bucket_seconds: int,
  *     retention_days: int,
  *     connection_ttl_seconds: int,
- *     route_cardinality_cap: int,
- *     latency_buckets_ms: array<int, int>
+ *     route_cardinality_cap: int
  * }
  */
 
@@ -80,9 +83,12 @@ return [
     // adversarial / high-cardinality URL space cannot blow up worker memory.
     'route_cardinality_cap' => $envInt('PHLIX_METRICS_ROUTE_CAP', 200),
 
-    // Latency histogram bucket upper bounds (milliseconds), ascending. A request
-    // is counted into the first bucket whose bound it does not exceed; anything
-    // slower than the last bound lands in the implicit "greater-than" overflow
-    // bucket (h_gt_<last>). Used for percentile approximation at read time.
-    'latency_buckets_ms' => [10, 50, 100, 250, 500, 1000, 2500, 5000],
+    // NOTE: the latency histogram bounds are intentionally NOT configurable here.
+    // They are schema-locked to MetricsRegistry::DEFAULT_LATENCY_BUCKETS_MS
+    // ([10,50,100,250,500,1000,2500,5000] ms) because they map 1:1 onto the fixed
+    // h_le_10 … h_le_5000 (+ h_gt_5000 overflow) columns in migration 046 that the
+    // flush service writes and the repository reads by name. Changing them would
+    // require a schema migration and code changes in MetricsFlushService +
+    // MetricsRepository; a stray config override would silently zero every
+    // histogram column and break the percentile approximation.
 ];

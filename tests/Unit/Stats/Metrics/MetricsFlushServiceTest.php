@@ -277,4 +277,29 @@ final class MetricsFlushServiceTest extends TestCase
         $this->assertSame(0, $conn[0]['params'][9]);
         $this->assertSame(0, $conn[0]['params'][10]);
     }
+
+    public function test_flush_prunes_stale_in_memory_connections_on_prune_tick(): void
+    {
+        $registry  = new MetricsRegistry(10);
+        $collector = new MetricsCollector($registry, true);
+        $service   = $this->service($this->mockConnection(), $collector); // ttl 15, flush 5
+
+        // 'idle' last touched at 1000; 'live' touched at 1990.
+        $registry->openConnection('idle', 'websocket', null, null, null, null, 1000);
+        $registry->touchConnection('idle', 500, 500, 1000);
+        $registry->openConnection('live', 'websocket', null, null, null, null, 1990);
+        $registry->touchConnection('live', 500, 500, 1990);
+
+        // flush_interval 5 => prune fires on the 12th flush. now=2000 => cutoff 1985.
+        // 'idle' (last_seen 1000 < 1985) is evicted from the in-RAM map; 'live'
+        // (last_seen 1990) survives — this is what bounds worker memory now that the
+        // WS close hook leaves a final touch instead of an immediate delete.
+        for ($i = 0; $i < 12; $i++) {
+            $service->flush(10000, 2000);
+        }
+
+        $snap = $registry->snapshotConnections();
+        $this->assertArrayNotHasKey('idle', $snap, 'Idle connection past TTL is pruned from the registry.');
+        $this->assertArrayHasKey('live', $snap, 'A recently-touched connection is retained.');
+    }
 }

@@ -162,6 +162,42 @@ class RelayConsumerTest extends TestCase
         $this->assertFalse($consumer->isConnected());
     }
 
+    public function test_connect_closes_a_prior_connection_instead_of_leaking_it(): void
+    {
+        // A factory that hands out a FRESH connection per call so the prior and
+        // the replacement can be told apart.
+        $opened = [];
+        $consumer = new RelayConsumer(
+            new RelayConfig(
+                enabled: true,
+                hubRelayWsUrl: 'ws://hub.example.com:8802',
+                localHttpAddress: '127.0.0.1:8096',
+            ),
+            $this->createMockHubClient(),
+            new StructuredLogger('relay', []),
+            'server-uuid-123',
+            hubConnectionFactory: static function (string $url) use (&$opened): AsyncTcpConnection {
+                $conn = new FakeRelayConnection($url);
+                $opened[] = $conn;
+                return $conn;
+            },
+            localConnectionFactory: static function (string $url): AsyncTcpConnection {
+                return new FakeRelayConnection($url);
+            },
+        );
+
+        $connect = new \ReflectionMethod(RelayConsumer::class, 'connect');
+        $connect->setAccessible(true);
+
+        $connect->invoke($consumer); // opens $opened[0]
+        $connect->invoke($consumer); // must close $opened[0] before opening $opened[1]
+
+        $this->assertCount(2, $opened);
+        $this->assertTrue($opened[0]->closed, 'the prior connection must be closed, not leaked');
+        $this->assertTrue($opened[1]->connected, 'the replacement connection must be initiated');
+        $this->assertFalse($opened[1]->closed, 'the replacement connection must stay open');
+    }
+
     public function test_hello_is_sent_on_connect(): void
     {
         $consumer = $this->createConsumer();

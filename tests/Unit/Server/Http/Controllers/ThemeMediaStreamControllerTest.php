@@ -349,6 +349,145 @@ class ThemeMediaStreamControllerTest extends TestCase
     }
 
     /**
+     * Range request on streamAudio returns 206 with the exact byte slice, read
+     * from the PARSED request header (the daemon path) — never $_SERVER, which
+     * Workerman does not repopulate per request.
+     */
+    public function testStreamAudioServesRangeRequest(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789'); // 10 bytes
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=2-5'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
+            $this->assertSame('bytes 2-5/10', $response->headers['Content-Range']);
+            $this->assertSame('bytes', $response->headers['Accept-Ranges']);
+            $this->assertSame('2345', $response->body);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * Suffix range `bytes=-N` serves the last N bytes.
+     */
+    public function testStreamAudioServesSuffixRange(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=-3'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('bytes 7-9/10', $response->headers['Content-Range']);
+            $this->assertSame('789', $response->body);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * An end that runs past EOF is clamped (RFC 7233), not rejected.
+     */
+    public function testStreamAudioClampsRangeEndBeyondEof(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=8-100'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('bytes 8-9/10', $response->headers['Content-Range']);
+            $this->assertSame('89', $response->body);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * A malformed Range yields 416 with `Content-Range: bytes * /size`.
+     */
+    public function testStreamAudioMalformedRangeReturns416(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=abc'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(416, $response->statusCode);
+            $this->assertSame('bytes */10', $response->headers['Content-Range']);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * streamVideo honours the parsed Range header too (206 slice).
+     */
+    public function testStreamVideoServesRangeRequest(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_video_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $repo = $this->createMock(ThemeMediaRepository::class);
+            $repo->method('findByLibraryId')->willReturn(new ThemeMedia(
+                libraryId: 'lib-1',
+                audio: null,
+                video: new ThemeVideo($tempFile, '/stream/theme-media/lib-1/video', 300, 1920, 1080, 'mp4'),
+                scannedAt: new \DateTimeImmutable()
+            ));
+            $controller = new ThemeMediaStreamController($repo);
+
+            $response = $controller->streamVideo($this->rangeRequest('bytes=0-3'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('video/mp4', $response->headers['Content-Type']);
+            $this->assertSame('bytes 0-3/10', $response->headers['Content-Range']);
+            $this->assertSame('0123', $response->body);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * Build a controller whose repository serves the given temp file as audio.
+     */
+    private function audioControllerFor(string $tempFile): ThemeMediaStreamController
+    {
+        $repo = $this->createMock(ThemeMediaRepository::class);
+        $repo->method('findByLibraryId')->willReturn(new ThemeMedia(
+            libraryId: 'lib-1',
+            audio: new ThemeAudio($tempFile, '/stream/theme-media/lib-1/audio', 120, 'mp3'),
+            video: null,
+            scannedAt: new \DateTimeImmutable()
+        ));
+
+        return new ThemeMediaStreamController($repo);
+    }
+
+    /**
+     * A Request carrying a Range header in its parsed headers (daemon shape).
+     */
+    private function rangeRequest(string $range): Request
+    {
+        $request = new Request();
+        $request->headers['Range'] = $range;
+
+        return $request;
+    }
+
+    /**
      * Data provider for audio format to content type mapping.
      */
     public static function audioFormatProvider(): array

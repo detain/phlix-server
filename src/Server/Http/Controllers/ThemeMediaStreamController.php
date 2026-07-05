@@ -69,7 +69,7 @@ class ThemeMediaStreamController
         return $this->streamFile(
             $audio->path,
             $this->getAudioContentType($audio->format),
-            $audio->duration
+            $request->getHeader('Range')
         );
     }
 
@@ -114,22 +114,27 @@ class ThemeMediaStreamController
         return $this->streamFile(
             $video->path,
             $this->getVideoContentType($video->format),
-            $video->duration
+            $request->getHeader('Range')
         );
     }
 
     /**
-     * Stream a file with content-type and range support.
+     * Stream a file with content-type and HTTP Range support.
      *
-     * @param string $filePath Absolute path to the file
-     * @param string $contentType MIME content type
-     * @param int $duration Duration hint in seconds (unused but available)
+     * @param string  $filePath    Absolute path to the file
+     * @param string  $contentType MIME content type
+     * @param ?string $rangeHeader The request's Range header value
+     *                             ({@see Request::getHeader()}), or null when absent.
+     *                             Passed in rather than read from $_SERVER so it works
+     *                             under the Workerman daemon (which never repopulates
+     *                             $_SERVER per request — a $_SERVER read left seeking
+     *                             dead: every ranged request fell through to a 200).
      *
      * @return Response
      *
      * @since 0.14.0
      */
-    private function streamFile(string $filePath, string $contentType, int $duration): Response
+    private function streamFile(string $filePath, string $contentType, ?string $rangeHeader): Response
     {
         $fileSize = filesize($filePath);
 
@@ -139,11 +144,8 @@ class ThemeMediaStreamController
             ]);
         }
 
-        // Handle range requests for seeking
-        $rangeHeader = $_SERVER['HTTP_RANGE'] ?? null;
-
-        if ($rangeHeader !== null) {
-            return $this->handleRangeRequest($filePath, $fileSize, $contentType);
+        if ($rangeHeader !== null && $rangeHeader !== '') {
+            return $this->handleRangeRequest($filePath, $fileSize, $contentType, $rangeHeader);
         }
 
         // Full file response
@@ -163,11 +165,18 @@ class ThemeMediaStreamController
     }
 
     /**
-     * Handle HTTP range request for seeking.
+     * Handle an HTTP Range request for seeking (HTTP 206).
      *
-     * @param string $filePath File path
-     * @param int $fileSize Total file size
+     * Accepts `bytes=start-end`, open-ended `bytes=start-`, and suffix `bytes=-N`
+     * (the last N bytes). An end that runs past EOF is clamped rather than rejected
+     * (RFC 7233); a malformed or unsatisfiable range yields 416 with
+     * `Content-Range: bytes * /{size}`. $fileSize is passed in so filesize() is only
+     * stat'd once by the caller.
+     *
+     * @param string $filePath    File path
+     * @param int    $fileSize    Total file size
      * @param string $contentType Content type
+     * @param string $rangeHeader Raw Range header value
      *
      * @return Response
      *
@@ -176,24 +185,38 @@ class ThemeMediaStreamController
     private function handleRangeRequest(
         string $filePath,
         int $fileSize,
-        string $contentType
+        string $contentType,
+        string $rangeHeader
     ): Response {
-        // Parse Range header: "bytes=start-end"
-        $rangeHeader = is_string($_SERVER['HTTP_RANGE'] ?? null) ? $_SERVER['HTTP_RANGE'] : '';
-        if (!preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $matches)) {
+        if ($fileSize <= 0 || preg_match('/^bytes=(\d*)-(\d*)$/', trim($rangeHeader), $matches) !== 1) {
             return (new Response())
                 ->status(416)
                 ->header('Content-Range', "bytes */{$fileSize}");
         }
 
-        // preg_match matched, so $matches[1] and $matches[2] are guaranteed to be set
-        /** @var int $start */
-        $start = (int) $matches[1];
-        // $matches[2] is ''|numeric-string, both of which can be cast to string
-        $end = ($matches[2] !== '' ? (int) $matches[2] : $fileSize - 1);
+        $startRaw = $matches[1];
+        $endRaw   = $matches[2];
 
-        // Validate range
-        if ($start >= $fileSize || $end >= $fileSize || $start > $end) {
+        if ($startRaw === '') {
+            // Suffix range "bytes=-N": the last N bytes (N >= file size => whole file).
+            $suffix = (int) $endRaw;
+            if ($suffix <= 0) {
+                return (new Response())
+                    ->status(416)
+                    ->header('Content-Range', "bytes */{$fileSize}");
+            }
+            $start = max(0, $fileSize - $suffix);
+            $end   = $fileSize - 1;
+        } else {
+            $start = (int) $startRaw;
+            $end   = ($endRaw !== '') ? (int) $endRaw : $fileSize - 1;
+            // Clamp an end that runs past EOF instead of rejecting the request.
+            if ($end > $fileSize - 1) {
+                $end = $fileSize - 1;
+            }
+        }
+
+        if ($start > $end || $start >= $fileSize) {
             return (new Response())
                 ->status(416)
                 ->header('Content-Range', "bytes */{$fileSize}");

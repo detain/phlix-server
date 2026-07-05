@@ -112,7 +112,14 @@ class ThemeMediaStreamControllerTest extends TestCase
             ->willReturn(new ThemeMedia(
                 libraryId: 'lib-1',
                 audio: null,
-                video: new ThemeVideo('/path/to/backdrop.mp4', '/stream/theme-media/lib-1/video', 300, 1920, 1080, 'mp4'),
+                video: new ThemeVideo(
+                    '/path/to/backdrop.mp4',
+                    '/stream/theme-media/lib-1/video',
+                    300,
+                    1920,
+                    1080,
+                    'mp4'
+                ),
                 scannedAt: new \DateTimeImmutable()
             ));
 
@@ -423,6 +430,46 @@ class ThemeMediaStreamControllerTest extends TestCase
         try {
             $controller = $this->audioControllerFor($tempFile);
             $response = $controller->streamAudio($this->rangeRequest('bytes=abc'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(416, $response->statusCode);
+            $this->assertSame('bytes */10', $response->headers['Content-Range']);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * Open-ended range `bytes=start-` serves from start through EOF.
+     */
+    public function testStreamAudioServesOpenEndedRange(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=5-'), ['libraryId' => 'lib-1']);
+
+            $this->assertSame(206, $response->statusCode);
+            $this->assertSame('bytes 5-9/10', $response->headers['Content-Range']);
+            $this->assertSame('5', $response->headers['Content-Length']);
+            $this->assertSame('56789', $response->body);
+        } finally {
+            @unlink($tempFile);
+        }
+    }
+
+    /**
+     * A start at or past EOF is unsatisfiable -> 416 with `Content-Range: bytes * /size`.
+     */
+    public function testStreamAudioUnsatisfiableRangeReturns416(): void
+    {
+        $tempFile = tempnam(sys_get_temp_dir(), 'theme_audio_');
+        file_put_contents($tempFile, '0123456789');
+
+        try {
+            $controller = $this->audioControllerFor($tempFile);
+            $response = $controller->streamAudio($this->rangeRequest('bytes=100-200'), ['libraryId' => 'lib-1']);
 
             $this->assertSame(416, $response->statusCode);
             $this->assertSame('bytes */10', $response->headers['Content-Range']);

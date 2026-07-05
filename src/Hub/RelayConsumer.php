@@ -284,6 +284,21 @@ final class RelayConsumer
      */
     private function connect(): void
     {
+        // Defensive: never orphan a prior connection. If connect() races a
+        // still-open socket (e.g. a reconnect fires before the previous close
+        // hook nulled it), detach its callbacks first — so its close hook does
+        // NOT re-enter handleDisconnect() and schedule a competing reconnect —
+        // then close it, releasing the socket instead of leaking it.
+        if ($this->connection !== null) {
+            $stale = $this->connection;
+            $this->connection = null;
+            $stale->onConnect = null;
+            $stale->onMessage = null;
+            $stale->onError = null;
+            $stale->onClose = null;
+            $stale->close();
+        }
+
         $wsUrl = $this->config->buildHubRelayWsUrl();
         if ($wsUrl === '') {
             $this->logger->error('RelayConsumer: no hub relay WS endpoint configured');

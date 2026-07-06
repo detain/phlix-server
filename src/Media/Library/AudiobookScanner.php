@@ -146,7 +146,17 @@ class AudiobookScanner extends BookScanner
     }
 
     /**
+     * Chunk size for reading MP4 atom payloads.
+     */
+    private const CHUNK_SIZE = 65536; // 64KB chunks
+
+    /**
      * Extracts chapters from an M4B file by parsing the `chpl` atom.
+     *
+     * Uses chunked/streaming reads to avoid loading the entire file into memory.
+     * MP4 files are structured as atoms (boxes) in a tree hierarchy. We navigate
+     * this hierarchy by reading atom headers (8 bytes) and seeking forward based
+     * on atom sizes, only reading payloads of atoms we need.
      *
      * @param string $path Absolute path to the M4B file
      * @return array<int, array<string, mixed>> Array of chapter data
@@ -159,31 +169,36 @@ class AudiobookScanner extends BookScanner
         }
 
         try {
-            // Read file into memory for atom scanning
             $fileSize = filesize($path);
             if ($fileSize === false || $fileSize === 0) {
-                return [];
-            }
-
-            $data = fread($handle, $fileSize);
-            if ($data === false) {
                 return [];
             }
 
             $chapters = [];
             $offset = 0;
 
-            // Find 'moov' atom
-            while ($offset < strlen($data) - 8) {
-                $atomSize = $this->readUInt32(substr($data, $offset, 4));
-                $atomType = substr($data, $offset + 4, 4);
+            // Find 'moov' atom using chunked navigation
+            while ($offset < $fileSize - 8) {
+                fseek($handle, $offset);
+                $header = fread($handle, 8);
+                if ($header === false || strlen($header) < 8) {
+                    break;
+                }
+
+                $atomSize = $this->readUInt32($header);
+                $atomType = substr($header, 4, 4);
 
                 if ($atomSize === 0) {
-                    $atomSize = strlen($data) - $offset;
+                    $atomSize = $fileSize - $offset;
+                }
+
+                if ($atomSize < 8) {
+                    break;
                 }
 
                 if ($atomType === 'moov') {
-                    $chapters = $this->parseMoovAtom(substr($data, $offset + 8, $atomSize - 8), $path);
+                    // Parse moov atom contents using chunked reading
+                    $chapters = $this->streamParseMoovAtomForChapters($handle, $offset + 8, (int) $atomSize - 8, $path);
                     break;
                 }
 
@@ -197,46 +212,72 @@ class AudiobookScanner extends BookScanner
     }
 
     /**
-     * Parses the moov atom to find chapter information.
+     * Stream-parses the moov atom to find chapter information using chunked reads.
      *
-     * @param string $data The moov atom data
+     * @param resource $handle File handle positioned after atom header
+     * @param int $startOffset Absolute file offset where atom payload starts
+     * @param int $atomSize Size of the atom payload
      * @param string $path_hint The file path for path_hint in chapters
      * @return array<int, array<string, mixed>> Array of chapter data
      */
-    private function parseMoovAtom(string $data, string $path_hint): array
+    private function streamParseMoovAtomForChapters($handle, int $startOffset, int $atomSize, string $path_hint): array
     {
         $chapters = [];
         $offset = 0;
-        $dataLen = strlen($data);
+        $endOffset = $startOffset + $atomSize;
 
-        while ($offset < $dataLen - 8) {
-            $unpacked = unpack('N', substr($data, $offset, 4));
-            if ($unpacked === false) {
+        while ($offset < $atomSize - 8) {
+            $currentPos = $startOffset + $offset;
+            fseek($handle, $currentPos);
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) < 8) {
                 break;
             }
-            $atomSize = $unpacked[1];
-            $atomType = substr($data, $offset + 4, 4);
 
-            if ($atomSize === 0) {
-                $atomSize = $dataLen - $offset;
+            $childAtomSize = $this->readUInt32($header);
+            $childAtomType = substr($header, 4, 4);
+
+            if ($childAtomSize === 0) {
+                $childAtomSize = $atomSize - $offset;
             }
 
-            if ($atomType === 'chpl') {
-                $chapters = $this->parseChplAtom(substr($data, $offset + 8, $atomSize - 8), $path_hint);
+            if ($childAtomSize < 8) {
+                break;
+            }
+
+            if ($childAtomType === 'chpl') {
+                // Found chapter list - read and parse it
+                $chplOffset = $currentPos + 8;
+                $chplSize = $childAtomSize - 8;
+                if ($chplSize > 0) {
+                    fseek($handle, $chplOffset);
+                    $chplData = fread($handle, min($chplSize, self::CHUNK_SIZE));
+                    if ($chplData !== false) {
+                        $chapters = $this->parseChplAtom($chplData, $path_hint);
+                    }
+                }
                 break;
             }
 
             // Search inside container atoms
-            if (in_array($atomType, ['udta', 'meta', 'ilst'], true)) {
-                $innerData = substr($data, $offset + 8, $atomSize - 8);
-                $innerChapters = $this->parseMoovAtom($innerData, $path_hint);
-                if (!empty($innerChapters)) {
-                    $chapters = $innerChapters;
-                    break;
+            if (in_array($childAtomType, ['udta', 'meta', 'ilst'], true)) {
+                $containerOffset = $offset + 8;
+                $containerSize = $childAtomSize - 8;
+                if ($containerSize > 0 && $containerOffset < $atomSize) {
+                    $innerChapters = $this->streamParseMoovAtomForChapters(
+                        $handle,
+                        $startOffset + $containerOffset,
+                        min($containerSize, $atomSize - $containerOffset),
+                        $path_hint
+                    );
+                    if (!empty($innerChapters)) {
+                        $chapters = $innerChapters;
+                        break;
+                    }
                 }
             }
 
-            $offset += $atomSize;
+            $offset += $childAtomSize;
         }
 
         return $chapters;
@@ -394,6 +435,10 @@ class AudiobookScanner extends BookScanner
     /**
      * Extracts metadata from an M4B file via MP4 atoms.
      *
+     * Uses chunked/streaming reads to avoid loading the entire file into memory.
+     * Only the 'moov' atom is loaded (which contains metadata) rather than the
+     * entire file. The 'mdat' (media data) atom can be gigabytes and is skipped.
+     *
      * @param string $path Absolute path to the M4B file
      * @return array<string, mixed> Extracted metadata
      */
@@ -410,24 +455,29 @@ class AudiobookScanner extends BookScanner
                 return [];
             }
 
-            $data = fread($handle, $fileSize);
-            if ($data === false) {
-                return [];
-            }
-
             $metadata = [];
 
-            // Find 'moov' atom
-            $offset = 0;
+            // Find 'moov' atom using chunked navigation
             $moovOffset = null;
             $moovSize = null;
+            $offset = 0;
 
-            while ($offset < strlen($data) - 8) {
-                $atomSize = $this->readUInt32(substr($data, $offset, 4));
-                $atomType = substr($data, $offset + 4, 4);
+            while ($offset < $fileSize - 8) {
+                fseek($handle, $offset);
+                $header = fread($handle, 8);
+                if ($header === false || strlen($header) < 8) {
+                    break;
+                }
+
+                $atomSize = $this->readUInt32($header);
+                $atomType = substr($header, 4, 4);
 
                 if ($atomSize === 0) {
-                    $atomSize = strlen($data) - $offset;
+                    $atomSize = $fileSize - $offset;
+                }
+
+                if ($atomSize < 8) {
+                    break;
                 }
 
                 if ($atomType === 'moov') {
@@ -443,16 +493,18 @@ class AudiobookScanner extends BookScanner
                 return [];
             }
 
-            // Find 'udta' -> 'meta' -> 'ilst' within moov
-            $moovData = substr($data, $moovOffset + 8, $moovSize - 8);
-            $ilstData = $this->findIlstAtom($moovData);
+            // Stream-parse moov atom for metadata and duration
+            $moovPayloadOffset = $moovOffset + 8;
+            $moovPayloadSize = $moovSize - 8;
 
+            // First pass: find and parse ilst for metadata
+            $ilstData = $this->streamFindIlstAtom($handle, $moovPayloadOffset, $moovPayloadSize);
             if ($ilstData !== null) {
                 $metadata = $this->parseIlstAtom($ilstData);
             }
 
-            // Also try to get duration from 'mdia' -> 'mdhd'
-            $duration = $this->findDuration($moovData);
+            // Second pass: find duration from mdhd
+            $duration = $this->streamFindDuration($handle, $moovPayloadOffset, $moovPayloadSize);
             if ($duration !== null) {
                 $metadata['duration_ms'] = $duration;
             }
@@ -464,82 +516,198 @@ class AudiobookScanner extends BookScanner
     }
 
     /**
-     * Finds the ilst atom within moov data.
+     * Stream-finds the ilst atom within moov data using chunked navigation.
      *
-     * @param string $moovData The moov atom data
+     * @param resource $handle File handle
+     * @param int $startOffset Absolute file offset where moov payload starts
+     * @param int $atomSize Size of the moov atom payload
      * @return string|null The ilst atom data or null
      */
-    private function findIlstAtom(string $moovData): ?string
+    private function streamFindIlstAtom($handle, int $startOffset, int $atomSize): ?string
     {
         $offset = 0;
+        $endOffset = $startOffset + $atomSize;
 
-        while ($offset < strlen($moovData) - 8) {
-            $atomSizeU = $this->readUInt32(substr($moovData, $offset, 4));
-            if ($atomSizeU === false) {
+        while ($offset < $atomSize - 8) {
+            $currentPos = $startOffset + $offset;
+            fseek($handle, $currentPos);
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) < 8) {
                 break;
             }
-            $atomSize = $atomSizeU;
-            $atomType = substr($moovData, $offset + 4, 4);
 
-            if ($atomSize === 0) {
-                $atomSize = strlen($moovData) - $offset;
+            $childAtomSize = $this->readUInt32($header);
+            $childAtomType = substr($header, 4, 4);
+
+            if ($childAtomSize === 0) {
+                $childAtomSize = $atomSize - $offset;
             }
 
-            if ($atomType === 'udta') {
+            if ($childAtomSize < 8) {
+                break;
+            }
+
+            if ($childAtomType === 'udta') {
                 // Look for meta inside udta
-                $udtaData = substr($moovData, $offset + 8, $atomSize - 8);
-                $metaData = $this->findMetaAtom($udtaData);
+                $metaData = $this->streamFindMetaAtom($handle, $currentPos + 8, $childAtomSize - 8);
                 if ($metaData !== null) {
-                    $ilstData = $this->findIlstAtom($metaData);
+                    $ilstData = $this->streamFindIlstAtom($handle, $currentPos + 8, $childAtomSize - 8);
                     if ($ilstData !== null) {
                         return $ilstData;
                     }
                 }
             }
 
-            if ($atomType === 'meta') {
-                // meta atom has 4-byte header before children
-                $innerData = substr($moovData, $offset + 12, $atomSize - 12);
-                $ilstData = $this->findIlstAtom($innerData);
-                if ($ilstData !== null) {
-                    return $ilstData;
+            if ($childAtomType === 'meta') {
+                // meta atom has 4-byte header before children (version/flags)
+                $innerData = $this->streamFindIlstAtom($handle, $currentPos + 12, $childAtomSize - 12);
+                if ($innerData !== null) {
+                    return $innerData;
                 }
             }
 
-            $offset += $atomSize;
+            $offset += $childAtomSize;
         }
 
         return null;
     }
 
     /**
-     * Finds the meta atom within udta.
+     * Stream-finds the meta atom within udta.
      *
-     * @param string $udtaData The udta atom data
+     * @param resource $handle File handle
+     * @param int $startOffset Absolute file offset where udta payload starts
+     * @param int $atomSize Size of the udta atom payload
      * @return string|null The meta atom data or null
      */
-    private function findMetaAtom(string $udtaData): ?string
+    private function streamFindMetaAtom($handle, int $startOffset, int $atomSize): ?string
     {
         $offset = 0;
 
-        while ($offset < strlen($udtaData) - 8) {
-            $atomSizeU = $this->readUInt32(substr($udtaData, $offset, 4));
-            if ($atomSizeU === false) {
+        while ($offset < $atomSize - 8) {
+            $currentPos = $startOffset + $offset;
+            fseek($handle, $currentPos);
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) < 8) {
                 break;
             }
-            $atomSize = $atomSizeU;
-            $atomType = substr($udtaData, $offset + 4, 4);
 
-            if ($atomSize === 0) {
-                $atomSize = strlen($udtaData) - $offset;
+            $childAtomSize = $this->readUInt32($header);
+            $childAtomType = substr($header, 4, 4);
+
+            if ($childAtomSize === 0) {
+                $childAtomSize = $atomSize - $offset;
             }
 
-            if ($atomType === 'meta') {
-                // meta has a 4-byte size + 4-byte 'meta' + 4-byte version/flags = 12 bytes header
-                return substr($udtaData, $offset + 12, $atomSize - 12);
+            if ($childAtomSize < 8) {
+                break;
             }
 
-            $offset += $atomSize;
+            if ($childAtomType === 'meta') {
+                // meta has 4-byte size + 4-byte 'meta' + 4-byte version/flags = 12 bytes header
+                return substr($header, 0, 0); // Return empty - we just signal found
+            }
+
+            $offset += $childAtomSize;
+        }
+
+        return null;
+    }
+
+    /**
+     * Stream-finds duration from mdia -> mdhd within moov.
+     *
+     * @param resource $handle File handle
+     * @param int $startOffset Absolute file offset where moov payload starts
+     * @param int $atomSize Size of the moov atom payload
+     * @return int|null Duration in milliseconds or null
+     */
+    private function streamFindDuration($handle, int $startOffset, int $atomSize): ?int
+    {
+        $offset = 0;
+
+        while ($offset < $atomSize - 8) {
+            $currentPos = $startOffset + $offset;
+            fseek($handle, $currentPos);
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) < 8) {
+                break;
+            }
+
+            $childAtomSize = $this->readUInt32($header);
+            $childAtomType = substr($header, 4, 4);
+
+            if ($childAtomSize === 0) {
+                $childAtomSize = $atomSize - $offset;
+            }
+
+            if ($childAtomSize < 8) {
+                break;
+            }
+
+            if ($childAtomType === 'mdia') {
+                return $this->streamFindDurationInMdia($handle, $currentPos + 8, $childAtomSize - 8);
+            }
+
+            $offset += $childAtomSize;
+        }
+
+        return null;
+    }
+
+    /**
+     * Stream-finds duration within mdia atom.
+     *
+     * @param resource $handle File handle
+     * @param int $startOffset Absolute file offset where mdia payload starts
+     * @param int $atomSize Size of the mdia atom payload
+     * @return int|null Duration in milliseconds or null
+     */
+    private function streamFindDurationInMdia($handle, int $startOffset, int $atomSize): ?int
+    {
+        $offset = 0;
+
+        while ($offset < $atomSize - 8) {
+            $currentPos = $startOffset + $offset;
+            fseek($handle, $currentPos);
+            $header = fread($handle, 8);
+            if ($header === false || strlen($header) < 8) {
+                break;
+            }
+
+            $childAtomSize = $this->readUInt32($header);
+            $childAtomType = substr($header, 4, 4);
+
+            if ($childAtomSize === 0) {
+                $childAtomSize = $atomSize - $offset;
+            }
+
+            if ($childAtomSize < 8) {
+                break;
+            }
+
+            if ($childAtomType === 'mdhd') {
+                fseek($handle, $currentPos + 8);
+                $readLen = max(1, min($childAtomSize - 8, 32)); // Only need first 32 bytes, min 1 for fread
+                $mdhdData = fread($handle, $readLen);
+                if ($mdhdData !== false && strlen($mdhdData) >= 24) {
+                    // Skip version(1) + flags(3) + creation(4) + modification(4)
+                    // Then 4 bytes timescale, 4 bytes duration
+                    $timescaleU = $this->readUInt32(substr($mdhdData, 12, 4));
+                    $durationU = $this->readUInt32(substr($mdhdData, 16, 4));
+                    if ($timescaleU !== false && $durationU !== false) {
+                        $timescale = $timescaleU;
+                        $duration = $durationU;
+
+                        if ($timescale > 0) {
+                            return (int)(($duration / $timescale) * 1000);
+                        }
+                    }
+                }
+                break;
+            }
+
+            $offset += $childAtomSize;
         }
 
         return null;
@@ -697,86 +865,6 @@ class AudiobookScanner extends BookScanner
         } catch (\Throwable) {
             return null;
         }
-    }
-
-    /**
-     * Finds the duration from mdia -> mdhd atom.
-     *
-     * @param string $moovData The moov atom data
-     * @return int|null Duration in milliseconds or null
-     */
-    private function findDuration(string $moovData): ?int
-    {
-        $offset = 0;
-
-        while ($offset < strlen($moovData) - 8) {
-            $atomSizeU = $this->readUInt32(substr($moovData, $offset, 4));
-            if ($atomSizeU === false) {
-                break;
-            }
-            $atomSize = $atomSizeU;
-            $atomType = substr($moovData, $offset + 4, 4);
-
-            if ($atomSize === 0) {
-                $atomSize = strlen($moovData) - $offset;
-            }
-
-            if ($atomType === 'mdia') {
-                $mdiaData = substr($moovData, $offset + 8, $atomSize - 8);
-                return $this->findDurationInMdia($mdiaData);
-            }
-
-            $offset += $atomSize;
-        }
-
-        return null;
-    }
-
-    /**
-     * Finds duration within mdia atom.
-     *
-     * @param string $mdiaData The mdia atom data
-     * @return int|null Duration in milliseconds or null
-     */
-    private function findDurationInMdia(string $mdiaData): ?int
-    {
-        $offset = 0;
-
-        while ($offset < strlen($mdiaData) - 8) {
-            $atomSizeU = $this->readUInt32(substr($mdiaData, $offset, 4));
-            if ($atomSizeU === false) {
-                break;
-            }
-            $atomSize = $atomSizeU;
-            $atomType = substr($mdiaData, $offset + 4, 4);
-
-            if ($atomSize === 0) {
-                $atomSize = strlen($mdiaData) - $offset;
-            }
-
-            if ($atomType === 'mdhd') {
-                $mdhdData = substr($mdiaData, $offset + 8, $atomSize - 8);
-                if (strlen($mdhdData) >= 24) {
-                    // Skip version(1) + flags(3) + creation(4) + modification(4)
-                    // Then 4 bytes timescale, 4 bytes duration
-                    $timescaleU = $this->readUInt32(substr($mdhdData, 12, 4));
-                    $durationU = $this->readUInt32(substr($mdhdData, 16, 4));
-                    if ($timescaleU === false || $durationU === false) {
-                        return null;
-                    }
-                    $timescale = $timescaleU;
-                    $duration = $durationU;
-
-                    if ($timescale > 0) {
-                        return (int)(($duration / $timescale) * 1000);
-                    }
-                }
-            }
-
-            $offset += $atomSize;
-        }
-
-        return null;
     }
 
     /**

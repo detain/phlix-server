@@ -186,6 +186,15 @@ final class MetricsRepositoryTest extends TestCase
         $this->assertSame(10, $h['p50_ms']);
         // p95 target=ceil(.95*10)=10 -> cumulative 8 then +2=10 at h_le_100 -> 100.
         $this->assertSame(100, $h['p95_ms']);
+
+        // Guard the ONLY_FULL_GROUP_BY fix (proven end-to-end in
+        // tests/Integration/Stats/MetricsReadQueriesTest): the history query must
+        // GROUP BY the `bucket` SELECT alias, never the raw
+        // FLOOR(UNIX_TIMESTAMP(...) / ?) expression — MySQL 8's default sql_mode
+        // rejects the latter with error 1055 and the admin charts 500.
+        $historySql = implode("\n", $this->seenSql);
+        $this->assertStringContainsString('GROUP BY bucket', $historySql);
+        $this->assertStringNotContainsString('GROUP BY FLOOR', $historySql);
     }
 
     public function test_history_skips_non_array_rows(): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Plugins\Scrobbler\Lastfm\DbLastfmOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmOAuthStateStore;
@@ -11,6 +12,7 @@ use Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository;
 use Phlix\Plugins\Scrobbler\Lastfm\SessionLastfmOAuthStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use Workerman\MySQL\Connection;
 
 /**
  * Admin-side "Connect Last.fm" flow controller.
@@ -49,14 +51,24 @@ final class LastfmController
      *     per-request CSRF `state` bound to the initiating user UUID. Defaults
      *     to a `$_SESSION`-backed implementation, swappable for tests / DB-backed
      *     production stores.
+     * @param Connection|null             $db         Workerman MySQL connection.
+     *     When supplied, the DB-backed {@see DbLastfmOAuthStateStore} is used
+     *     instead of the `$_SESSION`-backed store to avoid race conditions.
      */
     public function __construct(
         private readonly LastfmConfig $config,
         private readonly LastfmSessionRepository $sessions,
         private readonly LastfmApi $api,
         ?LastfmOAuthStateStore $stateStore = null,
+        ?Connection $db = null,
     ) {
-        $this->stateStore = $stateStore ?? new SessionLastfmOAuthStateStore();
+        if ($stateStore !== null) {
+            $this->stateStore = $stateStore;
+        } elseif ($db !== null) {
+            $this->stateStore = new DbLastfmOAuthStateStore($db);
+        } else {
+            $this->stateStore = new SessionLastfmOAuthStateStore();
+        }
     }
 
     /**

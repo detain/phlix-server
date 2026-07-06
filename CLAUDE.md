@@ -54,6 +54,17 @@ Schema lives in `migrations/001_initial_schema.sql` and `migrations/002_user_pro
 
 Tests mock the DB with `$this->createMock(Workerman\MySQL\Connection::class)` and stub `->query(...)->willReturn([['col' => 'val']])`.
 
+### Workerman Session Model
+
+**Critical:** `$_SESSION` is **NOT** request-scoped under Workerman. Unlike php-fpm where each request gets a fresh `$_SESSION`, Workerman runs a single process handling multiple concurrent connections. Using `$_SESSION` for state (like OAuth state tokens) causes **race conditions and state leakage** between requests.
+
+**Rule:** For any cross-request state (OAuth state, CSRF tokens, etc.), use **DB-backed state stores**:
+- `DbOidcStateStore` for OIDC OAuth
+- `DbTraktOAuthStateStore` for Trakt
+- `DbLastfmOAuthStateStore` for Last.fm
+
+These use the `oauth_state_store` table with TTL and atomic consume to prevent race conditions.
+
 ### Config
 
 `config/{server,database,logger,ffmpeg}.php` — each `include`d, each returns an array. Logger writes rotating files to `.logs/`.

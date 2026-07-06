@@ -580,4 +580,18 @@ class LibraryManager
     {
         return Uuid::v4();
     }
+
+    /**
+     * Clears the static libraries cache.
+     *
+     * Used primarily for testing to ensure each test starts with a clean cache state.
+     * Also clears the cache timestamp.
+     *
+     * @return void
+     */
+    public static function clearCache(): void
+    {
+        self::$cachedLibraries = null;
+        self::$librariesCacheTimestamp = null;
+    }
 }

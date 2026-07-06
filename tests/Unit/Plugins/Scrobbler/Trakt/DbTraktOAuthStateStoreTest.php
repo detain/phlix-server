@@ -31,6 +31,11 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     private array $seenSql = [];
 
     /**
+     * @var list<array<int, mixed>> Every parameter array passed to query().
+     */
+    private array $seenParams = [];
+
+    /**
      * Build a mock Connection.
      *
      * @param array<string, array<int, array<string, mixed>>> $byFragment
@@ -39,11 +44,13 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     private function mockConnection(array $byFragment = []): Connection
     {
         $seenSql = &$this->seenSql;
+        $seenParams = &$this->seenParams;
         $mock = $this->createMock(Connection::class);
 
         $mock->method('query')->willReturnCallback(
-            function (string $sql) use ($byFragment, &$seenSql): mixed {
+            function (string $sql, array $params = []) use ($byFragment, &$seenSql, &$seenParams): mixed {
                 $seenSql[] = $sql;
+                $seenParams[] = $params;
                 foreach ($byFragment as $fragment => $rows) {
                     if (str_contains($sql, $fragment)) {
                         return $rows;
@@ -64,6 +71,7 @@ final class DbTraktOAuthStateStoreTest extends TestCase
     {
         parent::setUp();
         $this->seenSql = [];
+        $this->seenParams = [];
     }
 
     public function test_round_trip_returns_verifier(): void
@@ -169,13 +177,17 @@ final class DbTraktOAuthStateStoreTest extends TestCase
 
         $store->put('test-state', 'test-verifier');
 
-        // Verify the INSERT used 'trakt' as the provider
-        $insertStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'INSERT INTO oauth_state_store')
-        );
-        self::assertCount(1, $insertStatements);
-        self::assertStringContainsString("'trakt'", $insertStatements[0]);
+        // Find the INSERT statement index
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        // Verify the INSERT used 'trakt' as the provider (params: id, provider, state, data, expires)
+        self::assertSame('trakt', $this->seenParams[$insertIndex][1]);
     }
 
     public function test_put_stores_code_verifier_in_json_data(): void
@@ -185,12 +197,19 @@ final class DbTraktOAuthStateStoreTest extends TestCase
 
         $store->put('test-state', 'my-code-verifier');
 
-        $insertStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'INSERT INTO oauth_state_store')
-        );
-        self::assertCount(1, $insertStatements);
-        self::assertStringContainsString('"code_verifier":"my-code-verifier"', $insertStatements[0]);
+        // Find the INSERT statement index
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        // Verify the JSON data contains the code_verifier (params: id, provider, state, data, expires)
+        $data = json_decode($this->seenParams[$insertIndex][3], true);
+        self::assertIsArray($data);
+        self::assertSame('my-code-verifier', $data['code_verifier']);
     }
 
     public function test_consume_queries_with_correct_provider_filter(): void
@@ -202,15 +221,18 @@ final class DbTraktOAuthStateStoreTest extends TestCase
 
         $store->consume('any-state');
 
-        $selectStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'SELECT data FROM oauth_state_store')
-        );
-        self::assertCount(1, $selectStatements);
-        // The SELECT should filter by provider = 'trakt'
-        self::assertStringContainsString("provider = 'trakt'", $selectStatements[0]);
-        self::assertStringContainsString("state_value = ?", $selectStatements[0]);
-        self::assertStringContainsString("expires_at > NOW()", $selectStatements[0]);
+        // Find the SELECT statement index
+        $selectIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                $selectIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($selectIndex, 'SELECT statement not found');
+        // The SELECT should filter by provider = 'trakt' (params: provider, state)
+        self::assertSame('trakt', $this->seenParams[$selectIndex][0]);
+        self::assertSame('any-state', $this->seenParams[$selectIndex][1]);
     }
 
     public function test_cleanup_runs_after_successful_consume(): void

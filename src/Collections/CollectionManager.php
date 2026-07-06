@@ -114,16 +114,28 @@ class CollectionManager
      */
     public function bulkAddFromSearch(string $collectionId, array $mediaItemIds): void
     {
+        if ($mediaItemIds === []) {
+            return;
+        }
+
         $maxSortOrder = $this->itemRepo->getMaxSortOrder($collectionId);
         $sortOrder = $maxSortOrder + 1;
 
+        // Batch check which items already exist in collection (single query)
+        $existing = $this->itemRepo->findExistingInCollection($collectionId, $mediaItemIds);
+
+        // Build list of items to insert
+        $toInsert = [];
         foreach ($mediaItemIds as $mediaItemId) {
-            // Skip if already in collection
-            if ($this->itemRepo->existsInCollection($collectionId, $mediaItemId)) {
-                continue;
+            if (!isset($existing[$mediaItemId])) {
+                $toInsert[] = ['mediaItemId' => $mediaItemId, 'sortOrder' => $sortOrder];
+                $sortOrder++;
             }
-            $this->itemRepo->insert($collectionId, $mediaItemId, $sortOrder);
-            $sortOrder++;
+        }
+
+        // Batch insert remaining items (single query)
+        if ($toInsert !== []) {
+            $this->itemRepo->batchInsert($collectionId, $toInsert);
         }
     }
 
@@ -143,14 +155,8 @@ class CollectionManager
         }
 
         $mediaItemIds = $this->itemRepo->findMediaItemIdsForCollection($id);
-        $items = [];
-
-        foreach ($mediaItemIds as $mediaItemId) {
-            $item = $this->items->findById($mediaItemId);
-            if ($item !== null) {
-                $items[] = $item;
-            }
-        }
+        // Single query instead of N queries (one per item)
+        $items = $this->items->findByIds($mediaItemIds);
 
         $total = count($items);
 

@@ -556,6 +556,24 @@ class SeriesMergerTest extends TestCase
                 return $out;
             }
 
+            public function findByParents(array $parentIds): array
+            {
+                if ($parentIds === []) {
+                    return [];
+                }
+                $children = [];
+                foreach ($this->store as $row) {
+                    $parentId = $row['parent_id'] ?? null;
+                    if (is_string($parentId) && in_array($parentId, $parentIds, true)) {
+                        if (!isset($children[$parentId])) {
+                            $children[$parentId] = [];
+                        }
+                        $children[$parentId][] = $this->hydrate($row);
+                    }
+                }
+                return $children;
+            }
+
             /**
              * Mimic ItemRepository hydration: a row seeded normally gets a
              * decoded 'metadata' array; a raw-seeded row is returned verbatim

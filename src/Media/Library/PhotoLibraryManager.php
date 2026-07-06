@@ -223,14 +223,11 @@ class PhotoLibraryManager
      */
     public function getPhotosGroupedByDate(string $libraryId): array
     {
-        $items = $this->itemRepo->getByLibrary($libraryId, 10000, 0);
+        // Use getByType instead of getByLibrary+filter to avoid loading non-photo items
+        $items = $this->itemRepo->getByType($libraryId, 'photo', 10000, 0);
         $grouped = [];
 
         foreach ($items as $item) {
-            if ($item['type'] !== 'photo') {
-                continue;
-            }
-
             /** @var array<string, mixed> */
             $metadata = $item['metadata'] ?? [];
             $dateTaken = $metadata['date_taken_unix'] ?? null;

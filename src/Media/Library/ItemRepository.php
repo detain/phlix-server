@@ -92,6 +92,46 @@ class ItemRepository
     }
 
     /**
+     * Finds multiple media items by their unique identifiers.
+     *
+     * @param array<int, string> $ids Array of media item UUIDs
+     * @return array<int, array<string, mixed>> Hydrated media items (preserves order of input IDs)
+     */
+    public function findByIds(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $results = $this->db->query(
+            "SELECT * FROM media_items WHERE id IN ({$placeholders})",
+            $ids
+        );
+
+        $rows = $this->hydrateRows($results);
+
+        // Preserve order of input IDs
+        $indexed = [];
+        foreach ($rows as $row) {
+            $id = $row['id'] ?? '';
+            if (!is_string($id)) {
+                continue;
+            }
+            $indexed[$id] = $row;
+        }
+
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($indexed[$id])) {
+                $ordered[] = $indexed[$id];
+            }
+        }
+
+        return $ordered;
+    }
+
+    /**
      * Finds a media item by its filesystem path.
      *
      * @param string $path The absolute filesystem path to the media file
@@ -256,6 +296,48 @@ class ItemRepository
         );
 
         return $this->hydrateRows($results);
+    }
+
+    /**
+     * Finds all child items for multiple parent media items in a single query.
+     *
+     * @param array<int, string> $parentIds Array of parent media item UUIDs
+     * @return array<string, array<int, array<string, mixed>>> Map of parent_id => children array
+     */
+    public function findByParents(array $parentIds): array
+    {
+        if ($parentIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($parentIds), '?'));
+        $results = $this->db->query(
+            "SELECT * FROM media_items WHERE parent_id IN ({$placeholders}) ORDER BY parent_id, name",
+            $parentIds
+        );
+
+        if (!is_array($results)) {
+            return [];
+        }
+
+        $children = [];
+        foreach ($results as $row) {
+            $normalized = $this->normalizeRow($row);
+            if ($normalized !== null) {
+                $hydrated = $this->hydrateItem($normalized);
+                $parentIdRaw = $hydrated['parent_id'] ?? null;
+                if (!is_string($parentIdRaw)) {
+                    continue;
+                }
+                $parentId = $parentIdRaw;
+                if (!isset($children[$parentId])) {
+                    $children[$parentId] = [];
+                }
+                $children[$parentId][] = $hydrated;
+            }
+        }
+
+        return $children;
     }
 
     /**

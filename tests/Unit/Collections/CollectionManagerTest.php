@@ -107,12 +107,20 @@ class CollectionManagerTest extends TestCase
             ->with('col-1')
             ->willReturn(0);
 
-        $itemRepo->expects($this->exactly(3))
-            ->method('existsInCollection')
-            ->willReturn(false);
+        // Batch check for existing items (single query instead of N)
+        $itemRepo->expects($this->once())
+            ->method('findExistingInCollection')
+            ->with('col-1', ['media-1', 'media-2', 'media-3'])
+            ->willReturn([]);  // None exist
 
-        $itemRepo->expects($this->exactly(3))
-            ->method('insert');
+        // Batch insert (single query instead of N)
+        $itemRepo->expects($this->once())
+            ->method('batchInsert')
+            ->with('col-1', [
+                ['mediaItemId' => 'media-1', 'sortOrder' => 1],
+                ['mediaItemId' => 'media-2', 'sortOrder' => 2],
+                ['mediaItemId' => 'media-3', 'sortOrder' => 3],
+            ]);
 
         $manager = new CollectionManager(
             $collectionRepo,
@@ -139,14 +147,17 @@ class CollectionManagerTest extends TestCase
             ->method('getMaxSortOrder')
             ->willReturn(0);
 
-        // First item exists, skip it
-        $itemRepo->expects($this->exactly(3))
-            ->method('existsInCollection')
-            ->willReturnOnConsecutiveCalls(true, true, false);
+        // Batch check: media-1 and media-2 already exist, media-3 doesn't
+        $itemRepo->expects($this->once())
+            ->method('findExistingInCollection')
+            ->willReturn(['media-1' => true, 'media-2' => true]);
 
-        // Only insert 1 item (media-1 and media-2 already exist)
-        $itemRepo->expects($this->exactly(1))
-            ->method('insert');
+        // Only insert media-3 (media-1 and media-2 are skipped as existing)
+        $itemRepo->expects($this->once())
+            ->method('batchInsert')
+            ->with('col-1', [
+                ['mediaItemId' => 'media-3', 'sortOrder' => 1],
+            ]);
 
         $manager = new CollectionManager(
             $collectionRepo,
@@ -185,10 +196,13 @@ class CollectionManagerTest extends TestCase
             ->with('col-1')
             ->willReturn(['media-1', 'media-2']);
 
-        $mediaItemRepo->method('findById')
-            ->willReturnMap([
-                ['media-1', ['id' => 'media-1', 'name' => 'Item 1']],
-                ['media-2', ['id' => 'media-2', 'name' => 'Item 2']],
+        // Use batch findByIds instead of individual findById calls
+        $mediaItemRepo->expects($this->once())
+            ->method('findByIds')
+            ->with(['media-1', 'media-2'])
+            ->willReturn([
+                ['id' => 'media-1', 'name' => 'Item 1'],
+                ['id' => 'media-2', 'name' => 'Item 2'],
             ]);
 
         $manager = new CollectionManager(

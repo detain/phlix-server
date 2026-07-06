@@ -264,7 +264,7 @@ final class IdTokenValidator
     }
 
     /**
-     * Fetch and cache JWKS from the discovery document.
+     * Fetch and cache JWKS from the discovery document using async HTTP.
      *
      * @param DiscoveryDocument $discovery
      * @return JWKSet
@@ -293,17 +293,34 @@ final class IdTokenValidator
         }
 
         $jwksUri = $discovery->jwksUri();
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
+
+        $http = new \Workerman\Http\Client([
+            'timeout' => 10,
         ]);
 
-        $content = @file_get_contents($jwksUri, false, $context);
-        if ($content === false) {
-            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri);
+        $content = null;
+        $error = null;
+
+        $http->get($jwksUri, [
+            'headers' => [
+                'User-Agent: PhlixMediaServer/1.0',
+                'Accept: application/json',
+            ],
+        ], function ($response) use (&$content) {
+            $content = $response->getBody();
+        }, function ($exception) use (&$error) {
+            $error = $exception->getMessage();
+        });
+
+        // Yield to the event loop to allow the async request to complete.
+        $loop = \Workerman\Worker::getEventLoop();
+        $start = time();
+        while ($content === null && $error === null && (time() - $start) < 10) {
+            $loop->runOnTick();
+        }
+
+        if ($content === null || $error !== null) {
+            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri . ($error !== null ? ': ' . $error : ''));
         }
 
         $jwksData = json_decode($content, true);

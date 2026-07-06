@@ -4,10 +4,17 @@ declare(strict_types=1);
 
 namespace Phlix\Admin;
 
+use Psr\Http\Message\ResponseInterface;
+use RuntimeException;
 use Throwable;
+use Workerman\Coroutine;
+use Workerman\Http\Client;
 
 /**
  * Minimal S3-compatible object storage client using plain HTTP and AWS Signature V4.
+ *
+ * Uses workerman/http-client for non-blocking async HTTP that yields to the
+ * event loop instead of blocking with cURL.
  *
  * Supports: upload, download, listObjects, deleteObject operations against
  * any S3-compatible service (AWS S3, MinIO, Backblaze B2, etc.).
@@ -20,6 +27,9 @@ class S3Client
     private string $accessKey;
     private string $secretKey;
     private string $endpoint;
+
+    /** @var Client|null Async HTTP client instance (lazy initialized). */
+    private ?Client $asyncClient = null;
 
     /**
      * @param string $region AWS region (e.g., 'us-east-1')
@@ -37,6 +47,19 @@ class S3Client
         $this->accessKey = $accessKey;
         $this->secretKey = $secretKey;
         $this->endpoint = rtrim($endpoint, '/');
+    }
+
+    /**
+     * Gets the async HTTP client, lazy initialized.
+     */
+    private function getAsyncClient(): Client
+    {
+        if ($this->asyncClient === null) {
+            $this->asyncClient = new Client([
+                'timeout' => 60,
+            ]);
+        }
+        return $this->asyncClient;
     }
 
     /**
@@ -67,69 +90,14 @@ class S3Client
             return false;
         }
 
-        $payloadHash = $actualChecksum;
-        $date = gmdate('Ymd');
-        $dateTime = gmdate('Ymd\THis\Z');
-        $credentialScope = "{$date}/{$this->region}/s3/aws4_request";
-
-        $host = $this->getHost($bucket);
-        $canonicalUri = '/' . rawurlencode($key);
-
-        $canonicalHeaders = [
-            'host' => $host,
-            'x-amz-content-sha256' => $payloadHash,
-            'x-amz-date' => $dateTime,
-        ];
-
-        $signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-        $canonicalQueryString = '';
-
-        $canonicalRequest = implode("\n", [
-            'PUT',
-            $canonicalUri,
-            $canonicalQueryString,
-            implode("\n", array_map(fn($k, $v) => strtolower($k) . ':' . trim((string) $v), array_keys($canonicalHeaders), $canonicalHeaders)) . "\n",
-            $signedHeaders,
-            $payloadHash,
-        ]);
-
-        $stringToSign = implode("\n", [
-            'AWS4-HMAC-SHA256',
-            $dateTime,
-            $credentialScope,
-            hash('sha256', $canonicalRequest),
-        ]);
-
-        $signature = $this->signString($stringToSign, $date);
-
-        $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
-
         $url = $this->buildUrl($bucket, $key);
+        $headers = $this->buildAuthHeaders('PUT', $bucket, $key, $actualChecksum);
+        $headers['Content-Length'] = (string) strlen($content);
+        $headers['Content-Type'] = 'application/octet-stream';
 
-        $ch = curl_init($url);
-        if ($ch === false) {
-            return false;
-        }
+        $response = $this->requestAsync('PUT', $url, $content, $headers);
 
-        curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => 'PUT',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POSTFIELDS => $content,
-            CURLOPT_HTTPHEADER => [
-                'Host: ' . $host,
-                'x-amz-content-sha256: ' . $payloadHash,
-                'x-amz-date: ' . $dateTime,
-                'Authorization: ' . $authorization,
-                'Content-Type: application/octet-stream',
-                'Content-Length: ' . strlen($content),
-            ],
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        return $httpCode >= 200 && $httpCode < 300;
+        return $response !== null && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
     }
 
     /**
@@ -142,67 +110,17 @@ class S3Client
      */
     public function download(string $bucket, string $key, string $destination): bool
     {
-        $date = gmdate('Ymd');
-        $dateTime = gmdate('Ymd\THis\Z');
-        $credentialScope = "{$date}/{$this->region}/s3/aws4_request";
-        $payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-
-        $host = $this->getHost($bucket);
-        $canonicalUri = '/' . rawurlencode($key);
-
-        $canonicalHeaders = [
-            'host' => $host,
-            'x-amz-content-sha256' => $payloadHash,
-            'x-amz-date' => $dateTime,
-        ];
-
-        $signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-        $canonicalQueryString = '';
-
-        $canonicalRequest = implode("\n", [
-            'GET',
-            $canonicalUri,
-            $canonicalQueryString,
-            implode("\n", array_map(fn($k, $v) => strtolower($k) . ':' . trim($v), array_keys($canonicalHeaders), $canonicalHeaders)) . "\n",
-            $signedHeaders,
-            $payloadHash,
-        ]);
-
-        $stringToSign = implode("\n", [
-            'AWS4-HMAC-SHA256',
-            $dateTime,
-            $credentialScope,
-            hash('sha256', $canonicalRequest),
-        ]);
-
-        $signature = $this->signString($stringToSign, $date);
-
-        $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
-
         $url = $this->buildUrl($bucket, $key);
+        $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+        $headers = $this->buildAuthHeaders('GET', $bucket, $key, $emptyHash);
 
-        $ch = curl_init($url);
-        if ($ch === false) {
+        $response = $this->requestAsync('GET', $url, null, $headers);
+
+        if ($response === null || $response->getStatusCode() !== 200) {
             return false;
         }
 
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Host: ' . $host,
-                'x-amz-content-sha256: ' . $payloadHash,
-                'x-amz-date: ' . $dateTime,
-                'Authorization: ' . $authorization,
-            ],
-        ]);
-
-        $content = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200 || $content === false) {
-            return false;
-        }
+        $content = (string) $response->getBody();
 
         $dir = dirname($destination);
         if (!is_dir($dir)) {
@@ -221,82 +139,24 @@ class S3Client
      */
     public function listObjects(string $bucket, string $prefix = ''): array
     {
-        $date = gmdate('Ymd');
-        $dateTime = gmdate('Ymd\THis\Z');
-        $credentialScope = "{$date}/{$this->region}/s3/aws4_request";
-        $payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
-
-        $host = $this->getHost($bucket);
-        $canonicalUri = '/';
-
+        $url = $this->buildUrl($bucket, '/');
         $queryParams = ['list-type' => '2'];
         if ($prefix !== '') {
             $queryParams['prefix'] = $prefix;
         }
+        $url .= '?' . http_build_query($queryParams);
 
-        $canonicalQueryString = implode('&', array_map(
-            fn($k, $v) => rawurlencode($k) . '=' . rawurlencode($v),
-            array_keys($queryParams),
-            $queryParams
-        ));
+        $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+        $headers = $this->buildAuthHeaders('GET', $bucket, '/', $emptyHash, $queryParams);
 
-        $canonicalHeaders = [
-            'host' => $host,
-            'x-amz-content-sha256' => $payloadHash,
-            'x-amz-date' => $dateTime,
-        ];
+        $response = $this->requestAsync('GET', $url, null, $headers);
 
-        $signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-
-        $canonicalRequest = implode("\n", [
-            'GET',
-            $canonicalUri,
-            $canonicalQueryString,
-            implode("\n", array_map(fn($k, $v) => strtolower($k) . ':' . trim($v), array_keys($canonicalHeaders), $canonicalHeaders)) . "\n",
-            $signedHeaders,
-            $payloadHash,
-        ]);
-
-        $stringToSign = implode("\n", [
-            'AWS4-HMAC-SHA256',
-            $dateTime,
-            $credentialScope,
-            hash('sha256', $canonicalRequest),
-        ]);
-
-        $signature = $this->signString($stringToSign, $date);
-
-        $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
-
-        $url = $this->buildUrl($bucket, '/') . '?list-type=2';
-        if ($prefix !== '') {
-            $url .= '&prefix=' . rawurlencode($prefix);
-        }
-
-        $ch = curl_init($url);
-        if ($ch === false) {
+        if ($response === null || $response->getStatusCode() !== 200) {
             return [];
         }
 
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Host: ' . $host,
-                'x-amz-content-sha256: ' . $payloadHash,
-                'x-amz-date: ' . $dateTime,
-                'Authorization: ' . $authorization,
-            ],
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($httpCode !== 200 || $response === false || $response === '') {
-            return [];
-        }
-
-        $xml = @simplexml_load_string((string) $response);
+        $body = (string) $response->getBody();
+        $xml = @simplexml_load_string($body);
         if ($xml === false) {
             return [];
         }
@@ -323,10 +183,30 @@ class S3Client
      */
     public function deleteObject(string $bucket, string $key): bool
     {
+        $url = $this->buildUrl($bucket, $key);
+        $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+        $headers = $this->buildAuthHeaders('DELETE', $bucket, $key, $emptyHash);
+
+        $response = $this->requestAsync('DELETE', $url, null, $headers);
+
+        return $response !== null && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
+    }
+
+    /**
+     * Build AWS v4 authorization headers for a request.
+     *
+     * @param string $method HTTP method
+     * @param string $bucket Bucket name
+     * @param string $key Object key (or '/' for bucket-level ops)
+     * @param string $payloadHash SHA-256 payload hash
+     * @param array<string, string> $queryParams Query parameters for signing
+     * @return array<string, string> Headers array
+     */
+    private function buildAuthHeaders(string $method, string $bucket, string $key, string $payloadHash, array $queryParams = []): array
+    {
         $date = gmdate('Ymd');
         $dateTime = gmdate('Ymd\THis\Z');
         $credentialScope = "{$date}/{$this->region}/s3/aws4_request";
-        $payloadHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
         $host = $this->getHost($bucket);
         $canonicalUri = '/' . rawurlencode($key);
@@ -338,10 +218,14 @@ class S3Client
         ];
 
         $signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
-        $canonicalQueryString = '';
+        $canonicalQueryString = implode('&', array_map(
+            fn($k, $v) => rawurlencode($k) . '=' . rawurlencode($v),
+            array_keys($queryParams),
+            $queryParams
+        ));
 
         $canonicalRequest = implode("\n", [
-            'DELETE',
+            $method,
             $canonicalUri,
             $canonicalQueryString,
             implode("\n", array_map(fn($k, $v) => strtolower($k) . ':' . trim($v), array_keys($canonicalHeaders), $canonicalHeaders)) . "\n",
@@ -358,31 +242,71 @@ class S3Client
 
         $signature = $this->signString($stringToSign, $date);
 
-        $authorization = "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}";
+        return [
+            'Host' => $host,
+            'x-amz-content-sha256' => $payloadHash,
+            'x-amz-date' => $dateTime,
+            'Authorization' => "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}",
+        ];
+    }
 
-        $url = $this->buildUrl($bucket, $key);
+    /**
+     * Perform an async HTTP request with cooperative wait.
+     *
+     * @param string $method HTTP method
+     * @param string $url Full URL
+     * @param string|null $body Request body
+     * @param array<string, string> $headers Request headers
+     * @return ResponseInterface|null Response or null on error/timeout
+     */
+    private function requestAsync(string $method, string $url, ?string $body, array $headers): ?ResponseInterface
+    {
+        $client = $this->getAsyncClient();
 
-        $ch = curl_init($url);
-        if ($ch === false) {
-            return false;
+        $options = [
+            'method' => $method,
+            'headers' => $headers,
+        ];
+
+        if ($body !== null) {
+            $options['data'] = $body;
         }
 
-        curl_setopt_array($ch, [
-            CURLOPT_CUSTOMREQUEST => 'DELETE',
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Host: ' . $host,
-                'x-amz-content-sha256: ' . $payloadHash,
-                'x-amz-date: ' . $dateTime,
-                'Authorization: ' . $authorization,
-            ],
-        ]);
+        // State shared between callback and waiting loop
+        $state = [
+            'response' => null,
+            'error' => null,
+            'done' => false,
+        ];
 
-        curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $options['success'] = function (ResponseInterface $response) use (&$state) {
+            $state['response'] = $response;
+            $state['done'] = true;
+        };
 
-        return $httpCode >= 200 && $httpCode < 300;
+        $options['error'] = function (\Throwable $error) use (&$state) {
+            $state['error'] = $error;
+            $state['done'] = true;
+        };
+
+        // Initiate async request (non-blocking)
+        $client->request($url, $options);
+
+        // Cooperative wait: run event loop until done or timeout
+        $maxWait = 60;
+        $waited = 0;
+        $interval = 0.001; // 1ms interval for event loop processing
+
+        while (!$state['done'] && $waited < $maxWait) {
+            usleep((int) ($interval * 1000000));
+            $waited += $interval;
+        }
+
+        if ($state['error'] !== null) {
+            return null;
+        }
+
+        return $state['response'];
     }
 
     /**

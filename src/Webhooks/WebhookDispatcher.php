@@ -234,43 +234,68 @@ class WebhookDispatcher
         $timeout = $this->intFromMixed($config['timeout'] ?? null, 5);
         $maxRetries = $this->intFromMixed($config['max_retries'] ?? null, 2);
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => [
-                    "Content-Type: application/json",
-                    "X-Phlix-Signature: {$signature}",
-                ],
-                'content' => $payload,
-                'timeout' => $timeout,
-                'ignore_errors' => true,
-            ],
-            'ssl' => $this->buildSslContextOptions($config),
+        $http = new \Workerman\Http\Client([
+            'timeout' => $timeout,
         ]);
 
         $retries = 0;
         $lastError = 'Unknown error';
         $responseCode = null;
+        $responseBody = null;
+
+        $sendRequest = function () use (&$retries, &$lastError, &$responseCode, &$responseBody, $url, $http, $payload, $signature, $timeout, $maxRetries, $webhook, $event): bool {
+            $requestBody = null;
+            $requestError = null;
+            $requestCode = null;
+
+            $http->request($url, [
+                'method' => 'POST',
+                'data' => $payload,
+                'headers' => [
+                    'Content-Type: application/json',
+                    'X-Phlix-Signature: ' . $signature,
+                ],
+            ], function ($response) use (&$responseBody, &$responseCode, &$requestBody) {
+                $responseBody = $response->getBody();
+                $responseCode = $response->getStatusCode();
+                $requestBody = $responseBody;
+            }, function ($exception) use (&$requestError) {
+                $requestError = $exception->getMessage();
+            });
+
+            // Yield to the event loop to allow the async request to complete.
+            $loop = \Workerman\Worker::getEventLoop();
+            $start = time();
+            while ($responseBody === null && $requestError === null && (time() - $start) < $timeout) {
+                $loop->runOnTick();
+            }
+
+            if ($requestError !== null) {
+                $lastError = $requestError;
+                return false;
+            }
+
+            if ($responseCode !== null && $responseCode >= 200 && $responseCode < 300) {
+                return true;
+            }
+
+            $lastError = "HTTP " . ($responseCode ?? 'unknown');
+            return false;
+        };
 
         do {
-            $response = @file_get_contents($url, false, $context);
+            $success = $sendRequest();
 
-            if ($response !== false) {
-                $responseCode = $this->getLastResponseCode();
-                if ($responseCode !== null && $responseCode >= 200 && $responseCode < 300) {
-                    $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
-                    $this->logDispatch(
-                        $webhookId,
-                        $event->eventType,
-                        $responseCode,
-                        $response,
-                        null
-                    );
-                    return ['success' => true];
-                }
-                $lastError = "HTTP {$responseCode}";
-            } else {
-                $lastError = error_get_last()['message'] ?? 'Request failed';
+            if ($success) {
+                $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
+                $this->logDispatch(
+                    $webhookId,
+                    $event->eventType,
+                    $responseCode,
+                    $responseBody,
+                    null
+                );
+                return ['success' => true];
             }
 
             $retries++;

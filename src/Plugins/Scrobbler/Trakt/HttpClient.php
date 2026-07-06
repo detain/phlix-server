@@ -43,7 +43,7 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
-     * Perform an HTTP request.
+     * Perform an HTTP request using workerman/http-client for non-blocking I/O.
      *
      * @param string $method HTTP method
      * @param string $url Full URL
@@ -57,7 +57,9 @@ class HttpClient implements HttpClientInterface
      */
     private function request(string $method, string $url, array $data, array $headers): array
     {
-        $ch = curl_init();
+        $http = new \Workerman\Http\Client([
+            'timeout' => $this->timeout,
+        ]);
 
         $requestHeaders = [
             'User-Agent: PhlixMediaServer/1.0',
@@ -69,41 +71,46 @@ class HttpClient implements HttpClientInterface
             $requestHeaders[] = $key . ': ' . $value;
         }
 
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => $this->timeout,
-            CURLOPT_HTTPHEADER => $requestHeaders,
-        ]);
+        $raw = null;
+        $error = null;
+        $httpCode = null;
 
-        if ($method === 'POST') {
-            curl_setopt($ch, CURLOPT_POST, true);
-            $jsonData = json_encode($data);
-            if (is_string($jsonData)) {
-                curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
-            }
+        $options = [
+            'method' => $method,
+            'headers' => $requestHeaders,
+        ];
+
+        if ($method === 'POST' && $data !== []) {
+            $options['data'] = json_encode($data);
         }
 
-        if ($url !== '') {
-            curl_setopt($ch, CURLOPT_URL, $url);
+        $http->request($url, $options, function ($response) use (&$raw, &$httpCode) {
+            $raw = $response->getBody();
+            $httpCode = $response->getStatusCode();
+        }, function ($exception) use (&$error) {
+            $error = $exception->getMessage();
+        });
+
+        // Yield to the event loop to allow the async request to complete.
+        $loop = \Workerman\Worker::getEventLoop();
+        $start = time();
+        while ($raw === null && $error === null && (time() - $start) < $this->timeout) {
+            $loop->runOnTick();
         }
 
-        /** @var string|false $raw */
-        $raw = curl_exec($ch);
-        /** @var int */
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        /** @var string */
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($raw === false || $error !== '') {
+        if ($error !== null) {
             throw new TraktApiException('cURL error: ' . $error);
+        }
+
+        if ($raw === null) {
+            throw new TraktApiException('request timed out: no response body');
         }
 
         if ($httpCode === 401) {
             throw new TraktAuthenticationException('Unauthorized - token invalid or expired');
         }
 
-        if ($httpCode >= 400) {
+        if ($httpCode !== null && $httpCode >= 400) {
             /** @var array<string, mixed> $decoded */
             $decoded = json_decode($raw, true) ?? [];
             $message = is_string($decoded['error'] ?? null) ? $decoded['error']

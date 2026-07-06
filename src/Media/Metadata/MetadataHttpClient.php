@@ -6,9 +6,14 @@ namespace Phlix\Media\Metadata;
 
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Psr\Http\Message\ResponseInterface;
+use Workerman\Http\Client;
 
 /**
  * MetadataHttpClient provides HTTP communication with metadata provider APIs.
+ *
+ * Uses workerman/http-client for non-blocking async HTTP that yields to the
+ * event loop instead of blocking with file_get_contents.
  *
  * This client handles HTTP requests to external metadata services with built-in
  * caching, error handling, and API key authentication. It validates JSON responses
@@ -35,6 +40,9 @@ class MetadataHttpClient
     /** @var array<string, array<string, mixed>> Response cache keyed by endpoint and parameters */
     private array $cache = [];
 
+    /** @var Client|null Async HTTP client instance (lazy initialized). */
+    private ?Client $asyncClient = null;
+
     /**
      * Constructor for MetadataHttpClient.
      *
@@ -51,7 +59,22 @@ class MetadataHttpClient
     }
 
     /**
+     * Gets the async HTTP client, lazy initialized.
+     */
+    private function getAsyncClient(): Client
+    {
+        if ($this->asyncClient === null) {
+            $this->asyncClient = new Client([
+                'timeout' => $this->timeout,
+            ]);
+        }
+        return $this->asyncClient;
+    }
+
+    /**
      * Perform GET request to metadata API with caching.
+     *
+     * Uses async HTTP client with cooperative wait to avoid blocking event loop.
      *
      * @param string $endpoint API endpoint path (e.g., '/search/movie')
      * @param array<string, mixed> $params Query parameters to include in request
@@ -69,32 +92,26 @@ class MetadataHttpClient
         $params['api_key'] = $this->apiKey;
         $url = $this->baseUrl . '/' . ltrim($endpoint, '/') . '?' . http_build_query($params);
 
-        $httpOptions = [
-            'timeout' => $this->timeout,
-            'ignore_errors' => true,
+        $requestHeaders = [
+            'Accept' => 'application/json',
         ];
 
         if ($headers !== null) {
-            $headerStrings = [];
             foreach ($headers as $key => $value) {
-                $headerStrings[] = "$key: $value";
+                $requestHeaders[$key] = $value;
             }
-            $httpOptions['header'] = implode("\r\n", $headerStrings);
         }
 
-        $context = stream_context_create(self::buildStreamContextOptions($httpOptions));
+        $response = $this->requestAsync($url, $requestHeaders);
 
-        $response = @file_get_contents($url, false, $context);
-
-        if ($response === false) {
+        if ($response === null) {
             $this->logger->error('Metadata HTTP request failed', [
                 'url' => $url,
-                'error' => error_get_last()['message'] ?? 'Unknown error',
             ]);
             return null;
         }
 
-        $data = json_decode($response, true);
+        $data = json_decode((string) $response->getBody(), true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
             $this->logger->error('Invalid JSON response from metadata API', [
@@ -121,6 +138,59 @@ class MetadataHttpClient
 
         $this->cache[$cacheKey] = $normalized;
         return $normalized;
+    }
+
+    /**
+     * Perform an async HTTP request with cooperative wait.
+     *
+     * @param string $url Full URL to request
+     * @param array<string, string> $headers Request headers
+     * @return ResponseInterface|null Response or null on error/timeout
+     */
+    private function requestAsync(string $url, array $headers): ?ResponseInterface
+    {
+        $client = $this->getAsyncClient();
+
+        $options = [
+            'method' => 'GET',
+            'headers' => $headers,
+        ];
+
+        // State shared between callback and waiting loop
+        $state = [
+            'response' => null,
+            'error' => null,
+            'done' => false,
+        ];
+
+        $options['success'] = function (ResponseInterface $response) use (&$state) {
+            $state['response'] = $response;
+            $state['done'] = true;
+        };
+
+        $options['error'] = function (\Throwable $error) use (&$state) {
+            $state['error'] = $error;
+            $state['done'] = true;
+        };
+
+        // Initiate async request (non-blocking)
+        $client->request($url, $options);
+
+        // Cooperative wait: run event loop until done or timeout
+        $maxWait = $this->timeout;
+        $waited = 0;
+        $interval = 0.001; // 1ms interval for event loop processing
+
+        while (!$state['done'] && $waited < $maxWait) {
+            usleep((int) ($interval * 1000000));
+            $waited += $interval;
+        }
+
+        if ($state['error'] !== null) {
+            return null;
+        }
+
+        return $state['response'];
     }
 
     /**

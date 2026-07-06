@@ -97,10 +97,7 @@ class RokuEcpClient
         // Launch MediaPlayer channel first
         $this->launchChannel(self::CHANNEL_MEDIAPLAYER);
 
-        // Give the channel time to launch
-        usleep(500000); // 500ms
-
-        // Send media play command with form data
+        // Give the channel time to launch using non-blocking Timer
         $formData = http_build_query([
             'url' => $mediaUrl,
             'mimeType' => $mimeType,
@@ -108,6 +105,18 @@ class RokuEcpClient
             'thumbnail' => $thumbnail,
         ]);
 
+        // Use Workerman\Timer for non-blocking delay before sending play command
+        // The ECP protocol is generally responsive; 500ms is conservative for channel launch
+        if (class_exists('\Workerman\Timer')) {
+            \Workerman\Timer::add(0.5, function () use ($formData): void {
+                $this->post('/media/play', $formData);
+            }, [], false);
+            // Return immediately without waiting for the timer
+            return ['success' => true, 'response' => ''];
+        }
+
+        // Fallback: blocking sleep if Timer not available (e.g., outside Workerman)
+        usleep(500000);
         return $this->post('/media/play', $formData);
     }
 

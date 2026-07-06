@@ -124,16 +124,33 @@ class RemoteRokuClient
             if ($method === 'POST') {
                 // Build form data
                 $body = http_build_query($data);
-
-                // For media/play endpoint
-                if (str_ends_with($ecpPath, '/media/play')) {
-                    // Launch MediaPlayer first
-                    $this->relayLaunchChannel(RokuEcpClient::CHANNEL_MEDIAPLAYER);
-                    usleep(500000); // 500ms
-                }
-
-                // Use file_get_contents to make the actual ECP request
                 $url = sprintf('http://%s:%d%s', $this->deviceHost, $this->devicePort, $ecpPath);
+
+                // For media/play endpoint, launch MediaPlayer and defer the play command
+                if (str_ends_with($ecpPath, '/media/play')) {
+                    $this->relayLaunchChannel(RokuEcpClient::CHANNEL_MEDIAPLAYER);
+
+                    if (class_exists('\Workerman\Timer')) {
+                        // Non-blocking: defer the play command by 500ms using Workerman Timer
+                        \Workerman\Timer::add(0.5, function () use ($url, $body): void {
+                            $context = stream_context_create([
+                                'http' => [
+                                    'method' => 'POST',
+                                    'timeout' => 10,
+                                    'content' => $body,
+                                    'ignore_errors' => true,
+                                    'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
+                                ],
+                            ]);
+                            @file_get_contents($url, false, $context);
+                        }, [], false);
+                        // Return immediately without waiting for the timer
+                        return null;
+                    }
+
+                    // Fallback: blocking sleep if Timer not available
+                    usleep(500000);
+                }
 
                 $context = stream_context_create([
                     'http' => [

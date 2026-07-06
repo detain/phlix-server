@@ -142,7 +142,7 @@ class ComskipRunner
             fclose($pipes[2]);
         }
 
-        // Wait for process with timeout
+        // Wait for process with timeout using non-blocking sleep when available
         while (true) {
             $status = proc_get_status($process);
 
@@ -158,7 +158,12 @@ class ComskipRunner
                 );
             }
 
-            usleep(100000); // 100ms
+            // Non-blocking sleep when in Swoole coroutine context
+            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                \Swoole\Coroutine::sleep(0.1);
+            } else {
+                usleep(100000);
+            }
         }
 
         proc_close($process);
@@ -178,7 +183,12 @@ class ComskipRunner
         $maxWait = 5;
         $waited = 0;
         while (!file_exists($edlPath) && $waited < $maxWait) {
-            usleep(100000);
+            // Non-blocking sleep when in Swoole coroutine context
+            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                \Swoole\Coroutine::sleep(0.1);
+            } else {
+                usleep(100000);
+            }
             $waited++;
         }
 

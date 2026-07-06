@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Plugins\Scrobbler\Trakt\HttpClient;
+use Phlix\Plugins\Scrobbler\Trakt\DbTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\InvalidOAuthStateException;
 use Phlix\Plugins\Scrobbler\Trakt\SessionTraktOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Trakt\TraktApi;
@@ -14,6 +15,7 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Psr\Log\LoggerInterface;
+use Workerman\MySQL\Connection;
 
 /**
  * Handles the OAuth2 callback for Trakt.tv authentication.
@@ -57,17 +59,28 @@ final class TraktOAuthController
      * @param SettingsRepository|null $settings When supplied, operator
      *     credentials saved in the admin Settings page (server_settings table)
      *     take precedence over the environment/file config.
+     * @param Connection|null $db Workerman MySQL connection. When supplied,
+     *     the DB-backed {@see DbTraktOAuthStateStore} is used instead of the
+     *     `$_SESSION`-backed store to avoid race conditions in Workerman.
      */
     public function __construct(
         ?LoggerInterface $logger = null,
         ?TraktOAuthStateStore $stateStore = null,
         ?string $configFile = null,
         ?SettingsRepository $settings = null,
+        ?Connection $db = null,
     ) {
         $this->logger = $logger;
-        $this->stateStore = $stateStore ?? new SessionTraktOAuthStateStore();
         $this->configFile = $configFile;
         $this->settings = $settings;
+
+        if ($stateStore !== null) {
+            $this->stateStore = $stateStore;
+        } elseif ($db !== null) {
+            $this->stateStore = new DbTraktOAuthStateStore($db);
+        } else {
+            $this->stateStore = new SessionTraktOAuthStateStore();
+        }
     }
 
     /**

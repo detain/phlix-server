@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "8d0c64fff31acf787ff20a26be4f1546",
+    "content-hash": "65895ab01f94d01d418459f6f0fc0509",
     "packages": [
         {
             "name": "brick/math",
@@ -5611,6 +5611,45 @@
             "time": "2026-03-12T02:07:37+00:00"
         },
         {
+            "name": "workerman/http-client",
+            "version": "v3.1.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/workerman-php/http-client.git",
+                "reference": "0d61bbd918dbba007b814db5b0a26e2c01db2548"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/workerman-php/http-client/zipball/0d61bbd918dbba007b814db5b0a26e2c01db2548",
+                "reference": "0d61bbd918dbba007b814db5b0a26e2c01db2548",
+                "shasum": ""
+            },
+            "require": {
+                "workerman/psr7": ">=1.4.3",
+                "workerman/workerman": "^5.1.11 || dev-master"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^11.0",
+                "revolt/event-loop": "^1.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Workerman\\Http\\": "./src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "homepage": "https://www.workerman.net",
+            "support": {
+                "issues": "https://github.com/workerman-php/http-client/issues",
+                "source": "https://github.com/workerman-php/http-client/tree/v3.1.1"
+            },
+            "time": "2026-06-02T07:26:29+00:00"
+        },
+        {
             "name": "workerman/mysql",
             "version": "v1.0.9",
             "source": {
@@ -5651,6 +5690,69 @@
                 "source": "https://github.com/walkor/mysql/tree/v1.0.9"
             },
             "time": "2025-03-18T06:10:03+00:00"
+        },
+        {
+            "name": "workerman/psr7",
+            "version": "v2.0.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/walkor/psr7.git",
+                "reference": "5f5b65e2462cd408f738cc967a80d8c15f9b57f3"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/walkor/psr7/zipball/5f5b65e2462cd408f738cc967a80d8c15f9b57f3",
+                "reference": "5f5b65e2462cd408f738cc967a80d8c15f9b57f3",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=7.2.0",
+                "psr/http-message": "~2.0"
+            },
+            "provide": {
+                "psr/http-message-implementation": "1.0"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "~4.0"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "src/functions_include.php"
+                ],
+                "psr-4": {
+                    "Workerman\\Psr7\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Michael Dowling",
+                    "email": "mtdowling@gmail.com",
+                    "homepage": "https://github.com/mtdowling"
+                },
+                {
+                    "name": "Tobias Schultze",
+                    "homepage": "https://github.com/Tobion"
+                }
+            ],
+            "description": "PSR-7 message implementation that also provides common utility methods",
+            "keywords": [
+                "http",
+                "message",
+                "request",
+                "response",
+                "stream",
+                "uri",
+                "url"
+            ],
+            "support": {
+                "source": "https://github.com/walkor/psr7/tree/v2.0.2"
+            },
+            "time": "2025-03-06T12:00:37+00:00"
         },
         {
             "name": "workerman/redis",

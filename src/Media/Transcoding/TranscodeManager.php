@@ -483,10 +483,15 @@ class TranscodeManager
             $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
         }
 
-        // Poll (coroutine-yielding) until the atomically-renamed final file appears.
+        // Poll using non-blocking sleep when in Swoole coroutine context.
+        // Falls back to usleep when not in coroutine (e.g., Swoole hooks disabled).
         $waited = 0;
         while (!is_file($final) && $waited < self::SEGMENT_MAX_WAIT_MS) {
-            usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
+            } else {
+                usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            }
             $waited += self::SEGMENT_POLL_INTERVAL_MS;
         }
 
@@ -514,7 +519,12 @@ class TranscodeManager
             if ($inflight === false || count($inflight) < self::SEGMENT_MAX_INFLIGHT) {
                 return;
             }
-            usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            // Non-blocking sleep when in Swoole coroutine context
+            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
+            } else {
+                usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            }
             $waited += self::SEGMENT_POLL_INTERVAL_MS;
         }
     }

@@ -110,18 +110,31 @@ final class LastfmApiClient implements LastfmApiClientInterface
 
         $url = self::BASE_URL . '?' . http_build_query($params);
 
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => 10,
-            CURLOPT_HTTPHEADER => ['User-Agent: PhlixMediaServer/1.0'],
+        $http = new \Workerman\Http\Client([
+            'timeout' => 10,
         ]);
 
-        $raw = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        $raw = null;
+        $error = null;
+        $httpCode = null;
 
-        if ($raw === false || $httpCode >= 400) {
+        $http->get($url, [
+            'headers' => ['User-Agent: PhlixMediaServer/1.0'],
+        ], function ($response) use (&$raw, &$httpCode) {
+            $raw = $response->getBody();
+            $httpCode = $response->getStatusCode();
+        }, function ($exception) use (&$error) {
+            $error = $exception->getMessage();
+        });
+
+        // Yield to the event loop to allow the async request to complete.
+        $loop = \Workerman\Worker::getEventLoop();
+        $start = time();
+        while ($raw === null && $error === null && (time() - $start) < 10) {
+            $loop->runOnTick();
+        }
+
+        if ($raw === null || $error !== null || ($httpCode !== null && $httpCode >= 400)) {
             return false;
         }
 
@@ -305,7 +318,7 @@ final class LastfmApiClient implements LastfmApiClientInterface
     }
 
     /**
-     * POST raw parameters to the Last.fm API.
+     * POST raw parameters to the Last.fm API using async HTTP.
      *
      * @param array<string, string|int> $params POST parameters.
      *
@@ -313,27 +326,40 @@ final class LastfmApiClient implements LastfmApiClientInterface
      */
     private function postRaw(array $params): array
     {
-        $ch = curl_init(self::BASE_URL);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => http_build_query($params),
-            CURLOPT_TIMEOUT => 15,
-            CURLOPT_HTTPHEADER => [
+        $http = new \Workerman\Http\Client([
+            'timeout' => 15,
+        ]);
+
+        $raw = null;
+        $error = null;
+        $httpCode = null;
+
+        $http->request(self::BASE_URL, [
+            'method' => 'POST',
+            'data' => http_build_query($params),
+            'headers' => [
                 'User-Agent: PhlixMediaServer/1.0',
                 'Content-Type: application/x-www-form-urlencoded',
             ],
-        ]);
+        ], function ($response) use (&$raw, &$httpCode) {
+            $raw = $response->getBody();
+            $httpCode = $response->getStatusCode();
+        }, function ($exception) use (&$error) {
+            $error = $exception->getMessage();
+        });
 
-        $raw = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($raw === false || $httpCode >= 400) {
-            return ['error' => 'HTTP ' . $httpCode];
+        // Yield to the event loop to allow the async request to complete.
+        $loop = \Workerman\Worker::getEventLoop();
+        $start = time();
+        while ($raw === null && $error === null && (time() - $start) < 15) {
+            $loop->runOnTick();
         }
 
-        if (!is_string($raw)) {
+        if ($error !== null || $raw === false) {
+            return ['error' => 'HTTP ' . ($httpCode ?? 'unknown')];
+        }
+
+        if ($raw === null) {
             return ['error' => 'Unexpected curl response type'];
         }
 

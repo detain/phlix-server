@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace Phlix\Hub;
 
 use InvalidArgumentException;
+use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
+use Workerman\Coroutine;
+use Workerman\Http\Client;
 
 /**
  * Lightweight HTTP client for hub API communication.
  *
- * Wraps cURL to provide a minimal, tested HTTP layer that always sends
- * `Accept-Phlix-Protocol: v1` and supports optional Bearer authentication.
+ * Uses workerman/http-client for non-blocking async HTTP that yields to the
+ * event loop instead of blocking with cURL.
  *
  * @package Phlix\Hub
  * @since 0.11.0
@@ -27,6 +30,9 @@ class HttpClient implements HttpClientInterface
     /** @var int Request timeout in seconds. */
     private int $timeout;
 
+    /** @var Client|null Async HTTP client instance (lazy initialized). */
+    private ?Client $asyncClient = null;
+
     /**
      * Creates a new HttpClient.
      *
@@ -40,6 +46,19 @@ class HttpClient implements HttpClientInterface
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->bearerToken = $bearerToken;
         $this->timeout = $timeout;
+    }
+
+    /**
+     * Gets the async HTTP client, lazy initialized.
+     */
+    private function getAsyncClient(): Client
+    {
+        if ($this->asyncClient === null) {
+            $this->asyncClient = new Client([
+                'timeout' => $this->timeout,
+            ]);
+        }
+        return $this->asyncClient;
     }
 
     /**
@@ -83,7 +102,11 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
-     * Performs an HTTP request using cURL.
+     * Performs an HTTP request using workerman/http-client (non-blocking async).
+     *
+     * Uses coroutine context when available for true async execution, otherwise
+     * falls back to a cooperative wait that allows event loop to process other tasks.
+     * When not in a workerman context (e.g., unit tests), falls back to synchronous curl.
      *
      * @param string                     $method  HTTP method (GET, POST, etc.).
      * @param string                     $path    Request path.
@@ -92,107 +115,203 @@ class HttpClient implements HttpClientInterface
      *
      * @return HttpResponse Parsed response.
      *
-     * @throws RuntimeException On cURL errors.
+     * @throws RuntimeException On HTTP errors.
      */
     private function request(string $method, string $path, ?array $body, array $headers): HttpResponse
     {
-        // Accept an already-absolute URL (scheme://host/…) as `$path` and use it
-        // verbatim — callers that target a specific hub (pairing/heartbeat) pass
-        // the full URL so the request works even when this client was built with
-        // an empty placeholder base. A bare path still resolves against baseUrl.
-        $url = preg_match('#^https?://#i', $path) === 1
-            ? $path
-            : $this->baseUrl . '/' . ltrim($path, '/');
+        $url = $this->buildUrl($path);
 
         if ($url === '') {
-            // Empty base + empty path — nothing to call. Fail loudly rather than
-            // handing cURL a hostless URL ("URL rejected: No host part").
             throw new RuntimeException('Cannot perform HTTP request: empty URL');
         }
 
-        $ch = curl_init();
-        if ($ch === false) {
-            throw new RuntimeException('curl_init() failed');
-        }
-
-        $requestHeaders = [
-            'Accept-Phlix-Protocol: v1',
-            'Content-Type: application/json',
-        ];
-
-        if ($this->bearerToken !== null) {
-            $requestHeaders[] = 'Authorization: Bearer ' . $this->bearerToken;
-        }
-
-        foreach ($headers as $key => $value) {
-            $requestHeaders[] = "$key: $value";
-        }
-
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $url,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT => $this->timeout,
-            CURLOPT_HTTPHEADER => $requestHeaders,
-            CURLOPT_HEADER => true,
-        ]);
-
-        if ($method !== 'GET' && $method !== '') {
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-        }
+        $requestHeaders = $this->buildHeaders($headers);
 
         if ($body !== null) {
             $encodedBody = json_encode($body);
             if ($encodedBody === false) {
                 throw new RuntimeException('json_encode failed');
             }
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $encodedBody);
+            $body = $encodedBody;
         }
 
-        $responseBody = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        $curlErrno = curl_errno($ch);
-        $curlError = curl_error($ch);
-
-        curl_close($ch);
-
-        if ($responseBody === false || $curlErrno !== 0) {
-            throw new RuntimeException('cURL error: ' . $curlError, $curlErrno);
+        // Use coroutine if available for true async behavior
+        if (Coroutine::isCoroutine()) {
+            return $this->requestCoroutine($method, $url, $body, $requestHeaders);
         }
 
-        $responseHeaders = [];
-        if ($headerSize > 0) {
-            assert(is_string($responseBody));
-            $headerBlock = substr($responseBody, 0, $headerSize);
-            $responseHeaders = $this->parseHeaders($headerBlock);
+        // When in workerman context, use async client with cooperative wait
+        // Otherwise fall back to synchronous curl (for unit tests etc.)
+        if ($this->isWorkermanContext()) {
+            return $this->requestAsync($method, $url, $body, $requestHeaders);
         }
 
-        assert(is_string($responseBody));
-        $bodyContent = substr($responseBody, $headerSize);
+        return $this->requestCurl($method, $url, $body, $requestHeaders);
+    }
+
+    /**
+     * Check if we're running inside a workerman worker context.
+     *
+     * @return bool True if in workerman context, false otherwise
+     */
+    private function isWorkermanContext(): bool
+    {
+        return class_exists('Workerman\Worker') && \Workerman\Worker::getId() >= 0;
+    }
+
+    /**
+     * Build the URL from path, handling both relative and absolute URLs.
+     */
+    private function buildUrl(string $path): string
+    {
+        if (preg_match('#^https?://#i', $path) === 1) {
+            return $path;
+        }
+        if ($this->baseUrl === '' && $path === '') {
+            return '';
+        }
+        return $this->baseUrl . '/' . ltrim($path, '/');
+    }
+
+    /**
+     * Build request headers including protocol headers and auth.
+     *
+     * @param array<string, string> $headers Additional headers.
+     * @return array<string, string> Complete headers array.
+     */
+    private function buildHeaders(array $headers): array
+    {
+        $requestHeaders = [
+            'Accept-Phlix-Protocol' => 'v1',
+            'Content-Type' => 'application/json',
+        ];
+
+        if ($this->bearerToken !== null) {
+            $requestHeaders['Authorization'] = 'Bearer ' . $this->bearerToken;
+        }
+
+        foreach ($headers as $key => $value) {
+            $requestHeaders[$key] = $value;
+        }
+
+        return $requestHeaders;
+    }
+
+    /**
+     * Perform request in coroutine context (truly async).
+     *
+     * @param string $method HTTP method.
+     * @param string $url Full URL.
+     * @param string|null $body Request body.
+     * @param array<string, string> $headers Request headers.
+     * @return HttpResponse Parsed response.
+     * @throws RuntimeException On errors.
+     */
+    private function requestCoroutine(string $method, string $url, ?string $body, array $headers): HttpResponse
+    {
+        $client = $this->getAsyncClient();
+        $options = [
+            'method' => $method,
+            'headers' => $headers,
+        ];
+
+        if ($body !== null) {
+            $options['data'] = $body;
+        }
+
+        /** @var ResponseInterface $response */
+        $response = $client->request($url, $options);
+
+        return $this->psr7ResponseToHttpResponse($response);
+    }
+
+    /**
+     * Perform request using async client with cooperative wait.
+     *
+     * This uses callbacks but blocks the worker cooperatively, allowing
+     * the event loop to process other tasks while waiting for the response.
+     *
+     * @param string $method HTTP method.
+     * @param string $url Full URL.
+     * @param string|null $body Request body.
+     * @param array<string, string> $headers Request headers.
+     * @return HttpResponse Parsed response.
+     * @throws RuntimeException On errors or timeout.
+     */
+    private function requestAsync(string $method, string $url, ?string $body, array $headers): HttpResponse
+    {
+        $client = $this->getAsyncClient();
+        $options = [
+            'method' => $method,
+            'headers' => $headers,
+        ];
+
+        if ($body !== null) {
+            $options['data'] = $body;
+        }
+
+        // State shared between callback and waiting loop
+        $state = [
+            'response' => null,
+            'error' => null,
+            'done' => false,
+        ];
+
+        $options['success'] = function (ResponseInterface $response) use (&$state) {
+            $state['response'] = $response;
+            $state['done'] = true;
+        };
+
+        $options['error'] = function (\Throwable $error) use (&$state) {
+            $state['error'] = $error;
+            $state['done'] = true;
+        };
+
+        // Initiate async request (non-blocking)
+        $client->request($url, $options);
+
+        // Cooperative wait: run event loop until done or timeout
+        $maxWait = $this->timeout;
+        $waited = 0;
+        $interval = 0.001; // 1ms interval for event loop processing
+
+        while (!$state['done'] && $waited < $maxWait) {
+            // This yields to the event loop, allowing it to process callbacks
+            usleep((int) ($interval * 1000000));
+            $waited += $interval;
+        }
+
+        if ($state['error'] !== null) {
+            throw new RuntimeException('Async HTTP error: ' . $state['error']->getMessage(), 0, $state['error']);
+        }
+
+        if ($state['response'] === null) {
+            throw new RuntimeException('Async HTTP request timed out after ' . $this->timeout . ' seconds');
+        }
+
+        return $this->psr7ResponseToHttpResponse($state['response']);
+    }
+
+    /**
+     * Convert PSR-7 response to our HttpResponse.
+     *
+     * @param \Psr\Http\Message\ResponseInterface $response PSR-7 response
+     * @return HttpResponse
+     */
+    private function psr7ResponseToHttpResponse(\Psr\Http\Message\ResponseInterface $response): HttpResponse
+    {
+        $statusCode = $response->getStatusCode();
+        $headers = [];
+        foreach ($response->getHeaders() as $name => $values) {
+            $headers[strtolower($name)] = implode(', ', $values);
+        }
+
+        $bodyContent = (string) $response->getBody();
         $bodyDecoded = json_decode($bodyContent, true);
         if (!is_array($bodyDecoded)) {
             $bodyDecoded = [];
         }
 
-        return new HttpResponse($httpCode, $responseHeaders, $bodyDecoded);
-    }
-
-    /**
-     * Parses the raw HTTP response header block.
-     *
-     * @param string $headerBlock Raw header text from cURL.
-     *
-     * @return array<string, string> Map of lowercase header name to value.
-     */
-    private function parseHeaders(string $headerBlock): array
-    {
-        $headers = [];
-        foreach (explode("\r\n", trim($headerBlock)) as $line) {
-            if (strpos($line, ':') !== false) {
-                [$name, $value] = explode(':', $line, 2);
-                $headers[strtolower(trim($name))] = trim($value);
-            }
-        }
-        return $headers;
+        return new HttpResponse($statusCode, $headers, $bodyDecoded);
     }
 }

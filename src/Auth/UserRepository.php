@@ -30,6 +30,21 @@ class UserRepository
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
 
+    /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by id */
+    private static array $cacheById = [];
+
+    /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by username */
+    private static array $cacheByUsername = [];
+
+    /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by email */
+    private static array $cacheByEmail = [];
+
+    /** @var array<string, array{status: string|null, expires_at: int}> Status cache keyed by user id */
+    private static array $statusCacheById = [];
+
+    /** @var int Cache TTL in seconds (60 seconds) */
+    private const CACHE_TTL = 60;
+
     /**
      * Create a new UserRepository instance.
      *
@@ -60,8 +75,28 @@ class UserRepository
      */
     public function findById(string $id): ?array
     {
+        $now = time();
+
+        // Check cache first
+        if (isset(self::$cacheById[$id])) {
+            $entry = self::$cacheById[$id];
+            if ($entry['expires_at'] > $now) {
+                return $entry['user'];
+            }
+            unset(self::$cacheById[$id]);
+        }
+
         $result = $this->db->query("SELECT * FROM users WHERE id = ?", [$id]);
-        return UserRow::firstFromMixed($result);
+        $user = UserRow::firstFromMixed($result);
+
+        if ($user !== null) {
+            self::$cacheById[$id] = [
+                'user' => $user,
+                'expires_at' => $now + self::CACHE_TTL,
+            ];
+        }
+
+        return $user;
     }
 
     /**
@@ -78,11 +113,31 @@ class UserRepository
      */
     public function findByUsername(string $username): ?array
     {
+        $now = time();
+
+        // Check cache first
+        if (isset(self::$cacheByUsername[$username])) {
+            $entry = self::$cacheByUsername[$username];
+            if ($entry['expires_at'] > $now) {
+                return $entry['user'];
+            }
+            unset(self::$cacheByUsername[$username]);
+        }
+
         $result = $this->db->query(
             "SELECT * FROM users WHERE username = ?",
             [$username]
         );
-        return UserRow::firstFromMixed($result);
+        $user = UserRow::firstFromMixed($result);
+
+        if ($user !== null) {
+            self::$cacheByUsername[$username] = [
+                'user' => $user,
+                'expires_at' => $now + self::CACHE_TTL,
+            ];
+        }
+
+        return $user;
     }
 
     /**
@@ -139,11 +194,29 @@ class UserRepository
      */
     public function getStatus(string $id): ?string
     {
+        $now = time();
+
+        // Check cache first
+        if (isset(self::$statusCacheById[$id])) {
+            $entry = self::$statusCacheById[$id];
+            if ($entry['expires_at'] > $now) {
+                return $entry['status'];
+            }
+            unset(self::$statusCacheById[$id]);
+        }
+
         $result = $this->db->query(
             "SELECT status FROM users WHERE id = ?",
             [$id]
         );
-        return UserRow::string(UserRow::firstFromMixed($result), 'status');
+        $status = UserRow::string(UserRow::firstFromMixed($result), 'status');
+
+        self::$statusCacheById[$id] = [
+            'status' => $status,
+            'expires_at' => $now + self::CACHE_TTL,
+        ];
+
+        return $status;
     }
 
     /**
@@ -199,6 +272,10 @@ class UserRepository
     public function delete(string $id): void
     {
         $this->db->query('DELETE FROM users WHERE id = ?', [$id]);
+
+        // Invalidate caches for this user
+        unset(self::$cacheById[$id]);
+        unset(self::$statusCacheById[$id]);
     }
 
     /**
@@ -215,6 +292,9 @@ class UserRepository
             "UPDATE users SET is_admin = ? WHERE id = ?",
             [$isAdmin ? 1 : 0, $id]
         );
+
+        // Invalidate caches for this user - admin status affects auth decisions
+        unset(self::$cacheById[$id]);
     }
 
     /**
@@ -242,6 +322,10 @@ class UserRepository
             "UPDATE users SET status = ? WHERE id = ?",
             [$status, $id]
         );
+
+        // Invalidate caches for this user - status affects session validity
+        unset(self::$cacheById[$id]);
+        unset(self::$statusCacheById[$id]);
     }
 
     /**
@@ -284,11 +368,31 @@ class UserRepository
      */
     public function findByEmail(string $email): ?array
     {
+        $now = time();
+
+        // Check cache first
+        if (isset(self::$cacheByEmail[$email])) {
+            $entry = self::$cacheByEmail[$email];
+            if ($entry['expires_at'] > $now) {
+                return $entry['user'];
+            }
+            unset(self::$cacheByEmail[$email]);
+        }
+
         $result = $this->db->query(
             "SELECT * FROM users WHERE email = ?",
             [$email]
         );
-        return UserRow::firstFromMixed($result);
+        $user = UserRow::firstFromMixed($result);
+
+        if ($user !== null) {
+            self::$cacheByEmail[$email] = [
+                'user' => $user,
+                'expires_at' => $now + self::CACHE_TTL,
+            ];
+        }
+
+        return $user;
     }
 
     /**
@@ -415,6 +519,9 @@ class UserRepository
             "UPDATE users SET " . implode(', ', $sets) . " WHERE id = ?",
             $values
         );
+
+        // Invalidate caches for this user
+        unset(self::$cacheById[$id]);
     }
 
     /**
@@ -593,6 +700,9 @@ class UserRepository
             "UPDATE users SET avatar_url = ? WHERE id = ?",
             [$avatarUrl, $userId]
         );
+
+        // Invalidate cache for this user
+        unset(self::$cacheById[$userId]);
     }
 
     /**
@@ -637,6 +747,9 @@ class UserRepository
             "UPDATE users SET avatar_url = NULL WHERE id = ?",
             [$userId]
         );
+
+        // Invalidate cache for this user
+        unset(self::$cacheById[$userId]);
     }
 
     /**
@@ -859,6 +972,9 @@ class UserRepository
             "UPDATE users SET provider_data = ? WHERE id = ?",
             [json_encode($data), $userId],
         );
+
+        // Invalidate cache for this user
+        unset(self::$cacheById[$userId]);
     }
 
     /**
@@ -880,6 +996,9 @@ class UserRepository
             "UPDATE users SET must_change_password = ? WHERE id = ?",
             [$mustChange ? 1 : 0, $userId],
         );
+
+        // Invalidate cache for this user - must_change_password affects auth
+        unset(self::$cacheById[$userId]);
     }
 
     /**
@@ -924,6 +1043,9 @@ class UserRepository
             "UPDATE users SET password_reset_token = ?, password_reset_expires_at = ? WHERE id = ?",
             [$hashedToken, $expiresAt, $userId],
         );
+
+        // Invalidate cache for this user
+        unset(self::$cacheById[$userId]);
     }
 
     /**
@@ -970,6 +1092,9 @@ class UserRepository
             "UPDATE users SET password_reset_token = NULL, password_reset_expires_at = NULL WHERE id = ?",
             [$userId],
         );
+
+        // Invalidate cache for this user
+        unset(self::$cacheById[$userId]);
     }
 
     /**

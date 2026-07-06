@@ -22,6 +22,15 @@ final class Plugin implements LifecycleInterface
 {
     private static ?string $pluginDirectory = null;
 
+    /** @var array<string, string>|null Cached settings to avoid repeated file reads */
+    private static ?array $cachedSettings = null;
+
+    /** @var int|null Timestamp when cached settings were loaded */
+    private static ?int $cacheTimestamp = null;
+
+    /** @var int Cache TTL in seconds (60 seconds) */
+    private const CACHE_TTL = 60;
+
     public static function setPluginDirectory(string $directory): void
     {
         self::$pluginDirectory = $directory;
@@ -87,19 +96,38 @@ final class Plugin implements LifecycleInterface
      */
     private function loadSettings(): array
     {
+        $now = time();
+
+        // Return cached settings if still valid
+        if (
+            self::$cachedSettings !== null
+            && self::$cacheTimestamp !== null
+            && ($now - self::$cacheTimestamp) < self::CACHE_TTL
+        ) {
+            return self::$cachedSettings;
+        }
+
         $settingsFile = self::getPluginDirectory() . '/settings.json';
         if (!is_file($settingsFile)) {
+            self::$cachedSettings = [];
+            self::$cacheTimestamp = $now;
             return [];
         }
         $content = file_get_contents($settingsFile);
         if ($content === false) {
+            self::$cachedSettings = [];
+            self::$cacheTimestamp = $now;
             return [];
         }
         $decoded = json_decode($content, true);
         if (!is_array($decoded)) {
+            self::$cachedSettings = [];
+            self::$cacheTimestamp = $now;
             return [];
         }
         /** @var array<string, string> $decoded */
+        self::$cachedSettings = $decoded;
+        self::$cacheTimestamp = $now;
         return $decoded;
     }
 
@@ -110,6 +138,10 @@ final class Plugin implements LifecycleInterface
     {
         $settingsFile = self::getPluginDirectory() . '/settings.json';
         file_put_contents($settingsFile, json_encode($settings, JSON_PRETTY_PRINT));
+
+        // Invalidate cache so next loadSettings() reads fresh data
+        self::$cachedSettings = null;
+        self::$cacheTimestamp = null;
     }
 
     /**

@@ -329,4 +329,61 @@ class FfmpegRunnerHlsTest extends TestCase
             rmdir($dir);
         }
     }
+
+    public function testBuildSegmentCommandFastSeeksAndAnchorsTimeline(): void
+    {
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+            'pix_fmt' => 'yuv420p',
+            'profile' => 'high',
+            'level' => '4.1',
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_channels' => 2,
+        ]);
+
+        // Accurate fast INPUT seek (before -i) to the segment start.
+        $this->assertMatchesRegularExpression('/-ss 780 -i /', $cmd);
+        $this->assertStringContainsString('-t 6', $cmd);
+        // First output frame is an IDR → independently decodable segment.
+        $this->assertStringContainsString("-force_key_frames 'expr:gte(t,0)'", $cmd);
+        // PTS anchored to the absolute timeline position so segments stitch + a seek lands right.
+        $this->assertStringContainsString('-output_ts_offset 780', $cmd);
+        // Browser-decodable encode + MPEG-TS output.
+        $this->assertStringContainsString('-c:v libx264', $cmd);
+        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-f mpegts', $cmd);
+        $this->assertStringContainsString("'/out/seg-00130.ts'", $cmd);
+    }
+
+    public function testBuildSegmentCommandUpgradesCopyToEncode(): void
+    {
+        // A segment can never stream-copy (it must force a keyframe at its start), so
+        // a 'copy' decision is treated as a browser-safe H.264 / AAC encode.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'copy',
+            'audio_codec' => 'copy',
+        ]);
+
+        $this->assertStringContainsString('-c:v libx264', $cmd);
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringNotContainsString('-c:v copy', $cmd);
+        $this->assertStringNotContainsString('-c:a copy', $cmd);
+    }
+
+    public function testBuildSegmentCommandFormatsFractionalTimes(): void
+    {
+        // The trailing segment is shorter than a full segment; times must be plain
+        // decimals (no scientific notation) that ffmpeg accepts.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00237.ts', 1422.0, 1.4, [
+            'video_codec' => 'libx264',
+        ]);
+
+        $this->assertStringContainsString('-ss 1422 -i ', $cmd);
+        $this->assertStringContainsString('-t 1.4', $cmd);
+        $this->assertStringContainsString('-output_ts_offset 1422', $cmd);
+    }
 }

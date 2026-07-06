@@ -1236,4 +1236,151 @@ class FfmpegRunner
         }
         return null;
     }
+
+    /**
+     * Builds an FFmpeg command that transcodes ONE on-demand HLS segment.
+     *
+     * This backs the seek-aware VOD pipeline: instead of a single linear encode
+     * that grows a live playlist, the media playlist is published complete up front
+     * and each MPEG-TS segment is produced only when the player fetches it. Any
+     * segment — including one far past what has been produced so far — is encoded
+     * directly by fast-seeking the source, so the user can seek anywhere.
+     *
+     * Recipe (validated against 10-bit HEVC MKV sources):
+     *   - `-ss {start} -i input` — accurate fast input seek to the segment start.
+     *   - `-t {duration}` — encode exactly this segment's window.
+     *   - `-force_key_frames expr:gte(t,0)` — the first output frame is an IDR, so
+     *     every segment is independently decodable (EXT-X-INDEPENDENT-SEGMENTS).
+     *   - `-output_ts_offset {start}` — anchor the segment's PTS to its absolute
+     *     position in the title timeline so hls.js concatenates segments seamlessly
+     *     and a seek lands at the right time.
+     * Video is always RE-ENCODED (a stream copy cannot force per-segment keyframes
+     * and would not align to segment boundaries); audio is re-encoded to AAC.
+     *
+     * @param string               $inputPath Source media file.
+     * @param string               $outFile   Absolute path to write the .ts segment to.
+     * @param float                $start     Segment start offset in seconds.
+     * @param float                $duration  Segment length in seconds.
+     * @param array<string, mixed> $params    Encode params (video_codec, preset, crf,
+     *                                         pix_fmt/profile/level, width/height for a
+     *                                         downscale, audio_codec/bitrate/channels).
+     *
+     * @return string The complete FFmpeg segment command.
+     */
+    public function buildSegmentCommand(
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): string {
+        $startArg = self::seconds($start);
+        $durArg = self::seconds($duration);
+
+        // Accurate input seek BEFORE -i so the decode starts at the segment boundary.
+        $cmd = sprintf('%s -nostdin -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
+        $cmd .= ' -ss ' . $startArg;
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+        $cmd .= ' -t ' . $durArg;
+
+        // Only the first video + first audio track; drop data/subtitle/attachment
+        // streams (anime MKVs carry font attachments + embedded subs that break the mux).
+        $cmd .= ' -map 0:v:0 -map 0:a:0? -dn -sn';
+
+        // Video: always encode (copy cannot force per-segment keyframes / align).
+        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
+        if ($videoCodec === 'copy' || $videoCodec === '') {
+            $videoCodec = 'libx264';
+        }
+        $cmd .= ' -c:v ' . $videoCodec;
+        if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
+            $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
+            $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
+            $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
+        }
+        $width = self::paramInt($params, 'width');
+        $height = self::paramInt($params, 'height');
+        if ($width !== null && $height !== null) {
+            $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+        }
+        // IDR at the segment start → independently decodable segment.
+        $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
+        $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
+
+        // Audio: encode to AAC (re-encoding avoids priming/alignment artefacts at
+        // the segment boundary that a fast-seek stream copy would introduce).
+        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === 'copy' || $audioCodec === '') {
+            $audioCodec = 'aac';
+        }
+        $cmd .= ' -c:a ' . $audioCodec;
+        $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+        $audioChannels = self::paramInt($params, 'audio_channels');
+        if ($audioChannels !== null && $audioChannels > 0) {
+            $cmd .= ' -ac ' . $audioChannels;
+        }
+
+        // Anchor PTS to the absolute timeline position; no mux pre-roll.
+        $cmd .= ' -muxdelay 0 -muxpreload 0';
+        $cmd .= ' -output_ts_offset ' . $startArg;
+        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+
+        return $cmd;
+    }
+
+    /**
+     * Launches an on-demand segment encode as a detached background process,
+     * writing atomically so a reader never sees a half-written segment.
+     *
+     * FFmpeg writes to a unique `.part` temp file; on success it is `mv`'d to the
+     * final path (an atomic rename on the same filesystem), on failure the temp is
+     * removed. The caller therefore treats `is_file($outFile)` as "segment ready".
+     * The launch itself returns immediately (the `& echo $!` backgrounds ffmpeg),
+     * so the worker never blocks on the encode — the caller polls for the file with
+     * a coroutine-yielding sleep.
+     *
+     * @param string               $inputPath Source media file.
+     * @param string               $outFile   Absolute final segment path.
+     * @param float                $start     Segment start offset in seconds.
+     * @param float                $duration  Segment length in seconds.
+     * @param array<string, mixed> $params    Encode params (see buildSegmentCommand()).
+     *
+     * @return int OS process id of the launched job (0 if launch failed).
+     */
+    public function startSegmentEncode(
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): int {
+        $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
+        $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+        // Atomic publish: rename on success, clean the temp on failure.
+        $inner = $encode
+            . ' && mv -f ' . escapeshellarg($tmp) . ' ' . escapeshellarg($outFile)
+            . ' || rm -f ' . escapeshellarg($tmp);
+        $log = dirname($outFile) . '/ffmpeg-segments.log';
+        $full = sprintf('nohup sh -c %s >> %s 2>&1 & echo $!', escapeshellarg($inner), escapeshellarg($log));
+
+        $pid = shell_exec($full);
+        if (!is_string($pid)) {
+            $this->logger->error('Failed to launch on-demand segment encode', ['segment' => $outFile]);
+            return 0;
+        }
+        return (int) trim($pid);
+    }
+
+    /**
+     * Formats a seconds value for an FFmpeg time argument (millisecond precision,
+     * no scientific notation, trimmed trailing zeros). Negative inputs clamp to 0.
+     */
+    private static function seconds(float $value): string
+    {
+        if ($value < 0) {
+            $value = 0.0;
+        }
+        $formatted = rtrim(rtrim(sprintf('%.3f', $value), '0'), '.');
+        return $formatted === '' ? '0' : $formatted;
+    }
 }

@@ -7,15 +7,19 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Media\Transcoding\TranscodeManager;
 
 /**
- * Serves HLS playlists and CMAF segments for transcode jobs.
+ * Serves HLS playlists and on-demand MPEG-TS segments for transcode jobs.
  *
- * The transcode pipeline ({@see \Phlix\Media\Transcoding\TranscodeManager}) runs
- * one CMAF (fMP4) encode that writes `master.m3u8` + `media_N.m3u8` (HLS) and the
- * shared `init-N.m4s` / `chunk-N-NNNNN.m4s` segments into the job directory. Every
- * playlist references its segments by relative filename, so this serves the job
- * directory's files verbatim — no URI rewriting.
+ * The transcode pipeline ({@see \Phlix\Media\Transcoding\TranscodeManager}) publishes
+ * a COMPLETE VOD playlist (`master.m3u8` + `media_0.m3u8`) into the job directory the
+ * instant a job is created, so the player knows the full duration and seekable range
+ * up front. The `seg-NNNNN.ts` segments listed by that playlist are transcoded ON
+ * DEMAND the first time each is fetched (an `-ss` fast-seek encode), which lets the
+ * player seek anywhere — including past what has been produced so far. Playlists and
+ * subtitle sidecars are static files served verbatim; segment requests are routed
+ * through {@see TranscodeManager::ensureSegment()} to produce-or-serve.
  */
 class HlsController
 {
@@ -23,9 +27,17 @@ class HlsController
 
     private HlsStreamer $hlsStreamer;
 
-    public function __construct(HlsStreamer $hlsStreamer)
+    /**
+     * The transcoder that produces on-demand segments. Null only in the degenerate
+     * container-less construction path (no DB), where segment requests cannot be
+     * served and 404 instead — playlists/static files still serve.
+     */
+    private ?TranscodeManager $transcodeManager;
+
+    public function __construct(HlsStreamer $hlsStreamer, ?TranscodeManager $transcodeManager = null)
     {
         $this->hlsStreamer = $hlsStreamer;
+        $this->transcodeManager = $transcodeManager;
     }
 
     /**
@@ -47,9 +59,11 @@ class HlsController
     }
 
     /**
-     * GET /hls/{job_id}/{file} — serve a playlist or segment from the job dir.
+     * GET /hls/{job_id}/{file} — serve a playlist, subtitle sidecar, or segment.
      *
-     * Handles `master.m3u8`, `media_N.m3u8`, `init-N.m4s` and `chunk-*.m4s`.
+     * `master.m3u8` / `media_0.m3u8` / `sub-*.vtt` (and legacy `chunk-*.m4s`) are
+     * static files. A `seg-NNNNN.ts` request is routed through the transcoder, which
+     * returns a cached segment immediately or transcodes it on demand first.
      *
      * @param array<string, string> $params
      */
@@ -57,7 +71,20 @@ class HlsController
     {
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
-        $dir = $jobId !== '' ? $this->hlsStreamer->getJobDirectory($jobId) : '';
+        if ($jobId === '' || !$this->isSafeFilename($file)) {
+            return (new Response())->status(400)->json(['error' => 'invalid request']);
+        }
+
+        // On-demand MPEG-TS segment: produce (or serve cached) this segment before
+        // handing it to the static file server.
+        if (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
+            $ready = $this->transcodeManager?->ensureSegment($jobId, (int) $m[1]);
+            if ($ready === null) {
+                return (new Response())->status(404)->json(['error' => 'segment unavailable']);
+            }
+        }
+
+        $dir = $this->hlsStreamer->getJobDirectory($jobId);
         return $this->serveJobFile($dir, $file);
     }
 }

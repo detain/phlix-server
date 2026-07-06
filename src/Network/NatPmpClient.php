@@ -6,6 +6,7 @@ namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use RuntimeException;
 use Socket;
 
 /**
@@ -34,6 +35,15 @@ class NatPmpClient
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->timeout = $timeout;
+    }
+
+    /**
+     * Returns true if Swoole coroutine context is active.
+     */
+    private static function inCoroutine(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0;
     }
 
     /**
@@ -324,6 +334,41 @@ class NatPmpClient
             }
         }
 
+        // Fallback: use UDP socket to determine local IP
+        return $this->getLocalIpViaUdpSocket();
+    }
+
+    /**
+     * Determines local IP by opening a UDP socket to 8.8.8.8:53.
+     *
+     * Uses Swoole\Coroutine\Socket when in coroutine context for non-blocking operation.
+     */
+    private function getLocalIpViaUdpSocket(): ?string
+    {
+        if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
+            try {
+                $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_DGRAM, 0);
+                // @phpstan-ignore-next-line setTimeout exists in Swoole extension
+                $sock->setTimeout(2.0);
+                // Connect to 8.8.8.8:53 (DNS) to determine local IP
+                $connected = $sock->connect('8.8.8.8', 53);
+                if ($connected) {
+                    $localAddr = $sock->getsockname();
+                    $sock->close();
+                    if ($localAddr !== false && is_array($localAddr)) {
+                        $host = $localAddr['host'] ?? null;
+                        if (is_string($host) && $host !== '') {
+                            return $host;
+                        }
+                    }
+                }
+                $sock->close();
+            } catch (RuntimeException $e) {
+                // Swoole socket failed, fall through to blocking fallback
+            }
+        }
+
+        // Blocking fallback
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
             $localAddr = stream_socket_get_name($sock, false);

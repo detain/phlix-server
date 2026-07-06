@@ -6,6 +6,7 @@ namespace Phlix\Network;
 
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
+use RuntimeException;
 use Socket;
 
 /**
@@ -34,6 +35,15 @@ class UpnpIgdClient
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->timeout = $timeout;
+    }
+
+    /**
+     * Returns true if Swoole coroutine context is active.
+     */
+    private static function inCoroutine(): bool
+    {
+        return class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0;
     }
 
     /**
@@ -301,36 +311,9 @@ class UpnpIgdClient
         $port = isset($parsed['port']) && is_int($parsed['port']) ? $parsed['port'] : 80;
         $path = isset($parsed['path']) && is_string($parsed['path']) ? $parsed['path'] : '/';
 
-        $sock = @fsockopen($host, $port, $errno, $errstr, 5);
-        if ($sock === false) {
-            return null;
-        }
-
-        $request = sprintf(
-            "GET %s HTTP/1.1\r\nHost: %s:%d\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-            $path,
-            $host,
-            $port
-        );
-        @fwrite($sock, $request);
-
-        $response = '';
-        while (!feof($sock)) {
-            $chunk = @fgets($sock, 4096);
-            if ($chunk === false) {
-                break;
-            }
-            $response .= $chunk;
-        }
-        @fclose($sock);
-
-        $bodyAfterStatus = preg_replace('/^[^\r\n]*\r\n/', '', $response, 1);
-        if ($bodyAfterStatus === null) {
-            return $locationUrl;
-        }
-        $body = preg_replace('/\r\n[^\r\n]+\r\n\r\n/', "\r\n\r\n", $bodyAfterStatus);
+        $body = $this->asyncHttpGet($host, $port, $path);
         if ($body === null) {
-            $body = $bodyAfterStatus;
+            return null;
         }
 
         if (preg_match('/<deviceDescriptionURL>(.+?)<\/deviceDescriptionURL>/i', $body, $matches)) {
@@ -359,6 +342,69 @@ class UpnpIgdClient
         }
 
         return $locationUrl;
+    }
+
+    /**
+     * Performs an HTTP GET request using Swoole coroutine when available,
+     * falling back to blocking fsockopen.
+     *
+     * @return string|null The response body or null on failure.
+     */
+    private function asyncHttpGet(string $host, int $port, string $path): ?string
+    {
+        if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Http\Client::class)) {
+            $ssl = false;
+            $client = new \Swoole\Coroutine\Http\Client($host, $port, $ssl);
+            $client->set([
+                'timeout' => 5,
+                'ssl_verify_peer' => false,
+                'ssl_verify_peer_name' => false,
+            ]);
+            $client->setHeaders([
+                'Host' => $host . ':' . $port,
+                'Accept' => '*/*',
+                'Connection' => 'close',
+            ]);
+            $ok = $client->execute($path);
+            $body = $client->body;
+            $client->close();
+
+            if ($ok === false || $body === false || $body === null) {
+                return null;
+            }
+
+            return is_string($body) ? $body : null;
+        }
+
+        // Fallback to blocking fsockopen
+        $sock = @fsockopen($host, $port, $errno, $errstr, 5);
+        if ($sock === false) {
+            return null;
+        }
+
+        $request = sprintf(
+            "GET %s HTTP/1.1\r\nHost: %s:%d\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+            $path,
+            $host,
+            $port
+        );
+        @fwrite($sock, $request);
+
+        $response = '';
+        while (!feof($sock)) {
+            $chunk = @fgets($sock, 4096);
+            if ($chunk === false) {
+                break;
+            }
+            $response .= $chunk;
+        }
+        @fclose($sock);
+
+        if (preg_match('/\r\n\r\n(.*)$/s', $response, $matches)) {
+            return $matches[1];
+        }
+
+        return preg_replace('/^[^\r\n]*\r\n/', '', $response, 1);
     }
 
     /**
@@ -465,25 +511,7 @@ class UpnpIgdClient
      */
     private function httpGet(string $host, int $port, string $path): ?string
     {
-        $sock = @fsockopen($host, $port, $errno, $errstr, 5);
-        if ($sock === false) {
-            return null;
-        }
-
-        $request = "GET {$path} HTTP/1.1\r\nHost: {$host}:{$port}\r\nAccept: */*\r\nConnection: close\r\n\r\n";
-        @fwrite($sock, $request);
-
-        $response = '';
-        while (!feof($sock)) {
-            $response .= @fgets($sock, 4096);
-        }
-        @fclose($sock);
-
-        if (preg_match('/\r\n\r\n(.*)$/s', $response, $matches)) {
-            return $matches[1];
-        }
-
-        return preg_replace('/^[^\r\n]*\r\n/', '', $response, 1);
+        return $this->asyncHttpGet($host, $port, $path);
     }
 
     /**
@@ -592,6 +620,41 @@ class UpnpIgdClient
             }
         }
 
+        // Fallback: use UDP socket to determine local IP
+        return $this->getLocalIpViaUdpSocket();
+    }
+
+    /**
+     * Determines local IP by opening a UDP socket to 8.8.8.8:53.
+     *
+     * Uses Swoole\Coroutine\Socket when in coroutine context for non-blocking operation.
+     */
+    private function getLocalIpViaUdpSocket(): ?string
+    {
+        if (self::inCoroutine() && class_exists(\Swoole\Coroutine\Socket::class)) {
+            try {
+                $sock = new \Swoole\Coroutine\Socket(AF_INET, SOCK_DGRAM, 0);
+                // @phpstan-ignore-next-line setTimeout exists in Swoole extension
+                $sock->setTimeout(2.0);
+                // Connect to 8.8.8.8:53 (DNS) to determine local IP
+                $connected = $sock->connect('8.8.8.8', 53);
+                if ($connected) {
+                    $localAddr = $sock->getsockname();
+                    $sock->close();
+                    if ($localAddr !== false && is_array($localAddr)) {
+                        $host = $localAddr['host'] ?? null;
+                        if (is_string($host) && $host !== '') {
+                            return $host;
+                        }
+                    }
+                }
+                $sock->close();
+            } catch (RuntimeException $e) {
+                // Swoole socket failed, fall through to blocking fallback
+            }
+        }
+
+        // Blocking fallback
         $sock = @fsockopen('8.8.8.8', 53, $errno, $errstr, 2);
         if ($sock !== false) {
             $localAddr = stream_socket_get_name($sock, false);

@@ -65,6 +65,84 @@ Tests mock the DB with `$this->createMock(Workerman\MySQL\Connection::class)` an
 
 These use the `oauth_state_store` table with TTL and atomic consume to prevent race conditions.
 
+### Async Patterns
+
+**Blocking vs Async I/O:** Workerman runs a single-process event loop. Blocking I/O (synchronous cURL, `file_get_contents` for HTTP, blocking DB queries) stalls the entire worker, blocking all concurrent connections. Always prefer non-blocking patterns.
+
+**HTTP Clients — Use `workerman/http-client`:**
+```php
+use Workerman\Http\Client;
+
+$client = new Client(['timeout' => 10]);
+// Non-blocking async request with cooperative wait
+$client->request($url, [
+    'success' => function ($response) use (&$state) {
+        $state['response'] = $response;
+        $state['done'] = true;
+    },
+    'error' => function ($error) use (&$state) {
+        $state['error'] = $error;
+        $state['done'] = true;
+    },
+]);
+// Cooperative wait — yields to event loop, allowing other tasks to proceed
+while (!$state['done'] && $waited < $maxWait) {
+    usleep(1000); // 1ms interval
+    $waited += 0.001;
+}
+```
+
+Classes using this pattern: `MetadataHttpClient`, `Hub\HttpClient`, `S3Client`.
+
+**Monotonic Time — Use `hrtime(true)`:**
+Never use `microtime(true)` or `time()` for measuring elapsed intervals. `hrtime(true)` returns a monotonically increasing nanosecond timestamp that is immune to system clock adjustments (NTP, daylight savings, manual changes).
+
+```php
+// CORRECT — monotonic, immune to clock jumps
+$start = hrtime(true);
+doWork();
+$elapsedMs = (hrtime(true) - $start) / 1_000_000.0;
+
+// WRONG — microtime can go backwards if the system clock adjusts
+$start = microtime(true);
+```
+
+Used in: benchmark scripts, streaming throughput measurement, performance profiling.
+
+**Batch Queries for N+1 Prevention:**
+Query in batches rather than looping with individual queries. When fetching related data for multiple items, use `WHERE id IN (...)` with a single query.
+
+```php
+// WRONG — N+1 queries (one per item)
+foreach ($itemIds as $id) {
+    $items[] = $db->query("SELECT * FROM media_items WHERE id = ?", [$id]);
+}
+
+// CORRECT — single batch query
+$placeholders = implode(',', array_fill(0, count($itemIds), '?'));
+$sql = "SELECT * FROM media_items WHERE id IN ($placeholders)";
+$items = $db->query($sql, $itemIds);
+```
+
+`DuplicateFinder` demonstrates batch pagination with `DEFAULT_BATCH_SIZE = 500` to bound memory in long-lived workers.
+
+**Chunked/Streaming for Large Data:**
+For large data that exceeds memory or response size limits, use chunked processing:
+
+```php
+// Reading large files in chunks (see AudiobookScanner)
+$handle = fopen($filePath, 'rb');
+while (!feof($handle)) {
+    $chunk = fread($handle, 8192);
+    // Process chunk without loading entire file
+}
+
+// Chunked HTTP responses for Workerman (see HttpHandler)
+// Responses over 2 MB are chunked to avoid buffering
+```
+
+`AudiobookScanner` uses chunked reading to parse files without loading them into memory entirely.
+
 ### Config
 
 `config/{server,database,logger,ffmpeg}.php` — each `include`d, each returns an array. Logger writes rotating files to `.logs/`.

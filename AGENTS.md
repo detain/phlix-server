@@ -91,6 +91,66 @@ Schema in `migrations/001_initial_schema.sql` (`users`, `user_settings`, `librar
 - Smarty templates use `{extends}` / `{block}` / `{include file="partials/media_card.tpl"}`
 - Each step in `docs/archive/plans/phase-N/step-N.M-*.md` ends with: branch → commit → `unset GITHUB_TOKEN` → `gh pr create` → `gh pr merge --squash --delete-branch` → `git checkout master && git pull`
 
+## Async Patterns
+
+**HTTP Clients — Use `workerman/http-client` for non-blocking I/O:**
+Workerman runs a single-process event loop. Blocking HTTP calls stall all concurrent connections.
+
+Three classes use `Workerman\Http\Client` for async HTTP:
+- `MetadataHttpClient` (`src/Media/Metadata/`) — TMDB/TVDB/Fanart API calls
+- `Hub\HttpClient` (`src/Hub/`) — Hub relay API calls
+- `S3Client` (`src/Admin/`) — S3-compatible storage
+
+Pattern: lazy-initialized `Client` with callback-based async request + cooperative `usleep` wait loop:
+
+```php
+$client = new Client(['timeout' => $this->timeout]);
+$client->request($url, [
+    'success' => fn($response) => $state['response'] = $response,
+    'error'   => fn($error)   => $state['error']   = $error,
+]);
+// Cooperative wait — yields to event loop
+while (!$state['done'] && $waited < $maxWait) {
+    usleep(1000);
+    $waited += 0.001;
+}
+```
+
+When `Workerman\Coroutine` is available (coroutine context), use `requestCoroutine()` for true async. Falls back to synchronous cURL in CLI/testing contexts.
+
+**Monotonic Time — Use `hrtime(true)` not `microtime(true)`:**
+`hrtime(true)` returns a monotonically increasing nanosecond counter, immune to system clock adjustments (NTP sync, daylight savings, manual changes). Use for all elapsed-time measurement:
+
+```php
+$start = hrtime(true);
+// ... work ...
+$elapsedMs = (hrtime(true) - $start) / 1_000_000.0;
+```
+
+Used in: `AdminHubController.php`, benchmark scripts under `scripts/bench/`. Never use `microtime(true)` or `time()` for intervals.
+
+**Batch Queries — Prevent N+1:**
+Fetch related data for multiple items in a single query using `WHERE id IN (...)`. Never loop with individual queries.
+
+```php
+// Single batch query — CORRECT
+$ids = array_column($items, 'id');
+$placeholders = implode(',', array_fill(0, count($ids), '?'));
+$rows = $db->query("SELECT * FROM media_items WHERE id IN ($placeholders)", $ids);
+
+// Per-item queries — WRONG (N+1)
+foreach ($items as $item) {
+    $rows[] = $db->query("SELECT * FROM media_items WHERE id = ?", [$item['id']]);
+}
+```
+
+`DuplicateFinder` demonstrates batch pagination (`DEFAULT_BATCH_SIZE = 500`) for bounded memory in long-lived workers.
+
+**Chunked/Streaming I/O for Large Data:**
+- `AudiobookScanner` reads large audio files in 8KB chunks via `fread()` to avoid memory pressure
+- `HttpHandler` chunks responses over 2 MB for streaming to clients
+- RelayConsumer chunks frames to ≤65535 bytes per DATA frame
+
 ## CI
 
 `.github/workflows/phpunit.yml` and `.github/workflows/coding-standards.yml` run on push. Coverage HTML in `coverage-report/`, Clover at `coverage.xml`.

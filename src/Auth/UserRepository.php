@@ -1098,6 +1098,24 @@ class UserRepository
     }
 
     /**
+     * Clear all in-memory caches.
+     *
+     * This is primarily useful for unit testing to ensure a clean cache state
+     * between tests. In production, caches naturally expire based on TTL.
+     *
+     * @return void
+     *
+     * @since 0.32.0
+     */
+    public static function clearCache(): void
+    {
+        self::$cacheById = [];
+        self::$cacheByUsername = [];
+        self::$cacheByEmail = [];
+        self::$statusCacheById = [];
+    }
+
+    /**
      * Generate a UUID v4 string.
      *
      * @return string UUID in standard format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx

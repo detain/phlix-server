@@ -339,4 +339,83 @@ class SmartPlaylistEngineTest extends TestCase
         $this->assertCount(1, $decoded['rules']);
         $this->assertSame('genre', $decoded['rules'][0]['field']);
     }
+
+    public function testEvaluateOnScanWithLargeDataset10500Items(): void
+    {
+        // Simulate 21 batches of 500 items each = 10,500 items total
+        // This tests the memory-safe batched reading mechanism
+        $batches = [];
+        for ($batchNum = 0; $batchNum < 21; $batchNum++) {
+            $startId = ($batchNum * 500) + 1;
+            $endId = ($batchNum + 1) * 500;
+            $batches[] = array_map(
+                fn(int $i) => $this->createItem($i, $i),
+                range($startId, $endId)
+            );
+        }
+        $batches[] = []; // End signal
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnOnConsecutiveCalls(...$batches);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 0, 'addedAt', true);
+
+        $this->assertCount(10500, $result);
+    }
+
+    public function testEvaluateOnScanWithLargeDatasetAndLimitReturnsCorrectCount(): void
+    {
+        // Test that top-K selection works correctly with large dataset
+        // 22 batches of 500 = 11,000 items, return only top 100
+        $batches = [];
+        for ($batchNum = 0; $batchNum < 22; $batchNum++) {
+            $startId = ($batchNum * 500) + 1;
+            $endId = ($batchNum + 1) * 500;
+            $batches[] = array_map(
+                fn(int $i) => $this->createItem($i, $i),
+                range($startId, $endId)
+            );
+        }
+        $batches[] = []; // End signal
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnOnConsecutiveCalls(...$batches);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 100, 'sortField', true);
+
+        $this->assertCount(100, $result);
+        // Should return the top 100 highest values (10900-11000)
+        $this->assertSame(11000, $result[0]['metadata']['sortField']);
+        $this->assertSame(10901, $result[99]['metadata']['sortField']);
+    }
+
+    public function testEvaluateOnScanWithLargeDatasetAndRandomSortUsesReservoirSampling(): void
+    {
+        // Test reservoir sampling with 10,500 items, selecting 50 random
+        $batches = [];
+        for ($batchNum = 0; $batchNum < 21; $batchNum++) {
+            $startId = ($batchNum * 500) + 1;
+            $endId = ($batchNum + 1) * 500;
+            $batches[] = array_map(
+                fn(int $i) => $this->createItem($i, $i),
+                range($startId, $endId)
+            );
+        }
+        $batches[] = []; // End signal
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnOnConsecutiveCalls(...$batches);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 50, 'random', true);
+
+        $this->assertCount(50, $result);
+        // All returned items should have IDs between 1 and 10500
+        foreach ($result as $item) {
+            $this->assertGreaterThanOrEqual(1, $item['id']);
+            $this->assertLessThanOrEqual(10500, $item['id']);
+        }
+    }
 }

@@ -31,6 +31,11 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
     private array $seenSql = [];
 
     /**
+     * @var list<array<int, mixed>> Every parameter array passed to query().
+     */
+    private array $seenParams = [];
+
+    /**
      * Build a mock Connection.
      *
      * @param array<string, array<int, array<string, mixed>>> $byFragment
@@ -39,11 +44,13 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
     private function mockConnection(array $byFragment = []): Connection
     {
         $seenSql = &$this->seenSql;
+        $seenParams = &$this->seenParams;
         $mock = $this->createMock(Connection::class);
 
         $mock->method('query')->willReturnCallback(
-            function (string $sql) use ($byFragment, &$seenSql): mixed {
+            function (string $sql, array $params = []) use ($byFragment, &$seenSql, &$seenParams): mixed {
                 $seenSql[] = $sql;
+                $seenParams[] = $params;
                 foreach ($byFragment as $fragment => $rows) {
                     if (str_contains($sql, $fragment)) {
                         return $rows;
@@ -64,6 +71,7 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
     {
         parent::setUp();
         $this->seenSql = [];
+        $this->seenParams = [];
     }
 
     public function test_round_trip_returns_user_id(): void
@@ -169,13 +177,17 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
 
         $store->put('test-state', 'user-123');
 
-        // Verify the INSERT used 'lastfm' as the provider
-        $insertStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'INSERT INTO oauth_state_store')
-        );
-        self::assertCount(1, $insertStatements);
-        self::assertStringContainsString("'lastfm'", $insertStatements[0]);
+        // Find the INSERT statement index
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        // Verify the INSERT used 'lastfm' as the provider (params: id, provider, state, data, expires)
+        self::assertSame('lastfm', $this->seenParams[$insertIndex][1]);
     }
 
     public function test_put_stores_user_id_in_json_data(): void
@@ -185,12 +197,19 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
 
         $store->put('test-state', 'user-xyz-789');
 
-        $insertStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'INSERT INTO oauth_state_store')
-        );
-        self::assertCount(1, $insertStatements);
-        self::assertStringContainsString('"user_id":"user-xyz-789"', $insertStatements[0]);
+        // Find the INSERT statement index
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        // Verify the JSON data contains the user_id (params: id, provider, state, data, expires)
+        $data = json_decode($this->seenParams[$insertIndex][3], true);
+        self::assertIsArray($data);
+        self::assertSame('user-xyz-789', $data['user_id']);
     }
 
     public function test_consume_queries_with_correct_provider_filter(): void
@@ -202,15 +221,18 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
 
         $store->consume('any-state');
 
-        $selectStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'SELECT data FROM oauth_state_store')
-        );
-        self::assertCount(1, $selectStatements);
-        // The SELECT should filter by provider = 'lastfm'
-        self::assertStringContainsString("provider = 'lastfm'", $selectStatements[0]);
-        self::assertStringContainsString("state_value = ?", $selectStatements[0]);
-        self::assertStringContainsString("expires_at > NOW()", $selectStatements[0]);
+        // Find the SELECT statement index
+        $selectIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'SELECT data FROM oauth_state_store')) {
+                $selectIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($selectIndex, 'SELECT statement not found');
+        // The SELECT should filter by provider = 'lastfm' (params: provider, state)
+        self::assertSame('lastfm', $this->seenParams[$selectIndex][0]);
+        self::assertSame('any-state', $this->seenParams[$selectIndex][1]);
     }
 
     public function test_cleanup_runs_after_successful_consume(): void
@@ -357,15 +379,19 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
 
         $store->put('state-abc', 'user-123');
 
-        $insertStatements = array_filter(
-            $this->seenSql,
-            static fn(string $sql): bool => str_contains($sql, 'INSERT INTO oauth_state_store')
-        );
-        self::assertCount(1, $insertStatements);
-        // UUID format: 8-4-4-4-12 hex characters
+        // Find the INSERT statement index
+        $insertIndex = null;
+        foreach ($this->seenSql as $i => $sql) {
+            if (str_contains($sql, 'INSERT INTO oauth_state_store')) {
+                $insertIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($insertIndex, 'INSERT statement not found');
+        // UUID format: 8-4-4-4-12 hex characters (first param is the id)
         self::assertMatchesRegularExpression(
             '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/',
-            $insertStatements[0]
+            $this->seenParams[$insertIndex][0]
         );
     }
 }

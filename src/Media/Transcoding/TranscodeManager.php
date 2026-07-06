@@ -66,6 +66,12 @@ class TranscodeManager
     /** @var int|null Unix timestamp of the last reaper run, or null if never run. */
     private ?int $lastReaperRun = null;
 
+    /** @var array<string, array{files: list<string>, expires_at: int}> Cached glob results by directory */
+    private static array $globCache = [];
+
+    /** @var int Cache TTL in seconds (5 seconds for transcode cleanup) */
+    private const GLOB_CACHE_TTL = 5;
+
     /**
      * Profile resolution caps used to decide downscaling for HLS jobs.
      *
@@ -1243,15 +1249,27 @@ class TranscodeManager
 
         $dir = dirname($job['output_path']);
         if (is_dir($dir)) {
-            $files = glob("{$dir}/*");
-            if ($files !== false) {
-                foreach ($files as $file) {
-                    if (is_file($file)) {
-                        unlink($file);
-                    }
+            // Use cached glob results if available and not expired
+            $now = time();
+            if (isset(self::$globCache[$dir]) && self::$globCache[$dir]['expires_at'] > $now) {
+                $files = self::$globCache[$dir]['files'];
+            } else {
+                $files = glob("{$dir}/*") ?: [];
+                self::$globCache[$dir] = [
+                    'files' => $files,
+                    'expires_at' => $now + self::GLOB_CACHE_TTL,
+                ];
+            }
+
+            foreach ($files as $file) {
+                if (is_file($file)) {
+                    unlink($file);
                 }
             }
             rmdir($dir);
+
+            // Clean up cache entry for this directory
+            unset(self::$globCache[$dir]);
         }
 
         $this->db->query("UPDATE transcode_jobs SET status = 'cancelled' WHERE id = ?", [$jobId]);

@@ -34,6 +34,15 @@ final class LogController
     /** Canonical log directory (no trailing slash), or '' if it doesn't resolve. */
     private string $logDir;
 
+    /** @var list<string>|null Cached glob results */
+    private static ?array $cachedGlobResults = null;
+
+    /** @var int|null Timestamp when glob cache was loaded */
+    private static ?int $globCacheTimestamp = null;
+
+    /** @var int Cache TTL in seconds (30 seconds - logs can be rotated) */
+    private const GLOB_CACHE_TTL = 30;
+
     /** @var int Hard cap on lines returned by tail(). */
     private const MAX_LINES = 2000;
 
@@ -61,8 +70,23 @@ final class LogController
             return (new Response())->json(['files' => []]);
         }
 
+        $now = time();
+
+        // Use cached glob results if still valid
+        if (
+            self::$cachedGlobResults !== null
+            && self::$globCacheTimestamp !== null
+            && ($now - self::$globCacheTimestamp) < self::GLOB_CACHE_TTL
+        ) {
+            $paths = self::$cachedGlobResults;
+        } else {
+            $paths = glob($this->logDir . '/*.log') ?: [];
+            self::$cachedGlobResults = $paths;
+            self::$globCacheTimestamp = $now;
+        }
+
         $files = [];
-        foreach (glob($this->logDir . '/*.log') ?: [] as $path) {
+        foreach ($paths as $path) {
             if (!is_file($path)) {
                 continue;
             }
@@ -149,7 +173,20 @@ final class LogController
             return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
         }
 
-        $paths = array_values(array_filter(glob($this->logDir . '/*.log') ?: [], 'is_file'));
+        // Use cached glob results if still valid (same cache as index method)
+        if (
+            self::$cachedGlobResults !== null
+            && self::$globCacheTimestamp !== null
+            && (time() - self::$globCacheTimestamp) < self::GLOB_CACHE_TTL
+        ) {
+            $paths = self::$cachedGlobResults;
+        } else {
+            $paths = glob($this->logDir . '/*.log') ?: [];
+            self::$cachedGlobResults = $paths;
+            self::$globCacheTimestamp = time();
+        }
+
+        $paths = array_values(array_filter($paths, 'is_file'));
         $fileCount = count($paths);
         if ($fileCount === 0) {
             return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);

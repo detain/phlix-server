@@ -49,6 +49,15 @@ class LibraryManager
     /** @var ThemeMediaRepository|null Repository for theme media caching */
     private ?ThemeMediaRepository $themeMediaRepository = null;
 
+    /** @var array<int, array<string, mixed>>|null Cached libraries list */
+    private static ?array $cachedLibraries = null;
+
+    /** @var int|null Timestamp when libraries cache was loaded */
+    private static ?int $librariesCacheTimestamp = null;
+
+    /** @var int Cache TTL in seconds (60 seconds) */
+    private const LIBRARIES_CACHE_TTL = 60;
+
     /**
      * Constructor for LibraryManager.
      *
@@ -127,6 +136,10 @@ class LibraryManager
             "INSERT INTO libraries (id, name, type, paths, options) VALUES (?, ?, ?, ?, ?)",
             [$id, $name, $type, json_encode($paths), json_encode($options)]
         );
+
+        // Invalidate libraries cache since list has changed
+        self::$cachedLibraries = null;
+        self::$librariesCacheTimestamp = null;
 
         $this->logger->info('Library created', ['library_id' => $id, 'name' => $name, 'type' => $type]);
 
@@ -211,8 +224,21 @@ class LibraryManager
      */
     public function getAllLibraries(): array
     {
+        $now = time();
+
+        // Return cached libraries if still valid
+        if (
+            self::$cachedLibraries !== null
+            && self::$librariesCacheTimestamp !== null
+            && ($now - self::$librariesCacheTimestamp) < self::LIBRARIES_CACHE_TTL
+        ) {
+            return self::$cachedLibraries;
+        }
+
         $results = $this->db->query("SELECT * FROM libraries ORDER BY display_order, name");
         if (!is_array($results)) {
+            self::$cachedLibraries = [];
+            self::$librariesCacheTimestamp = $now;
             return [];
         }
 
@@ -229,6 +255,9 @@ class LibraryManager
             }
             $out[] = LibraryRow::fromRow($normalized)->toArray();
         }
+
+        self::$cachedLibraries = $out;
+        self::$librariesCacheTimestamp = $now;
         return $out;
     }
 
@@ -272,6 +301,10 @@ class LibraryManager
             $values
         );
 
+        // Invalidate libraries cache since list has changed
+        self::$cachedLibraries = null;
+        self::$librariesCacheTimestamp = null;
+
         $this->logger->info('Library updated', ['library_id' => $id]);
     }
 
@@ -284,6 +317,11 @@ class LibraryManager
     public function deleteLibrary(string $id): void
     {
         $this->db->query("DELETE FROM libraries WHERE id = ?", [$id]);
+
+        // Invalidate libraries cache since list has changed
+        self::$cachedLibraries = null;
+        self::$librariesCacheTimestamp = null;
+
         $this->logger->info('Library deleted', ['library_id' => $id]);
     }
 

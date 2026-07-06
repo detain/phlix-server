@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Plugins\Oidc;
+
+/**
+ * In-memory fallback implementation of {@see OidcStateStore}.
+ *
+ * Used only when neither an explicit state store nor a database connection
+ * is available. This should only occur in test scenarios or when DI is
+ * not properly configured.
+ *
+ * WARNING: Do not use in production - this does not persist state across
+ * requests and will cause race conditions under Workerman.
+ *
+ * @internal Not for production use.
+ * @since 0.16.0
+ */
+final class InMemoryOidcStateStore implements OidcStateStore
+{
+    /** @var array<string, array{code_verifier: string, nonce: string}> */
+    private array $entries = [];
+
+    public function put(string $state, string $codeVerifier, string $nonce): void
+    {
+        $this->entries[$state] = [
+            'code_verifier' => $codeVerifier,
+            'nonce' => $nonce,
+        ];
+    }
+
+    public function consume(string $state): ?array
+    {
+        if (!isset($this->entries[$state])) {
+            return null;
+        }
+        $entry = $this->entries[$state];
+        unset($this->entries[$state]);
+
+        $verifier = is_string($entry['code_verifier'] ?? null) ? $entry['code_verifier'] : '';
+        $nonce = is_string($entry['nonce'] ?? null) ? $entry['nonce'] : '';
+        if ($verifier === '') {
+            return null;
+        }
+
+        return [
+            'code_verifier' => $verifier,
+            'nonce' => $nonce,
+        ];
+    }
+}

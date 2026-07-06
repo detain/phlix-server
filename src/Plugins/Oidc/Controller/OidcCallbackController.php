@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Phlix\Plugins\Oidc\Controller;
 
+use Phlix\Plugins\Oidc\DbOidcStateStore;
+use Phlix\Plugins\Oidc\InMemoryOidcStateStore;
 use Phlix\Plugins\Oidc\OidcProvider;
 use Phlix\Plugins\Oidc\OidcStateStore;
-use Phlix\Plugins\Oidc\SessionOidcStateStore;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Auth\AuthProviderRegistry;
@@ -14,6 +15,7 @@ use Phlix\Auth\JwtHandler;
 use Phlix\Auth\UserRepository;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
+use Workerman\MySQL\Connection;
 
 /**
  * Handles OIDC authentication callback endpoints.
@@ -37,11 +39,22 @@ final class OidcCallbackController
         UserRepository $userRepository,
         JwtHandler $jwtHandler,
         ?OidcStateStore $stateStore = null,
+        ?Connection $db = null,
     ) {
         $this->registry = $registry;
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
-        $this->stateStore = $stateStore ?? new SessionOidcStateStore();
+
+        if ($stateStore !== null) {
+            $this->stateStore = $stateStore;
+        } elseif ($db !== null) {
+            $this->stateStore = new DbOidcStateStore($db);
+        } else {
+            // Fallback for test backwards compatibility. In production,
+            // DI autowiring injects Connection automatically, so this
+            // fallback should never be hit in normal operation.
+            $this->stateStore = new InMemoryOidcStateStore();
+        }
     }
 
     /**

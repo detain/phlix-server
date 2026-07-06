@@ -288,7 +288,20 @@ class TranscodeManager
         // Record the precise source duration so the UI shows a correct length.
         $this->persistProbedDuration($mediaItemId, $item, $probe);
 
-        $params = $this->computeHlsParams($probe, $profileName);
+        // On-demand seek-aware VOD. The media playlist is published COMPLETE up front
+        // (the full title duration, every segment, EXT-X-ENDLIST) and each MPEG-TS
+        // segment is transcoded ONLY when the player fetches it (see ensureSegment()).
+        // The player therefore reports the true total length immediately and can seek
+        // anywhere — including far past what has been produced — instead of the old
+        // single linear CMAF encode's live, ever-growing playlist (which made the
+        // duration keep climbing and seeking snap back to the buffered region).
+        $duration = $this->probedDurationSeconds($probe);
+        if ($duration <= 0.0) {
+            throw new \RuntimeException('Could not determine media duration for HLS playlist');
+        }
+
+        $segParams = $this->computeSegmentParams($probe, $profileName);
+        $segSeconds = $this->segmentSeconds;
 
         $jobId = $this->generateUuid();
         $hlsDir = "{$this->segmentDir}/{$jobId}";
@@ -296,15 +309,18 @@ class TranscodeManager
             throw new \RuntimeException("Failed to create HLS directory: {$hlsDir}");
         }
 
-        $width = is_int($params['variant_width'] ?? null) ? $params['variant_width'] : null;
-        $height = is_int($params['variant_height'] ?? null) ? $params['variant_height'] : null;
-        $bandwidth = is_int($params['variant_bandwidth'] ?? null) ? $params['variant_bandwidth'] : null;
-        // CMAF master playlist (HLS); the DASH manifest.mpd lands in the same dir.
+        $width = is_int($segParams['variant_width'] ?? null) ? $segParams['variant_width'] : null;
+        $height = is_int($segParams['variant_height'] ?? null) ? $segParams['variant_height'] : null;
+        $bandwidth = is_int($segParams['variant_bandwidth'] ?? null) ? $segParams['variant_bandwidth'] : null;
         $playlistPath = "{$hlsDir}/master.m3u8";
 
-        // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/
-        // VobSub are skipped). Detection is a cheap parse of the in-memory probe;
-        // the actual extraction runs in the detached job below.
+        // Publish the complete VOD master + media playlists now — no encode is needed
+        // to know the timeline, so this is instantaneous.
+        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth);
+
+        // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
+        // are skipped). Detection is a cheap parse of the in-memory probe; extraction
+        // runs in a detached job below (video no longer needs a background encode).
         $tracks = $this->subtitleExtractor->detectTextTracks($probe);
         $extractCmds = [];
         foreach ($tracks as $track) {
@@ -318,44 +334,336 @@ class TranscodeManager
             );
         }
         $tracksJson = $tracks === [] ? null : json_encode($tracks);
+        $segParamsJson = json_encode($segParams);
 
+        // Status is 'completed': the job's deliverable — the full VOD playlist — is
+        // ready the instant it's written, and segments are produced lazily on request.
+        // Marking it completed (not 'running') keeps the stale-job reaper — which only
+        // reaps 'running' rows — from tearing the job down while someone is watching.
         $this->db->query(
             "INSERT INTO transcode_jobs
-                (id, media_item_id, input_path, output_path, hls_dir, status, profile, key_hash,
-                 variant_width, variant_height, variant_bandwidth, subtitle_tracks, started_at)
-             VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, NOW())",
+                (id, media_item_id, input_path, output_path, hls_dir, status, progress, profile, key_hash,
+                 variant_width, variant_height, variant_bandwidth, subtitle_tracks,
+                 duration_seconds, segment_seconds, segment_params, started_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, 'completed', 100, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
             [$jobId, $mediaItemId, $itemPath, $playlistPath, $hlsDir, $profileName, $keyHash,
-                $width, $height, $bandwidth, $tracksJson]
+                $width, $height, $bandwidth, $tracksJson,
+                (int) round($duration), $segSeconds, $segParamsJson]
         );
 
-        $pid = $this->ffmpeg->startCmafTranscodeWithSubtitles($itemPath, $hlsDir, $params, $extractCmds);
-        if ($pid <= 0) {
-            $this->db->query(
-                "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ?",
-                ['Failed to launch ffmpeg', $jobId]
-            );
-            throw new \RuntimeException('Failed to launch transcode');
+        // Extract subtitles in the background (best-effort). A harmless `true` primary
+        // writes the `.complete` marker and the extract commands run after it; because
+        // `true` always succeeds, a failing extract can never write `.failed` (which
+        // would wrongly mark the whole job failed) — each extract is internally `|| true`.
+        if ($extractCmds !== []) {
+            $this->ffmpeg->startDetached('true', $hlsDir, $extractCmds);
         }
 
-        $this->logger->info('CMAF transcode started', [
+        $this->logger->info('On-demand HLS job created', [
             'job_id' => $jobId,
             'media_item_id' => $mediaItemId,
             'profile' => $profileName,
-            'pid' => $pid,
-            'video_codec' => $params['video_codec'] ?? null,
-            'audio_codec' => $params['audio_codec'] ?? null,
+            'duration' => (int) round($duration),
+            'segment_seconds' => $segSeconds,
+            'video_codec' => $segParams['video_codec'] ?? null,
+            'audio_codec' => $segParams['audio_codec'] ?? null,
             'subtitle_tracks' => count($tracks),
         ]);
 
         return [
             'job_id' => $jobId,
-            'status' => self::STATUS_RUNNING,
+            'status' => self::STATUS_COMPLETED,
             'master_url' => "/hls/{$jobId}/master.m3u8",
             'hls_url' => "/hls/{$jobId}/master.m3u8",
             'dash_url' => "/dash/{$jobId}/manifest.mpd",
             'reused' => false,
             'subtitles' => $this->subtitleTrackUrls($jobId, $tracks),
         ];
+    }
+
+    /**
+     * Interval (ms) between polls while waiting for an on-demand segment to encode.
+     * Uses a coroutine-yielding sleep (SWOOLE_HOOK_SLEEP is in the curated hook set),
+     * so a waiting request does not block the worker.
+     */
+    private const SEGMENT_POLL_INTERVAL_MS = 100;
+
+    /**
+     * Max time (ms) to wait for a single on-demand segment before giving up (404).
+     * A 6 s segment encodes in ~1–3 s at `veryfast`; the ceiling covers a slow or
+     * contended encode while staying under the client's fragment-load timeout.
+     */
+    private const SEGMENT_MAX_WAIT_MS = 25000;
+
+    /**
+     * Soft cap on in-flight segment encodes per job. Rapid scrubbing can request a
+     * burst of distinct segments; beyond this we briefly wait for a slot before
+     * launching so a frantic seek can't fork-bomb ffmpeg on a small box.
+     */
+    private const SEGMENT_MAX_INFLIGHT = 4;
+
+    /**
+     * Ensures the Nth MPEG-TS segment of an on-demand HLS job exists on disk,
+     * transcoding it if necessary, and returns its absolute path (or null).
+     *
+     * This is the seek-anywhere core: because the VOD playlist advertises every
+     * segment up front, the player may fetch ANY segment — including one far past
+     * whatever has been produced so far. A cache hit returns immediately; otherwise
+     * a short `-ss` fast-seek encode of exactly this segment's window is launched
+     * (detached, written atomically) and the request polls — with a coroutine-
+     * yielding sleep — until the file appears or the wait ceiling is hit.
+     *
+     * @param string $jobId Transcode job id.
+     * @param int    $index Zero-based segment index.
+     *
+     * @return string|null Absolute path to the ready segment, or null when the job
+     *                     is not on-demand, the index is out of range, or the encode
+     *                     did not finish within {@see self::SEGMENT_MAX_WAIT_MS}.
+     */
+    public function ensureSegment(string $jobId, int $index): ?string
+    {
+        $row = $this->getJobRow($jobId);
+        if ($row === null || $index < 0) {
+            return null;
+        }
+
+        $segParamsRaw = $row['segment_params'] ?? null;
+        if (!is_string($segParamsRaw) || $segParamsRaw === '') {
+            return null; // not an on-demand job (e.g. a legacy CMAF job)
+        }
+        $decodedParams = json_decode($segParamsRaw, true);
+        if (!is_array($decodedParams)) {
+            return null;
+        }
+        // Normalise to string keys so the encode-param contract holds (JSON objects
+        // always decode with string keys; this makes that explicit for the type).
+        $segParams = [];
+        foreach ($decodedParams as $paramKey => $paramValue) {
+            $segParams[(string) $paramKey] = $paramValue;
+        }
+
+        $segSeconds = is_numeric($row['segment_seconds'] ?? null)
+            ? (int) $row['segment_seconds']
+            : $this->segmentSeconds;
+        $segSeconds = $segSeconds > 0 ? $segSeconds : $this->segmentSeconds;
+        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
+        if ($duration <= 0.0) {
+            return null;
+        }
+
+        $total = (int) ceil($duration / $segSeconds);
+        if ($index >= $total) {
+            return null;
+        }
+
+        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
+            ? (string) $row['hls_dir']
+            : "{$this->segmentDir}/{$jobId}";
+        $final = $dir . '/' . self::segmentFileName($index);
+
+        if (is_file($final)) {
+            return $final; // cache hit
+        }
+
+        $inputPath = is_string($row['input_path'] ?? null) ? (string) $row['input_path'] : '';
+        if ($inputPath === '' || !is_file($inputPath)) {
+            return null;
+        }
+
+        $start = (float) ($index * $segSeconds);
+        $segLen = min((float) $segSeconds, $duration - $start);
+        if ($segLen <= 0.0) {
+            return null;
+        }
+
+        // Soft concurrency cap: wait briefly for an in-flight slot before launching.
+        $this->awaitSegmentSlot($dir, $final);
+
+        if (!is_file($final)) {
+            $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
+        }
+
+        // Poll (coroutine-yielding) until the atomically-renamed final file appears.
+        $waited = 0;
+        while (!is_file($final) && $waited < self::SEGMENT_MAX_WAIT_MS) {
+            usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            $waited += self::SEGMENT_POLL_INTERVAL_MS;
+        }
+
+        return is_file($final) ? $final : null;
+    }
+
+    /**
+     * Briefly waits for the in-flight on-demand encode count for a job to fall
+     * below {@see self::SEGMENT_MAX_INFLIGHT} before a new segment encode is
+     * launched, so a frantic seek can't spawn an unbounded number of ffmpegs. Best
+     * effort: it never blocks longer than the segment wait ceiling and returns once
+     * a slot is free, the target segment appeared, or the ceiling is hit.
+     *
+     * @param string $dir   Job directory (holds the `*.part-*` temp files).
+     * @param string $final The target segment path (stop waiting if it appears).
+     */
+    private function awaitSegmentSlot(string $dir, string $final): void
+    {
+        $waited = 0;
+        while ($waited < self::SEGMENT_MAX_WAIT_MS) {
+            if (is_file($final)) {
+                return;
+            }
+            $inflight = glob("{$dir}/seg-*.ts.part-*");
+            if ($inflight === false || count($inflight) < self::SEGMENT_MAX_INFLIGHT) {
+                return;
+            }
+            usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+            $waited += self::SEGMENT_POLL_INTERVAL_MS;
+        }
+    }
+
+    /**
+     * The on-demand segment filename for a zero-based index (`seg-00042.ts`).
+     */
+    private static function segmentFileName(int $index): string
+    {
+        return sprintf('seg-%05d.ts', $index);
+    }
+
+    /**
+     * Extracts the source duration (seconds) from a raw ffprobe result.
+     *
+     * @param array<string, mixed> $probe Raw ffprobe result (expects format.duration).
+     *
+     * @return float Duration in seconds, or 0.0 when not determinable.
+     */
+    private function probedDurationSeconds(array $probe): float
+    {
+        $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
+        $raw = $format['duration'] ?? null;
+        return is_numeric($raw) ? (float) $raw : 0.0;
+    }
+
+    /**
+     * Computes the per-segment encode parameters for an on-demand HLS job.
+     *
+     * Starts from {@see self::computeHlsParams()} but forces a real encode: on-demand
+     * segments cannot stream-copy (a copy can't force a keyframe at each segment
+     * boundary), so a `'copy'` decision is upgraded to a browser-safe H.264 / AAC
+     * encode. The variant_width/height/bandwidth descriptors are preserved for the
+     * master playlist.
+     *
+     * @param array<string, mixed> $probe       Raw ffprobe result.
+     * @param string               $profileName Device profile name.
+     *
+     * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildSegmentCommand()}.
+     */
+    private function computeSegmentParams(array $probe, string $profileName): array
+    {
+        $params = $this->computeHlsParams($probe, $profileName);
+
+        if (($params['video_codec'] ?? null) === 'copy') {
+            $params['video_codec'] = 'libx264';
+            $params['preset'] = is_string($params['preset'] ?? null) ? $params['preset'] : 'veryfast';
+            $params['crf'] = is_numeric($params['crf'] ?? null) ? (int) $params['crf'] : 23;
+            $params['pix_fmt'] = 'yuv420p';
+            $params['profile'] = 'high';
+            $params['level'] = '4.1';
+        }
+        if (($params['audio_codec'] ?? null) === 'copy') {
+            $params['audio_codec'] = 'aac';
+            $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null) ? $params['audio_bitrate'] : '128k';
+        }
+
+        return $params;
+    }
+
+    /**
+     * Writes the complete VOD master + media playlists for an on-demand HLS job.
+     *
+     * Both are static: the master advertises the single variant, and the media
+     * playlist lists every segment with its EXTINF, `EXT-X-PLAYLIST-TYPE:VOD`, and a
+     * closing `EXT-X-ENDLIST`, so the player knows the true duration and full
+     * seekable range immediately. Segments themselves are produced on demand.
+     *
+     * @param string   $dir        Job directory.
+     * @param float    $duration   Source duration in seconds.
+     * @param int      $segSeconds Target segment (EXTINF) length in seconds.
+     * @param int|null $width      Variant pixel width (master RESOLUTION), or null.
+     * @param int|null $height     Variant pixel height, or null.
+     * @param int|null $bandwidth  Variant nominal bandwidth (master BANDWIDTH), or null.
+     */
+    private function writeVodPlaylists(
+        string $dir,
+        float $duration,
+        int $segSeconds,
+        ?int $width,
+        ?int $height,
+        ?int $bandwidth
+    ): void {
+        file_put_contents("{$dir}/master.m3u8", $this->buildMasterPlaylist($width, $height, $bandwidth));
+        file_put_contents("{$dir}/media_0.m3u8", $this->buildMediaPlaylist($duration, $segSeconds));
+    }
+
+    /**
+     * Builds the single-variant HLS master playlist text.
+     *
+     * @param int|null $width     Variant pixel width, or null to omit RESOLUTION.
+     * @param int|null $height    Variant pixel height, or null to omit RESOLUTION.
+     * @param int|null $bandwidth Nominal variant bandwidth (bits/sec).
+     *
+     * @return string Master playlist text.
+     */
+    private function buildMasterPlaylist(?int $width, ?int $height, ?int $bandwidth): string
+    {
+        // avc1.640029 = H.264 High@4.1 (the segment encode target); mp4a.40.2 = AAC-LC.
+        $attrs = 'BANDWIDTH=' . ($bandwidth !== null && $bandwidth > 0 ? $bandwidth : 3000000);
+        if ($width !== null && $height !== null && $width > 0 && $height > 0) {
+            $attrs .= ",RESOLUTION={$width}x{$height}";
+        }
+        $attrs .= ',CODECS="avc1.640029,mp4a.40.2"';
+
+        return "#EXTM3U\n"
+            . "#EXT-X-VERSION:3\n"
+            . "#EXT-X-STREAM-INF:{$attrs}\n"
+            . "media_0.m3u8\n";
+    }
+
+    /**
+     * Builds the complete VOD media playlist text for a title of the given duration.
+     *
+     * Emits one `#EXTINF` + `seg-NNNNN.ts` entry per segment (the last shorter when
+     * the duration is not a whole multiple of the segment length), tagged VOD and
+     * terminated with `#EXT-X-ENDLIST` so the player treats it as a fixed-length,
+     * fully-seekable stream.
+     *
+     * @param float $duration   Source duration in seconds.
+     * @param int   $segSeconds Target segment length in seconds.
+     *
+     * @return string Media playlist text.
+     */
+    private function buildMediaPlaylist(float $duration, int $segSeconds): string
+    {
+        $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
+        $count = (int) ceil($duration / $segSeconds);
+
+        $lines = [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            '#EXT-X-PLAYLIST-TYPE:VOD',
+            '#EXT-X-TARGETDURATION:' . $segSeconds,
+            '#EXT-X-MEDIA-SEQUENCE:0',
+            '#EXT-X-INDEPENDENT-SEGMENTS',
+        ];
+        for ($i = 0; $i < $count; $i++) {
+            $start = $i * $segSeconds;
+            $len = min((float) $segSeconds, $duration - $start);
+            if ($len <= 0.0) {
+                break;
+            }
+            $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
+            $lines[] = self::segmentFileName($i);
+        }
+        $lines[] = '#EXT-X-ENDLIST';
+
+        return implode("\n", $lines) . "\n";
     }
 
     /**
@@ -493,10 +801,18 @@ class TranscodeManager
         $dbStatus = is_string($row['status'] ?? null) ? (string) $row['status'] : self::STATUS_RUNNING;
 
         $segments = $this->countSegments($dir);
-        $playlistReady = file_exists("{$dir}/master.m3u8") && $segments > 0;
+        // The VOD master playlist is written at job creation (before ensureHlsJob
+        // returns), so its presence alone means the player can start — segments are
+        // produced on demand (see ensureSegment()), so do NOT require any to exist yet.
+        $playlistReady = file_exists("{$dir}/master.m3u8");
 
         $status = $dbStatus;
-        if ($dbStatus !== self::STATUS_CANCELLED) {
+        // A completed job never regresses. An on-demand job is 'completed' from
+        // creation (its complete VOD playlist IS the deliverable); the disk markers
+        // below only describe a legacy linear encode that is still in flight.
+        if ($dbStatus === self::STATUS_COMPLETED) {
+            $status = self::STATUS_COMPLETED;
+        } elseif ($dbStatus !== self::STATUS_CANCELLED) {
             if (file_exists("{$dir}/.failed")) {
                 $status = self::STATUS_FAILED;
             } elseif (file_exists("{$dir}/.complete")) {
@@ -645,9 +961,13 @@ class TranscodeManager
      */
     private function findReusableJob(string $keyHash): ?string
     {
+        // Only reuse ON-DEMAND jobs (segment_params IS NOT NULL). A legacy linear
+        // CMAF job with the same key_hash left in the table across the upgrade must
+        // NOT be reused — its playlist is the old live, ever-growing one — so it is
+        // skipped here and a fresh on-demand job is created instead.
         $result = $this->db->query(
             "SELECT id, hls_dir, status FROM transcode_jobs
-             WHERE key_hash = ? AND status IN ('running', 'completed')
+             WHERE key_hash = ? AND status IN ('running', 'completed') AND segment_params IS NOT NULL
              ORDER BY started_at DESC LIMIT 1",
             [$keyHash]
         );
@@ -713,8 +1033,12 @@ class TranscodeManager
      */
     private function countSegments(string $dir): int
     {
-        $files = glob("{$dir}/chunk-*.m4s");
-        return $files === false ? 0 : count($files);
+        // Legacy linear CMAF jobs write `chunk-*.m4s`; on-demand jobs write
+        // `seg-*.ts` as they are requested (the `seg-*.ts.part-*` temps do not match
+        // the `.ts` glob, so half-written segments are not counted).
+        $cmaf = glob("{$dir}/chunk-*.m4s");
+        $ts = glob("{$dir}/seg-*.ts");
+        return (is_array($cmaf) ? count($cmaf) : 0) + (is_array($ts) ? count($ts) : 0);
     }
 
     /**

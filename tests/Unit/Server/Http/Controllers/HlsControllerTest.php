@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
 
@@ -34,9 +35,9 @@ class HlsControllerTest extends TestCase
         $this->rrmdir($this->segmentDir);
     }
 
-    private function controller(): HlsController
+    private function controller(?TranscodeManager $manager = null): HlsController
     {
-        return new HlsController($this->streamer);
+        return new HlsController($this->streamer, $manager);
     }
 
     private function writeJobFile(string $jobId, string $file, string $content): void
@@ -107,6 +108,54 @@ class HlsControllerTest extends TestCase
     public function testServeFile404WhenMissing(): void
     {
         $res = $this->controller()->serveFile(new Request(), ['job_id' => 'nope', 'file' => 'master.m3u8']);
+        $this->assertSame(404, $res->statusCode);
+    }
+
+    public function testServesOnDemandSegmentThroughTranscodeManager(): void
+    {
+        // A seg-NNNNN.ts request is routed through the transcoder, which produces
+        // (or serves cached) the segment; the controller then serves its bytes.
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->expects($this->once())
+            ->method('ensureSegment')
+            ->with('job-seg', 5)
+            ->willReturnCallback(function (string $jobId, int $index): string {
+                $this->writeJobFile($jobId, 'seg-00005.ts', 'TSBYTES');
+                return "{$this->segmentDir}/{$jobId}/seg-00005.ts";
+            });
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+        );
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('video/mp2t', $res->headers['Content-Type']);
+        $this->assertSame('TSBYTES', $res->body);
+    }
+
+    public function testOnDemandSegment404WhenTranscoderReturnsNull(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureSegment')->willReturn(null);
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+        );
+
+        $this->assertSame(404, $res->statusCode);
+    }
+
+    public function testOnDemandSegment404WhenTranscoderUnavailable(): void
+    {
+        // Degenerate container-less construction: no transcoder → segments 404
+        // (playlists/static files still serve).
+        $res = $this->controller(null)->serveFile(
+            new Request(),
+            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+        );
+
         $this->assertSame(404, $res->statusCode);
     }
 

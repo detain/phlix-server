@@ -2855,7 +2855,9 @@ class Application
 
         /** @var \Phlix\Media\Streaming\HlsStreamer */
         $hlsStreamer = $this->container->get(\Phlix\Media\Streaming\HlsStreamer::class);
-        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer);
+        /** @var \Phlix\Media\Transcoding\TranscodeManager */
+        $transcodeManager = $this->container->get(\Phlix\Media\Transcoding\TranscodeManager::class);
+        return new \Phlix\Server\Http\Controllers\HlsController($hlsStreamer, $transcodeManager);
     }
 
     /**

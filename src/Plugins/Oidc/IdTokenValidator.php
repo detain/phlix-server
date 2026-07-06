@@ -293,34 +293,25 @@ final class IdTokenValidator
         }
 
         $jwksUri = $discovery->jwksUri();
-
-        $http = new \Workerman\Http\Client([
-            'timeout' => 10,
-        ]);
-
-        $content = null;
-        $error = null;
-
-        $http->get($jwksUri, [
-            'headers' => [
-                'User-Agent: PhlixMediaServer/1.0',
-                'Accept: application/json',
-            ],
-        ], function ($response) use (&$content) {
-            $content = $response->getBody();
-        }, function ($exception) use (&$error) {
-            $error = $exception->getMessage();
-        });
-
-        // Yield to the event loop to allow the async request to complete.
-        $loop = \Workerman\Worker::getEventLoop();
-        $start = time();
-        while ($content === null && $error === null && (time() - $start) < 10) {
-            $loop->runOnTick();
+        if ($jwksUri === '') {
+            throw new RuntimeException('JWKS URI is empty');
         }
 
-        if ($content === null || $error !== null) {
-            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri . ($error !== null ? ': ' . $error : ''));
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $jwksUri);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: PhlixMediaServer/1.0',
+            'Accept: application/json',
+        ]);
+
+        $content = curl_exec($ch);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($content === false || $content === true) {
+            throw new RuntimeException('Failed to fetch JWKS from: ' . $jwksUri . ': ' . $curlError);
         }
 
         $jwksData = json_decode($content, true);

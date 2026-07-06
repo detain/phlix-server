@@ -110,35 +110,23 @@ final class LastfmApiClient implements LastfmApiClientInterface
 
         $url = self::BASE_URL . '?' . http_build_query($params);
 
-        $http = new \Workerman\Http\Client([
-            'timeout' => 10,
-        ]);
-
-        $raw = null;
-        $error = null;
-        $httpCode = null;
-
-        $http->get($url, [
-            'headers' => ['User-Agent: PhlixMediaServer/1.0'],
-        ], function ($response) use (&$raw, &$httpCode) {
-            $raw = $response->getBody();
-            $httpCode = $response->getStatusCode();
-        }, function ($exception) use (&$error) {
-            $error = $exception->getMessage();
-        });
-
-        // Yield to the event loop to allow the async request to complete.
-        $loop = \Workerman\Worker::getEventLoop();
-        $start = time();
-        while ($raw === null && $error === null && (time() - $start) < 10) {
-            $loop->runOnTick();
-        }
-
-        if ($raw === null || $error !== null || ($httpCode !== null && $httpCode >= 400)) {
+        $ch = curl_init();
+        if ($ch === false) {
             return false;
         }
 
-        if (!is_string($raw)) {
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: PhlixMediaServer/1.0',
+        ]);
+
+        $raw = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($raw) || $httpCode >= 400) {
             return false;
         }
 
@@ -318,7 +306,7 @@ final class LastfmApiClient implements LastfmApiClientInterface
     }
 
     /**
-     * POST raw parameters to the Last.fm API using async HTTP.
+     * POST raw parameters to the Last.fm API using synchronous cURL.
      *
      * @param array<string, string|int> $params POST parameters.
      *
@@ -326,41 +314,32 @@ final class LastfmApiClient implements LastfmApiClientInterface
      */
     private function postRaw(array $params): array
     {
-        $http = new \Workerman\Http\Client([
-            'timeout' => 15,
+        $ch = curl_init();
+        if ($ch === false) {
+            return ['error' => 'Failed to initialize cURL'];
+        }
+
+        curl_setopt($ch, CURLOPT_URL, self::BASE_URL);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($params));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: PhlixMediaServer/1.0',
+            'Content-Type: application/x-www-form-urlencoded',
         ]);
 
-        $raw = null;
-        $error = null;
-        $httpCode = null;
+        $raw = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
 
-        $http->request(self::BASE_URL, [
-            'method' => 'POST',
-            'data' => http_build_query($params),
-            'headers' => [
-                'User-Agent: PhlixMediaServer/1.0',
-                'Content-Type: application/x-www-form-urlencoded',
-            ],
-        ], function ($response) use (&$raw, &$httpCode) {
-            $raw = $response->getBody();
-            $httpCode = $response->getStatusCode();
-        }, function ($exception) use (&$error) {
-            $error = $exception->getMessage();
-        });
-
-        // Yield to the event loop to allow the async request to complete.
-        $loop = \Workerman\Worker::getEventLoop();
-        $start = time();
-        while ($raw === null && $error === null && (time() - $start) < 15) {
-            $loop->runOnTick();
+        if ($raw === false) {
+            return ['error' => 'cURL error: ' . ($curlError ?: 'Unknown error')];
         }
 
-        if ($error !== null || $raw === false) {
-            return ['error' => 'HTTP ' . ($httpCode ?? 'unknown')];
-        }
-
-        if ($raw === null) {
-            return ['error' => 'Unexpected curl response type'];
+        if (!is_string($raw)) {
+            return ['error' => 'Unexpected cURL response type'];
         }
 
         /** @var array<string, mixed> $decoded */

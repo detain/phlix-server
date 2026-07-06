@@ -83,6 +83,34 @@ class TranscodeManagerTest extends TestCase
         return new TranscodeManager($db, $ff, new EncodingHelper(), $this->segmentDir, $this->segmentDir, null, 6);
     }
 
+    /**
+     * Extracts the on-demand job INSERT from captured queries.
+     *
+     * @param array<int, array{0: string, 1: array<int, mixed>}> $captured
+     *
+     * @return array{hls_dir: string, duration: int, segment_seconds: int, segment_params: array<string, mixed>}
+     */
+    private function capturedJobInsert(array $captured): array
+    {
+        foreach ($captured as [$sql, $params]) {
+            if (!str_contains($sql, 'INSERT INTO transcode_jobs')) {
+                continue;
+            }
+            // Placeholder order (status/progress/timestamps are SQL literals, not params):
+            //  0 id, 1 media_item_id, 2 input_path, 3 output_path, 4 hls_dir, 5 profile,
+            //  6 key_hash, 7 variant_width, 8 variant_height, 9 variant_bandwidth,
+            // 10 subtitle_tracks, 11 duration_seconds, 12 segment_seconds, 13 segment_params
+            $segParams = is_string($params[13] ?? null) ? json_decode($params[13], true) : [];
+            return [
+                'hls_dir' => (string) ($params[4] ?? ''),
+                'duration' => (int) ($params[11] ?? 0),
+                'segment_seconds' => (int) ($params[12] ?? 0),
+                'segment_params' => is_array($segParams) ? $segParams : [],
+            ];
+        }
+        $this->fail('no transcode_jobs INSERT was captured');
+    }
+
     public function testEnsureHlsJobReusesExistingValidJob(): void
     {
         $existingDir = $this->segmentDir . '/existing-job';
@@ -117,16 +145,19 @@ class TranscodeManagerTest extends TestCase
             $captured
         );
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
-            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
-        ]]);
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(4242);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
 
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
         $this->assertFalse($result['reused']);
-        $this->assertSame('running', $result['status']);
+        // On-demand jobs are 'completed' the instant their VOD playlist is written.
+        $this->assertSame('completed', $result['status']);
     }
 
     public function testEnsureHlsJobThrowsWhenConcurrencyExhausted(): void
@@ -150,28 +181,29 @@ class TranscodeManagerTest extends TestCase
         $this->manager($db, $ff)->ensureHlsJob('missing', 'web');
     }
 
-    public function testEnsureHlsJobCopiesH264AacWithoutDownscale(): void
+    public function testEnsureHlsJobForcesEncodeForOnDemandSegments(): void
     {
+        // On-demand segments can never stream-copy (a copy can't force a keyframe at
+        // each segment boundary), so even an otherwise-copyable 8-bit H.264 + AAC
+        // source is recorded with a real H.264 / AAC encode in segment_params.
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
-            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
-        ]]);
-        $passed = [];
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
-            function (string $in, string $dir, array $params) use (&$passed): int {
-                $passed = $params;
-                return 100;
-            }
-        );
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720,
+                    'pix_fmt' => 'yuv420p', 'profile' => 'High'],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $insert = $this->capturedJobInsert($captured);
 
-        $this->assertSame('copy', $passed['video_codec']);
-        $this->assertSame('copy', $passed['audio_codec']);
-        $this->assertArrayNotHasKey('width', $passed);
+        $this->assertSame('libx264', $insert['segment_params']['video_codec']);
+        $this->assertSame('aac', $insert['segment_params']['audio_codec']);
+        $this->assertArrayNotHasKey('width', $insert['segment_params']);
     }
 
     public function testEnsureHlsJobEncodesHevcAndDownscales4kForWeb(): void
@@ -179,52 +211,57 @@ class TranscodeManagerTest extends TestCase
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            ['codec_type' => 'video', 'codec_name' => 'hevc', 'width' => 3840, 'height' => 2160],
-            ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6],
-        ]]);
-        $passed = [];
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
-            function (string $in, string $dir, array $params) use (&$passed): int {
-                $passed = $params;
-                return 100;
-            }
-        );
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'hevc', 'width' => 3840, 'height' => 2160],
+                ['codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6],
+            ],
+            'format' => ['duration' => '1200.0'],
+        ]);
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $p = $this->capturedJobInsert($captured)['segment_params'];
 
-        $this->assertSame('libx264', $passed['video_codec']);
-        $this->assertSame(1920, $passed['width']);
-        $this->assertSame(1080, $passed['height']);
-        $this->assertSame('aac', $passed['audio_codec']);
-        $this->assertSame(6, $passed['audio_channels']);
+        $this->assertSame('libx264', $p['video_codec']);
+        $this->assertSame(1920, $p['width']);
+        $this->assertSame(1080, $p['height']);
+        $this->assertSame('aac', $p['audio_codec']);
+        $this->assertSame(6, $p['audio_channels']);
         // The encode must pin a browser-decodable 8-bit 4:2:0 profile.
-        $this->assertSame('yuv420p', $passed['pix_fmt']);
-        $this->assertSame('high', $passed['profile']);
+        $this->assertSame('yuv420p', $p['pix_fmt']);
+        $this->assertSame('high', $p['profile']);
     }
 
-    public function testEnsureHlsJobRequestsVodPlaylistNotEvent(): void
+    public function testEnsureHlsJobWritesCompleteVodPlaylist(): void
     {
-        // VOD (not 'event'): an event/live playlist makes hls.js report a
-        // duration that only grows as segments arrive instead of the real total.
+        // The fix: a COMPLETE VOD media playlist is published up front (full
+        // duration, every segment, EXT-X-ENDLIST) so the player reports the true
+        // total length and can seek anywhere — never a live, ever-growing playlist.
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
-            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
-        ]]);
-        $passed = [];
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
-            function (string $in, string $dir, array $params) use (&$passed): int {
-                $passed = $params;
-                return 100;
-            }
-        );
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            // 25s at 6s segments → 5 segments (0..4): four 6s + one 1s.
+            'format' => ['duration' => '25.0'],
+        ]);
 
-        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
-        $this->assertSame('vod', $passed['playlist_type']);
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+        $media = (string) file_get_contents("{$dir}/media_0.m3u8");
+        $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $media);
+        $this->assertStringContainsString('#EXT-X-ENDLIST', $media);
+        $this->assertStringContainsString('seg-00000.ts', $media);
+        $this->assertStringContainsString('seg-00004.ts', $media);
+        $this->assertStringNotContainsString('seg-00005.ts', $media);
+        // The master points at the single media playlist.
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+        $this->assertStringContainsString('media_0.m3u8', $master);
+        $this->assertStringContainsString('/hls/', $result['master_url']);
     }
 
     public function testEnsureHlsJobPersistsProbedDurationToMediaItem(): void
@@ -410,73 +447,64 @@ class TranscodeManagerTest extends TestCase
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            [
-                'codec_type' => 'video',
-                'codec_name' => 'h264',
-                'width' => 1920,
-                'height' => 1080,
-                'pix_fmt' => 'yuv420p10le',
-                'profile' => 'High 10',
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                [
+                    'codec_type' => 'video',
+                    'codec_name' => 'h264',
+                    'width' => 1920,
+                    'height' => 1080,
+                    'pix_fmt' => 'yuv420p10le',
+                    'profile' => 'High 10',
+                ],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
             ],
-            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
-        ]]);
-        $passed = [];
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
-            function (string $in, string $dir, array $params) use (&$passed): int {
-                $passed = $params;
-                return 100;
-            }
-        );
+            'format' => ['duration' => '600.0'],
+        ]);
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $p = $this->capturedJobInsert($captured)['segment_params'];
 
-        $this->assertSame('libx264', $passed['video_codec']);
-        $this->assertSame('yuv420p', $passed['pix_fmt']);
+        $this->assertSame('libx264', $p['video_codec']);
+        $this->assertSame('yuv420p', $p['pix_fmt']);
     }
 
-    public function testEnsureHlsJobCopies8BitH264(): void
+    public function testEnsureHlsJobPersistsSegmentBookkeeping(): void
     {
-        // An ordinary 8-bit 4:2:0 H.264 stream still takes the fast copy path.
+        // The on-demand job persists the probed duration + segment length so any
+        // segment can be built later without re-probing the source.
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->method('probe')->willReturn(['streams' => [
-            [
-                'codec_type' => 'video',
-                'codec_name' => 'h264',
-                'width' => 1280,
-                'height' => 720,
-                'pix_fmt' => 'yuv420p',
-                'profile' => 'High',
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
             ],
-            ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
-        ]]);
-        $passed = [];
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturnCallback(
-            function (string $in, string $dir, array $params) use (&$passed): int {
-                $passed = $params;
-                return 100;
-            }
-        );
+            'format' => ['duration' => '1423.4'],
+        ]);
 
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $insert = $this->capturedJobInsert($captured);
 
-        $this->assertSame('copy', $passed['video_codec']);
+        $this->assertSame(1423, $insert['duration']);
+        $this->assertSame(6, $insert['segment_seconds']);
+        $this->assertSame(6, $insert['segment_params']['segment_seconds'] ?? 6);
     }
 
-    public function testEnsureHlsJobFailsWhenLaunchReturnsZeroPid(): void
+    public function testEnsureHlsJobThrowsWhenDurationUndeterminable(): void
     {
+        // Without a probeable duration the full VOD playlist cannot be built, so the
+        // job is refused rather than silently producing a live/growing stream.
         $captured = [];
         $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->method('probe')->willReturn(['streams' => [
             ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
         ]]);
-        $ff->method('startCmafTranscodeWithSubtitles')->willReturn(0);
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('Failed to launch transcode');
+        $this->expectExceptionMessage('Could not determine media duration');
         $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
     }
 
@@ -602,6 +630,112 @@ class TranscodeManagerTest extends TestCase
         $ff = $this->createMock(FfmpegRunner::class);
 
         $this->assertSame([], $this->manager($db, $ff)->subtitleTracksFor('job-nosubs'));
+    }
+
+    public function testGetJobReadinessOnDemandCompletedWithoutSegments(): void
+    {
+        // An on-demand job is 'completed' with its VOD playlist present but NO
+        // segments yet (they are produced on request). Readiness must report it
+        // completed + playlist_ready so the player starts immediately.
+        $dir = $this->segmentDir . '/job-od';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $r = $this->manager($db, $ff)->getJobReadiness('job-od');
+
+        $this->assertSame('completed', $r['status']);
+        $this->assertTrue($r['playlist_ready']);
+        $this->assertSame(0, $r['segments']);
+    }
+
+    /**
+     * Builds a job row for an on-demand ensureSegment() test.
+     *
+     * @return array<string, mixed>
+     */
+    private function onDemandJobRow(string $dir, string $inputPath): array
+    {
+        return [
+            'id' => 'seg-job',
+            'hls_dir' => $dir,
+            'input_path' => $inputPath,
+            'status' => 'completed',
+            'duration_seconds' => 60,
+            'segment_seconds' => 6,
+            'segment_params' => json_encode(['video_codec' => 'libx264', 'audio_codec' => 'aac']),
+        ];
+    }
+
+    public function testEnsureSegmentReturnsNullForLegacyJobWithoutSegmentParams(): void
+    {
+        // A legacy CMAF job (no segment_params) cannot serve on-demand segments.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $this->segmentDir, 'status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 0));
+    }
+
+    public function testEnsureSegmentRejectsOutOfRangeIndex(): void
+    {
+        $dir = $this->segmentDir . '/seg-oor';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        // 60s / 6s = 10 segments (0..9); index 10 is past the end.
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 10));
+    }
+
+    public function testEnsureSegmentReturnsCachedSegmentWithoutEncoding(): void
+    {
+        $dir = $this->segmentDir . '/seg-cache';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        file_put_contents("{$dir}/seg-00003.ts", 'cached');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 3);
+
+        $this->assertSame("{$dir}/seg-00003.ts", $path);
+    }
+
+    public function testEnsureSegmentTranscodesOnDemand(): void
+    {
+        $dir = $this->segmentDir . '/seg-live';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        // Segment 2 → start 12s, length 6s. The encoder mock materializes the file
+        // (the real one writes to a temp then atomically renames to this path).
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len) use ($input): int {
+                $this->assertSame($input, $in);
+                $this->assertSame(12.0, $start);
+                $this->assertSame(6.0, $len);
+                file_put_contents($out, 'encoded');
+                return 4242;
+            }
+        );
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 2);
+
+        $this->assertSame("{$dir}/seg-00002.ts", $path);
+        $this->assertFileExists($path);
     }
 
     private function rrmdir(string $dir): void

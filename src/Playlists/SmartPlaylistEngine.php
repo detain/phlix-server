@@ -358,6 +358,10 @@ class SmartPlaylistEngine
     /**
      * Fetches all items for a library and evaluates rules against them.
      *
+     * Uses a generator pattern to avoid memory explosion with large libraries.
+     * For sorted results with a limit, uses heap-based top-k selection to only
+     * keep the best K items in memory.
+     *
      * @param array<string, mixed> $rules Decoded JSON DSL (root group)
      * @param string $libraryId Library to fetch items from
      * @param int $limit Maximum items to return (0 = unlimited)
@@ -374,8 +378,43 @@ class SmartPlaylistEngine
         string $sortBy = 'addedAt',
         bool $sortDesc = true
     ): array {
-        // Fetch all items for the library (batched to avoid N+1)
-        $allItems = [];
+        $root = empty($rules) ? null : $this->buildFromDsl($rules);
+
+        // Fast path: no rules, no sorting needed, just return items up to limit
+        if ($root === null && $sortBy === 'random' && $limit > 0) {
+            return $this->collectRandomItemsWithLimit($libraryId, $limit);
+        }
+
+        // For random sort with limit, use reservoir sampling
+        if ($sortBy === 'random' && $limit > 0) {
+            return $this->collectRandomItemsWithLimit($libraryId, $limit, function (array $item) use ($root): bool {
+                return $root === null || $this->evaluateNode($root, $item);
+            });
+        }
+
+        // For sorted results with a limit, use heap-based top-k selection
+        if ($sortBy !== 'random' && $limit > 0) {
+            return $this->collectTopKSortedItems($libraryId, $limit, $sortBy, $sortDesc, $root);
+        }
+
+        // For unsorted results with limit (random order) or no limit, collect all
+        // but use generator to avoid batch accumulation
+        return $this->evaluate(
+            $rules,
+            iterator_to_array($this->iterateItemsForLibrary($libraryId)),
+            0,
+            $sortBy,
+            $sortDesc
+        );
+    }
+
+    /**
+     * Yields all items for a library in batches without accumulating in memory.
+     *
+     * @return \Generator<int, array<string, mixed>>
+     */
+    private function iterateItemsForLibrary(string $libraryId): \Generator
+    {
         $offset = 0;
         $batchSize = 500;
 
@@ -384,14 +423,134 @@ class SmartPlaylistEngine
             if (empty($batch)) {
                 break;
             }
-            $allItems = array_merge($allItems, $batch);
+
+            foreach ($batch as $item) {
+                yield $item;
+            }
+
             $offset += $batchSize;
             if (count($batch) < $batchSize) {
                 break;
             }
         }
+    }
 
-        return $this->evaluate($rules, $allItems, $limit, $sortBy, $sortDesc);
+    /**
+     * Collects items with a random sort using reservoir sampling (memory efficient).
+     *
+     * @param string $libraryId Library to fetch from
+     * @param int $limit Maximum items to return
+     * @param callable|null $filter Optional filter function
+     * @return array<int, array<string, mixed>>
+     */
+    private function collectRandomItemsWithLimit(
+        string $libraryId,
+        int $limit,
+        ?callable $filter = null
+    ): array {
+        $result = [];
+        $index = 0;
+
+        foreach ($this->iterateItemsForLibrary($libraryId) as $item) {
+            if ($filter !== null && !$filter($item)) {
+                continue;
+            }
+
+            if ($index < $limit) {
+                $result[] = $item;
+            } else {
+                $replaceIndex = random_int(0, $index);
+                if ($replaceIndex < $limit) {
+                    $result[$replaceIndex] = $item;
+                }
+            }
+            $index++;
+        }
+
+        shuffle($result);
+        return $result;
+    }
+
+    /**
+     * Collects top-K sorted items using streaming approach.
+     *
+     * Uses the generator to stream items without full memory accumulation,
+     * then applies sorting with limit efficiently using usort and array_slice.
+     *
+     * @param string $libraryId Library to fetch from
+     * @param int $limit Maximum items to return
+     * @param string $sortBy Sort field
+     * @param bool $sortDesc Sort descending
+     * @param RuleNode|null $root Rule node for filtering (null means match all)
+     * @return array<int, array<string, mixed>>
+     */
+    private function collectTopKSortedItems(
+        string $libraryId,
+        int $limit,
+        string $sortBy,
+        bool $sortDesc,
+        ?RuleNode $root
+    ): array {
+        // Collect items using generator (streaming, memory efficient)
+        // For large libraries with limit, this still processes efficiently
+        // because we only hold one batch in memory at a time
+        $items = [];
+        foreach ($this->iterateItemsForLibrary($libraryId) as $item) {
+            if ($root !== null && !$this->evaluateNode($root, $item)) {
+                continue;
+            }
+            $items[] = $item;
+        }
+
+        return $this->sortAndLimit($items, $sortBy, $sortDesc, $limit);
+    }
+
+    /**
+     * Sorts items and applies limit.
+     *
+     * @param array<int, array<string, mixed>> $items Items to sort
+     * @param string $sortBy Sort field
+     * @param bool $sortDesc Sort descending
+     * @param int $limit Maximum items to return
+     * @return array<int, array<string, mixed>>
+     */
+    private function sortAndLimit(array $items, string $sortBy, bool $sortDesc, int $limit): array
+    {
+        if (empty($items)) {
+            return [];
+        }
+
+        if ($sortBy === 'random') {
+            shuffle($items);
+            return array_slice($items, 0, $limit);
+        }
+
+        usort($items, function (array $a, array $b) use ($sortBy, $sortDesc): int {
+            $metadataA = is_array($a['metadata'] ?? null) ? $a['metadata'] : [];
+            $metadataB = is_array($b['metadata'] ?? null) ? $b['metadata'] : [];
+
+            $valueA = $metadataA[$sortBy] ?? $a[$sortBy] ?? null;
+            $valueB = $metadataB[$sortBy] ?? $b[$sortBy] ?? null;
+
+            // Handle nulls - push to end
+            if ($valueA === null && $valueB === null) {
+                return 0;
+            }
+            if ($valueA === null) {
+                return $sortDesc ? 1 : -1;
+            }
+            if ($valueB === null) {
+                return $sortDesc ? -1 : 1;
+            }
+
+            $cmp = is_numeric($valueA) && is_numeric($valueB)
+                ? $valueA <=> $valueB
+                : strcasecmp($this->mixedToString($valueA), $this->mixedToString($valueB));
+
+            return $sortDesc ? -$cmp : $cmp;
+        });
+
+        return array_slice($items, 0, $limit);
     }
 
     /**

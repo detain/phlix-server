@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
-use Workerman\MySQL\Connection;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
-use Phlix\Common\Util\RowMap;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\Dto\MetadataValue;
@@ -19,6 +17,12 @@ use Phlix\Media\Metadata\Dto\MetadataValue;
  * prioritizes them by media type, and handles the refresh workflow for items.
  * It supports cascading provider fallback when one provider fails to return results.
  *
+ * **Memory safety:** The library-refresh methods page through items in fixed-size
+ * batches so a huge library (10K+ items) never loads every row into memory at once.
+ * Use {@see refreshLibraryMetadataBatched()} for a generator-based stream that
+ * yields items as they are processed, or {@see refreshLibraryMetadata()} for the
+ * classic all-at-once count return.
+ *
  * @author Phlix Development Team
  * @version 1.0.0
  * @description Metadata fetching coordination with provider prioritization and fallback
@@ -28,11 +32,18 @@ use Phlix\Media\Metadata\Dto\MetadataValue;
  */
 class MetadataManager
 {
-    /** @var Connection Database connection */
-    private Connection $db;
-
     /** @var ItemRepository Repository for media item persistence */
     private ItemRepository $itemRepository;
+
+    /**
+     * Page size for batched library refresh operations.
+     *
+     * Keeps individual query result sets bounded so a huge library
+     * never exhausts PHP memory during a metadata refresh run.
+     *
+     * @var int
+     */
+    private const PAGE_SIZE = 100;
 
     /** @var array<string, array<string, MetadataProviderInterface>> Provider type => [name => provider] */
     private array $providersByType = [];
@@ -68,18 +79,15 @@ class MetadataManager
     /**
      * Constructor for MetadataManager.
      *
-     * @param Connection $db Database connection for media item queries
      * @param ItemRepository $itemRepository Repository for media item operations
      * @param LibraryManager|null $libraries Library data access used to load the
      *     per-library `options.image_types` selection (M5); when null, provider
      *     image sets are stored unfiltered (back-compat).
      */
     public function __construct(
-        Connection $db,
         ItemRepository $itemRepository,
         ?LibraryManager $libraries = null
     ) {
-        $this->db = $db;
         $this->itemRepository = $itemRepository;
         $this->libraries = $libraries;
         $this->logger = LoggerFactory::get(LogChannels::MEDIA);
@@ -402,32 +410,71 @@ class MetadataManager
     /**
      * Refresh metadata for entire library with optional progress callback.
      *
+     * Pages through the library in fixed-size batches ({@see PAGE_SIZE}) so a
+     * huge library (10K+ items) never loads every row into memory at once.
+     *
      * @param string $libraryId The library's unique identifier
      * @param callable|null $progressCallback Optional callback(current, total) for progress updates
      * @return int Number of items successfully refreshed
      */
     public function refreshLibraryMetadata(string $libraryId, ?callable $progressCallback = null): int
     {
-        $items = RowMap::listFromMixed($this->db->query(
-            "SELECT id, name, metadata_json FROM media_items WHERE library_id = ?",
-            [$libraryId]
-        ));
-
         $refreshed = 0;
-        $total = count($items);
+        $processed = 0;
 
-        foreach ($items as $index => $item) {
-            $itemId = MetadataValue::asString($item['id'] ?? null);
-            if ($itemId !== '' && $this->refreshItemMetadata($itemId)) {
+        foreach ($this->refreshLibraryMetadataBatched($libraryId) as $itemRefreshed) {
+            if ($itemRefreshed) {
                 $refreshed++;
             }
+            $processed++;
 
             if ($progressCallback !== null) {
-                $progressCallback($index + 1, $total);
+                $progressCallback($processed, 0, $refreshed);
             }
         }
 
         return $refreshed;
+    }
+
+    /**
+     * Generator that refreshes metadata for entire library in batches.
+     *
+     * Streams items through a generator so the caller can process them
+     * one-at-a-time without ever holding the full library in memory.
+     * Each iteration yields `true` if the item was refreshed, `false` otherwise.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @return \Generator<int, bool, mixed, void> Yields bool per item (true=refreshed)
+     */
+    public function refreshLibraryMetadataBatched(string $libraryId): \Generator
+    {
+        $offset = 0;
+
+        while (true) {
+            $batch = $this->itemRepository->getByLibrary($libraryId, self::PAGE_SIZE, $offset);
+
+            if ($batch === []) {
+                break;
+            }
+
+            foreach ($batch as $item) {
+                $itemId = MetadataValue::asString($item['id'] ?? null);
+                $refreshed = false;
+
+                if ($itemId !== '') {
+                    $refreshed = $this->refreshItemMetadata($itemId);
+                }
+
+                yield $refreshed;
+            }
+
+            // Stop when we receive a short page (end of results).
+            if (count($batch) < self::PAGE_SIZE) {
+                break;
+            }
+
+            $offset += self::PAGE_SIZE;
+        }
     }
 
     /**

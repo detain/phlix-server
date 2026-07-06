@@ -207,6 +207,18 @@ class WebhookDispatcher
     {
         $url = $this->stringFromMixed($webhook['url'] ?? null);
 
+        if ($url === '') {
+            $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
+            $this->logDispatch(
+                $webhookId,
+                $event->eventType,
+                null,
+                null,
+                'Empty URL',
+            );
+            return ['success' => false, 'error' => 'Empty webhook URL'];
+        }
+
         // SSRF guard at dispatch time: re-validate the stored URL before any
         // outbound fetch so a row that was poisoned after creation (or via a
         // direct DB write) cannot reach loopback/link-local/private targets.
@@ -234,59 +246,46 @@ class WebhookDispatcher
         $timeout = $this->intFromMixed($config['timeout'] ?? null, 5);
         $maxRetries = $this->intFromMixed($config['max_retries'] ?? null, 2);
 
-        $http = new \Workerman\Http\Client([
-            'timeout' => $timeout,
-        ]);
-
         $retries = 0;
         $lastError = 'Unknown error';
         $responseCode = null;
         $responseBody = null;
 
-        $sendRequest = function () use (&$retries, &$lastError, &$responseCode, &$responseBody, $url, $http, $payload, $signature, $timeout, $maxRetries, $webhook, $event): bool {
-            $requestBody = null;
-            $requestError = null;
-            $requestCode = null;
-
-            $http->request($url, [
-                'method' => 'POST',
-                'data' => $payload,
-                'headers' => [
-                    'Content-Type: application/json',
-                    'X-Phlix-Signature: ' . $signature,
-                ],
-            ], function ($response) use (&$responseBody, &$responseCode, &$requestBody) {
-                $responseBody = $response->getBody();
-                $responseCode = $response->getStatusCode();
-                $requestBody = $responseBody;
-            }, function ($exception) use (&$requestError) {
-                $requestError = $exception->getMessage();
-            });
-
-            // Yield to the event loop to allow the async request to complete.
-            $loop = \Workerman\Worker::getEventLoop();
-            $start = time();
-            while ($responseBody === null && $requestError === null && (time() - $start) < $timeout) {
-                $loop->runOnTick();
-            }
-
-            if ($requestError !== null) {
-                $lastError = $requestError;
-                return false;
-            }
-
-            if ($responseCode !== null && $responseCode >= 200 && $responseCode < 300) {
-                return true;
-            }
-
-            $lastError = "HTTP " . ($responseCode ?? 'unknown');
-            return false;
-        };
-
         do {
-            $success = $sendRequest();
+            $responseCode = null;
+            $responseBody = null;
+            $requestError = null;
 
-            if ($success) {
+            $ch = curl_init();
+            if ($ch === false) {
+                $lastError = 'Failed to initialize cURL';
+                break;
+            }
+
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Content-Type: application/json',
+                'X-Phlix-Signature: ' . $signature,
+            ]);
+
+            $rawResponse = curl_exec($ch);
+            $responseCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $requestError = curl_error($ch);
+            curl_close($ch);
+
+            if ($rawResponse === false) {
+                $lastError = $requestError !== '' ? $requestError : 'cURL request failed';
+                $retries++;
+                continue;
+            }
+
+            $responseBody = is_string($rawResponse) ? $rawResponse : '';
+
+            if ($responseCode >= 200 && $responseCode < 300) {
                 $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
                 $this->logDispatch(
                     $webhookId,
@@ -298,6 +297,7 @@ class WebhookDispatcher
                 return ['success' => true];
             }
 
+            $lastError = "HTTP " . $responseCode;
             $retries++;
         } while ($retries <= $maxRetries);
 
@@ -311,17 +311,6 @@ class WebhookDispatcher
         );
 
         return ['success' => false, 'error' => $lastError];
-    }
-
-    private function getLastResponseCode(): ?int
-    {
-        global $http_response_header;
-        if (isset($http_response_header[0])) {
-            if (preg_match('/HTTP\/\d+\.?\d*\s+(\d+)/', $http_response_header[0], $matches)) {
-                return (int) $matches[1];
-            }
-        }
-        return null;
     }
 
     private function logDispatch(

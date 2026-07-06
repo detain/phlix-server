@@ -156,7 +156,72 @@ class HttpClient implements HttpClientInterface
      */
     private function isWorkermanContext(): bool
     {
-        return class_exists('Workerman\Worker') && \Workerman\Worker::getId() >= 0;
+        if (!class_exists('Workerman\Worker')) {
+            return false;
+        }
+        // Worker::$_instance is set when running in worker context
+        return defined('\Workerman\Worker::$_instance');
+    }
+
+    /**
+     * Fallback synchronous cURL request for CLI/testing contexts.
+     *
+     * @param array<string, string> $headers
+     */
+    private function requestCurl(string $method, string $url, ?string $body, array $headers): HttpResponse
+    {
+        if ($url === '') {
+            throw new InvalidArgumentException('URL cannot be empty');
+        }
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
+        curl_setopt($ch, CURLOPT_HEADER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array_values(
+            array_map(
+                fn(string $k, string $v): string => "$k: $v",
+                array_keys($headers),
+                $headers
+            )
+        ));
+
+        if ($method === 'POST') {
+            curl_setopt($ch, CURLOPT_POST, true);
+            if ($body !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            }
+        } elseif ($method !== 'GET') {
+            assert($method !== '');
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+        }
+
+        $rawResponse = curl_exec($ch);
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($rawResponse === false || $rawResponse === true) {
+            throw new RuntimeException("cURL error: $curlError");
+        }
+
+        /** @var string $headerBlock */
+        $headerBlock = substr($rawResponse, 0, $headerSize);
+        $responseHeaders = [];
+        foreach (explode("\r\n", $headerBlock) as $line) {
+            if (str_contains($line, ':')) {
+                [$key, $value] = explode(':', $line, 2);
+                $responseHeaders[trim($key)] = trim($value);
+            }
+        }
+
+        /** @var string $responseBody */
+        $responseBody = substr($rawResponse, $headerSize);
+        /** @var array<string, mixed> $bodyArray */
+        $bodyArray = json_decode($responseBody, true) ?? [];
+
+        return new HttpResponse($statusCode, $responseHeaders, $bodyArray);
     }
 
     /**

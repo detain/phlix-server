@@ -43,7 +43,7 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
-     * Perform an HTTP request using workerman/http-client for non-blocking I/O.
+     * Perform an HTTP request using synchronous cURL.
      *
      * @param string $method HTTP method
      * @param string $url Full URL
@@ -57,9 +57,9 @@ class HttpClient implements HttpClientInterface
      */
     private function request(string $method, string $url, array $data, array $headers): array
     {
-        $http = new \Workerman\Http\Client([
-            'timeout' => $this->timeout,
-        ]);
+        if ($url === '') {
+            throw new TraktApiException('URL cannot be empty');
+        }
 
         $requestHeaders = [
             'User-Agent: PhlixMediaServer/1.0',
@@ -71,56 +71,58 @@ class HttpClient implements HttpClientInterface
             $requestHeaders[] = $key . ': ' . $value;
         }
 
-        $raw = null;
-        $error = null;
-        $httpCode = null;
-
-        $options = [
-            'method' => $method,
-            'headers' => $requestHeaders,
-        ];
-
-        if ($method === 'POST' && $data !== []) {
-            $options['data'] = json_encode($data);
+        $ch = curl_init();
+        if ($ch === false) {
+            throw new TraktApiException('Failed to initialize cURL');
         }
 
-        $http->request($url, $options, function ($response) use (&$raw, &$httpCode) {
-            $raw = $response->getBody();
-            $httpCode = $response->getStatusCode();
-        }, function ($exception) use (&$error) {
-            $error = $exception->getMessage();
-        });
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $requestHeaders);
 
-        // Yield to the event loop to allow the async request to complete.
-        $loop = \Workerman\Worker::getEventLoop();
-        $start = time();
-        while ($raw === null && $error === null && (time() - $start) < $this->timeout) {
-            $loop->runOnTick();
+        if ($method === 'POST') {
+            curl_setopt($ch, CURLOPT_POST, true);
+            if ($data !== []) {
+                $encoded = json_encode($data);
+                if ($encoded === false) {
+                    curl_close($ch);
+                    throw new TraktApiException('Failed to encode request body');
+                }
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $encoded);
+            }
         }
 
-        if ($error !== null) {
-            throw new TraktApiException('cURL error: ' . $error);
+        $raw = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($raw === false) {
+            throw new TraktApiException('cURL error: ' . ($curlError ?: 'Unknown error'));
         }
 
-        if ($raw === null) {
-            throw new TraktApiException('request timed out: no response body');
+        if (!is_string($raw)) {
+            throw new TraktApiException('cURL error: Unexpected non-string response');
         }
 
         if ($httpCode === 401) {
             throw new TraktAuthenticationException('Unauthorized - token invalid or expired');
         }
 
-        if ($httpCode !== null && $httpCode >= 400) {
-            /** @var array<string, mixed> $decoded */
-            $decoded = json_decode($raw, true) ?? [];
-            $message = is_string($decoded['error'] ?? null) ? $decoded['error']
-                : (is_string($decoded['message'] ?? null) ? $decoded['message'] : 'HTTP ' . $httpCode);
+        if ($httpCode >= 400) {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $message = is_string($decoded['error'] ?? null) ? $decoded['error']
+                    : (is_string($decoded['message'] ?? null) ? $decoded['message'] : 'HTTP ' . $httpCode);
+            } else {
+                $message = 'HTTP ' . $httpCode;
+            }
             throw new TraktApiException($message, $httpCode);
         }
 
-        /** @var array<string, mixed> $decoded */
-        $decoded = json_decode($raw, true) ?? [];
+        $decoded = json_decode($raw, true);
 
-        return $decoded;
+        return is_array($decoded) ? $decoded : [];
     }
 }

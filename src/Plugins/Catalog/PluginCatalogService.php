@@ -418,61 +418,45 @@ final class PluginCatalogService
     }
 
     /**
-     * Async HTTP GET using workerman/http-client. Follows ≤3 http/https redirects, verifies TLS.
+     * Synchronous HTTP GET using native cURL. Follows ≤3 http/https redirects, verifies TLS.
      *
-     * Uses workerman/http-client for non-blocking I/O that does not stall the
-     * Workerman event loop during catalog fetches. The HTTP client schedules
-     * requests asynchronously and uses callbacks for response handling.
+     * Uses native PHP cURL for synchronous catalog fetching. Under Swoole's
+     * coroutine runtime, native curl is safe via `SWOOLE_HOOK_NATIVE_CURL`.
      *
      * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
      */
     private static function curlFetch(string $url, int $timeout): string
     {
-        $http = new \Workerman\Http\Client([
-            'connect_timeout' => $timeout,
-            'timeout' => $timeout,
+        if ($url === '') {
+            throw new \RuntimeException('URL cannot be empty');
+        }
+
+        $ch = curl_init();
+        if ($ch === false) {
+            throw new \RuntimeException('Failed to initialize cURL');
+        }
+
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+        curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'User-Agent: Phlix-PluginCatalog',
+            'Accept: application/json',
         ]);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
 
-        $body = null;
-        $error = null;
-        $response = null;
+        $body = curl_exec($ch);
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
 
-        $http->get($url, function ($res) use (&$body, &$response) {
-            $body = $res->getBody();
-            $response = $res;
-        }, function ($exception) use (&$error) {
-            $error = $exception->getMessage();
-        });
-
-        // The request is scheduled asynchronously. In Workerman, the event loop
-        // runs between handler invocations, processing scheduled I/O. The callbacks
-        // will be invoked when the response arrives.
-        //
-        // For synchronous-style code that needs to wait, we use a minimal event loop
-        // iteration that doesn't block the worker but processes scheduled operations.
-        if ($body === null && $error === null) {
-            $loop = \Workerman\Worker::getEventLoop();
-            if (method_exists($loop, 'futureTick')) {
-                // Schedule a future tick to process the async operation
-                $loop->futureTick(function () use (&$body, &$error, $http, $url) {
-                    // The HTTP client processes requests on each event loop tick
-                    // This allows the async operation to complete
-                });
-            }
+        if ($body === false) {
+            throw new \RuntimeException('request failed or timed out: ' . ($curlError ?: 'Unknown error'));
         }
-
-        if ($error !== null) {
-            throw new \RuntimeException('request failed or timed out: ' . $error);
-        }
-
-        if ($body === null) {
-            // If body is still null after scheduling, the request is pending.
-            // For synchronous context, we need to ensure the request completes.
-            // This is a limitation - proper async requires callback-based code.
-            throw new \RuntimeException('request pending: async HTTP requires callback handling');
-        }
-
-        $status = $response !== null ? $response->getStatusCode() : 200;
 
         if ($status >= 400) {
             throw new \RuntimeException('HTTP ' . $status);

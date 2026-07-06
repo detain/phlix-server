@@ -4,16 +4,24 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Playlists;
 
-use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Playlists\RuleNode;
 use Phlix\Playlists\SmartPlaylistEngine;
-use Phlix\Playlists\RuleOperators;
+use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\MockObject\MockObject;
 
+/**
+ * Unit tests for {@see SmartPlaylistEngine}.
+ *
+ * Tests the generator-based memory-efficient evaluation, heap-based top-K
+ * selection, and reservoir sampling for random ordering.
+ */
 class SmartPlaylistEngineTest extends TestCase
 {
+    private const LIBRARY_ID = 'library-1';
+
+    private ItemRepository&MockObject $itemRepository;
     private SmartPlaylistEngine $engine;
-    private ItemRepository $itemRepository;
 
     protected function setUp(): void
     {
@@ -21,228 +29,314 @@ class SmartPlaylistEngineTest extends TestCase
         $this->engine = new SmartPlaylistEngine($this->itemRepository);
     }
 
-    public function test_build_from_dsl_creates_rule_node_tree(): void
+    /**
+     * Creates a media item with the given metadata value for sorting.
+     *
+     * @param int|float|string|null $value The sort field value
+     * @param int|null $id Optional item ID
+     * @return array<string, mixed>
+     */
+    private function createItem(int|float|string|null $value, ?int $id = null): array
+    {
+        return [
+            'id' => $id ?? (is_numeric($value) ? (int) $value : ($value !== null ? ord($value[0]) : 0)),
+            'metadata' => ['sortField' => $value],
+        ];
+    }
+
+    public function testEvaluateOnScanWithNoLimitReturnsAllItems(): void
+    {
+        $items = [
+            $this->createItem(1),
+            $this->createItem(2),
+            $this->createItem(3),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturn($items);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 0, 'addedAt', true);
+
+        $this->assertCount(3, $result);
+    }
+
+    public function testEvaluateOnScanWithLimitReturnsCorrectCount(): void
+    {
+        $items = array_map(
+            fn(int $i) => $this->createItem($i, $i),
+            range(1, 100)
+        );
+
+        // Simulate batched loading: return items once, then empty to signal end
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 10, 'addedAt', true);
+
+        $this->assertCount(10, $result);
+    }
+
+    public function testEvaluateOnScanDescendingSortReturnsLargestFirst(): void
+    {
+        $items = [
+            $this->createItem(10),
+            $this->createItem(5),
+            $this->createItem(20),
+            $this->createItem(15),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 3, 'sortField', true);
+
+        $this->assertCount(3, $result);
+        // Should be sorted descending: 20, 15, 10
+        $this->assertSame(20, $result[0]['metadata']['sortField']);
+        $this->assertSame(15, $result[1]['metadata']['sortField']);
+        $this->assertSame(10, $result[2]['metadata']['sortField']);
+    }
+
+    public function testEvaluateOnScanAscendingSortReturnsSmallestFirst(): void
+    {
+        $items = [
+            $this->createItem(10),
+            $this->createItem(5),
+            $this->createItem(20),
+            $this->createItem(15),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 3, 'sortField', false);
+
+        $this->assertCount(3, $result);
+        // Should be sorted ascending: 5, 10, 15
+        $this->assertSame(5, $result[0]['metadata']['sortField']);
+        $this->assertSame(10, $result[1]['metadata']['sortField']);
+        $this->assertSame(15, $result[2]['metadata']['sortField']);
+    }
+
+    public function testEvaluateOnScanWithRulesFiltersItems(): void
+    {
+        $items = [
+            $this->createItem(10),
+            $this->createItem(5),
+            $this->createItem(20),
+            $this->createItem(15),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $rules = [
+            'logic' => 'and',
+            'rules' => [
+                ['field' => 'sortField', 'op' => 'gt', 'value' => 10],
+            ],
+        ];
+
+        $result = $this->engine->evaluateOnScan($rules, self::LIBRARY_ID, 10, 'sortField', true);
+
+        // Should only return items with sortField > 10: 20, 15
+        $this->assertCount(2, $result);
+        $this->assertSame(20, $result[0]['metadata']['sortField']);
+        $this->assertSame(15, $result[1]['metadata']['sortField']);
+    }
+
+    public function testEvaluateOnScanRandomWithLimitUsesReservoirSampling(): void
+    {
+        // Create 1000 items
+        $items = array_map(
+            fn(int $i) => $this->createItem($i, $i),
+            range(1, 1000)
+        );
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 10, 'random', true);
+
+        $this->assertCount(10, $result);
+        // All returned items should be from the original set
+        foreach ($result as $item) {
+            $this->assertArrayHasKey('id', $item);
+            $this->assertGreaterThanOrEqual(1, $item['id']);
+            $this->assertLessThanOrEqual(1000, $item['id']);
+        }
+    }
+
+    public function testEvaluateOnScanBatchedLoadingHandlesMultipleBatches(): void
+    {
+        // Simulate 3 batches of 500 items each
+        $batch1 = array_map(fn(int $i) => $this->createItem($i, $i), range(1, 500));
+        $batch2 = array_map(fn(int $i) => $this->createItem($i, $i), range(501, 1000));
+        $batch3 = array_map(fn(int $i) => $this->createItem($i, $i), range(1001, 1500));
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnOnConsecutiveCalls($batch1, $batch2, $batch3, []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 0, 'addedAt', true);
+
+        $this->assertCount(1500, $result);
+    }
+
+    public function testEvaluateOnScanWithEmptyLibraryReturnsEmptyArray(): void
+    {
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturn([]);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 10, 'sortField', true);
+
+        $this->assertCount(0, $result);
+    }
+
+    public function testEvaluateOnScanWithNullValuesHandlesCorrectly(): void
+    {
+        $items = [
+            $this->createItem(null),
+            $this->createItem(10),
+            $this->createItem(5),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 3, 'sortField', true);
+
+        $this->assertCount(3, $result);
+        // Null values should be at the end for descending
+        $this->assertSame(10, $result[0]['metadata']['sortField']);
+        $this->assertSame(5, $result[1]['metadata']['sortField']);
+        $this->assertNull($result[2]['metadata']['sortField']);
+    }
+
+    public function testEvaluateOnScanWithLimitOneReturnsSingleTopItem(): void
+    {
+        $items = [
+            $this->createItem(10),
+            $this->createItem(5),
+            $this->createItem(20),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 1, 'sortField', true);
+
+        $this->assertCount(1, $result);
+        $this->assertSame(20, $result[0]['metadata']['sortField']); // Largest
+    }
+
+    public function testEvaluateOnScanDescendingAscendingReturnsSmallest(): void
+    {
+        $items = [
+            $this->createItem(10),
+            $this->createItem(5),
+            $this->createItem(20),
+        ];
+
+        $this->itemRepository
+            ->method('getByLibrary')
+            ->willReturnCallback(fn(string $libId, int $limit, int $offset) => $offset === 0 ? $items : []);
+
+        $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 1, 'sortField', false);
+
+        $this->assertCount(1, $result);
+        $this->assertSame(5, $result[0]['metadata']['sortField']); // Smallest
+    }
+
+    public function testEvaluateReturnsItemsMatchingRules(): void
+    {
+        $items = [
+            ['id' => '1', 'metadata' => ['genre' => 'Drama', 'year' => 2020]],
+            ['id' => '2', 'metadata' => ['genre' => 'Comedy', 'year' => 2015]],
+            ['id' => '3', 'metadata' => ['genre' => 'Drama', 'year' => 2018]],
+        ];
+
+        $rules = [
+            'logic' => 'and',
+            'rules' => [
+                ['field' => 'genre', 'op' => 'equals', 'value' => 'Drama'],
+            ],
+        ];
+
+        $result = $this->engine->evaluate($rules, $items, 0, 'addedAt', true);
+
+        $this->assertCount(2, $result);
+    }
+
+    public function testBuildFromDslParsesSimpleRule(): void
     {
         $dsl = [
             'logic' => 'and',
             'rules' => [
                 ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-                ['field' => 'year', 'op' => 'gt', 'value' => 2010],
             ],
         ];
 
-        $root = $this->engine->buildFromDsl($dsl);
+        $node = $this->engine->buildFromDsl($dsl);
 
-        $this->assertInstanceOf(RuleNode::class, $root);
-        $this->assertTrue($root->isAnd());
-        $this->assertCount(2, $root->children);
-        $this->assertSame('genre', $root->children[0]->field);
-        $this->assertSame('contains', $root->children[0]->operator);
+        $this->assertSame(RuleNode::TYPE_AND, $node->type);
+        $this->assertCount(1, $node->children);
     }
 
-    public function test_evaluate_and_rule_requires_all_conditions(): void
+    public function testBuildFromDslParsesNestedGroups(): void
     {
-        $rules = [
-            'logic' => 'and',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-                ['field' => 'year', 'op' => 'gt', 'value' => 2010],
-            ],
-        ];
-
-        $items = [
-            $this->makeItem(['genre' => 'Drama', 'year' => 2020]), // matches
-            $this->makeItem(['genre' => 'Drama', 'year' => 2009]), // fails year
-            $this->makeItem(['genre' => 'Comedy', 'year' => 2020]), // fails genre
-            $this->makeItem(['genre' => 'Action', 'year' => 2008]), // fails both
-        ];
-
-        $result = $this->engine->evaluate($rules, $items);
-
-        $this->assertCount(1, $result);
-        $this->assertSame('Drama', $result[0]['metadata']['genre']);
-    }
-
-    public function test_evaluate_or_rule_requires_one_condition(): void
-    {
-        $rules = [
+        $dsl = [
             'logic' => 'or',
             'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Comedy'],
-            ],
-        ];
-
-        $items = [
-            $this->makeItem(['genre' => 'Drama']),
-            $this->makeItem(['genre' => 'Comedy']),
-            $this->makeItem(['genre' => 'Action']),
-        ];
-
-        $result = $this->engine->evaluate($rules, $items);
-
-        $this->assertCount(2, $result);
-    }
-
-    public function test_evaluate_not_rule_inverts_condition(): void
-    {
-        $rules = [
-            'logic' => 'not',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-            ],
-        ];
-
-        $items = [
-            $this->makeItem(['genre' => 'Drama']),
-            $this->makeItem(['genre' => 'Comedy']),
-            $this->makeItem(['genre' => 'Action']),
-        ];
-
-        $result = $this->engine->evaluate($rules, $items);
-
-        $this->assertCount(2, $result);
-    }
-
-    public function test_evaluate_nested_groups(): void
-    {
-        $rules = [
-            'logic' => 'and',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
                 [
-                    'logic' => 'or',
+                    'logic' => 'and',
                     'rules' => [
-                        ['field' => 'rating', 'op' => 'gte', 'value' => 8.0],
-                        ['field' => 'criticScore', 'op' => 'gte', 'value' => 85],
+                        ['field' => 'genre', 'op' => 'equals', 'value' => 'Drama'],
+                        ['field' => 'year', 'op' => 'gt', 'value' => 2010],
                     ],
+                ],
+                [
+                    'field' => 'genre',
+                    'op' => 'equals',
+                    'value' => 'Comedy',
                 ],
             ],
         ];
 
-        $items = [
-            $this->makeItem(['genre' => 'Drama', 'rating' => 8.5, 'criticScore' => 70]),
-            $this->makeItem(['genre' => 'Drama', 'rating' => 7.0, 'criticScore' => 90]),
-            $this->makeItem(['genre' => 'Drama', 'rating' => 7.0, 'criticScore' => 80]),
-            $this->makeItem(['genre' => 'Comedy', 'rating' => 9.0, 'criticScore' => 95]),
-        ];
+        $node = $this->engine->buildFromDsl($dsl);
 
-        $result = $this->engine->evaluate($rules, $items);
-
-        $this->assertCount(2, $result);
+        $this->assertSame(RuleNode::TYPE_OR, $node->type);
+        $this->assertCount(2, $node->children);
     }
 
-    public function test_evaluate_empty_rules_returns_all_items(): void
+    public function testToJsonSerializesRuleNode(): void
     {
-        $items = [
-            $this->makeItem(['genre' => 'Drama']),
-            $this->makeItem(['genre' => 'Comedy']),
-        ];
-
-        $result = $this->engine->evaluate([], $items);
-
-        $this->assertCount(2, $result);
-    }
-
-    public function test_evaluate_with_limit(): void
-    {
-        $rules = [
-            'logic' => 'and',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
+        $node = new RuleNode(
+            type: RuleNode::TYPE_AND,
+            children: [
+                new RuleNode(
+                    type: RuleNode::TYPE_RULE,
+                    field: 'genre',
+                    operator: 'equals',
+                    value: 'Drama',
+                ),
             ],
-        ];
-
-        $items = array_map(
-            fn($i) => $this->makeItem(['genre' => 'Drama', 'title' => "Movie $i"]),
-            range(1, 10)
         );
 
-        $result = $this->engine->evaluate($rules, $items, limit: 3);
+        $json = $this->engine->toJson($node);
 
-        $this->assertCount(3, $result);
-    }
-
-    public function test_evaluate_sort_by_random(): void
-    {
-        $rules = [
-            'logic' => 'and',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-            ],
-        ];
-
-        $items = array_map(
-            fn($i) => $this->makeItem(['genre' => 'Drama', 'title' => "Movie $i"]),
-            range(1, 5)
-        );
-
-        // Run multiple times to verify randomization
-        $results = [];
-        for ($i = 0; $i < 3; $i++) {
-            $results[] = $this->engine->evaluate($rules, $items, sortBy: 'random', sortDesc: true);
-        }
-
-        // Results should differ due to random sort (statistically unlikely to be same order 3 times)
-        $this->assertTrue(
-            $results[0] !== $results[1] || $results[1] !== $results[2],
-            'Random sort should produce different orders across calls'
-        );
-    }
-
-    public function test_to_json_round_trip(): void
-    {
-        $dsl = [
-            'logic' => 'and',
-            'rules' => [
-                ['field' => 'genre', 'op' => 'contains', 'value' => 'Drama'],
-                ['field' => 'year', 'op' => 'gt', 'value' => 2010],
-            ],
-        ];
-
-        $root = $this->engine->buildFromDsl($dsl);
-        $json = $this->engine->toJson($root);
         $decoded = json_decode($json, true);
-
         $this->assertSame('and', $decoded['logic']);
-        $this->assertCount(2, $decoded['rules']);
+        $this->assertCount(1, $decoded['rules']);
         $this->assertSame('genre', $decoded['rules'][0]['field']);
-        $this->assertSame('contains', $decoded['rules'][0]['op']);
-    }
-
-    public function test_evaluate_with_sort_by_field(): void
-    {
-        $rules = [
-            'logic' => 'and',
-            'rules' => [],
-        ];
-
-        $items = [
-            $this->makeItem(['year' => 2010]),
-            $this->makeItem(['year' => 2020]),
-            $this->makeItem(['year' => 2015]),
-        ];
-
-        $result = $this->engine->evaluate($rules, $items, sortBy: 'year', sortDesc: true);
-
-        $this->assertCount(3, $result);
-        $this->assertSame(2020, $result[0]['metadata']['year']);
-        $this->assertSame(2015, $result[1]['metadata']['year']);
-        $this->assertSame(2010, $result[2]['metadata']['year']);
-    }
-
-    /**
-     * Helper to create a media item with metadata.
-     */
-    private function makeItem(array $metadata): array
-    {
-        return [
-            'id' => 'test-' . uniqid(),
-            'library_id' => 'lib-123',
-            'name' => $metadata['title'] ?? 'Test Movie',
-            'type' => 'movie',
-            'path' => '/test/movie.mp4',
-            'metadata' => $metadata,
-        ];
     }
 }

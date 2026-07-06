@@ -30,7 +30,7 @@ final class MetadataManagerAnimeIntegrationTest extends TestCase
         $mockDb = $this->createMock(\Workerman\MySQL\Connection::class);
         $mockItemRepo = $this->createMock(ItemRepository::class);
 
-        $this->manager = new MetadataManager($mockDb, $mockItemRepo);
+        $this->manager = new MetadataManager($mockItemRepo);
     }
 
     /**

@@ -133,10 +133,8 @@ class BookController
         $offset = max(0, is_numeric($offsetParam) ? (int) $offsetParam : 0);
         $limit = min(100, max(1, is_numeric($limitParam) ? (int) $limitParam : 50));
 
-        // Get total count for pagination
-        $items = $this->itemRepo->getByLibrary($libraryId, 10000, 0);
-        $books = array_filter($items, fn($item) => ($item['type'] ?? '') === 'book');
-        $total = count($books);
+        // Get total count for pagination (use COUNT query instead of loading 10K items)
+        $total = $this->itemRepo->countByType($libraryId, 'book');
 
         $xml = $this->opdsBuilder->buildAcquisitionFeed($libraryId, $limit, $offset, $total);
 

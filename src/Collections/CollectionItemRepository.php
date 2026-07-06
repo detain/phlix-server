@@ -156,6 +156,77 @@ class CollectionItemRepository
     }
 
     /**
+     * Check which media items exist in a collection (batch check).
+     *
+     * @param string $collectionId Collection UUID
+     * @param array<int, string> $mediaItemIds Array of media item UUIDs to check
+     * @return array<string, bool> Map of media_item_id => exists (only includes IDs that exist)
+     *
+     * @since 0.14.0
+     */
+    public function findExistingInCollection(string $collectionId, array $mediaItemIds): array
+    {
+        if ($mediaItemIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($mediaItemIds), '?'));
+        $result = $this->db->query(
+            "SELECT media_item_id FROM collection_items
+             WHERE collection_id = ? AND media_item_id IN ({$placeholders})",
+            array_merge([$collectionId], $mediaItemIds)
+        );
+
+        $existing = [];
+        if (is_array($result)) {
+            foreach ($result as $row) {
+                if (is_array($row) && array_key_exists('media_item_id', $row)) {
+                    $existing[(string)$row['media_item_id']] = true;
+                }
+            }
+        }
+
+        return $existing;
+    }
+
+    /**
+     * Batch insert multiple media items into a collection.
+     *
+     * @param string $collectionId Collection UUID
+     * @param array<int, array{mediaItemId: string, sortOrder: int}> $items Items to insert
+     * @return void
+     *
+     * @since 0.14.0
+     */
+    public function batchInsert(string $collectionId, array $items): void
+    {
+        if ($items === []) {
+            return;
+        }
+
+        $now = (new \DateTimeImmutable())->format('Y-m-d H:i:s');
+        $placeholders = [];
+
+        foreach ($items as $item) {
+            $placeholders[] = '(?, ?, ?, ?)';
+        }
+
+        $bindings = [];
+        foreach ($items as $item) {
+            $bindings[] = $collectionId;
+            $bindings[] = $item['mediaItemId'];
+            $bindings[] = $item['sortOrder'];
+            $bindings[] = $now;
+        }
+
+        $this->db->query(
+            "INSERT INTO collection_items (collection_id, media_item_id, sort_order, added_at)
+             VALUES " . implode(', ', $placeholders),
+            $bindings
+        );
+    }
+
+    /**
      * Get the maximum sort order for a collection.
      *
      * @param string $collectionId Collection UUID

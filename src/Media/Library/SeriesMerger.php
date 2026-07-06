@@ -203,13 +203,18 @@ final class SeriesMerger
         $moved = 0;
         $deleted = 0;
 
+        // Batch fetch all children of both primary and duplicate series (replaces 2 queries with 1)
+        $allChildren = $this->items->findByParents([$primaryId, $duplicateId]);
+        $primaryChildren = $allChildren[$primaryId] ?? [];
+        $duplicateChildren = $allChildren[$duplicateId] ?? [];
+
         // Index the PRIMARY's existing seasons by their season number so a
         // same-number duplicate season collapses into it (no duplicate season
         // row created). The map is also extended below when a duplicate season
         // is re-parented as a new season under the primary, so two duplicate
         // seasons of the same number still converge onto ONE primary season.
         $primarySeasonByNumber = [];
-        foreach ($this->items->findByParent($primaryId) as $child) {
+        foreach ($primaryChildren as $child) {
             if ($this->stringField($child, 'type') !== 'season') {
                 continue;
             }
@@ -220,7 +225,24 @@ final class SeriesMerger
             $primarySeasonByNumber[$this->seasonNumberOf($child)] = $childId;
         }
 
-        foreach ($this->items->findByParent($duplicateId) as $child) {
+        // Collect all duplicate season IDs for batch episode fetch
+        $duplicateSeasonIds = [];
+        foreach ($duplicateChildren as $child) {
+            if ($this->stringField($child, 'type') === 'season') {
+                $childId = $this->stringField($child, 'id');
+                if ($childId !== '') {
+                    $duplicateSeasonIds[] = $childId;
+                }
+            }
+        }
+
+        // Batch fetch all episodes for all duplicate seasons (replaces N queries with 1)
+        $allEpisodesBySeason = [];
+        if ($duplicateSeasonIds !== []) {
+            $allEpisodesBySeason = $this->items->findByParents($duplicateSeasonIds);
+        }
+
+        foreach ($duplicateChildren as $child) {
             $childId = $this->stringField($child, 'id');
             if ($childId === '') {
                 continue;
@@ -233,7 +255,7 @@ final class SeriesMerger
                     // The primary already has this season — move the duplicate
                     // season's episodes onto it, then delete the empty shell.
                     $targetSeasonId = $primarySeasonByNumber[$seasonNumber];
-                    foreach ($this->items->findByParent($childId) as $episode) {
+                    foreach ($allEpisodesBySeason[$childId] ?? [] as $episode) {
                         $episodeId = $this->stringField($episode, 'id');
                         if ($episodeId === '') {
                             continue;

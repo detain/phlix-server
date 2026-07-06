@@ -471,10 +471,8 @@ class PhotoController
                 }
             }
         } else {
-            // Get all photos
-            $items = $this->itemRepo->getByLibrary($libraryId, 10000, 0);
-            $photos = array_filter($items, fn($item) => $item['type'] === 'photo');
-            $photos = array_values($photos);
+            // Get all photos (use getByType instead of loading all items + filtering)
+            $photos = $this->itemRepo->getByType($libraryId, 'photo', 10000, 0);
         }
 
         $slideshow = array_map(function (array $photo) use ($interval): array {

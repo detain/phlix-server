@@ -23,14 +23,14 @@ final class UserRepositoryCacheTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        UserRepository::clearCache();
         $this->db = $this->createMock(Connection::class);
         $this->repo = new UserRepository($this->db);
+        $this->repo->clearCache();
     }
 
     protected function tearDown(): void
     {
-        UserRepository::clearCache();
+        $this->repo->clearCache();
         parent::tearDown();
     }
 
@@ -100,7 +100,7 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([$user]);
 
         // Clear cache to ensure test isolation
-        UserRepository::clearCache();
+        $this->repo->clearCache();
 
         $result = $this->repo->findById('user-1');
         $this->assertSame('user-1', $result['id']);
@@ -307,7 +307,7 @@ final class UserRepositoryCacheTest extends TestCase
         $this->assertSame(3, $callCount, 'Should have 3 DB calls for cache population');
 
         // Clear all caches
-        UserRepository::clearCache();
+        $this->repo->clearCache();
 
         // Next calls should all hit DB again (3 more DB calls)
         $this->repo->findById('user-1');

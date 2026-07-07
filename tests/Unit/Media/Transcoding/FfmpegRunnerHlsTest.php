@@ -359,19 +359,185 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringContainsString("'/out/seg-00130.ts'", $cmd);
     }
 
-    public function testBuildSegmentCommandUpgradesCopyToEncode(): void
+    public function testBuildSegmentCommandAppliesPerRungCappedCrf(): void
     {
-        // A segment can never stream-copy (it must force a keyframe at its start), so
-        // a 'copy' decision is treated as a browser-safe H.264 / AAC encode.
+        // A 1080p ABR rung: capped-CRF (quality-driven encode with a hard VBV ceiling
+        // from Rendition::maxrate()/bufsize()), the rung downscale, and the rung level.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+            'video_bitrate' => 5000000,
+            'maxrate' => 5350000,
+            'bufsize' => 10700000,
+            'width' => 1920,
+            'height' => 1080,
+            'level' => '4.1',
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_channels' => 2,
+        ]);
+
+        $this->assertStringContainsString('-crf 23', $cmd);
+        $this->assertStringContainsString('-preset veryfast', $cmd);
+        // Hard VBV ceiling from the rung — the cap is maxrate/bufsize, never a bare -b:v.
+        $this->assertStringContainsString('-maxrate 5350000', $cmd);
+        $this->assertStringContainsString('-bufsize 10700000', $cmd);
+        $this->assertStringNotContainsString('-b:v', $cmd);
+        $this->assertStringContainsString('scale=1920:1080:force_original_aspect_ratio=decrease', $cmd);
+        $this->assertStringContainsString('-level 4.1', $cmd);
+    }
+
+    public function testBuildSegmentCommandHonorsPerRungLevelAndScaleForLowRung(): void
+    {
+        // A 240p rung: its own scale/cap/level flow through independently of any other rung.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, [
+            'video_codec' => 'libx264',
+            'maxrate' => 428000,
+            'bufsize' => 856000,
+            'width' => 426,
+            'height' => 240,
+            'level' => '3.0',
+        ]);
+
+        $this->assertStringContainsString('-maxrate 428000', $cmd);
+        $this->assertStringContainsString('-bufsize 856000', $cmd);
+        $this->assertStringContainsString('scale=426:240:force_original_aspect_ratio=decrease', $cmd);
+        $this->assertStringContainsString('-level 3.0', $cmd);
+        $this->assertStringContainsString('-crf 23', $cmd);
+    }
+
+    public function testBuildSegmentCommandCappedFlagsAbsentWhenNotRequested(): void
+    {
+        // Backward-compat: no maxrate/bufsize params → CRF-only, exactly like before.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+        ]);
+
+        $this->assertStringContainsString('-crf 23', $cmd);
+        $this->assertStringNotContainsString('-maxrate', $cmd);
+        $this->assertStringNotContainsString('-bufsize', $cmd);
+        $this->assertStringNotContainsString('-b:v', $cmd);
+    }
+
+    public function testBuildSegmentCommandStreamCopiesVideoForOriginal(): void
+    {
+        // Genuine "Original" passthrough: -c:v copy, NO encoder/scale/keyframe flags.
         $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
             'video_codec' => 'copy',
             'audio_codec' => 'copy',
         ]);
 
+        $this->assertStringContainsString('-c:v copy', $cmd);
+        // A stream copy cannot synthesise a keyframe mid-GOP, so no force_key_frames.
+        $this->assertStringNotContainsString('-force_key_frames', $cmd);
+        // No encoder-only / scale / cap flags leak into a pure copy.
+        $this->assertStringNotContainsString('-crf', $cmd);
+        $this->assertStringNotContainsString('-preset', $cmd);
+        $this->assertStringNotContainsString('-maxrate', $cmd);
+        $this->assertStringNotContainsString('-bufsize', $cmd);
+        $this->assertStringNotContainsString('scale=', $cmd);
+        $this->assertStringNotContainsString('libx264', $cmd);
+        // PTS anchoring still applies to a copy segment.
+        $this->assertStringContainsString('-output_ts_offset 0', $cmd);
+        $this->assertStringContainsString('-muxdelay 0 -muxpreload 0', $cmd);
+        $this->assertStringContainsString('-f mpegts', $cmd);
+    }
+
+    public function testBuildSegmentCommandStreamCopiesAudio(): void
+    {
+        // Genuine audio passthrough: -c:a copy, no bitrate/sample-rate/channel flags.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'audio_codec' => 'copy',
+        ]);
+
+        $this->assertStringContainsString('-c:a copy', $cmd);
+        $this->assertStringNotContainsString('-b:a', $cmd);
+        $this->assertStringNotContainsString('-ar', $cmd);
+        $this->assertStringNotContainsString('-ac', $cmd);
+    }
+
+    public function testBuildSegmentCommandMixedVideoReencodeAudioCopy(): void
+    {
+        // The caller pins video re-encode + audio copy; each stream's codec decision
+        // is independent, so an AAC-safe source can keep its audio while video encodes.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+            'audio_codec' => 'copy',
+        ]);
+
         $this->assertStringContainsString('-c:v libx264', $cmd);
-        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-force_key_frames', $cmd);
+        $this->assertStringContainsString('-c:a copy', $cmd);
         $this->assertStringNotContainsString('-c:v copy', $cmd);
+        $this->assertStringNotContainsString('-c:a aac', $cmd);
+    }
+
+    public function testBuildSegmentCommandMixedVideoCopyAudioReencode(): void
+    {
+        // H.264 source with non-AAC audio → copy the compatible video, re-encode audio.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'copy',
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+        ]);
+
+        $this->assertStringContainsString('-c:v copy', $cmd);
+        $this->assertStringNotContainsString('-force_key_frames', $cmd);
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-b:a 128k', $cmd);
         $this->assertStringNotContainsString('-c:a copy', $cmd);
+    }
+
+    public function testBuildSegmentCommandBoundaryFlagsIdenticalAcrossRungs(): void
+    {
+        // Seamless ABR switching demands that the segment framing (keyframe expr, PTS
+        // anchor, mux pre-roll, window length) is byte-identical across every rung;
+        // only scale/bitrate/level differ.
+        $common = [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+        ];
+        $rung480 = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, $common + [
+            'maxrate' => 1498000,
+            'bufsize' => 2996000,
+            'width' => 854,
+            'height' => 480,
+            'level' => '3.1',
+        ]);
+        $rung1080 = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-00130.ts', 780.0, 6.0, $common + [
+            'maxrate' => 5350000,
+            'bufsize' => 10700000,
+            'width' => 1920,
+            'height' => 1080,
+            'level' => '4.1',
+        ]);
+
+        // Boundary / PTS / framing flags are IDENTICAL across the two rungs.
+        foreach (
+            [
+                "-force_key_frames 'expr:gte(t,0)'",
+                '-output_ts_offset 780',
+                '-muxdelay 0 -muxpreload 0',
+                '-ss 780 -i ',
+                '-t 6',
+            ] as $shared
+        ) {
+            $this->assertStringContainsString($shared, $rung480);
+            $this->assertStringContainsString($shared, $rung1080);
+        }
+
+        // ...and ONLY the scale/bitrate/level differ.
+        $this->assertStringContainsString('scale=854:480', $rung480);
+        $this->assertStringContainsString('scale=1920:1080', $rung1080);
+        $this->assertStringContainsString('-maxrate 1498000', $rung480);
+        $this->assertStringContainsString('-maxrate 5350000', $rung1080);
+        $this->assertStringContainsString('-level 3.1', $rung480);
+        $this->assertStringContainsString('-level 4.1', $rung1080);
     }
 
     public function testBuildSegmentCommandFormatsFractionalTimes(): void

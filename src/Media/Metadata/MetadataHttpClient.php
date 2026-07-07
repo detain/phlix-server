@@ -102,7 +102,9 @@ class MetadataHttpClient
             }
         }
 
-        $response = $this->requestAsync($url, $requestHeaders);
+        $response = $this->isWorkermanContext()
+            ? $this->requestAsync($url, $requestHeaders)
+            : $this->requestCurl($url, $requestHeaders);
 
         if ($response === null) {
             $this->logger->error('Metadata HTTP request failed', [
@@ -191,6 +193,65 @@ class MetadataHttpClient
         }
 
         return $state['response'];
+    }
+
+    /**
+     * Check if we're running inside a workerman worker context.
+     *
+     * `Workerman\Http\Client` (and the `Timer` it uses internally for request
+     * timeouts) requires an active Workerman event loop. Under PHPUnit (or any
+     * plain CLI invocation) there is no running worker, so the async client
+     * throws `RuntimeException: Timer can only be used in workerman running
+     * environment`. Detect that case and fall back to synchronous cURL.
+     *
+     * @return bool True if in workerman context, false otherwise
+     */
+    private function isWorkermanContext(): bool
+    {
+        if (!class_exists('Workerman\Worker')) {
+            return false;
+        }
+        // Worker::$_instance is set when running in worker context
+        return defined('\Workerman\Worker::$_instance');
+    }
+
+    /**
+     * Fallback synchronous cURL request for CLI/testing contexts where no
+     * Workerman event loop is running.
+     *
+     * @param array<string, string> $headers Request headers
+     * @return ResponseInterface|null Response or null on error
+     */
+    private function requestCurl(string $url, array $headers): ?ResponseInterface
+    {
+        if ($url === '') {
+            return null;
+        }
+
+        $ch = curl_init();
+        if ($ch === false) {
+            return null;
+        }
+
+        $headerLines = [];
+        foreach ($headers as $key => $value) {
+            $headerLines[] = "$key: $value";
+        }
+
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headerLines);
+
+        $body = curl_exec($ch);
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($body)) {
+            return null;
+        }
+
+        return new \Workerman\Http\Response($statusCode, [], $body);
     }
 
     /**

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
+use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
 use Phlix\Server\Http\Request;
@@ -145,6 +146,20 @@ class HlsControllerTest extends TestCase
         );
 
         $this->assertSame(404, $res->statusCode);
+    }
+
+    public function testOnDemandSegmentReturns503WhenTranscoderBusy(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureSegment')->willThrowException(new SegmentBusyException('busy'));
+
+        $res = $this->controller($manager)->serveFile(
+            new Request(),
+            ['job_id' => 'job-seg', 'file' => 'seg-00005.ts']
+        );
+
+        $this->assertSame(503, $res->statusCode);
+        $this->assertSame('1', $res->headers['Retry-After'] ?? null);
     }
 
     public function testOnDemandSegment404WhenTranscoderUnavailable(): void

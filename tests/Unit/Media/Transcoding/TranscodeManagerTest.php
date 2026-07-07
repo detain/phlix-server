@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Workerman\MySQL\Connection;
 
@@ -736,6 +737,156 @@ class TranscodeManagerTest extends TestCase
 
         $this->assertSame("{$dir}/seg-00002.ts", $path);
         $this->assertFileExists($path);
+    }
+
+    /**
+     * Builds a manager with the on-demand concurrency / cache / poll seams exposed
+     * so segment behaviour can be exercised without a 30 s real-world wait.
+     */
+    private function segManager(
+        Connection $db,
+        FfmpegRunner $ff,
+        ?int $maxConcurrentSegments = null,
+        ?int $cacheMaxBytes = null,
+        ?int $cacheMaxAge = null,
+        ?int $waitMs = 200
+    ): TranscodeManager {
+        return new TranscodeManager(
+            $db,
+            $ff,
+            new EncodingHelper(),
+            $this->segmentDir,
+            $this->segmentDir,
+            null,
+            6,
+            null,
+            null,
+            null,
+            $maxConcurrentSegments,
+            $cacheMaxBytes,
+            $cacheMaxAge,
+            $waitMs
+        );
+    }
+
+    public function testEnsureSegmentDoesNotRelaunchWhenSegmentAlreadyEncoding(): void
+    {
+        $dir = $this->segmentDir . '/seg-dedup';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        // An encode for seg-00002 is already in flight (its atomic-write temp exists).
+        file_put_contents("{$dir}/seg-00002.ts.part-deadbeef", 'partial');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        // The in-flight encode must NOT be duplicated — this is the anti-cascade fix.
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->segManager($db, $ff)->ensureSegment('seg-job', 2));
+    }
+
+    public function testEnsureSegmentThrowsSegmentBusyWhenGlobalCeilingReached(): void
+    {
+        $dir = $this->segmentDir . '/seg-busy';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        // A different job already has an encode in flight, filling the ceiling (=1).
+        $otherDir = $this->segmentDir . '/other-job';
+        mkdir($otherDir, 0755, true);
+        file_put_contents("{$otherDir}/seg-00000.ts.part-aaaabbbb", 'p');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->expectException(SegmentBusyException::class);
+        $this->segManager($db, $ff, 1)->ensureSegment('seg-job', 2);
+    }
+
+    public function testEnsureSegmentAtCapacityStillServesAlreadyEncodingSegment(): void
+    {
+        $dir = $this->segmentDir . '/seg-cap-inflight';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        // This exact segment is already encoding; even though its temp also fills the
+        // ceiling (=1), an in-flight segment must piggyback rather than fast-fail.
+        file_put_contents("{$dir}/seg-00002.ts.part-bbbbcccc", 'p');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        // No SegmentBusyException — returns null after the short wait since the
+        // in-flight encode does not complete within the test.
+        $this->assertNull($this->segManager($db, $ff, 1)->ensureSegment('seg-job', 2));
+    }
+
+    public function testEnsureSegmentRecreatesMissingJobDir(): void
+    {
+        // hls_dir is gone (evicted by the sweep, or wiped by a PrivateTmp restart).
+        $dir = $this->segmentDir . '/seg-gone';
+        $input = $this->segmentDir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out): int {
+                $this->assertDirectoryExists(dirname($out)); // dir was recreated
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $path = $this->segManager($db, $ff)->ensureSegment('seg-job', 1);
+
+        $this->assertSame("{$dir}/seg-00001.ts", $path);
+        $this->assertDirectoryExists($dir);
+    }
+
+    public function testSweepSegmentCacheEvictsIdleSessionsPastTtl(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $old = $this->segmentDir . '/ttl-old';
+        $fresh = $this->segmentDir . '/ttl-fresh';
+        mkdir($old, 0755, true);
+        mkdir($fresh, 0755, true);
+        file_put_contents("{$old}/seg-00000.ts", 'x');
+        file_put_contents("{$fresh}/seg-00000.ts", 'x');
+        touch($old, time() - 10); // idle 10s
+
+        // cacheMaxAge = 1s → the idle dir is past TTL, the fresh one is not.
+        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCache();
+
+        $this->assertSame(1, $reaped);
+        $this->assertDirectoryDoesNotExist($old);
+        $this->assertDirectoryExists($fresh);
+    }
+
+    public function testSweepSegmentCacheEvictsLruOverBudgetButKeepsActiveSessions(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $old = $this->segmentDir . '/lru-old';
+        $active = $this->segmentDir . '/lru-active';
+        mkdir($old, 0755, true);
+        mkdir($active, 0755, true);
+        file_put_contents("{$old}/seg-00000.ts", str_repeat('x', 4096));
+        file_put_contents("{$active}/seg-00000.ts", str_repeat('y', 4096));
+        touch($old, time() - 2400);   // idle 40 min → past the 30-min active window
+        touch($active, time());       // actively watched right now
+
+        // Budget tiny (over it), TTL huge (nothing TTL-evicted) → LRU size eviction,
+        // but the live session is never pulled out from under the viewer.
+        $reaped = $this->segManager($db, $ff, null, 1024, 86400)->sweepSegmentCache();
+
+        $this->assertSame(1, $reaped);
+        $this->assertDirectoryDoesNotExist($old);
+        $this->assertDirectoryExists($active);
     }
 
     private function rrmdir(string $dir): void

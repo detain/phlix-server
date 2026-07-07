@@ -76,6 +76,21 @@ return [
         // Target HLS segment duration (seconds). 6s is the Apple-recommended
         // default and keeps the segment count (and per-request overhead) sane.
         'segment_seconds' => 6,
+        // Ceiling on simultaneous on-demand segment encodes across all jobs. Each
+        // segment is a full decode+encode; unbounded concurrency (many viewers, or
+        // one viewer's timed-out retries) saturates the CPU so every encode slows
+        // past the client's fragment timeout and playback fails. Requests over the
+        // ceiling get a fast 503 + Retry-After so the client backs off. Tune toward
+        // the box's core count. Env override: HLS_MAX_CONCURRENT_SEGMENTS.
+        'max_concurrent_segments' => (int) (getenv('HLS_MAX_CONCURRENT_SEGMENTS') ?: 8),
+        // Size budget (bytes) for the on-demand segment cache. `segment_dir` is
+        // often a RAM-backed tmpfs, and on-demand jobs never self-clean, so without
+        // a ceiling the cache grows until the filesystem fills and encodes fail with
+        // ENOSPC. Over budget, least-recently-used sessions are evicted. Default 8 GiB.
+        'cache_max_bytes' => (int) (getenv('HLS_CACHE_MAX_BYTES') ?: 8 * 1024 * 1024 * 1024),
+        // Age (seconds) after which an idle segment session is reclaimed regardless
+        // of the size budget — an abandoned watch. Default 3 hours.
+        'cache_max_age' => (int) (getenv('HLS_CACHE_MAX_AGE') ?: 10800),
     ],
 
     // WebSocket server settings for SyncPlay realtime communication.

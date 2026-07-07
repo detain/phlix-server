@@ -144,6 +144,50 @@ final class TraktApiTest extends TestCase
         $this->expectException(TraktApiException::class);
         $api->refreshAfterAuthFailure('expired-refresh-token');
     }
+
+    /**
+     * Test that the cross-process lock acquire is non-blocking (LOCK_EX | LOCK_NB)
+     * rather than a bare blocking flock(). If another process/holder has the
+     * lock file exclusively locked and never releases it, refreshAfterAuthFailure()
+     * must eventually give up (polling with a yield, not blocking the event loop
+     * forever) and throw TraktApiException rather than hang indefinitely.
+     *
+     * This directly guards against a regression back to a blocking
+     * flock($fp, LOCK_EX), which would stall the whole Workerman/Swoole worker
+     * event loop while the lock is contended.
+     */
+    public function testRefreshAfterAuthFailureThrowsWhenLockIsHeldByAnotherProcess(): void
+    {
+        $lockFile = sys_get_temp_dir() . '/phlix_trakt_refresh.lock';
+
+        // Simulate another worker process holding the cross-process mutex by
+        // acquiring an exclusive lock on the SAME lock file path used internally
+        // by TraktApi::refreshAfterAuthFailure(), and never releasing it during
+        // this test. If the implementation uses a bare blocking flock(LOCK_EX),
+        // this test would hang forever; with LOCK_NB + bounded polling it must
+        // instead throw within a bounded time.
+        $externalHolder = fopen($lockFile, 'c+');
+        $this->assertNotFalse($externalHolder, 'Could not open lock file for test setup');
+        $this->assertTrue(flock($externalHolder, LOCK_EX), 'Could not acquire external test lock');
+
+        try {
+            $http = new MockHttpClient([
+                ['access_token' => 'irrelevant', 'refresh_token' => 'irrelevant', 'expires_in' => 3600],
+            ]);
+            $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+            $this->expectException(TraktApiException::class);
+            $this->expectExceptionMessage('Could not acquire refresh lock');
+
+            // Use a refresh token unique to this test so the static same-process
+            // single-flight cache (keyed by md5(refreshToken)) can't short-circuit
+            // and return a cached result from another test in the same process.
+            $api->refreshAfterAuthFailure('lock-contention-test-token-' . __METHOD__);
+        } finally {
+            flock($externalHolder, LOCK_UN);
+            fclose($externalHolder);
+        }
+    }
 }
 
 final class MockHttpClient implements HttpClientInterface

@@ -728,10 +728,13 @@ class MediaScanner
         $existing = $this->itemRepository->findByPath($path);
         if ($existing) {
             // Re-scan: the row is already indexed, so no new item is added.
-            // Backfill a missing total duration for time-based media so the
-            // scrubber has the true length even for files indexed before this
-            // probe existed (or before they were ever transcoded).
-            $this->backfillDuration($path, $existing);
+            // Backfill any missing source technical metadata for time-based
+            // media — the total duration, the compact metadata_json['source']
+            // summary, and the media_streams rows — so files indexed before the
+            // source probe existed (or before they were ever transcoded) still
+            // gain it on a plain rescan. Fully guarded; a single ffprobe call
+            // yields all three.
+            $this->backfillItemSourceMetadata($existing);
             return false; // Already scanned
         }
 
@@ -789,17 +792,29 @@ class MediaScanner
         $path = self::toValidUtf8($path);
         $metadata = self::sanitizeMetadata($metadata);
 
-        // Probe and store the precise total duration (seconds) for time-based
-        // media so the player's scrubber knows the full length immediately. An
-        // int is sanitize-safe, so it is added after sanitizeMetadata(). Never
-        // overwrite a duration already present in the parsed metadata.
-        if (
-            in_array($mediaType, self::DURATION_PROBE_TYPES, true)
-            && !(isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds']))
-        ) {
-            $duration = $this->probeDurationSeconds($path);
-            if ($duration !== null) {
-                $metadata['duration_seconds'] = $duration;
+        // Probe the source file ONCE for time-based media and stamp BOTH the
+        // precise total duration (seconds) AND a compact technical source
+        // summary (metadata_json['source'] = {width, height, video_codec,
+        // video_bitrate, pix_fmt, audio_codec, audio_bitrate}) so the player's
+        // scrubber knows the full length immediately and the ABR ladder can
+        // later be built without re-probing on every playback start. These
+        // scalar values are sanitize-safe, so they are added after
+        // sanitizeMetadata(). A duration already present in the parsed metadata
+        // is never overwritten. The same probe result also feeds media_streams
+        // once the row is created (below), so no second ffprobe is ever issued.
+        $probeSummary = null;
+        if (in_array($mediaType, self::DURATION_PROBE_TYPES, true)) {
+            $probeSummary = $this->probeSummary($path);
+            if ($probeSummary !== null) {
+                if (
+                    $probeSummary['duration_seconds'] !== null
+                    && !(isset($metadata['duration_seconds']) && is_numeric($metadata['duration_seconds']))
+                ) {
+                    $metadata['duration_seconds'] = $probeSummary['duration_seconds'];
+                }
+                if ($probeSummary['source'] !== null) {
+                    $metadata['source'] = $probeSummary['source'];
+                }
             }
         }
 
@@ -854,25 +869,36 @@ class MediaScanner
             'type' => $mediaType,
         ]);
 
+        // Persist the video + primary audio streams derived from the SAME probe
+        // taken above (no second ffprobe). Idempotent and self-guarded, so a
+        // stream-write failure never aborts the scan.
+        if ($probeSummary !== null && $probeSummary['streams'] !== []) {
+            $this->persistStreams((string) $itemId, $probeSummary['streams']);
+        }
+
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
 
         return true;
     }
 
     /**
-     * Probe a media file's total duration in whole seconds via ffprobe.
+     * Probe a media file's source characteristics with a SINGLE ffprobe call,
+     * deriving its total duration, a compact `source` summary, and the
+     * media_streams rows to persist — so the scan- and backfill-time paths
+     * never probe the same file twice.
      *
-     * Returns null when no ffprobe runner is wired, when the probe fails or
-     * yields no positive duration, or when any error occurs — a probe failure
-     * must NEVER abort the scan, so all throwables are caught and logged.
-     * Matches {@see TranscodeManager::persistProbedDuration()}'s key, type and
-     * `(int) round((float) $raw)` rounding so the scan- and transcode-time
-     * paths agree on the stored value.
+     * Returns null when no ffprobe runner is wired, when the probe fails, or
+     * when any error occurs — a probe failure must NEVER abort the scan, so all
+     * throwables are caught and logged.
      *
      * @param string $path Absolute filesystem path to the media file.
-     * @return int|null Total duration in seconds (> 0), or null.
+     * @return array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * }|null Combined probe summary, or null when nothing could be probed.
      */
-    private function probeDurationSeconds(string $path): ?int
+    private function probeSummary(string $path): ?array
     {
         if ($this->ffmpeg === null) {
             return null;
@@ -883,15 +909,9 @@ class MediaScanner
             if (!is_array($probe)) {
                 return null;
             }
-            $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
-            $rawDuration = $format['duration'] ?? null;
-            if (!is_numeric($rawDuration)) {
-                return null;
-            }
-            $duration = (int) round((float) $rawDuration);
-            return $duration > 0 ? $duration : null;
+            return self::summarizeProbe($probe);
         } catch (\Throwable $e) {
-            $this->logger->debug('Duration probe failed; continuing scan', [
+            $this->logger->debug('Source probe failed; continuing scan', [
                 'path' => $path,
                 'error' => $e->getMessage(),
             ]);
@@ -900,53 +920,337 @@ class MediaScanner
     }
 
     /**
-     * Backfill a missing total duration onto an already-indexed media item.
+     * Derive the total duration, a compact source technical summary, and the
+     * media_streams rows from a SINGLE {@see FfmpegRunner::probe()} result.
+     * Pure and side-effect free so one probe feeds every downstream write.
      *
-     * Invoked on re-scan for rows that {@see processFile()} would otherwise just
-     * skip. Only time-based items (video/movie/episode/audio) that lack a
-     * positive `duration_seconds` are probed; the existing metadata is read,
-     * merged (never clobbering other keys) and written back in full via
-     * {@see ItemRepository::update()}. Fully guarded so a probe or write failure
-     * never aborts the scan.
+     * The `source` summary is the fixed shape `{width, height, video_codec,
+     * video_bitrate, pix_fmt, audio_codec, audio_bitrate}` (each value null when
+     * the probe does not expose it), stored under `metadata_json['source']` for
+     * the ABR-ladder builder. `pix_fmt` lives only there because the
+     * media_streams table has no such column. `video_bitrate` falls back to the
+     * whole-file bitrate (`format.bit_rate`) when the video stream carries none
+     * (common for Matroska) so the ladder always has a usable source ceiling.
      *
-     * @param string               $path     Absolute filesystem path of the file.
-     * @param array<string, mixed> $existing Hydrated existing media-item row.
+     * Duration rounding matches {@see TranscodeManager::persistProbedDuration()}
+     * (`(int) round((float) $raw)`, positive only) so the scan- and
+     * transcode-time paths agree on the stored value. `source` is null and
+     * `streams` empty when the file exposes neither a video nor an audio stream.
+     *
+     * @param array<string, mixed> $probe Raw ffprobe result (streams + format).
+     * @return array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * }
      */
-    private function backfillDuration(string $path, array $existing): void
+    private static function summarizeProbe(array $probe): array
+    {
+        $rawStreams = is_array($probe['streams'] ?? null) ? $probe['streams'] : [];
+        $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
+
+        $video = null;
+        $videoIndex = null;
+        $videoFallback = null;
+        $videoFallbackIndex = null;
+        $audio = null;
+        $audioIndex = null;
+        foreach ($rawStreams as $stream) {
+            if (!is_array($stream)) {
+                continue;
+            }
+            $codecType = $stream['codec_type'] ?? null;
+            if ($codecType === 'video') {
+                // Remember the first video-type stream as a fallback for the
+                // rare file whose ONLY video stream is an embedded cover art.
+                if ($videoFallback === null) {
+                    $videoFallback = $stream;
+                    $videoFallbackIndex = self::intOrNull($stream['index'] ?? null);
+                }
+                // Prefer the first REAL video stream: skip an embedded poster
+                // (disposition.attached_pic = 1), whose tiny 600x900 dims would
+                // otherwise masquerade as the source resolution and wrongly cap
+                // the ABR ladder at the thumbnail size.
+                if ($video === null && !self::isAttachedPic($stream)) {
+                    $video = $stream;
+                    $videoIndex = self::intOrNull($stream['index'] ?? null);
+                }
+            } elseif ($audio === null && $codecType === 'audio') {
+                $audio = $stream;
+                $audioIndex = self::intOrNull($stream['index'] ?? null);
+            }
+        }
+
+        // Only when every video-type stream is an attached picture do we fall
+        // back to it — preserving prior behavior for that edge (an item that
+        // truly has no playable video stream).
+        if ($video === null && $videoFallback !== null) {
+            $video = $videoFallback;
+            $videoIndex = $videoFallbackIndex;
+        }
+
+        // Total duration (seconds) from the container format. Rounded and
+        // positive-only to match the transcode-time persist path.
+        $duration = null;
+        $rawDuration = $format['duration'] ?? null;
+        if (is_numeric($rawDuration)) {
+            $seconds = (int) round((float) $rawDuration);
+            if ($seconds > 0) {
+                $duration = $seconds;
+            }
+        }
+
+        // A file with neither a video nor an audio stream (image/data-only) has
+        // no meaningful source summary or streams to persist.
+        if ($video === null && $audio === null) {
+            return ['duration_seconds' => $duration, 'source' => null, 'streams' => []];
+        }
+
+        $videoBitrate = $video !== null
+            ? (self::intOrNull($video['bit_rate'] ?? null) ?? self::intOrNull($format['bit_rate'] ?? null))
+            : null;
+        $audioBitrate = $audio !== null ? self::intOrNull($audio['bit_rate'] ?? null) : null;
+
+        $source = [
+            'width' => $video !== null ? self::intOrNull($video['width'] ?? null) : null,
+            'height' => $video !== null ? self::intOrNull($video['height'] ?? null) : null,
+            'video_codec' => $video !== null ? self::stringOrNull($video['codec_name'] ?? null) : null,
+            'video_bitrate' => $videoBitrate,
+            'pix_fmt' => $video !== null ? self::stringOrNull($video['pix_fmt'] ?? null) : null,
+            'audio_codec' => $audio !== null ? self::stringOrNull($audio['codec_name'] ?? null) : null,
+            'audio_bitrate' => $audioBitrate,
+        ];
+
+        $streams = [];
+        if ($video !== null) {
+            $streams[] = [
+                'stream_index' => $videoIndex ?? 0,
+                'stream_type' => 'video',
+                'codec' => self::stringOrNull($video['codec_name'] ?? null),
+                'language' => self::streamLanguage($video),
+                'bitrate' => $videoBitrate,
+                'width' => self::intOrNull($video['width'] ?? null),
+                'height' => self::intOrNull($video['height'] ?? null),
+            ];
+        }
+        if ($audio !== null) {
+            $streams[] = [
+                'stream_index' => $audioIndex ?? ($video !== null ? 1 : 0),
+                'stream_type' => 'audio',
+                'codec' => self::stringOrNull($audio['codec_name'] ?? null),
+                'language' => self::streamLanguage($audio),
+                'bitrate' => $audioBitrate,
+                'width' => null,
+                'height' => null,
+            ];
+        }
+
+        return ['duration_seconds' => $duration, 'source' => $source, 'streams' => $streams];
+    }
+
+    /**
+     * Coerce a probe value to an int, or null when not numeric. ffprobe emits
+     * many numbers as strings (e.g. bit_rate "5000000"), so both ints and
+     * numeric strings are accepted.
+     *
+     * @param mixed $value Raw probe value.
+     */
+    private static function intOrNull(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    /**
+     * Coerce a probe value to a non-empty string, or null otherwise.
+     *
+     * @param mixed $value Raw probe value.
+     */
+    private static function stringOrNull(mixed $value): ?string
+    {
+        return (is_string($value) && $value !== '') ? $value : null;
+    }
+
+    /**
+     * Whether an ffprobe stream is an embedded attached picture (cover art /
+     * poster) rather than real playable video — `disposition.attached_pic = 1`.
+     * Such a stream reports the poster's tiny dimensions, which must not be
+     * mistaken for the source resolution when building the ABR ladder. Accepts
+     * a mixed value so callers never need to pre-narrow the raw stream array.
+     *
+     * @param mixed $stream Raw ffprobe stream entry.
+     */
+    private static function isAttachedPic(mixed $stream): bool
+    {
+        if (!is_array($stream)) {
+            return false;
+        }
+        $disposition = $stream['disposition'] ?? null;
+        if (!is_array($disposition)) {
+            return false;
+        }
+        $attached = $disposition['attached_pic'] ?? null;
+        return is_numeric($attached) && (int) $attached === 1;
+    }
+
+    /**
+     * Extract a stream's ISO language tag (ffprobe `tags.language`), truncated
+     * to the media_streams.language column width (10). Returns null when absent,
+     * empty, or the "und" (undetermined) placeholder. Accepts a mixed value so
+     * callers never need to pre-narrow the raw stream array.
+     *
+     * @param mixed $stream Raw ffprobe stream entry.
+     */
+    private static function streamLanguage(mixed $stream): ?string
+    {
+        if (!is_array($stream)) {
+            return null;
+        }
+        $tags = $stream['tags'] ?? null;
+        if (!is_array($tags)) {
+            return null;
+        }
+        $lang = $tags['language'] ?? null;
+        if (!is_string($lang) || $lang === '' || strtolower($lang) === 'und') {
+            return null;
+        }
+        return substr($lang, 0, 10);
+    }
+
+    /**
+     * Replace a media item's media_streams rows with the freshly-probed set,
+     * reporting whether the replacement fully succeeded.
+     *
+     * Idempotent: the item's existing stream rows are cleared first, so a
+     * rescan re-inserts rather than duplicates. Fully guarded — a stream-write
+     * failure is logged and never aborts the scan, but is signalled by a false
+     * return so callers can leave the row repairable (see
+     * {@see backfillItemSourceMetadata()}). An empty stream set, or an empty
+     * item id, is a no-op success.
+     *
+     * @param string                     $itemId  Media item UUID.
+     * @param list<array<string, mixed>> $streams Stream rows for {@see ItemRepository::addStream()}.
+     * @return bool True when the streams were persisted (or there were none);
+     *              false when a write failed part-way.
+     */
+    private function persistStreams(string $itemId, array $streams): bool
+    {
+        if ($itemId === '' || $streams === []) {
+            return true;
+        }
+
+        try {
+            $this->itemRepository->deleteStreamsByItem($itemId);
+            foreach ($streams as $stream) {
+                $this->itemRepository->addStream($itemId, $stream);
+            }
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->debug('Persisting media streams failed; continuing scan', [
+                'item_id' => $itemId,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * Backfill source technical metadata onto ONE already-indexed media item
+     * from a single fresh ffprobe: the total duration, the compact
+     * `metadata_json['source']` summary, and the media_streams rows.
+     *
+     * Shared entry point for BOTH the incremental rescan path (invoked from
+     * {@see processFile()} when a file is already indexed) and the offline
+     * backfill CLI (`scripts/backfill-source-metadata.php`), so the two never
+     * drift. Idempotent — an item that already has both a positive duration and
+     * a `source` blob is skipped WITHOUT probing. Fully guarded: a probe or
+     * write failure returns `'failed'` rather than throwing, so one bad item
+     * never aborts a scan or a batch run.
+     *
+     * Repairability invariant: media_streams are replaced FIRST (a blanket
+     * delete-then-insert). If that replacement fails part-way we write NEITHER
+     * `metadata_json['source']` NOR the duration and return `'failed'`, so the
+     * row is left source-less and the backfill CLI (which reselects on
+     * `source IS NULL`) picks it up again on the next run rather than stranding
+     * it with a populated `source` but partial/zero streams.
+     *
+     * @param array<string, mixed> $existing Hydrated media_items row; needs
+     *                                        `id`, `type`, `path`, and either a
+     *                                        decoded `metadata` or a raw
+     *                                        `metadata_json`.
+     * @return 'updated'|'skipped'|'failed' `'updated'` when metadata and/or
+     *         streams were written; `'skipped'` when nothing was needed
+     *         (already populated / not time-based / missing id or path / no
+     *         ffprobe runner / probe yielded no new data); `'failed'` when the
+     *         probe or a stream write failed and the item should be retried
+     *         on a later run.
+     */
+    public function backfillItemSourceMetadata(array $existing): string
     {
         if ($this->ffmpeg === null) {
-            return;
+            return 'skipped';
         }
 
         try {
             $type = $existing['type'] ?? null;
             if (!is_string($type) || !in_array($type, self::DURATION_PROBE_TYPES, true)) {
-                return;
-            }
-
-            $meta = $this->existingMetadata($existing);
-            $existingDuration = $meta['duration_seconds'] ?? null;
-            if (is_numeric($existingDuration) && (int) $existingDuration > 0) {
-                return; // Already has a positive duration — nothing to do.
-            }
-
-            $duration = $this->probeDurationSeconds($path);
-            if ($duration === null) {
-                return;
+                return 'skipped';
             }
 
             $id = $existing['id'] ?? null;
             if (!is_string($id) || $id === '') {
-                return;
+                return 'skipped';
             }
 
-            $meta['duration_seconds'] = $duration;
-            $this->itemRepository->update($id, ['metadata_json' => $meta]);
+            $path = $existing['path'] ?? null;
+            if (!is_string($path) || $path === '') {
+                return 'skipped';
+            }
+
+            $meta = $this->existingMetadata($existing);
+            $hasDuration = isset($meta['duration_seconds'])
+                && is_numeric($meta['duration_seconds'])
+                && (int) $meta['duration_seconds'] > 0;
+            $hasSource = isset($meta['source']) && is_array($meta['source']);
+            if ($hasDuration && $hasSource) {
+                return 'skipped'; // Already populated — idempotent, no probe.
+            }
+
+            $summary = $this->probeSummary($path);
+            if ($summary === null) {
+                return 'failed'; // Probe failed (missing/unreadable) — retry later.
+            }
+
+            // Replace media_streams FIRST from the fresh probe. If that fails we
+            // must not write source/duration below, so the item stays
+            // source-less and is reselected for a clean retry instead of being
+            // stranded half-populated.
+            if (!$this->persistStreams($id, $summary['streams'])) {
+                return 'failed';
+            }
+
+            $metaChanged = false;
+            if (!$hasDuration && $summary['duration_seconds'] !== null) {
+                $meta['duration_seconds'] = $summary['duration_seconds'];
+                $metaChanged = true;
+            }
+            if (!$hasSource && $summary['source'] !== null) {
+                $meta['source'] = $summary['source'];
+                $metaChanged = true;
+            }
+            if ($metaChanged) {
+                $this->itemRepository->update($id, ['metadata_json' => $meta]);
+                return 'updated';
+            }
+
+            // Streams persisted cleanly but there was nothing new to stamp into
+            // metadata (e.g. a probe exposing no A/V source summary).
+            return $summary['streams'] !== [] ? 'updated' : 'skipped';
         } catch (\Throwable $e) {
-            $this->logger->debug('Duration backfill failed; continuing scan', [
-                'path' => $path,
+            $this->logger->debug('Source metadata backfill failed; continuing scan', [
+                'path' => is_string($existing['path'] ?? null) ? $existing['path'] : '',
                 'error' => $e->getMessage(),
             ]);
+            return 'failed';
         }
     }
 

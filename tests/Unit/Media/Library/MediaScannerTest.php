@@ -956,13 +956,18 @@ class MediaScannerTest extends TestCase
         $this->assertSame(27205, $updates[0]['data']['metadata_json']['tmdb_id'], 'existing metadata preserved');
     }
 
-    public function testRescanDoesNotReprobeWhenDurationAlreadyPresent(): void
+    public function testRescanDoesNotReprobeWhenDurationAndSourceAlreadyPresent(): void
     {
         $repo = $this->makeFakeRepo();
 
         $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
         $path = $this->tmpDir . '/Inception (2010).mkv';
 
+        // A fully-populated prior scan: both the duration AND the source
+        // technical summary are already stored, so a rescan has nothing to
+        // backfill and must never probe or write again. (An item that has a
+        // duration but NO source is intentionally re-probed once to backfill
+        // the source summary — covered by the source-metadata tests.)
         $repo->seed([
             'id' => 'existing-movie',
             'library_id' => 'lib-1',
@@ -970,10 +975,21 @@ class MediaScannerTest extends TestCase
             'name' => 'Inception',
             'type' => 'movie',
             'path' => $path,
-            'metadata_json' => ['duration_seconds' => 1234],
+            'metadata_json' => [
+                'duration_seconds' => 1234,
+                'source' => [
+                    'width' => 1920,
+                    'height' => 1080,
+                    'video_codec' => 'h264',
+                    'video_bitrate' => 5000000,
+                    'pix_fmt' => 'yuv420p',
+                    'audio_codec' => 'aac',
+                    'audio_bitrate' => 128000,
+                ],
+            ],
         ]);
 
-        // Already has a positive duration → never probe again, never update.
+        // Already fully populated → never probe again, never update.
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $ffmpeg->expects($this->never())->method('probe');
 
@@ -989,7 +1005,7 @@ class MediaScannerTest extends TestCase
         $scanner->scan('lib-1', $this->tmpDir, 'movie');
 
         $updates = array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie');
-        $this->assertCount(0, $updates, 'no redundant write when duration already stored');
+        $this->assertCount(0, $updates, 'no redundant write when duration and source already stored');
     }
 
     /**
@@ -1004,6 +1020,750 @@ class MediaScannerTest extends TestCase
             'format' => ['duration' => $durationSeconds],
         ]);
         return $ffmpeg;
+    }
+
+    // --- source metadata + media_streams (step A1) -------------------------
+
+    /**
+     * summarizeProbe() extracts the fixed source blob from a realistic probe:
+     * an h264 1080p video (per-stream bitrate) + an aac audio, plus the
+     * container duration. The per-stream video bitrate wins over the container
+     * bitrate, and two media_streams rows (video, then audio) are derived.
+     */
+    public function testSummarizeProbeExtractsSourceBlobFromRealisticProbe(): void
+    {
+        $summary = $this->summarize($this->h264AacProbe());
+
+        // (int) round((float) "5433.2") = 5433 — matches persistProbedDuration().
+        $this->assertSame(5433, $summary['duration_seconds']);
+        $this->assertSame([
+            'width' => 1920,
+            'height' => 1080,
+            'video_codec' => 'h264',
+            'video_bitrate' => 5000000, // per-stream bitrate, NOT format.bit_rate
+            'pix_fmt' => 'yuv420p',
+            'audio_codec' => 'aac',
+            'audio_bitrate' => 128000,
+        ], $summary['source']);
+
+        // Exactly two rows: the chosen video, then the primary audio.
+        $this->assertCount(2, $summary['streams']);
+        $this->assertSame('video', $summary['streams'][0]['stream_type']);
+        $this->assertSame(0, $summary['streams'][0]['stream_index']);
+        $this->assertSame('h264', $summary['streams'][0]['codec']);
+        $this->assertSame('eng', $summary['streams'][0]['language']);
+        $this->assertSame(5000000, $summary['streams'][0]['bitrate']);
+        $this->assertSame(1920, $summary['streams'][0]['width']);
+        $this->assertSame(1080, $summary['streams'][0]['height']);
+        $this->assertSame('audio', $summary['streams'][1]['stream_type']);
+        $this->assertSame(1, $summary['streams'][1]['stream_index']);
+        $this->assertSame('aac', $summary['streams'][1]['codec']);
+        $this->assertSame(128000, $summary['streams'][1]['bitrate']);
+        $this->assertNull($summary['streams'][1]['width'], 'audio row carries no dimensions');
+        $this->assertNull($summary['streams'][1]['height']);
+    }
+
+    /**
+     * Every source field the probe does not expose becomes null (never 0/'')
+     * so the ABR-ladder clamp downstream can tell "unknown" from "zero".
+     */
+    public function testSummarizeProbeMissingFieldsBecomeNull(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                // A bare video stream: no width/height/codec_name/bit_rate/pix_fmt.
+                ['index' => 0, 'codec_type' => 'video'],
+            ],
+            'format' => [], // no duration, no bit_rate
+        ]);
+
+        $this->assertNull($summary['duration_seconds']);
+        $this->assertSame([
+            'width' => null,
+            'height' => null,
+            'video_codec' => null,
+            'video_bitrate' => null, // no stream bitrate AND no format.bit_rate
+            'pix_fmt' => null,
+            'audio_codec' => null,   // no audio stream at all
+            'audio_bitrate' => null,
+        ], $summary['source']);
+        // The video row is still emitted (all-null fields); no audio row.
+        $this->assertCount(1, $summary['streams']);
+        $this->assertSame('video', $summary['streams'][0]['stream_type']);
+        $this->assertNull($summary['streams'][0]['codec']);
+        $this->assertNull($summary['streams'][0]['language']);
+    }
+
+    /**
+     * video_bitrate falls back to the whole-file container bitrate
+     * (format.bit_rate) when the video stream carries none — common for
+     * Matroska — so the ladder always has a usable source ceiling. The derived
+     * media_streams video row uses the same fallen-back value.
+     */
+    public function testSummarizeProbeVideoBitrateFallsBackToFormatBitRate(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                // 4K hevc with NO per-stream bit_rate (typical .mkv).
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'hevc',
+                 'width' => 3840, 'height' => 2160, 'pix_fmt' => 'yuv420p10le'],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'eac3'],
+            ],
+            'format' => ['duration' => '600', 'bit_rate' => '18000000'],
+        ]);
+
+        $this->assertSame(18000000, $summary['source']['video_bitrate'], 'falls back to format.bit_rate');
+        $this->assertSame(18000000, $summary['streams'][0]['bitrate'], 'stream row uses the fallback too');
+        // Audio has no bitrate and there is NO audio-side format fallback → null.
+        $this->assertNull($summary['source']['audio_bitrate']);
+        $this->assertNull($summary['streams'][1]['bitrate']);
+    }
+
+    /**
+     * A container exposing neither a video nor an audio stream (subtitle/data
+     * only) has no meaningful source summary and nothing to persist — but its
+     * duration is still read.
+     */
+    public function testSummarizeProbeWithNoAudioOrVideoYieldsNullSourceAndNoStreams(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'subtitle', 'codec_name' => 'subrip'],
+                ['index' => 1, 'codec_type' => 'data'],
+            ],
+            'format' => ['duration' => '120.0'],
+        ]);
+
+        $this->assertSame(120, $summary['duration_seconds']);
+        $this->assertNull($summary['source']);
+        $this->assertSame([], $summary['streams']);
+    }
+
+    /**
+     * Duration is rounded like persistProbedDuration() and kept only when
+     * positive; zero / negative / non-numeric collapse to null.
+     */
+    public function testSummarizeProbeDurationIsRoundedAndPositiveOnly(): void
+    {
+        $this->assertSame(43, $this->summarize([
+            'streams' => [['codec_type' => 'audio', 'codec_name' => 'mp3']],
+            'format' => ['duration' => '42.6'],
+        ])['duration_seconds']);
+
+        foreach (['0', '0.0', '-5', 'N/A', ''] as $raw) {
+            $this->assertNull(
+                $this->summarize([
+                    'streams' => [['codec_type' => 'audio', 'codec_name' => 'mp3']],
+                    'format' => ['duration' => $raw],
+                ])['duration_seconds'],
+                "duration '{$raw}' must be null"
+            );
+        }
+    }
+
+    /**
+     * Cover-art aware: an embedded poster (attached_pic mjpeg 600x900) listed
+     * BEFORE the real h264 1080p track must be ignored — both the source blob
+     * and the derived media_streams video row describe the h264, never the
+     * poster (whose portrait dims would wrongly cap the ABR ladder).
+     */
+    public function testSummarizeProbeSkipsCoverArtAndPicksRealVideoStream(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'mjpeg',
+                 'width' => 600, 'height' => 900, 'disposition' => ['attached_pic' => 1]],
+                ['index' => 1, 'codec_type' => 'video', 'codec_name' => 'h264',
+                 'width' => 1920, 'height' => 1080, 'bit_rate' => '6000000', 'pix_fmt' => 'yuv420p'],
+                ['index' => 2, 'codec_type' => 'audio', 'codec_name' => 'aac', 'bit_rate' => '160000'],
+            ],
+            'format' => ['duration' => '1800.0'],
+        ]);
+
+        $this->assertSame(1920, $summary['source']['width']);
+        $this->assertSame(1080, $summary['source']['height']);
+        $this->assertSame('h264', $summary['source']['video_codec']);
+        $this->assertSame(6000000, $summary['source']['video_bitrate']);
+
+        // The video row is the h264 at index 1 — never the mjpeg poster.
+        $this->assertSame('video', $summary['streams'][0]['stream_type']);
+        $this->assertSame(1, $summary['streams'][0]['stream_index']);
+        $this->assertSame('h264', $summary['streams'][0]['codec']);
+        $this->assertSame(1920, $summary['streams'][0]['width']);
+    }
+
+    /**
+     * Documented edge: when EVERY video-type stream is an attached picture (an
+     * audio file with embedded album art), the summary falls back to that
+     * stream — preserving prior behavior so the item still gets a source rather
+     * than none.
+     */
+    public function testSummarizeProbeFallsBackToAttachedPicWhenEveryVideoIsCoverArt(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'png',
+                 'width' => 500, 'height' => 500, 'disposition' => ['attached_pic' => 1]],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'flac', 'bit_rate' => '900000'],
+            ],
+            'format' => ['duration' => '240.0'],
+        ]);
+
+        $this->assertSame(500, $summary['source']['width']);
+        $this->assertSame('png', $summary['source']['video_codec']);
+        $this->assertSame('png', $summary['streams'][0]['codec']);
+        $this->assertSame('flac', $summary['source']['audio_codec']);
+    }
+
+    /**
+     * streamLanguage(): the "und" placeholder is dropped to null and an
+     * over-long tag is truncated to the media_streams.language column width (10).
+     */
+    public function testSummarizeProbeDropsUndeterminedLanguageAndTruncatesLongTags(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'h264',
+                 'width' => 1280, 'height' => 720, 'tags' => ['language' => 'und']],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'aac',
+                 'tags' => ['language' => 'this-is-a-very-long-language-tag']],
+            ],
+            'format' => [],
+        ]);
+
+        $this->assertNull($summary['streams'][0]['language'], '"und" is dropped');
+        $this->assertSame('this-is-a-', $summary['streams'][1]['language'], 'truncated to 10 chars');
+    }
+
+    /**
+     * isAttachedPic() truth table — `1` and `"1"` are true; `0`, `"0"`, other
+     * numerics, a missing key, a non-array disposition, and a non-array stream
+     * are all false.
+     *
+     * @dataProvider attachedPicCases
+     */
+    public function testIsAttachedPicTruthTable(mixed $stream, bool $expected, string $desc): void
+    {
+        $this->assertSame($expected, $this->invokeIsAttachedPic($stream), $desc);
+    }
+
+    /** @return array<int, array{0: mixed, 1: bool, 2: string}> */
+    public static function attachedPicCases(): array
+    {
+        return [
+            [['disposition' => ['attached_pic' => 1]], true, 'int 1 => true'],
+            [['disposition' => ['attached_pic' => '1']], true, 'numeric string "1" => true'],
+            [['disposition' => ['attached_pic' => 0]], false, 'int 0 => false'],
+            [['disposition' => ['attached_pic' => '0']], false, 'numeric string "0" => false'],
+            [['disposition' => ['attached_pic' => 2]], false, 'other numeric (2) => false'],
+            [['disposition' => []], false, 'missing attached_pic key => false'],
+            [['disposition' => 'yes'], false, 'non-array disposition => false'],
+            [['codec_type' => 'video'], false, 'no disposition key => false'],
+            ['not-an-array', false, 'non-array (string) stream => false'],
+            [null, false, 'null stream => false'],
+            [42, false, 'scalar (int) stream => false'],
+        ];
+    }
+
+    /**
+     * Initial scan (create path): metadata_json['source'] is MERGED into the
+     * freshly-parsed metadata — the filename-derived keys (name, year) survive
+     * alongside the probed source + duration — and the video + primary audio
+     * are persisted to media_streams under the new item's id.
+     */
+    public function testInitialScanMergesSourceWithParsedMetadataAndPersistsStreams(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies);
+        $meta = $movies[0]['metadata_json'];
+
+        // Parsed-from-filename keys are NOT clobbered by the source merge.
+        $this->assertSame('2010', $meta['year']);
+        $this->assertSame('Inception', $meta['name']);
+        // Probed scalars merged in.
+        $this->assertSame(5433, $meta['duration_seconds']);
+        $this->assertSame('h264', $meta['source']['video_codec']);
+        $this->assertSame(1920, $meta['source']['width']);
+
+        // Streams persisted against the created item's id: video then audio.
+        $this->assertNotSame([], $repo->addedStreams);
+        $this->assertSame(
+            [$movies[0]['id']],
+            array_values(array_unique(array_map(fn ($s) => $s['item_id'], $repo->addedStreams)))
+        );
+        $this->assertSame(['video', 'audio'], array_map(fn ($s) => $s['data']['stream_type'], $repo->addedStreams));
+    }
+
+    /**
+     * Initial scan with embedded cover art: the persisted media_streams video
+     * row is the real h264 (index 1), never the attached-pic mjpeg poster — the
+     * end-to-end scan wiring, not just the pure summarizer.
+     */
+    public function testInitialScanPersistsRealVideoStreamNotCoverArt(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $probe = [
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'mjpeg',
+                 'width' => 600, 'height' => 900, 'disposition' => ['attached_pic' => 1]],
+                ['index' => 1, 'codec_type' => 'video', 'codec_name' => 'h264',
+                 'width' => 1920, 'height' => 1080, 'bit_rate' => '6000000', 'pix_fmt' => 'yuv420p'],
+                ['index' => 2, 'codec_type' => 'audio', 'codec_name' => 'aac', 'bit_rate' => '160000'],
+            ],
+            'format' => ['duration' => '1800.0'],
+        ];
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($probe)
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Poster Embedded Movie (2021).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies);
+        $this->assertSame(1920, $movies[0]['metadata_json']['source']['width'], 'source is the real video, not the poster');
+
+        $videoRows = array_values(array_filter($repo->addedStreams, fn ($s) => $s['data']['stream_type'] === 'video'));
+        $this->assertCount(1, $videoRows);
+        $this->assertSame('h264', $videoRows[0]['data']['codec']);
+        $this->assertSame(1, $videoRows[0]['data']['stream_index']);
+        $this->assertSame(1920, $videoRows[0]['data']['width']);
+    }
+
+    /**
+     * Rescan (backfill path): the probed source is merged into the EXISTING
+     * DB metadata — tmdb_id / genres are preserved and an already-present
+     * positive duration is never overwritten by the probe.
+     */
+    public function testRescanMergesSourcePreservingExistingMetadata(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $path = $this->tmpDir . '/Inception (2010).mkv';
+
+        $repo->seed([
+            'id' => 'existing-movie',
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'Inception',
+            'type' => 'movie',
+            'path' => $path,
+            'metadata_json' => [
+                'tmdb_id' => 27205,
+                'genres' => ['Action', 'Sci-Fi'],
+                'duration_seconds' => 8880, // pre-existing positive duration
+            ],
+        ]);
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $this->assertCount(1, $repo->items(), 'no duplicate row on rescan');
+        $updates = array_values(array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie'));
+        $this->assertCount(1, $updates, 'exactly one source-backfill update');
+        $meta = $updates[0]['data']['metadata_json'];
+
+        $this->assertSame('h264', $meta['source']['video_codec'], 'source merged in');
+        $this->assertSame(27205, $meta['tmdb_id'], 'tmdb_id preserved');
+        $this->assertSame(['Action', 'Sci-Fi'], $meta['genres'], 'genres preserved');
+        $this->assertSame(8880, $meta['duration_seconds'], 'existing positive duration not overwritten by the 5433 probe');
+    }
+
+    /**
+     * media_streams idempotency: repeated rescans of the same file never
+     * accumulate rows — each generation clears the item's rows (deleteStreams
+     * ByItem) BEFORE re-inserting, so the table always holds exactly the fresh
+     * video + audio pair.
+     */
+    public function testRescanReplacesMediaStreamsIdempotentlyWithNoDuplicateRows(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+
+        $existing = [
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'path' => '/library/Inception (2010).mkv',
+            'metadata' => ['duration_seconds' => 8880], // has duration, lacks source
+        ];
+
+        // Three rescans of the same snapshot (source never lands in $existing).
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
+
+        // Table holds exactly ONE video + ONE audio row — no accumulation.
+        $this->assertCount(2, $repo->streamTable['movie-1']);
+        $this->assertSame(['video', 'audio'], array_map(fn ($r) => $r['stream_type'], $repo->streamTable['movie-1']));
+
+        // Every generation deletes before it re-inserts: (delete, add, add) x 3.
+        $this->assertSame(
+            ['delete', 'add', 'add', 'delete', 'add', 'add', 'delete', 'add', 'add'],
+            array_map(fn ($o) => $o['op'], $repo->streamOps)
+        );
+        $this->assertSame('movie-1', $repo->streamOps[0]['item_id']);
+    }
+
+    /**
+     * Backfill core: an item that already has BOTH a positive duration and a
+     * source blob is skipped WITHOUT probing and without any write.
+     */
+    public function testBackfillSkipsAlreadyPopulatedItemWithoutProbing(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+
+        $existing = [
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'path' => '/x/Movie.mkv',
+            'metadata' => [
+                'duration_seconds' => 1234,
+                'source' => [
+                    'width' => 1920, 'height' => 1080, 'video_codec' => 'h264',
+                    'video_bitrate' => 5000000, 'pix_fmt' => 'yuv420p',
+                    'audio_codec' => 'aac', 'audio_bitrate' => 128000,
+                ],
+            ],
+        ];
+
+        $this->assertSame('skipped', $scanner->backfillItemSourceMetadata($existing));
+        $this->assertSame([], $repo->updates);
+        $this->assertSame([], $repo->streamOps);
+    }
+
+    /**
+     * Backfill repairability: when a media_streams write fails part-way (the
+     * audio insert throws after the video insert), the method returns 'failed'
+     * and writes NEITHER source NOR duration — so the row stays source-less and
+     * the CLI (source IS NULL) reselects it on the next run.
+     */
+    public function testBackfillReturnsFailedAndLeavesSourceUnwrittenWhenStreamPersistFails(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $repo->throwOnAddStreamCall = 2; // audio insert fails, after the video insert
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+
+        $existing = [
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'path' => '/x/Movie.mkv',
+            'metadata' => ['duration_seconds' => 8880], // has duration, lacks source
+        ];
+
+        $this->assertSame('failed', $scanner->backfillItemSourceMetadata($existing));
+        $this->assertSame([], $repo->updates, 'no source/duration written on a stream-persist failure');
+        // The delete + first (video) insert happened before the audio insert threw.
+        $this->assertSame(['movie-1'], $repo->deletedStreamItems);
+        $this->assertCount(1, $repo->addedStreams, 'only the video insert landed before the failure');
+    }
+
+    /**
+     * Backfill 'updated' edge: streams are (idempotently) persisted but the
+     * probe supplies nothing new for metadata (source already present, no
+     * duration and none probeable), so no metadata_json write is issued yet the
+     * result is still 'updated' because streams were rewritten.
+     */
+    public function testBackfillPersistsStreamsButSkipsMetadataWriteWhenNothingNew(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $probe = $this->h264AacProbe();
+        $probe['format'] = []; // no probeable duration
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($probe)
+        );
+
+        $existing = [
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'path' => '/x/Movie.mkv',
+            'metadata' => ['source' => ['width' => 1920, 'height' => 1080]], // has source, no duration
+        ];
+
+        $this->assertSame('updated', $scanner->backfillItemSourceMetadata($existing));
+        $this->assertSame([], $repo->updates, 'no metadata write when neither duration nor source is new');
+        $this->assertCount(2, $repo->addedStreams, 'streams are still idempotently persisted');
+    }
+
+    /**
+     * Backfill guards: no ffprobe runner => 'skipped'; a non-time-based type is
+     * never probed => 'skipped'; a probe returning null (missing/unreadable
+     * file) => 'failed' with no write.
+     */
+    public function testBackfillSkipsNullFfmpegAndNonTimeBasedTypeAndReportsFailedProbe(): void
+    {
+        // No ffmpeg runner.
+        $repoA = $this->makeFakeRepo();
+        $noFfmpeg = new MediaScanner($this->createMock(Connection::class), $repoA);
+        $this->assertSame(
+            'skipped',
+            $noFfmpeg->backfillItemSourceMetadata(['id' => 'x', 'type' => 'movie', 'path' => '/x.mkv', 'metadata' => []])
+        );
+
+        // Non-time-based type is never probed.
+        $repoB = $this->makeFakeRepo();
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('probe');
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repoB, null, null, null, $ff);
+        $this->assertSame(
+            'skipped',
+            $scanner->backfillItemSourceMetadata(['id' => 'x', 'type' => 'image', 'path' => '/x.jpg', 'metadata' => []])
+        );
+
+        // Probe returns null → failed, nothing written.
+        $repoC = $this->makeFakeRepo();
+        $nullProbe = $this->createMock(FfmpegRunner::class);
+        $nullProbe->method('probe')->willReturn(null);
+        $scanner2 = new MediaScanner($this->createMock(Connection::class), $repoC, null, null, null, $nullProbe);
+        $this->assertSame(
+            'failed',
+            $scanner2->backfillItemSourceMetadata(['id' => 'x', 'type' => 'movie', 'path' => '/missing.mkv', 'metadata' => []])
+        );
+        $this->assertSame([], $repoC->updates);
+        $this->assertSame([], $repoC->streamOps);
+    }
+
+    /**
+     * Null-ffmpeg path unchanged: a scan with no ffprobe runner indexes the file
+     * but writes NEITHER metadata_json['source'] NOR any media_streams rows.
+     */
+    public function testNullFfmpegScanWritesNeitherSourceNorStreams(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo);
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies, 'file still indexed without an ffprobe runner');
+        $this->assertArrayNotHasKey('source', $movies[0]['metadata_json']);
+        $this->assertArrayNotHasKey('duration_seconds', $movies[0]['metadata_json']);
+        $this->assertSame([], $repo->streamOps, 'no media_streams writes without an ffprobe runner');
+    }
+
+    /**
+     * Defensive: a malformed non-array entry in the streams list is skipped, and
+     * the real video stream after it is still selected.
+     */
+    public function testSummarizeProbeIgnoresNonArrayStreamEntries(): void
+    {
+        $summary = $this->summarize([
+            'streams' => [
+                'not-an-array',
+                ['index' => 1, 'codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+            ],
+            'format' => ['duration' => '10.0'],
+        ]);
+
+        $this->assertSame('h264', $summary['source']['video_codec']);
+        $this->assertSame(1280, $summary['source']['width']);
+    }
+
+    /**
+     * streamLanguage() guards: a non-array stream, a stream with no tags, and a
+     * non-array tags value all yield null; "und"/empty are dropped; a real tag
+     * is returned and truncated to 10 chars.
+     */
+    public function testStreamLanguageGuardsCoverNonArrayStreamAndMissingTags(): void
+    {
+        $this->assertNull($this->invokeStreamLanguage('not-an-array'), 'non-array stream => null');
+        $this->assertNull($this->invokeStreamLanguage(['codec_type' => 'audio']), 'no tags key => null');
+        $this->assertNull($this->invokeStreamLanguage(['tags' => 'nope']), 'non-array tags => null');
+        $this->assertNull($this->invokeStreamLanguage(['tags' => ['language' => 'und']]), '"und" => null');
+        $this->assertNull($this->invokeStreamLanguage(['tags' => ['language' => '']]), 'empty => null');
+        $this->assertSame('fr', $this->invokeStreamLanguage(['tags' => ['language' => 'fr']]));
+        $this->assertSame('abcdefghij', $this->invokeStreamLanguage(['tags' => ['language' => 'abcdefghijKLMNOP']]));
+    }
+
+    /**
+     * Backfill guards: an $existing row lacking a usable id or path is skipped
+     * BEFORE any probe or write.
+     */
+    public function testBackfillSkipsWhenExistingRowLacksIdOrPath(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+
+        $this->assertSame('skipped', $scanner->backfillItemSourceMetadata([
+            'type' => 'movie',
+            'path' => '/x/Movie.mkv',
+            'metadata' => [],
+        ]), 'missing id => skipped');
+        $this->assertSame('skipped', $scanner->backfillItemSourceMetadata([
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'metadata' => [],
+        ]), 'missing path => skipped');
+
+        $this->assertSame([], $repo->updates);
+        $this->assertSame([], $repo->streamOps);
+    }
+
+    /**
+     * Backfill is fully guarded: an UNEXPECTED throwable escaping after streams
+     * persist (here the metadata update() throws) is swallowed and reported as
+     * 'failed' — it never propagates to abort the scan or the batch CLI.
+     */
+    public function testBackfillReturnsFailedWhenAnUnexpectedThrowableEscapesIntoTheGuard(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $repo->throwOnUpdate = true;
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->h264AacProbe())
+        );
+
+        $existing = [
+            'id' => 'movie-1',
+            'type' => 'movie',
+            'path' => '/x/Movie.mkv',
+            'metadata' => [], // neither duration nor source → a metadata write is attempted
+        ];
+
+        $this->assertSame('failed', $scanner->backfillItemSourceMetadata($existing));
+        // Streams persisted (delete + 2 adds) before the metadata write threw.
+        $this->assertSame(['delete', 'add', 'add'], array_map(fn ($o) => $o['op'], $repo->streamOps));
+        $this->assertSame([], $repo->updates, 'the throwing update() recorded nothing');
+    }
+
+    /**
+     * A realistic single-video + single-audio ffprobe result: 1080p h264 with a
+     * per-stream video bitrate, stereo aac, and a container duration + bitrate —
+     * the shape {@see FfmpegRunner::probe()} itself yields.
+     *
+     * @return array<string, mixed>
+     */
+    private function h264AacProbe(): array
+    {
+        return [
+            'streams' => [
+                [
+                    'index' => 0,
+                    'codec_type' => 'video',
+                    'codec_name' => 'h264',
+                    'width' => 1920,
+                    'height' => 1080,
+                    'bit_rate' => '5000000',
+                    'pix_fmt' => 'yuv420p',
+                    'tags' => ['language' => 'eng'],
+                ],
+                [
+                    'index' => 1,
+                    'codec_type' => 'audio',
+                    'codec_name' => 'aac',
+                    'bit_rate' => '128000',
+                    'tags' => ['language' => 'eng'],
+                ],
+            ],
+            'format' => ['duration' => '5433.2', 'bit_rate' => '5200000'],
+        ];
+    }
+
+    /**
+     * Build a mocked FfmpegRunner whose probe() returns the given raw ffprobe
+     * array (streams + format) for every call.
+     *
+     * @param array<string, mixed> $probe
+     */
+    private function makeProbeStub(array $probe): FfmpegRunner
+    {
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturn($probe);
+        return $ffmpeg;
+    }
+
+    /**
+     * Invoke the private static MediaScanner::summarizeProbe() directly.
+     *
+     * @param array<string, mixed> $probe
+     * @return array{duration_seconds: int|null, source: array<string, mixed>|null, streams: array<int, array<string, mixed>>}
+     */
+    private function summarize(array $probe): array
+    {
+        $method = new \ReflectionMethod(MediaScanner::class, 'summarizeProbe');
+        $method->setAccessible(true);
+        /** @var array{duration_seconds: int|null, source: array<string, mixed>|null, streams: array<int, array<string, mixed>>} $result */
+        $result = $method->invoke(null, $probe);
+        return $result;
+    }
+
+    /**
+     * Invoke the private static MediaScanner::isAttachedPic() directly.
+     */
+    private function invokeIsAttachedPic(mixed $stream): bool
+    {
+        $method = new \ReflectionMethod(MediaScanner::class, 'isAttachedPic');
+        $method->setAccessible(true);
+        return (bool) $method->invoke(null, $stream);
+    }
+
+    /**
+     * Invoke the private static MediaScanner::streamLanguage() directly.
+     */
+    private function invokeStreamLanguage(mixed $stream): ?string
+    {
+        $method = new \ReflectionMethod(MediaScanner::class, 'streamLanguage');
+        $method->setAccessible(true);
+        $result = $method->invoke(null, $stream);
+        return is_string($result) ? $result : null;
     }
 
     // --- helpers -----------------------------------------------------------
@@ -1128,6 +1888,48 @@ class MediaScannerTest extends TestCase
             public array $updates = [];
             /** Spy: counts how many times the canonical-key fallback was consulted. */
             public int $canonicalLookupCount = 0;
+            /**
+             * Faithful in-memory media_streams table (item_id => rows). A
+             * deleteStreamsByItem() clears an item's rows; addStream() appends —
+             * so a repeated rescan can be asserted to hold exactly the fresh set
+             * (no accumulation), proving the delete-then-insert idempotency.
+             *
+             * @var array<string, list<array<string, mixed>>>
+             */
+            public array $streamTable = [];
+            /**
+             * Ordered log of every media_streams mutation so a test can assert
+             * the delete-BEFORE-insert ordering (the idempotency contract).
+             *
+             * @var list<array{op: string, item_id: string, data?: array<string, mixed>}>
+             */
+            public array $streamOps = [];
+            /**
+             * Each addStream() payload in call order (video row, then audio row).
+             *
+             * @var list<array{item_id: string, data: array<string, mixed>}>
+             */
+            public array $addedStreams = [];
+            /**
+             * Item ids passed to deleteStreamsByItem(), in call order.
+             *
+             * @var list<string>
+             */
+            public array $deletedStreamItems = [];
+            /**
+             * When set to N (1-based), the Nth addStream() call throws — lets a
+             * test simulate a mid-loop media_streams write failure (e.g. the
+             * audio insert failing after the video insert) to exercise the
+             * repairable 'failed' backfill path.
+             */
+            public ?int $throwOnAddStreamCall = null;
+            private int $addStreamCalls = 0;
+            /**
+             * When true, update() throws — lets a test drive an UNEXPECTED
+             * throwable inside backfillItemSourceMetadata() (i.e. after streams
+             * persist cleanly) into the guarded catch → 'failed' path.
+             */
+            public bool $throwOnUpdate = false;
 
             public function findByPath(string $path): ?array
             {
@@ -1185,6 +1987,9 @@ class MediaScannerTest extends TestCase
 
             public function update(string $id, array $data): void
             {
+                if ($this->throwOnUpdate) {
+                    throw new \RuntimeException('simulated metadata update failure');
+                }
                 $this->updates[] = ['id' => $id, 'data' => $data];
                 foreach ($this->store as &$item) {
                     if (($item['id'] ?? null) === $id) {
@@ -1194,6 +1999,28 @@ class MediaScannerTest extends TestCase
                         return;
                     }
                 }
+            }
+
+            public function deleteStreamsByItem(string $itemId): void
+            {
+                $this->deletedStreamItems[] = $itemId;
+                $this->streamOps[] = ['op' => 'delete', 'item_id' => $itemId];
+                unset($this->streamTable[$itemId]);
+            }
+
+            /**
+             * @param array<string, mixed> $streamData
+             */
+            public function addStream(string $itemId, array $streamData): string
+            {
+                $this->addStreamCalls++;
+                if ($this->throwOnAddStreamCall !== null && $this->addStreamCalls === $this->throwOnAddStreamCall) {
+                    throw new \RuntimeException('simulated media_streams insert failure');
+                }
+                $this->addedStreams[] = ['item_id' => $itemId, 'data' => $streamData];
+                $this->streamOps[] = ['op' => 'add', 'item_id' => $itemId, 'data' => $streamData];
+                $this->streamTable[$itemId][] = $streamData;
+                return 'stream-' . $this->addStreamCalls;
             }
 
             /**

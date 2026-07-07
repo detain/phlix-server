@@ -954,6 +954,23 @@ class ItemRepositoryTest extends TestCase
         $this->assertNotEmpty($id);
     }
 
+    public function testDeleteStreamsByItemDeletesAllStreamsForItem(): void
+    {
+        // Idempotent stream replace (step A1): the scanner clears an item's
+        // existing media_streams rows before re-inserting a fresh probe so a
+        // rescan never duplicates rows.
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('DELETE FROM media_streams WHERE media_item_id = ?'),
+                ['movie-1']
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->deleteStreamsByItem('movie-1');
+    }
+
     public function testBatchCreateCreatesMultipleItems(): void
     {
         $db = $this->createMock(Connection::class);

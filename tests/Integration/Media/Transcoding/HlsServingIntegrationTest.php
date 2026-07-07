@@ -15,12 +15,15 @@ use Phlix\Server\Http\Request;
 use Workerman\MySQL\Connection;
 
 /**
- * Full on-demand HLS chain against a REAL ffmpeg binary: TranscodeManager publishes
- * a complete VOD playlist up front (no background encode), then HlsController serves
- * the master + media playlists and transcodes an individual MPEG-TS segment ON
- * DEMAND when it is fetched — including a LATER segment with no earlier segment
- * produced first, proving seek-anywhere. The DB is mocked; ffmpeg/filesystem are
- * real. Skipped when ffmpeg is absent.
+ * Full on-demand MULTI-VARIANT HLS chain against a REAL ffmpeg binary (A5):
+ * TranscodeManager publishes a complete VOD master (every variant) + one media
+ * playlist per variant up front (no background encode); HlsController serves the
+ * playlists; and an individual per-variant MPEG-TS segment is transcoded ON DEMAND
+ * via `ensureSegment($jobId, $variant, $index)` — including a LATER segment with no
+ * earlier segment produced first (seek-anywhere), the copy "original" passthrough,
+ * and an out-of-range 404. (HlsController variant-filename PARSING lands in A6; this
+ * test drives per-variant production through the manager directly.) The DB is mocked;
+ * ffmpeg/filesystem are real. Skipped when ffmpeg is absent.
  */
 class HlsServingIntegrationTest extends TestCase
 {
@@ -81,37 +84,59 @@ class HlsServingIntegrationTest extends TestCase
         $hls = new HlsController($streamer, $manager);
         $req = new Request();
 
-        // Master → single media playlist.
+        // Master → MULTIPLE variants (a 320x240 H.264/AAC source → a 240p rung + a
+        // copy "original"), each pointing at its own media_v{id}.m3u8.
         $master = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'master.m3u8']);
         $this->assertSame(200, $master->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $master->headers['Content-Type']);
-        $this->assertSame(1, preg_match('/^(media_\d+\.m3u8)$/m', $master->body, $mm));
+        $this->assertGreaterThanOrEqual(2, substr_count($master->body, '#EXT-X-STREAM-INF:'));
+        $this->assertSame(
+            preg_match_all('/^(media_v[A-Za-z0-9]+\.m3u8)$/m', $master->body, $mm),
+            substr_count($master->body, '#EXT-X-STREAM-INF:')
+        );
+        $this->assertContains('media_v240p.m3u8', $mm[1]);
 
-        // Media playlist is a COMPLETE VOD list (all segments + ENDLIST) up front.
-        $media = $hls->serveFile($req, ['job_id' => $jobId, 'file' => $mm[1]]);
+        // The 240p variant's media playlist is a COMPLETE VOD list (all segments +
+        // ENDLIST) up front, with per-variant seg-v240p-NNNNN.ts names.
+        $media = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'media_v240p.m3u8']);
         $this->assertSame(200, $media->statusCode);
         $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $media->body);
         $this->assertStringContainsString('#EXT-X-ENDLIST', $media->body);
         // ~8s at 2s segments → 4 (or 5 if ffmpeg's real duration rounds up) entries.
-        $this->assertGreaterThanOrEqual(4, preg_match_all('/^seg-\d+\.ts$/m', $media->body));
+        $this->assertGreaterThanOrEqual(4, preg_match_all('/^seg-v240p-\d+\.ts$/m', $media->body));
 
-        // On-demand: the FIRST segment is transcoded when fetched.
-        $seg0 = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-00000.ts']);
-        $this->assertSame(200, $seg0->statusCode);
-        $this->assertSame('video/mp2t', $seg0->headers['Content-Type']);
-        $this->assertGreaterThan(0, strlen($seg0->body));
+        // On-demand: the FIRST 240p segment is transcoded when requested.
+        $seg0 = $manager->ensureSegment($jobId, '240p', 0);
+        $this->assertNotNull($seg0);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00000.ts", $seg0);
+        $this->assertGreaterThan(0, (int) filesize($seg0));
 
-        // Seek-anywhere: a LATER segment is produced on demand with NO earlier
-        // segment encoded first — this is what the old linear encode could not do.
-        $this->assertFileDoesNotExist("{$this->segmentDir}/{$jobId}/seg-00003.ts");
-        $seg3 = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-00003.ts']);
-        $this->assertSame(200, $seg3->statusCode);
-        $this->assertSame('video/mp2t', $seg3->headers['Content-Type']);
-        $this->assertGreaterThan(0, strlen($seg3->body));
+        // Seek-anywhere: a LATER 240p segment is produced with NO earlier segment
+        // encoded first — this is what the old linear encode could not do.
+        $this->assertFileDoesNotExist("{$this->segmentDir}/{$jobId}/seg-v240p-00003.ts");
+        $seg3 = $manager->ensureSegment($jobId, '240p', 3);
+        $this->assertNotNull($seg3);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-v240p-00003.ts", $seg3);
+        $this->assertGreaterThan(0, (int) filesize($seg3));
 
-        // An out-of-range segment is a 404, not an endless wait.
-        $missing = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-00099.ts']);
-        $this->assertSame(404, $missing->statusCode);
+        // The copy "original" passthrough (H.264 + AAC source) produces its own
+        // seg-voriginal-NNNNN.ts via -c copy.
+        $origSeg = $manager->ensureSegment($jobId, 'original', 0);
+        $this->assertNotNull($origSeg);
+        $this->assertSame("{$this->segmentDir}/{$jobId}/seg-voriginal-00000.ts", $origSeg);
+        $this->assertGreaterThan(0, (int) filesize($origSeg));
+
+        // A produced segment serves through HlsController's static path with the
+        // right content-type.
+        $seg0Served = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-v240p-00000.ts']);
+        $this->assertSame(200, $seg0Served->statusCode);
+        $this->assertSame('video/mp2t', $seg0Served->headers['Content-Type']);
+        $this->assertGreaterThan(0, strlen($seg0Served->body));
+
+        // An out-of-range segment is null (→ 404), not an endless wait.
+        $this->assertNull($manager->ensureSegment($jobId, '240p', 99));
+        // An unknown variant is null, too.
+        $this->assertNull($manager->ensureSegment($jobId, '4320p', 0));
     }
 
     private function mockDb(string $clipPath): Connection
@@ -130,7 +155,8 @@ class HlsServingIntegrationTest extends TestCase
                 }
                 if (str_contains($sql, 'INSERT INTO transcode_jobs')) {
                     // Record the job so a later SELECT can echo the fields ensureSegment()
-                    // needs (hls_dir, input_path, duration, segment_seconds, segment_params).
+                    // needs (hls_dir, input_path, duration, segment_seconds, segment_params,
+                    // and the A5 multi-variant `variants` ladder at index 14).
                     $p = $params ?? [];
                     $this->insertedJob = [
                         'id' => (string) ($p[0] ?? ''),
@@ -140,6 +166,7 @@ class HlsServingIntegrationTest extends TestCase
                         'duration_seconds' => (int) ($p[11] ?? 0),
                         'segment_seconds' => (int) ($p[12] ?? 0),
                         'segment_params' => is_string($p[13] ?? null) ? $p[13] : null,
+                        'variants' => is_string($p[14] ?? null) ? $p[14] : null,
                     ];
                     return [];
                 }

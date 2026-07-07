@@ -1238,32 +1238,70 @@ class FfmpegRunner
     }
 
     /**
-     * Builds an FFmpeg command that transcodes ONE on-demand HLS segment.
+     * Builds an FFmpeg command that produces ONE on-demand HLS segment.
      *
      * This backs the seek-aware VOD pipeline: instead of a single linear encode
      * that grows a live playlist, the media playlist is published complete up front
      * and each MPEG-TS segment is produced only when the player fetches it. Any
-     * segment — including one far past what has been produced so far — is encoded
+     * segment — including one far past what has been produced so far — is produced
      * directly by fast-seeking the source, so the user can seek anywhere.
      *
-     * Recipe (validated against 10-bit HEVC MKV sources):
-     *   - `-ss {start} -i input` — accurate fast input seek to the segment start.
-     *   - `-t {duration}` — encode exactly this segment's window.
-     *   - `-force_key_frames expr:gte(t,0)` — the first output frame is an IDR, so
-     *     every segment is independently decodable (EXT-X-INDEPENDENT-SEGMENTS).
-     *   - `-output_ts_offset {start}` — anchor the segment's PTS to its absolute
-     *     position in the title timeline so hls.js concatenates segments seamlessly
-     *     and a seek lands at the right time.
-     * Video is always RE-ENCODED (a stream copy cannot force per-segment keyframes
-     * and would not align to segment boundaries); audio is re-encoded to AAC.
+     * Two segment shapes are produced, selected per-stream by the codec params:
+     *
+     * 1. TRANSCODED RUNG (the ABR-ladder default; validated on 10-bit HEVC MKVs).
+     *    Video is re-encoded with a capped-CRF recipe:
+     *      - `-ss {start} -i input` — accurate fast input seek to the segment start.
+     *      - `-t {duration}` — encode exactly this segment's window.
+     *      - `-preset`/`-crf` — quality-driven encode (libx264/libx265 defaults kept
+     *        when the caller omits them, so legacy callers are unaffected).
+     *      - `-maxrate`/`-bufsize` — a hard VBV ceiling derived by A2's
+     *        `Rendition::maxrate()` (≈1.07×target) / `Rendition::bufsize()` (2×maxrate)
+     *        so the stream never exceeds the rung's advertised `BANDWIDTH`. Emitted
+     *        ONLY when the caller passes `maxrate`/`bufsize`; absent them the encode
+     *        stays CRF-only (unchanged legacy behaviour). A bare `-b:v` is
+     *        deliberately NOT set — it would disable CRF mode; the cap is the VBV pair.
+     *      - `-vf scale=…` — the per-rung downscale (`width`/`height`).
+     *      - `-force_key_frames expr:gte(t,0)` — the first output frame is an IDR, so
+     *        every segment is independently decodable (EXT-X-INDEPENDENT-SEGMENTS).
+     *      - `browserSafeVideoFlags()` — `-pix_fmt`/`-profile:v`/`-level` (the `level`
+     *        is honoured per-rung from `params['level']`).
+     *    The `-force_key_frames`, `-t`, `-output_ts_offset`, and `-muxdelay`/
+     *    `-muxpreload` framing are IDENTICAL across every transcoded rung — only the
+     *    scale/bitrate/level differ — so hls.js can ABR-switch between rungs at any
+     *    segment boundary seamlessly.
+     *
+     * 2. STREAM-COPY "Original" (plan §1 D4). When `video_codec` is `copy` the segment
+     *    is a genuine `-c:v copy` (near-zero CPU): no `-preset`/`-crf`/scale/`-maxrate`/
+     *    `-bufsize`/`browserSafeVideoFlags()`, and — critically — NO `-force_key_frames`
+     *    (a stream copy cannot synthesise a keyframe at an arbitrary point). Because
+     *    `-ss` before `-i` fast-seeks to the nearest PRECEDING source keyframe, a copy
+     *    segment's actual start may drift up to one source GOP length from the nominal
+     *    boundary. That is acceptable for a manually-pinned "Original" variant (the
+     *    source is already HLS-safe H.264 + AAC) but is exactly why copy is NOT used
+     *    for the ABR-switching rungs, which must stay frame-aligned. `-output_ts_offset`
+     *    and `-muxdelay 0 -muxpreload 0` still apply to anchor the segment's PTS for
+     *    playlist concatenation.
+     *
+     * Audio mirrors the same split: `audio_codec = copy` → `-c:a copy` (no
+     * `-b:a`/`-ac`); otherwise re-encode to AAC (re-encoding avoids priming/alignment
+     * artefacts at the boundary a fast-seek copy would introduce). The video and audio
+     * codec decisions are INDEPENDENT, so mixed segments are fully supported — an
+     * H.264 source with non-AAC audio yields video copy + audio re-encode, and the
+     * reverse yields video re-encode + audio copy.
      *
      * @param string               $inputPath Source media file.
      * @param string               $outFile   Absolute path to write the .ts segment to.
      * @param float                $start     Segment start offset in seconds.
      * @param float                $duration  Segment length in seconds.
-     * @param array<string, mixed> $params    Encode params (video_codec, preset, crf,
-     *                                         pix_fmt/profile/level, width/height for a
-     *                                         downscale, audio_codec/bitrate/channels).
+     * @param array<string, mixed> $params    Encode params: `video_codec`
+     *                                         (`libx264`/`libx265`/`copy`), `preset`,
+     *                                         `crf`, `video_bitrate`/`maxrate`/`bufsize`
+     *                                         (bps; capped-CRF VBV ceiling — `-maxrate`/
+     *                                         `-bufsize` are emitted, never a bare
+     *                                         `-b:v`), `pix_fmt`/`profile`/`level`,
+     *                                         `width`/`height` (downscale),
+     *                                         `audio_codec` (`aac`/…/`copy`),
+     *                                         `audio_bitrate`, `audio_channels`.
      *
      * @return string The complete FFmpeg segment command.
      */
@@ -1287,37 +1325,58 @@ class FfmpegRunner
         // streams (anime MKVs carry font attachments + embedded subs that break the mux).
         $cmd .= ' -map 0:v:0 -map 0:a:0? -dn -sn';
 
-        // Video: always encode (copy cannot force per-segment keyframes / align).
+        // Video: a transcoded rung (capped-CRF) OR a genuine stream copy for "Original".
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
-        if ($videoCodec === 'copy' || $videoCodec === '') {
+        if ($videoCodec === '') {
             $videoCodec = 'libx264';
         }
-        $cmd .= ' -c:v ' . $videoCodec;
-        if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
-            $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
-            $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
-            $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
+        if ($videoCodec === 'copy') {
+            // Genuine passthrough: no encoder/scale flags and NO force_key_frames
+            // (a copy cannot synthesise a keyframe mid-GOP). See the method docblock
+            // for why this is Original-only and never used for ABR-switching rungs.
+            $cmd .= ' -c:v copy';
+        } else {
+            $cmd .= ' -c:v ' . $videoCodec;
+            if ($videoCodec === 'libx264' || $videoCodec === 'libx265') {
+                $cmd .= ' -preset ' . (self::paramString($params, 'preset') ?? 'veryfast');
+                $defaultCrf = $videoCodec === 'libx265' ? 28 : 23;
+                $cmd .= ' -crf ' . (self::paramInt($params, 'crf') ?? $defaultCrf);
+            }
+            // Per-rung VBV ceiling (capped CRF): a quality-driven encode that still
+            // never exceeds the rung's advertised BANDWIDTH. Emitted only when the
+            // caller supplies the rung cap; no bare -b:v (it would disable CRF mode).
+            $maxrate = self::paramInt($params, 'maxrate');
+            if ($maxrate !== null && $maxrate > 0) {
+                $cmd .= ' -maxrate ' . $maxrate;
+            }
+            $bufsize = self::paramInt($params, 'bufsize');
+            if ($bufsize !== null && $bufsize > 0) {
+                $cmd .= ' -bufsize ' . $bufsize;
+            }
+            $width = self::paramInt($params, 'width');
+            $height = self::paramInt($params, 'height');
+            if ($width !== null && $height !== null) {
+                $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+            }
+            // IDR at the segment start → independently decodable, frame-aligned segment.
+            $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
+            $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
         }
-        $width = self::paramInt($params, 'width');
-        $height = self::paramInt($params, 'height');
-        if ($width !== null && $height !== null) {
-            $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
-        }
-        // IDR at the segment start → independently decodable segment.
-        $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
-        $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
 
-        // Audio: encode to AAC (re-encoding avoids priming/alignment artefacts at
-        // the segment boundary that a fast-seek stream copy would introduce).
+        // Audio: re-encode to AAC by default, or a genuine stream copy when asked.
         $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-        if ($audioCodec === 'copy' || $audioCodec === '') {
+        if ($audioCodec === '') {
             $audioCodec = 'aac';
         }
-        $cmd .= ' -c:a ' . $audioCodec;
-        $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-        $audioChannels = self::paramInt($params, 'audio_channels');
-        if ($audioChannels !== null && $audioChannels > 0) {
-            $cmd .= ' -ac ' . $audioChannels;
+        if ($audioCodec === 'copy') {
+            $cmd .= ' -c:a copy';
+        } else {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $audioChannels = self::paramInt($params, 'audio_channels');
+            if ($audioChannels !== null && $audioChannels > 0) {
+                $cmd .= ' -ac ' . $audioChannels;
+            }
         }
 
         // Anchor PTS to the absolute timeline position; no mux pre-roll.

@@ -51,6 +51,18 @@ class TranscodeManager
     /** @var int Target HLS segment duration in seconds */
     private int $segmentSeconds;
 
+    /** @var int Ceiling on simultaneous on-demand segment encodes across all jobs */
+    private int $maxConcurrentSegments;
+
+    /** @var int Size budget (bytes) for the on-demand segment cache before LRU eviction */
+    private int $cacheMaxBytes;
+
+    /** @var int Age (seconds) after which an idle segment-job directory is reclaimed */
+    private int $cacheMaxAgeSeconds;
+
+    /** @var int Max time (ms) to wait for an on-demand segment encode before giving up */
+    private int $segmentMaxWaitMs;
+
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
 
@@ -122,7 +134,11 @@ class TranscodeManager
         int $segmentSeconds = 6,
         ?SubtitleExtractor $subtitleExtractor = null,
         ?string $phpBinary = null,
-        ?string $cleanVttScript = null
+        ?string $cleanVttScript = null,
+        ?int $maxConcurrentSegments = null,
+        ?int $cacheMaxBytes = null,
+        ?int $cacheMaxAgeSeconds = null,
+        ?int $segmentMaxWaitMs = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
@@ -132,6 +148,19 @@ class TranscodeManager
         $this->maxConcurrentTranscodes = 4;
         $this->logger = $logger ?? new NullLogger();
         $this->segmentSeconds = $segmentSeconds > 0 ? $segmentSeconds : 6;
+        $this->maxConcurrentSegments = ($maxConcurrentSegments !== null && $maxConcurrentSegments > 0)
+            ? $maxConcurrentSegments
+            : self::SEGMENT_MAX_INFLIGHT_GLOBAL;
+        $this->cacheMaxBytes = ($cacheMaxBytes !== null && $cacheMaxBytes > 0)
+            ? $cacheMaxBytes
+            : self::SEGMENT_CACHE_MAX_BYTES;
+        $this->cacheMaxAgeSeconds = ($cacheMaxAgeSeconds !== null && $cacheMaxAgeSeconds > 0)
+            ? $cacheMaxAgeSeconds
+            : self::SEGMENT_CACHE_MAX_AGE;
+        // Primarily a test seam so the segment poll ceiling can be shortened.
+        $this->segmentMaxWaitMs = ($segmentMaxWaitMs !== null && $segmentMaxWaitMs > 0)
+            ? $segmentMaxWaitMs
+            : self::SEGMENT_MAX_WAIT_MS;
         $this->subtitleExtractor = $subtitleExtractor ?? new SubtitleExtractor();
         // PHP_BINARY is the absolute path to the running interpreter, used by the
         // detached job to invoke the VTT-cleaner CLI.
@@ -396,17 +425,49 @@ class TranscodeManager
 
     /**
      * Max time (ms) to wait for a single on-demand segment before giving up (404).
-     * A 6 s segment encodes in ~1–3 s at `veryfast`; the ceiling covers a slow or
-     * contended encode while staying under the client's fragment-load timeout.
+     * A 6 s segment encodes in ~1–3 s at `veryfast` when the box is idle, but a
+     * heavy source (e.g. HEVC → H.264) under load can take longer, so the ceiling
+     * is generous. Pair it with a matching client fragment first-byte timeout —
+     * the server sends nothing until the whole segment is encoded, so first-byte
+     * latency equals encode time.
      */
-    private const SEGMENT_MAX_WAIT_MS = 25000;
+    private const SEGMENT_MAX_WAIT_MS = 30000;
 
     /**
-     * Soft cap on in-flight segment encodes per job. Rapid scrubbing can request a
-     * burst of distinct segments; beyond this we briefly wait for a slot before
-     * launching so a frantic seek can't fork-bomb ffmpeg on a small box.
+     * Default ceiling on simultaneous on-demand segment encodes across ALL jobs.
+     *
+     * Each segment is a full decode+encode; letting an unbounded number run at
+     * once (many viewers, or one viewer's timed-out retries each re-launching an
+     * encode) saturates the CPU so every encode slows past the client's fragment
+     * timeout, and the failures cascade into the "can't play" overlay. Requests
+     * over this ceiling fast-fail with {@see SegmentBusyException} (→ HTTP 503 +
+     * Retry-After) so the CPU stays free for the encodes already in flight.
+     * Overridable via `config['hls']['max_concurrent_segments']`.
      */
-    private const SEGMENT_MAX_INFLIGHT = 4;
+    private const SEGMENT_MAX_INFLIGHT_GLOBAL = 8;
+
+    /**
+     * Default size budget (bytes) for the on-demand segment cache. On-demand
+     * segments accumulate in a (often RAM-backed / tmpfs) directory with no natural
+     * lifecycle; without a ceiling they grow until the filesystem fills and every
+     * encode then fails with ENOSPC. When the cache exceeds this, the least-recently
+     * used job directories are evicted. Overridable via `config['hls']['cache_max_bytes']`.
+     */
+    private const SEGMENT_CACHE_MAX_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
+
+    /**
+     * Default age (seconds) after which an idle segment-job directory is reclaimed
+     * regardless of the size budget — a session nobody has touched for this long is
+     * almost certainly abandoned. Overridable via `config['hls']['cache_max_age']`.
+     */
+    private const SEGMENT_CACHE_MAX_AGE = 10800; // 3 hours
+
+    /**
+     * A job directory touched within this window (seconds) is considered actively
+     * watched and is never evicted by the size-budget sweep, so a live session is
+     * not pulled out from under a viewer.
+     */
+    private const SEGMENT_CACHE_ACTIVE_WINDOW = 1800; // 30 minutes
 
     /**
      * Ensures the Nth MPEG-TS segment of an on-demand HLS job exists on disk,
@@ -425,6 +486,10 @@ class TranscodeManager
      * @return string|null Absolute path to the ready segment, or null when the job
      *                     is not on-demand, the index is out of range, or the encode
      *                     did not finish within {@see self::SEGMENT_MAX_WAIT_MS}.
+     *
+     * @throws SegmentBusyException When the global segment-encode ceiling is reached
+     *                     and this segment is not already encoding — a transient,
+     *                     retryable state the caller surfaces as HTTP 503.
      */
     public function ensureSegment(string $jobId, int $index): ?string
     {
@@ -468,6 +533,7 @@ class TranscodeManager
         $final = $dir . '/' . self::segmentFileName($index);
 
         if (is_file($final)) {
+            $this->touchJobDir($dir); // mark the session active for the LRU sweep
             return $final; // cache hit
         }
 
@@ -482,17 +548,38 @@ class TranscodeManager
             return null;
         }
 
-        // Soft concurrency cap: wait briefly for an in-flight slot before launching.
-        $this->awaitSegmentSlot($dir, $final);
+        // The job dir can be missing here even for a `completed` job: a restart
+        // wipes a PrivateTmp /tmp, and the LRU sweep can evict an idle session.
+        // Recreate it so an on-demand re-encode still lands somewhere (the DB row,
+        // and thus the advertised playlist, still references this segment).
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
 
-        if (!is_file($final)) {
+        // Only launch an encode if one for THIS exact segment is not already
+        // running. Without this, every client retry of a slow segment (hls.js
+        // re-requests the same fragment on a first-byte timeout) spawns a duplicate
+        // ffmpeg, and the redundant load is exactly what pushes encodes past the
+        // client timeout — a self-amplifying cascade. A retry now piggybacks on the
+        // in-flight encode instead.
+        if (!$this->segmentEncodeInFlight($final)) {
+            // Global ceiling: bound total concurrent encodes so a burst of cold
+            // seeks (many viewers, or one frantic scrub) can't saturate the CPU.
+            // Over the ceiling we fast-fail (503 + Retry-After) rather than pile on
+            // — the client backs off briefly and the in-flight encodes finish fast.
+            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+                throw new SegmentBusyException(
+                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                );
+            }
+            $this->touchJobDir($dir);
             $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
         }
 
         // Poll using non-blocking sleep when in Swoole coroutine context.
         // Falls back to usleep when not in coroutine (e.g., Swoole hooks disabled).
         $waited = 0;
-        while (!is_file($final) && $waited < self::SEGMENT_MAX_WAIT_MS) {
+        while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
             if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
                 \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
             } else {
@@ -505,34 +592,168 @@ class TranscodeManager
     }
 
     /**
-     * Briefly waits for the in-flight on-demand encode count for a job to fall
-     * below {@see self::SEGMENT_MAX_INFLIGHT} before a new segment encode is
-     * launched, so a frantic seek can't spawn an unbounded number of ffmpegs. Best
-     * effort: it never blocks longer than the segment wait ceiling and returns once
-     * a slot is free, the target segment appeared, or the ceiling is hit.
+     * True when an on-demand encode for exactly this segment is already running,
+     * detected by its atomic-write temp file ({@see FfmpegRunner::startSegmentEncode}
+     * writes `{final}.part-XXXX` then renames on success).
      *
-     * @param string $dir   Job directory (holds the `*.part-*` temp files).
-     * @param string $final The target segment path (stop waiting if it appears).
+     * @param string $final Absolute path of the target segment (`.../seg-NNNNN.ts`).
      */
-    private function awaitSegmentSlot(string $dir, string $final): void
+    private function segmentEncodeInFlight(string $final): bool
     {
-        $waited = 0;
-        while ($waited < self::SEGMENT_MAX_WAIT_MS) {
-            if (is_file($final)) {
-                return;
-            }
-            $inflight = glob("{$dir}/seg-*.ts.part-*");
-            if ($inflight === false || count($inflight) < self::SEGMENT_MAX_INFLIGHT) {
-                return;
-            }
-            // Non-blocking sleep when in Swoole coroutine context
-            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
-                \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
-            } else {
-                usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
-            }
-            $waited += self::SEGMENT_POLL_INTERVAL_MS;
+        $parts = glob($final . '.part-*');
+        return is_array($parts) && $parts !== [];
+    }
+
+    /**
+     * Count on-demand segment encodes in flight across ALL jobs, by globbing the
+     * shared segment directory for the `*.part-*` atomic-write temp files. Bounds
+     * the global concurrency ceiling in {@see ensureSegment()}.
+     *
+     * @return int Number of segment encodes currently running.
+     */
+    private function countInFlightSegmentEncodes(): int
+    {
+        $parts = glob("{$this->segmentDir}/*/seg-*.ts.part-*");
+        return is_array($parts) ? count($parts) : 0;
+    }
+
+    /**
+     * Bumps a job directory's mtime so the LRU sweep ({@see sweepSegmentCache()})
+     * treats the session as recently active. Called whenever a segment is served
+     * or launched, since serving a cached segment does not otherwise touch the dir.
+     *
+     * @param string $dir Job directory.
+     */
+    private function touchJobDir(string $dir): void
+    {
+        if (is_dir($dir)) {
+            @touch($dir);
         }
+    }
+
+    /**
+     * Reclaims on-demand segment directories to bound the segment cache.
+     *
+     * On-demand segments pile up in a shared (frequently tmpfs / RAM-backed)
+     * directory with no natural lifecycle — the jobs are marked `completed` the
+     * moment their VOD playlist is written, so nothing ever deletes their segments.
+     * Left unchecked the directory grows until the filesystem fills and every encode
+     * then fails with ENOSPC. This runs on the reaper tick and:
+     *
+     *   1. removes any job directory idle longer than {@see $cacheMaxAgeSeconds}
+     *      (an abandoned session), then
+     *   2. if the total is still over {@see $cacheMaxBytes}, evicts the
+     *      least-recently-used directories — skipping any touched within
+     *      {@see self::SEGMENT_CACHE_ACTIVE_WINDOW} so a live watch is never pulled
+     *      out from under a viewer — until back under budget.
+     *
+     * Eviction is safe: {@see ensureSegment()} recreates a missing directory and
+     * re-encodes on demand, and the sweep only ever touches paths under
+     * {@see $segmentDir}.
+     *
+     * @return int Number of directories reclaimed.
+     */
+    public function sweepSegmentCache(): int
+    {
+        $dirs = glob("{$this->segmentDir}/*", GLOB_ONLYDIR);
+        if (!is_array($dirs) || $dirs === []) {
+            return 0;
+        }
+
+        $now = time();
+        $ageCutoff = $now - $this->cacheMaxAgeSeconds;
+        $activeCutoff = $now - self::SEGMENT_CACHE_ACTIVE_WINDOW;
+
+        /** @var list<array{path: string, mtime: int, size: int}> $entries */
+        $entries = [];
+        $totalBytes = 0;
+        $reaped = 0;
+
+        foreach ($dirs as $dir) {
+            $mtime = @filemtime($dir);
+            if ($mtime === false) {
+                continue;
+            }
+            // 1) Hard TTL: an idle session past the age cutoff is abandoned.
+            if ($mtime < $ageCutoff) {
+                $reaped += $this->removeJobDir($dir) ? 1 : 0;
+                continue;
+            }
+            $size = $this->dirSize($dir);
+            $totalBytes += $size;
+            $entries[] = ['path' => $dir, 'mtime' => $mtime, 'size' => $size];
+        }
+
+        // 2) Size budget: evict least-recently-used until under the ceiling,
+        // never touching an actively-watched (recently-touched) session.
+        if ($totalBytes > $this->cacheMaxBytes) {
+            usort($entries, static fn(array $a, array $b): int => $a['mtime'] <=> $b['mtime']);
+            foreach ($entries as $entry) {
+                if ($totalBytes <= $this->cacheMaxBytes) {
+                    break;
+                }
+                if ($entry['mtime'] >= $activeCutoff) {
+                    continue; // live session — leave it alone
+                }
+                if ($this->removeJobDir($entry['path'])) {
+                    $totalBytes -= $entry['size'];
+                    $reaped++;
+                }
+            }
+        }
+
+        if ($reaped > 0) {
+            $this->logger->info('Swept on-demand segment cache', [
+                'reclaimed_dirs' => $reaped,
+                'remaining_bytes' => $totalBytes,
+            ]);
+        }
+
+        return $reaped;
+    }
+
+    /**
+     * Total byte size of the files directly inside a job directory.
+     *
+     * @param string $dir Job directory.
+     */
+    private function dirSize(string $dir): int
+    {
+        $files = glob("{$dir}/*");
+        if (!is_array($files)) {
+            return 0;
+        }
+        $bytes = 0;
+        foreach ($files as $file) {
+            $size = @filesize($file);
+            if ($size !== false) {
+                $bytes += $size;
+            }
+        }
+        return $bytes;
+    }
+
+    /**
+     * Deletes a job directory and its contents. Guarded to stay within
+     * {@see $segmentDir} and tolerant of concurrent deletion by another worker.
+     *
+     * @param string $dir Absolute job directory path.
+     *
+     * @return bool True if the directory was removed.
+     */
+    private function removeJobDir(string $dir): bool
+    {
+        $base = rtrim($this->segmentDir, '/') . '/';
+        if (!str_starts_with($dir, $base) || $dir === $this->segmentDir) {
+            return false; // never escape the segment dir
+        }
+        $files = glob("{$dir}/*");
+        if (is_array($files)) {
+            foreach ($files as $file) {
+                @unlink($file);
+            }
+        }
+        return @rmdir($dir);
     }
 
     /**
@@ -1633,6 +1854,7 @@ class TranscodeManager
             function (): void {
                 try {
                     $this->reapStaleRunningJobs();
+                    $this->sweepSegmentCache();
                 } catch (\Throwable $e) {
                     $this->logger->error('Reaper timer failed', [
                         'error' => $e->getMessage(),

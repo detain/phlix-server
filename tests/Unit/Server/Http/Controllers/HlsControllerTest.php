@@ -119,8 +119,10 @@ class HlsControllerTest extends TestCase
         $manager = $this->createMock(TranscodeManager::class);
         $manager->expects($this->once())
             ->method('ensureSegment')
-            ->with('job-seg', 5)
-            ->willReturnCallback(function (string $jobId, int $index): string {
+            // A5: signature is (jobId, variant, index); the legacy unprefixed
+            // seg-NNNNN.ts match passes null for the variant (A6 adds variant parsing).
+            ->with('job-seg', null, 5)
+            ->willReturnCallback(function (string $jobId, ?string $variant, int $index): string {
                 $this->writeJobFile($jobId, 'seg-00005.ts', 'TSBYTES');
                 return "{$this->segmentDir}/{$jobId}/seg-00005.ts";
             });

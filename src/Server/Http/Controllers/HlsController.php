@@ -80,7 +80,10 @@ class HlsController
         // handing it to the static file server.
         if (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
             try {
-                $ready = $this->transcodeManager?->ensureSegment($jobId, (int) $m[1]);
+                // A5 changed ensureSegment() to (jobId, variant, index). This legacy
+                // unprefixed match passes null for the variant; full variant-aware
+                // filename parsing (media_v{V}.m3u8 / seg-v{V}-NNNNN.ts) lands in step A6.
+                $ready = $this->transcodeManager?->ensureSegment($jobId, null, (int) $m[1]);
             } catch (SegmentBusyException $e) {
                 // Transient overload — tell the player to retry shortly rather than
                 // blocking a worker or timing out. hls.js treats 503 as a retryable

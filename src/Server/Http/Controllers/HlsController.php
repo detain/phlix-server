@@ -14,13 +14,21 @@ use Phlix\Media\Transcoding\TranscodeManager;
  * Serves HLS playlists and on-demand MPEG-TS segments for transcode jobs.
  *
  * The transcode pipeline ({@see \Phlix\Media\Transcoding\TranscodeManager}) publishes
- * a COMPLETE VOD playlist (`master.m3u8` + `media_0.m3u8`) into the job directory the
- * instant a job is created, so the player knows the full duration and seekable range
- * up front. The `seg-NNNNN.ts` segments listed by that playlist are transcoded ON
- * DEMAND the first time each is fetched (an `-ss` fast-seek encode), which lets the
- * player seek anywhere — including past what has been produced so far. Playlists and
- * subtitle sidecars are static files served verbatim; segment requests are routed
- * through {@see TranscodeManager::ensureSegment()} to produce-or-serve.
+ * a COMPLETE VOD playlist into the job directory the instant a job is created, so the
+ * player knows the full duration and seekable range up front. Two job shapes exist:
+ *
+ *   - Legacy single-variant: `master.m3u8` + `media_0.m3u8` listing `seg-NNNNN.ts`.
+ *   - Multi-variant ABR ladder (A5): `master.m3u8` lists one `#EXT-X-STREAM-INF` per
+ *     rung, each pointing at a per-variant media playlist `media_v{V}.m3u8` (e.g.
+ *     `media_v1080p.m3u8`, `media_voriginal.m3u8`) that lists `seg-v{V}-NNNNN.ts`
+ *     segments, where `{V}` is the rendition id from `AbrLadder` (`240p`…`2160p`,
+ *     `original` — lowercase letters + digits only).
+ *
+ * The `seg-…\.ts` segments are transcoded ON DEMAND the first time each is fetched
+ * (an `-ss` fast-seek encode), which lets the player seek anywhere — including past
+ * what has been produced so far. All playlists (master + per-variant media) and
+ * subtitle sidecars are static files served verbatim; only segment requests are
+ * routed through {@see TranscodeManager::ensureSegment()} to produce-or-serve.
  */
 class HlsController
 {
@@ -62,9 +70,24 @@ class HlsController
     /**
      * GET /hls/{job_id}/{file} — serve a playlist, subtitle sidecar, or segment.
      *
-     * `master.m3u8` / `media_0.m3u8` / `sub-*.vtt` (and legacy `chunk-*.m4s`) are
-     * static files. A `seg-NNNNN.ts` request is routed through the transcoder, which
-     * returns a cached segment immediately or transcodes it on demand first.
+     * `master.m3u8` / `media_0.m3u8` / `media_v{V}.m3u8` / `sub-*.vtt` (and legacy
+     * `chunk-*.m4s`) are static files served verbatim by {@see serveJobFile()} — no
+     * transcoder involvement (the multi-variant media playlists are written up front
+     * by {@see TranscodeManager}). Only segment requests are routed through the
+     * transcoder, which returns a cached segment immediately or transcodes it on
+     * demand first. Two segment shapes are recognized:
+     *
+     *   - Legacy `seg-NNNNN.ts` → `ensureSegment($jobId, null, NNNNN)` (the null
+     *     variant selects the single-variant `variants IS NULL` job path).
+     *   - Multi-variant `seg-v{V}-NNNNN.ts` → `ensureSegment($jobId, '{V}', NNNNN)`,
+     *     where `{V}` is a rendition id (`[a-z0-9]+`, e.g. `1080p`, `original`). An
+     *     unknown variant / out-of-range index resolves to 404 (self-heals via client
+     *     retry once the segment exists).
+     *
+     * The variant character class `[a-z0-9]+` is anchored inside `^…$` and excludes
+     * `.` `/` `\`, so it is a defense-in-depth allowlist that cannot smuggle a
+     * traversal sequence; a filename that fails both regexes (and passes the earlier
+     * {@see isSafeFilename()} gate) falls through to a plain static lookup that 404s.
      *
      * @param array<string, string> $params
      */
@@ -77,13 +100,24 @@ class HlsController
         }
 
         // On-demand MPEG-TS segment: produce (or serve cached) this segment before
-        // handing it to the static file server.
-        if (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
+        // handing it to the static file server. Two filename shapes route here — the
+        // legacy unprefixed name (null variant) and the multi-variant name (rendition
+        // id parsed from the URL and validated against the [a-z0-9]+ allowlist).
+        $variant = null;
+        $index = null;
+        if (preg_match('/^seg-v([a-z0-9]+)-(\d{1,9})\.ts$/', $file, $m) === 1) {
+            $variant = $m[1];
+            $index = (int) $m[2];
+        } elseif (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
+            $index = (int) $m[1];
+        }
+
+        if ($index !== null) {
             try {
-                // A5 changed ensureSegment() to (jobId, variant, index). This legacy
-                // unprefixed match passes null for the variant; full variant-aware
-                // filename parsing (media_v{V}.m3u8 / seg-v{V}-NNNNN.ts) lands in step A6.
-                $ready = $this->transcodeManager?->ensureSegment($jobId, null, (int) $m[1]);
+                // A5 changed ensureSegment() to (jobId, variant, index): a null
+                // variant selects the legacy single-variant job; a rendition id
+                // string selects the matching rung of the multi-variant ladder.
+                $ready = $this->transcodeManager?->ensureSegment($jobId, $variant, $index);
             } catch (SegmentBusyException $e) {
                 // Transient overload — tell the player to retry shortly rather than
                 // blocking a worker or timing out. hls.js treats 503 as a retryable

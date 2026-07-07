@@ -95,7 +95,7 @@ class S3Client
         $headers['Content-Length'] = (string) strlen($content);
         $headers['Content-Type'] = 'application/octet-stream';
 
-        $response = $this->requestAsync('PUT', $url, $content, $headers);
+        $response = $this->doRequest('PUT', $url, $content, $headers);
 
         return $response !== null && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
     }
@@ -114,7 +114,7 @@ class S3Client
         $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
         $headers = $this->buildAuthHeaders('GET', $bucket, $key, $emptyHash);
 
-        $response = $this->requestAsync('GET', $url, null, $headers);
+        $response = $this->doRequest('GET', $url, null, $headers);
 
         if ($response === null || $response->getStatusCode() !== 200) {
             return false;
@@ -149,7 +149,7 @@ class S3Client
         $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
         $headers = $this->buildAuthHeaders('GET', $bucket, '/', $emptyHash, $queryParams);
 
-        $response = $this->requestAsync('GET', $url, null, $headers);
+        $response = $this->doRequest('GET', $url, null, $headers);
 
         if ($response === null || $response->getStatusCode() !== 200) {
             return [];
@@ -187,7 +187,7 @@ class S3Client
         $emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
         $headers = $this->buildAuthHeaders('DELETE', $bucket, $key, $emptyHash);
 
-        $response = $this->requestAsync('DELETE', $url, null, $headers);
+        $response = $this->doRequest('DELETE', $url, null, $headers);
 
         return $response !== null && $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
     }
@@ -248,6 +248,94 @@ class S3Client
             'x-amz-date' => $dateTime,
             'Authorization' => "AWS4-HMAC-SHA256 Credential={$this->accessKey}/{$credentialScope}, SignedHeaders={$signedHeaders}, Signature={$signature}",
         ];
+    }
+
+    /**
+     * Dispatch an HTTP request, using the async client when a Workerman event
+     * loop is running and falling back to synchronous cURL otherwise.
+     *
+     * `Workerman\Http\Client` (and the `Timer` it uses internally for request
+     * timeouts) requires an active Workerman event loop. Under PHPUnit (or any
+     * plain CLI invocation) there is no running worker, so the async client
+     * throws `RuntimeException: Timer can only be used in workerman running
+     * environment`.
+     *
+     * @param string $method HTTP method
+     * @param string $url Full URL
+     * @param string|null $body Request body
+     * @param array<string, string> $headers Request headers
+     * @return ResponseInterface|null Response or null on error/timeout
+     */
+    private function doRequest(string $method, string $url, ?string $body, array $headers): ?ResponseInterface
+    {
+        if ($this->isWorkermanContext()) {
+            return $this->requestAsync($method, $url, $body, $headers);
+        }
+
+        return $this->requestCurl($method, $url, $body, $headers);
+    }
+
+    /**
+     * Check if we're running inside a workerman worker context.
+     *
+     * @return bool True if in workerman context, false otherwise
+     */
+    private function isWorkermanContext(): bool
+    {
+        if (!class_exists('Workerman\Worker')) {
+            return false;
+        }
+        // Worker::$_instance is set when running in worker context
+        return defined('\Workerman\Worker::$_instance');
+    }
+
+    /**
+     * Fallback synchronous cURL request for CLI/testing contexts where no
+     * Workerman event loop is running.
+     *
+     * @param string $method HTTP method
+     * @param string $url Full URL
+     * @param string|null $body Request body
+     * @param array<string, string> $headers Request headers
+     * @return ResponseInterface|null Response or null on error
+     */
+    private function requestCurl(string $method, string $url, ?string $body, array $headers): ?ResponseInterface
+    {
+        if ($url === '' || $method === '') {
+            return null;
+        }
+
+        $ch = curl_init();
+        if ($ch === false) {
+            return null;
+        }
+
+        $headerLines = [];
+        foreach ($headers as $key => $value) {
+            $headerLines[] = "$key: $value";
+        }
+
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headerLines);
+
+        if ($method !== 'GET') {
+            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+            if ($body !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+            }
+        }
+
+        $responseBody = curl_exec($ch);
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if (!is_string($responseBody)) {
+            return null;
+        }
+
+        return new \Workerman\Http\Response($statusCode, [], $responseBody);
     }
 
     /**

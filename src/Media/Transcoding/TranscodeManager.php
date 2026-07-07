@@ -6,6 +6,9 @@ namespace Phlix\Media\Transcoding;
 
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Media\Streaming\AbrLadder;
+use Phlix\Media\Streaming\Rendition;
+use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Streaming\StreamState;
 use Phlix\Media\Transcoding\Subtitles\SubtitleExtractor;
 use Psr\Log\LoggerInterface;
@@ -335,8 +338,27 @@ class TranscodeManager
             throw new \RuntimeException('Could not determine media duration for HLS playlist');
         }
 
+        // Legacy single-variant params are still persisted in `segment_params` for
+        // BC (older readers + the reuse filter). A5 additionally builds the true
+        // multi-variant ABR ladder below and persists it in `variants`.
         $segParams = $this->computeSegmentParams($probe, $profileName);
         $segSeconds = $this->segmentSeconds;
+
+        // A5: resolve the ABR ladder. Prefer A1's persisted source metadata blob
+        // (metadata_json['source']) when it carries real dimensions; otherwise derive
+        // a SourceProfile from the live probe we already have in hand.
+        $sourceProfile = $this->sourceProfileForItem($item, $probe);
+        $ladder = (new AbrLadder())->build($sourceProfile, $profileName);
+        $streamVariants = $ladder->streamVariants();
+        $topVariant = $streamVariants[0] ?? null;
+        if ($topVariant === null) {
+            // AbrLadder always emits at least one rung; defensive only.
+            throw new \RuntimeException('ABR ladder produced no variants');
+        }
+        $variantsJson = json_encode($ladder->toArray());
+        if ($variantsJson === false) {
+            throw new \RuntimeException('Failed to encode ABR ladder');
+        }
 
         $jobId = $this->generateUuid();
         $hlsDir = "{$this->segmentDir}/{$jobId}";
@@ -344,14 +366,18 @@ class TranscodeManager
             throw new \RuntimeException("Failed to create HLS directory: {$hlsDir}");
         }
 
-        $width = is_int($segParams['variant_width'] ?? null) ? $segParams['variant_width'] : null;
-        $height = is_int($segParams['variant_height'] ?? null) ? $segParams['variant_height'] : null;
-        $bandwidth = is_int($segParams['variant_bandwidth'] ?? null) ? $segParams['variant_bandwidth'] : null;
+        // The single-variant descriptor columns (variant_width/height/bandwidth) are
+        // kept for BC with anything still reading them directly, populated from the
+        // TOP (highest, first) master variant.
+        $width = $topVariant->width;
+        $height = $topVariant->height;
+        $bandwidth = $topVariant->bandwidth();
         $playlistPath = "{$hlsDir}/master.m3u8";
 
-        // Publish the complete VOD master + media playlists now — no encode is needed
-        // to know the timeline, so this is instantaneous.
-        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth);
+        // Publish the complete VOD master (every variant) + one media playlist per
+        // variant now — no encode is needed to know the timeline, so this is
+        // instantaneous. Segments themselves are produced on demand per variant.
+        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth, $streamVariants);
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
         // are skipped). Detection is a cheap parse of the in-memory probe; extraction
@@ -370,6 +396,7 @@ class TranscodeManager
         }
         $tracksJson = $tracks === [] ? null : json_encode($tracks);
         $segParamsJson = json_encode($segParams);
+        // $variantsJson was built above from the resolved ABR ladder.
 
         // Status is 'completed': the job's deliverable — the full VOD playlist — is
         // ready the instant it's written, and segments are produced lazily on request.
@@ -379,11 +406,11 @@ class TranscodeManager
             "INSERT INTO transcode_jobs
                 (id, media_item_id, input_path, output_path, hls_dir, status, progress, profile, key_hash,
                  variant_width, variant_height, variant_bandwidth, subtitle_tracks,
-                 duration_seconds, segment_seconds, segment_params, started_at, completed_at)
-             VALUES (?, ?, ?, ?, ?, 'completed', 100, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
+                 duration_seconds, segment_seconds, segment_params, variants, started_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, 'completed', 100, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())",
             [$jobId, $mediaItemId, $itemPath, $playlistPath, $hlsDir, $profileName, $keyHash,
                 $width, $height, $bandwidth, $tracksJson,
-                (int) round($duration), $segSeconds, $segParamsJson]
+                (int) round($duration), $segSeconds, $segParamsJson, $variantsJson]
         );
 
         // Extract subtitles in the background (best-effort). A harmless `true` primary
@@ -480,24 +507,51 @@ class TranscodeManager
      * (detached, written atomically) and the request polls — with a coroutine-
      * yielding sleep — until the file appears or the wait ceiling is hit.
      *
-     * @param string $jobId Transcode job id.
-     * @param int    $index Zero-based segment index.
+     * A5 made this variant-aware. A job whose `variants` column is populated (created
+     * on or after A5) resolves the requested `$variant` (a Rendition id such as
+     * `1080p` / `original`) against the persisted ABR ladder and encodes that rung's
+     * `seg-v{variant}-NNNNN.ts`. A legacy job (`variants IS NULL`, created before A5)
+     * ignores `$variant`, reads the single `segment_params` column, and writes the
+     * unprefixed `seg-NNNNN.ts` exactly as before.
+     *
+     * @param string      $jobId   Transcode job id.
+     * @param string|null $variant Rendition id for a multi-variant job (e.g. `720p`,
+     *                             `original`); `null` for the legacy single-variant path.
+     * @param int         $index   Zero-based segment index.
      *
      * @return string|null Absolute path to the ready segment, or null when the job
-     *                     is not on-demand, the index is out of range, or the encode
-     *                     did not finish within {@see self::SEGMENT_MAX_WAIT_MS}.
+     *                     is not on-demand, the variant is unknown/not advertised, the
+     *                     index is out of range, or the encode did not finish within
+     *                     {@see self::SEGMENT_MAX_WAIT_MS}.
      *
      * @throws SegmentBusyException When the global segment-encode ceiling is reached
      *                     and this segment is not already encoding — a transient,
      *                     retryable state the caller surfaces as HTTP 503.
      */
-    public function ensureSegment(string $jobId, int $index): ?string
+    public function ensureSegment(string $jobId, ?string $variant, int $index): ?string
     {
         $row = $this->getJobRow($jobId);
         if ($row === null || $index < 0) {
             return null;
         }
 
+        $variantsRaw = $row['variants'] ?? null;
+        if (is_string($variantsRaw) && $variantsRaw !== '') {
+            // Multi-variant (A5+) job: resolve the rung from the persisted ladder.
+            $decoded = json_decode($variantsRaw, true);
+            if (!is_array($decoded)) {
+                return null;
+            }
+            $rendition = $this->findRenditionArray($decoded, $variant);
+            if ($rendition === null) {
+                return null; // unknown / non-advertised variant → 404 (mirrors out-of-range)
+            }
+            $segParams = self::segmentParamsForRendition($rendition);
+            return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
+        }
+
+        // Legacy single-variant job (variants IS NULL) — byte-identical to pre-A5:
+        // ignore $variant, read segment_params, write unprefixed seg-NNNNN.ts.
         $segParamsRaw = $row['segment_params'] ?? null;
         if (!is_string($segParamsRaw) || $segParamsRaw === '') {
             return null; // not an on-demand job (e.g. a legacy CMAF job)
@@ -513,6 +567,33 @@ class TranscodeManager
             $segParams[(string) $paramKey] = $paramValue;
         }
 
+        return $this->produceSegment($jobId, $row, null, $index, $segParams);
+    }
+
+    /**
+     * Produce-or-serve one on-demand segment given already-resolved encode params.
+     *
+     * Shared tail of {@see ensureSegment()} for both the legacy single-variant and
+     * the multi-variant path — the ONLY difference between the two is the resolved
+     * `$segParams` and the `$variantId` that prefixes the segment filename; the
+     * timeline (segment count / boundaries / duration) is identical across every
+     * variant of a job. The dedup ({@see segmentEncodeInFlight()}), global cap
+     * ({@see countInFlightSegmentEncodes()} → {@see SegmentBusyException}), the
+     * coroutine-yielding poll, and the LRU touch are unchanged from pre-A5.
+     *
+     * @param string               $jobId     Transcode job id.
+     * @param array<string, mixed>  $row       The transcode_jobs row.
+     * @param string|null           $variantId Rendition id (null = legacy unprefixed name).
+     * @param int                   $index     Zero-based segment index.
+     * @param array<string, mixed>  $segParams Encode params for FfmpegRunner::buildSegmentCommand().
+     */
+    private function produceSegment(
+        string $jobId,
+        array $row,
+        ?string $variantId,
+        int $index,
+        array $segParams
+    ): ?string {
         $segSeconds = is_numeric($row['segment_seconds'] ?? null)
             ? (int) $row['segment_seconds']
             : $this->segmentSeconds;
@@ -530,7 +611,7 @@ class TranscodeManager
         $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
             ? (string) $row['hls_dir']
             : "{$this->segmentDir}/{$jobId}";
-        $final = $dir . '/' . self::segmentFileName($index);
+        $final = $dir . '/' . self::segmentFileName($variantId, $index);
 
         if (is_file($final)) {
             $this->touchJobDir($dir); // mark the session active for the LRU sweep
@@ -561,7 +642,8 @@ class TranscodeManager
         // re-requests the same fragment on a first-byte timeout) spawns a duplicate
         // ffmpeg, and the redundant load is exactly what pushes encodes past the
         // client timeout — a self-amplifying cascade. A retry now piggybacks on the
-        // in-flight encode instead.
+        // in-flight encode instead. `$final` already carries the per-variant name, so
+        // dedup + the global cap are naturally scoped per (job, variant).
         if (!$this->segmentEncodeInFlight($final)) {
             // Global ceiling: bound total concurrent encodes so a burst of cold
             // seeks (many viewers, or one frantic scrub) can't saturate the CPU.
@@ -589,6 +671,148 @@ class TranscodeManager
         }
 
         return is_file($final) ? $final : null;
+    }
+
+    /**
+     * Resolve a variant id against a decoded `variants` ladder to its Rendition array.
+     *
+     * Searches the clamped rungs (`renditions`) first, then the `original` descriptor —
+     * but `original` is only resolvable when it is a genuine stream-copy variant
+     * (`is_copy === true`), because that is the only case
+     * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} emits it into the
+     * master. When `original` merely mirrors the top transcode rung (`is_copy === false`)
+     * it is NOT advertised, so nothing ever requests it and this returns null (404).
+     *
+     * @param array<mixed>  $decoded LadderResult::toArray() shape: `{renditions:[...], original:{...}}`.
+     * @param string|null   $variant Requested Rendition id.
+     *
+     * @return array<string, mixed>|null The matching Rendition array, or null when not found/advertised.
+     */
+    private function findRenditionArray(array $decoded, ?string $variant): ?array
+    {
+        if ($variant === null || $variant === '') {
+            return null;
+        }
+
+        $renditions = $decoded['renditions'] ?? null;
+        if (is_array($renditions)) {
+            foreach ($renditions as $rung) {
+                if (is_array($rung) && ($rung['id'] ?? null) === $variant) {
+                    /** @var array<string, mixed> $rung */
+                    return $rung;
+                }
+            }
+        }
+
+        $original = $decoded['original'] ?? null;
+        if (
+            is_array($original)
+            && ($original['id'] ?? null) === $variant
+            && ($original['is_copy'] ?? false) === true
+        ) {
+            /** @var array<string, mixed> $original */
+            return $original;
+        }
+
+        return null;
+    }
+
+    /**
+     * Build the {@see FfmpegRunner::buildSegmentCommand()} params for one Rendition array.
+     *
+     * A copy rung yields the minimal `-c copy` contract (A4 skips every other flag on
+     * the copy path). A transcode rung yields the capped-CRF H.264 / AAC contract:
+     * per-rung scale (`width`/`height`), MB-derived `level` (from the advertised
+     * CODECS), and the VBV ceiling (`maxrate`/`bufsize`) derived from the rung's
+     * `video_bitrate` via {@see Rendition::MAXRATE_MULTIPLIER} / ::BUFSIZE_MULTIPLIER.
+     *
+     * @param array<string, mixed> $rendition A Rendition::toArray() shape.
+     *
+     * @return array<string, mixed> Encode params for FfmpegRunner::buildSegmentCommand().
+     */
+    private static function segmentParamsForRendition(array $rendition): array
+    {
+        if (($rendition['is_copy'] ?? false) === true) {
+            // Genuine passthrough: A4 emits only `-c:v copy` / `-c:a copy` and skips
+            // every other flag on the copy path, so nothing else belongs here.
+            return ['video_codec' => 'copy', 'audio_codec' => 'copy'];
+        }
+
+        $videoBitrate = self::renditionInt($rendition, 'video_bitrate');
+        $codecs = is_string($rendition['codecs'] ?? null) ? (string) $rendition['codecs'] : '';
+        $maxrate = (int) round($videoBitrate * Rendition::MAXRATE_MULTIPLIER);
+        $bufsize = $maxrate * Rendition::BUFSIZE_MULTIPLIER;
+
+        return [
+            'video_codec' => 'libx264',
+            'preset' => 'veryfast',
+            'crf' => 23,
+            'pix_fmt' => 'yuv420p',
+            'profile' => 'high',
+            'level' => self::ffmpegLevelFromCodecs($codecs),
+            // Always pass the target scale — even at source resolution an explicit
+            // -vf scale is harmless and keeps the command uniform across rungs.
+            'width' => self::renditionInt($rendition, 'width'),
+            'height' => self::renditionInt($rendition, 'height'),
+            // Informational (A4 does not turn this into a bare -b:v).
+            'video_bitrate' => $videoBitrate,
+            'maxrate' => $maxrate,
+            'bufsize' => $bufsize,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_sample_rate' => 48000,
+        ];
+    }
+
+    /**
+     * Derive the ffmpeg `-level` string (e.g. `4.1`) from an HLS CODECS string.
+     *
+     * The CODECS produced by {@see \Phlix\Media\Streaming\AbrLadder::h264Codecs()} is
+     * always `avc1.6400{LL},mp4a.40.2` where `64`=High profile_idc, `00`=constraint
+     * flags, and `LL` is the level_idc as two hex digits. The table mirrors
+     * `AbrLadder::H264_LEVELS` as decimal-level strings. Falls back to `4.1`
+     * defensively (unreachable given AbrLadder only ever emits these seven strings).
+     *
+     * @param string $codecs HLS CODECS string.
+     */
+    private static function ffmpegLevelFromCodecs(string $codecs): string
+    {
+        $map = [
+            '1E' => '3.0',
+            '1F' => '3.1',
+            '20' => '3.2',
+            '29' => '4.1',
+            '2A' => '4.2',
+            '32' => '5.0',
+            '33' => '5.1',
+        ];
+        // Capture the level_idc: the two hex digits after `avc1.` + profile/constraint.
+        if (preg_match('/avc1\.[0-9A-Fa-f]{4}([0-9A-Fa-f]{2})/', $codecs, $m) === 1) {
+            $level = strtoupper($m[1]);
+            if (isset($map[$level])) {
+                return $map[$level];
+            }
+        }
+
+        return '4.1';
+    }
+
+    /**
+     * Coerce a Rendition-array field to a non-negative int (0 when absent/non-numeric).
+     *
+     * @param array<string, mixed> $rendition
+     */
+    private static function renditionInt(array $rendition, string $key): int
+    {
+        $value = $rendition[$key] ?? null;
+        if (is_int($value)) {
+            return $value;
+        }
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        return 0;
     }
 
     /**
@@ -757,11 +981,24 @@ class TranscodeManager
     }
 
     /**
-     * The on-demand segment filename for a zero-based index (`seg-00042.ts`).
+     * The on-demand segment filename for a variant + zero-based index.
+     *
+     * Legacy single-variant jobs (`$variantId === null`) use the unprefixed
+     * `seg-00042.ts` — byte-identical to pre-A5. Multi-variant jobs prefix the
+     * Rendition id: `seg-v1080p-00042.ts`. Segments stay FLAT in the job dir (no
+     * `v{id}/` subdirectory): the `/hls/{job_id}/{file}` route's `{file}` placeholder
+     * is `[^/]+`, so a nested path would never match.
+     *
+     * @param string|null $variantId Rendition id (e.g. `1080p`, `original`) or null (legacy).
+     * @param int         $index     Zero-based segment index.
      */
-    private static function segmentFileName(int $index): string
+    private static function segmentFileName(?string $variantId, int $index): string
     {
-        return sprintf('seg-%05d.ts', $index);
+        if ($variantId === null) {
+            return sprintf('seg-%05d.ts', $index);
+        }
+
+        return sprintf('seg-v%s-%05d.ts', $variantId, $index);
     }
 
     /**
@@ -815,17 +1052,25 @@ class TranscodeManager
     /**
      * Writes the complete VOD master + media playlists for an on-demand HLS job.
      *
-     * Both are static: the master advertises the single variant, and the media
-     * playlist lists every segment with its EXTINF, `EXT-X-PLAYLIST-TYPE:VOD`, and a
-     * closing `EXT-X-ENDLIST`, so the player knows the true duration and full
-     * seekable range immediately. Segments themselves are produced on demand.
+     * All are static: the master advertises every variant, and each media playlist
+     * lists every segment with its EXTINF, `EXT-X-PLAYLIST-TYPE:VOD`, and a closing
+     * `EXT-X-ENDLIST`, so the player knows the true duration and full seekable range
+     * immediately. Segments themselves are produced on demand per variant.
      *
-     * @param string   $dir        Job directory.
-     * @param float    $duration   Source duration in seconds.
-     * @param int      $segSeconds Target segment (EXTINF) length in seconds.
-     * @param int|null $width      Variant pixel width (master RESOLUTION), or null.
-     * @param int|null $height     Variant pixel height, or null.
-     * @param int|null $bandwidth  Variant nominal bandwidth (master BANDWIDTH), or null.
+     * Multi-variant path (A5+): `$variants` is the highest-first list from
+     * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} — one master
+     * listing every variant plus one `media_v{id}.m3u8` per variant (segment TIMING
+     * is IDENTICAL across variants; only the encode target differs). Legacy path
+     * (`$variants === null`): the single-variant `master.m3u8` + `media_0.m3u8`
+     * write, byte-identical to pre-A5.
+     *
+     * @param string              $dir        Job directory.
+     * @param float               $duration   Source duration in seconds.
+     * @param int                 $segSeconds Target segment (EXTINF) length in seconds.
+     * @param int|null            $width      Variant pixel width (master RESOLUTION), or null.
+     * @param int|null            $height     Variant pixel height, or null.
+     * @param int|null            $bandwidth  Variant nominal bandwidth (master BANDWIDTH), or null.
+     * @param list<Rendition>|null $variants  Multi-variant list (highest-first), or null for legacy.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -833,14 +1078,28 @@ class TranscodeManager
         int $segSeconds,
         ?int $width,
         ?int $height,
-        ?int $bandwidth
+        ?int $bandwidth,
+        ?array $variants = null
     ): void {
-        file_put_contents("{$dir}/master.m3u8", $this->buildMasterPlaylist($width, $height, $bandwidth));
-        file_put_contents("{$dir}/media_0.m3u8", $this->buildMediaPlaylist($duration, $segSeconds));
+        if ($variants === null) {
+            // Legacy single-variant path (BC for pre-A5 jobs / callers).
+            file_put_contents("{$dir}/master.m3u8", $this->buildMasterPlaylist($width, $height, $bandwidth));
+            file_put_contents("{$dir}/media_0.m3u8", $this->buildMediaPlaylist($duration, $segSeconds, null));
+            return;
+        }
+
+        // Multi-variant: one master listing every variant + one media playlist per variant.
+        file_put_contents("{$dir}/master.m3u8", $this->buildMultiVariantMaster($variants));
+        foreach ($variants as $variant) {
+            file_put_contents(
+                "{$dir}/media_v{$variant->id}.m3u8",
+                $this->buildMediaPlaylist($duration, $segSeconds, $variant->id)
+            );
+        }
     }
 
     /**
-     * Builds the single-variant HLS master playlist text.
+     * Builds the single-variant HLS master playlist text (legacy / pre-A5 jobs).
      *
      * @param int|null $width     Variant pixel width, or null to omit RESOLUTION.
      * @param int|null $height    Variant pixel height, or null to omit RESOLUTION.
@@ -864,19 +1123,48 @@ class TranscodeManager
     }
 
     /**
+     * Builds the multi-variant HLS master playlist text.
+     *
+     * Emits one `#EXT-X-STREAM-INF` (with BANDWIDTH / RESOLUTION / CODECS from the
+     * Rendition) + `media_v{id}.m3u8` per variant, preserving the caller's order
+     * (highest-first per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}).
+     *
+     * @param list<Rendition> $variants Variants in master order (not re-sorted).
+     *
+     * @return string Master playlist text.
+     */
+    private function buildMultiVariantMaster(array $variants): string
+    {
+        $lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+        foreach ($variants as $variant) {
+            $attrs = 'BANDWIDTH=' . $variant->bandwidth()
+                . ',RESOLUTION=' . $variant->resolution()
+                . ',CODECS="' . $variant->codecs . '"';
+            $lines[] = '#EXT-X-STREAM-INF:' . $attrs;
+            $lines[] = 'media_v' . $variant->id . '.m3u8';
+        }
+
+        return implode("\n", $lines) . "\n";
+    }
+
+    /**
      * Builds the complete VOD media playlist text for a title of the given duration.
      *
-     * Emits one `#EXTINF` + `seg-NNNNN.ts` entry per segment (the last shorter when
-     * the duration is not a whole multiple of the segment length), tagged VOD and
+     * Emits one `#EXTINF` + segment entry per segment (the last shorter when the
+     * duration is not a whole multiple of the segment length), tagged VOD and
      * terminated with `#EXT-X-ENDLIST` so the player treats it as a fixed-length,
-     * fully-seekable stream.
+     * fully-seekable stream. The segment TIMELINE (count / EXTINF / duration) is
+     * identical for every variant — only the segment FILENAME prefix differs — so
+     * hls.js can ABR-switch between variants at any boundary.
      *
-     * @param float $duration   Source duration in seconds.
-     * @param int   $segSeconds Target segment length in seconds.
+     * @param float       $duration   Source duration in seconds.
+     * @param int         $segSeconds Target segment length in seconds.
+     * @param string|null $variantId  Rendition id for `seg-v{id}-NNNNN.ts`, or null
+     *                                for the legacy unprefixed `seg-NNNNN.ts`.
      *
      * @return string Media playlist text.
      */
-    private function buildMediaPlaylist(float $duration, int $segSeconds): string
+    private function buildMediaPlaylist(float $duration, int $segSeconds, ?string $variantId): string
     {
         $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
         $count = (int) ceil($duration / $segSeconds);
@@ -896,7 +1184,7 @@ class TranscodeManager
                 break;
             }
             $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
-            $lines[] = self::segmentFileName($i);
+            $lines[] = self::segmentFileName($variantId, $i);
         }
         $lines[] = '#EXT-X-ENDLIST';
 
@@ -1364,6 +1652,111 @@ class TranscodeManager
             return (int) $value;
         }
         return 0;
+    }
+
+    /**
+     * Resolve the {@see SourceProfile} the ABR ladder is built from.
+     *
+     * Prefers A1's persisted `metadata_json['source']` blob when it carries real
+     * dimensions (width + height both > 0), so the ladder is built without leaning on
+     * the live probe. Falls back to deriving the profile from the probe we already
+     * have in hand for older items that predate the A1 backfill.
+     *
+     * @param array<string, mixed> $item  The media_items row (carries metadata_json).
+     * @param array<string, mixed> $probe Raw ffprobe result.
+     */
+    private function sourceProfileForItem(array $item, array $probe): SourceProfile
+    {
+        $source = $this->persistedSourceMetadata($item);
+        if (
+            $source !== null
+            && $this->intVal($source['width'] ?? null) > 0
+            && $this->intVal($source['height'] ?? null) > 0
+        ) {
+            return SourceProfile::fromSourceMetadata($source);
+        }
+
+        return $this->sourceProfileFromProbe($probe);
+    }
+
+    /**
+     * Extract A1's persisted `metadata_json['source']` descriptor from a media_items row.
+     *
+     * @param array<string, mixed> $item The media_items row.
+     *
+     * @return array<string, mixed>|null The source blob, or null when absent/malformed.
+     */
+    private function persistedSourceMetadata(array $item): ?array
+    {
+        $metaRaw = $item['metadata_json'] ?? null;
+        $meta = null;
+        if (is_string($metaRaw) && $metaRaw !== '') {
+            $decoded = json_decode($metaRaw, true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        } elseif (is_array($metaRaw)) {
+            $meta = $metaRaw;
+        }
+        if ($meta === null) {
+            return null;
+        }
+
+        $source = $meta['source'] ?? null;
+        if (!is_array($source)) {
+            return null;
+        }
+
+        // Normalise to string keys for the SourceProfile contract.
+        $out = [];
+        foreach ($source as $key => $value) {
+            $out[(string) $key] = $value;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Derive a {@see SourceProfile} from a live ffprobe result.
+     *
+     * Mirrors {@see computeHlsParams()}'s field extraction: first video/audio stream
+     * codec name / dimensions / pix_fmt, and the video bitrate from the stream's
+     * `bit_rate` (falling back to `format.bit_rate` when the stream omits it). Absent
+     * or non-positive fields map to null so the ladder's source-clamp sees "unknown".
+     *
+     * @param array<string, mixed> $probe Raw ffprobe result.
+     */
+    private function sourceProfileFromProbe(array $probe): SourceProfile
+    {
+        $video = $this->firstStreamOfType($probe, 'video');
+        $audio = $this->firstStreamOfType($probe, 'audio');
+        $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
+
+        $width = $this->intVal($video['width'] ?? null);
+        $height = $this->intVal($video['height'] ?? null);
+        $videoBitrate = $this->intVal($video['bit_rate'] ?? null);
+        if ($videoBitrate <= 0) {
+            $videoBitrate = $this->intVal($format['bit_rate'] ?? null);
+        }
+        $audioBitrate = $this->intVal($audio['bit_rate'] ?? null);
+
+        return new SourceProfile(
+            width: $width > 0 ? $width : null,
+            height: $height > 0 ? $height : null,
+            videoCodec: $this->probeString($video['codec_name'] ?? null),
+            videoBitrate: $videoBitrate > 0 ? $videoBitrate : null,
+            audioCodec: $this->probeString($audio['codec_name'] ?? null),
+            audioBitrate: $audioBitrate > 0 ? $audioBitrate : null,
+            pixFmt: $this->probeString($video['pix_fmt'] ?? null),
+        );
+    }
+
+    /**
+     * Coerce a mixed probe value to a non-empty string, or null.
+     */
+    private function probeString(mixed $value): ?string
+    {
+        return is_string($value) && $value !== '' ? $value : null;
     }
 
     /**

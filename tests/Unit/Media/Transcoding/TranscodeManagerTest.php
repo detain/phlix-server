@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
 use PHPUnit\Framework\TestCase;
+use Phlix\Media\Streaming\AbrLadder;
+use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
@@ -235,7 +238,7 @@ class TranscodeManagerTest extends TestCase
 
     public function testEnsureHlsJobWritesCompleteVodPlaylist(): void
     {
-        // The fix: a COMPLETE VOD media playlist is published up front (full
+        // A5: a COMPLETE VOD media playlist per VARIANT is published up front (full
         // duration, every segment, EXT-X-ENDLIST) so the player reports the true
         // total length and can seek anywhere — never a live, ever-growing playlist.
         $captured = [];
@@ -253,16 +256,21 @@ class TranscodeManagerTest extends TestCase
         $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
 
         $dir = $this->capturedJobInsert($captured)['hls_dir'];
-        $media = (string) file_get_contents("{$dir}/media_0.m3u8");
+        // A 720p H.264 + AAC source → rungs 240/360/480/720 + a copy "original".
+        $media = (string) file_get_contents("{$dir}/media_v720p.m3u8");
         $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $media);
         $this->assertStringContainsString('#EXT-X-ENDLIST', $media);
-        $this->assertStringContainsString('seg-00000.ts', $media);
-        $this->assertStringContainsString('seg-00004.ts', $media);
-        $this->assertStringNotContainsString('seg-00005.ts', $media);
-        // The master points at the single media playlist.
+        $this->assertStringContainsString('seg-v720p-00000.ts', $media);
+        $this->assertStringContainsString('seg-v720p-00004.ts', $media);
+        $this->assertStringNotContainsString('seg-v720p-00005.ts', $media);
+        // The master lists every variant and references the per-variant playlists.
         $master = (string) file_get_contents("{$dir}/master.m3u8");
-        $this->assertStringContainsString('media_0.m3u8', $master);
+        $this->assertGreaterThanOrEqual(2, substr_count($master, '#EXT-X-STREAM-INF:'));
+        $this->assertStringContainsString('media_v720p.m3u8', $master);
+        $this->assertStringContainsString('media_voriginal.m3u8', $master);
         $this->assertStringContainsString('/hls/', $result['master_url']);
+        // No legacy single-variant artefacts written for a multi-variant job.
+        $this->assertFileDoesNotExist("{$dir}/media_0.m3u8");
     }
 
     public function testEnsureHlsJobPersistsProbedDurationToMediaItem(): void
@@ -677,7 +685,7 @@ class TranscodeManagerTest extends TestCase
         $db = $this->mockDb([], 0, [], ['hls_dir' => $this->segmentDir, 'status' => 'completed'], $captured);
         $ff = $this->createMock(FfmpegRunner::class);
 
-        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 0));
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', null, 0));
     }
 
     public function testEnsureSegmentRejectsOutOfRangeIndex(): void
@@ -692,7 +700,7 @@ class TranscodeManagerTest extends TestCase
         // 60s / 6s = 10 segments (0..9); index 10 is past the end.
         $ff->expects($this->never())->method('startSegmentEncode');
 
-        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 10));
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', null, 10));
     }
 
     public function testEnsureSegmentReturnsCachedSegmentWithoutEncoding(): void
@@ -707,7 +715,7 @@ class TranscodeManagerTest extends TestCase
         $ff = $this->createMock(FfmpegRunner::class);
         $ff->expects($this->never())->method('startSegmentEncode');
 
-        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 3);
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', null, 3);
 
         $this->assertSame("{$dir}/seg-00003.ts", $path);
     }
@@ -733,7 +741,7 @@ class TranscodeManagerTest extends TestCase
             }
         );
 
-        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 2);
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', null, 2);
 
         $this->assertSame("{$dir}/seg-00002.ts", $path);
         $this->assertFileExists($path);
@@ -783,7 +791,7 @@ class TranscodeManagerTest extends TestCase
         // The in-flight encode must NOT be duplicated — this is the anti-cascade fix.
         $ff->expects($this->never())->method('startSegmentEncode');
 
-        $this->assertNull($this->segManager($db, $ff)->ensureSegment('seg-job', 2));
+        $this->assertNull($this->segManager($db, $ff)->ensureSegment('seg-job', null, 2));
     }
 
     public function testEnsureSegmentThrowsSegmentBusyWhenGlobalCeilingReached(): void
@@ -802,7 +810,7 @@ class TranscodeManagerTest extends TestCase
         $ff->expects($this->never())->method('startSegmentEncode');
 
         $this->expectException(SegmentBusyException::class);
-        $this->segManager($db, $ff, 1)->ensureSegment('seg-job', 2);
+        $this->segManager($db, $ff, 1)->ensureSegment('seg-job', null, 2);
     }
 
     public function testEnsureSegmentAtCapacityStillServesAlreadyEncodingSegment(): void
@@ -821,7 +829,7 @@ class TranscodeManagerTest extends TestCase
 
         // No SegmentBusyException — returns null after the short wait since the
         // in-flight encode does not complete within the test.
-        $this->assertNull($this->segManager($db, $ff, 1)->ensureSegment('seg-job', 2));
+        $this->assertNull($this->segManager($db, $ff, 1)->ensureSegment('seg-job', null, 2));
     }
 
     public function testEnsureSegmentRecreatesMissingJobDir(): void
@@ -841,7 +849,7 @@ class TranscodeManagerTest extends TestCase
             }
         );
 
-        $path = $this->segManager($db, $ff)->ensureSegment('seg-job', 1);
+        $path = $this->segManager($db, $ff)->ensureSegment('seg-job', null, 1);
 
         $this->assertSame("{$dir}/seg-00001.ts", $path);
         $this->assertDirectoryExists($dir);
@@ -887,6 +895,510 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(1, $reaped);
         $this->assertDirectoryDoesNotExist($old);
         $this->assertDirectoryExists($active);
+    }
+
+    // ---------------------------------------------------------------------
+    // A5 — multi-variant ABR ladder pipeline
+    // ---------------------------------------------------------------------
+
+    /**
+     * Extracts the `variants` JSON (bound param index 14, right after segment_params)
+     * from the captured on-demand job INSERT.
+     *
+     * @param array<int, array{0: string, 1: array<int, mixed>}> $captured
+     */
+    private function capturedVariantsJson(array $captured): string
+    {
+        foreach ($captured as [$sql, $params]) {
+            if (!str_contains($sql, 'INSERT INTO transcode_jobs')) {
+                continue;
+            }
+            return is_string($params[14] ?? null) ? $params[14] : '';
+        }
+        $this->fail('no transcode_jobs INSERT was captured');
+    }
+
+    /**
+     * A multi-variant (A5+) job row: carries the persisted `variants` ladder JSON.
+     *
+     * @return array<string, mixed>
+     */
+    private function multiVariantJobRow(string $dir, string $input, string $variantsJson): array
+    {
+        return [
+            'id' => 'seg-job',
+            'hls_dir' => $dir,
+            'input_path' => $input,
+            'status' => 'completed',
+            'duration_seconds' => 60,
+            'segment_seconds' => 6,
+            // segment_params is still present (BC) but must be IGNORED for a job
+            // whose `variants` column is populated.
+            'segment_params' => json_encode(['video_codec' => 'copy', 'audio_codec' => 'copy']),
+            'variants' => $variantsJson,
+        ];
+    }
+
+    public function testEnsureHlsJobBuildsLadderFromPersistedSourceMetadata(): void
+    {
+        // A1 persisted a 1080p H.264/AAC source. The live probe deliberately reports a
+        // SMALLER 360p frame — if the ladder were (wrongly) built from the probe it
+        // would cap at 360p. Proving a 1080p rung is present proves the A1 metadata
+        // (not the probe) drove the ladder, and the persisted JSON must equal exactly
+        // what AbrLadder::build() produces for that SourceProfile (genuinely usable).
+        $source = [
+            'width' => 1920,
+            'height' => 1080,
+            'video_codec' => 'h264',
+            'video_bitrate' => 6000000,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => 128000,
+            'pix_fmt' => 'yuv420p',
+        ];
+        $captured = [];
+        $db = $this->mockDb(
+            [],
+            0,
+            ['path' => '/m.mkv', 'metadata_json' => json_encode(['source' => $source])],
+            [],
+            $captured
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 640, 'height' => 360],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $variantsJson = $this->capturedVariantsJson($captured);
+
+        // Exactly what AbrLadder produces for the SAME SourceProfile → genuinely usable.
+        $expected = (string) json_encode(
+            (new AbrLadder())->build(SourceProfile::fromSourceMetadata($source), 'web')->toArray()
+        );
+        $this->assertSame($expected, $variantsJson);
+
+        $decoded = json_decode($variantsJson, true);
+        $this->assertIsArray($decoded);
+        $ids = array_column($decoded['renditions'], 'id');
+        $this->assertContains('1080p', $ids, 'ladder built from A1 metadata (not the 360p probe)');
+    }
+
+    public function testEnsureHlsJobFallsBackToProbeWhenSourceMetadataAbsent(): void
+    {
+        // No metadata_json['source'] → the ladder is derived from the live probe.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720,
+                    'bit_rate' => 2500000, 'pix_fmt' => 'yuv420p'],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2, 'bit_rate' => 128000],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $variantsJson = $this->capturedVariantsJson($captured);
+
+        $expected = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(
+                    width: 1280,
+                    height: 720,
+                    videoCodec: 'h264',
+                    videoBitrate: 2500000,
+                    audioCodec: 'aac',
+                    audioBitrate: 128000,
+                    pixFmt: 'yuv420p',
+                ),
+                'web'
+            )->toArray()
+        );
+        $this->assertSame($expected, $variantsJson);
+
+        $decoded = json_decode($variantsJson, true);
+        $ids = array_column($decoded['renditions'], 'id');
+        $this->assertContains('720p', $ids);
+        $this->assertNotContains('1080p', $ids, 'no upscaling beyond the 720p probe');
+    }
+
+    public function testMasterListsEveryVariantHighestFirstWithCorrectAttrs(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1920, 'height' => 1080,
+                    'bit_rate' => 6000000],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '60.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+
+        // Rebuild the ladder to know the expected order/attrs.
+        $variants = (new AbrLadder())->build(
+            new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+            'web'
+        )->streamVariants();
+
+        // One STREAM-INF + media_v{id}.m3u8 per variant, in the SAME (highest-first) order.
+        $lines = array_values(array_filter(explode("\n", $master), static fn (string $l): bool => $l !== ''));
+        $streamLines = [];
+        foreach ($lines as $i => $line) {
+            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                $streamLines[] = [$line, $lines[$i + 1] ?? ''];
+            }
+        }
+        $this->assertCount(count($variants), $streamLines);
+        foreach ($variants as $pos => $variant) {
+            [$inf, $uri] = $streamLines[$pos];
+            $this->assertStringContainsString('BANDWIDTH=' . $variant->bandwidth(), $inf);
+            $this->assertStringContainsString('RESOLUTION=' . $variant->resolution(), $inf);
+            $this->assertStringContainsString('CODECS="' . $variant->codecs . '"', $inf);
+            $this->assertSame("media_v{$variant->id}.m3u8", $uri);
+        }
+        // Highest-first: the first STREAM-INF's resolution height ≥ the last's.
+        $this->assertSame("media_v{$variants[0]->id}.m3u8", $streamLines[0][1]);
+    }
+
+    public function testMediaPlaylistTimingIdenticalAcrossVariants(): void
+    {
+        // Segment BOUNDARIES/TIMING must be identical across every variant — only the
+        // filename prefix differs. Compare each variant's playlist with the segment
+        // names normalised away.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+
+        $playlists = glob("{$dir}/media_v*.m3u8") ?: [];
+        $this->assertGreaterThanOrEqual(2, count($playlists));
+        $normalised = null;
+        foreach ($playlists as $file) {
+            $body = (string) file_get_contents($file);
+            // Strip the per-variant segment name so only the TIMELINE remains.
+            $timeline = preg_replace('/seg-v[^-]+-(\d{5})\.ts/', 'SEG-$1.ts', $body);
+            $normalised ??= $timeline;
+            $this->assertSame($normalised, $timeline, "timing differs in {$file}");
+            $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $body);
+            $this->assertStringContainsString('#EXT-X-ENDLIST', $body);
+        }
+    }
+
+    public function testEnsureSegmentResolvesRenditionVariant(): void
+    {
+        // A pinned rung (e.g. 480p) resolves to its Rendition and encodes the
+        // correctly-prefixed seg-v480p-NNNNN.ts with the transcode param contract.
+        $dir = $this->segmentDir . '/mv-rung';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertSame("{$dir}/seg-v480p-00002.ts", $path);
+        // Transcode rung contract.
+        $this->assertSame('libx264', $captParams['video_codec']);
+        $this->assertSame('aac', $captParams['audio_codec']);
+        $this->assertSame(854, $captParams['width']);
+        $this->assertSame(480, $captParams['height']);
+        $this->assertSame('yuv420p', $captParams['pix_fmt']);
+        $this->assertSame('high', $captParams['profile']);
+        $this->assertArrayHasKey('maxrate', $captParams);
+        $this->assertArrayHasKey('bufsize', $captParams);
+        $this->assertSame($captParams['maxrate'] * 2, $captParams['bufsize']);
+    }
+
+    public function testEnsureSegmentResolvesCopyOriginalVariant(): void
+    {
+        // The copy "original" (H.264 + AAC source) resolves to a genuine -c copy
+        // contract and its own seg-voriginal-NNNNN.ts.
+        $dir = $this->segmentDir . '/mv-orig';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+            'web'
+        );
+        $this->assertTrue($ladder->original->isCopy, 'H.264/AAC source → copy original');
+        $ladderJson = (string) json_encode($ladder->toArray());
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'copied');
+                return 1;
+            }
+        );
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 'original', 0);
+
+        $this->assertSame("{$dir}/seg-voriginal-00000.ts", $path);
+        $this->assertSame(['video_codec' => 'copy', 'audio_codec' => 'copy'], $captParams);
+    }
+
+    public function testEnsureSegmentReturnsNullForNonCopyOriginal(): void
+    {
+        // A NON-copy original (HEVC source → transcode) is NOT advertised in the
+        // master, so ensureSegment('original', …) must resolve to null — nothing
+        // ever requests it.
+        $dir = $this->segmentDir . '/mv-orig-noncopy';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 3840, height: 2160, videoCodec: 'hevc', videoBitrate: 20000000, audioCodec: 'ac3'),
+            'web'
+        );
+        $this->assertFalse($ladder->original->isCopy, 'HEVC/AC3 source → non-copy original');
+        $ladderJson = (string) json_encode($ladder->toArray());
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 'original', 0));
+    }
+
+    public function testEnsureSegmentReturnsNullForUnknownVariant(): void
+    {
+        $dir = $this->segmentDir . '/mv-unknown';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        // 4320p is not a rung this source produces.
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', '4320p', 0));
+        // A null variant against a multi-variant job is also unresolvable.
+        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', null, 0));
+    }
+
+    public function testSegmentParamsForRenditionContract(): void
+    {
+        $method = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
+        $method->setAccessible(true);
+
+        // Copy rendition → minimal -c copy contract (A4 skips everything else).
+        $copy = $method->invoke(null, ['is_copy' => true, 'width' => 1920, 'height' => 1080,
+            'codecs' => 'avc1.640029,mp4a.40.2', 'video_bitrate' => 6000000]);
+        $this->assertSame(['video_codec' => 'copy', 'audio_codec' => 'copy'], $copy);
+
+        // Transcode rendition → capped-CRF H.264/AAC contract with derived VBV + level.
+        $t = $method->invoke(null, ['is_copy' => false, 'width' => 1280, 'height' => 720,
+            'codecs' => 'avc1.640029,mp4a.40.2', 'video_bitrate' => 2800000]);
+        $this->assertSame('libx264', $t['video_codec']);
+        $this->assertSame('veryfast', $t['preset']);
+        $this->assertSame(23, $t['crf']);
+        $this->assertSame('yuv420p', $t['pix_fmt']);
+        $this->assertSame('high', $t['profile']);
+        $this->assertSame('4.1', $t['level']);
+        $this->assertSame(1280, $t['width']);
+        $this->assertSame(720, $t['height']);
+        $this->assertSame(2800000, $t['video_bitrate']);
+        $this->assertSame((int) round(2800000 * 1.07), $t['maxrate']);
+        $this->assertSame(((int) round(2800000 * 1.07)) * 2, $t['bufsize']);
+        $this->assertSame('aac', $t['audio_codec']);
+        $this->assertSame('128k', $t['audio_bitrate']);
+        $this->assertSame(48000, $t['audio_sample_rate']);
+    }
+
+    public function testFfmpegLevelFromCodecsCoversAllKnownStrings(): void
+    {
+        $method = new ReflectionMethod(TranscodeManager::class, 'ffmpegLevelFromCodecs');
+        $method->setAccessible(true);
+
+        $cases = [
+            'avc1.64001E,mp4a.40.2' => '3.0',
+            'avc1.64001F,mp4a.40.2' => '3.1',
+            'avc1.640020,mp4a.40.2' => '3.2',
+            'avc1.640029,mp4a.40.2' => '4.1',
+            'avc1.64002A,mp4a.40.2' => '4.2',
+            'avc1.640032,mp4a.40.2' => '5.0',
+            'avc1.640033,mp4a.40.2' => '5.1',
+        ];
+        foreach ($cases as $codecs => $expected) {
+            $this->assertSame($expected, $method->invoke(null, $codecs), "level for {$codecs}");
+        }
+        // Defensive fallback for an unparseable / unmapped codec string.
+        $this->assertSame('4.1', $method->invoke(null, 'garbage'));
+        $this->assertSame('4.1', $method->invoke(null, 'avc1.6400FF,mp4a.40.2'));
+    }
+
+    public function testEnsureSegmentLegacyPathUnprefixedNameAndParams(): void
+    {
+        // Regression: a variants=NULL job still reads segment_params and writes the
+        // legacy unprefixed seg-NNNNN.ts, ignoring any variant argument.
+        $dir = $this->segmentDir . '/legacy-seg';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        // onDemandJobRow has segment_params + NO variants key → legacy path.
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $captOut = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams, &$captOut): int {
+                $captParams = $params;
+                $captOut = $out;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        // Pass a bogus variant — it MUST be ignored on the legacy path.
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', '1080p', 3);
+
+        $this->assertSame("{$dir}/seg-00003.ts", $path);
+        $this->assertSame("{$dir}/seg-00003.ts", $captOut);
+        // Params come from the legacy segment_params column verbatim.
+        $this->assertSame('libx264', $captParams['video_codec']);
+        $this->assertSame('aac', $captParams['audio_codec']);
+    }
+
+    // --- Audit tests: the FS-glob helpers must see variant-prefixed filenames ---
+
+    public function testSegmentEncodeInFlightDedupsPerVariant(): void
+    {
+        // A seg-v720p-00002 encode is already in flight (its .part- temp exists) —
+        // ensureSegment for that exact variant/index must NOT relaunch (per-variant dedup).
+        $dir = $this->segmentDir . '/audit-dedup';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        file_put_contents("{$dir}/seg-v720p-00002.ts.part-deadbeef", 'partial');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->segManager($db, $ff)->ensureSegment('seg-job', '720p', 2));
+    }
+
+    public function testCountInFlightSegmentEncodesCountsMixedVariants(): void
+    {
+        // The global cap globs seg-*.ts.part-* — it must count variant-prefixed temps
+        // from DIFFERENT variants across DIFFERENT jobs. Two are in flight; with a
+        // ceiling of 2 a fresh (different-variant) encode fast-fails 503.
+        $dir = $this->segmentDir . '/audit-cap';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $otherA = $this->segmentDir . '/other-a';
+        $otherB = $this->segmentDir . '/other-b';
+        mkdir($otherA, 0755, true);
+        mkdir($otherB, 0755, true);
+        file_put_contents("{$otherA}/seg-v240p-00000.ts.part-aaaaaaaa", 'p');
+        file_put_contents("{$otherB}/seg-v1080p-00005.ts.part-bbbbbbbb", 'p');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+
+        $this->expectException(SegmentBusyException::class);
+        $this->segManager($db, $ff, 2)->ensureSegment('seg-job', '720p', 1);
+    }
+
+    public function testCountSegmentsIncludesAllVariantSegments(): void
+    {
+        // getJobReadiness()'s segment count globs seg-*.ts → it must total segments
+        // across every variant present in the job dir.
+        $dir = $this->segmentDir . '/audit-count';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/seg-v240p-00000.ts", 'x');
+        file_put_contents("{$dir}/seg-v240p-00001.ts", 'x');
+        file_put_contents("{$dir}/seg-v1080p-00000.ts", 'x');
+        // A half-written temp must NOT be counted.
+        file_put_contents("{$dir}/seg-v1080p-00001.ts.part-cccccccc", 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $r = $this->manager($db, $ff)->getJobReadiness('audit-count');
+
+        $this->assertSame(3, $r['segments']);
+    }
+
+    public function testSweepSegmentCacheReclaimsDirWithVariantSegments(): void
+    {
+        // The cache sweep is directory-level; it must reclaim a stale job dir whose
+        // contents are variant-prefixed segments (dirSize globs {dir}/*).
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $old = $this->segmentDir . '/audit-sweep-old';
+        mkdir($old, 0755, true);
+        file_put_contents("{$old}/seg-v240p-00000.ts", str_repeat('x', 2048));
+        file_put_contents("{$old}/seg-v1080p-00000.ts", str_repeat('y', 2048));
+        touch($old, time() - 10);
+
+        $reaped = $this->segManager($db, $ff, null, null, 1)->sweepSegmentCache();
+
+        $this->assertSame(1, $reaped);
+        $this->assertDirectoryDoesNotExist($old);
     }
 
     private function rrmdir(string $dir): void

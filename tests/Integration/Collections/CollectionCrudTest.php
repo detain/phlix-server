@@ -116,6 +116,21 @@ class CollectionCrudTest extends TestCase
             ['media-1', ['id' => 'media-1', 'name' => 'Movie 1']],
             ['media-2', ['id' => 'media-2', 'name' => 'Movie 2']],
         ]);
+        // getCollectionWithItems() now uses the batch findByIds() (single query
+        // instead of N calls to findById()) — see CollectionManager::getCollectionWithItems().
+        $mediaItemRepo->method('findByIds')->willReturnCallback(function (array $ids) {
+            $all = [
+                'media-1' => ['id' => 'media-1', 'name' => 'Movie 1'],
+                'media-2' => ['id' => 'media-2', 'name' => 'Movie 2'],
+            ];
+            $ordered = [];
+            foreach ($ids as $id) {
+                if (isset($all[$id])) {
+                    $ordered[] = $all[$id];
+                }
+            }
+            return $ordered;
+        });
 
         // Create manager
         $manager = new CollectionManager(
@@ -177,7 +192,10 @@ class CollectionCrudTest extends TestCase
         $queries = []; // Reset tracking
         $manager->bulkAddFromSearch('col-1', ['media-4', 'media-5', 'media-6']);
 
-        // Should skip media-1 and media-2 (already exist), add media-4, media-5, media-6
+        // Should skip media-1 and media-2 (already exist), add media-4, media-5, media-6.
+        // batchInsert() issues a SINGLE multi-row INSERT (one query, N value tuples)
+        // rather than one INSERT per row — count rows via the bound params, not the
+        // number of INSERT queries.
         $insertCount = 0;
         foreach ($queries as $q) {
             if (strpos($q['sql'], 'SELECT 1 FROM collection_items') !== false) {
@@ -185,7 +203,8 @@ class CollectionCrudTest extends TestCase
             } elseif (strpos($q['sql'], 'SELECT MAX(sort_order)') !== false) {
                 // getMaxSortOrder
             } elseif (strpos($q['sql'], 'INSERT INTO collection_items') !== false) {
-                $insertCount++;
+                // Each row binds 4 params: (collection_id, media_item_id, sort_order, added_at)
+                $insertCount += (int) (count($q['params']) / 4);
             }
         }
         // Should have 3 inserts (media-1 and media-2 already exist)

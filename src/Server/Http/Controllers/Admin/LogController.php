@@ -34,11 +34,21 @@ final class LogController
     /** Canonical log directory (no trailing slash), or '' if it doesn't resolve. */
     private string $logDir;
 
-    /** @var list<string>|null Cached glob results */
-    private static ?array $cachedGlobResults = null;
+    /**
+     * Cached glob results, keyed by the exact directory queried so that
+     * different LogController instances (different log dirs — e.g. distinct
+     * PHPUnit fixture directories within the same process) never collide.
+     *
+     * @var array<string, list<string>>
+     */
+    private static array $cachedGlobResults = [];
 
-    /** @var int|null Timestamp when glob cache was loaded */
-    private static ?int $globCacheTimestamp = null;
+    /**
+     * Timestamp when each keyed glob cache entry was loaded.
+     *
+     * @var array<string, int>
+     */
+    private static array $globCacheTimestamps = [];
 
     /** @var int Cache TTL in seconds (30 seconds - logs can be rotated) */
     private const GLOB_CACHE_TTL = 30;
@@ -70,20 +80,7 @@ final class LogController
             return (new Response())->json(['files' => []]);
         }
 
-        $now = time();
-
-        // Use cached glob results if still valid
-        if (
-            self::$cachedGlobResults !== null
-            && self::$globCacheTimestamp !== null
-            && ($now - self::$globCacheTimestamp) < self::GLOB_CACHE_TTL
-        ) {
-            $paths = self::$cachedGlobResults;
-        } else {
-            $paths = glob($this->logDir . '/*.log') ?: [];
-            self::$cachedGlobResults = $paths;
-            self::$globCacheTimestamp = $now;
-        }
+        $paths = $this->globLogFiles();
 
         $files = [];
         foreach ($paths as $path) {
@@ -173,18 +170,9 @@ final class LogController
             return (new Response())->json(['files' => [], 'lines' => [], 'truncated' => false]);
         }
 
-        // Use cached glob results if still valid (same cache as index method)
-        if (
-            self::$cachedGlobResults !== null
-            && self::$globCacheTimestamp !== null
-            && (time() - self::$globCacheTimestamp) < self::GLOB_CACHE_TTL
-        ) {
-            $paths = self::$cachedGlobResults;
-        } else {
-            $paths = glob($this->logDir . '/*.log') ?: [];
-            self::$cachedGlobResults = $paths;
-            self::$globCacheTimestamp = time();
-        }
+        // Use cached glob results if still valid (same cache as index method,
+        // keyed by log dir so this never collides with a different instance).
+        $paths = $this->globLogFiles();
 
         $paths = array_values(array_filter($paths, 'is_file'));
         $fileCount = count($paths);
@@ -259,6 +247,37 @@ final class LogController
             return $m[1];
         }
         return '';
+    }
+
+    /**
+     * glob() the configured log dir for `*.log` files, using a small
+     * per-directory TTL cache so a busy "view logs" admin page doesn't hit
+     * the filesystem on every request.
+     *
+     * The cache is keyed by {@see self::$logDir} (not a fixed string) so
+     * distinct {@see LogController} instances pointed at different
+     * directories — e.g. separate PHPUnit fixture dirs created within the
+     * same long-lived process — never read or clobber each other's results.
+     *
+     * @return list<string>
+     */
+    private function globLogFiles(): array
+    {
+        $key = $this->logDir;
+        $now = time();
+
+        if (
+            isset(self::$cachedGlobResults[$key], self::$globCacheTimestamps[$key])
+            && ($now - self::$globCacheTimestamps[$key]) < self::GLOB_CACHE_TTL
+        ) {
+            return self::$cachedGlobResults[$key];
+        }
+
+        $paths = glob($key . '/*.log') ?: [];
+        self::$cachedGlobResults[$key] = $paths;
+        self::$globCacheTimestamps[$key] = $now;
+
+        return $paths;
     }
 
     /**

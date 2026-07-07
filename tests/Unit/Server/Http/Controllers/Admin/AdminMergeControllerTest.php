@@ -450,6 +450,19 @@ final class AdminMergeControllerTest extends TestCase
                 return $out;
             }
 
+            /**
+             * @param array<int, string> $parentIds
+             * @return array<string, array<int, array<string, mixed>>>
+             */
+            public function findByParents(array $parentIds): array
+            {
+                $out = [];
+                foreach ($parentIds as $parentId) {
+                    $out[$parentId] = $this->findByParent($parentId);
+                }
+                return $out;
+            }
+
             public function update(string $id, array $data): void
             {
                 if (!isset($this->store[$id])) {

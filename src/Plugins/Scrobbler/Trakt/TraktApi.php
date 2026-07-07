@@ -197,7 +197,26 @@ class TraktApi
             throw new TraktApiException('Could not open refresh lock file');
         }
 
-        if (!flock($fp, LOCK_EX)) {
+        // Acquire the lock with a NON-BLOCKING flock (LOCK_NB) in a polling retry
+        // loop, yielding to the event loop between attempts via the same \Co\sleep
+        // (with usleep fallback) idiom as Phase 1 above. A bare blocking
+        // flock($fp, LOCK_EX) would stall the entire Workerman/Swoole worker event
+        // loop while contended, freezing every other concurrent connection on that
+        // worker — defeating the point of the async refactor.
+        $maxWaitAttempts = 400; // ~2s ceiling at 5ms per attempt
+        $attempts = 0;
+        $acquired = flock($fp, LOCK_EX | LOCK_NB);
+        while (!$acquired && $attempts < $maxWaitAttempts) {
+            if (function_exists('\Co\sleep')) {
+                \Co\sleep(0.005); // 5ms - yields to event loop in async context
+            } else {
+                usleep(5000); // Fallback for non-Swoole (unit tests)
+            }
+            ++$attempts;
+            $acquired = flock($fp, LOCK_EX | LOCK_NB);
+        }
+
+        if (!$acquired) {
             fclose($fp);
             unset($inFlightRefresh[$tokenKey]);
             throw new TraktApiException('Could not acquire refresh lock');

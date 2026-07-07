@@ -30,17 +30,30 @@ class UserRepository
     /** @var Connection Database connection for MySQL queries */
     private Connection $db;
 
+    // NOTE: These caches were previously `private static`, which made them
+    // process-wide (shared across every UserRepository instance in the same
+    // Workerman worker / PHPUnit process). Under PHPUnit's default
+    // single-process execution this meant one test's cached row (keyed on a
+    // generic id/username like "user-1" or "alice") could leak into an
+    // unrelated, later-running test that happened to reuse the same key with
+    // a different mock DB — producing order-dependent failures (see
+    // UserRepositoryStatusTest::test_get_status_returns_disabled_for_disabled_user
+    // and ProviderManagerTest::test_fallback_to_password_auth). Each
+    // UserRepository is already constructed per-request (bound to a single
+    // `$db` connection), so scoping the cache to the instance gives the same
+    // within-request caching behaviour without the cross-instance leak.
+
     /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by id */
-    private static array $cacheById = [];
+    private array $cacheById = [];
 
     /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by username */
-    private static array $cacheByUsername = [];
+    private array $cacheByUsername = [];
 
     /** @var array<string, array{user: array<string, mixed>, expires_at: int}> User cache keyed by email */
-    private static array $cacheByEmail = [];
+    private array $cacheByEmail = [];
 
     /** @var array<string, array{status: string|null, expires_at: int}> Status cache keyed by user id */
-    private static array $statusCacheById = [];
+    private array $statusCacheById = [];
 
     /** @var int Cache TTL in seconds (60 seconds) */
     private const CACHE_TTL = 60;
@@ -78,19 +91,19 @@ class UserRepository
         $now = time();
 
         // Check cache first
-        if (isset(self::$cacheById[$id])) {
-            $entry = self::$cacheById[$id];
+        if (isset($this->cacheById[$id])) {
+            $entry = $this->cacheById[$id];
             if ($entry['expires_at'] > $now) {
                 return $entry['user'];
             }
-            unset(self::$cacheById[$id]);
+            unset($this->cacheById[$id]);
         }
 
         $result = $this->db->query("SELECT * FROM users WHERE id = ?", [$id]);
         $user = UserRow::firstFromMixed($result);
 
         if ($user !== null) {
-            self::$cacheById[$id] = [
+            $this->cacheById[$id] = [
                 'user' => $user,
                 'expires_at' => $now + self::CACHE_TTL,
             ];
@@ -116,12 +129,12 @@ class UserRepository
         $now = time();
 
         // Check cache first
-        if (isset(self::$cacheByUsername[$username])) {
-            $entry = self::$cacheByUsername[$username];
+        if (isset($this->cacheByUsername[$username])) {
+            $entry = $this->cacheByUsername[$username];
             if ($entry['expires_at'] > $now) {
                 return $entry['user'];
             }
-            unset(self::$cacheByUsername[$username]);
+            unset($this->cacheByUsername[$username]);
         }
 
         $result = $this->db->query(
@@ -131,7 +144,7 @@ class UserRepository
         $user = UserRow::firstFromMixed($result);
 
         if ($user !== null) {
-            self::$cacheByUsername[$username] = [
+            $this->cacheByUsername[$username] = [
                 'user' => $user,
                 'expires_at' => $now + self::CACHE_TTL,
             ];
@@ -197,12 +210,12 @@ class UserRepository
         $now = time();
 
         // Check cache first
-        if (isset(self::$statusCacheById[$id])) {
-            $entry = self::$statusCacheById[$id];
+        if (isset($this->statusCacheById[$id])) {
+            $entry = $this->statusCacheById[$id];
             if ($entry['expires_at'] > $now) {
                 return $entry['status'];
             }
-            unset(self::$statusCacheById[$id]);
+            unset($this->statusCacheById[$id]);
         }
 
         $result = $this->db->query(
@@ -211,7 +224,7 @@ class UserRepository
         );
         $status = UserRow::string(UserRow::firstFromMixed($result), 'status');
 
-        self::$statusCacheById[$id] = [
+        $this->statusCacheById[$id] = [
             'status' => $status,
             'expires_at' => $now + self::CACHE_TTL,
         ];
@@ -274,8 +287,8 @@ class UserRepository
         $this->db->query('DELETE FROM users WHERE id = ?', [$id]);
 
         // Invalidate caches for this user
-        unset(self::$cacheById[$id]);
-        unset(self::$statusCacheById[$id]);
+        unset($this->cacheById[$id]);
+        unset($this->statusCacheById[$id]);
     }
 
     /**
@@ -294,7 +307,7 @@ class UserRepository
         );
 
         // Invalidate caches for this user - admin status affects auth decisions
-        unset(self::$cacheById[$id]);
+        unset($this->cacheById[$id]);
     }
 
     /**
@@ -324,8 +337,8 @@ class UserRepository
         );
 
         // Invalidate caches for this user - status affects session validity
-        unset(self::$cacheById[$id]);
-        unset(self::$statusCacheById[$id]);
+        unset($this->cacheById[$id]);
+        unset($this->statusCacheById[$id]);
     }
 
     /**
@@ -371,12 +384,12 @@ class UserRepository
         $now = time();
 
         // Check cache first
-        if (isset(self::$cacheByEmail[$email])) {
-            $entry = self::$cacheByEmail[$email];
+        if (isset($this->cacheByEmail[$email])) {
+            $entry = $this->cacheByEmail[$email];
             if ($entry['expires_at'] > $now) {
                 return $entry['user'];
             }
-            unset(self::$cacheByEmail[$email]);
+            unset($this->cacheByEmail[$email]);
         }
 
         $result = $this->db->query(
@@ -386,7 +399,7 @@ class UserRepository
         $user = UserRow::firstFromMixed($result);
 
         if ($user !== null) {
-            self::$cacheByEmail[$email] = [
+            $this->cacheByEmail[$email] = [
                 'user' => $user,
                 'expires_at' => $now + self::CACHE_TTL,
             ];
@@ -521,7 +534,7 @@ class UserRepository
         );
 
         // Invalidate caches for this user
-        unset(self::$cacheById[$id]);
+        unset($this->cacheById[$id]);
     }
 
     /**
@@ -702,7 +715,7 @@ class UserRepository
         );
 
         // Invalidate cache for this user
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
@@ -749,7 +762,7 @@ class UserRepository
         );
 
         // Invalidate cache for this user
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
@@ -974,7 +987,7 @@ class UserRepository
         );
 
         // Invalidate cache for this user
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
@@ -998,7 +1011,7 @@ class UserRepository
         );
 
         // Invalidate cache for this user - must_change_password affects auth
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
@@ -1045,7 +1058,7 @@ class UserRepository
         );
 
         // Invalidate cache for this user
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
@@ -1094,25 +1107,29 @@ class UserRepository
         );
 
         // Invalidate cache for this user
-        unset(self::$cacheById[$userId]);
+        unset($this->cacheById[$userId]);
     }
 
     /**
-     * Clear all in-memory caches.
+     * Clear all in-memory caches on this repository instance.
      *
      * This is primarily useful for unit testing to ensure a clean cache state
      * between tests. In production, caches naturally expire based on TTL.
+     *
+     * Instance-scoped (not static): each UserRepository already owns its own
+     * cache (see the class-level NOTE above the cache properties), so there
+     * is no process-wide state left to clear from outside an instance.
      *
      * @return void
      *
      * @since 0.32.0
      */
-    public static function clearCache(): void
+    public function clearCache(): void
     {
-        self::$cacheById = [];
-        self::$cacheByUsername = [];
-        self::$cacheByEmail = [];
-        self::$statusCacheById = [];
+        $this->cacheById = [];
+        $this->cacheByUsername = [];
+        $this->cacheByEmail = [];
+        $this->statusCacheById = [];
     }
 
     /**

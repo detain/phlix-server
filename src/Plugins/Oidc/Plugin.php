@@ -34,6 +34,15 @@ final class Plugin implements LifecycleInterface
     public static function setPluginDirectory(string $directory): void
     {
         self::$pluginDirectory = $directory;
+
+        // The cached settings were loaded from whatever directory was active
+        // at the time; if the directory changes (e.g. tests pointing the
+        // plugin at a fresh temp dir per case, or an operator relocating the
+        // plugin's data dir at runtime) the old cache would otherwise leak
+        // into the new directory's context. Invalidate eagerly so the next
+        // loadSettings() call re-reads from the new location.
+        self::$cachedSettings = null;
+        self::$cacheTimestamp = null;
     }
 
     public static function getPluginDirectory(): string

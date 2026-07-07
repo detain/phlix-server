@@ -7,6 +7,7 @@ namespace Phlix\Server\Http\Controllers;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Streaming\HlsStreamer;
+use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
 
 /**
@@ -78,7 +79,17 @@ class HlsController
         // On-demand MPEG-TS segment: produce (or serve cached) this segment before
         // handing it to the static file server.
         if (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
-            $ready = $this->transcodeManager?->ensureSegment($jobId, (int) $m[1]);
+            try {
+                $ready = $this->transcodeManager?->ensureSegment($jobId, (int) $m[1]);
+            } catch (SegmentBusyException $e) {
+                // Transient overload — tell the player to retry shortly rather than
+                // blocking a worker or timing out. hls.js treats 503 as a retryable
+                // load error and backs off, so the in-flight encodes finish first.
+                return (new Response())
+                    ->status(503)
+                    ->header('Retry-After', '1')
+                    ->json(['error' => 'segment busy']);
+            }
             if ($ready === null) {
                 return (new Response())->status(404)->json(['error' => 'segment unavailable']);
             }

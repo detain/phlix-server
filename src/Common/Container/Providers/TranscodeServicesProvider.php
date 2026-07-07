@@ -64,6 +64,15 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
         $segmentSeconds = is_int($hlsConfig['segment_seconds'] ?? null)
             ? $hlsConfig['segment_seconds'] : 6;
 
+        // On-demand segment concurrency ceiling + cache budget. Null lets the
+        // TranscodeManager apply its own safe defaults.
+        $maxConcurrentSegments = is_int($hlsConfig['max_concurrent_segments'] ?? null)
+            ? $hlsConfig['max_concurrent_segments'] : null;
+        $cacheMaxBytes = is_int($hlsConfig['cache_max_bytes'] ?? null)
+            ? $hlsConfig['cache_max_bytes'] : null;
+        $cacheMaxAge = is_int($hlsConfig['cache_max_age'] ?? null)
+            ? $hlsConfig['cache_max_age'] : null;
+
         $builder->addDefinitions([
             FfmpegRunner::class => factory(
                 static function (ContainerInterface $c) use ($ffmpegPath, $ffprobePath, $transcodeDir): FfmpegRunner {
@@ -81,7 +90,10 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 ) use (
                     $transcodeDir,
                     $segmentDir,
-                    $segmentSeconds
+                    $segmentSeconds,
+                    $maxConcurrentSegments,
+                    $cacheMaxBytes,
+                    $cacheMaxAge
                 ): TranscodeManager {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
@@ -98,7 +110,13 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         $transcodeDir,
                         $segmentDir,
                         $logger,
-                        $segmentSeconds
+                        $segmentSeconds,
+                        null,
+                        null,
+                        null,
+                        $maxConcurrentSegments,
+                        $cacheMaxBytes,
+                        $cacheMaxAge
                     );
                 }
             ),

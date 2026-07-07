@@ -744,6 +744,22 @@ class ItemRepository
     }
 
     /**
+     * Deletes every media_streams row belonging to a media item.
+     *
+     * Lets the scanner make stream persistence idempotent: on rescan the item's
+     * existing stream rows are cleared and re-inserted from a fresh probe rather
+     * than duplicated (the table has no unique key on media_item_id +
+     * stream_index). No-op when the item has no streams.
+     *
+     * @param string $itemId The media item's unique identifier
+     * @return void
+     */
+    public function deleteStreamsByItem(string $itemId): void
+    {
+        $this->db->query("DELETE FROM media_streams WHERE media_item_id = ?", [$itemId]);
+    }
+
+    /**
      * Gets the intro marker columns for a media item.
      *
      * @param string $itemId The media item's unique identifier

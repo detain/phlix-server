@@ -13,9 +13,12 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Media\Markers\OutroMarker;
 use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\MediaItemController;
+use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
 /**
@@ -462,5 +465,194 @@ class MediaItemControllerTest extends TestCase
         $this->assertNull($skipSpec->skip_intro_end);
         $this->assertNull($skipSpec->skip_outro_start);
         $this->assertNull($skipSpec->skip_outro_end);
+    }
+
+    /**
+     * A media item with A1-persisted source metadata gets a pre-flight
+     * `quality_ladder` — the flat Rendition-shape ladder with every `url` null
+     * (advertisement only, no job created).
+     */
+    public function testGetPlaybackInfoIncludesQualityLadderFromSourceMetadata(): void
+    {
+        $controller = $this->controllerForItem($this->itemRowWithSource([
+            'width' => 1920, 'height' => 1080, 'video_codec' => 'h264',
+            'video_bitrate' => 6000000, 'audio_codec' => 'aac', 'audio_bitrate' => 128000,
+            'pix_fmt' => 'yuv420p',
+        ]));
+
+        // No profile / header → defaults to `web` (1080p cap).
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+
+        $this->assertArrayHasKey('quality_ladder', $body);
+        $this->assertIsArray($body['quality_ladder']);
+        $this->assertNotEmpty($body['quality_ladder']);
+
+        $ids = array_map(static fn (array $v): string => (string) $v['id'], $body['quality_ladder']);
+        $this->assertContains('1080p', $ids);
+        // Preview only: nothing is playable yet, so every url must be null.
+        foreach ($body['quality_ladder'] as $entry) {
+            $this->assertNull($entry['url'], 'pre-flight ladder entries carry no playable url');
+            $this->assertArrayHasKey('label', $entry);
+            $this->assertArrayHasKey('height', $entry);
+            $this->assertArrayHasKey('bitrate', $entry);
+            $this->assertArrayHasKey('codecs', $entry);
+        }
+    }
+
+    /**
+     * An explicit `?profile=` narrows the previewed ladder (mobile-low caps at
+     * 480p), proving the profile selection is honored.
+     */
+    public function testGetPlaybackInfoQualityLadderHonorsProfileQueryParam(): void
+    {
+        $controller = $this->controllerForItem($this->itemRowWithSource([
+            'width' => 1920, 'height' => 1080, 'video_codec' => 'h264',
+            'video_bitrate' => 6000000, 'audio_codec' => 'aac',
+        ]));
+
+        $request = new Request();
+        $request->query = ['profile' => 'mobile-low'];
+        $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
+        $body = json_decode($response->body, true);
+
+        $ids = array_map(static fn (array $v): string => (string) $v['id'], $body['quality_ladder']);
+        $this->assertContains('480p', $ids);
+        $this->assertNotContains('1080p', $ids, 'mobile-low profile caps the preview at 480p');
+        foreach ($body['quality_ladder'] as $entry) {
+            $this->assertLessThanOrEqual(480, $entry['height']);
+        }
+    }
+
+    /**
+     * With no `?profile=`, the `X-Phlix-Device-Type` header drives the profile
+     * (mirrors TranscodeController::start()); a TV header lets the ladder reach
+     * beyond the web cap.
+     */
+    public function testGetPlaybackInfoQualityLadderHonorsDeviceTypeHeader(): void
+    {
+        $controller = $this->controllerForItem($this->itemRowWithSource([
+            'width' => 3840, 'height' => 2160, 'video_codec' => 'hevc',
+            'video_bitrate' => 20000000, 'audio_codec' => 'ac3',
+        ]));
+
+        $request = new Request();
+        $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen']; // → tv-4k
+        $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
+        $body = json_decode($response->body, true);
+
+        $ids = array_map(static fn (array $v): string => (string) $v['id'], $body['quality_ladder']);
+        // tv-4k (3840x2160) admits the 2160p rung a web cap would drop.
+        $this->assertContains('2160p', $ids);
+    }
+
+    /**
+     * An item without persisted source metadata degrades gracefully to
+     * `quality_ladder: null` (no error).
+     */
+    public function testGetPlaybackInfoQualityLadderNullWhenSourceAbsent(): void
+    {
+        $controller = $this->controllerForItem($this->baseItemRow(json_encode([])));
+
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('quality_ladder', $body);
+        $this->assertNull($body['quality_ladder']);
+    }
+
+    /**
+     * Source metadata missing width or height → `quality_ladder: null` (incomplete
+     * blob is not enough to build a ladder).
+     */
+    public function testGetPlaybackInfoQualityLadderNullWhenSourceIncomplete(): void
+    {
+        // width present but height absent.
+        $controller = $this->controllerForItem($this->itemRowWithSource([
+            'width' => 1920, 'video_codec' => 'h264', 'audio_codec' => 'aac',
+        ]));
+
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        $body = json_decode($response->body, true);
+        $this->assertNull($body['quality_ladder']);
+    }
+
+    /**
+     * The device-type → profile mapping table in MediaItemController MUST be
+     * byte-identical to TranscodeController's, so the pre-flight preview and the
+     * real transcode job agree on the device profile.
+     */
+    public function testDeviceTypeMappingIsIdenticalToTranscodeController(): void
+    {
+        $mediaController = $this->controllerForItem($this->baseItemRow(json_encode([])));
+        $transcodeController = new TranscodeController($this->createMock(TranscodeManager::class));
+
+        $mediaMap = new ReflectionMethod($mediaController, 'mapDeviceTypeToProfile');
+        $transcodeMap = new ReflectionMethod($transcodeController, 'mapDeviceTypeToProfile');
+
+        $inputs = [
+            'samsung-tizen', 'tizen', 'roku', 'android', 'ios', 'windows',
+            '', 'unknown-device', 'SAMSUNG-TIZEN', 'Android', 'Roku', 'iOS',
+            '  roku  ', 'macos', 'web',
+        ];
+        foreach ($inputs as $input) {
+            $this->assertSame(
+                $transcodeMap->invoke($transcodeController, $input),
+                $mediaMap->invoke($mediaController, $input),
+                "mapping for '{$input}' must match TranscodeController",
+            );
+        }
+    }
+
+    /**
+     * Builds a MediaItemController whose repository returns exactly $itemRow.
+     *
+     * @param array<string, mixed> $itemRow
+     */
+    private function controllerForItem(array $itemRow): MediaItemController
+    {
+        $db = $this->createMockConnection();
+        $db->method('query')->willReturn([$itemRow]);
+        $itemRepo = new ItemRepository($db);
+        $candidateRepo = new MarkerCandidateRepository($itemRepo);
+        $markerService = new MarkerService($itemRepo, $candidateRepo);
+
+        return new MediaItemController($itemRepo, $markerService);
+    }
+
+    /**
+     * A minimal episode row with the given raw metadata_json string.
+     *
+     * @return array<string, mixed>
+     */
+    private function baseItemRow(string $metadataJson): array
+    {
+        return [
+            'id' => 'ep-1',
+            'name' => 'Episode 1',
+            'type' => 'episode',
+            'library_id' => 'lib-1',
+            'parent_id' => 'show-1',
+            'path' => '/test/ep.mkv',
+            'metadata_json' => $metadataJson,
+            'intro_start_seconds' => null,
+            'intro_end_seconds' => null,
+            'outro_start_seconds' => null,
+            'outro_end_seconds' => null,
+            'chapters_json' => null,
+        ];
+    }
+
+    /**
+     * A base episode row carrying an A1-style `metadata_json['source']` blob.
+     *
+     * @param array<string, mixed> $source
+     *
+     * @return array<string, mixed>
+     */
+    private function itemRowWithSource(array $source): array
+    {
+        return $this->baseItemRow((string) json_encode(['source' => $source]));
     }
 }

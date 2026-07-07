@@ -1,0 +1,38 @@
+-- Migration: 049_transcode_jobs_variants.sql
+-- Description: Multi-variant ABR ladder column for transcode_jobs.
+--
+-- The on-demand HLS pipeline (src/Media/Transcoding/TranscodeManager) is being
+-- extended from a single-variant master playlist to a true multi-variant ABR
+-- ladder (src/Media/Streaming/AbrLadder.php, see A2). A job now needs to persist
+-- the resolved ladder alongside the existing single-variant bookkeeping columns
+-- added in 047 (duration_seconds/segment_seconds/segment_params), so that:
+--   * the master playlist can be rebuilt (or served) without recomputing the
+--     ladder from a live ffprobe on every request;
+--   * each rung's per-variant segment_params can be derived consistently across
+--     playlist writes and on-demand segment encodes;
+--   * older jobs (pre-ladder) keep working unmodified via the existing
+--     single-variant columns as a fallback.
+--
+--   * variants  -- JSON-shaped TEXT (matches segment_params' TEXT convention;
+--                  the workerman/mysql driver handles it as a plain string, not
+--                  native JSON) holding LadderResult::toArray():
+--                    { "renditions": [<Rendition::toArray()>, ...highest-first],
+--                      "original": <Rendition::toArray()> }
+--                  Each Rendition::toArray() is flat:
+--                    { id, label, width, height,
+--                      bitrate,        -- peak BANDWIDTH bps (advertised in master)
+--                      codecs,         -- per-rung MB-derived H.264 level string
+--                      url,           -- null until A5/A7 wire real playlist URLs
+--                      is_original, is_copy,
+--                      video_bitrate  -- target -b:v bps (maxrate/bufsize are
+--                                        derived from this at encode time, not
+--                                        stored) }
+--
+-- Only ADDs a nullable column; no existing column/constraint is altered.
+-- Old single-variant columns (profile, segment_params, ...) are retained for
+-- backward compatibility — older rows leave variants NULL and the pipeline
+-- falls back to the pre-ladder single-variant path. Idempotent: re-running an
+-- ADD COLUMN that already exists raises a duplicate-column error which the
+-- migration runner downgrades to a note (see src/Common/Database/MigrationRunner.php).
+
+ALTER TABLE transcode_jobs ADD COLUMN variants TEXT NULL AFTER segment_params;

@@ -150,10 +150,12 @@ class PhotoLibraryManagerTest extends TestCase
 
     public function testGetPhotosGroupedByDate(): void
     {
-        // Mock database to return photo items via getByLibrary
-        // The SQL pattern that getByLibrary uses (its ORDER BY now ignores a
-        // leading article, so match up to the ORDER BY rather than "name LIMIT").
-        $sqlPattern = "SELECT * FROM media_items WHERE library_id = ? ORDER BY";
+        // Mock database to return photo items via getByType (PhotoLibraryManager
+        // now pushes the type filter into SQL instead of loading all library
+        // items and filtering in PHP — see Phase 4 N+1 fix). The SQL pattern
+        // that getByType uses (its ORDER BY now ignores a leading article, so
+        // match up to the ORDER BY rather than "name LIMIT").
+        $sqlPattern = "SELECT * FROM media_items WHERE library_id = ? AND type = ? ORDER BY";
 
         // January 15, 2024 12:00:00 UTC = 1705320000
         $jan15_2024 = 1705320000;

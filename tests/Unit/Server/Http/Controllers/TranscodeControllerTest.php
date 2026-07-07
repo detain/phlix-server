@@ -181,6 +181,130 @@ class TranscodeControllerTest extends TestCase
         ];
     }
 
+    /**
+     * A multi-variant job → `start()` includes a `variants[]` array with each
+     * variant's own media-playlist url signed exactly like master_url.
+     */
+    public function testStartIncludesSignedVariantsForMultiVariantJob(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn($this->jobFixture());
+        $manager->expects($this->once())
+            ->method('getJobVariants')
+            ->with('job-7')
+            ->willReturn($this->variantsFixture());
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->start(new Request(), ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+
+        $this->assertIsArray($body['variants']);
+        $this->assertCount(2, $body['variants']);
+        // Each variant url is signed against its OWN relative media-playlist path.
+        $this->assertSignedUrlFor('/hls/job-7/media_v1080p.m3u8', $body['variants'][0]['url']);
+        $this->assertSignedUrlFor('/hls/job-7/media_v720p.m3u8', $body['variants'][1]['url']);
+        // Flat Rendition shape preserved untouched.
+        $this->assertSame('1080p', $body['variants'][0]['id']);
+        $this->assertSame(1080, $body['variants'][0]['height']);
+        $this->assertSame('1080p', $body['variants'][0]['label']);
+    }
+
+    /**
+     * A legacy job (`variants IS NULL`) → `start()` includes an explicit
+     * `variants: null` (backward-compatible; clients check `!= null`).
+     */
+    public function testStartIncludesNullVariantsForLegacyJob(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('ensureHlsJob')->willReturn($this->jobFixture());
+        $manager->expects($this->once())
+            ->method('getJobVariants')
+            ->with('job-7')
+            ->willReturn(null);
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->start(new Request(), ['id' => 'media-1']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('variants', $body);
+        $this->assertNull($body['variants']);
+        // Every pre-existing key is intact (backward compatibility).
+        foreach (['job_id', 'master_url', 'hls_url', 'dash_url', 'status', 'reused', 'subtitles'] as $key) {
+            $this->assertArrayHasKey($key, $body);
+        }
+    }
+
+    public function testStatusIncludesSignedVariantsForMultiVariantJob(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('getJobReadiness')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'completed',
+            'segments' => 0,
+            'playlist_ready' => true,
+            'progress' => 100.0,
+            'subtitles' => [],
+        ]);
+        $manager->expects($this->once())
+            ->method('getJobVariants')
+            ->with('job-7')
+            ->willReturn($this->variantsFixture());
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->status(new Request(), ['jobId' => 'job-7']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertCount(2, $body['variants']);
+        $this->assertSignedUrlFor('/hls/job-7/media_v1080p.m3u8', $body['variants'][0]['url']);
+        $this->assertSignedUrlFor('/hls/job-7/media_v720p.m3u8', $body['variants'][1]['url']);
+    }
+
+    public function testStatusIncludesNullVariantsForLegacyJob(): void
+    {
+        $manager = $this->createMock(TranscodeManager::class);
+        $manager->method('getJobReadiness')->willReturn([
+            'job_id' => 'job-7',
+            'status' => 'completed',
+            'segments' => 0,
+            'playlist_ready' => true,
+            'progress' => 100.0,
+            'subtitles' => [],
+        ]);
+        $manager->method('getJobVariants')->with('job-7')->willReturn(null);
+        $controller = new TranscodeController($manager);
+
+        $response = $controller->status(new Request(), ['jobId' => 'job-7']);
+        $this->assertSame(200, $response->statusCode);
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('variants', $body);
+        $this->assertNull($body['variants']);
+    }
+
+    /**
+     * A getJobVariants() list as TranscodeManager would return it — flat
+     * Rendition shapes with RELATIVE, UNSIGNED urls (the controller signs them).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function variantsFixture(): array
+    {
+        return [
+            [
+                'id' => '1080p', 'label' => '1080p', 'width' => 1920, 'height' => 1080,
+                'bitrate' => 5480000, 'codecs' => 'avc1.640029,mp4a.40.2',
+                'url' => '/hls/job-7/media_v1080p.m3u8',
+                'is_original' => false, 'is_copy' => false, 'video_bitrate' => 5000000,
+            ],
+            [
+                'id' => '720p', 'label' => '720p', 'width' => 1280, 'height' => 720,
+                'bitrate' => 3124000, 'codecs' => 'avc1.640029,mp4a.40.2',
+                'url' => '/hls/job-7/media_v720p.m3u8',
+                'is_original' => false, 'is_copy' => false, 'video_bitrate' => 2800000,
+            ],
+        ];
+    }
+
     public function testStartReturns400WhenMediaIdEmpty(): void
     {
         $manager = $this->createMock(TranscodeManager::class);

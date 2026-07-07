@@ -10,6 +10,9 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Media\Streaming\AbrLadder;
+use Phlix\Media\Streaming\Rendition;
+use Phlix\Media\Streaming\SourceProfile;
 
 class MediaItemController
 {
@@ -167,6 +170,101 @@ class MediaItemController
             'outro_marker' => $outroMarker,
             'chapters' => $chapters,
             'skip_button_spec' => $skipSpec->toArray(),
+            'quality_ladder' => $this->buildQualityLadder($item, $request),
         ]);
+    }
+
+    /**
+     * Builds the pre-flight ABR ladder PREVIEW for a media item (D6).
+     *
+     * Advertisement-only: NO transcode job is created and the source is NOT
+     * probed — this is purely the ladder a play would produce, so a pre-flight UI
+     * can show "here's the quality you'll get" before the user presses play. It is
+     * a DIFFERENT key from a real job's `variants[]` (per-item, not per-job, and
+     * nothing is playable yet), so every entry's `url` is `null`.
+     *
+     * The ladder is built from A1's persisted `metadata_json['source']` blob
+     * (already-decoded by {@see ItemRepository::hydrateItem()} — NOT re-decoded
+     * here). When that blob is absent or is missing width/height (an item not yet
+     * scanned with A1's source-metadata capture, or pre-A1), this returns `null`
+     * — graceful degradation, no error. The device profile is resolved exactly as
+     * {@see \Phlix\Server\Http\Controllers\TranscodeController::start()} does: an
+     * explicit `?profile=` wins, else it is derived from the `X-Phlix-Device-Type`
+     * header ({@see self::mapDeviceTypeToProfile()}, a byte-identical mapping to
+     * TranscodeController's).
+     *
+     * @param array<string, mixed> $item    The hydrated media item (with decoded `metadata`).
+     * @param Request              $request The current request (for `?profile=` / device header).
+     *
+     * @return list<array<string, mixed>>|null The flat Rendition-shape ladder
+     *                                          (each `url` null), or null when the
+     *                                          item has no usable source metadata.
+     */
+    private function buildQualityLadder(array $item, Request $request): ?array
+    {
+        $metadata = $item['metadata'] ?? null;
+        $source = is_array($metadata) ? ($metadata['source'] ?? null) : null;
+        if (!is_array($source)) {
+            return null; // pre-A1 / unscanned item — no source metadata to build from
+        }
+
+        /** @var array<string, mixed> $source */
+        $sourceProfile = SourceProfile::fromSourceMetadata($source);
+        // Incomplete source (missing width or height) → graceful null, not an error.
+        if ($sourceProfile->width === null || $sourceProfile->height === null) {
+            return null;
+        }
+
+        $explicit = $request->queryString('profile');
+        if (is_string($explicit) && $explicit !== '') {
+            $profileName = $explicit;
+        } else {
+            $profileName = $this->mapDeviceTypeToProfile($request->getHeader('X-Phlix-Device-Type') ?? '');
+        }
+
+        $ladder = (new AbrLadder())->build($sourceProfile, $profileName);
+
+        // Preview only: no job exists, so nothing is playable — every url stays null
+        // (Rendition::toArray() already yields url => null).
+        return array_map(
+            static fn (Rendition $rendition): array => $rendition->toArray(),
+            $ladder->streamVariants(),
+        );
+    }
+
+    /**
+     * Maps an `X-Phlix-Device-Type` header value to a transcode quality profile.
+     *
+     * Thin `@phlix/ui` clients advertise their platform via the header but don't
+     * pass an explicit `?profile=`; this picks a sensible default profile per
+     * platform. The lookup is case-insensitive. Anything unknown or empty falls
+     * back to `web` (the historical default). Every arm resolves to a profile
+     * defined by {@see \Phlix\Media\Streaming\QualitySelector} (generic,
+     * mobile-low, mobile-high, web, tv-4k); any arm added later must keep that
+     * invariant — the controller test asserts each mapped profile is known.
+     *
+     * IMPORTANT: this mapping table MUST stay byte-identical to
+     * {@see \Phlix\Server\Http\Controllers\TranscodeController::mapDeviceTypeToProfile()}
+     * so the pre-flight `quality_ladder` preview and the real transcode job agree
+     * on the device profile. A controller test asserts the two tables are identical.
+     *
+     * Mapping:
+     *   samsung-tizen, tizen, roku → tv-4k
+     *   android, ios               → mobile-high
+     *   windows                    → generic
+     *   (anything else / missing)  → web
+     *
+     * @param string $deviceType The raw header value (may be empty).
+     *
+     * @return string A profile name QualitySelector understands.
+     */
+    private function mapDeviceTypeToProfile(string $deviceType): string
+    {
+        return match (strtolower(trim($deviceType))) {
+            'samsung-tizen', 'tizen', 'roku' => 'tv-4k',
+            'android', 'ios' => 'mobile-high',
+            'windows' => 'generic',
+            default => 'web',
+        };
     }
 }

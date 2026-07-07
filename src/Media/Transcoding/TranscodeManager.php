@@ -1377,6 +1377,87 @@ class TranscodeManager
     }
 
     /**
+     * Returns the PLAYABLE variant list for a job, or null for a legacy
+     * (`variants IS NULL`) job.
+     *
+     * The single source of truth clients read to build a quality picker. It
+     * mirrors {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}'s dedup
+     * rule exactly: a non-copy "original" merely duplicates the top transcode rung
+     * and is NOT listed separately (nothing can request it — see A5/A6's
+     * {@see findRenditionArray()}); a genuine stream-copy "original" is a real
+     * additional highest variant and is prepended. Each entry is a flat
+     * {@see \Phlix\Media\Streaming\Rendition::toArray()} shape with `url` filled to
+     * that variant's own media-playlist path (relative + UNSIGNED — the caller,
+     * {@see \Phlix\Server\Http\Controllers\TranscodeController}, signs it, the same
+     * as `master_url`/`hls_url`).
+     *
+     * Reads the persisted `variants` column (A5 writes exactly
+     * {@see \Phlix\Media\Streaming\LadderResult::toArray()}:
+     * `{renditions: [...highest-first], original: {...}}`). Defensive against a
+     * missing/empty/corrupt column: any of those yields `null` rather than an
+     * exception, so a malformed DB row can never blow up the request.
+     *
+     * @param string $jobId Transcode job id.
+     *
+     * @return list<array<string, mixed>>|null The playable variants (each with a
+     *                                          relative unsigned `url`), or null
+     *                                          for a legacy/malformed job.
+     */
+    public function getJobVariants(string $jobId): ?array
+    {
+        $row = $this->getJobRow($jobId);
+        if ($row === null) {
+            return null;
+        }
+
+        $variantsRaw = $row['variants'] ?? null;
+        if (!is_string($variantsRaw) || $variantsRaw === '') {
+            return null; // legacy single-variant job (variants IS NULL / empty)
+        }
+
+        $decoded = json_decode($variantsRaw, true);
+        if (!is_array($decoded)) {
+            return null; // corrupt/malformed JSON — never crash the request
+        }
+
+        // Collect the clamped rungs (highest-first, exactly as persisted).
+        $playable = [];
+        $rungs = $decoded['renditions'] ?? null;
+        if (is_array($rungs)) {
+            foreach ($rungs as $rung) {
+                if (is_array($rung)) {
+                    $playable[] = $rung;
+                }
+            }
+        }
+
+        // Mirror LadderResult::streamVariants(): a copy original is a genuine extra
+        // (highest) variant → prepend; a non-copy original just mirrors the top rung
+        // and is NOT separately playable → drop it.
+        $original = $decoded['original'] ?? null;
+        if (is_array($original) && ($original['is_copy'] ?? false) === true) {
+            array_unshift($playable, $original);
+        }
+
+        // Fill each entry's own media-playlist url (relative, unsigned).
+        $out = [];
+        foreach ($playable as $entry) {
+            $variantId = $entry['id'] ?? null;
+            $variantId = is_string($variantId) ? $variantId : (is_scalar($variantId) ? (string) $variantId : '');
+            // Normalise to string keys (JSON objects always decode with string keys;
+            // this makes the array<string, mixed> shape explicit for the type checker).
+            $normalized = [];
+            foreach ($entry as $key => $value) {
+                $normalized[(string) $key] = $value;
+            }
+            $normalized['url'] = "/hls/{$jobId}/media_v{$variantId}.m3u8";
+            $out[] = $normalized;
+        }
+
+        return $out;
+    }
+
+    /**
      * Computes HLS encode parameters from a probe + device profile.
      *
      * Copies a browser-compatible stream when possible (h264 video without a

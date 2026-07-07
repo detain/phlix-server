@@ -964,6 +964,7 @@ class Application
             $config,
             $sessions,
             $api,
+            db: $db,
         );
     }
 
@@ -993,6 +994,7 @@ class Application
                 $config,
                 $sessions,
                 $api,
+                db: $db,
             );
 
             $this->router->get('/admin/lastfm', [$controller, 'index']);
@@ -2911,7 +2913,6 @@ class Application
         $sessionManager = new \Phlix\Session\SessionManager($db);
         $audioScanner = new \Phlix\Media\Library\AudioScanner($db, $itemRepo);
         $metadataManager = new \Phlix\Media\Metadata\MetadataManager(
-            $db,
             $itemRepo
         );
         $musicManager = new \Phlix\Media\Library\MusicLibraryManager(
@@ -3128,11 +3129,14 @@ class Application
             }
         }
 
+        $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+
         return new \Phlix\Server\Http\Controllers\TraktOAuthController(
             logger: $logger,
             stateStore: null,
             configFile: null,
             settings: $settings,
+            db: $db,
         );
     }
 

@@ -70,6 +70,12 @@ class TranscodeController
         $signer = SignedUrl::fromEnv();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
 
+        // Advertise the playable quality ladder so clients can build a picker
+        // (D6). Null for a legacy `variants IS NULL` job (explicit key so a client
+        // can reliably check `!= null` rather than guess from key absence). Each
+        // variant `url` is signed exactly like master_url/hls_url.
+        $variants = $this->transcodeManager->getJobVariants($job['job_id']);
+
         return (new Response())->json([
             'job_id' => $job['job_id'],
             'master_url' => $sign($job['master_url']),
@@ -78,6 +84,7 @@ class TranscodeController
             'status' => $job['status'],
             'reused' => $job['reused'],
             'subtitles' => self::signSubtitleUrls($job['subtitles'], $sign),
+            'variants' => $variants === null ? null : self::signVariantUrls($variants, $sign),
         ]);
     }
 
@@ -133,6 +140,10 @@ class TranscodeController
         $signer = SignedUrl::fromEnv();
         $sign = static fn (mixed $url): mixed => is_string($url) && $url !== '' ? $signer->mint($url) : $url;
 
+        // Same quality-ladder advertisement as start() (D6): null for a legacy job,
+        // else each variant's own media playlist url signed like master_url.
+        $variants = $this->transcodeManager->getJobVariants($readiness['job_id']);
+
         return (new Response())->json([
             'job_id' => $readiness['job_id'],
             'status' => $readiness['status'],
@@ -142,6 +153,7 @@ class TranscodeController
             'master_url' => $sign("/hls/{$readiness['job_id']}/master.m3u8"),
             'dash_url' => $sign("/dash/{$readiness['job_id']}/manifest.mpd"),
             'subtitles' => self::signSubtitleUrls($readiness['subtitles'], $sign),
+            'variants' => $variants === null ? null : self::signVariantUrls($variants, $sign),
         ]);
     }
 
@@ -171,5 +183,31 @@ class TranscodeController
 
             return $track;
         }, $subtitles);
+    }
+
+    /**
+     * Signs the `url` of each variant in a playable-variant list.
+     *
+     * Each variant's `url` is a per-variant media playlist under `/hls/{job}/`
+     * (unsigned, relative — {@see TranscodeManager::getJobVariants()} leaves the
+     * signing to the controller). hls.js fetches these without a Bearer header,
+     * so each is signed with the SAME prefix-scoped signer as `master_url`; the
+     * rest of the flat Rendition shape (`id`/`label`/`height`/`bitrate`/`codecs`/…)
+     * is preserved untouched.
+     *
+     * @param list<array<string, mixed>> $variants The unsigned variant list.
+     * @param \Closure                   $sign     Per-URL signer: `fn(mixed $url): mixed`.
+     *
+     * @return list<array<string, mixed>> The variant list with each `url` signed.
+     */
+    private static function signVariantUrls(array $variants, \Closure $sign): array
+    {
+        return array_map(static function (array $variant) use ($sign): array {
+            if (isset($variant['url'])) {
+                $variant['url'] = $sign($variant['url']);
+            }
+
+            return $variant;
+        }, $variants);
     }
 }

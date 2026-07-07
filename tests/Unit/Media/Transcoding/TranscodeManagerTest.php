@@ -1401,6 +1401,105 @@ class TranscodeManagerTest extends TestCase
         $this->assertDirectoryDoesNotExist($old);
     }
 
+    public function testGetJobVariantsPrependsCopyOriginal(): void
+    {
+        // H.264 + AAC 1080p source → the "original" is a genuine stream-copy variant,
+        // so getJobVariants() must PREPEND it (highest) ahead of the clamped rungs,
+        // exactly like LadderResult::streamVariants().
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+            'web'
+        );
+        $this->assertTrue($ladder->original->isCopy, 'H.264/AAC source → copy original');
+        $ladderJson = (string) json_encode($ladder->toArray());
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'seg-job', 'variants' => $ladderJson], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $variants = $this->manager($db, $ff)->getJobVariants('seg-job');
+
+        $this->assertNotNull($variants);
+        // Same membership + order as the streamVariants() dedup rule.
+        $expectedIds = array_map(
+            static fn ($r): string => $r->id,
+            $ladder->streamVariants(),
+        );
+        $this->assertSame($expectedIds, array_map(static fn (array $v): string => (string) $v['id'], $variants));
+        // The copy original is the highest (first) entry.
+        $this->assertSame('original', $variants[0]['id']);
+        $this->assertTrue($variants[0]['is_copy']);
+        // Every entry carries its own signed-later media playlist url.
+        foreach ($variants as $entry) {
+            $this->assertSame("/hls/seg-job/media_v{$entry['id']}.m3u8", $entry['url']);
+            // Flat Rendition shape preserved.
+            $this->assertArrayHasKey('label', $entry);
+            $this->assertArrayHasKey('height', $entry);
+            $this->assertArrayHasKey('bitrate', $entry);
+            $this->assertArrayHasKey('codecs', $entry);
+        }
+    }
+
+    public function testGetJobVariantsOmitsNonCopyOriginal(): void
+    {
+        // HEVC + AC3 source → the "original" is NOT a copy (it mirrors the top
+        // transcode rung), so it must NOT appear as a separate variant — the list
+        // is exactly the clamped rungs, highest-first.
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 3840, height: 2160, videoCodec: 'hevc', videoBitrate: 20000000, audioCodec: 'ac3'),
+            'web'
+        );
+        $this->assertFalse($ladder->original->isCopy, 'HEVC/AC3 source → non-copy original');
+        $ladderJson = (string) json_encode($ladder->toArray());
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'seg-job', 'variants' => $ladderJson], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $variants = $this->manager($db, $ff)->getJobVariants('seg-job');
+
+        $this->assertNotNull($variants);
+        $ids = array_map(static fn (array $v): string => (string) $v['id'], $variants);
+        $this->assertNotContains('original', $ids, 'non-copy original must not be listed');
+        // Membership + order equals the clamped rungs highest-first.
+        $expectedIds = array_map(static fn ($r): string => $r->id, $ladder->streamVariants());
+        $this->assertSame($expectedIds, $ids);
+        // Highest-first: first entry is the tallest rung.
+        $this->assertSame('1080p', $variants[0]['id']); // web profile caps at 1080p
+        foreach ($variants as $entry) {
+            $this->assertSame("/hls/seg-job/media_v{$entry['id']}.m3u8", $entry['url']);
+        }
+    }
+
+    public function testGetJobVariantsReturnsNullForLegacyJob(): void
+    {
+        // A legacy job (variants IS NULL) must return null so callers advertise
+        // `variants: null` and old clients see a byte-compatible response.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'seg-job', 'status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertNull($this->manager($db, $ff)->getJobVariants('seg-job'));
+    }
+
+    public function testGetJobVariantsReturnsNullForUnknownJob(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, [], [], $captured); // no job row
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertNull($this->manager($db, $ff)->getJobVariants('nope'));
+    }
+
+    public function testGetJobVariantsHandlesMalformedVariantsJsonGracefully(): void
+    {
+        // A corrupt `variants` column must degrade to null, never throw — this
+        // reads a DB column that should be well-formed but must not blow up a request.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'seg-job', 'variants' => '{not valid json'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+
+        $this->assertNull($this->manager($db, $ff)->getJobVariants('seg-job'));
+    }
+
     private function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) {

@@ -1,6 +1,12 @@
 <?php
 
 /**
+ * Phlix media server component: moved.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
+/**
  * Compatibility shim — the WebSocketEvents class moved to
  * WebSocketEvents.php to comply with PSR-4 (the class name must match the
  * filename). This file is kept only because phpstan.neon.dist references

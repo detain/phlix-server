@@ -542,17 +542,32 @@ class ItemRepository
         // call site. NULL when absent/blank (an unkeyable row).
         $canonicalKey = self::extractCanonicalKey($data['metadata_json'] ?? null);
 
+        // Materialize the article-stripped sort key (migration 050) so listings
+        // can ORDER BY the indexed `sort_title` column instead of the per-row
+        // SortTitle::sqlExpression() CASE that forced a filesort. Derived from the
+        // SAME scrubbed name the row stores via SortTitle::from(), whose output is
+        // branch-for-branch identical to that SQL expression, so the materialized
+        // order matches the historical one exactly. NULL for a non-string name.
+        $scrubbedName = self::toValidUtf8($data['name'] ?? null);
+        $sortTitle = is_string($scrubbedName) ? SortTitle::from($scrubbedName) : null;
+
+        // Materialize the content rating (migration 050) so rating filters/sorts
+        // hit the indexed `content_rating` column instead of a JSON extraction.
+        $contentRating = self::extractContentRating($data['metadata_json'] ?? null);
+
         $this->db->query(
-            "INSERT INTO media_items (id, library_id, parent_id, name, type, path, canonical_key, metadata_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO media_items (id, library_id, parent_id, name, type, path, canonical_key, sort_title, content_rating, metadata_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $data['library_id'],
                 $data['parent_id'] ?? null,
-                self::toValidUtf8($data['name'] ?? null),
+                $scrubbedName,
                 $data['type'],
                 self::toValidUtf8($data['path'] ?? null),
                 $canonicalKey,
+                $sortTitle,
+                $contentRating,
                 $metadataJson,
             ]
         );
@@ -628,6 +643,39 @@ class ItemRepository
     }
 
     /**
+     * Extract the content rating from a `metadata_json` payload for the
+     * materialized, indexed `content_rating` column (migration 050).
+     *
+     * Mirrors the value the old query path read via
+     * `JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating'))`: the string under
+     * `$.rating` when present, else `null`. Accepts the same shapes
+     * `create()`/`update()` accept for `metadata_json` — an already-decoded
+     * `array<string, mixed>` (the scanner path) or a raw JSON string. Only a
+     * string rating is materialized; any other shape (missing, array, bool)
+     * yields `null` so the column stays NULL, exactly as the JSON extraction did.
+     * The blob itself is never mutated — the rating is only COPIED into the
+     * column. Also used by scripts/backfill-sort-metadata.php so the offline and
+     * live paths derive the column identically.
+     *
+     * @param mixed $metadataJson Array, JSON string, or anything else (→ null).
+     */
+    public static function extractContentRating(mixed $metadataJson): ?string
+    {
+        if (is_string($metadataJson)) {
+            $decoded = json_decode($metadataJson, true);
+            $metadataJson = is_array($decoded) ? $decoded : null;
+        }
+
+        if (!is_array($metadataJson)) {
+            return null;
+        }
+
+        $rating = $metadataJson['rating'] ?? null;
+
+        return is_string($rating) ? $rating : null;
+    }
+
+    /**
      * Updates an existing media item's properties.
      *
      * When `$data` includes `metadata_json` (the only field genres live under),
@@ -659,6 +707,29 @@ class ItemRepository
             ) {
                 $sets[] = 'canonical_key = ?';
                 $values[] = self::extractCanonicalKey($value);
+            }
+
+            // Keep the materialized `content_rating` column (migration 050) in
+            // lockstep with metadata_json.$.rating whenever the blob is
+            // (re)written, so rating filters/sorts never read a stale column. An
+            // explicit `content_rating` in $data wins (handled by the normal loop).
+            if (
+                $key === 'metadata_json'
+                && !array_key_exists('content_rating', $data)
+            ) {
+                $sets[] = 'content_rating = ?';
+                $values[] = self::extractContentRating($value);
+            }
+
+            // Keep the materialized `sort_title` column (migration 050) in lockstep
+            // with `name` whenever the display name changes, so listings ORDER BY
+            // the indexed column. Derived from the scrubbed name via
+            // SortTitle::from() to match what the row stores. An explicit
+            // `sort_title` in $data wins (handled by the normal loop).
+            if ($key === 'name' && !array_key_exists('sort_title', $data)) {
+                $scrubbedName = self::toValidUtf8($value);
+                $sets[] = 'sort_title = ?';
+                $values[] = is_string($scrubbedName) ? SortTitle::from($scrubbedName) : null;
             }
 
             $sets[] = "$key = ?";
@@ -1059,10 +1130,12 @@ class ItemRepository
      */
     public function getByAllowedRatings(string $libraryId, array $allowedRatings, int $limit = 100, int $offset = 0): array
     {
-        // Build CASE expression for rating order comparison
+        // Build CASE expression for rating order comparison. Reads the indexed,
+        // materialized `content_rating` column (migration 050) rather than a
+        // per-row JSON extraction.
         $ratingCases = [];
         foreach (self::RATING_ORDER as $rating => $order) {
-            $ratingCases[] = "WHEN JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) = '{$rating}' THEN {$order}";
+            $ratingCases[] = "WHEN content_rating = '{$rating}' THEN {$order}";
         }
         $ratingOrderSql = 'CASE ' . implode(' ', $ratingCases) . ' ELSE 999 END';
 
@@ -1072,12 +1145,14 @@ class ItemRepository
         // Rating restriction first, then an article-insensitive alphabetical tiebreak.
         $orderBy = $ratingOrderSql . ', ' . self::titleOrder();
 
+        // Filter on the indexed `content_rating` column; a NULL column means the
+        // item carries no rating (the old `JSON_EXTRACT(...) IS NULL` case).
         $results = $this->db->query(
             "SELECT * FROM media_items
              WHERE library_id = ?
                AND (
-                   JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) IN ({$ratingPlaceholders})
-                   OR JSON_EXTRACT(metadata_json, '$.rating') IS NULL
+                   content_rating IN ({$ratingPlaceholders})
+                   OR content_rating IS NULL
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
@@ -1140,6 +1215,18 @@ class ItemRepository
     /**
      * Get items filtered by allowed genres.
      *
+     * Genres deliberately stay inside `metadata_json.$.genres` rather than being
+     * normalized into a separate genres/join table — migration 050 adds a MySQL 8
+     * multi-valued functional index directly over that JSON path instead, which
+     * makes this membership test index-resolvable with NO new genre write path
+     * and NO second genre-storage location to keep in sync. That matters
+     * specifically because {@see distinctGenres()}'s JSON_TABLE facet scan and its
+     * S5 TTL+LRU cache ({@see invalidateGenreFacets()}) already read genres from
+     * this exact blob; a join table would require every genre write to update
+     * BOTH locations (and would risk the facet cache silently drifting from the
+     * normalized table). A future "normalize genres properly" proposal should
+     * weigh this coherence cost, not just query ergonomics.
+     *
      * @param string $libraryId Library to filter
      * @param array<string> $allowedGenres Array of allowed genre strings
      * @param int $limit Max items to return
@@ -1152,13 +1239,15 @@ class ItemRepository
             return $this->getByLibrary($libraryId, $limit, $offset);
         }
 
-        // One containment test per allowed genre, each scoped to '$.genres' and fed a
-        // JSON-encoded candidate (a bare string is not a valid JSON_CONTAINS candidate).
+        // One membership test per allowed genre against the multi-valued index on
+        // metadata_json.$.genres (migration 050). `? MEMBER OF (...)` binds the
+        // bare genre string and matches array elements exactly (case/accent
+        // sensitive — same semantics as the previous JSON_CONTAINS containment),
+        // but is resolvable from the index instead of full-scanning.
         $genreWheres = implode(
             ' OR ',
-            array_fill(0, count($allowedGenres), "JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0")
+            array_fill(0, count($allowedGenres), "? MEMBER OF (metadata_json->'\$.genres')")
         );
-        $encodedGenres = array_map(static fn ($g) => json_encode($g), $allowedGenres);
 
         $orderBy = self::titleOrder();
 
@@ -1171,7 +1260,7 @@ class ItemRepository
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
-            array_merge([$libraryId], $encodedGenres, [$limit, $offset])
+            array_merge([$libraryId], array_values($allowedGenres), [$limit, $offset])
         );
 
         return $this->hydrateRows($results);
@@ -1179,6 +1268,20 @@ class ItemRepository
 
     /**
      * Get items excluding blocked genres.
+     *
+     * @todo S10 (dead-code cleanup step): DELETE or repair this method. It is
+     *       DEAD — no callers anywhere under src/, tests/, or scripts/ (verified
+     *       repo-wide during S7). It is also the ONLY genre-filter path NOT
+     *       migrated to the indexed `? MEMBER OF (metadata_json->'$.genres')` form
+     *       (migration 050); it still uses an un-indexed, un-path-scoped
+     *       `JSON_CONTAINS(metadata_json, ?) = 0` that full-scans media_items.
+     *       PRE-EXISTING PARAM-COUNT BUG: `$genrePlaceholders` is computed but
+     *       never interpolated into the SQL (the WHERE has a single `?`), yet the
+     *       binding `array_merge([$libraryId], $blockedGenres, [$limit, $offset])`
+     *       expands ALL of $blockedGenres — so with >1 blocked genre the bound
+     *       param count exceeds the placeholder count and the query throws. Left
+     *       untouched in S7 (out of the browse/filter hot path) to avoid scope
+     *       creep into buggy dead code; S10 owns the delete/fix decision.
      *
      * @param string $libraryId Library to filter
      * @param array<string> $blockedGenres Array of blocked genre strings
@@ -1323,7 +1426,8 @@ class ItemRepository
      * Queries media items with flexible filtering, sorting, and pagination.
      *
      * Honors the library-query schema params over metadata_json, building on the
-     * existing getByAllowedGenres() (JSON_CONTAINS) and search() (FULLTEXT/LIKE)
+     * existing getByAllowedGenres() (`? MEMBER OF (metadata_json->'$.genres')`,
+     * the multi-valued index from migration 050) and search() (FULLTEXT/LIKE)
      * patterns. All filter conditions are AND-combined; array-valued filters
      * (genres, ratings, actors) use OR logic within the array.
      *
@@ -1404,28 +1508,28 @@ class ItemRepository
         $desc = $order === 'desc';
 
         $bucketExpr = match ($field) {
-            'name' => SortTitle::letterSqlExpression('name'),
+            'name' => self::letterExpression(),
             'year' => self::yearValueExpression(),
             'rating' => self::ratingValueExpression(),
             'runtime' => self::runtimeValueExpression(),
             'date_added' => 'DATE(created_at)',
             'genre' => self::genrePrimaryExpression(),
             'artist' => self::artistValueExpression(),
-            default => SortTitle::letterSqlExpression('name'),
+            default => self::letterExpression(),
         };
 
         // The ORDER BY expression uses the private helper (includes ASC/DESC).
         // The GROUP BY uses the bare bucket expression.  They share the same
         // underlying column/expression so can never drift apart.
         $orderByExpr = match ($field) {
-            'name' => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
+            'name' => self::letterExpression() . ($desc ? ' DESC' : ' ASC'),
             'year' => $this->yearSortExpression($desc),
             'rating' => $this->ratingSortExpression($desc),
             'runtime' => $this->runtimeSortExpression($desc),
             'date_added' => $this->createdAtSortExpression($desc),
             'genre' => self::genrePrimaryExpression() . ($desc ? ' DESC' : ' ASC'),
             'artist' => $this->artistSortExpression($desc),
-            default => SortTitle::letterSqlExpression('name') . ($desc ? ' DESC' : ' ASC'),
+            default => self::letterExpression() . ($desc ? ' DESC' : ' ASC'),
         };
 
         ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
@@ -1465,10 +1569,10 @@ class ItemRepository
     {
         return "CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.year')) AS SIGNED)";
     }
-    /** Content-rating string (G/PG/…) from metadata. */
+    /** Content-rating string (G/PG/…) — the materialized, indexed column (migration 050). */
     private static function ratingValueExpression(): string
     {
-        return "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.rating'))";
+        return 'content_rating';
     }
     /** Runtime minutes from metadata. */
     private static function runtimeValueExpression(): string
@@ -1577,10 +1681,15 @@ class ItemRepository
             $genreWheres = [];
             foreach ($genres as $genre) {
                 if (is_string($genre) && $genre !== '') {
-                    // Match the genre inside the metadata_json.genres array. Without the
-                    // '$.genres' path JSON_CONTAINS tests the whole document and never matches.
-                    $genreWheres[] = "JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0";
-                    $bindings[] = json_encode($genre);
+                    // Membership test against the multi-valued index on
+                    // metadata_json.$.genres (migration 050). `? MEMBER OF (...)`
+                    // is index-resolvable and matches array elements exactly, the
+                    // same semantics the previous path-scoped JSON_CONTAINS had.
+                    // Genres deliberately stay in metadata_json rather than a join
+                    // table, to stay coherent with distinctGenres()'s S5 facet
+                    // cache — see {@see getByAllowedGenres()}'s docblock for why.
+                    $genreWheres[] = "? MEMBER OF (metadata_json->'\$.genres')";
+                    $bindings[] = $genre;
                 }
             }
             if (count($genreWheres) > 0) {
@@ -1600,7 +1709,9 @@ class ItemRepository
 
         if ($ratings !== null && count($ratings) > 0) {
             $ratingPlaceholders = implode(',', array_fill(0, count($ratings), '?'));
-            $wheres[] = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) IN ({$ratingPlaceholders})";
+            // Filter on the indexed, materialized `content_rating` column
+            // (migration 050) instead of a per-row JSON extraction.
+            $wheres[] = "content_rating IN ({$ratingPlaceholders})";
             $bindings = array_merge($bindings, $ratings);
         }
 
@@ -1682,7 +1793,7 @@ class ItemRepository
         // Bucket by the first letter of the article-stripped sort key (so
         // "The Plot" counts under P), matching the ORDER BY in self::query()
         // so the cumulative letter offsets line up with the grid.
-        $letterExpr = SortTitle::letterSqlExpression('name');
+        $letterExpr = self::letterExpression();
         $sql = "SELECT {$letterExpr} AS letter, COUNT(*) AS n FROM media_items WHERE "
             . implode(' AND ', $wheres) . ' GROUP BY letter';
         $rows = $this->db->query($sql, $bindings);
@@ -1962,7 +2073,9 @@ class ItemRepository
         if ($sort === 'rating_sort') {
             $ratingCases = [];
             foreach (self::RATING_ORDER as $rating => $orderVal) {
-                $ratingCases[] = "WHEN JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.rating')) = '{$rating}' THEN {$orderVal}";
+                // Map the materialized `content_rating` column (migration 050) to
+                // its restriction rank rather than extracting from the JSON blob.
+                $ratingCases[] = "WHEN content_rating = '{$rating}' THEN {$orderVal}";
             }
             $ratingOrderSql = 'CASE ' . implode(' ', $ratingCases) . ' ELSE 999 END';
             return "{$ratingOrderSql} {$direction}, {$titleTie}";
@@ -2002,7 +2115,25 @@ class ItemRepository
     {
         $dir = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
 
-        return SortTitle::sqlExpression('name') . " {$dir}, name {$dir}";
+        // Order by the materialized, indexed `sort_title` column (migration 050)
+        // — value-identical to the old SortTitle::sqlExpression() runtime CASE, so
+        // the order is unchanged, but now index-satisfiable (no per-row function).
+        // The `name` tiebreak keeps distinct titles that share a sort key stably
+        // paged; it is the trailing key of idx_media_items_library_type_sort_title
+        // so the listing sorts with no filesort.
+        return "sort_title {$dir}, name {$dir}";
+    }
+
+    /**
+     * SQL expression for the uppercased first letter of an item's sort key — the
+     * A-Z jump-rail bucket. Reads the materialized `sort_title` column
+     * (migration 050) instead of recomputing SortTitle::letterSqlExpression()'s
+     * CASE per row, so the grid ORDER BY and the letter buckets share the same
+     * indexed column and can never drift.
+     */
+    private static function letterExpression(): string
+    {
+        return 'UPPER(LEFT(sort_title, 1))';
     }
 
     /**

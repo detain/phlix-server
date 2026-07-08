@@ -50,6 +50,23 @@ class HlsControllerTest extends TestCase
         file_put_contents("{$dir}/{$file}", $content);
     }
 
+    /**
+     * Resolves the served bytes of a response. File-backed responses (segments and
+     * playlists now stream via {@see \Phlix\Server\Http\Response::withFile()} rather
+     * than buffering into `->body`), so read the window from disk; plain responses
+     * (JSON errors) fall back to the buffered body.
+     */
+    private function bodyOf(\Phlix\Server\Http\Response $res): string
+    {
+        if ($res->filePath === null) {
+            return $res->body;
+        }
+        $bytes = $res->fileLength > 0
+            ? file_get_contents($res->filePath, false, null, $res->fileOffset, $res->fileLength)
+            : file_get_contents($res->filePath, false, null, $res->fileOffset);
+        return $bytes === false ? '' : $bytes;
+    }
+
     public function testGetPlaylistReturnsMasterUrl(): void
     {
         $res = $this->controller()->getPlaylist(new Request(), ['job_id' => 'job-9']);
@@ -73,7 +90,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $res->headers['Content-Type']);
         $this->assertSame('no-cache', $res->headers['Cache-Control']);
-        $this->assertStringContainsString('#EXTM3U', $res->body);
+        $this->assertStringContainsString('#EXTM3U', $this->bodyOf($res));
     }
 
     public function testServesMediaPlaylistVerbatim(): void
@@ -84,7 +101,7 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         // Served verbatim — relative segment URIs are kept (no rewriting).
-        $this->assertSame($playlist, $res->body);
+        $this->assertSame($playlist, $this->bodyOf($res));
     }
 
     public function testServesFmp4SegmentWithVideoMp4ContentType(): void
@@ -95,7 +112,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
         $this->assertSame('public, max-age=31536000', $res->headers['Cache-Control']);
-        $this->assertSame('SEGMENTBYTES', $res->body);
+        $this->assertSame('SEGMENTBYTES', $this->bodyOf($res));
     }
 
     public function testServesInitSegment(): void
@@ -103,7 +120,7 @@ class HlsControllerTest extends TestCase
         $this->writeJobFile('job-4', 'init-0.m4s', 'INIT');
         $res = $this->controller()->serveFile(new Request(), ['job_id' => 'job-4', 'file' => 'init-0.m4s']);
         $this->assertSame(200, $res->statusCode);
-        $this->assertSame('INIT', $res->body);
+        $this->assertSame('INIT', $this->bodyOf($res));
     }
 
     public function testServeFile404WhenMissing(): void
@@ -134,7 +151,7 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp2t', $res->headers['Content-Type']);
-        $this->assertSame('TSBYTES', $res->body);
+        $this->assertSame('TSBYTES', $this->bodyOf($res));
     }
 
     public function testOnDemandSegment404WhenTranscoderReturnsNull(): void
@@ -170,7 +187,7 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp2t', $res->headers['Content-Type']);
-        $this->assertSame('MVBYTES', $res->body);
+        $this->assertSame('MVBYTES', $this->bodyOf($res));
     }
 
     public function testServesOriginalVariantSegmentThroughTranscodeManager(): void
@@ -192,7 +209,7 @@ class HlsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $res->statusCode);
-        $this->assertSame('ORIGBYTES', $res->body);
+        $this->assertSame('ORIGBYTES', $this->bodyOf($res));
     }
 
     public function testMultiVariantSegment404WhenTranscoderReturnsNull(): void
@@ -250,7 +267,7 @@ class HlsControllerTest extends TestCase
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $res->headers['Content-Type']);
         $this->assertSame('no-cache', $res->headers['Cache-Control']);
-        $this->assertSame($playlist, $res->body);
+        $this->assertSame($playlist, $this->bodyOf($res));
     }
 
     public function testServesOriginalVariantMediaPlaylistAsStaticFile(): void
@@ -268,7 +285,7 @@ class HlsControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $res->headers['Content-Type']);
-        $this->assertSame($playlist, $res->body);
+        $this->assertSame($playlist, $this->bodyOf($res));
     }
 
     public function testMalformedVariantSegmentIsNotRoutedToTranscoder(): void
@@ -335,6 +352,190 @@ class HlsControllerTest extends TestCase
             $this->assertContains($res->statusCode, [400, 404], "filename '{$bad}' must not be served");
             $this->assertNotSame(200, $res->statusCode);
         }
+    }
+
+    public function testSegmentHonoursByteRangeWith206(): void
+    {
+        // S3: segments stream via withFile() with real Range support. A single
+        // byte-range yields 206 with the requested window (Workerman derives
+        // Content-Range from the offset/length passed to withFile()).
+        // A static fMP4 segment (immutable, served directly by serveJobFile — no
+        // transcoder gate) exercises the file-streaming Range path.
+        $this->writeJobFile('job-r', 'chunk-0-00001.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=2-5';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r', 'file' => 'chunk-0-00001.m4s']);
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame('video/mp4', $res->headers['Content-Type']);
+        $this->assertNotNull($res->filePath);
+        $this->assertSame(2, $res->fileOffset);
+        $this->assertSame(4, $res->fileLength);
+        $this->assertSame('CDEF', $this->bodyOf($res));
+    }
+
+    public function testSegmentOpenEndedRangeReturns206ToEof(): void
+    {
+        // `bytes=6-` (no end) → from offset 6 to EOF.
+        $this->writeJobFile('job-r2', 'chunk-0-00002.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=6-';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r2', 'file' => 'chunk-0-00002.m4s']);
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame(6, $res->fileOffset);
+        $this->assertSame(4, $res->fileLength);
+        $this->assertSame('GHIJ', $this->bodyOf($res));
+    }
+
+    public function testSegmentUnsatisfiableRangeReturns416(): void
+    {
+        // start-pos itself is past EOF — genuinely unsatisfiable, still 416.
+        $this->writeJobFile('job-r3', 'chunk-0-00003.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=50-60';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r3', 'file' => 'chunk-0-00003.m4s']);
+
+        $this->assertSame(416, $res->statusCode);
+        $this->assertSame('bytes */10', $res->headers['Content-Range']);
+        $this->assertNull($res->filePath);
+    }
+
+    public function testSegmentOverLongRangeEndIsClampedToEofNotRejected(): void
+    {
+        // Reviewer S3 round-1 finding 1 (MINOR): RFC 7233 §2.1 — a satisfiable
+        // start with an over-long last-byte-pos MUST be clamped to EOF and answered
+        // 206, not rejected with 416 (a conforming client/cache can send
+        // `bytes=0-999999999` against a segment it hasn't measured yet).
+        $this->writeJobFile('job-r5', 'chunk-0-00005.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=0-999999999';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r5', 'file' => 'chunk-0-00005.m4s']);
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame(0, $res->fileOffset);
+        $this->assertSame(10, $res->fileLength);
+        $this->assertSame('ABCDEFGHIJ', $this->bodyOf($res));
+    }
+
+    public function testSegmentSuffixRangeReturnsLastNBytes(): void
+    {
+        // Reviewer S3 round-1 finding 2 (INFO): `bytes=-N` ("last N bytes") is now
+        // honoured instead of falling through to a whole-file 200.
+        $this->writeJobFile('job-r6', 'chunk-0-00006.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=-4';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r6', 'file' => 'chunk-0-00006.m4s']);
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame(6, $res->fileOffset);
+        $this->assertSame(4, $res->fileLength);
+        $this->assertSame('GHIJ', $this->bodyOf($res));
+    }
+
+    public function testSegmentSuffixRangeLongerThanFileReturnsWholeFile(): void
+    {
+        // A suffix larger than the file just clamps to byte 0 — the whole file,
+        // still satisfiable, still 206 (matches common server behaviour/RFC intent).
+        $this->writeJobFile('job-r7', 'chunk-0-00007.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=-999';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r7', 'file' => 'chunk-0-00007.m4s']);
+
+        $this->assertSame(206, $res->statusCode);
+        $this->assertSame(0, $res->fileOffset);
+        $this->assertSame(10, $res->fileLength);
+        $this->assertSame('ABCDEFGHIJ', $this->bodyOf($res));
+    }
+
+    public function testSegmentZeroLengthSuffixRangeReturns416(): void
+    {
+        // `bytes=-0` is not a valid suffix-length per RFC 7233 §2.1 — unsatisfiable.
+        $this->writeJobFile('job-r8', 'chunk-0-00008.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=-0';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r8', 'file' => 'chunk-0-00008.m4s']);
+
+        $this->assertSame(416, $res->statusCode);
+        $this->assertSame('bytes */10', $res->headers['Content-Range']);
+        $this->assertNull($res->filePath);
+    }
+
+    public function testSegmentMultiRangeFallsBackToFull200(): void
+    {
+        // We only support a single range; a multi-range value is ignored and the
+        // whole file is streamed (a valid RFC 7233 fallback).
+        $this->writeJobFile('job-r4', 'chunk-0-00004.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=0-2,4-6';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r4', 'file' => 'chunk-0-00004.m4s']);
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame(0, $res->fileOffset);
+        $this->assertSame(0, $res->fileLength);
+        $this->assertSame('ABCDEFGHIJ', $this->bodyOf($res));
+    }
+
+    public function testSegmentInvertedRangeReturns416(): void
+    {
+        // An in-file but inverted range (`bytes=5-2`, first-byte-pos > last-byte-pos)
+        // is unsatisfiable → 416. This exercises the `$start <= $end` guard in
+        // parseRange() with a satisfiable start (`$start < $fileSize` is TRUE), the
+        // one satisfiability branch the `bytes=50-60` test can't reach (there the
+        // start is itself past EOF so the earlier `$start < $fileSize` short-circuits).
+        $this->writeJobFile('job-r9', 'chunk-0-00010.m4s', 'ABCDEFGHIJ');
+        $req = new Request();
+        $req->headers['Range'] = 'bytes=5-2';
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-r9', 'file' => 'chunk-0-00010.m4s']);
+
+        $this->assertSame(416, $res->statusCode);
+        $this->assertSame('bytes */10', $res->headers['Content-Range']);
+        $this->assertNull($res->filePath);
+    }
+
+    public function testImmutableSegmentReturns304OnMatchingIfModifiedSince(): void
+    {
+        // Immutable (max-age=31536000) segments answer a conditional GET with 304
+        // when If-Modified-Since matches the file mtime — no body re-sent.
+        $this->writeJobFile('job-c', 'chunk-0-00009.m4s', 'TSBYTES');
+        $path = "{$this->segmentDir}/job-c/chunk-0-00009.m4s";
+        $lastModified = gmdate('D, d M Y H:i:s', (int) filemtime($path)) . ' GMT';
+
+        $req = new Request();
+        $req->headers['If-Modified-Since'] = $lastModified;
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-c', 'file' => 'chunk-0-00009.m4s']);
+
+        $this->assertSame(304, $res->statusCode);
+        $this->assertSame($lastModified, $res->headers['Last-Modified']);
+        $this->assertNull($res->filePath);
+    }
+
+    public function testNoCachePlaylistIsNeverShortCircuitedTo304(): void
+    {
+        // Playlists are `no-cache` (they may be rewritten during the encode), so a
+        // matching If-Modified-Since must still serve the full body, not 304.
+        $this->writeJobFile('job-c2', 'media_0.m3u8', "#EXTM3U\n");
+        $path = "{$this->segmentDir}/job-c2/media_0.m3u8";
+        $lastModified = gmdate('D, d M Y H:i:s', (int) filemtime($path)) . ' GMT';
+
+        $req = new Request();
+        $req->headers['If-Modified-Since'] = $lastModified;
+
+        $res = $this->controller()->serveFile($req, ['job_id' => 'job-c2', 'file' => 'media_0.m3u8']);
+
+        $this->assertSame(200, $res->statusCode);
+        $this->assertSame('no-cache', $res->headers['Cache-Control']);
+        $this->assertSame("#EXTM3U\n", $this->bodyOf($res));
     }
 
     private function rrmdir(string $dir): void

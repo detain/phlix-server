@@ -61,6 +61,6 @@ class DashController
         $jobId = $params['job_id'] ?? '';
         $file = $params['file'] ?? '';
         $dir = $jobId !== '' ? "{$this->segmentDir}/{$jobId}" : '';
-        return $this->serveJobFile($dir, $file);
+        return $this->serveJobFile($request, $dir, $file);
     }
 }

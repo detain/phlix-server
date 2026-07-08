@@ -47,6 +47,20 @@ class Response
     /** @var string The response body content */
     public string $body = '';
 
+    /**
+     * @var string|null Absolute path of a file to stream to the client instead of
+     * buffering its bytes into {@see $body}. Null means the body is used. Set via
+     * {@see withFile()}; consumed by {@see toWorkermanResponse()} (event-loop file
+     * streaming) and, as a CGI fallback, by {@see send()}.
+     */
+    public ?string $filePath = null;
+
+    /** @var int Byte offset into {@see $filePath} to start streaming from (0 = start). */
+    public int $fileOffset = 0;
+
+    /** @var int Number of bytes of {@see $filePath} to stream (0 = to EOF). */
+    public int $fileLength = 0;
+
     /** @var string HTTP protocol version */
     public string $version = '1.1';
 
@@ -249,6 +263,34 @@ class Response
     }
 
     /**
+     * Stream a file from disk instead of buffering its bytes into {@see $body}.
+     *
+     * When a file is set, {@see toWorkermanResponse()} hands the path to
+     * Workerman's native {@see WorkermanResponse::withFile()} so the file streams
+     * through the event loop (chunked for bodies ≥ 2 MB) rather than being read
+     * into worker memory — essential for the multi-MB HLS/DASH segments served by a
+     * resident-memory worker. Workerman emits `Content-Length`, `Accept-Ranges:
+     * bytes`, and `Last-Modified` automatically; passing a non-zero `$offset` /
+     * `$length` makes it emit `Content-Range` and a 206 automatically (so a caller
+     * building a partial-content reply only needs to set status 206 and pass the
+     * range window here).
+     *
+     * The body is left empty; do not mix {@see body()}/{@see json()} with this.
+     *
+     * @param string $path   Absolute path to the file to stream.
+     * @param int    $offset Byte offset to start from (0 = whole file).
+     * @param int    $length Number of bytes to send (0 = to EOF).
+     * @return self For method chaining.
+     */
+    public function withFile(string $path, int $offset = 0, int $length = 0): self
+    {
+        $this->filePath = $path;
+        $this->fileOffset = $offset;
+        $this->fileLength = $length;
+        return $this;
+    }
+
+    /**
      * Queue a Set-Cookie header on this response.
      *
      * The cookie is buffered until {@see send()} / {@see toWorkermanResponse()}
@@ -382,6 +424,15 @@ class Response
      */
     public function send(): void
     {
+        // A file-backed response relies on the event-loop path (toWorkermanResponse())
+        // to derive Content-Length/Accept-Ranges/Content-Range automatically; the CGI
+        // fallback has no such runtime, so compute and set the same headers (and force
+        // 206 for a partial window) here BEFORE the status/header lines are emitted —
+        // keeping both entrypoints' wire behaviour identical.
+        if ($this->filePath !== null) {
+            $this->finalizeFileHeaders();
+        }
+
         // Set status code header
         http_response_code($this->statusCode);
 
@@ -413,8 +464,79 @@ class Response
             setcookie($cookie['name'], $cookie['value'], $options);
         }
 
-        // Send body
+        // Send body — stream a file-backed response in bounded chunks, otherwise
+        // emit the buffered body.
+        if ($this->filePath !== null) {
+            $this->streamFileToOutput();
+            return;
+        }
         echo $this->body;
+    }
+
+    /**
+     * Computes and sets the `Content-Length` / `Accept-Ranges` / `Content-Range`
+     * headers (and forces status 206) for a file-backed response in the CGI/FPM
+     * fallback ({@see send()}), mirroring exactly what Workerman's native
+     * `withFile()` emits automatically for the event-loop path (see
+     * `vendor/workerman/workerman/src/Protocols/Http.php::encode()` and
+     * {@see toWorkermanResponse()}) — kept in sync so both entrypoints answer a
+     * Range request identically instead of the CGI path silently omitting these
+     * headers.
+     */
+    private function finalizeFileHeaders(): void
+    {
+        $path = $this->filePath;
+        if ($path === null || !is_file($path)) {
+            return;
+        }
+
+        $fileSize = (int) filesize($path);
+        $bodyLen = $this->fileLength > 0 ? $this->fileLength : $fileSize - $this->fileOffset;
+
+        $this->headers['Content-Length'] = (string) $bodyLen;
+        $this->headers['Accept-Ranges'] = 'bytes';
+
+        if ($this->fileOffset > 0 || $this->fileLength > 0) {
+            $offsetEnd = $this->fileOffset + $bodyLen - 1;
+            $this->headers['Content-Range'] = "bytes {$this->fileOffset}-{$offsetEnd}/{$fileSize}";
+            $this->statusCode = 206;
+        }
+    }
+
+    /**
+     * CGI/FPM fallback for {@see withFile()} responses: stream the file to output
+     * in bounded chunks (honouring `$fileOffset`/`$fileLength`) rather than reading
+     * it into memory.
+     *
+     * The streaming routes that use {@see withFile()} are registered ONLY on the
+     * Workerman entrypoint (see `Application::loadStreamingRoutes()`), so this path
+     * is not reached for HLS/DASH segments in production — it exists so a
+     * file-carrying response still degrades gracefully if ever rendered via
+     * {@see send()}.
+     */
+    private function streamFileToOutput(): void
+    {
+        $path = $this->filePath;
+        if ($path === null) {
+            return;
+        }
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return;
+        }
+        if ($this->fileOffset > 0) {
+            fseek($handle, $this->fileOffset);
+        }
+        $remaining = $this->fileLength > 0 ? $this->fileLength : PHP_INT_MAX;
+        while ($remaining > 0 && !feof($handle)) {
+            $chunk = fread($handle, (int) min(8192, $remaining));
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            echo $chunk;
+            $remaining -= strlen($chunk);
+        }
+        fclose($handle);
     }
 
     /**
@@ -439,6 +561,13 @@ class Response
                 $cookie['httpOnly'],
                 $cookie['sameSite'],
             );
+        }
+
+        // Event-loop file streaming: Workerman sends the file (chunked for bodies
+        // ≥ 2 MB) and auto-emits Content-Length / Accept-Ranges / Last-Modified,
+        // plus Content-Range + 206 when an offset/length window is given.
+        if ($this->filePath !== null) {
+            $wr->withFile($this->filePath, $this->fileOffset, $this->fileLength);
         }
 
         return $wr;

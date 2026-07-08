@@ -44,6 +44,23 @@ class DashControllerTest extends TestCase
         file_put_contents("{$dir}/{$file}", $content);
     }
 
+    /**
+     * Resolves the served bytes of a response. File-backed responses (the MPD and
+     * segments now stream via {@see \Phlix\Server\Http\Response::withFile()} rather
+     * than buffering into `->body`), so read the window from disk; plain responses
+     * (JSON errors) fall back to the buffered body.
+     */
+    private function bodyOf(\Phlix\Server\Http\Response $res): string
+    {
+        if ($res->filePath === null) {
+            return $res->body;
+        }
+        $bytes = $res->fileLength > 0
+            ? file_get_contents($res->filePath, false, null, $res->fileOffset, $res->fileLength)
+            : file_get_contents($res->filePath, false, null, $res->fileOffset);
+        return $bytes === false ? '' : $bytes;
+    }
+
     public function testGetManifestReturnsMpdUrl(): void
     {
         $res = $this->controller()->getManifest(new Request(), ['job_id' => 'job-1']);
@@ -67,7 +84,7 @@ class DashControllerTest extends TestCase
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('application/dash+xml', $res->headers['Content-Type']);
         $this->assertSame('no-cache', $res->headers['Cache-Control']);
-        $this->assertStringContainsString('<MPD>', $res->body);
+        $this->assertStringContainsString('<MPD>', $this->bodyOf($res));
     }
 
     public function testServesM4sSegment(): void
@@ -77,7 +94,7 @@ class DashControllerTest extends TestCase
 
         $this->assertSame(200, $res->statusCode);
         $this->assertSame('video/mp4', $res->headers['Content-Type']);
-        $this->assertSame('AUDIOBYTES', $res->body);
+        $this->assertSame('AUDIOBYTES', $this->bodyOf($res));
     }
 
     public function testServeFile404WhenMissing(): void

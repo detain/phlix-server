@@ -133,6 +133,6 @@ class HlsController
         }
 
         $dir = $this->hlsStreamer->getJobDirectory($jobId);
-        return $this->serveJobFile($dir, $file);
+        return $this->serveJobFile($request, $dir, $file);
     }
 }

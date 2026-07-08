@@ -29,6 +29,8 @@ return [
 
     'jwks_cache_ttl' => 900,
 
+    'enrollment_renewal_threshold' => (int)(getenv('PHLIX_HUB_ENROLLMENT_RENEWAL_THRESHOLD') ?: 86400),  // renew if expiring within 24h
+
     'key_path' => __DIR__ . '/hub-server-key.pem',
 
     'config_dir' => __DIR__,

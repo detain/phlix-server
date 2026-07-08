@@ -16,7 +16,6 @@ use Workerman\MySQL\Connection;
  */
 class LibraryManagerCacheTest extends TestCase
 {
-    private Connection $db;
     private MediaScanner $scanner;
     private FolderWatcher $watcher;
     private int $queryCount = 0;
@@ -29,7 +28,6 @@ class LibraryManagerCacheTest extends TestCase
         // Reset cache before each test
         LibraryManager::clearCache();
 
-        $this->db = $this->createMock(Connection::class);
         $this->scanner = $this->createMock(MediaScanner::class);
         $this->watcher = $this->createMock(FolderWatcher::class);
 
@@ -43,7 +41,7 @@ class LibraryManagerCacheTest extends TestCase
     private function mockDbWithQueryTracking(): Connection
     {
         $db = $this->createMock(Connection::class);
-        $db->method('query')->willReturnCallback(function (string $sql) use (&$queryCount) {
+        $db->method('query')->willReturnCallback(function (string $sql) {
             $this->queryCount++;
             if (str_contains($sql, 'SELECT')) {
                 return [
@@ -123,7 +121,6 @@ class LibraryManagerCacheTest extends TestCase
 
         $result = $manager->getAllLibraries();
 
-        $this->assertIsArray($result);
         $this->assertEmpty($result);
     }
 
@@ -333,9 +330,8 @@ class LibraryManagerCacheTest extends TestCase
         LibraryManager::clearCache();
 
         // Should not throw any exception
+        $this->expectNotToPerformAssertions();
         LibraryManager::clearCache();
-
-        $this->assertTrue(true); // If we get here, no exception was thrown
     }
 
     public function testMultipleInstancesShareCache(): void
@@ -352,7 +348,6 @@ class LibraryManagerCacheTest extends TestCase
         $db2->method('query')->willReturnCallback(function (string $sql) {
             // This should NOT be called if cache is working
             $this->fail('Second instance should use cached data, not query DB');
-            return [];
         });
 
         $manager2 = new LibraryManager($db2, $this->scanner, $this->watcher);

@@ -32,7 +32,7 @@ class FolderWatcherTest extends TestCase
         $watcher = new FolderWatcher();
         $watcher->setCheckInterval(60);
 
-        // Test passes if no exception is thrown
-        $this->assertTrue(true);
+        // The interval setter persists the configured value.
+        $this->assertSame(60, $watcher->getCheckInterval());
     }
 }

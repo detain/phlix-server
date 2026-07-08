@@ -24,7 +24,7 @@ final class ScanJobRepositoryTest extends TestCase
 {
     public function testEnqueueInsertsQueuedRowAndReturnsGeneratedId(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
             ->method('query')
@@ -164,7 +164,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testUpdateProgressWritesOnlyKnownCountersAndPath(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
             ->method('query')
@@ -201,7 +201,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testMarkCompletedSetsStatusAndOptionalFinalCounts(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
             ->method('query')
@@ -224,7 +224,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testMarkCompletedWithoutCountsStillStampsStatus(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
             ->method('query')
@@ -370,7 +370,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testGetHistoryForLibraryReturnsDecodedRows(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             static function (string $sql, ?array $params = null) use (&$captured) {
@@ -396,7 +396,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testGetHistoryForLibraryClampsLimitToUpperBound(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             static function (string $sql, ?array $params = null) use (&$captured) {
@@ -414,7 +414,7 @@ final class ScanJobRepositoryTest extends TestCase
 
     public function testGetHistoryForLibraryClampsLimitToLowerBound(): void
     {
-        $captured = [];
+        $captured = ['sql' => '', 'params' => []];
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
             static function (string $sql, ?array $params = null) use (&$captured) {

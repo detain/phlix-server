@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Media\Library;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoLibraryManager;
@@ -19,6 +20,7 @@ class PhotoLibraryManagerTest extends TestCase
     private PhotoLibraryManager $manager;
     private PhotoScanner $scanner;
     private ItemRepository $itemRepo;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -188,7 +190,6 @@ class PhotoLibraryManagerTest extends TestCase
 
         $result = $this->manager->getPhotosGroupedByDate('lib-1');
 
-        $this->assertIsArray($result);
         // Since all items have the same date, there should be one group
         $this->assertNotEmpty($result, 'Result should not be empty');
         // The key should be a date string (YYYY-MM-DD)

@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Media\Library;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\AudiobookProgress;
 use Phlix\Media\Library\AudiobookProgressStore;
@@ -9,6 +10,7 @@ use Workerman\MySQL\Connection;
 
 class AudiobookProgressStoreTest extends TestCase
 {
+    /** @return Connection&MockObject */
     private function createMockConnection(): Connection
     {
         return $this->createMock(Connection::class);

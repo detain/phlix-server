@@ -162,8 +162,8 @@ final class AvatarStorageTest extends TestCase
     {
         // Should not throw - reaching here without exception is the test
         $this->storage->delete('user-nonexistent');
-        // Assert the method returns void (reaches this point without throwing)
-        $this->assertTrue(true, 'delete() should not throw for non-existent avatar');
+        // delete() is a safe no-op: the (never-present) avatar stays absent.
+        $this->assertNull($this->storage->path('user-nonexistent'), 'delete() should not throw for non-existent avatar');
     }
 
     public function testPathReturnsNullWhenNone(): void

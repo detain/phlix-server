@@ -67,6 +67,7 @@ final class AdminMiddlewareTest extends TestCase
 
         $this->assertNotNull($response);
         $this->assertSame(403, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('auth.not_admin', $body['code'] ?? null);
@@ -87,6 +88,7 @@ final class AdminMiddlewareTest extends TestCase
 
         $this->assertNotNull($response);
         $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('auth.required', $body['code'] ?? null);

@@ -68,6 +68,7 @@ class SubtitleControllerTest extends TestCase
         $response = $this->controller($repo, $ffmpeg)->listTracks(new Request(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{tracks: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertCount(1, $body['tracks'], 'the bitmap track is excluded');
@@ -84,6 +85,7 @@ class SubtitleControllerTest extends TestCase
             ->listTracks(new Request(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame([], $body['tracks']);
     }

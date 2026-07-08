@@ -46,6 +46,7 @@ final class ThemeMusicStreamControllerTest extends TestCase
             new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::CHILD_FIRST
         );
+        /** @var \SplFileInfo $f */
         foreach ($it as $f) {
             $f->isDir() ? rmdir($f->getPathname()) : unlink($f->getPathname());
         }

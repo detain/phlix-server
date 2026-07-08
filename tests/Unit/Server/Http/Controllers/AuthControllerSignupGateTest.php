@@ -49,6 +49,7 @@ final class AuthControllerSignupGateTest extends TestCase
         $response = $controller->register($request, []);
 
         $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('pending', $body['status']);
@@ -76,6 +77,7 @@ final class AuthControllerSignupGateTest extends TestCase
         $response = $controller->register($request, []);
 
         $this->assertSame(403, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('auth.signups_disabled', $body['code']);
         $this->assertArrayHasKey('error', $body);
@@ -96,6 +98,7 @@ final class AuthControllerSignupGateTest extends TestCase
         $response = $controller->login($request, []);
 
         $this->assertSame(403, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('auth.account_pending', $body['code']);
         $this->assertArrayHasKey('error', $body);
@@ -116,6 +119,7 @@ final class AuthControllerSignupGateTest extends TestCase
         $response = $controller->login($request, []);
 
         $this->assertSame(403, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('auth.account_disabled', $body['code']);
     }

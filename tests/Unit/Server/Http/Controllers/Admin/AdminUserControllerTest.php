@@ -21,6 +21,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class AdminUserControllerTest extends TestCase
 {
+    /**
+     * @param array<string, mixed> $body
+     */
     private function makeRequest(array $body = []): Request
     {
         $request = new Request();
@@ -65,7 +68,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->list();
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{users: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('users', $body);
         $this->assertCount(2, $body['users']);
@@ -83,7 +86,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->list();
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{users: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('users', $body);
         $this->assertCount(0, $body['users']);
@@ -107,7 +110,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->get($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{user: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('user', $body);
         $this->assertSame('alice', $body['user']['username']);
@@ -136,7 +139,7 @@ final class AdminUserControllerTest extends TestCase
 
         $this->assertLessThan(500, $response->statusCode);
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{user: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('alice', $body['user']['username']);
     }
@@ -204,7 +207,7 @@ final class AdminUserControllerTest extends TestCase
         ]));
 
         $this->assertSame(400, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Invalid username', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
@@ -227,7 +230,7 @@ final class AdminUserControllerTest extends TestCase
         ]));
 
         $this->assertSame(400, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Email already exists', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
@@ -248,7 +251,7 @@ final class AdminUserControllerTest extends TestCase
         ]));
 
         $this->assertSame(400, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{error: mixed, field_errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Invalid password', $body['error']);
         $this->assertArrayHasKey('field_errors', $body);
@@ -615,7 +618,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->resetPassword($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{message: string} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
         // S7+F1: new_password must NOT be in the response (security fix)
@@ -662,7 +665,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->list($request);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{users: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(1, $body['users']);
         $this->assertSame('pending', $body['users'][0]['status']);
@@ -686,7 +689,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->list($request);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{users: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(2, $body['users']);
     }
@@ -846,7 +849,7 @@ final class AdminUserControllerTest extends TestCase
         $response = $controller->reject($this->makeRequest(), ['id' => '3']);
 
         $this->assertSame(400, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertStringContainsString('pending', $body['error']);
     }

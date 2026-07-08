@@ -30,6 +30,7 @@ final class SignedUrlMiddlewareTest extends TestCase
 
         $request = new Request();
         $request->path = $path;
+        /** @var array<string, array<mixed>|string> $query */
         $request->query = $query;
 
         return $request;
@@ -61,6 +62,7 @@ final class SignedUrlMiddlewareTest extends TestCase
 
         $this->assertInstanceOf(Response::class, $response);
         $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('auth.required', $body['code']);
         // Non-OPDS routes must NOT emit a Basic challenge (would pop a browser dialog).
@@ -87,6 +89,7 @@ final class SignedUrlMiddlewareTest extends TestCase
 
         $request = new Request();
         $request->path = '/api/v1/photo/photos/SECRET/full';
+        /** @var array<string, array<mixed>|string> $query */
         $request->query = $query;
 
         $response = (new SignedUrlMiddleware(false, 'Phlix', null, $this->signer))($request);
@@ -126,13 +129,14 @@ final class SignedUrlMiddlewareTest extends TestCase
 
     public function testOpdsChallengesWhenNoCredentialsSupplied(): void
     {
-        $validator = static fn (string $u, string $p): ?string => 'user-1';
+        $validator = static fn (string $u, string $p): string => 'user-1';
 
         $request = new Request();
         $request->path = '/opds/v1.2';
 
         $response = SignedUrlMiddleware::forOpds($validator, $this->signer)($request);
 
+        $this->assertInstanceOf(Response::class, $response);
         $this->assertSame(401, $response->statusCode);
         $this->assertArrayHasKey('WWW-Authenticate', $response->headers);
     }
@@ -140,7 +144,7 @@ final class SignedUrlMiddlewareTest extends TestCase
     public function testOpdsRejectsMalformedBasicHeaderWithoutCallingValidator(): void
     {
         $called = false;
-        $validator = static function (string $u, string $p) use (&$called): ?string {
+        $validator = static function (string $u, string $p) use (&$called): string {
             $called = true;
 
             return 'user-1';
@@ -152,6 +156,7 @@ final class SignedUrlMiddlewareTest extends TestCase
 
         $response = SignedUrlMiddleware::forOpds($validator, $this->signer)($request);
 
+        $this->assertInstanceOf(Response::class, $response);
         $this->assertSame(401, $response->statusCode);
         $this->assertFalse($called, 'validator must not run on a malformed header');
     }
@@ -168,7 +173,7 @@ final class SignedUrlMiddlewareTest extends TestCase
 
     public function testSessionTakesPrecedenceOverBasic(): void
     {
-        $validator = static fn (string $u, string $p): ?string => 'basic-user';
+        $validator = static fn (string $u, string $p): string => 'basic-user';
         $request = new Request();
         $request->path = '/opds/v1.2';
         $request->userId = 'session-user';

@@ -409,13 +409,25 @@ class TranscodeManager
             throw new \RuntimeException('Media item has no source path');
         }
 
+        // S6: reuse A1's persisted source metadata when it is fresh (real dimensions
+        // + a stored duration), so play-start no longer HARD-depends on a live probe.
+        // The probe below is still issued — it is now coroutine-friendly / non-blocking
+        // (see FfmpegRunner::probe()), so it never stalls the worker — because embedded
+        // TEXT-subtitle detection needs the live stream list, which A1 does not persist.
+        // But when persisted metadata is fresh, the source duration comes straight from
+        // the scan (no probe dependency, no redundant persist write), the ABR ladder is
+        // built from the persisted profile (see sourceProfileForItem()), and a probe
+        // FAILURE is tolerated (we degrade to no embedded-subtitle sidecars) rather than
+        // refusing playback for an item we already know how to describe.
+        $metadataFresh = $this->sourceMetadataFresh($item);
+
         $probe = $this->ffmpeg->probe($itemPath);
-        if (!$probe) {
+        if ($probe === null && !$metadataFresh) {
             throw new \RuntimeException('Failed to probe media file');
         }
-
-        // Record the precise source duration so the UI shows a correct length.
-        $this->persistProbedDuration($mediaItemId, $item, $probe);
+        // Downstream extractors treat an empty probe as "no streams / no subtitles";
+        // this only occurs on the tolerated fresh-metadata + probe-failure path.
+        $probe ??= [];
 
         // On-demand seek-aware VOD. The media playlist is published COMPLETE up front
         // (the full title duration, every segment, EXT-X-ENDLIST) and each MPEG-TS
@@ -424,7 +436,15 @@ class TranscodeManager
         // anywhere — including far past what has been produced — instead of the old
         // single linear CMAF encode's live, ever-growing playlist (which made the
         // duration keep climbing and seeking snap back to the buffered region).
-        $duration = $this->probedDurationSeconds($probe);
+        if ($metadataFresh) {
+            // Source length is authoritative from the scan; skip the probe-derived
+            // value and the idempotent persist write entirely.
+            $duration = $this->persistedDurationSeconds($item);
+        } else {
+            // Record the precise source duration so the UI shows a correct length.
+            $this->persistProbedDuration($mediaItemId, $item, $probe);
+            $duration = $this->probedDurationSeconds($probe);
+        }
         if ($duration <= 0.0) {
             throw new \RuntimeException('Could not determine media duration for HLS playlist');
         }
@@ -473,6 +493,19 @@ class TranscodeManager
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
         // are skipped). Detection is a cheap parse of the in-memory probe; extraction
         // runs in a detached job below (video no longer needs a background encode).
+        //
+        // S6 SCOPE NOTE — do not delete the probe call above on the strength of the
+        // fresh-metadata skip. The probe above is retained specifically to feed THIS
+        // call: A1 persists only the video + primary-audio summary in
+        // `metadata_json['source']`/`media_streams` (see sourceMetadataFresh() /
+        // persistedSourceMetadata()), never subtitle stream descriptors. So even on
+        // the "fresh metadata" fast path (duration + ABR ladder skip the probe
+        // entirely), `$probe` is still needed here — `detectTextTracks()` has no
+        // other source for the stream list. If a future change persists subtitle
+        // descriptors at scan time (the follow-up flagged in S6's changelog entry),
+        // THAT is the point at which this call could be removed/short-circuited —
+        // removing it first, without that persistence, would silently drop embedded
+        // subtitles for every backfilled item that hits the fresh-metadata path.
         $tracks = $this->subtitleExtractor->detectTextTracks($probe);
         $extractCmds = [];
         foreach ($tracks as $track) {
@@ -2069,6 +2102,63 @@ class TranscodeManager
         }
 
         return $this->sourceProfileFromProbe($probe);
+    }
+
+    /**
+     * Whether A1's persisted source metadata is fresh enough to build the HLS job
+     * without leaning on a live probe.
+     *
+     * "Fresh" means the scan captured real source dimensions (width + height both
+     * > 0, mirroring {@see sourceProfileForItem()}'s gate so the ladder source and
+     * the skip decision never disagree) AND a positive source duration is stored
+     * under `metadata_json['duration_seconds']`. Older items that predate the A1
+     * backfill fail this test and fall back to the (now non-blocking) probe.
+     *
+     * @param array<string, mixed> $item The media_items row (carries metadata_json).
+     */
+    private function sourceMetadataFresh(array $item): bool
+    {
+        $source = $this->persistedSourceMetadata($item);
+        if (
+            $source === null
+            || $this->intVal($source['width'] ?? null) <= 0
+            || $this->intVal($source['height'] ?? null) <= 0
+        ) {
+            return false;
+        }
+
+        return $this->persistedDurationSeconds($item) > 0.0;
+    }
+
+    /**
+     * Read the persisted source duration (seconds) from `metadata_json`.
+     *
+     * Reads the same `duration_seconds` key {@see persistProbedDuration()} writes,
+     * so the scan- and transcode-time paths agree on the stored length. Returns
+     * 0.0 when absent or non-positive.
+     *
+     * @param array<string, mixed> $item The media_items row (carries metadata_json).
+     */
+    private function persistedDurationSeconds(array $item): float
+    {
+        $metaRaw = $item['metadata_json'] ?? null;
+        $meta = null;
+        if (is_string($metaRaw) && $metaRaw !== '') {
+            $decoded = json_decode($metaRaw, true);
+            if (is_array($decoded)) {
+                $meta = $decoded;
+            }
+        } elseif (is_array($metaRaw)) {
+            $meta = $metaRaw;
+        }
+        if ($meta === null) {
+            return 0.0;
+        }
+
+        $raw = $meta['duration_seconds'] ?? null;
+        $seconds = is_numeric($raw) ? (float) $raw : 0.0;
+
+        return $seconds > 0.0 ? $seconds : 0.0;
     }
 
     /**

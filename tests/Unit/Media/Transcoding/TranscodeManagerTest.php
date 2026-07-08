@@ -305,6 +305,76 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('X', $decoded['name'], 'existing metadata is preserved');
     }
 
+    public function testEnsureHlsJobSkipsDurationProbeWorkWhenSourceMetadataFresh(): void
+    {
+        // S6: when A1 persisted BOTH real source dims AND a duration, the source
+        // length is taken from the scan — the probe-derived duration is NOT used and
+        // NO (redundant) metadata_json UPDATE is issued. The probe deliberately
+        // reports a DIFFERENT duration to prove the persisted 1200 wins.
+        $captured = [];
+        $meta = json_encode([
+            'duration_seconds' => 1200,
+            'source' => ['width' => 1920, 'height' => 1080, 'video_codec' => 'h264', 'audio_codec' => 'aac'],
+        ]);
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv', 'metadata_json' => $meta], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1920, 'height' => 1080],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '999.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        foreach ($captured as [$sql]) {
+            $this->assertStringNotContainsString(
+                'UPDATE media_items SET metadata_json',
+                $sql,
+                'no redundant duration persist when source metadata is fresh'
+            );
+        }
+        // The persisted 1200s (not the probe's 999s) is stamped onto the job row.
+        $this->assertSame(1200, $this->capturedJobInsert($captured)['duration']);
+    }
+
+    public function testEnsureHlsJobToleratesProbeFailureWhenSourceMetadataFresh(): void
+    {
+        // S6: a live probe FAILURE (null) no longer refuses playback when the scan
+        // already described the source — the job is still created (from persisted
+        // duration + source), just without embedded-subtitle sidecars.
+        $captured = [];
+        $meta = json_encode([
+            'duration_seconds' => 900,
+            'source' => ['width' => 1280, 'height' => 720, 'video_codec' => 'h264', 'audio_codec' => 'aac'],
+        ]);
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv', 'metadata_json' => $meta], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn(null);
+
+        $result = $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $this->assertSame('completed', $result['status']);
+        $this->assertSame([], $result['subtitles'], 'no subtitles detectable without a probe');
+        $this->assertSame(900, $this->capturedJobInsert($captured)['duration']);
+    }
+
+    public function testEnsureHlsJobStillThrowsOnProbeFailureWithoutFreshMetadata(): void
+    {
+        // Unchanged pre-S6 behavior: with no persisted source metadata to fall back
+        // on, a failed probe must still refuse the job.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv', 'metadata_json' => '{"name":"X"}'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn(null);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Failed to probe media file');
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+    }
+
     public function testReapStaleRunningJobsFailsGhostWithMissingDir(): void
     {
         // A 'running' row whose working dir is gone is a ghost from a dead worker;

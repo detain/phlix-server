@@ -71,7 +71,10 @@ class FfmpegRunner
     /**
      * Probes a media file for technical information.
      *
-     * Uses FFprobe to extract stream details and format information.
+     * Uses FFprobe to extract stream details and format information. The actual
+     * command execution is delegated to {@see runProbeCommand()}, which is
+     * coroutine-aware (non-blocking under Swoole, S6) — this method's parsing and
+     * return shape are unaffected by that and have not changed.
      *
      * @param string $inputPath Path to the media file to probe
      *
@@ -94,8 +97,8 @@ class FfmpegRunner
             escapeshellarg($inputPath)
         );
 
-        $output = shell_exec($cmd);
-        if (!is_string($output) || $output === '') {
+        $output = $this->runProbeCommand($cmd);
+        if ($output === null || $output === '') {
             return null;
         }
 
@@ -135,6 +138,53 @@ class FfmpegRunner
             'streams' => $streams,
             'format' => $format,
         ];
+    }
+
+    /**
+     * Executes an ffprobe command, coroutine-friendly under the Swoole runtime.
+     *
+     * The phlix server runs on Workerman with a Swoole coroutine event loop and a
+     * deliberately curated hook mask ({@see \Phlix\Server\Runtime\SwooleRuntime})
+     * that intentionally does NOT hook `proc_open`/`exec`/`shell_exec` — so a plain
+     * `shell_exec()` here would block the whole worker (every concurrent connection)
+     * for the full duration of the ffprobe process. That stall is exactly what S6
+     * removes: on the hot paths (`ensureHlsJob` on play-start, the scanner per file)
+     * ffprobe can take tens to hundreds of milliseconds.
+     *
+     * When running inside a coroutine, {@see \Swoole\Coroutine\System::exec()} is
+     * used instead. It drives the child process through Swoole's async scheduler and
+     * yields to the event loop while ffprobe runs, so other connections keep being
+     * served. It is a native coroutine primitive and therefore works regardless of
+     * the runtime hook mask (it does not rely on the `proc_open` hook being enabled).
+     *
+     * Outside a coroutine — the CLI scanner/backfill, unit tests, or any non-Swoole
+     * runtime — it falls back to a blocking `shell_exec()`, which is correct there
+     * (no event loop to stall). Both paths run the command via `/bin/sh -c`, so the
+     * `escapeshellarg()`-quoted arguments and the `2>/dev/null` redirect behave
+     * identically; only stdout (the ffprobe JSON) is captured.
+     *
+     * @param string $cmd Fully built, shell-escaped ffprobe command line.
+     *
+     * @return string|null Captured stdout, or null when execution failed.
+     */
+    private function runProbeCommand(string $cmd): ?string
+    {
+        if (
+            extension_loaded('swoole')
+            && class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0
+        ) {
+            /** @var array{code?: int, signal?: int, output?: string}|false $result */
+            $result = \Swoole\Coroutine\System::exec($cmd);
+            if (is_array($result) && isset($result['output']) && is_string($result['output'])) {
+                return $result['output'];
+            }
+            return null;
+        }
+
+        $output = shell_exec($cmd);
+
+        return is_string($output) ? $output : null;
     }
 
     /**

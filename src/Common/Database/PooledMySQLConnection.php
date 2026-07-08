@@ -29,12 +29,19 @@ use Workerman\MySQL\Connection;
  *
  * This front never opens its own socket: it deliberately does NOT call the
  * parent constructor (which would `connect()`); it only ever delegates the
- * methods Phlix actually uses — `query()`, the `*Trans()` family and
- * `lastInsertId()` — to a leased raw connection.
+ * literal-SQL methods Phlix uses — `query()` plus the row-returning read
+ * helpers `row()`/`single()`/`column()`, the `*Trans()` family and
+ * `lastInsertId()` — to a leased raw connection. It intentionally does NOT
+ * delegate the fluent query-builder (`select()`/`from()`/`where()`/…): that API
+ * accumulates state on a single connection instance across calls, which is
+ * incompatible with per-coroutine leasing; Phlix never uses it (always the
+ * `query($sql, $params)` form).
  *
- * NOTE: enabled only when `connections.mysql.pool_enabled` is true. It must be
- * validated against a live coroutine runtime before trusting under load;
- * `pool_enabled=false` (the default) keeps the proven single-connection mutex.
+ * NOTE: selected when `connections.mysql.pool_enabled` is true, which is now the
+ * DEFAULT (Track S / S9) after this front was validated against the live coroutine
+ * runtime under load. Setting `DB_POOL_ENABLED=0` (`pool_enabled=false`) is the
+ * documented fallback: it restores the proven single {@see PhlixMySQLConnection}
+ * socket serialised by its per-connection coroutine mutex.
  *
  * @since 1.7
  */
@@ -105,6 +112,51 @@ final class PooledMySQLConnection extends Connection
     public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
     {
         return $this->lease()->query($query, $params, $fetchmode);
+    }
+
+    /**
+     * Fetch a single row for a literal SQL string.
+     *
+     * Unlike {@see query()}, the parent's {@see Connection::row()} always fetches
+     * a row regardless of the leading keyword, so it is the correct primitive for
+     * a row-returning statement `query()` doesn't special-case (e.g. `EXPLAIN`).
+     * Delegated like {@see query()} because it is stateless w.r.t. the fluent
+     * builder when called with an explicit `$query`.
+     *
+     * @param string                        $query
+     * @param array<int|string, mixed>|null  $params
+     * @param int                            $fetchmode
+     * @return mixed
+     */
+    public function row($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+    {
+        return $this->lease()->row($query, $params, $fetchmode);
+    }
+
+    /**
+     * Fetch a single scalar value for a literal SQL string. Delegated like
+     * {@see query()}.
+     *
+     * @param string                        $query
+     * @param array<int|string, mixed>|null  $params
+     * @return mixed
+     */
+    public function single($query = '', $params = null)
+    {
+        return $this->lease()->single($query, $params);
+    }
+
+    /**
+     * Fetch a single column (list of values) for a literal SQL string.
+     * Delegated like {@see query()}.
+     *
+     * @param string                        $query
+     * @param array<int|string, mixed>|null  $params
+     * @return mixed
+     */
+    public function column($query = '', $params = null)
+    {
+        return $this->lease()->column($query, $params);
     }
 
     public function beginTrans(): bool

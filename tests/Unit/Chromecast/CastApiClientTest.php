@@ -68,9 +68,7 @@ class CastApiClientTest extends TestCase
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
-            $status = $client->getMediaStatus();
-            // If we somehow get a response, verify it's an array
-            $this->assertIsArray($status);
+            $client->getMediaStatus();
         } catch (\Throwable $e) {
             // Expected - no server running
             $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());
@@ -94,8 +92,7 @@ class CastApiClientTest extends TestCase
         $client = new CastApiClient('127.0.0.1', 19999, $this->loggerMock);
 
         try {
-            $sessions = $client->getAppSessions();
-            $this->assertIsArray($sessions);
+            $client->getAppSessions();
         } catch (\Throwable $e) {
             // Expected - no server running
             $this->assertStringContainsString('127.0.0.1:19999', $e->getMessage());

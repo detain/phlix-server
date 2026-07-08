@@ -139,7 +139,7 @@ final class MediaServicesProviderTest extends TestCase
 
         /** @var list<string> $resolved */
         $resolved = $container->get('matching.noise_suffixes');
-        $this->assertSame(array_values(TitleSuffixStripper::NOISE_SUFFIXES), $resolved);
+        $this->assertSame(TitleSuffixStripper::NOISE_SUFFIXES, $resolved);
     }
 
     /**
@@ -156,7 +156,7 @@ final class MediaServicesProviderTest extends TestCase
 
         /** @var list<string> $resolved */
         $resolved = $container->get('matching.noise_suffixes');
-        $this->assertSame(array_values(TitleSuffixStripper::NOISE_SUFFIXES), $resolved);
+        $this->assertSame(TitleSuffixStripper::NOISE_SUFFIXES, $resolved);
     }
 
     /**
@@ -233,6 +233,7 @@ final class MediaServicesProviderTest extends TestCase
         $container = $builder->build();
 
         $config = $container->get(PriorityConfig::class);
+        $this->assertInstanceOf(PriorityConfig::class, $config);
         $this->assertSame(['tmdb', 'imdb'], $config->orderFor('movie'));
         $this->assertSame('first', $config->genresMode());
     }

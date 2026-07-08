@@ -24,7 +24,8 @@ function getPortForwardService(): PortForwardService
     $pfConfig = is_array($config['port_forwarding'] ?? null) ? $config['port_forwarding'] : [];
 
     $autoEnabled = (bool) ($pfConfig['auto'] ?? true);
-    $port = (int) ($pfConfig['port'] ?? 32400);
+    $portRaw = $pfConfig['port'] ?? 32400;
+    $port = is_numeric($portRaw) ? (int) $portRaw : 32400;
 
     return new PortForwardService(
         new UpnpIgdClient(),
@@ -90,11 +91,11 @@ function cmdInfo(): void
     $connections = @net_get_interfaces();
     if (is_array($connections)) {
         foreach ($connections as $info) {
-            if (is_array($info) && isset($info['unicast'])) {
+            if (is_array($info) && isset($info['unicast']) && is_array($info['unicast'])) {
                 foreach ($info['unicast'] as $addr) {
                     if (is_array($addr) && isset($addr['address'])) {
                         $ip = $addr['address'];
-                        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                        if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
                             $localIp = $ip;
                             break 2;
                         }

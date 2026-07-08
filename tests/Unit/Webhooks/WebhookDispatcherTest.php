@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Webhooks;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Net\SsrfGuard;
@@ -13,7 +14,9 @@ use DateTimeImmutable;
 
 class WebhookDispatcherTest extends TestCase
 {
+    /** @var Connection&MockObject */
     private Connection $db;
+    /** @var StructuredLogger&MockObject */
     private StructuredLogger $logger;
     private WebhookDispatcher $dispatcher;
 
@@ -188,7 +191,6 @@ class WebhookDispatcherTest extends TestCase
 
         $webhooks = $this->dispatcher->listWebhooks();
 
-        $this->assertIsArray($webhooks);
         $this->assertCount(2, $webhooks);
         $this->assertEquals('wh-1', $webhooks[0]['id']);
         $this->assertEquals(['playback.started'], $webhooks[0]['events']);
@@ -203,7 +205,6 @@ class WebhookDispatcherTest extends TestCase
 
         $webhooks = $this->dispatcher->listWebhooks();
 
-        $this->assertIsArray($webhooks);
         $this->assertCount(0, $webhooks);
     }
 

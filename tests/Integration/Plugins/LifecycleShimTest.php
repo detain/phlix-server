@@ -23,12 +23,8 @@ final class LifecycleShimTest extends TestCase
         $impl = new LegacyImplementer();
 
         $this->assertInstanceOf(LegacyLifecycleInterface::class, $impl);
+        // Legacy implementers must satisfy the shared LifecycleInterface contract.
         $this->assertInstanceOf(SharedLifecycleInterface::class, $impl);
-
-        $this->assertTrue(
-            is_a($impl, SharedLifecycleInterface::class),
-            'Legacy implementers must satisfy the shared LifecycleInterface contract.'
-        );
     }
 }
 

@@ -60,7 +60,7 @@ $finder = new DuplicateFinder($repo);
 // (begin/commit/rollBackTrans), honoured by BOTH the single-socket
 // PhlixMySQLConnection and the PooledMySQLConnection (DB_POOL_ENABLED=1), so the
 // --apply path works in both pool modes. (Only built on --apply.)
-$merger = ($apply && $db instanceof Connection) ? new SeriesMerger($repo, $db) : null;
+$merger = $apply ? new SeriesMerger($repo, $db) : null;
 
 echo $apply
     ? "MODE: APPLY (merging duplicate groups)\n"

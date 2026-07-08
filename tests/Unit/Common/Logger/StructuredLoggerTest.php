@@ -9,6 +9,12 @@ use Monolog\Level;
 class StructuredLoggerTest extends TestCase
 {
     private string $tempDir;
+    /**
+     * @var array{
+     *     handlers: array{file: array{type: string, path: string, level: string}},
+     *     processors: array{context: bool, request_id: bool, user_id: bool}
+     * }
+     */
     private array $config;
 
     protected function setUp(): void
@@ -35,7 +41,7 @@ class StructuredLoggerTest extends TestCase
     protected function tearDown(): void
     {
         // Clean up temp files
-        array_map('unlink', glob($this->tempDir . '/*'));
+        array_map('unlink', glob($this->tempDir . '/*') ?: []);
         rmdir($this->tempDir);
     }
 

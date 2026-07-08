@@ -26,8 +26,7 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateStore;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintFactory;
 use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
-use Psr\Log\StreamHandler;
-use Psr\Log\LoggerFactory;
+use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
 use Monolog\Level;
 
@@ -37,7 +36,7 @@ $db = ConnectionPool::getConnection('mysql');
 
 $itemRepo = new ItemRepository($db);
 $fingerprintRepo = new FingerprintRepository($itemRepo);
-$chromaPrint = (new ChromaPrintFactory())->create();
+$chromaPrint = ChromaPrintFactory::build('fpcalc');
 $candidateStore = new MarkerCandidateStore($config['job_queue_dir']);
 $candidateRepo = new MarkerCandidateRepository($itemRepo);
 

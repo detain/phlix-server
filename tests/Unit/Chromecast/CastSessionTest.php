@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Chromecast;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Chromecast\CastApiClient;
 use Phlix\Chromecast\CastDevice;
@@ -13,6 +14,7 @@ use Phlix\Session\PlaybackController;
 
 class CastSessionTest extends TestCase
 {
+    /** @var CastApiClient&MockObject */
     private CastApiClient $clientMock;
     private PlaybackController $playbackControllerMock;
     private StructuredLogger $loggerMock;
@@ -90,7 +92,6 @@ class CastSessionTest extends TestCase
         );
 
         $this->assertEquals(CastSession::STATE_PLAYING, $session->getState());
-        $this->assertIsArray($result);
     }
 
     public function testPlayTransitionsToPlaying(): void
@@ -120,7 +121,6 @@ class CastSessionTest extends TestCase
         $result = $session->play();
 
         $this->assertEquals(CastSession::STATE_PLAYING, $session->getState());
-        $this->assertIsArray($result);
     }
 
     public function testPauseTransitionsToPaused(): void
@@ -150,7 +150,6 @@ class CastSessionTest extends TestCase
         $result = $session->pause();
 
         $this->assertEquals(CastSession::STATE_PAUSED, $session->getState());
-        $this->assertIsArray($result);
     }
 
     public function testSeekSendsSeekCommand(): void
@@ -179,7 +178,7 @@ class CastSessionTest extends TestCase
 
         $result = $session->seek(120000); // 120000 ms = 120 seconds
 
-        $this->assertIsArray($result);
+        $this->assertSame(['success' => true], $result);
     }
 
     public function testStopResetsState(): void
@@ -209,7 +208,6 @@ class CastSessionTest extends TestCase
         $result = $session->stop();
 
         $this->assertEquals(CastSession::STATE_IDLE, $session->getState());
-        $this->assertIsArray($result);
     }
 
     public function testGetMediaStatusParsesCurrentTime(): void
@@ -244,7 +242,7 @@ class CastSessionTest extends TestCase
 
         $status = $session->getMediaStatus();
 
-        $this->assertIsArray($status);
+        $this->assertArrayHasKey('status', $status);
     }
 
     public function testSessionStateConstants(): void

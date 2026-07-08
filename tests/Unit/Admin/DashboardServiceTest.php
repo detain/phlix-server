@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Admin;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\DashboardService;
 use Phlix\Media\Library\ItemRepository;
@@ -15,26 +16,31 @@ use Workerman\MySQL\Connection;
 
 class DashboardServiceTest extends TestCase
 {
+    /** @return Connection&MockObject */
     private function createMockConnection(): Connection
     {
         return $this->createMock(Connection::class);
     }
 
+    /** @return StatsCollector&MockObject */
     private function createMockStatsCollector(): StatsCollector
     {
         return $this->createMock(StatsCollector::class);
     }
 
+    /** @return SessionManager&MockObject */
     private function createMockSessionManager(): SessionManager
     {
         return $this->createMock(SessionManager::class);
     }
 
+    /** @return StreamManager&MockObject */
     private function createMockStreamManager(): StreamManager
     {
         return $this->createMock(StreamManager::class);
     }
 
+    /** @return ItemRepository&MockObject */
     private function createMockItemRepository(): ItemRepository
     {
         return $this->createMock(ItemRepository::class);
@@ -87,7 +93,6 @@ class DashboardServiceTest extends TestCase
 
         $result = $service->getNowPlaying();
 
-        $this->assertIsArray($result);
         $this->assertCount(1, $result);
         $this->assertEquals('stream-123', $result[0]['stream_id']);
         $this->assertEquals('user-abc', $result[0]['user_id']);
@@ -134,7 +139,6 @@ class DashboardServiceTest extends TestCase
 
         $result = $service->getTopUsers(10, 30);
 
-        $this->assertIsArray($result);
         $this->assertCount(2, $result);
         $this->assertEquals('user-123', $result[0]['user_id']);
         $this->assertEquals('alice', $result[0]['username']);
@@ -189,7 +193,6 @@ class DashboardServiceTest extends TestCase
 
         $result = $service->getTopMedia(10, 30);
 
-        $this->assertIsArray($result);
         $this->assertCount(2, $result);
         $this->assertEquals('media-123', $result[0]['media_item_id']);
         $this->assertEquals('Popular Movie', $result[0]['title']);
@@ -234,7 +237,6 @@ class DashboardServiceTest extends TestCase
 
         $result = $service->getStorageSummary();
 
-        $this->assertIsArray($result);
         $this->assertArrayHasKey('movie_bytes', $result);
         $this->assertArrayHasKey('series_bytes', $result);
         $this->assertArrayHasKey('music_bytes', $result);
@@ -328,7 +330,6 @@ class DashboardServiceTest extends TestCase
 
         $result = $service->getRecentActivity(20);
 
-        $this->assertIsArray($result);
         $this->assertGreaterThanOrEqual(1, count($result));
 
         // Find the playback event

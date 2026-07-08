@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Chromecast;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Chromecast\CastDevice;
 use Phlix\Chromecast\CastDiscovery;
@@ -13,6 +14,7 @@ use Phlix\Discovery\Mdns\MdnsService;
 
 class CastDiscoveryTest extends TestCase
 {
+    /** @var MdnsDiscovery&MockObject */
     private MdnsDiscovery $mdnsMock;
     private StructuredLogger $loggerMock;
     private CastDiscovery $discovery;
@@ -74,7 +76,6 @@ class CastDiscoveryTest extends TestCase
         $devices = $this->discovery->discoverDevices();
 
         $this->assertCount(0, $devices);
-        $this->assertIsArray($devices);
     }
 
     public function testDiscoverDevicesHandlesMissingTxtRecords(): void

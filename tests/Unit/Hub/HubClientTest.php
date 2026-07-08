@@ -32,7 +32,7 @@ class HubClientTest extends TestCase
     protected function tearDown(): void
     {
         if (is_dir($this->tmpDir)) {
-            $files = glob($this->tmpDir . '/*');
+            $files = glob($this->tmpDir . '/*') ?: [];
             foreach ($files as $file) {
                 @unlink($file);
             }
@@ -210,7 +210,10 @@ class HubClientTest extends TestCase
         $enrollmentPath = $this->tmpDir . '/hub-enrollment.json';
         $this->assertFileExists($enrollmentPath);
 
-        $data = json_decode(file_get_contents($enrollmentPath), true);
+        $json = file_get_contents($enrollmentPath);
+        $this->assertIsString($json);
+        $data = json_decode($json, true);
+        $this->assertIsArray($data);
         $this->assertEquals('jwt-token', $data['enrollment_jwt']);
         $this->assertEquals('https://hub.example.com/.well-known/jwks.json', $data['hub_jwks_url']);
         $this->assertEquals('server-uuid', $data['server_id']);
@@ -443,7 +446,10 @@ class HubClientTest extends TestCase
 
         // The fresh enrollment must be persisted with the new JWT and a
         // reset enrolled_at timestamp.
-        $data = json_decode(file_get_contents($enrollmentPath), true);
+        $json = file_get_contents($enrollmentPath);
+        $this->assertIsString($json);
+        $data = json_decode($json, true);
+        $this->assertIsArray($data);
         $this->assertEquals('fresh-jwt', $data['enrollment_jwt']);
         $this->assertEquals('server-uuid', $data['server_id']);
         $this->assertEquals('https://hub.example.com', $data['hub_base_url']);
@@ -478,7 +484,10 @@ class HubClientTest extends TestCase
         $this->assertFalse($reEnrolled);
 
         // The stored enrollment must be untouched on failure.
-        $data = json_decode(file_get_contents($enrollmentPath), true);
+        $json = file_get_contents($enrollmentPath);
+        $this->assertIsString($json);
+        $data = json_decode($json, true);
+        $this->assertIsArray($data);
         $this->assertEquals('old-jwt', $data['enrollment_jwt']);
     }
 
@@ -517,7 +526,6 @@ class HubClientTest extends TestCase
         $client = new HubClient($keyManager, $httpClient, $logger, $this->tmpDir);
         $keys = $client->getPublicKeysJwk();
 
-        $this->assertIsArray($keys);
         $this->assertNotEmpty($keys);
         $this->assertEquals('OKP', $keys[0]['kty']);
         $this->assertEquals('EdDSA', $keys[0]['alg']);

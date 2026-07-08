@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Admin;
 
 use DateTime;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\NewsletterSender;
 use Workerman\MySQL\Connection;
@@ -16,6 +17,7 @@ use Workerman\MySQL\Connection;
  */
 class NewsletterSenderTest extends TestCase
 {
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -66,7 +68,6 @@ class NewsletterSenderTest extends TestCase
         $sender = new NewsletterSender($this->db);
         $result = $sender->getDeliveryStats();
 
-        $this->assertIsArray($result);
         $this->assertArrayHasKey('pending', $result);
         $this->assertArrayHasKey('sent', $result);
         $this->assertArrayHasKey('failed', $result);

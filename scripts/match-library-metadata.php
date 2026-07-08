@@ -18,14 +18,14 @@ declare(strict_types=1);
  *   php scripts/match-library-metadata.php --all            # every library
  */
 
-$baseDir = dirname(__DIR__);
-require_once $baseDir . '/vendor/autoload.php';
-require_once __DIR__ . '/bootstrap_env.php';
-
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
+
+$baseDir = dirname(__DIR__);
+require_once $baseDir . '/vendor/autoload.php';
+require_once __DIR__ . '/bootstrap_env.php';
 
 $libraryId = null;
 $all = in_array('--all', $argv, true);

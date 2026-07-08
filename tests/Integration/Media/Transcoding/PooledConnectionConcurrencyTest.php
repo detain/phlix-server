@@ -416,12 +416,13 @@ final class PooledConnectionConcurrencyTest extends TestCase
         });
 
         // No exception (2014 "commands out of sync", corruption, or otherwise)
-        // escaped any coroutine.
-        $this->assertSame([], $errors, 'concurrent churn raised errors: ' . implode(' | ', $errors));
+        // escaped any coroutine. Check the specific fingerprints first, then the
+        // catch-all empty assertion.
         foreach ($errors as $msg) {
             $this->assertStringNotContainsStringIgnoringCase('2014', $msg);
             $this->assertStringNotContainsStringIgnoringCase('out of sync', $msg);
         }
+        $this->assertSame([], $errors, 'concurrent churn raised errors: ' . implode(' | ', $errors));
 
         // No corruption: every value a reader saw was one that had been written
         // by that point (seed 0 .. maxWritten).
@@ -467,8 +468,9 @@ final class PooledConnectionConcurrencyTest extends TestCase
                 : null;
 
             $rows = $pool->query('SELECT duration_seconds FROM transcode_jobs WHERE id = ?', [$jobId]);
-            $dbValue = is_array($rows) && is_numeric($rows[0]['duration_seconds'] ?? null)
-                ? (int) $rows[0]['duration_seconds']
+            $firstRow = is_array($rows) ? ($rows[0] ?? null) : null;
+            $dbValue = is_array($firstRow) && is_numeric($firstRow['duration_seconds'] ?? null)
+                ? (int) $firstRow['duration_seconds']
                 : null;
 
             // CASCADE-deletes the media_item and its transcode_jobs.

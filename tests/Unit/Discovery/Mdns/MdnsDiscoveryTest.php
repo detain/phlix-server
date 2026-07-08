@@ -19,7 +19,7 @@ class MdnsDiscoveryTest extends TestCase
         $discovery = new MdnsDiscovery($socket, null);
         $result = $discovery->discoverChromecast();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverAirplayReturnsArray(): void
@@ -30,7 +30,7 @@ class MdnsDiscoveryTest extends TestCase
         $discovery = new MdnsDiscovery($socket, null);
         $result = $discovery->discoverAirPlay();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverAirplayQueriesBothAirplayAndRaop(): void
@@ -94,13 +94,13 @@ class MdnsDiscoveryTest extends TestCase
 
         $discovery = new MdnsDiscovery($socket, null);
 
+        $this->expectNotToPerformAssertions();
+
         // Should not throw
         $discovery->announceServer('Phlix._phlix._tcp.local.', '_phlix._tcp.local.', 8200, [
             'serverId' => 'test-id',
             'friendlyName' => 'Phlix Server',
         ]);
-
-        $this->assertTrue(true);
     }
 
     public function testAnnounceServerReturnsFalseWhenAvahiNotAvailable(): void
@@ -120,11 +120,10 @@ class MdnsDiscoveryTest extends TestCase
             ['serverId' => 'test-id']
         );
 
-        // If avahi-publish-service is not installed, this returns false
-        // If it is installed, it would return true (and actually try to publish)
-        // We can't fully test the avahi-available path without mocking exec,
-        // but we can at least verify the method runs without error
-        $this->assertIsBool($result);
+        // If avahi-publish-service is not installed, this returns false.
+        // If it is installed, it would return true (and actually try to publish).
+        // The return type is bool by signature; assert it is one of the two.
+        $this->assertContains($result, [true, false], 'announceServer must return a bool');
     }
 
     public function testAnnounceServerReturnsBool(): void
@@ -140,7 +139,7 @@ class MdnsDiscoveryTest extends TestCase
             ['serverId' => 'test-id']
         );
 
-        $this->assertIsBool($result);
+        $this->assertContains($result, [true, false], 'announceServer must return a bool');
     }
 
     /**

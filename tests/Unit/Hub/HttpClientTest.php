@@ -48,8 +48,10 @@ class HttpClientTest extends TestCase
     public function test_httpResponse_body_is_array(): void
     {
         $response = new HttpResponse(200, [], ['keys' => [['kty' => 'OKP']]]);
-        $this->assertIsArray($response->body);
-        $this->assertEquals('OKP', $response->body['keys'][0]['kty']);
+        $keys = $response->body['keys'];
+        $this->assertIsArray($keys);
+        $this->assertIsArray($keys[0]);
+        $this->assertEquals('OKP', $keys[0]['kty']);
     }
 
     public function test_httpResponse_headers_are_accessible(): void

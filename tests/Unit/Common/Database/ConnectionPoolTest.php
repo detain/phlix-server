@@ -11,10 +11,10 @@ class ConnectionPoolTest extends TestCase
     {
         $configPath = __DIR__ . '/../../../../config/database.php';
         
+        $this->expectNotToPerformAssertions();
+
         // This should not throw
         ConnectionPool::init($configPath);
-        
-        $this->assertTrue(true);
     }
 
     public function testGetInstanceReturnsPoolInstance(): void

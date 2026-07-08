@@ -35,6 +35,7 @@ class ThemeMediaFinderTest extends TestCase
             \RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $file) {
+            /** @var \SplFileInfo $file */
             if ($file->isDir()) {
                 rmdir($file->getPathname());
             } else {
@@ -128,6 +129,7 @@ class ThemeMediaFinderTest extends TestCase
         $finder = new ThemeMediaFinder();
         $result = $finder->findForLibrary('lib-123', $this->fixturesDir);
 
+        $this->assertNotNull($result);
         $this->assertNotNull($result->audio);
         $this->assertSame('mp3', $result->audio->format);
     }
@@ -142,6 +144,7 @@ class ThemeMediaFinderTest extends TestCase
         $finder = new ThemeMediaFinder();
         $result = $finder->findForLibrary('lib-123', $this->fixturesDir);
 
+        $this->assertNotNull($result);
         $this->assertNotNull($result->video);
         $this->assertSame('mp4', $result->video->format);
     }
@@ -154,6 +157,7 @@ class ThemeMediaFinderTest extends TestCase
         $finder = new ThemeMediaFinder();
         $result = $finder->findForLibrary('lib-123', $this->fixturesDir);
 
+        $this->assertNotNull($result);
         $this->assertNotNull($result->audio);
         $this->assertStringContainsString('/stream/theme-media/audio', $result->audio->url);
         $this->assertStringContainsString(urlencode($themeMp3), $result->audio->url);
@@ -167,6 +171,7 @@ class ThemeMediaFinderTest extends TestCase
         $finder = new ThemeMediaFinder();
         $result = $finder->findForLibrary('lib-123', $this->fixturesDir);
 
+        $this->assertNotNull($result);
         $this->assertNotNull($result->video);
         $this->assertStringContainsString('/stream/theme-media/video', $result->video->url);
         $this->assertStringContainsString(urlencode($backdropMp4), $result->video->url);

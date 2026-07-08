@@ -200,6 +200,8 @@ class ThemeMediaRepositoryTest extends TestCase
         $this->assertInstanceOf(ThemeMedia::class, $result);
         $this->assertTrue($result->hasAudio());
         $this->assertTrue($result->hasVideo());
+        $this->assertNotNull($result->audio);
+        $this->assertNotNull($result->video);
         $this->assertSame(180, $result->audio->duration);
         $this->assertSame(1080, $result->video->height);
     }

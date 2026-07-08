@@ -6,6 +6,8 @@ namespace Phlix\Tests\Unit\Server\WebPortal\Controllers;
 
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\Expectation;
+use Mockery\MockInterface;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Server\Http\Request;
@@ -23,8 +25,12 @@ final class BookPageControllerTest extends TestCase
 
     public function test_detail_returns_404_when_missing(): void
     {
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('nope')->andReturn(null);
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('nope')->andReturn(null);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
 
         $controller = new BookPageController($itemRepo, $library, $this->noSmartyDir());
@@ -35,8 +41,12 @@ final class BookPageControllerTest extends TestCase
 
     public function test_detail_returns_404_when_not_a_book(): void
     {
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('m1')->andReturn(['id' => 'm1', 'type' => 'movie']);
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('m1')->andReturn(['id' => 'm1', 'type' => 'movie']);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
 
         $controller = new BookPageController($itemRepo, $library, $this->noSmartyDir());
@@ -52,11 +62,17 @@ final class BookPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('getByLibrary')->with('lib1', Mockery::any(), Mockery::any())
+        /** @var Expectation $getByLibrary */
+        $getByLibrary = $itemRepo->shouldReceive('getByLibrary');
+        $getByLibrary->with('lib1', Mockery::any(), Mockery::any())
             ->andReturn([$this->bookItem()]);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
-        $library->shouldReceive('getAllLibraries')->andReturn([['id' => 'lib1', 'type' => 'book']]);
+        /** @var Expectation $getAllLibraries */
+        $getAllLibraries = $library->shouldReceive('getAllLibraries');
+        $getAllLibraries->andReturn([['id' => 'lib1', 'type' => 'book']]);
 
         $controller = new BookPageController($itemRepo, $library, $this->realTemplateDir());
         $response = $controller->index($this->makeRequest(), []);
@@ -72,8 +88,12 @@ final class BookPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('b1')->andReturn($this->bookItem());
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('b1')->andReturn($this->bookItem());
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
 
         $controller = new BookPageController($itemRepo, $library, $this->realTemplateDir());
@@ -91,8 +111,12 @@ final class BookPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('b1')->andReturn($this->bookItem());
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('b1')->andReturn($this->bookItem());
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
 
         $controller = new BookPageController($itemRepo, $library, $this->realTemplateDir());

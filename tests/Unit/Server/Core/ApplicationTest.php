@@ -78,6 +78,7 @@ class ApplicationTest extends TestCase
 
         // Both must carry a non-empty middleware stack including AdminMiddleware.
         foreach (['authorize' => $authorize, 'callback' => $callback] as $label => $route) {
+            /** @var array<int, mixed> $middleware */
             $middleware = $route['middleware'] ?? [];
             $this->assertNotEmpty(
                 $middleware,

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding\Subtitles;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
@@ -14,7 +15,7 @@ use Phlix\Media\Transcoding\Subtitles\SubtitleTrack;
 
 class SubtitleBurnerTest extends TestCase
 {
-    private function createMockFfmpegRunner(): FfmpegRunner
+    private function createMockFfmpegRunner(): FfmpegRunner&MockObject
     {
         return $this->createMock(FfmpegRunner::class);
     }

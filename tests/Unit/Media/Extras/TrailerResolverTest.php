@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Extras;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Extras\ExtrasRepository;
 use Phlix\Media\Extras\Extra;
@@ -16,10 +17,10 @@ use Phlix\Media\Metadata\TmdbProvider;
 class TrailerResolverTest extends TestCase
 {
     private TrailerResolver $resolver;
-    private ItemRepository $itemRepository;
-    private TmdbProvider $tmdb;
-    private ExtrasRepository $extras;
-    private TrailerFinder $trailerFinder;
+    private ItemRepository&MockObject $itemRepository;
+    private TmdbProvider&MockObject $tmdb;
+    private ExtrasRepository&MockObject $extras;
+    private TrailerFinder&MockObject $trailerFinder;
 
     protected function setUp(): void
     {
@@ -246,8 +247,8 @@ class TrailerResolverTest extends TestCase
         // Expect batch insert to be called
         $this->extras->expects($this->once())->method('batchInsert');
 
-        $trailers = $this->resolver->getTrailers($mediaItemId);
-
-        $this->assertIsArray($trailers);
+        // The batchInsert() expectation configured above is the assertion for
+        // this path; getTrailers() returns the merged trailer list.
+        $this->resolver->getTrailers($mediaItemId);
     }
 }

@@ -77,7 +77,6 @@ class ExtraTest extends TestCase
 
         $array = $extra->toArray();
 
-        $this->assertIsArray($array);
         $this->assertSame('extra-123', $array['id']);
         $this->assertSame('media-456', $array['media_item_id']);
         $this->assertSame('Featurette', $array['title']);

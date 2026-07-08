@@ -40,11 +40,13 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertSame(['Drama', 'Action & Adventure'], $resolved['genres']);
         $this->assertSame(2001, $resolved['year']);
         $this->assertSame('1668', $resolved['tmdb_id']);
-        $this->assertSame('1668', $resolved['external_ids']['tmdb']);
-        $this->assertSame('tt0285331', $resolved['external_ids']['imdb']);
+        $externalIds = $resolved['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertSame('1668', $externalIds['tmdb']);
+        $this->assertSame('tt0285331', $externalIds['imdb']);
         $this->assertSame(['tmdb'], $resolved['sources']);
         // No tvdb_id supplied by getTvDetails → the external_ids has no tvdb key.
-        $this->assertArrayNotHasKey('tvdb', $resolved['external_ids']);
+        $this->assertArrayNotHasKey('tvdb', $externalIds);
     }
 
     public function testResolveThreadsTvdbIdIntoExternalIds(): void
@@ -63,7 +65,9 @@ final class SeriesMetadataResolverTest extends TestCase
         $resolved = (new SeriesMetadataResolver($tmdb))->resolve('24', 2001);
 
         $this->assertNotNull($resolved);
-        $this->assertSame('76290', $resolved['external_ids']['tvdb']);
+        $externalIds = $resolved['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertSame('76290', $externalIds['tvdb']);
     }
 
     /**
@@ -267,10 +271,19 @@ final class SeriesMetadataResolverTest extends TestCase
         $this->assertNotNull($resolved);
         // actors stays flat.
         $this->assertSame(['Kiefer Sutherland'], $resolved['actors']);
-        $this->assertSame('Jack Bauer', $resolved['cast'][0]['role']);
-        $this->assertSame('https://i/w185/k.jpg', $resolved['cast'][0]['profile_url']);
-        $this->assertSame('Creator', $resolved['crew'][0]['job']);
-        $this->assertSame('FOX', $resolved['production_companies'][0]['name']);
+        $cast = $resolved['cast'];
+        $this->assertIsArray($cast);
+        $this->assertIsArray($cast[0]);
+        $this->assertSame('Jack Bauer', $cast[0]['role']);
+        $this->assertSame('https://i/w185/k.jpg', $cast[0]['profile_url']);
+        $crew = $resolved['crew'];
+        $this->assertIsArray($crew);
+        $this->assertIsArray($crew[0]);
+        $this->assertSame('Creator', $crew[0]['job']);
+        $companies = $resolved['production_companies'];
+        $this->assertIsArray($companies);
+        $this->assertIsArray($companies[0]);
+        $this->assertSame('FOX', $companies[0]['name']);
         $this->assertSame('FOX', $resolved['studio']);
     }
 

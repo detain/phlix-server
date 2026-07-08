@@ -12,11 +12,12 @@ use Phlix\Media\Markers\IntroMarker;
 use Phlix\Media\Markers\OutroMarker;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class PlaybackMarkerServiceTest extends TestCase
 {
-    private function createMockConnection(): Connection
+    private function createMockConnection(): Connection&MockObject
     {
         return $this->createMock(Connection::class);
     }

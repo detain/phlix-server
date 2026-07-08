@@ -12,11 +12,12 @@ use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
 use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
 use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
 use Psr\Log\NullLogger;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class IntroDetectionJobTest extends TestCase
 {
-    private function createMockConnection(): Connection
+    private function createMockConnection(): Connection&MockObject
     {
         return $this->createMock(Connection::class);
     }

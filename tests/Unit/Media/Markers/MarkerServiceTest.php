@@ -13,11 +13,12 @@ use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
 use Phlix\Media\Markers\Detection\StoredMarkers;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class MarkerServiceTest extends TestCase
 {
-    private function createMockConnection(): Connection
+    private function createMockConnection(): Connection&MockObject
     {
         return $this->createMock(Connection::class);
     }
@@ -319,31 +320,41 @@ class MarkerServiceTest extends TestCase
     {
         $db = $this->createMockConnection();
 
-        $db->method('query')->willReturn([[
-            'id' => 'ep-1',
-            'name' => 'Episode 1',
-            'type' => 'episode',
-            'library_id' => 'lib-1',
-            'parent_id' => 'show-1',
-            'path' => '/test/ep.mkv',
-            'metadata_json' => json_encode([]),  // No candidates
-            'intro_start_seconds' => null,
-            'intro_end_seconds' => null,
-            'outro_start_seconds' => null,
-            'outro_end_seconds' => null,
-            'chapters_json' => null,
-        ]]);
+        /** @var list<string> $executedSql */
+        $executedSql = [];
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$executedSql): array {
+                $executedSql[] = $sql;
+                return [[
+                    'id' => 'ep-1',
+                    'name' => 'Episode 1',
+                    'type' => 'episode',
+                    'library_id' => 'lib-1',
+                    'parent_id' => 'show-1',
+                    'path' => '/test/ep.mkv',
+                    'metadata_json' => json_encode([]),  // No candidates
+                    'intro_start_seconds' => null,
+                    'intro_end_seconds' => null,
+                    'outro_start_seconds' => null,
+                    'outro_end_seconds' => null,
+                    'chapters_json' => null,
+                ]];
+            }
+        );
 
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $service = new MarkerService($itemRepo, $candidateRepo);
 
-        $calledWithUpdate = [];
         $service->promoteCandidates('ep-1');
 
         // No UPDATE query was made since there were no candidates
-        // The findById SELECT query was made but no update followed
-        $this->assertEmpty($calledWithUpdate);
+        // (the findById SELECT query was made but no update followed).
+        $updateQueries = array_filter(
+            $executedSql,
+            static fn(string $sql): bool => str_contains(strtoupper($sql), 'UPDATE')
+        );
+        $this->assertEmpty($updateQueries);
     }
 
     public function testGetMarkersWithChapters(): void

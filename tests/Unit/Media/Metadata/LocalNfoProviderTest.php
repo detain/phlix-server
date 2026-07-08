@@ -27,7 +27,7 @@ class LocalNfoProviderTest extends TestCase
     protected function tearDown(): void
     {
         // Clean up test files
-        $files = glob($this->testDir . '/*');
+        $files = glob($this->testDir . "/*") ?: [];
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -55,31 +55,29 @@ class LocalNfoProviderTest extends TestCase
     {
         // Local NFO doesn't support search
         $result = $this->provider->search('Test');
-        
-        $this->assertIsArray($result);
+
         $this->assertEmpty($result);
     }
 
     public function testParseMovieNfoReturnsArray(): void
     {
         $result = $this->provider->getDetails('/nonexistent/nonexistent.nfo');
-        
-        $this->assertIsArray($result);
+
+        // A missing NFO path yields an empty result (no metadata to parse).
+        $this->assertEmpty($result);
     }
 
     public function testParseDirectoryReturnsArray(): void
     {
         $result = $this->provider->getDetails($this->testDir);
-        
-        $this->assertIsArray($result);
+
         $this->assertArrayHasKey('type', $result);
     }
 
     public function testParseDirectoryWithEmptyDir(): void
     {
         $result = $this->provider->parseDirectory($this->testDir);
-        
-        $this->assertIsArray($result);
+
         $this->assertEquals('unknown', $result['type']);
     }
 
@@ -133,13 +131,23 @@ NFO;
         $this->assertEquals(120, $result['runtime']);
         $this->assertEquals('PG-13', $result['mpaa']);
         $this->assertEquals('Test tagline', $result['tagline']);
-        $this->assertContains('Action', $result['genres']);
-        $this->assertContains('Adventure', $result['genres']);
-        $this->assertContains('Test Studio', $result['studios']);
-        $this->assertContains('Test Director', $result['directors']);
-        $this->assertCount(2, $result['actors']);
-        $this->assertEquals('tt1234567', $result['external_ids']['tmdb']);
-        $this->assertEquals('tt1234567', $result['external_ids']['imdb']);
+        $genres = $result['genres'];
+        $this->assertIsArray($genres);
+        $this->assertContains('Action', $genres);
+        $this->assertContains('Adventure', $genres);
+        $studios = $result['studios'];
+        $this->assertIsArray($studios);
+        $this->assertContains('Test Studio', $studios);
+        $directors = $result['directors'];
+        $this->assertIsArray($directors);
+        $this->assertContains('Test Director', $directors);
+        $actors = $result['actors'];
+        $this->assertIsArray($actors);
+        $this->assertCount(2, $actors);
+        $externalIds = $result['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertEquals('tt1234567', $externalIds['tmdb']);
+        $this->assertEquals('tt1234567', $externalIds['imdb']);
     }
 
     public function testParseTvShowNfoWithXmlFormat(): void
@@ -176,10 +184,16 @@ NFO;
         $this->assertEquals(9.0, $result['rating']);
         $this->assertEquals('Continuing', $result['status']);
         $this->assertEquals(45, $result['episode_run_time']);
-        $this->assertContains('Drama', $result['genres']);
-        $this->assertContains('Thriller', $result['genres']);
-        $this->assertContains('TV Studio', $result['studios']);
-        $this->assertEquals('123456', $result['external_ids']['tvdb']);
+        $genres = $result['genres'];
+        $this->assertIsArray($genres);
+        $this->assertContains('Drama', $genres);
+        $this->assertContains('Thriller', $genres);
+        $studios = $result['studios'];
+        $this->assertIsArray($studios);
+        $this->assertContains('TV Studio', $studios);
+        $externalIds = $result['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertEquals('123456', $externalIds['tvdb']);
     }
 
     public function testParseEpisodeNfoWithXmlFormat(): void
@@ -228,8 +242,10 @@ NFO;
         $result = $this->provider->parseMovieNfo($nfoFile);
         
         $this->assertEquals('movie', $result['type']);
-        $this->assertEquals('12345', $result['external_ids']['tmdb']);
-        $this->assertEquals('tt54321', $result['external_ids']['imdb']);
+        $externalIds = $result['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertEquals('12345', $externalIds['tmdb']);
+        $this->assertEquals('tt54321', $externalIds['imdb']);
     }
 
     public function testFindLocalImagesInDirectory(): void
@@ -241,8 +257,9 @@ NFO;
         file_put_contents($this->testDir . '/folder.jpg', 'fake-image');
         
         $result = $this->provider->getImages($this->testDir);
-        
-        $this->assertIsArray($result);
+
+        // The four image files created above are discovered and grouped.
+        $this->assertNotEmpty($result);
     }
 
     public function testParseDirectoryWithTvshowNfo(): void
@@ -261,6 +278,8 @@ NFO;
         $result = $this->provider->parseDirectory($this->testDir);
         
         $this->assertEquals('tvshow', $result['type']);
-        $this->assertEquals('My TV Show', $result['metadata']['name']);
+        $metadata = $result['metadata'];
+        $this->assertIsArray($metadata);
+        $this->assertEquals('My TV Show', $metadata['name']);
     }
 }

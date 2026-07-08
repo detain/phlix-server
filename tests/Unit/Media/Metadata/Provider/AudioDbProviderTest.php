@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Metadata\Provider;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Metadata\MetadataHttpClient;
 use Phlix\Media\Metadata\Provider\AudioDbProvider;
@@ -11,7 +12,7 @@ use Phlix\Common\Logger\LoggerFactory;
 
 class AudioDbProviderTest extends TestCase
 {
-    private MetadataHttpClient $httpClient;
+    private MetadataHttpClient&MockObject $httpClient;
 
     protected function setUp(): void
     {
@@ -47,7 +48,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $results = $provider->search('test query');
 
-        $this->assertIsArray($results);
         $this->assertCount(1, $results);
         $this->assertEquals('123456', $results[0]['id']);
         $this->assertEquals('Test Artist', $results[0]['title']);
@@ -58,7 +58,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, '');
         $results = $provider->search('test query');
 
-        $this->assertIsArray($results);
         $this->assertEmpty($results);
     }
 
@@ -125,8 +124,11 @@ class AudioDbProviderTest extends TestCase
         $this->assertEquals('Test Album', $album['title']);
         $this->assertEquals('artist-123', $album['artist_id']);
         $this->assertEquals(2020, $album['year']);
-        $this->assertCount(2, $album['tracks']);
-        $this->assertEquals('Track 1', $album['tracks'][0]['title']);
+        $tracks = $album['tracks'];
+        $this->assertIsArray($tracks);
+        $this->assertCount(2, $tracks);
+        $this->assertIsArray($tracks[0]);
+        $this->assertEquals('Track 1', $tracks[0]['title']);
     }
 
     public function test_rate_limit_applied(): void
@@ -220,7 +222,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $details = $provider->getDetails('123456', ['entity' => 'artist']);
 
-        $this->assertIsArray($details);
         $this->assertEquals('Test Artist', $details['name']);
     }
 
@@ -245,7 +246,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $details = $provider->getDetails('album-123', ['entity' => 'album']);
 
-        $this->assertIsArray($details);
         $this->assertEquals('Test Album', $details['title']);
     }
 
@@ -267,7 +267,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $details = $provider->getDetails('track-123', ['entity' => 'track']);
 
-        $this->assertIsArray($details);
         $this->assertEquals('Test Track', $details['title']);
     }
 
@@ -276,7 +275,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $images = $provider->getImages('123456');
 
-        $this->assertIsArray($images);
         $this->assertArrayHasKey('posters', $images);
         $this->assertArrayHasKey('backdrops', $images);
         $this->assertArrayHasKey('logos', $images);
@@ -330,7 +328,6 @@ class AudioDbProviderTest extends TestCase
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
         $results = $provider->search('test query');
 
-        $this->assertIsArray($results);
         $this->assertEmpty($results);
     }
 
@@ -411,8 +408,11 @@ class AudioDbProviderTest extends TestCase
         $album = $provider->getAlbum('album-123');
 
         $this->assertIsArray($album);
-        $this->assertCount(1, $album['tracks']);
-        $this->assertEquals(0, $album['tracks'][0]['duration']);
+        $tracks = $album['tracks'];
+        $this->assertIsArray($tracks);
+        $this->assertCount(1, $tracks);
+        $this->assertIsArray($tracks[0]);
+        $this->assertEquals(0, $tracks[0]['duration']);
     }
 
     public function test_get_album_tracks_throws_exception(): void

@@ -23,7 +23,6 @@ class ChromaPrintTest extends TestCase
         $chromaprint = new ChromaPrintTestable('/usr/local/bin/fpcalc', new NullLogger(), $mockImpl);
         $result = $chromaprint->fingerprint('/path/to/file.mkv');
 
-        $this->assertIsString($result);
         $this->assertEquals('test-fingerprint-data', $result);
     }
 
@@ -35,7 +34,6 @@ class ChromaPrintTest extends TestCase
         $chromaprint = new ChromaPrintTestable('/usr/local/bin/fpcalc', new NullLogger(), $mockImpl);
         $result = $chromaprint->isAvailable();
 
-        $this->assertIsBool($result);
         $this->assertTrue($result);
     }
 

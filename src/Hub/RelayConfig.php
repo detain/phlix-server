@@ -31,23 +31,25 @@ final class RelayConfig
     public const DEFAULT_HUB_RELAY_WS_PORT = 8802;
 
     /**
-     * @param bool   $enabled          Whether the relay tunnel is enabled.
-     * @param string $hubWssUrl         Legacy hub relay endpoint template
-     *                                  (e.g. wss://hub.example.com/api/v1/servers/{id}/relay).
-     *                                  Used only to derive the hub host when
-     *                                  $hubRelayWsUrl is not explicitly set.
-     * @param string $localAddress      Local address the relay consumer binds to
-     *                                  (default 127.0.0.1:0 for auto).
-     * @param string $tunnelHostname    Public hostname for the tunnel (e.g. my-server.phlix.media).
-     * @param int    $reconnectDelay    Seconds to wait before reconnecting after disconnect.
-     * @param int    $pingInterval      Seconds between heartbeat frames.
-     * @param int    $pingTimeout       Seconds to wait before considering the tunnel dead.
-     * @param string $hubRelayWsUrl     Explicit hub server-tunnel WS endpoint
-     *                                  (e.g. ws://hub.example.com:8802). When empty
-     *                                  it is derived from $hubWssUrl + port 8802.
-     * @param string $localHttpAddress  Address of this server's own local HTTP
-     *                                  listener that relayed client bytes are piped
-     *                                  to (default 127.0.0.1:8096).
+     * @param bool   $enabled                Whether the relay tunnel is enabled.
+     * @param string $hubWssUrl             Legacy hub relay endpoint template
+     *                                      (e.g. wss://hub.example.com/api/v1/servers/{id}/relay).
+     *                                      Used only to derive the hub host when
+     *                                      $hubRelayWsUrl is not explicitly set.
+     * @param string $localAddress          Local address the relay consumer binds to
+     *                                      (default 127.0.0.1:0 for auto).
+     * @param string $tunnelHostname        Public hostname for the tunnel (e.g. my-server.phlix.media).
+     * @param int    $reconnectDelay        Seconds for the first reconnect attempt (base delay).
+     * @param int    $reconnectMaxDelay     Maximum reconnect delay cap (5 minutes).
+     * @param float  $reconnectJitterFactor Jitter factor for reconnect delay (±30% by default).
+     * @param int    $pingInterval          Seconds between heartbeat frames.
+     * @param int    $pingTimeout           Seconds to wait before considering the tunnel dead.
+     * @param string $hubRelayWsUrl         Explicit hub server-tunnel WS endpoint
+     *                                      (e.g. ws://hub.example.com:8802). When empty
+     *                                      it is derived from $hubWssUrl + port 8802.
+     * @param string $localHttpAddress      Address of this server's own local HTTP
+     *                                      listener that relayed client bytes are piped
+     *                                      to (default 127.0.0.1:8096).
      */
     public function __construct(
         public readonly bool $enabled = false,
@@ -55,6 +57,8 @@ final class RelayConfig
         public readonly string $localAddress = '127.0.0.1:0',
         public readonly string $tunnelHostname = '',
         public readonly int $reconnectDelay = 5,
+        public readonly int $reconnectMaxDelay = 300,
+        public readonly float $reconnectJitterFactor = 0.3,
         public readonly int $pingInterval = 30,
         public readonly int $pingTimeout = 10,
         public readonly string $hubRelayWsUrl = '',
@@ -77,6 +81,8 @@ final class RelayConfig
         $hubUrl = getenv('PHLIX_RELAY_HUB_URL') ?: '';
         $tunnelHostname = getenv('PHLIX_RELAY_TUNNEL_HOSTNAME') ?: '';
         $reconnectDelay = (int)(getenv('PHLIX_RELAY_RECONNECT_DELAY') ?: '5');
+        $reconnectMaxDelay = (int)(getenv('PHLIX_RELAY_RECONNECT_MAX_DELAY') ?: '300');
+        $reconnectJitterFactor = (float)(getenv('PHLIX_RELAY_RECONNECT_JITTER_FACTOR') ?: '0.3');
         $pingInterval = (int)(getenv('PHLIX_RELAY_PING_INTERVAL') ?: '30');
         $pingTimeout = (int)(getenv('PHLIX_RELAY_PING_TIMEOUT') ?: '10');
         $localAddress = '127.0.0.1:0';
@@ -94,6 +100,10 @@ final class RelayConfig
                 ? $overrides['tunnel_hostname'] : $tunnelHostname;
             $reconnectDelay = is_int($overrides['reconnect_delay'] ?? null)
                 ? $overrides['reconnect_delay'] : $reconnectDelay;
+            $reconnectMaxDelay = is_int($overrides['reconnect_max_delay'] ?? null)
+                ? $overrides['reconnect_max_delay'] : $reconnectMaxDelay;
+            $reconnectJitterFactor = is_float($overrides['reconnect_jitter_factor'] ?? null)
+                ? $overrides['reconnect_jitter_factor'] : $reconnectJitterFactor;
             $pingInterval = is_int($overrides['ping_interval'] ?? null)
                 ? $overrides['ping_interval'] : $pingInterval;
             $pingTimeout = is_int($overrides['ping_timeout'] ?? null)
@@ -110,6 +120,8 @@ final class RelayConfig
             localAddress: $localAddress,
             tunnelHostname: $tunnelHostname,
             reconnectDelay: $reconnectDelay,
+            reconnectMaxDelay: $reconnectMaxDelay,
+            reconnectJitterFactor: $reconnectJitterFactor,
             pingInterval: $pingInterval,
             pingTimeout: $pingTimeout,
             hubRelayWsUrl: $hubRelayWsUrl,
@@ -152,6 +164,8 @@ final class RelayConfig
             localAddress: $this->localAddress,
             tunnelHostname: $this->tunnelHostname,
             reconnectDelay: $this->reconnectDelay,
+            reconnectMaxDelay: $this->reconnectMaxDelay,
+            reconnectJitterFactor: $this->reconnectJitterFactor,
             pingInterval: $this->pingInterval,
             pingTimeout: $this->pingTimeout,
             hubRelayWsUrl: $hubRelayWsUrl,

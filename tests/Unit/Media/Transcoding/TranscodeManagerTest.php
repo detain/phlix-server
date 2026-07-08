@@ -7,7 +7,6 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
-use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentBusyException;
 use Phlix\Media\Transcoding\TranscodeManager;
@@ -84,7 +83,7 @@ class TranscodeManagerTest extends TestCase
 
     private function manager(Connection $db, FfmpegRunner $ff): TranscodeManager
     {
-        return new TranscodeManager($db, $ff, new EncodingHelper(), $this->segmentDir, $this->segmentDir, null, 6);
+        return new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
     }
 
     /**
@@ -843,9 +842,10 @@ class TranscodeManagerTest extends TestCase
 
     public function testCompletionTransitionBumpsEpochViaPublicPath(): void
     {
-        // One of the 5 invalidateJobRowCache() call sites, reached through the
-        // public API: getJobReadiness() syncing a running->completed transition
-        // (line 1651) issues the status UPDATE and then invalidates — which must
+        // One of the 3 invalidateJobRowCache() call sites (completion, legacy-failure,
+        // reap), reached through the public API: getJobReadiness() syncing a
+        // running->completed transition issues the status UPDATE and then invalidates —
+        // which must
         // bump the epoch, not merely unset the cache, so a reader whose SELECT was
         // in flight across this write cannot re-poison the cache under the pool.
         $dir = $this->segmentDir . '/job-ep-pub';
@@ -951,31 +951,14 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(2, $this->countJobRowSelects($captured), 'reap must invalidate the cache');
     }
 
-    public function testCancelInvalidatesCachedJobRow(): void
-    {
-        // S1: stopTranscode() writes status='cancelled'; the cached row must be
-        // dropped so a subsequent read never serves the stale (pre-cancel) status.
-        $variants = json_encode([
-            'renditions' => [['id' => '720p', 'width' => 1280, 'height' => 720, 'bandwidth' => 2_500_000]],
-            'original' => ['is_copy' => false],
-        ]);
-        $captured = [];
-        $db = $this->mockDb([], 0, [], ['id' => 'job-cancel', 'status' => 'running', 'variants' => $variants], $captured);
-        $ff = $this->createMock(FfmpegRunner::class);
-        $manager = $this->manager($db, $ff);
-
-        // Register an active job so stopTranscode() proceeds to the UPDATE + invalidate
-        // (its dir does not exist on disk, so the file cleanup is a no-op).
-        $active = new \ReflectionProperty(TranscodeManager::class, 'activeJobs');
-        $active->setAccessible(true);
-        $active->setValue($manager, ['job-cancel' => ['output_path' => $this->segmentDir . '/job-cancel/out.m3u8']]);
-
-        $this->assertNotNull($manager->getJobVariants('job-cancel')); // primes the cache
-        $manager->stopTranscode('job-cancel');                        // → UPDATE cancelled + invalidate
-        $manager->getJobVariants('job-cancel');                       // cache dropped → re-SELECT
-
-        $this->assertSame(2, $this->countJobRowSelects($captured), 'cancel must invalidate the cache');
-    }
+    // NOTE (S10): the former testCancelInvalidatesCachedJobRow() was removed with the
+    // dead blocking transcode path. It exercised stopTranscode(), the only "cancel"
+    // invalidateJobRowCache() call site, which gated entirely on the now-deleted
+    // in-memory $activeJobs map and had no production caller — so no remaining call
+    // site maps to a "cancel" scenario to repoint it at. The 3 surviving call sites
+    // (completion, legacy-failure, reap) are covered by
+    // testCompletionTransitionBumpsEpochViaPublicPath(),
+    // testTerminalTransitionInvalidatesCachedJobRow(), and testReapInvalidatesCachedJobRow().
 
     public function testLruEvictsOldestEntryBeyondCacheMax(): void
     {
@@ -1228,8 +1211,6 @@ class TranscodeManagerTest extends TestCase
         return new TranscodeManager(
             $db,
             $ff,
-            new EncodingHelper(),
-            $this->segmentDir,
             $this->segmentDir,
             null,
             6,

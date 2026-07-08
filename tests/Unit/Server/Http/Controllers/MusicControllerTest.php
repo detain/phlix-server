@@ -10,6 +10,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Session\SessionManager;
+use PHPUnit\Framework\MockObject\MockObject;
 
 /**
  * Unit tests for MusicController.
@@ -19,8 +20,11 @@ use Phlix\Session\SessionManager;
 class MusicControllerTest extends TestCase
 {
     private MusicController $controller;
+    /** @var MusicLibraryManager&MockObject */
     private MusicLibraryManager $musicManager;
+    /** @var LibraryManager&MockObject */
     private LibraryManager $libraryManager;
+    /** @var SessionManager&MockObject */
     private SessionManager $sessionManager;
 
     protected function setUp(): void
@@ -60,6 +64,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{artists: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('artists', $body);
         $this->assertCount(1, $body['artists']);
@@ -83,6 +88,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(404, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('Artist not found', $body['error']);
     }
@@ -111,6 +117,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{artist: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('artist', $body);
         $this->assertEquals('Found Artist', $body['artist']['name']);
@@ -141,6 +148,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{albums: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('albums', $body);
         $this->assertCount(1, $body['albums']);
@@ -177,6 +185,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{album: array{name: mixed, tracks: array<mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('album', $body);
         $this->assertEquals('My Album', $body['album']['name']);
@@ -213,6 +222,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('tracks', $body);
         $this->assertArrayHasKey('limit', $body);
@@ -238,6 +248,7 @@ class MusicControllerTest extends TestCase
 
         $response = $this->controller->listTracks($request, []);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals(50, $body['limit']);
         $this->assertEquals(100, $body['offset']);
@@ -283,6 +294,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('now_playing', $body);
     }
@@ -299,6 +311,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertNull($body['now_playing']);
     }
@@ -315,6 +328,7 @@ class MusicControllerTest extends TestCase
 
         $response = $this->controller->nowPlaying($request, []);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertNull($body['now_playing']);
     }
@@ -330,6 +344,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(400, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('Artist name is required', $body['error']);
     }
@@ -345,6 +360,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(400, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('Album name is required', $body['error']);
     }
@@ -366,6 +382,7 @@ class MusicControllerTest extends TestCase
 
         $this->assertEquals(404, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('Track not found', $body['error']);
     }

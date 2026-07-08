@@ -11,10 +11,14 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Server\Http\Controllers\MarkerController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class MarkerControllerTest extends TestCase
 {
+    /**
+     * @return Connection&MockObject
+     */
     private function createMockConnection(): Connection
     {
         return $this->createMock(Connection::class);
@@ -48,6 +52,7 @@ class MarkerControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('intro', $body);
         $this->assertArrayHasKey('outro', $body);
@@ -70,6 +75,7 @@ class MarkerControllerTest extends TestCase
         // MarkerSet can be empty but returns 200
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertNull($body['intro']);
         $this->assertNull($body['outro']);
@@ -104,6 +110,7 @@ class MarkerControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals(10, $body['start']);
         $this->assertEquals(100, $body['end']);
@@ -166,6 +173,7 @@ class MarkerControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals(2200, $body['start']);
         $this->assertEquals(2400, $body['end']);
@@ -248,6 +256,7 @@ class MarkerControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('show-1', $body['show_id']);
         $this->assertIsArray($body['episodes']);

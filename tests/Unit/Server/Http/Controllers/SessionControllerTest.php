@@ -75,6 +75,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{progress: array<string, mixed>, intro_marker: array<string, mixed>, outro_marker: array<string, mixed>, skip_button_spec: array<string, mixed>, chapters: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
 
         // Verify progress data is present
@@ -153,6 +154,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify all markers are null/empty
@@ -161,6 +163,7 @@ class SessionControllerTest extends TestCase
         $this->assertEmpty($body['chapters']);
 
         // Verify skip_button_spec has null values
+        /** @var array<string, mixed> $skipSpec */
         $skipSpec = $body['skip_button_spec'];
         $this->assertNull($skipSpec['skip_intro_start']);
         $this->assertNull($skipSpec['skip_intro_end']);
@@ -211,6 +214,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify progress is present but markers are empty
@@ -309,6 +313,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(404, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
         $this->assertEquals('Session not found', $body['error']);
@@ -351,6 +356,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertNull($body['progress']);
     }
@@ -389,6 +395,7 @@ class SessionControllerTest extends TestCase
 
         $this->assertEquals(403, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
         $this->assertEquals('Forbidden', $body['error']);
@@ -415,6 +422,7 @@ class SessionControllerTest extends TestCase
         $response = $controller->createSession($request, []);
 
         $this->assertSame(201, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('new-session-99', $body['session_id']);
     }

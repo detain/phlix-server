@@ -21,6 +21,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class AdminSettingsControllerTest extends TestCase
 {
+    /**
+     * @param array<string, mixed> $body
+     */
     private function makeRequest(array $body = []): Request
     {
         $request = new Request();
@@ -123,6 +126,7 @@ final class AdminSettingsControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{success: mixed, data: array{settings: array<string, mixed>, overridden: mixed, types: array<string, mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
         $this->assertFalse($body['data']['settings']['hwaccel.enabled']);
@@ -139,6 +143,7 @@ final class AdminSettingsControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(500, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertFalse($body['success']);
     }
@@ -161,6 +166,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
     }
@@ -188,6 +194,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
     }
@@ -206,6 +213,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertFalse($body['success']);
     }
@@ -229,6 +237,7 @@ final class AdminSettingsControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{success: mixed, data: array{settings: array<string, mixed>, types: array<string, mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
         $this->assertSame($effective, $body['data']['settings']['matching.noise_suffixes']);
@@ -261,6 +270,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
     }
@@ -285,6 +295,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
     }
@@ -312,6 +323,7 @@ final class AdminSettingsControllerTest extends TestCase
         $response = $controller->index($this->makeRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{success: mixed, data: array{settings: array<string, mixed>, types: array<string, mixed>}} $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['success']);
         $this->assertSame($effective, $body['data']['settings']['metadata.provider_priority']);
@@ -347,6 +359,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{success: mixed, errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertFalse($body['success']);
         $this->assertArrayHasKey('totally.unknown', $body['errors']);
@@ -365,6 +378,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('hwaccel.probe_timeout', $body['errors']);
     }
@@ -397,6 +411,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{errors: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('unknown.key', $body['errors']);
     }
@@ -416,6 +431,7 @@ final class AdminSettingsControllerTest extends TestCase
         );
 
         $this->assertSame(500, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertFalse($body['success']);
         $this->assertSame('Failed to update settings', $body['error']);

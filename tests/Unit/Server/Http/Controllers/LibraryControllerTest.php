@@ -78,6 +78,7 @@ class LibraryControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
 
+        /** @var array{libraries: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('libraries', $body);
@@ -114,6 +115,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->index($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{libraries: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertCount(1, $body['libraries']);
@@ -137,6 +139,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->index($request, []);
 
         $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Unauthorized', $body['error']);
     }
@@ -162,6 +165,7 @@ class LibraryControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
 
+        /** @var array{library: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('library', $body);
@@ -188,6 +192,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->show($request, ['id' => 'nonexistent']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library not found', $body['error']);
     }
@@ -246,6 +251,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(201, $response->statusCode);
+        /** @var array{library_id: mixed, job_id: mixed, status: mixed, message: string} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('new-lib-id', $body['library_id']);
         $this->assertSame('job-1', $body['job_id']);
@@ -479,6 +485,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Missing required fields: name, type, paths', $body['error']);
     }
@@ -505,6 +512,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Invalid library type', $body['error']);
         $this->assertArrayHasKey('valid_types', $body);
@@ -553,6 +561,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->update($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library updated successfully', $body['message']);
     }
@@ -655,6 +664,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->delete($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library deleted successfully', $body['message']);
     }
@@ -710,6 +720,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->scan($request, ['id' => 'lib-1']);
 
         $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('job-1', $body['job_id']);
@@ -789,6 +800,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->rescan($request, ['id' => 'lib-1']);
 
         $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('job-2', $body['job_id']);
@@ -868,6 +880,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->matchMetadata($request, ['id' => 'lib-1']);
 
         $this->assertSame(202, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('job-md', $body['job_id']);
@@ -962,6 +975,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->scanStatus($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{scan_status: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('scan_status', $body);
@@ -995,6 +1009,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->scanStatus($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('scan_status', $body);
@@ -1076,6 +1091,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->scanHistory($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{history: list<array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('history', $body);
@@ -1109,6 +1125,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->scanHistory($request, ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame([], $body['history']);
@@ -1246,6 +1263,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertStringContainsString('metadata_priority', $body['error']);
@@ -1428,6 +1446,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->update($request, ['id' => 'lib-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertStringContainsString('metadata_priority', $body['error']);
@@ -1650,6 +1669,7 @@ class LibraryControllerTest extends TestCase
         $response = $controller->update($request, ['id' => 'lib-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertStringContainsString('image_types', $body['error']);

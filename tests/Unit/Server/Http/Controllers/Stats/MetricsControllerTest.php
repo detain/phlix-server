@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers\Stats;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Request;
 use Phlix\Stats\Metrics\MetricsRepositoryInterface;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -16,6 +17,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class MetricsControllerTest extends TestCase
 {
+    /**
+     * @return MetricsRepositoryInterface&MockObject
+     */
     private function mockRepo(): MetricsRepositoryInterface
     {
         return $this->createMock(MetricsRepositoryInterface::class);
@@ -36,6 +40,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->snapshot($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
         $this->assertEquals(['bytes_in_per_sec' => 0], $body['data']);
@@ -56,6 +61,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->snapshot($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
     }
@@ -71,6 +77,7 @@ final class MetricsControllerTest extends TestCase
         $request = new Request();
         $request->body = [];
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($controller->snapshot($request, [])->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('success', $body);
@@ -104,6 +111,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->history($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
         $this->assertEquals($expectedRows, $body['data']);
@@ -124,6 +132,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->history($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
     }
@@ -146,6 +155,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->connections($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
         $this->assertEquals($expectedConnections, $body['data']);
@@ -166,6 +176,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->connections($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
     }
@@ -195,6 +206,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->routes($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
         $this->assertEquals($expectedRoutes, $body['data']);
@@ -215,6 +227,7 @@ final class MetricsControllerTest extends TestCase
         $response = $controller->routes($request, []);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('data', $body);
     }

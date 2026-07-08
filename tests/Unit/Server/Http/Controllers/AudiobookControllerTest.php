@@ -8,16 +8,23 @@ use Phlix\Media\Library\AudiobookProgress;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Controllers\AudiobookController;
 use Phlix\Server\Http\Request;
+use PHPUnit\Framework\MockObject\MockObject;
 
 class AudiobookControllerTest extends TestCase
 {
     private ?string $testMediaDir = null;
 
+    /**
+     * @return ItemRepository&MockObject
+     */
     private function createMockItemRepo(): ItemRepository
     {
         return $this->createMock(ItemRepository::class);
     }
 
+    /**
+     * @return AudiobookLibraryManager&MockObject
+     */
     private function createMockLibraryManager(): AudiobookLibraryManager
     {
         return $this->createMock(AudiobookLibraryManager::class);
@@ -59,7 +66,7 @@ class AudiobookControllerTest extends TestCase
 
         // Clean up test media directory
         if ($this->testMediaDir !== null && is_dir($this->testMediaDir)) {
-            $files = glob($this->testMediaDir . '/*');
+            $files = glob($this->testMediaDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -603,11 +610,13 @@ class AudiobookControllerTest extends TestCase
         $controller = new AudiobookController($itemRepo, $libraryManager);
 
         $response = $controller->getAudiobook(new Request(), ['id' => 'audiobook-123']);
+        /** @var array{audiobook: array{stream_url: string}} $body */
         $body = json_decode($response->body, true);
 
         $signer = \Phlix\Auth\SignedUrl::fromEnv();
         $this->assertArrayHasKey('stream_url', $body['audiobook']);
         parse_str((string) parse_url((string) $body['audiobook']['stream_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
         $this->assertTrue(
             $signer->verify('/api/v1/audiobooks/audiobook-123/stream', (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
             'stream_url must be a verifiable signed URL',

@@ -20,6 +20,7 @@ final class AuthMiddlewareTest extends TestCase
 
         $this->assertInstanceOf(Response::class, $response);
         $this->assertSame(401, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('auth.required', $body['code']);
     }

@@ -62,6 +62,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->index(new Request(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body['collections']);
         $this->assertCount(1, $body['collections']);
@@ -88,6 +89,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(201, $response->statusCode);
+        /** @var array{collection: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('New Collection', $body['collection']['name']);
         $this->assertSame('lib-1', $body['collection']['library_id']);
@@ -106,6 +108,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('name is required', $body['error']);
     }
@@ -123,6 +126,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->create($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('library_id is required', $body['error']);
     }
@@ -144,6 +148,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->show(new Request(), ['id' => 'c-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{collection: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('c-1', $body['collection']['id']);
     }
@@ -160,6 +165,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->show(new Request(), ['id' => 'not-found']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -187,6 +193,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->update($request, ['id' => 'c-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{collection: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Updated Name', $body['collection']['name']);
     }
@@ -203,6 +210,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->update(new Request(), ['id' => 'not-found']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -226,6 +234,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->delete(new Request(), ['id' => 'c-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection deleted successfully', $body['message']);
     }
@@ -242,6 +251,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->delete(new Request(), ['id' => 'not-found']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -265,6 +275,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->addItem(new Request(), ['id' => 'c-1', 'mediaItemId' => 'media-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Item added to collection', $body['message']);
     }
@@ -281,6 +292,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->addItem(new Request(), ['id' => 'not-found', 'mediaItemId' => 'media-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -294,6 +306,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->addItem(new Request(), ['mediaItemId' => 'media-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('collection id is required', $body['error']);
     }
@@ -317,6 +330,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->removeItem(new Request(), ['id' => 'c-1', 'mediaItemId' => 'media-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Item removed from collection', $body['message']);
     }
@@ -333,6 +347,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->removeItem(new Request(), ['id' => 'not-found', 'mediaItemId' => 'media-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -360,6 +375,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->bulkAdd($request, ['id' => 'c-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Items added to collection', $body['message']);
         $this->assertSame(2, $body['added_count']);
@@ -384,6 +400,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->bulkAdd($request, ['id' => 'c-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('media_item_ids array is required', $body['error']);
     }
@@ -407,6 +424,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->bulkAdd($request, ['id' => 'c-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('media_item_ids array is required', $body['error']);
     }
@@ -430,6 +448,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->bulkAdd($request, ['id' => 'c-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('media_item_ids must contain at least one valid id', $body['error']);
     }
@@ -462,6 +481,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->refresh(new Request(), ['id' => 'c-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Smart collection refreshed', $body['message']);
     }
@@ -481,6 +501,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->refresh(new Request(), ['id' => 'c-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection is not a smart collection', $body['error']);
     }
@@ -497,6 +518,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->refresh(new Request(), ['id' => 'not-found']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Collection not found', $body['error']);
     }
@@ -517,6 +539,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->forLibrary(new Request(), ['libraryId' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body['collections']);
         $this->assertCount(1, $body['collections']);
@@ -532,6 +555,7 @@ class CollectionControllerTest extends TestCase
         $response = $controller->forLibrary(new Request(), []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('library_id is required', $body['error']);
     }

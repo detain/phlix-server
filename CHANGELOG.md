@@ -7,6 +7,10 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-07-08
+
+**Stream Quality + Adaptive Bitrate (ABR) release.** Ships the full server-side pipeline built across this program's Tracks A, S, and D: a source-clamped multi-variant HLS ladder with on-demand per-variant segment encoding and genuine stream-copy passthrough for compatible sources (A1-A7), a client-facing `variants[]`/`quality_ladder` API surface, a batch of performance work spanning job-row/facet caching, streamed segment serving, non-blocking/parallel scan probing, materialized sort/genre indexes, and a validated coroutine DB connection pool (S1-S10), a genre-index risk redesign after a real InnoDB issue surfaced under stress (S7b), and hub proxy improvements for streaming paths (D1-D4). See the sections below for the full accumulated detail. Version bumped `1.0.0`→`1.1.0` (MINOR — entirely new, backward-compatible functionality; no server↔hub wire-compatibility impact). Also fixes a real drift bug found while preparing this release: the `/health` and `/system/info` endpoints hardcoded a stale `'1.0.0'` literal independently of `Phlix\Common\Version::STRING` (the documented single source of truth) — both now reference the constant directly, so a future version bump can no longer silently miss these two endpoints.
+
 ### Removed
 
 - **Dead blocking/legacy linear-transcode path removed from `TranscodeManager`/`FfmpegRunner` (Stream Quality/ABR step S10, Track S — pure cleanup, no behavior change; Track S is now FULLY COMPLETE, S1-S10).** The on-demand, seek-aware HLS/ABR pipeline built across A1-A7 and S1-S9 fully superseded the original blocking, single-linear-encode transcode path; this step deletes the now-zero-caller remainder rather than leaving it to bit-rot alongside the live code.

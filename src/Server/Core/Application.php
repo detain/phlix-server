@@ -7,6 +7,7 @@ namespace Phlix\Server\Core;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Version;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\HubApplication;
 use Phlix\Hub\RelayApplication;
@@ -182,7 +183,7 @@ class Application
             return (new Response())->json([
                 'status' => 'ok',
                 'timestamp' => time(),
-                'version' => '1.0.0',
+                'version' => Version::STRING,
             ]);
         });
 
@@ -195,7 +196,7 @@ class Application
 
             return (new Response())->json([
                 'server' => $serverName,
-                'version' => '1.0.0',
+                'version' => Version::STRING,
                 'php_version' => PHP_VERSION,
                 'workerman_version' => \Workerman\Worker::VERSION,
             ]);

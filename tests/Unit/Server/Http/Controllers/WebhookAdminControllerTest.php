@@ -39,8 +39,12 @@ final class WebhookAdminControllerTest extends TestCase
         parent::tearDown();
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private function decodeBody(string $body): array
     {
+        /** @var array<string, mixed> $decoded */
         $decoded = json_decode($body, true);
         if (!is_array($decoded)) {
             throw new \RuntimeException('Failed to decode JSON body: ' . $body);
@@ -59,6 +63,7 @@ final class WebhookAdminControllerTest extends TestCase
         $response = $this->controller->index($request, []);
 
         self::assertSame(200, $response->statusCode);
+        /** @var array{webhooks: list<array<string, mixed>>} $body */
         $body = $this->decodeBody($response->body);
         self::assertArrayHasKey('webhooks', $body);
         self::assertCount(1, $body['webhooks']);
@@ -79,6 +84,7 @@ final class WebhookAdminControllerTest extends TestCase
         $response = $this->controller->create($request, []);
 
         self::assertSame(201, $response->statusCode);
+        /** @var array{webhook: array<string, mixed>} $body */
         $body = $this->decodeBody($response->body);
         self::assertArrayHasKey('webhook', $body);
         self::assertSame('New Webhook', $body['webhook']['name']);
@@ -130,6 +136,7 @@ final class WebhookAdminControllerTest extends TestCase
         $response = $this->controller->create($request, []);
 
         self::assertSame(400, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = $this->decodeBody($response->body);
         self::assertArrayHasKey('error', $body);
         self::assertStringContainsStringIgnoringCase('non-public', $body['error']);

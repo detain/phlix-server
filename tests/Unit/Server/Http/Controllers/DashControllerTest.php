@@ -65,6 +65,7 @@ class DashControllerTest extends TestCase
     {
         $res = $this->controller()->getManifest(new Request(), ['job_id' => 'job-1']);
         $this->assertSame(200, $res->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($res->body, true);
         $this->assertSame('/dash/job-1/manifest.mpd', $body['manifest_url']);
         $this->assertSame('DASH', $body['protocol']);

@@ -20,17 +20,14 @@ use Phlix\Server\Http\Request;
  */
 class MediaPosterControllerTest extends TestCase
 {
+    /**
+     * @param array<string, mixed> $body
+     */
     private function authedRequest(array $body = []): Request
     {
         $request = new Request();
         $request->userId = 'admin-1';
         $request->body = $body;
-        return $request;
-    }
-
-    private function authedRequestWithQuery(Request $request): Request
-    {
-        $request->userId = 'admin-1';
         return $request;
     }
 
@@ -43,7 +40,9 @@ class MediaPosterControllerTest extends TestCase
 
         $response = $controller->listPosters(new Request(), ['id' => 'm1']);
         $this->assertSame(401, $response->statusCode);
-        $this->assertSame('auth.required', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
     }
 
     public function testListPosters404WhenItemMissing(): void
@@ -95,6 +94,7 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{providers: list<array{provider: mixed, posters: array<mixed>}>, current: mixed} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(1, $body['providers']);
         $this->assertSame('tmdb', $body['providers'][0]['provider']);
@@ -167,6 +167,7 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{providers: list<array{provider: mixed, posters: array<mixed>}>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(1, $body['providers']);
         $this->assertSame('tmdb', $body['providers'][0]['provider']);
@@ -190,7 +191,9 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unconfigured', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('metadata.tmdb_unconfigured', $body['code']);
     }
 
     public function testListPosters502WhenTmdbUnreachable(): void
@@ -210,7 +213,9 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(502, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unreachable', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('metadata.tmdb_unreachable', $body['code']);
     }
 
     public function testListPostersCapsAt30PerProvider(): void
@@ -242,6 +247,7 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{providers: list<array{posters: array<mixed>}>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(30, $body['providers'][0]['posters']);
     }
@@ -263,6 +269,7 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->listPosters($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame([], $body['providers']);
         $this->assertNull($body['current']);
@@ -277,7 +284,9 @@ class MediaPosterControllerTest extends TestCase
 
         $response = $controller->setPoster(new Request(), ['id' => 'm1']);
         $this->assertSame(401, $response->statusCode);
-        $this->assertSame('auth.required', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('auth.required', $body['code']);
     }
 
     public function testSetPoster404WhenItemMissing(): void
@@ -300,7 +309,9 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->setPoster($this->authedRequest([]), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('poster.missing_url', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('poster.missing_url', $body['code']);
     }
 
     public function testSetPoster400WhenUrlNotCandidate(): void
@@ -333,7 +344,9 @@ class MediaPosterControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('poster.poster_not_candidate', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('poster.poster_not_candidate', $body['code']);
     }
 
     public function testSetPoster400WhenNoImagesStored(): void
@@ -352,7 +365,9 @@ class MediaPosterControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('poster.poster_not_candidate', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('poster.poster_not_candidate', $body['code']);
     }
 
     public function testSetPosterSuccessPersistsAndReturnsShapedItem(): void
@@ -426,6 +441,7 @@ class MediaPosterControllerTest extends TestCase
         );
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{item: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('item', $body);
         $this->assertSame('m1', $body['item']['id']);
@@ -442,6 +458,8 @@ class MediaPosterControllerTest extends TestCase
         $response = $controller->setPoster($this->authedRequest(['poster_url' => '  ']), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('poster.missing_url', json_decode($response->body, true)['code']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('poster.missing_url', $body['code']);
     }
 }

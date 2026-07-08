@@ -18,6 +18,7 @@ use Phlix\Server\Http\Controllers\MediaItemController;
 use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\MockObject\MockObject;
 use ReflectionMethod;
 use Workerman\MySQL\Connection;
 
@@ -26,6 +27,9 @@ use Workerman\MySQL\Connection;
  */
 class MediaItemControllerTest extends TestCase
 {
+    /**
+     * @return Connection&MockObject
+     */
     private function createMockConnection(): Connection
     {
         return $this->createMock(Connection::class);
@@ -50,6 +54,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(404, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
         $this->assertEquals('Item not found', $body['error']);
@@ -90,6 +95,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify top-level structure
@@ -124,10 +130,12 @@ class MediaItemControllerTest extends TestCase
         $controller = new MediaItemController($itemRepo, $markerService);
 
         $response = $controller->show(new Request(), ['id' => 'ep-1']);
+        /** @var array{item: array{stream_url: string}} $body */
         $body = json_decode($response->body, true);
 
         $this->assertArrayHasKey('stream_url', $body['item']);
         parse_str((string) parse_url((string) $body['item']['stream_url'], PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
         $this->assertTrue(
             \Phlix\Auth\SignedUrl::fromEnv()->verify('/media/ep-1/stream', (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
             'stream_url must be a verifiable signed URL for /media/ep-1/stream',
@@ -166,6 +174,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{intro_marker: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
 
         // Verify intro_marker has correct structure
@@ -208,6 +217,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{outro_marker: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
 
         // Verify outro_marker has correct structure
@@ -254,6 +264,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify chapters structure
@@ -309,10 +320,12 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify skip_button_spec structure
         $this->assertArrayHasKey('skip_button_spec', $body);
+        /** @var array<string, mixed> $skipSpec */
         $skipSpec = $body['skip_button_spec'];
 
         $this->assertArrayHasKey('skip_intro_start', $skipSpec);
@@ -359,6 +372,7 @@ class MediaItemControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         // Verify null markers and empty chapters
@@ -367,6 +381,7 @@ class MediaItemControllerTest extends TestCase
         $this->assertEmpty($body['chapters']);
 
         // Skip spec should have null values when no markers
+        /** @var array<string, mixed> $skipSpec */
         $skipSpec = $body['skip_button_spec'];
         $this->assertNull($skipSpec['skip_intro_start']);
         $this->assertNull($skipSpec['skip_intro_end']);
@@ -483,6 +498,7 @@ class MediaItemControllerTest extends TestCase
         // No profile / header → defaults to `web` (1080p cap).
         $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         $this->assertArrayHasKey('quality_ladder', $body);
@@ -515,6 +531,7 @@ class MediaItemControllerTest extends TestCase
         $request = new Request();
         $request->query = ['profile' => 'mobile-low'];
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
+        /** @var array{quality_ladder: list<array{id: string, height: mixed}>} $body */
         $body = json_decode($response->body, true);
 
         $ids = array_map(static fn (array $v): string => (string) $v['id'], $body['quality_ladder']);
@@ -540,6 +557,7 @@ class MediaItemControllerTest extends TestCase
         $request = new Request();
         $request->headers = ['X-PHLIX-DEVICE-TYPE' => 'samsung-tizen']; // → tv-4k
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
+        /** @var array{quality_ladder: list<array{id: string}>} $body */
         $body = json_decode($response->body, true);
 
         $ids = array_map(static fn (array $v): string => (string) $v['id'], $body['quality_ladder']);
@@ -553,10 +571,11 @@ class MediaItemControllerTest extends TestCase
      */
     public function testGetPlaybackInfoQualityLadderNullWhenSourceAbsent(): void
     {
-        $controller = $this->controllerForItem($this->baseItemRow(json_encode([])));
+        $controller = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
 
         $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('quality_ladder', $body);
         $this->assertNull($body['quality_ladder']);
@@ -574,6 +593,7 @@ class MediaItemControllerTest extends TestCase
         ]));
 
         $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertNull($body['quality_ladder']);
     }
@@ -585,7 +605,7 @@ class MediaItemControllerTest extends TestCase
      */
     public function testDeviceTypeMappingIsIdenticalToTranscodeController(): void
     {
-        $mediaController = $this->controllerForItem($this->baseItemRow(json_encode([])));
+        $mediaController = $this->controllerForItem($this->baseItemRow((string) json_encode([])));
         $transcodeController = new TranscodeController($this->createMock(TranscodeManager::class));
 
         $mediaMap = new ReflectionMethod($mediaController, 'mapDeviceTypeToProfile');

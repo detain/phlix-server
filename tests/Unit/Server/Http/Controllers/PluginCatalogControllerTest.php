@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\Http\Controllers;
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\Expectation;
 use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\AuditLogger;
@@ -49,8 +50,12 @@ final class PluginCatalogControllerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->loader = Mockery::mock(PluginLoader::class);
-        $this->audit  = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        /** @var PluginLoader&MockInterface $loader */
+        $loader = Mockery::mock(PluginLoader::class);
+        $this->loader = $loader;
+        /** @var AuditLogger&MockInterface $audit */
+        $audit = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        $this->audit  = $audit;
         $this->store  = [PluginCatalogService::KEY_DEFAULT_SOURCE => self::DEFAULT_SOURCE];
         // Catalog fetch/add now SSRF-guards URLs. Inject a deterministic public
         // resolver so the suite never performs a real DNS lookup.
@@ -73,7 +78,7 @@ final class PluginCatalogControllerTest extends TestCase
             ],
         ], JSON_THROW_ON_ERROR);
 
-        $this->loader->shouldReceive('listInstalled')
+        $this->expect($this->loader, 'listInstalled')
             ->once()
             ->andReturn([$this->fixturePlugin('phlix-plugin-anidb', enabled: true)]);
 
@@ -85,9 +90,12 @@ final class PluginCatalogControllerTest extends TestCase
 
         $this->assertSame(self::DEFAULT_SOURCE, $payload['default_source']);
         $this->assertSame([self::DEFAULT_SOURCE], $payload['sources']);
-        $this->assertCount(1, $payload['catalogs']);
+        /** @var list<array<string, mixed>> $catalogs */
+        $catalogs = $payload['catalogs'];
+        $this->assertCount(1, $catalogs);
 
-        $plugins = $payload['catalogs'][0]['plugins'];
+        /** @var list<array<string, mixed>> $plugins */
+        $plugins = $catalogs[0]['plugins'];
         $this->assertSame('phlix-plugin-anidb', $plugins[0]['name']);
         $this->assertTrue($plugins[0]['installed']);
         $this->assertTrue($plugins[0]['enabled']);
@@ -99,7 +107,7 @@ final class PluginCatalogControllerTest extends TestCase
     public function test_index_reports_unreachable_source_as_error(): void
     {
         $this->store[PluginCatalogService::KEY_SOURCES] = ['https://example.com/down.json'];
-        $this->loader->shouldReceive('listInstalled')->once()->andReturn([]);
+        $this->expect($this->loader, 'listInstalled')->once()->andReturn([]);
 
         // No body for either source → both error out, page still 200s.
         $controller = $this->controller([]);
@@ -108,12 +116,14 @@ final class PluginCatalogControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $payload = $this->decode($response->body);
         $this->assertSame([], $payload['catalogs']);
-        $this->assertCount(2, $payload['errors']);
+        /** @var list<mixed> $errors */
+        $errors = $payload['errors'];
+        $this->assertCount(2, $errors);
     }
 
     public function test_add_source_persists_and_audits(): void
     {
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expect($this->audit, 'logPluginAction')
             ->once()
             ->with('admin-1', 'catalog.add_source', 'https://example.com/extra.json', Mockery::type('array'));
 
@@ -125,7 +135,9 @@ final class PluginCatalogControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
         $payload = $this->decode($response->body);
-        $this->assertContains('https://example.com/extra.json', $payload['sources']);
+        /** @var list<mixed> $sources */
+        $sources = $payload['sources'];
+        $this->assertContains('https://example.com/extra.json', $sources);
         $this->assertSame(['https://example.com/extra.json'], $this->store[PluginCatalogService::KEY_SOURCES]);
     }
 
@@ -153,7 +165,7 @@ final class PluginCatalogControllerTest extends TestCase
     public function test_remove_source_drops_extra(): void
     {
         $this->store[PluginCatalogService::KEY_SOURCES] = ['https://example.com/extra.json'];
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expect($this->audit, 'logPluginAction')->once();
 
         $controller = $this->controller([]);
         $response = $controller->removeSource(
@@ -171,7 +183,7 @@ final class PluginCatalogControllerTest extends TestCase
     {
         // The browser's DELETE has no body — the URL arrives on the query string.
         $this->store[PluginCatalogService::KEY_SOURCES] = ['https://example.com/extra.json'];
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expect($this->audit, 'logPluginAction')->once();
 
         $request = $this->makeRequest('admin-1', []);
         $request->query = ['url' => 'https://example.com/extra.json'];
@@ -254,6 +266,24 @@ final class PluginCatalogControllerTest extends TestCase
         $request->queryString = '';
         $request->userId = $userId;
         return $request;
+    }
+
+    /**
+     * Narrow Mockery's loose {@see \Mockery\LegacyMockInterface::shouldReceive()}
+     * union return (Expectation|ExpectationInterface|HigherOrderMessage) down to
+     * the {@see Expectation} API a single-method expectation exposes, so fluent
+     * ->once()/->with() calls type-check under PHPStan. The runtime value is a
+     * Mockery\CompositeExpectation that proxies those calls via __call(), hence
+     * no native return type (which would reject the concrete runtime class).
+     *
+     * @return Expectation
+     */
+    private function expect(MockInterface $mock, string $method)
+    {
+        /** @var Expectation $expectation */
+        $expectation = $mock->shouldReceive($method);
+
+        return $expectation;
     }
 
     /**

@@ -12,6 +12,7 @@ use Phlix\Server\Http\Request;
  */
 class RequestTest extends TestCase
 {
+    /** @var array<string, mixed> */
     private array $originalServer = [];
 
     protected function setUp(): void

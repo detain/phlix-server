@@ -68,6 +68,7 @@ final class FsBrowseControllerTest extends TestCase
 
         self::assertSame(200, $response->statusCode);
 
+        /** @var array{success: mixed, data: array{entries: list<array<string, mixed>>, path: mixed, parent: mixed}} $body */
         $body = $this->decode($response->body);
         self::assertTrue($body['success']);
 
@@ -84,6 +85,7 @@ final class FsBrowseControllerTest extends TestCase
 
         self::assertSame(200, $response->statusCode);
 
+        /** @var array{success: mixed, data: array{entries: list<array<string, mixed>>, path: mixed, parent: mixed}} $body */
         $body = $this->decode($response->body);
         self::assertTrue($body['success']);
         self::assertNull($body['data']['path']);
@@ -167,6 +169,7 @@ final class FsBrowseControllerTest extends TestCase
         // The good root still works: browsing it returns its subdirectories.
         $okResponse = $controller->browse($this->makeRequest($this->root), []);
         self::assertSame(200, $okResponse->statusCode);
+        /** @var array{success: mixed, data: array{entries: list<array<string, mixed>>, path: mixed, parent: mixed}} $okBody */
         $okBody = $this->decode($okResponse->body);
         self::assertTrue($okBody['success']);
         $names = array_column($okBody['data']['entries'], 'name');
@@ -200,6 +203,7 @@ final class FsBrowseControllerTest extends TestCase
         $response   = $controller->browse($this->makeRequest($movies), []);
 
         self::assertSame(200, $response->statusCode);
+        /** @var array{success: mixed, data: array{entries: list<array<string, mixed>>, path: mixed, parent: mixed}} $body */
         $body = $this->decode($response->body);
         self::assertTrue($body['success']);
 
@@ -234,6 +238,7 @@ final class FsBrowseControllerTest extends TestCase
      */
     private function decode(string $body): array
     {
+        /** @var array<string, mixed> $decoded */
         $decoded = json_decode($body, true);
         self::assertIsArray($decoded);
 

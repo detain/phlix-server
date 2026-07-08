@@ -1,6 +1,12 @@
 <?php
 
 /**
+ * Phlix media server component: =>.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
+/**
  * Deprecation aliases registered on Composer autoload.
  *
  * This file is loaded via `composer.json#autoload.files` so the

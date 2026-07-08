@@ -1,5 +1,11 @@
 <?php
 
+/**
+ * Phlix media server component: Logger.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
 namespace Phlix\Common\Logger;
 
 /**

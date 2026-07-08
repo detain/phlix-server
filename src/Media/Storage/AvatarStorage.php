@@ -1,5 +1,11 @@
 <?php
 
+/**
+ * Phlix media server component: Storage.
+ *
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license   MIT
+ */
 declare(strict_types=1);
 
 namespace Phlix\Media\Storage;

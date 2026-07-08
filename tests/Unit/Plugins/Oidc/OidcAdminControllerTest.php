@@ -34,7 +34,7 @@ final class OidcAdminControllerTest extends TestCase
     {
         parent::tearDown();
         if (is_dir($this->pluginDir)) {
-            $files = glob($this->pluginDir . '/*');
+            $files = glob($this->pluginDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -48,6 +48,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->getSettings($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertFalse($body['configured']);
         $this->assertSame('', $body['provider_url']);
@@ -67,6 +68,7 @@ final class OidcAdminControllerTest extends TestCase
         $request = new Request();
         $response = $this->controller->getSettings($request, []);
 
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['configured']);
         $this->assertSame('https://test.example.com', $body['provider_url']);
@@ -84,6 +86,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->saveSettings($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('missing_provider_url', $body['error']);
     }
@@ -98,6 +101,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->saveSettings($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('missing_client_id', $body['error']);
     }
@@ -113,6 +117,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->saveSettings($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('invalid_provider_url', $body['error']);
     }
@@ -128,6 +133,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->saveSettings($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Settings saved successfully', $body['message']);
         $this->assertTrue($body['configured']);
@@ -146,6 +152,7 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->saveSettings($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Settings saved successfully', $body['message']);
 
@@ -184,15 +191,19 @@ final class OidcAdminControllerTest extends TestCase
         $response = $this->controller->getSchema($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
 
         $this->assertArrayHasKey('schema', $body);
+        /** @var array<string, mixed> $schema */
         $schema = $body['schema'];
         $this->assertSame('OIDC Provider Configuration', $schema['title']);
         $this->assertArrayHasKey('properties', $schema);
-        $this->assertArrayHasKey('provider_url', $schema['properties']);
-        $this->assertArrayHasKey('client_id', $schema['properties']);
-        $this->assertArrayHasKey('client_secret', $schema['properties']);
-        $this->assertArrayHasKey('scopes', $schema['properties']);
+        /** @var array<string, mixed> $properties */
+        $properties = $schema['properties'];
+        $this->assertArrayHasKey('provider_url', $properties);
+        $this->assertArrayHasKey('client_id', $properties);
+        $this->assertArrayHasKey('client_secret', $properties);
+        $this->assertArrayHasKey('scopes', $properties);
     }
 }

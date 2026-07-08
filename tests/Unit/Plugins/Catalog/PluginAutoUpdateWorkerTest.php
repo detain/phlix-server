@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Net\SsrfGuard;
@@ -16,6 +17,7 @@ use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Tests\Unit\Plugins\MockeryExpectationTrait;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -24,6 +26,7 @@ use PHPUnit\Framework\TestCase;
 final class PluginAutoUpdateWorkerTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
+    use MockeryExpectationTrait;
 
     protected function setUp(): void
     {
@@ -91,6 +94,7 @@ final class PluginAutoUpdateWorkerTest extends TestCase
     public function test_does_nothing_when_auto_update_is_off(): void
     {
         $catalog = $this->catalog(false, []);
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
         // updateAll() is never reached, so the installed list is never read.
         $loader->shouldNotReceive('listInstalled');
@@ -115,8 +119,9 @@ final class PluginAutoUpdateWorkerTest extends TestCase
 
         $catalog = $this->catalog(true, [self::CATALOG_RAW => $catalogBody]);
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
         $manifest = Manifest::fromArray([
             'name' => 'phlix-plugin-anidb',
             'version' => '0.2.0',
@@ -125,7 +130,7 @@ final class PluginAutoUpdateWorkerTest extends TestCase
             'entry' => 'Demo\\Plugin',
         ]);
         // SV-B2: un-pinned catalog entry → update threads a null pin.
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
+        $this->expect($loader, 'install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $updates = new PluginUpdateService(
             $loader,
@@ -148,8 +153,9 @@ final class PluginAutoUpdateWorkerTest extends TestCase
 
         $catalog = $this->catalog(true, [self::CATALOG_RAW => $catalogBody]);
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.2.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.2.0')]);
         $loader->shouldNotReceive('install');
 
         $updates = new PluginUpdateService(

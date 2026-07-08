@@ -144,8 +144,10 @@ final class SettingsMaskerTest extends TestCase
         $this->assertTrue($schema['api_key']['secret']);
 
         // default present only when declared.
-        $this->assertArrayHasKey('default', $schema['use_dump']);
-        $this->assertSame(true, $schema['use_dump']['default']);
+        /** @var array<string, mixed> $useDumpSchema */
+        $useDumpSchema = $schema['use_dump'];
+        $this->assertArrayHasKey('default', $useDumpSchema);
+        $this->assertSame(true, $useDumpSchema['default']);
 
         // missing descriptors default sanely.
         $this->assertSame('mixed', $schema['bare']['type']);

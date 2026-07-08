@@ -27,7 +27,7 @@ final class DiscoveryDocumentTest extends TestCase
     {
         parent::tearDown();
         if (is_dir($this->cacheDir)) {
-            $files = glob($this->cacheDir . '/*');
+            $files = glob($this->cacheDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -201,7 +201,9 @@ final class DiscoveryDocumentTest extends TestCase
     public function test_clear_memory_cache(): void
     {
         DiscoveryDocument::clearMemoryCache();
-        $this->assertTrue(true);
+        $cacheProperty = new \ReflectionProperty(DiscoveryDocument::class, 'memoryCache');
+        $cacheProperty->setAccessible(true);
+        $this->assertNull($cacheProperty->getValue());
     }
 
     public function test_expired_cache_is_refreshed(): void

@@ -32,7 +32,7 @@ final class OidcProviderTest extends TestCase
     {
         parent::tearDown();
         if (is_dir($this->cacheDir)) {
-            $files = glob($this->cacheDir . '/*');
+            $files = glob($this->cacheDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -123,7 +123,8 @@ final class OidcProviderTest extends TestCase
         $provider = new OidcProvider($discovery, 'client-id', 'client-secret');
 
         $provider->linkAccount('local-user-id', ['oidc' => 'external-id']);
-        $this->assertTrue(true);
+        // linkAccount is a no-op; the provider stays intact and configured.
+        $this->assertSame('client-id', $provider->getClientId());
     }
 
     public function test_get_discovery(): void

@@ -84,7 +84,9 @@ final class IdTokenValidatorTest extends TestCase
     public function test_clear_jwks_cache(): void
     {
         IdTokenValidator::clearJwksCache();
-        $this->assertTrue(true);
+        $cacheProperty = new \ReflectionProperty(IdTokenValidator::class, 'jwksCache');
+        $cacheProperty->setAccessible(true);
+        $this->assertSame([], $cacheProperty->getValue());
     }
 
     public function test_validation_exception_is_runtime(): void

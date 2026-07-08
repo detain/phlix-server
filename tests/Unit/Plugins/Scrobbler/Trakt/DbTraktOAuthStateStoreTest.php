@@ -207,7 +207,9 @@ final class DbTraktOAuthStateStoreTest extends TestCase
         }
         self::assertNotNull($insertIndex, 'INSERT statement not found');
         // Verify the JSON data contains the code_verifier (params: id, provider, state, data, expires)
-        $data = json_decode($this->seenParams[$insertIndex][3], true);
+        /** @var string $insertData */
+        $insertData = $this->seenParams[$insertIndex][3];
+        $data = json_decode($insertData, true);
         self::assertIsArray($data);
         self::assertSame('my-code-verifier', $data['code_verifier']);
     }

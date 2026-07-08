@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -21,8 +22,8 @@ use Phlix\Server\Http\Response;
 class BookControllerTest extends TestCase
 {
     private BookController $controller;
-    private ItemRepository $itemRepo;
-    private LibraryManager $libraryManager;
+    private ItemRepository&MockObject $itemRepo;
+    private LibraryManager&MockObject $libraryManager;
     private OpdsFeedBuilder $opdsBuilder;
 
     protected function setUp(): void
@@ -126,6 +127,7 @@ class BookControllerTest extends TestCase
         $this->assertInstanceOf(Response::class, $response);
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{book: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('book', $body);
         $this->assertEquals('Test Book', $body['book']['name']);
@@ -222,6 +224,7 @@ class BookControllerTest extends TestCase
         try {
             $response = $this->controller->downloadBook(new Request(), ['id' => 'book-evil']);
             $this->assertEquals(404, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertArrayHasKey('error', $body);
         } finally {
@@ -298,6 +301,7 @@ class BookControllerTest extends TestCase
         try {
             $response = $this->controller->getCover(new Request(), ['id' => 'book-evil']);
             $this->assertEquals(404, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertArrayHasKey('error', $body);
         } finally {
@@ -344,6 +348,7 @@ class BookControllerTest extends TestCase
         $this->assertInstanceOf(Response::class, $response);
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('books', $body);
     }
@@ -388,6 +393,7 @@ class BookControllerTest extends TestCase
         ]);
 
         $response = $this->controller->getBook(new Request(), ['id' => 'book-123']);
+        /** @var array{book: array<string, string>} $body */
         $body = json_decode($response->body, true);
 
         $signer = \Phlix\Auth\SignedUrl::fromEnv();
@@ -398,9 +404,11 @@ class BookControllerTest extends TestCase
         ];
         foreach ($expected as $field => $path) {
             $this->assertArrayHasKey($field, $body['book']);
-            parse_str((string) parse_url((string) $body['book'][$field], PHP_URL_QUERY), $q);
+            parse_str((string) parse_url($body['book'][$field], PHP_URL_QUERY), $q);
+            $exp = $q['exp'] ?? '';
+            $sig = $q['sig'] ?? '';
             $this->assertTrue(
-                $signer->verify($path, (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+                $signer->verify($path, is_string($exp) ? $exp : '', is_string($sig) ? $sig : ''),
                 "{$field} must be a verifiable signed URL for {$path}",
             );
         }

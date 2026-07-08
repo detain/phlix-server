@@ -46,6 +46,7 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{server_session_token: string} $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertArrayHasKey('server_session_token', $body);
@@ -53,6 +54,7 @@ class HubTokenControllerTest extends TestCase
 
         // Verify the JWT contains the opaque_token claim
         $tokenParts = explode('.', $body['server_session_token']);
+        /** @var array<array-key, mixed> $payload */
         $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
 
         $this->assertEquals('test-opaque-token-from-hub', $payload['opaque_token'] ?? null);
@@ -84,12 +86,14 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{server_session_token: string} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('server_session_token', $body);
         $this->assertNotEmpty($body['server_session_token']);
 
         // Verify the JWT does NOT contain opaque_token when hub token was empty
         $tokenParts = explode('.', $body['server_session_token']);
+        /** @var array<array-key, mixed> $payload */
         $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
 
         $this->assertArrayNotHasKey('opaque_token', $payload);
@@ -108,6 +112,7 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(503, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('hub.not_enrolled', $body['code'] ?? null);
     }
@@ -127,6 +132,7 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(400, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('hub.token_required', $body['code'] ?? null);
     }
@@ -147,6 +153,7 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(401, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertEquals('hub.jwt_invalid', $body['code'] ?? null);
     }
@@ -194,11 +201,13 @@ class HubTokenControllerTest extends TestCase
 
         $this->assertEquals(200, $response->statusCode);
 
+        /** @var array{server_session_token: string} $body */
         $body = json_decode($response->body, true);
         $serverToken = $body['server_session_token'];
 
         // Decode the JWT and verify opaque_token is present
         $tokenParts = explode('.', $serverToken);
+        /** @var array<array-key, mixed> $payload */
         $payload = json_decode(base64_decode(strtr($tokenParts[1], '-_', '+/')), true);
 
         $this->assertEquals($opaqueTokenValue, $payload['opaque_token']);

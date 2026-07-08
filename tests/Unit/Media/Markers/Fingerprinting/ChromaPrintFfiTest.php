@@ -13,7 +13,9 @@ class ChromaPrintFfiTest extends TestCase
         $chromaprint = new ChromaPrintFfi();
         $result = $chromaprint->isAvailable();
 
-        $this->assertIsBool($result);
+        // The chromaprint C library is not linkable in the test environment, so
+        // FFI-backed availability resolves to false.
+        $this->assertFalse($result);
     }
 
     /**

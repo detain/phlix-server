@@ -104,14 +104,29 @@ class TranscodeManagerTest extends TestCase
             //  6 key_hash, 7 variant_width, 8 variant_height, 9 variant_bandwidth,
             // 10 subtitle_tracks, 11 duration_seconds, 12 segment_seconds, 13 segment_params
             $segParams = is_string($params[13] ?? null) ? json_decode($params[13], true) : [];
+            $hlsDir = $params[4] ?? '';
+            $duration = $params[11] ?? 0;
+            $segmentSeconds = $params[12] ?? 0;
             return [
-                'hls_dir' => (string) ($params[4] ?? ''),
-                'duration' => (int) ($params[11] ?? 0),
-                'segment_seconds' => (int) ($params[12] ?? 0),
+                'hls_dir' => is_scalar($hlsDir) ? (string) $hlsDir : '',
+                'duration' => is_numeric($duration) ? (int) $duration : 0,
+                'segment_seconds' => is_numeric($segmentSeconds) ? (int) $segmentSeconds : 0,
                 'segment_params' => is_array($segParams) ? $segParams : [],
             ];
         }
         $this->fail('no transcode_jobs INSERT was captured');
+    }
+
+    /**
+     * Extracts the string `id` from a job-variant array (asserting its type).
+     *
+     * @param array<string, mixed> $variant
+     */
+    private function variantId(array $variant): string
+    {
+        $id = $variant['id'] ?? null;
+        $this->assertIsString($id);
+        return $id;
     }
 
     public function testEnsureHlsJobReusesExistingValidJob(): void
@@ -300,6 +315,7 @@ class TranscodeManagerTest extends TestCase
         $this->assertNotNull($update, 'a metadata_json update must be issued');
         $this->assertIsString($update[0]);
         $decoded = json_decode($update[0], true);
+        $this->assertIsArray($decoded);
         $this->assertSame(1447, $decoded['duration_seconds']);
         $this->assertSame('X', $decoded['name'], 'existing metadata is preserved');
     }
@@ -1469,7 +1485,10 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame($expected, $variantsJson);
 
         $decoded = json_decode($variantsJson, true);
-        $ids = array_column($decoded['renditions'], 'id');
+        $this->assertIsArray($decoded);
+        $renditions = $decoded['renditions'];
+        $this->assertIsArray($renditions);
+        $ids = array_column($renditions, 'id');
         $this->assertContains('720p', $ids);
         $this->assertNotContains('1080p', $ids, 'no upscaling beyond the 720p probe');
     }
@@ -1581,6 +1600,7 @@ class TranscodeManagerTest extends TestCase
 
         $this->assertSame("{$dir}/seg-v480p-00002.ts", $path);
         // Transcode rung contract.
+        $this->assertNotNull($captParams);
         $this->assertSame('libx264', $captParams['video_codec']);
         $this->assertSame('aac', $captParams['audio_codec']);
         $this->assertSame(854, $captParams['width']);
@@ -1589,7 +1609,9 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame('high', $captParams['profile']);
         $this->assertArrayHasKey('maxrate', $captParams);
         $this->assertArrayHasKey('bufsize', $captParams);
-        $this->assertSame($captParams['maxrate'] * 2, $captParams['bufsize']);
+        $maxrate = $captParams['maxrate'];
+        $this->assertIsInt($maxrate);
+        $this->assertSame($maxrate * 2, $captParams['bufsize']);
     }
 
     public function testEnsureSegmentResolvesCopyOriginalVariant(): void
@@ -1683,6 +1705,7 @@ class TranscodeManagerTest extends TestCase
         // Transcode rendition → capped-CRF H.264/AAC contract with derived VBV + level.
         $t = $method->invoke(null, ['is_copy' => false, 'width' => 1280, 'height' => 720,
             'codecs' => 'avc1.640029,mp4a.40.2', 'video_bitrate' => 2800000]);
+        $this->assertIsArray($t);
         $this->assertSame('libx264', $t['video_codec']);
         $this->assertSame('veryfast', $t['preset']);
         $this->assertSame(23, $t['crf']);
@@ -1750,6 +1773,7 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame("{$dir}/seg-00003.ts", $path);
         $this->assertSame("{$dir}/seg-00003.ts", $captOut);
         // Params come from the legacy segment_params column verbatim.
+        $this->assertNotNull($captParams);
         $this->assertSame('libx264', $captParams['video_codec']);
         $this->assertSame('aac', $captParams['audio_codec']);
     }
@@ -1871,13 +1895,14 @@ class TranscodeManagerTest extends TestCase
             static fn ($r): string => $r->id,
             $ladder->streamVariants(),
         );
-        $this->assertSame($expectedIds, array_map(static fn (array $v): string => (string) $v['id'], $variants));
+        $this->assertSame($expectedIds, array_map($this->variantId(...), $variants));
         // The copy original is the highest (first) entry.
         $this->assertSame('original', $variants[0]['id']);
         $this->assertTrue($variants[0]['is_copy']);
         // Every entry carries its own signed-later media playlist url.
         foreach ($variants as $entry) {
-            $this->assertSame("/hls/seg-job/media_v{$entry['id']}.m3u8", $entry['url']);
+            $entryId = $this->variantId($entry);
+            $this->assertSame("/hls/seg-job/media_v{$entryId}.m3u8", $entry['url']);
             // Flat Rendition shape preserved.
             $this->assertArrayHasKey('label', $entry);
             $this->assertArrayHasKey('height', $entry);
@@ -1904,7 +1929,7 @@ class TranscodeManagerTest extends TestCase
         $variants = $this->manager($db, $ff)->getJobVariants('seg-job');
 
         $this->assertNotNull($variants);
-        $ids = array_map(static fn (array $v): string => (string) $v['id'], $variants);
+        $ids = array_map($this->variantId(...), $variants);
         $this->assertNotContains('original', $ids, 'non-copy original must not be listed');
         // Membership + order equals the clamped rungs highest-first.
         $expectedIds = array_map(static fn ($r): string => $r->id, $ladder->streamVariants());
@@ -1912,7 +1937,8 @@ class TranscodeManagerTest extends TestCase
         // Highest-first: first entry is the tallest rung.
         $this->assertSame('1080p', $variants[0]['id']); // web profile caps at 1080p
         foreach ($variants as $entry) {
-            $this->assertSame("/hls/seg-job/media_v{$entry['id']}.m3u8", $entry['url']);
+            $entryId = $this->variantId($entry);
+            $this->assertSame("/hls/seg-job/media_v{$entryId}.m3u8", $entry['url']);
         }
     }
 

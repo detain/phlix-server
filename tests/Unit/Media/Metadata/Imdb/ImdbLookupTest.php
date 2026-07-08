@@ -59,8 +59,10 @@ class ImdbLookupTest extends TestCase
 
         // Normalized title + year window [1998, 2000] + exact-year tiebreak.
         $this->assertSame(['matrix', 1998, 2000, 1999], $captured['params']);
-        $this->assertStringContainsString('BETWEEN ? AND ?', $captured['sql']);
-        $this->assertStringContainsString('start_year = ?', $captured['sql']);
+        $sql = $captured['sql'];
+        $this->assertIsString($sql);
+        $this->assertStringContainsString('BETWEEN ? AND ?', $sql);
+        $this->assertStringContainsString('start_year = ?', $sql);
     }
 
     public function testLookupWithoutYearOrdersByVotes(): void
@@ -89,8 +91,10 @@ class ImdbLookupTest extends TestCase
         $this->assertNotNull($result);
         $this->assertSame('tt0111161', $result['imdb_id']);
         $this->assertSame(['shawshank redemption'], $captured['params']);
-        $this->assertStringContainsString('ORDER BY num_votes DESC', $captured['sql']);
-        $this->assertStringNotContainsString('BETWEEN', $captured['sql']);
+        $sql = $captured['sql'];
+        $this->assertIsString($sql);
+        $this->assertStringContainsString('ORDER BY num_votes DESC', $sql);
+        $this->assertStringNotContainsString('BETWEEN', $sql);
     }
 
     public function testLookupReturnsNullWhenNoRows(): void

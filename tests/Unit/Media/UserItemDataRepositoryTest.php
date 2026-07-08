@@ -82,6 +82,7 @@ class UserItemDataRepositoryTest extends TestCase
 
         $data = (new UserItemDataRepository($db))->getItemData(self::USER, self::ITEM);
 
+        $this->assertNotNull($data);
         $this->assertTrue($data['watched'], 'string "1" watched column coerces to bool true');
     }
 
@@ -91,6 +92,7 @@ class UserItemDataRepositoryTest extends TestCase
         $dbAbsent = $this->createMock(Connection::class);
         $dbAbsent->method('query')->willReturn([['favorite' => '1', 'rating' => '5', 'like_level' => '0']]);
         $absent = (new UserItemDataRepository($dbAbsent))->getItemData(self::USER, self::ITEM);
+        $this->assertNotNull($absent);
         $this->assertFalse($absent['watched']);
 
         // Column present but NULL → default false.
@@ -99,6 +101,7 @@ class UserItemDataRepositoryTest extends TestCase
             ['favorite' => '1', 'rating' => '5', 'like_level' => '0', 'watched' => null],
         ]);
         $null = (new UserItemDataRepository($dbNull))->getItemData(self::USER, self::ITEM);
+        $this->assertNotNull($null);
         $this->assertFalse($null['watched']);
     }
 
@@ -117,6 +120,7 @@ class UserItemDataRepositoryTest extends TestCase
 
         // Signed thumbs axis: the driver returns the column as a string; a
         // negative dislike value must coerce back to a negative int.
+        $this->assertNotNull($data);
         $this->assertSame(-2, $data['like_level']);
     }
 
@@ -126,12 +130,14 @@ class UserItemDataRepositoryTest extends TestCase
         $dbAbsent = $this->createMock(Connection::class);
         $dbAbsent->method('query')->willReturn([['favorite' => '1', 'rating' => '5']]);
         $absent = (new UserItemDataRepository($dbAbsent))->getItemData(self::USER, self::ITEM);
+        $this->assertNotNull($absent);
         $this->assertSame(0, $absent['like_level']);
 
         // Column present but NULL → default 0.
         $dbNull = $this->createMock(Connection::class);
         $dbNull->method('query')->willReturn([['favorite' => '1', 'rating' => '5', 'like_level' => null]]);
         $null = (new UserItemDataRepository($dbNull))->getItemData(self::USER, self::ITEM);
+        $this->assertNotNull($null);
         $this->assertSame(0, $null['like_level']);
     }
 

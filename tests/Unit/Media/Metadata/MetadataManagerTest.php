@@ -67,10 +67,13 @@ class MetadataManagerTest extends TestCase
 
     public function testSetProviderPriority(): void
     {
+        $this->manager->registerProvider('local', $this->mockProvider, ['movie']);
+        $this->manager->registerProvider('tmdb', $this->mockProvider, ['movie']);
+        $this->manager->registerProvider('fanart', $this->mockProvider, ['movie']);
         $this->manager->setProviderPriority('movie', ['local', 'tmdb', 'fanart']);
-        
-        // No exception means success
-        $this->assertTrue(true);
+
+        // All three prioritised providers now resolve for the movie type.
+        $this->assertCount(3, $this->manager->getProvidersForType('movie'));
     }
 
     public function testGetProvidersForTypeWithDefaultPriority(): void
@@ -97,9 +100,10 @@ class MetadataManagerTest extends TestCase
     public function testGetProvidersForUnknownTypeReturnsDefault(): void
     {
         $providers = $this->manager->getProvidersForType('unknown');
-        
-        // Should return default priority which includes 'local'
-        $this->assertIsArray($providers);
+
+        // Unknown types fall back to the default ['local'] priority; with no
+        // 'local' provider registered here, the resolved list is empty.
+        $this->assertEmpty($providers);
     }
 
     public function testRegisterProviderWithEmptySupportedTypes(): void

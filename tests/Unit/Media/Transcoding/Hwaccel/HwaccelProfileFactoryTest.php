@@ -54,7 +54,6 @@ class HwaccelProfileFactoryTest extends TestCase
 
         $profiles = $factory->getAllProfiles();
 
-        $this->assertIsArray($profiles);
         $this->assertContainsOnlyInstancesOf(\Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::class, $profiles);
         $this->assertArrayHasKey('nvenc', $profiles);
         $this->assertArrayHasKey('vaapi', $profiles);

@@ -272,37 +272,45 @@ class TmdbProviderTest extends TestCase
         $details = (new TmdbProvider('k', $http))->getDetails('603');
 
         // Flat `actors` (objects with order) UNCHANGED.
-        $this->assertSame('Keanu Reeves', $details['actors'][0]['name']);
-        $this->assertSame('Neo', $details['actors'][0]['role']);
+        /** @var list<array<string, mixed>> $actors */
+        $actors = $details['actors'];
+        $this->assertSame('Keanu Reeves', $actors[0]['name']);
+        $this->assertSame('Neo', $actors[0]['role']);
 
         // Rich cast with profile photos.
-        $this->assertCount(2, $details['cast']);
+        /** @var list<array<string, mixed>> $cast */
+        $cast = $details['cast'];
+        $this->assertCount(2, $cast);
         $this->assertSame([
             'name' => 'Keanu Reeves',
             'role' => 'Neo',
             'profile_url' => 'https://image.tmdb.org/t/p/w185/keanu.jpg',
-        ], $details['cast'][0]);
-        $this->assertNull($details['cast'][1]['profile_url']);
+        ], $cast[0]);
+        $this->assertNull($cast[1]['profile_url']);
 
         // Crew: key jobs only, deduped by name+job.
-        $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $details['crew']);
+        /** @var list<array{name: string, job: string, profile_url: string|null}> $crew */
+        $crew = $details['crew'];
+        $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $crew);
         $this->assertSame(
             ['Lana Wachowski/Director', 'Lilly Wachowski/Writer', 'Joel Silver/Producer'],
             $crewKeys,
         );
-        $this->assertSame('https://image.tmdb.org/t/p/w185/lana.jpg', $details['crew'][0]['profile_url']);
-        $this->assertNull($details['crew'][1]['profile_url']);
+        $this->assertSame('https://image.tmdb.org/t/p/w185/lana.jpg', $crew[0]['profile_url']);
+        $this->assertNull($crew[1]['profile_url']);
         // Non-key job (Director of Photography) excluded — assert it is absent.
         $this->assertNotContains('Bill Pope/Director of Photography', $crewKeys);
 
         // Production companies with logo URLs; empty name skipped.
-        $this->assertCount(2, $details['production_companies']);
+        /** @var list<array<string, mixed>> $companies */
+        $companies = $details['production_companies'];
+        $this->assertCount(2, $companies);
         $this->assertSame([
             'name' => 'Warner Bros.',
             'logo_url' => 'https://image.tmdb.org/t/p/w185/wb.png',
             'origin_country' => 'US',
-        ], $details['production_companies'][0]);
-        $this->assertNull($details['production_companies'][1]['logo_url']);
+        ], $companies[0]);
+        $this->assertNull($companies[1]['logo_url']);
 
         // `studio` (first company) is still present, unchanged.
         $this->assertSame('Warner Bros.', $details['studio']);
@@ -363,22 +371,28 @@ class TmdbProviderTest extends TestCase
         $this->assertSame(['Kiefer Sutherland'], $details['actors']);
 
         // Rich cast pulls role from roles[0].character + profile.
-        $this->assertCount(1, $details['cast']);
+        /** @var list<array<string, mixed>> $cast */
+        $cast = $details['cast'];
+        $this->assertCount(1, $cast);
         $this->assertSame([
             'name' => 'Kiefer Sutherland',
             'role' => 'Jack Bauer',
             'profile_url' => 'https://image.tmdb.org/t/p/w185/kiefer.jpg',
-        ], $details['cast'][0]);
+        ], $cast[0]);
 
         // Crew: created_by mapped to Creator + key-job crew from aggregate_credits.
-        $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $details['crew']);
+        /** @var list<array{name: string, job: string, profile_url: string|null}> $crew */
+        $crew = $details['crew'];
+        $crewKeys = array_map(static fn(array $c): string => $c['name'] . '/' . $c['job'], $crew);
         $this->assertSame(
             ['Joel Surnow/Creator', 'Robert Cochran/Creator', 'Jon Cassar/Director'],
             $crewKeys,
         );
 
         // Companies: production_companies AND networks both feed the list.
-        $names = array_map(static fn(array $c): string => $c['name'], $details['production_companies']);
+        /** @var list<array{name: string, logo_url: string|null, origin_country: string}> $productionCompanies */
+        $productionCompanies = $details['production_companies'];
+        $names = array_map(static fn(array $c): string => $c['name'], $productionCompanies);
         $this->assertSame(['Imagine Television', 'FOX'], $names);
         $this->assertSame('Imagine Television', $details['studio']);
     }

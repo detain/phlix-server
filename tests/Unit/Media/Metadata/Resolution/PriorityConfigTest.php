@@ -121,8 +121,12 @@ final class PriorityConfigTest extends TestCase
     public function testOrderForReturnsListNotPreservingStringKeys(): void
     {
         // orderFor must return a clean list (re-indexed) so it is a valid
-        // PriorityFieldResolver sourceOrder.
-        $config = new PriorityConfig(['movie' => [2 => 'tmdb', 5 => 'imdb']]);
+        // PriorityFieldResolver sourceOrder. Decoding the JSON object yields the
+        // gapped integer keys [2 => 'tmdb', 5 => 'imdb'] at runtime, deliberately
+        // exercising that re-indexing path.
+        /** @var array<string, list<string>> $priority */
+        $priority = json_decode('{"movie":{"2":"tmdb","5":"imdb"}}', true);
+        $config = new PriorityConfig($priority);
 
         $this->assertSame(['tmdb', 'imdb'], $config->orderFor('movie'));
     }

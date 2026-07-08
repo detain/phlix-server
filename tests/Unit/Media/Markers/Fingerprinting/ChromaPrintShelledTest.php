@@ -24,7 +24,7 @@ class ChromaPrintShelledTest extends TestCase
             unlink($this->tempFpcalc);
         }
         // Remove any test files in tempDir
-        $files = glob($this->tempDir . '/*');
+        $files = glob($this->tempDir . "/*") ?: [];
         foreach ($files as $file) {
             if (is_file($file)) {
                 unlink($file);
@@ -50,7 +50,6 @@ BASH;
         $chromaprint = new ChromaPrintShelled($this->tempFpcalc);
         $result = $chromaprint->fingerprint($tempFile);
 
-        $this->assertIsString($result);
         $this->assertEquals('ABC123DEF456', $result);
     }
 
@@ -59,7 +58,6 @@ BASH;
         $chromaprint = new ChromaPrintShelled('/nonexistent/fpcalc');
         $result = $chromaprint->isAvailable();
 
-        $this->assertIsBool($result);
         $this->assertFalse($result);
     }
 

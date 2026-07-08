@@ -235,10 +235,19 @@ class MovieMetadataResolverTest extends TestCase
         $this->assertSame(['Keanu Reeves', 'Carrie-Anne Moss'], $result['actors']);
         $this->assertSame('Lana Wachowski', $result['director']);
         // Rich objects passed through verbatim.
-        $this->assertSame('Keanu Reeves', $result['cast'][0]['name']);
-        $this->assertSame('https://i/w185/k.jpg', $result['cast'][0]['profile_url']);
-        $this->assertSame('Director', $result['crew'][0]['job']);
-        $this->assertSame('Warner Bros.', $result['production_companies'][0]['name']);
+        $cast = $result['cast'];
+        $this->assertIsArray($cast);
+        $this->assertIsArray($cast[0]);
+        $this->assertSame('Keanu Reeves', $cast[0]['name']);
+        $this->assertSame('https://i/w185/k.jpg', $cast[0]['profile_url']);
+        $crew = $result['crew'];
+        $this->assertIsArray($crew);
+        $this->assertIsArray($crew[0]);
+        $this->assertSame('Director', $crew[0]['job']);
+        $companies = $result['production_companies'];
+        $this->assertIsArray($companies);
+        $this->assertIsArray($companies[0]);
+        $this->assertSame('Warner Bros.', $companies[0]['name']);
         $this->assertSame('Warner Bros.', $result['studio']);
     }
 
@@ -311,8 +320,10 @@ class MovieMetadataResolverTest extends TestCase
         // A TMDB-only field still falls through (IMDb has no overview).
         $this->assertSame('TMDB overview (tmdb-only field).', $result['overview']);
         // Provenance/id construction is unchanged regardless of order.
-        $this->assertSame('603', $result['external_ids']['tmdb']);
-        $this->assertSame('tt0133093', $result['external_ids']['imdb']);
+        $externalIds = $result['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertSame('603', $externalIds['tmdb']);
+        $this->assertSame('tt0133093', $externalIds['imdb']);
         $this->assertSame(8.7, $result['imdb_rating']);
         $this->assertSame(['tmdb', 'imdb'], $result['sources']);
     }

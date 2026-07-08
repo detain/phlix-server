@@ -95,7 +95,7 @@ class PortForwardServiceTest extends TestCase
         $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
         $candidates = $service->discoverHostnameCandidates();
 
-        $this->assertIsArray($candidates);
+        $this->assertNotEmpty($candidates);
     }
 
     public function testDiscoverHostnameCandidatesIncludesPublicIpWhenPortOpen(): void
@@ -110,7 +110,6 @@ class PortForwardServiceTest extends TestCase
         $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
         $candidates = $service->discoverHostnameCandidates();
 
-        $this->assertIsArray($candidates);
         $publicCandidates = array_filter($candidates, fn($c) => $c['type'] === 'public');
         $this->assertNotEmpty($publicCandidates);
     }
@@ -124,7 +123,6 @@ class PortForwardServiceTest extends TestCase
         $service = new PortForwardService($upnp, $stun, $natpmp, new NullLogger(), 32400, true, $this->tmpDir);
         $instructions = $service->getManualInstructions();
 
-        $this->assertIsArray($instructions);
         $this->assertArrayHasKey('instructions', $instructions);
         $this->assertArrayHasKey('router_detection', $instructions);
         $this->assertArrayHasKey('external_port', $instructions);

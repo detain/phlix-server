@@ -19,7 +19,6 @@ class SlackPluginTest extends TestCase
     public function testGetSupportedEvents(): void
     {
         $events = SlackPlugin::getSupportedEvents();
-        $this->assertIsArray($events);
         $this->assertContains('playback.started', $events);
         $this->assertContains('playback.ended', $events);
         $this->assertContains('library.updated', $events);
@@ -113,6 +112,9 @@ class SlackPluginTest extends TestCase
         $this->assertEquals(7, strlen($color)); // #RRGGBB
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function createEvent(string $eventType, array $payload): WebhookEvent
     {
         return new WebhookEvent(

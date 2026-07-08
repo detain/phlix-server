@@ -68,6 +68,8 @@ final class MetricsReadQueriesTest extends TestCase
 
         $this->purgeFixtureRows();
 
+        $this->assertNotNull($this->db);
+
         // Two workers, same time-bucket: proves the cross-worker SUM/GROUP BY.
         // A third row two minutes back lands in a separate 60s bucket.
         $this->db->query(

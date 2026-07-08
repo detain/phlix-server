@@ -177,6 +177,7 @@ class CollectionCrudTest extends TestCase
 
         // Test: Add item
         $queries = []; // Reset tracking
+        /** @var list<array{sql: string, params: array<int, mixed>}> $queries */
         $manager->addItem('col-1', 'media-3');
 
         $addItemFound = false;
@@ -190,6 +191,7 @@ class CollectionCrudTest extends TestCase
 
         // Test: Bulk add
         $queries = []; // Reset tracking
+        /** @var list<array{sql: string, params: array<int, mixed>}> $queries */
         $manager->bulkAddFromSearch('col-1', ['media-4', 'media-5', 'media-6']);
 
         // Should skip media-1 and media-2 (already exist), add media-4, media-5, media-6.
@@ -217,6 +219,7 @@ class CollectionCrudTest extends TestCase
 
         // Test: Delete - should delete items first, then collection
         $queries = [];
+        /** @var list<array{sql: string, params: array<int, mixed>}> $queries */
         $manager->delete('col-new');
 
         $deleteItemsFound = false;

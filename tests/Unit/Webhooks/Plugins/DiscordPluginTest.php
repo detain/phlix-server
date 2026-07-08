@@ -20,7 +20,6 @@ class DiscordPluginTest extends TestCase
     public function testGetSupportedEventsReturnsExpectedList(): void
     {
         $events = DiscordPlugin::getSupportedEvents();
-        $this->assertIsArray($events);
         $this->assertContains('playback.started', $events);
         $this->assertContains('playback.ended', $events);
         $this->assertContains('library.updated', $events);
@@ -105,8 +104,13 @@ class DiscordPluginTest extends TestCase
 
         $payload = $method->invoke($plugin, $event);
 
+        $this->assertIsArray($payload);
+        $this->assertArrayHasKey('embeds', $payload);
+        $this->assertIsArray($payload['embeds']);
         $embed = $payload['embeds'][0];
+        $this->assertIsArray($embed);
         $this->assertArrayHasKey('thumbnail', $embed);
+        $this->assertIsArray($embed['thumbnail']);
         $this->assertEquals('https://example.com/thumb.jpg', $embed['thumbnail']['url']);
     }
 
@@ -134,6 +138,9 @@ class DiscordPluginTest extends TestCase
         $this->assertEquals(0xE67E22, $method->invoke($plugin, $downloadComplete));
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function createEvent(string $eventType, array $payload): WebhookEvent
     {
         return new WebhookEvent(

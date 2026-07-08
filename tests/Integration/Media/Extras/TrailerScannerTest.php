@@ -22,7 +22,6 @@ class TrailerScannerTest extends TestCase
     private ExtrasRepository $extrasRepository;
     private TrailerFinder $trailerFinder;
     private TrailerResolver $resolver;
-    private ExtrasController $controller;
 
     protected function setUp(): void
     {
@@ -50,7 +49,8 @@ class TrailerScannerTest extends TestCase
             86400
         );
 
-        $this->controller = new ExtrasController($this->resolver);
+        // Exercise the controller wiring; the tests below drive the finder directly.
+        new ExtrasController($this->resolver);
     }
 
     protected function tearDown(): void
@@ -70,6 +70,7 @@ class TrailerScannerTest extends TestCase
             \RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $file) {
+            /** @var \SplFileInfo $file */
             if ($file->isDir()) {
                 rmdir($file->getPathname());
             } else {
@@ -139,7 +140,6 @@ class TrailerScannerTest extends TestCase
         // We're testing the resolver which is used by controller
         $trailers = $this->trailerFinder->findLocalTrailers($mediaDir, $mediaFilename);
 
-        $this->assertIsArray($trailers);
         $this->assertArrayHasKey('path', $trailers[0]);
         $this->assertArrayHasKey('title', $trailers[0]);
         $this->assertArrayHasKey('duration', $trailers[0]);

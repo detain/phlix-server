@@ -16,7 +16,7 @@ final class UuidTest extends TestCase
     {
         $uuid = Uuid::v4();
 
-        $this->assertIsString($uuid);
+        $this->assertNotEmpty($uuid);
     }
 
     public function testV4ReturnsCorrectFormat(): void

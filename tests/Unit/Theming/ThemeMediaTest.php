@@ -149,9 +149,9 @@ class ThemeMediaTest extends TestCase
         $array = $themeMedia->toArray();
 
         $this->assertSame('lib-123', $array['library_id']);
-        $this->assertNotNull($array['audio']);
         $this->assertNull($array['video']);
         $this->assertSame('2026-01-15T10:30:00+00:00', $array['scanned_at']);
+        $this->assertIsArray($array['audio']);
         $this->assertSame('/movies/theme.mp3', $array['audio']['path']);
         $this->assertSame(180, $array['audio']['duration']);
     }

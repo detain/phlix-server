@@ -95,6 +95,7 @@ final class TlsVerificationTest extends TestCase
         $method->setAccessible(true);
         $ssl = $method->invoke($plugin, ['ca_bundle' => '/etc/phlix/private-ca.crt']);
 
+        self::assertIsArray($ssl);
         self::assertSame('/etc/phlix/private-ca.crt', $ssl['cafile']);
     }
 

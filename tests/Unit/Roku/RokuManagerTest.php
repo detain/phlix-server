@@ -64,11 +64,10 @@ class RokuManagerTest extends TestCase
         $mockDiscovery = $this->createMock(RokuDiscovery::class);
         $manager = new RokuManager($mockDiscovery, $this->createMockPlaybackController());
 
+        $this->expectNotToPerformAssertions();
+
         // stopSession should not throw even if no session exists
         $manager->stopSession('non-existent-device');
-
-        // Verify no exception was thrown
-        $this->assertTrue(true);
     }
 
     public function testGetSessionReturnsNullForUnknownDevice(): void
@@ -88,7 +87,6 @@ class RokuManagerTest extends TestCase
 
         $sessions = $manager->getActiveSessions();
 
-        $this->assertIsArray($sessions);
         $this->assertCount(0, $sessions);
     }
 

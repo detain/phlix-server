@@ -822,7 +822,8 @@ final class FakeAuditLogger extends AuditLogger
         string $pluginName,
         array $context = [],
     ): void {
-        $key = $action . '.' . ($context['source'] ?? 'system');
+        $source = $context['source'] ?? 'system';
+        $key = $action . '.' . (is_string($source) ? $source : 'system');
         $this->pluginActions[$key] = ($this->pluginActions[$key] ?? 0) + 1;
     }
 

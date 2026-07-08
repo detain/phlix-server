@@ -92,7 +92,7 @@ class SubdomainClientTest extends TestCase
         if (!is_dir($dir)) {
             return;
         }
-        $files = glob($dir . '/*');
+        $files = glob($dir . '/*') ?: [];
         foreach ($files as $file) {
             if (is_dir($file)) {
                 $this->recursiveDelete($file);

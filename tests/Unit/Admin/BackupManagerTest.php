@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Admin;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\RestoreResult;
@@ -10,6 +11,7 @@ use Workerman\MySQL\Connection;
 class BackupManagerTest extends TestCase
 {
     private BackupManager $backupManager;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -66,7 +68,6 @@ class BackupManagerTest extends TestCase
 
         $backups = $this->backupManager->listBackups();
 
-        $this->assertIsArray($backups);
         $this->assertEmpty($backups);
     }
 
@@ -118,17 +119,17 @@ class BackupManagerTest extends TestCase
 
         // When no backups exist, returns time() which is effectively "now"
         $this->assertNotNull($result);
-        $this->assertIsInt($result);
     }
 
     public function testCleanupOldBackupsRespectsRetention(): void
     {
         $this->db->method('query')->willReturn([]);
 
+        $this->expectNotToPerformAssertions();
+
         $this->backupManager->cleanupOldBackups();
 
         // No assertions needed - just verify no exceptions
-        $this->assertTrue(true);
     }
 
     public function testRestoreResultSuccessFactory(): void

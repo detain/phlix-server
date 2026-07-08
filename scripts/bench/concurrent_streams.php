@@ -96,6 +96,7 @@ HELP;
  * Parses command-line arguments into an associative array.
  *
  * @param array<string> $args Command-line arguments
+ * @param list<string> $args
  * @return array<string, mixed> Parsed arguments
  */
 function parseArgs(array $args): array
@@ -199,7 +200,7 @@ function getSystemResources(): array
     $memInfo = [];
     if (file_exists('/proc/meminfo')) {
         $memContent = file_get_contents('/proc/meminfo');
-        if (preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
+        if ($memContent !== false && preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
             foreach ($matches as $match) {
                 $memInfo[$match[1]] = (int)$match[2];
             }
@@ -212,7 +213,12 @@ function getSystemResources(): array
 
     $cpuUsage = 0.0;
     if (function_exists('sys_getloadavg')) {
-        $cpuUsage = min(100.0, ($loadAverage[0] / shell_exec('nproc') ?? 1) * 100);
+        $nprocRaw = shell_exec('nproc');
+        $nproc = is_string($nprocRaw) ? (int) trim($nprocRaw) : 0;
+        if ($nproc < 1) {
+            $nproc = 1;
+        }
+        $cpuUsage = min(100.0, ($loadAverage[0] / $nproc) * 100);
     }
 
     return [
@@ -283,7 +289,7 @@ function streamRequest(string $server, string $mediaId, string $quality, int $ti
  * @param string $quality Quality profile
  * @param int $numStreams Number of concurrent streams
  * @param int $timeout Request timeout
- * @return array<string, mixed> Benchmark results
+ * @return array{total_streams: int, successful: int, failed: int, success_rate: float|int, avg_response_time_ms: float, min_response_time_ms: float|int, max_response_time_ms: float|int, streams_sustained: int} Benchmark results
  */
 function runConcurrentBenchmark(string $server, string $mediaId, string $quality, int $numStreams, int $timeout): array
 {
@@ -292,6 +298,7 @@ function runConcurrentBenchmark(string $server, string $mediaId, string $quality
     $numToSpawn = $numStreams;
     $successCount = 0;
     $failCount = 0;
+    /** @var list<float> $responseTimes */
     $responseTimes = [];
 
     for ($i = 0; $i < $numToSpawn; $i++) {
@@ -317,11 +324,14 @@ function runConcurrentBenchmark(string $server, string $mediaId, string $quality
 
         $resultFile = '/tmp/bench_stream_' . $pid . '.json';
         if (file_exists($resultFile)) {
-            $result = json_decode(file_get_contents($resultFile), true, 512, JSON_THROW_ON_ERROR);
+            $json = file_get_contents($resultFile);
+            $decoded = json_decode(is_string($json) ? $json : '{}', true, 512, JSON_THROW_ON_ERROR);
+            $result = is_array($decoded) ? $decoded : [];
             $results[] = $result;
+            $responseTime = $result['response_time_ms'] ?? null;
             if ($exitCode === 0 && ($result['success'] ?? false)) {
                 $successCount++;
-                $responseTimes[] = $result['response_time_ms'];
+                $responseTimes[] = is_numeric($responseTime) ? (float) $responseTime : 0.0;
             } else {
                 $failCount++;
             }
@@ -349,6 +359,8 @@ function runConcurrentBenchmark(string $server, string $mediaId, string $quality
 
 /**
  * Main entry point for the benchmark script.
+ *
+ * @param list<string> $argv
  */
 function main(array $argv): int
 {
@@ -376,12 +388,15 @@ function main(array $argv): int
         return 0;
     }
 
-    $mediaId = (string)$args['media_id'];
-    $numStreams = (int)$args['streams'];
-    $server = (string)$args['server'];
-    $timeout = (int)$args['timeout'];
-    $duration = (int)$args['duration'];
-    $quality = (string)$args['quality'];
+    $asString = static fn (mixed $v): string => is_scalar($v) ? (string) $v : '';
+    $asInt = static fn (mixed $v): int => is_numeric($v) ? (int) $v : 0;
+
+    $mediaId = $asString($args['media_id'] ?? null);
+    $numStreams = $asInt($args['streams'] ?? null);
+    $server = $asString($args['server'] ?? null);
+    $timeout = $asInt($args['timeout'] ?? null);
+    $duration = $asInt($args['duration'] ?? null);
+    $quality = $asString($args['quality'] ?? null);
 
     echo "Starting Concurrent Streams Benchmark\n";
     echo "=====================================\n";

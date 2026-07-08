@@ -140,7 +140,6 @@ final class BootstrapTest extends TestCase
         $this->assertInstanceOf(ContainerInterface::class, $container);
 
         $application = new Application($container, $config);
-        $this->assertNotNull($application->getRouter());
         $this->assertSame($container, $application->getContainer());
 
         // Resolving a few canonical bindings end-to-end should not throw.

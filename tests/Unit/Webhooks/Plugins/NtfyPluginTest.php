@@ -19,7 +19,6 @@ class NtfyPluginTest extends TestCase
     public function testGetSupportedEvents(): void
     {
         $events = NtfyPlugin::getSupportedEvents();
-        $this->assertIsArray($events);
         $this->assertContains('playback.started', $events);
         $this->assertContains('playback.ended', $events);
         $this->assertContains('library.updated', $events);
@@ -97,19 +96,29 @@ class NtfyPluginTest extends TestCase
         $method->setAccessible(true);
 
         $playbackStarted = $this->createEvent('playback.started', []);
-        $this->assertStringContainsString('play', $method->invoke($plugin, $playbackStarted));
+        $playbackStartedTags = $method->invoke($plugin, $playbackStarted);
+        $this->assertIsString($playbackStartedTags);
+        $this->assertStringContainsString('play', $playbackStartedTags);
 
         $playbackEnded = $this->createEvent('playback.ended', []);
-        $this->assertStringContainsString('stop', $method->invoke($plugin, $playbackEnded));
+        $playbackEndedTags = $method->invoke($plugin, $playbackEnded);
+        $this->assertIsString($playbackEndedTags);
+        $this->assertStringContainsString('stop', $playbackEndedTags);
 
         $libraryUpdated = $this->createEvent('library.updated', []);
-        $this->assertStringContainsString('books', $method->invoke($plugin, $libraryUpdated));
+        $libraryUpdatedTags = $method->invoke($plugin, $libraryUpdated);
+        $this->assertIsString($libraryUpdatedTags);
+        $this->assertStringContainsString('books', $libraryUpdatedTags);
 
         $downloadComplete = $this->createEvent('download.complete', []);
-        $this->assertStringContainsString('arrow_down', $method->invoke($plugin, $downloadComplete));
+        $downloadCompleteTags = $method->invoke($plugin, $downloadComplete);
+        $this->assertIsString($downloadCompleteTags);
+        $this->assertStringContainsString('arrow_down', $downloadCompleteTags);
 
         $alert = $this->createEvent('alert', []);
-        $this->assertStringContainsString('warning', $method->invoke($plugin, $alert));
+        $alertTags = $method->invoke($plugin, $alert);
+        $this->assertIsString($alertTags);
+        $this->assertStringContainsString('warning', $alertTags);
     }
 
     public function testGetPriorityFromEventReturnsCorrectPriority(): void
@@ -136,6 +145,9 @@ class NtfyPluginTest extends TestCase
         $this->assertEquals(2, $method->invoke($plugin, $playbackStarted));
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function createEvent(string $eventType, array $payload): WebhookEvent
     {
         return new WebhookEvent(

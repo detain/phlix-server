@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Admin;
 
 use DateTime;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Admin\NewsletterGenerator;
 use Phlix\Media\Library\LibraryManager;
@@ -20,6 +21,7 @@ use Workerman\MySQL\Connection;
  */
 class NewsletterGeneratorTest extends TestCase
 {
+    /** @var Connection&MockObject */
     private Connection $db;
     private StatsCollector $stats;
     private LibraryManager $library;
@@ -62,7 +64,6 @@ class NewsletterGeneratorTest extends TestCase
 
         $result = $generator->generateForUser('user-123', $weekStart);
 
-        $this->assertIsArray($result);
         $this->assertArrayHasKey('subject', $result);
         $this->assertArrayHasKey('html_body', $result);
         $this->assertArrayHasKey('plain_text', $result);
@@ -156,7 +157,6 @@ class NewsletterGeneratorTest extends TestCase
 
         $result = $generator->getRecipientUserIds();
 
-        $this->assertIsArray($result);
         $this->assertCount(3, $result);
         $this->assertEquals('user-1', $result[0]);
         $this->assertEquals('user-2', $result[1]);

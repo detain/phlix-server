@@ -86,7 +86,14 @@ final class SortTitleOrderingTest extends TestCase
         $repo = new ItemRepository($this->db);
 
         $result = $repo->query(['limit' => 50], $this->libraryId);
-        $names = array_map(static fn (array $row): string => (string) $row['name'], $result['items']);
+        $names = array_map(
+            static function (array $row): string {
+                $name = $row['name'];
+
+                return is_string($name) ? $name : '';
+            },
+            $result['items']
+        );
 
         // Ordered by the key in [], the article is ignored; "name" itself is unchanged.
         // "The " has an empty key (only an article) and sorts first.

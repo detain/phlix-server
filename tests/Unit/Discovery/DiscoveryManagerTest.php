@@ -26,7 +26,7 @@ class DiscoveryManagerTest extends TestCase
         $manager = new DiscoveryManager($ssdp, $mdns, null);
         $result = $manager->discoverDlnaServers();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverDlnaRenderersDelegatesToSsdp(): void
@@ -42,7 +42,7 @@ class DiscoveryManagerTest extends TestCase
         $manager = new DiscoveryManager($ssdp, $mdns, null);
         $result = $manager->discoverDlnaRenderers();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverChromecastDevicesDelegatesToMdns(): void
@@ -56,7 +56,7 @@ class DiscoveryManagerTest extends TestCase
         $manager = new DiscoveryManager($ssdp, $mdns, null);
         $result = $manager->discoverChromecastDevices();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverAirPlayDevicesDelegatesToMdns(): void
@@ -70,7 +70,7 @@ class DiscoveryManagerTest extends TestCase
         $manager = new DiscoveryManager($ssdp, $mdns, null);
         $result = $manager->discoverAirPlayDevices();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testDiscoverRokuDevicesDelegatesToMdns(): void
@@ -84,7 +84,7 @@ class DiscoveryManagerTest extends TestCase
         $manager = new DiscoveryManager($ssdp, $mdns, null);
         $result = $manager->discoverRokuDevices();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testAnnounceServerCallsBothSsdpAndMdns(): void
@@ -120,12 +120,12 @@ class DiscoveryManagerTest extends TestCase
 
         $manager = new DiscoveryManager($ssdp, $mdns, null);
 
+        $this->expectNotToPerformAssertions();
+
         // Should not throw
         $manager->startListeners(function ($device) {
             // Device discovered callback
         });
-
-        $this->assertTrue(true);
     }
 
     public function testDiscoverDlnaServersReturnsDevices(): void

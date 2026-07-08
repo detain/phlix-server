@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Theming;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Theming\Theme;
 use Phlix\Theming\ThemeRegistry;
@@ -12,6 +13,7 @@ use Workerman\MySQL\Connection;
 class ThemeRegistryTest extends TestCase
 {
     private ThemeRegistry $registry;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void

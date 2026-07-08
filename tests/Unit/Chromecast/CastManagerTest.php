@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Chromecast;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Chromecast\CastDevice;
 use Phlix\Chromecast\CastDiscovery;
@@ -14,6 +15,7 @@ use Phlix\Session\PlaybackController;
 
 class CastManagerTest extends TestCase
 {
+    /** @var CastDiscovery&MockObject */
     private CastDiscovery $discoveryMock;
     private PlaybackController $playbackControllerMock;
     private StructuredLogger $loggerMock;
@@ -73,7 +75,6 @@ class CastManagerTest extends TestCase
         $result = $this->manager->discoverDevices();
 
         $this->assertCount(0, $result);
-        $this->assertIsArray($result);
     }
 
     public function testStartSessionCreatesAndLaunches(): void
@@ -164,10 +165,10 @@ class CastManagerTest extends TestCase
 
     public function testStopSessionHandlesNonExistentSession(): void
     {
+        $this->expectNotToPerformAssertions();
+
         // Should not throw
         $this->manager->stopSession('non-existent-session');
-
-        $this->assertTrue(true); // If we got here, no exception was thrown
     }
 
     public function testGetActiveSessionsReturnsAllSessions(): void
@@ -175,7 +176,6 @@ class CastManagerTest extends TestCase
         // Initially empty
         $sessions = $this->manager->getActiveSessions();
         $this->assertCount(0, $sessions);
-        $this->assertIsArray($sessions);
     }
 
     public function testManagerStoresDiscoveryAndPlaybackController(): void

@@ -78,9 +78,8 @@ class CollectionRepositoryTest extends TestCase
             sortOrder: 0,
         );
 
+        // The mocked query expectation above is verified on tear-down.
         $repo->update($collection);
-
-        $this->assertTrue(true); // Placeholder assertion
     }
 
     public function testDeleteRemovesRow(): void
@@ -218,7 +217,7 @@ class CollectionRepositoryTest extends TestCase
         $repo = new CollectionRepository($db);
         $result = $repo->findAll();
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testFindAllWithCustomLimitAndOffset(): void
@@ -240,6 +239,6 @@ class CollectionRepositoryTest extends TestCase
         $repo = new CollectionRepository($db);
         $result = $repo->findAll(50, 10);
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 }

@@ -36,6 +36,60 @@ class ItemRepository
     private ?StatsCollector $statsCollector;
 
     /**
+     * In-worker TTL cache of the DISTINCT genre facet set, keyed by scope.
+     *
+     * {@see distinctGenres()} unnests `metadata_json.$.genres` set-side via
+     * `JSON_TABLE` over the whole `media_items` table — an expensive scan run on
+     * every genre-filter-UI load, even though the genre set changes only when
+     * items are scanned or edited. This memoises the computed facet list per
+     * scope so repeat loads within the TTL are served from memory without
+     * touching the DB.
+     *
+     * Contract:
+     *  - Keyed by library UUID; the unscoped (all-libraries) set uses
+     *    {@see GENRE_FACET_GLOBAL_KEY}.
+     *  - Each entry carries a monotonic expiry ({@see monotonicMs()} +
+     *    {@see GENRE_FACET_CACHE_TTL_MS}); a stale entry is recomputed on the next
+     *    read. The TTL is the ONLY cross-worker / cross-process coherence bound —
+     *    a scan running in another worker cannot reach this per-worker map, so its
+     *    genre changes surface here after at most one TTL window.
+     *  - Same-worker writes that can change the genre set ({@see create()},
+     *    {@see update()}, {@see delete()}, {@see deleteByLibrary()}) invalidate
+     *    eagerly via {@see invalidateGenreFacets()} so a reader in this worker
+     *    never observes its own stale write.
+     *  - Bounded by {@see GENRE_FACET_CACHE_MAX} with oldest-first eviction via
+     *    `array_key_first()`. This is a SECURITY control, not just a size limit:
+     *    the scope key includes a caller-supplied, unvalidated `libraryId` query
+     *    param (see `WebPortalRouter::getMediaFacets()`), so this map is
+     *    attacker-influenced and must stay bounded in a resident Workerman worker,
+     *    or an authenticated caller could grow it unbounded by cycling fabricated
+     *    library ids.
+     *  - Eviction is genuinely LRU (least-recently-*read*), not FIFO
+     *    (least-recently-*written*): both the cache-hit path in
+     *    {@see distinctGenres()} and its stale-entry recompute path `unset()` the
+     *    key immediately before reassigning it, which moves it to the END of the
+     *    PHP array — the position `array_key_first()` eviction never touches.
+     *    Without that `unset()`, a plain value reassignment of an *existing* key
+     *    leaves it in its original position, and a hot/just-refreshed scope could
+     *    be evicted ahead of a genuinely cold one.
+     *
+     * @var array<string, array{genres: list<string>, expires_at: int}>
+     */
+    private array $genreFacetCache = [];
+
+    /** @var int Genre-facet cache TTL in milliseconds (5 minutes). Genres change rarely. */
+    private const GENRE_FACET_CACHE_TTL_MS = 300_000;
+
+    /** @var int Max distinct scopes retained in the in-worker facet LRU before eviction. */
+    private const GENRE_FACET_CACHE_MAX = 256;
+
+    /**
+     * Cache key standing in for the unscoped (all-libraries) genre facet set. The
+     * leading NUL byte cannot collide with any real library UUID key.
+     */
+    private const GENRE_FACET_GLOBAL_KEY = "\0all-libraries";
+
+    /**
      * Constructor for ItemRepository.
      *
      * @param Connection $db Database connection for media item persistence
@@ -464,6 +518,11 @@ class ItemRepository
     /**
      * Creates a new media item in the database.
      *
+     * Also invalidates the affected library's cached genre facet set (and the
+     * all-libraries scope) via {@see invalidateGenreFacets()}, since the new
+     * item's `metadata_json.$.genres` may introduce a genre not previously
+     * seen. {@see batchCreate()} inherits this since it calls this method.
+     *
      * @param array<string, mixed> $data Media item data including library_id, name, type, path, and optionally metadata_json
      * @return string The unique identifier of the created media item
      * @throws \InvalidArgumentException If required fields are missing
@@ -502,6 +561,11 @@ class ItemRepository
             ? $data['library_id']
             : null;
         $this->recordChange('item_added', $id, $libraryId);
+
+        // A new item may introduce a genre not previously present — drop the
+        // affected library's facet cache (and the all-libraries scope). A null
+        // library flushes all scopes to stay correct.
+        $this->invalidateGenreFacets($libraryId);
 
         return $id;
     }
@@ -566,6 +630,12 @@ class ItemRepository
     /**
      * Updates an existing media item's properties.
      *
+     * When `$data` includes `metadata_json` (the only field genres live under),
+     * this flushes the entire cached genre facet set via
+     * {@see invalidateGenreFacets(null)} — the owning library isn't part of
+     * `$data`, so a full flush is the only way to stay correct without an extra
+     * lookup query. Any other field update leaves the facet cache warm.
+     *
      * @param string $id The media item's unique identifier
      * @param array<string, mixed> $data Associative array of fields to update
      * @return void
@@ -610,10 +680,23 @@ class ItemRepository
             "UPDATE media_items SET " . implode(', ', $sets) . " WHERE id = ?",
             $values
         );
+
+        // Genres live in metadata_json.$.genres, so only a metadata_json rewrite
+        // can change the facet set. The owning library isn't part of $data, so
+        // flush every scope (null) to guarantee correctness.
+        if (array_key_exists('metadata_json', $data)) {
+            $this->invalidateGenreFacets(null);
+        }
     }
 
     /**
      * Deletes a media item by its identifier.
+     *
+     * Also invalidates the cached genre facet set via
+     * {@see invalidateGenreFacets()} — scoped to the owning library when it
+     * could be resolved (only when a {@see StatsCollector} is wired), else a
+     * full flush (`null`), since a removed item may have held the last row
+     * bearing some genre.
      *
      * @param string $id The media item's unique identifier
      * @return void
@@ -635,10 +718,19 @@ class ItemRepository
         $this->db->query("DELETE FROM media_items WHERE id = ?", [$id]);
 
         $this->recordChange('item_removed', $id, $libraryId);
+
+        // Removing an item may drop the last row bearing some genre. Invalidate
+        // the owning library when known (resolved above only if a StatsCollector
+        // is wired); otherwise flush all scopes (null) to stay correct.
+        $this->invalidateGenreFacets($libraryId);
     }
 
     /**
      * Deletes all media items belonging to a specific library.
+     *
+     * Also invalidates that library's cached genre facet set and the
+     * all-libraries scope (clearing a library shrinks the global genre set
+     * too) via {@see invalidateGenreFacets()}.
      *
      * @param string $libraryId The library's unique identifier
      * @return void
@@ -650,6 +742,10 @@ class ItemRepository
         // One aggregate change row rather than one per deleted item — bulk
         // library clears would otherwise flood stats_library_changes.
         $this->recordChange('library_cleared', null, $libraryId);
+
+        // Clearing a library empties its genre set (and shrinks the
+        // all-libraries set) — drop both scopes.
+        $this->invalidateGenreFacets($libraryId);
     }
 
     /**
@@ -1642,6 +1738,20 @@ class ItemRepository
      */
     public function distinctGenres(?string $libraryId = null): array
     {
+        // Served from the in-worker TTL cache when a fresh entry exists so the
+        // JSON_TABLE scan below runs at most once per scope per TTL window (see
+        // $genreFacetCache). Cache misses/stale entries fall through and recompute.
+        $cacheKey = $libraryId ?? self::GENRE_FACET_GLOBAL_KEY;
+        $now = $this->monotonicMs();
+
+        $cached = $this->genreFacetCache[$cacheKey] ?? null;
+        if ($cached !== null && $cached['expires_at'] > $now) {
+            // LRU touch: move to the MRU position so hot scopes outlive eviction.
+            unset($this->genreFacetCache[$cacheKey]);
+            $this->genreFacetCache[$cacheKey] = $cached;
+            return $cached['genres'];
+        }
+
         // Unnest metadata_json.$.genres[*] into one row per genre via JSON_TABLE
         // (MySQL 8.0+), then DISTINCT + ORDER set-side so PHP never materialises
         // the full media_items table. NULL/missing `$.genres` simply yields no
@@ -1676,7 +1786,67 @@ class ItemRepository
             }
         }
 
+        // Populate the in-worker cache and bound its size with oldest-first
+        // eviction — the scope key can carry a caller-supplied libraryId, so the
+        // map must never grow unbounded in a resident worker. unset() first: a
+        // plain value-only reassignment of an EXISTING key (the stale-entry
+        // recompute path) leaves that key in its ORIGINAL array position in PHP,
+        // NOT the end — without the unset(), array_key_first() below could evict
+        // a genuinely-stale scope while a just-recomputed (freshest) entry stays
+        // stuck near the front and gets dropped first on a subsequent overflow.
+        unset($this->genreFacetCache[$cacheKey]);
+        $this->genreFacetCache[$cacheKey] = [
+            'genres' => $genres,
+            'expires_at' => $now + self::GENRE_FACET_CACHE_TTL_MS,
+        ];
+        if (count($this->genreFacetCache) > self::GENRE_FACET_CACHE_MAX) {
+            $oldest = array_key_first($this->genreFacetCache);
+            if ($oldest !== null) {
+                unset($this->genreFacetCache[$oldest]);
+            }
+        }
+
         return $genres;
+    }
+
+    /**
+     * Invalidate cached genre facets so the next {@see distinctGenres()} call
+     * recomputes from the DB.
+     *
+     * Call after any write that can change the genre set. Pass the owning library
+     * to drop just that scope plus the all-libraries scope (which spans it); pass
+     * null to flush every scope when the affected library is unknown (e.g. an
+     * {@see update()} that rewrites `metadata_json`, or a single-item
+     * {@see delete()} whose owning library was not resolved).
+     *
+     * In-worker only: this clears the calling worker's map. Cross-worker /
+     * cross-process readers (a scan runs in its own worker) re-converge via the
+     * cache TTL — see the {@see $genreFacetCache} contract.
+     *
+     * @param string|null $libraryId Owning library UUID, or null to flush all scopes.
+     */
+    public function invalidateGenreFacets(?string $libraryId = null): void
+    {
+        if ($libraryId === null) {
+            $this->genreFacetCache = [];
+            return;
+        }
+
+        // A library-scoped write also changes the all-libraries facet set, so drop
+        // both the library's own scope and the global scope.
+        unset(
+            $this->genreFacetCache[$libraryId],
+            $this->genreFacetCache[self::GENRE_FACET_GLOBAL_KEY]
+        );
+    }
+
+    /**
+     * Monotonic millisecond clock for the genre-facet cache TTL — immune to
+     * wall-clock jumps (NTP / DST), per the repo's `hrtime(true)` convention.
+     */
+    private function monotonicMs(): int
+    {
+        return (int) (hrtime(true) / 1_000_000);
     }
 
     /**

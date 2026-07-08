@@ -65,6 +65,7 @@ class AvTransportTest extends TestCase
         $result = $this->avTransport->play(99);
 
         $this->assertArrayHasKey('Error', $result);
+        /** @var array{Error: array{code: int}} $result */
         $this->assertEquals(702, $result['Error']['code']);
     }
 
@@ -182,6 +183,7 @@ class AvTransportTest extends TestCase
         $this->assertArrayHasKey('PlayMedia', $caps);
         $this->assertArrayHasKey('RecMedia', $caps);
         $this->assertArrayHasKey('RecQualityModes', $caps);
+        /** @var array{PlayMedia: string, RecMedia: string, RecQualityModes: string} $caps */
         $this->assertStringContainsString('NETWORK', $caps['PlayMedia']);
     }
 
@@ -213,6 +215,7 @@ class AvTransportTest extends TestCase
         $result = $this->avTransport->setPlayMode(0, 'INVALID_MODE');
 
         $this->assertArrayHasKey('Error', $result);
+        /** @var array{Error: array{code: int}} $result */
         $this->assertEquals(701, $result['Error']['code']);
     }
 
@@ -222,6 +225,7 @@ class AvTransportTest extends TestCase
         $this->avTransport->setAvTransportUri(0, 'http://example.com/media.mp4');
 
         $actions = $this->avTransport->getCurrentTransportActions(0);
+        /** @var array{Actions: string} $actions */
         $this->assertStringContainsString('Play', $actions['Actions']);
         $this->assertStringNotContainsString('Pause', $actions['Actions']);
 
@@ -229,6 +233,7 @@ class AvTransportTest extends TestCase
         $this->avTransport->play(0);
 
         $actions = $this->avTransport->getCurrentTransportActions(0);
+        /** @var array{Actions: string} $actions */
         $this->assertStringContainsString('Pause', $actions['Actions']);
         $this->assertStringContainsString('Stop', $actions['Actions']);
         $this->assertStringContainsString('Seek', $actions['Actions']);
@@ -237,6 +242,7 @@ class AvTransportTest extends TestCase
         $this->avTransport->pause(0);
 
         $actions = $this->avTransport->getCurrentTransportActions(0);
+        /** @var array{Actions: string} $actions */
         $this->assertStringContainsString('Play', $actions['Actions']);
         $this->assertStringContainsString('Stop', $actions['Actions']);
     }

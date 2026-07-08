@@ -29,7 +29,7 @@ class SyncPlay extends Module
     /** @var array<string, MockConnection> Active mock connections */
     private array $connections = [];
 
-    /** @var array<int, array{from: string, to: string, message: array}> Sent messages */
+    /** @var array<int, array{from: string, to: string, message: array<array-key, mixed>}> Sent messages */
     private array $messageLog = [];
 
     /** @var int Connection counter for unique IDs */
@@ -38,6 +38,7 @@ class SyncPlay extends Module
     /** @var array<string, string> Connection ID to Member ID mapping */
     private array $connectionToMember = [];
 
+    /** @var array<int, string> */
     protected array $requiredFields = ['host', 'port'];
 
     public function _before(\Codeception\TestInterface $test): void
@@ -113,7 +114,7 @@ class SyncPlay extends Module
      */
     public function initializeManager(): void
     {
-        $this->manager->initialize(new \Phlix\Server\WebSocket\MessageHandler());
+        $this->manager->initialize(new \Phlix\Server\WebSocket\MessageHandler(ConnectionPool::getInstance()));
     }
 
     /**
@@ -123,7 +124,7 @@ class SyncPlay extends Module
      * @param string $groupName The group name
      * @param string|null $password Optional group password
      * @param string|null $memberName The host's display name
-     * @return array{success: bool, group?: array, error?: string, group_id?: string}
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
      */
     public function createGroup(
         string $connectionId,
@@ -156,7 +157,7 @@ class SyncPlay extends Module
      * @param string $groupId The group ID to join
      * @param string|null $password Optional group password
      * @param string|null $memberName The member's display name
-     * @return array{success: bool, group?: array, error?: string}
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
      */
     public function joinGroup(
         string $connectionId,
@@ -186,7 +187,7 @@ class SyncPlay extends Module
      * Leave a SyncPlay group.
      *
      * @param string $connectionId The leaving member's connection ID
-     * @return array{success: bool, message?: string, error?: string}
+     * @return array{success: true, message?: string}|array{success: false, error: string}
      */
     public function leaveGroup(string $connectionId): array
     {
@@ -285,7 +286,7 @@ class SyncPlay extends Module
      *
      * @param string $connectionId The connection ID to check
      * @param string|null $type Optional message type filter
-     * @return array The messages sent to this connection
+     * @return array<int, array<array-key, mixed>> The messages sent to this connection
      */
     public function getMessagesForConnection(string $connectionId, ?string $type = null): array
     {
@@ -314,11 +315,13 @@ class SyncPlay extends Module
             }
         }
 
-        $this->assert($found, "Message type {$messageType} was sent to connection {$connectionId}");
+        $this->assertCondition($found, "Message type {$messageType} was sent to connection {$connectionId}");
     }
 
     /**
      * Get the group state for a specific group.
+     *
+     * @return array<string, mixed>|null
      */
     public function getGroupState(string $groupId): ?array
     {
@@ -327,6 +330,8 @@ class SyncPlay extends Module
 
     /**
      * Get all messages in the message log.
+     *
+     * @return array<int, array{from: string, to: string, message: array<array-key, mixed>}>
      */
     public function getMessageLog(): array
     {
@@ -339,7 +344,7 @@ class SyncPlay extends Module
     public function assertGroupExists(string $groupId): void
     {
         $state = $this->manager->getGroupState($groupId);
-        $this->assert($state !== null, "Group {$groupId} should exist");
+        $this->assertCondition($state !== null, "Group {$groupId} should exist");
     }
 
     /**
@@ -348,7 +353,7 @@ class SyncPlay extends Module
     public function assertGroupNotExists(string $groupId): void
     {
         $state = $this->manager->getGroupState($groupId);
-        $this->assert($state === null, "Group {$groupId} should not exist");
+        $this->assertCondition($state === null, "Group {$groupId} should not exist");
     }
 
     /**
@@ -357,7 +362,7 @@ class SyncPlay extends Module
     public function assertMemberInGroup(string $memberId, string $groupId): void
     {
         $actualGroupId = $this->manager->getMemberGroup($memberId);
-        $this->assert(
+        $this->assertCondition(
             $actualGroupId === $groupId,
             "Member {$memberId} should be in group {$groupId}, but is in " . ($actualGroupId ?? 'none')
         );
@@ -369,7 +374,7 @@ class SyncPlay extends Module
     public function assertMemberIsHost(string $memberId, string $groupId): void
     {
         $state = $this->manager->getGroupState($groupId);
-        $this->assert(
+        $this->assertCondition(
             $state !== null && ($state['host_id'] ?? '') === $memberId,
             "Member {$memberId} should be host of group {$groupId}"
         );
@@ -381,9 +386,12 @@ class SyncPlay extends Module
     public function assertGroupMemberCount(string $groupId, int $expectedCount): void
     {
         $state = $this->manager->getGroupState($groupId);
-        $this->assert(
-            $state !== null && ($state['member_count'] ?? 0) === $expectedCount,
-            "Group {$groupId} should have {$expectedCount} members, has " . ($state['member_count'] ?? 0)
+        $actualCount = (is_array($state) && isset($state['member_count']) && is_int($state['member_count']))
+            ? $state['member_count']
+            : 0;
+        $this->assertCondition(
+            $state !== null && $actualCount === $expectedCount,
+            "Group {$groupId} should have {$expectedCount} members, has {$actualCount}"
         );
     }
 
@@ -398,7 +406,7 @@ class SyncPlay extends Module
     /**
      * Simple assertion helper.
      */
-    private function assert(bool $condition, string $message): void
+    private function assertCondition(bool $condition, string $message): void
     {
         if (!$condition) {
             throw new \RuntimeException("Assertion failed: {$message}");

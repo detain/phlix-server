@@ -61,6 +61,7 @@ class SyncPlayManagerTest extends TestCase
     public function testJoinGroupSuccess(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'host_1', 'Host User');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $joinResult = $this->manager->joinGroup($groupId, 'member_2', 'User 2');
@@ -72,6 +73,7 @@ class SyncPlayManagerTest extends TestCase
     public function testJoinGroupWithPassword(): void
     {
         $createResult = $this->manager->createGroup('Test Group', 'secret');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $joinResult = $this->manager->joinGroup($groupId, 'member_2', 'User 2', 'secret');
@@ -82,6 +84,7 @@ class SyncPlayManagerTest extends TestCase
     public function testJoinGroupWithWrongPasswordFails(): void
     {
         $createResult = $this->manager->createGroup('Test Group', 'secret');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $joinResult = $this->manager->joinGroup($groupId, 'member_2', 'User 2', 'wrong');
@@ -101,6 +104,7 @@ class SyncPlayManagerTest extends TestCase
     public function testLeaveGroupSuccess(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'Host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_2', 'User 2');
@@ -121,6 +125,7 @@ class SyncPlayManagerTest extends TestCase
     public function testLeaveGroupRemovesMemberFromGroup(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'Host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_2', 'User 2');
@@ -128,12 +133,14 @@ class SyncPlayManagerTest extends TestCase
         $this->manager->leaveGroup('member_2');
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals(1, $state['member_count']);
     }
 
     public function testGetGroupStateReturnsState(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'Host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $state = $this->manager->getGroupState($groupId);
@@ -162,6 +169,7 @@ class SyncPlayManagerTest extends TestCase
     public function testGetMemberGroupReturnsGroupId(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'Host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $foundGroupId = $this->manager->getMemberGroup('member_1');
@@ -215,6 +223,7 @@ class SyncPlayManagerTest extends TestCase
         $this->assertTrue($result['success']);
 
         // Verify the group requires password
+        /** @var array{group: array{group_id: string}} $result */
         $state = $this->manager->getGroupState($result['group']['group_id']);
         $this->assertNotNull($state);
     }
@@ -222,6 +231,7 @@ class SyncPlayManagerTest extends TestCase
     public function testMultipleMembersCanJoinGroup(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'host', 'Host User');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_1', 'User 1');
@@ -229,6 +239,7 @@ class SyncPlayManagerTest extends TestCase
         $this->manager->joinGroup($groupId, 'member_3', 'User 3');
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
 
         $this->assertEquals(4, $state['member_count']); // host + 3 members
     }
@@ -236,6 +247,7 @@ class SyncPlayManagerTest extends TestCase
     public function testCannotJoinGroupAsDuplicateMember(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'User 1');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $result = $this->manager->joinGroup($groupId, 'member_1', 'User 1 Again');
@@ -248,6 +260,7 @@ class SyncPlayManagerTest extends TestCase
     {
         // Create group with host
         $createResult = $this->manager->createGroup('Test Group', null, 'host_1', 'Host 1');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Add another member
@@ -255,12 +268,14 @@ class SyncPlayManagerTest extends TestCase
 
         // Verify host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('host_1', $state['host_id']);
 
         // Leave host - should trigger election
         $this->manager->leaveGroup('host_1');
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         // New host should be elected (either member_2 or null if group became empty temporarily)
         $this->assertNotEquals('host_1', $state['host_id']);
     }
@@ -268,6 +283,7 @@ class SyncPlayManagerTest extends TestCase
     public function testEmptyGroupIsRemoved(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'member_1', 'User 1');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->leaveGroup('member_1');
@@ -310,6 +326,7 @@ class SyncPlayManagerTest extends TestCase
         );
 
         $this->assertTrue($result['success']);
+        /** @var array{group: array{group_id: string}} $result */
         $state = $this->manager->getGroupState($result['group']['group_id']);
         $this->assertNotNull($state);
         // connection_id is stored in the member record inside GroupState
@@ -320,6 +337,7 @@ class SyncPlayManagerTest extends TestCase
     public function testJoinGroupStoresConnectionIdOnMemberRecord(): void
     {
         $createResult = $this->manager->createGroup('Test Group', null, 'host_1', 'Host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $joinResult = $this->manager->joinGroup(
@@ -333,6 +351,7 @@ class SyncPlayManagerTest extends TestCase
         $this->assertTrue($joinResult['success']);
         $state = $this->manager->getGroupState($groupId);
         $this->assertNotNull($state);
+        /** @var array{members: array<string, array{id: string, name: string}>} $state */
         // Verify member_2 is in the group
         $member2 = null;
         foreach ($state['members'] as $m) {
@@ -354,16 +373,19 @@ class SyncPlayManagerTest extends TestCase
             'Host',
             'conn-host'
         );
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member');
 
         $stateBefore = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $stateBefore */
         $this->assertEquals(2, $stateBefore['member_count']);
 
         $this->manager->onConnectionClose('conn-member');
 
         $stateAfter = $this->manager->getGroupState($groupId);
+        /** @var array{member_count: int, members: array<string, array{id: string, name: string}>} $stateAfter */
         $this->assertEquals(1, $stateAfter['member_count']);
         $member2Found = false;
         foreach ($stateAfter['members'] as $m) {
@@ -384,6 +406,7 @@ class SyncPlayManagerTest extends TestCase
             'Host',
             'conn-host'
         );
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member-2');
@@ -436,7 +459,7 @@ class SyncPlayManagerTest extends TestCase
         foreach (['conn-host', 'conn-member-2', 'conn-member-3'] as $connId) {
             $this->assertArrayHasKey($connId, $sentTo);
             $frame = $sentTo[$connId];
-            $this->assertIsArray($frame);
+            $this->assertArrayHasKey('type', $frame);
             $this->assertEquals(Messages::TYPE_INFO, $frame['type']);
             $this->assertArrayHasKey('message', $frame);
             $this->assertEquals('hello', $frame['message']);
@@ -453,6 +476,7 @@ class SyncPlayManagerTest extends TestCase
             'Host',
             'conn-host'
         );
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $this->manager->joinGroup($groupId, 'member_2', 'User 2', null, 'conn-member-2');

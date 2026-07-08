@@ -179,7 +179,7 @@ class DlnaDeviceTest extends TestCase
 
         $array = $device->toArray();
 
-        $this->assertIsArray($array);
+        $this->assertArrayHasKey('udn', $array);
         $this->assertEquals('uuid:test-device', $array['udn']);
         $this->assertEquals(DlnaDevice::TYPE_SERVER, $array['device_type']);
         $this->assertEquals('Test Device', $array['friendly_name']);

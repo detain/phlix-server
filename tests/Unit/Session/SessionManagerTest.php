@@ -35,38 +35,12 @@ class SessionManagerTest extends TestCase
         $method->setAccessible(true);
 
         $uuid = $method->invoke($manager);
+        /** @var string $uuid */
 
         // UUID format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
         $this->assertMatchesRegularExpression(
             '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i',
             $uuid
         );
-    }
-
-    private function createMockConnection(): Connection
-    {
-        return new class('127.0.0.1', 3306, 'root', '', 'test') extends Connection {
-            public function __construct(
-                string $host = '127.0.0.1',
-                int $port = 3306,
-                string $user = 'root',
-                string $password = '',
-                string $dbname = '',
-                string $charset = 'utf8mb4'
-            ) {
-                // Skip parent constructor to avoid actual connection
-            }
-
-            public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC) {
-                return [];
-            }
-
-            public function getLastInsertId() {
-                return 'test-id';
-            }
-
-            public function closeConnection(): void {
-            }
-        };
     }
 }

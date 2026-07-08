@@ -17,13 +17,24 @@ return [
             'username'  => getenv('DB_USER')     ?: (getenv('DB_USERNAME') ?: 'phlix'),
             'password'  => getenv('DB_PASSWORD') ?: '',
             'charset'   => 'utf8mb4',
-            // Coroutine connection pool. OFF by default: the proven
-            // single-connection mutex stays active. Set DB_POOL_ENABLED=1 (and
-            // tune `pool_size`) to give each coroutine its own leased
-            // connection for true intra-worker DB parallelism — validate on a
-            // non-prod restart first (see PooledMySQLConnection). pool_size=1
-            // is a safe, fully-serialised fallback.
-            'pool_enabled' => filter_var(getenv('DB_POOL_ENABLED') ?: false, FILTER_VALIDATE_BOOLEAN),
+            // Coroutine connection pool. ON by default (Track S / S9): each
+            // coroutine leases its OWN connection from a bounded pool, so
+            // independent queries within a worker run truly in parallel instead
+            // of serialising on a single shared socket. Validated by this
+            // session's concurrency audit (every in-worker cache whose coherence
+            // once relied on the shared connection mutex was re-proven or fixed —
+            // see TranscodeManager's epoch-stamped job-row cache) plus the S9
+            // load test. The proven single-connection mutex path
+            // (PhlixMySQLConnection) remains fully intact as an opt-out fallback:
+            // set DB_POOL_ENABLED=0 to restore it. pool_size=1 is a safe,
+            // fully-serialised middle ground. NB: `=== false` distinguishes an
+            // UNSET env var (→ default '1' = on) from an explicit `DB_POOL_ENABLED=0`
+            // opt-out; a plain `?: '1'` would treat the string "0" as empty and
+            // silently re-enable the pool, defeating the fallback.
+            'pool_enabled' => filter_var(
+                getenv('DB_POOL_ENABLED') === false ? '1' : getenv('DB_POOL_ENABLED'),
+                FILTER_VALIDATE_BOOLEAN
+            ),
             // Per-worker pool ceiling. Each worker process keeps its OWN pool,
             // so the server-wide max is roughly (worker count × pool_size) — keep
             // it comfortably under MySQL `max_connections`. Tune via DB_POOL_SIZE.

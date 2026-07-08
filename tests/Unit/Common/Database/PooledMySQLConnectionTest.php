@@ -62,6 +62,36 @@ final class PooledMySQLConnectionTest extends TestCase
         $this->assertSame(1, $calls, 'CLI path should open exactly one connection');
     }
 
+    public function testRowSingleAndColumnDelegateToLeasedConnection(): void
+    {
+        // S9: the pool front is now the DEFAULT connection, so it must be a
+        // faithful drop-in for the row-returning literal-SQL read helpers too —
+        // not just query(). row() in particular is the only primitive that
+        // fetches a row for statements query() doesn't special-case (e.g.
+        // EXPLAIN); before this delegation existed, a caller hitting the pooled
+        // connection's un-constructed parent row() crashed with a socket connect
+        // (SQLSTATE[HY000] [2002]) instead of running the query.
+        $raw = $this->createMock(Connection::class);
+        $raw->expects($this->once())
+            ->method('row')
+            ->with('EXPLAIN SELECT 1', [7])
+            ->willReturn(['id' => 1, 'type' => 'ref']);
+        $raw->expects($this->once())
+            ->method('single')
+            ->with('SELECT COUNT(*) FROM t WHERE x = ?', [3])
+            ->willReturn('5');
+        $raw->expects($this->once())
+            ->method('column')
+            ->with('SELECT name FROM t', null)
+            ->willReturn(['a', 'b']);
+
+        $pool = $this->pool(static fn (): Connection => $raw);
+
+        $this->assertSame(['id' => 1, 'type' => 'ref'], $pool->row('EXPLAIN SELECT 1', [7]));
+        $this->assertSame('5', $pool->single('SELECT COUNT(*) FROM t WHERE x = ?', [3]));
+        $this->assertSame(['a', 'b'], $pool->column('SELECT name FROM t'));
+    }
+
     public function testTransactionMethodsDelegate(): void
     {
         $raw = $this->createMock(Connection::class);

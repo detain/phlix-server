@@ -23,7 +23,7 @@
         "smarty/smarty": "^4.0",
         "symfony/process": "^7.0",
         "symfony/yaml": "^7.0",
-        "web-auth/webauthn-lib": "^4.0",
+        "web-auth/webauthn-lib": "^5.3",
         "web-token/jwt-framework": "^4.1",
         "webman/console": "^2.2",
         "workerman/http-client": "^3.1",

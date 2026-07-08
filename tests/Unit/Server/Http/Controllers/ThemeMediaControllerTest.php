@@ -66,6 +66,7 @@ class ThemeMediaControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('lib-1', $body['library_id']);
@@ -105,6 +106,7 @@ class ThemeMediaControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('lib-1', $body['library_id']);
         $this->assertNull($body['audio']);
@@ -136,6 +138,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->getThemeMedia($request, ['id' => '']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library ID is required', $body['error']);
     }
@@ -167,6 +170,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->getThemeMedia($request, ['id' => 'nonexistent']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library not found', $body['error']);
     }
@@ -223,6 +227,7 @@ class ThemeMediaControllerTest extends TestCase
 
             $this->assertSame(200, $response->statusCode);
 
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertSame('lib-1', $body['library_id']);
             $this->assertTrue($body['audio_found']);
@@ -281,6 +286,7 @@ class ThemeMediaControllerTest extends TestCase
 
             $this->assertSame(200, $response->statusCode);
 
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertSame('lib-1', $body['library_id']);
             $this->assertFalse($body['audio_found']);
@@ -313,6 +319,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->scanThemeMedia($request, ['id' => '']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library ID is required', $body['error']);
     }
@@ -344,6 +351,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->scanThemeMedia($request, ['id' => 'nonexistent']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library not found', $body['error']);
     }
@@ -378,6 +386,7 @@ class ThemeMediaControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('lib-1', $body['library_id']);
         $this->assertTrue($body['deleted']);
@@ -407,6 +416,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->deleteThemeMedia($request, ['id' => '']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library ID is required', $body['error']);
     }
@@ -438,6 +448,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->deleteThemeMedia($request, ['id' => 'nonexistent']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library not found', $body['error']);
     }
@@ -508,6 +519,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->scanThemeMedia($request, ['id' => 'lib-1']);
 
         $this->assertSame(401, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Unauthorized', $body['error']);
         $this->assertSame('auth.required', $body['code']);
@@ -529,6 +541,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->scanThemeMedia($request, ['id' => 'lib-1']);
 
         $this->assertSame(403, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Forbidden', $body['error']);
         $this->assertSame('auth.not_admin', $body['code']);
@@ -585,6 +598,7 @@ class ThemeMediaControllerTest extends TestCase
             $this->assertSame(200, $response->statusCode);
             $this->assertNotSame(401, $response->statusCode);
             $this->assertNotSame(403, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertSame('lib-1', $body['library_id']);
             $this->assertTrue($body['has_theme']);
@@ -635,6 +649,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->deleteThemeMedia($request, ['id' => 'lib-1']);
 
         $this->assertSame(401, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Unauthorized', $body['error']);
         $this->assertSame('auth.required', $body['code']);
@@ -655,6 +670,7 @@ class ThemeMediaControllerTest extends TestCase
         $response = $controller->deleteThemeMedia($request, ['id' => 'lib-1']);
 
         $this->assertSame(403, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Forbidden', $body['error']);
         $this->assertSame('auth.not_admin', $body['code']);
@@ -690,6 +706,7 @@ class ThemeMediaControllerTest extends TestCase
         $this->assertSame(200, $response->statusCode);
         $this->assertNotSame(401, $response->statusCode);
         $this->assertNotSame(403, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertTrue($body['deleted']);
     }

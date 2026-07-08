@@ -72,6 +72,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getExtras(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame(2, $body['count']);
@@ -91,6 +92,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getExtras(new Request(), []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Missing media item ID', $body['error']);
     }
@@ -109,6 +111,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getExtras(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(500, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertStringContainsString('boom', $body['error']);
     }
@@ -129,6 +132,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getTrailers(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{count: mixed, trailers: array<int, array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame(2, $body['count']);
         $this->assertCount(2, $body['trailers']);
@@ -148,6 +152,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getTrailers(new Request(), []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Missing media item ID', $body['error']);
     }
@@ -166,6 +171,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getTrailers(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(500, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertStringContainsString('upstream tmdb error', $body['error']);
     }
@@ -186,6 +192,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getOtherExtras(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{count: mixed, extras: array<int, array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame(2, $body['count']);
         $this->assertCount(2, $body['extras']);
@@ -205,6 +212,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getOtherExtras(new Request(), []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Missing media item ID', $body['error']);
     }
@@ -223,6 +231,7 @@ class ExtrasControllerTest extends TestCase
         $response = $controller->getOtherExtras(new Request(), ['id' => 'm-1']);
 
         $this->assertSame(500, $response->statusCode);
+        /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertStringContainsString('db down', $body['error']);
     }

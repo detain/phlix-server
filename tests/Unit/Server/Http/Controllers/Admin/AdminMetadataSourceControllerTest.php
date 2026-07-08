@@ -75,24 +75,28 @@ final class AdminMetadataSourceControllerTest extends TestCase
         $body = $this->decode($response->body);
         // 'tmdb' appears exactly once (from the built-in list); only the truly
         // new 'anidb' is appended.
-        $this->assertSame(
-            ['tmdb', 'imdb', 'tvdb', 'fanart', 'local', 'anidb'],
-            $body['sources'],
-        );
         $sources = $body['sources'];
         $this->assertIsArray($sources);
+        $this->assertSame(
+            ['tmdb', 'imdb', 'tvdb', 'fanart', 'local', 'anidb'],
+            $sources,
+        );
         $this->assertCount(1, array_keys($sources, 'tmdb', true));
     }
 
     /**
      * A minimal {@see MetadataSourceInterface} implementer for registry tests.
      *
+     * @param non-empty-string $name
      * @param list<non-empty-string> $types
      */
     private function fakeSource(string $name, array $types): MetadataSourceInterface
     {
         return new class ($name, $types) implements MetadataSourceInterface {
-            /** @param list<non-empty-string> $types */
+            /**
+             * @param non-empty-string $name
+             * @param list<non-empty-string> $types
+             */
             public function __construct(
                 private readonly string $name,
                 private readonly array $types,

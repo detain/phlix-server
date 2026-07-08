@@ -49,8 +49,12 @@ final class PluginAdminControllerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->loader = Mockery::mock(PluginLoader::class);
-        $this->audit  = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        /** @var PluginLoader&MockInterface $loader */
+        $loader = Mockery::mock(PluginLoader::class);
+        $this->loader = $loader;
+        /** @var AuditLogger&MockInterface $audit */
+        $audit = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        $this->audit = $audit;
         // Default catalog has no plugins, so pinFor() always returns [null, null]
         // (un-pinned). Tests that assert a pin rebuild the controller with a
         // populated catalog via controllerWithCatalog().
@@ -112,13 +116,14 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_index_returns_plugin_list_as_json(): void
     {
-        $this->loader->shouldReceive('listInstalled')
+        $this->expectCall($this->loader, 'listInstalled')
             ->once()
             ->andReturn([$this->fixturePlugin('phlix-plugin-demo', enabled: true)]);
 
         $response = $this->controller->index($this->makeRequest('admin-1'), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{plugins: array<int, array<string, mixed>>} $body */
         $body = $this->decode($response->body);
         $this->assertArrayHasKey('plugins', $body);
         $this->assertCount(1, $body['plugins']);
@@ -137,12 +142,12 @@ final class PluginAdminControllerTest extends TestCase
             'entry' => 'Demo\\Plugin',
         ]);
 
-        $this->loader->shouldReceive('install')
+        $this->expectCall($this->loader, 'install')
             ->once()
             ->with('https://example.com/plugin.json', null, null)
             ->andReturn($manifest);
 
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expectCall($this->audit, 'logPluginAction')
             ->once()
             ->with(
                 'admin-1',
@@ -161,6 +166,7 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(201, $response->statusCode);
+        /** @var array{plugin: array<string, mixed>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('phlix-plugin-demo', $body['plugin']['name']);
         $this->assertSame('1.0.0', $body['plugin']['version']);
@@ -179,12 +185,12 @@ final class PluginAdminControllerTest extends TestCase
             'entry' => 'Phlix\\Anidb\\AnidbMetadataProvider',
         ]);
 
-        $this->loader->shouldReceive('install')
+        $this->expectCall($this->loader, 'install')
             ->once()
             ->with('github.com/detain/phlix-plugin-anidb', null, null)
             ->andReturn($manifest);
 
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->install(
             $this->makeRequest('admin-1', ['url' => 'github.com/detain/phlix-plugin-anidb']),
@@ -192,6 +198,7 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(201, $response->statusCode);
+        /** @var array{plugin: array<string, mixed>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('phlix-plugin-anidb', $body['plugin']['name']);
     }
@@ -220,12 +227,12 @@ final class PluginAdminControllerTest extends TestCase
             'entry' => 'Phlix\\Anidb\\AnidbMetadataProvider',
         ]);
 
-        $this->loader->shouldReceive('install')
+        $this->expectCall($this->loader, 'install')
             ->once()
             ->with($repo, $sha, $ref)
             ->andReturn($manifest);
 
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->install(
             $this->makeRequest('admin-1', ['url' => $repo]),
@@ -233,7 +240,9 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(201, $response->statusCode);
-        $this->assertSame('phlix-plugin-anidb', $this->decode($response->body)['plugin']['name']);
+        /** @var array{plugin: array<string, mixed>} $body */
+        $body = $this->decode($response->body);
+        $this->assertSame('phlix-plugin-anidb', $body['plugin']['name']);
     }
 
     public function test_install_passes_null_pin_for_an_unpinned_operator_url(): void
@@ -252,12 +261,12 @@ final class PluginAdminControllerTest extends TestCase
             'entry' => 'Op\\Plugin',
         ]);
 
-        $this->loader->shouldReceive('install')
+        $this->expectCall($this->loader, 'install')
             ->once()
             ->with($url, null, null)
             ->andReturn($manifest);
 
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->install(
             $this->makeRequest('admin-1', ['url' => $url]),
@@ -265,7 +274,9 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(201, $response->statusCode);
-        $this->assertSame('phlix-plugin-operator', $this->decode($response->body)['plugin']['name']);
+        /** @var array{plugin: array<string, mixed>} $body */
+        $body = $this->decode($response->body);
+        $this->assertSame('phlix-plugin-operator', $body['plugin']['name']);
     }
 
     public function test_install_returns_400_on_missing_url(): void
@@ -311,7 +322,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_install_returns_422_on_invalid_manifest_with_field_errors(): void
     {
-        $this->loader->shouldReceive('install')->andThrow(new PluginInstallException(
+        $this->expectCall($this->loader, 'install')->andThrow(new PluginInstallException(
             'Manifest is missing required fields.',
             [
                 new ManifestValidationError(field: 'name', code: 'required', message: 'name is required'),
@@ -325,6 +336,7 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(422, $response->statusCode);
+        /** @var array{code: mixed, fields: array<int, array<string, mixed>>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('plugin.install.failed', $body['code']);
         $this->assertCount(2, $body['fields']);
@@ -333,8 +345,8 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_enable_returns_200_and_calls_loader(): void
     {
-        $this->loader->shouldReceive('enable')->once()->with('phlix-plugin-demo');
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expectCall($this->loader, 'enable')->once()->with('phlix-plugin-demo');
+        $this->expectCall($this->audit, 'logPluginAction')
             ->once()
             ->with(
                 'admin-1',
@@ -346,6 +358,7 @@ final class PluginAdminControllerTest extends TestCase
         $response = $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{plugin: array<string, mixed>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('phlix-plugin-demo', $body['plugin']['name']);
         $this->assertTrue($body['plugin']['enabled']);
@@ -353,7 +366,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_enable_returns_404_when_plugin_not_found(): void
     {
-        $this->loader->shouldReceive('enable')->andThrow(
+        $this->expectCall($this->loader, 'enable')->andThrow(
             new PluginNotFoundException('No installed plugin named "missing".'),
         );
 
@@ -366,7 +379,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_enable_returns_422_when_enable_fails(): void
     {
-        $this->loader->shouldReceive('enable')->andThrow(new PluginEnableException('entry class missing'));
+        $this->expectCall($this->loader, 'enable')->andThrow(new PluginEnableException('entry class missing'));
 
         $response = $this->controller->enable($this->makeRequest('admin-1'), ['name' => 'broken']);
 
@@ -375,8 +388,8 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_disable_returns_200(): void
     {
-        $this->loader->shouldReceive('disable')->once()->with('phlix-plugin-demo');
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expectCall($this->loader, 'disable')->once()->with('phlix-plugin-demo');
+        $this->expectCall($this->audit, 'logPluginAction')
             ->once()
             ->with(
                 'admin-1',
@@ -388,13 +401,14 @@ final class PluginAdminControllerTest extends TestCase
         $response = $this->controller->disable($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-demo']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{plugin: array<string, mixed>} $body */
         $body = $this->decode($response->body);
         $this->assertFalse($body['plugin']['enabled']);
     }
 
     public function test_disable_returns_404_when_plugin_not_found(): void
     {
-        $this->loader->shouldReceive('disable')->andThrow(
+        $this->expectCall($this->loader, 'disable')->andThrow(
             new PluginNotFoundException('No installed plugin named "missing".'),
         );
 
@@ -405,8 +419,8 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_uninstall_returns_200_with_body(): void
     {
-        $this->loader->shouldReceive('uninstall')->once()->with('phlix-plugin-demo');
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expectCall($this->loader, 'uninstall')->once()->with('phlix-plugin-demo');
+        $this->expectCall($this->audit, 'logPluginAction')
             ->once()
             ->with(
                 'admin-1',
@@ -429,7 +443,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_uninstall_returns_404_when_plugin_not_found(): void
     {
-        $this->loader->shouldReceive('uninstall')->andThrow(
+        $this->expectCall($this->loader, 'uninstall')->andThrow(
             new PluginNotFoundException('No installed plugin named "missing".'),
         );
 
@@ -440,18 +454,18 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_every_action_logs_to_audit_logger(): void
     {
-        $this->loader->shouldReceive('install')->andReturn(Manifest::fromArray([
+        $this->expectCall($this->loader, 'install')->andReturn(Manifest::fromArray([
             'name' => 'phlix-plugin-demo',
             'version' => '1.0.0',
             'phlix_min_server_version' => '0.10.0',
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]));
-        $this->loader->shouldReceive('enable')->andReturnNull();
-        $this->loader->shouldReceive('disable')->andReturnNull();
-        $this->loader->shouldReceive('uninstall')->andReturnNull();
+        $this->expectCall($this->loader, 'enable')->andReturnNull();
+        $this->expectCall($this->loader, 'disable')->andReturnNull();
+        $this->expectCall($this->loader, 'uninstall')->andReturnNull();
 
-        $this->audit->shouldReceive('logPluginAction')->times(4);
+        $this->expectCall($this->audit, 'logPluginAction')->times(4);
 
         $this->controller->install(
             $this->makeRequest('admin-1', ['url' => 'https://example.com/plugin.json']),
@@ -477,7 +491,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_index_masks_secret_settings(): void
     {
-        $this->loader->shouldReceive('listInstalled')->andReturn([
+        $this->expectCall($this->loader, 'listInstalled')->andReturn([
             $this->fixturePlugin(
                 'phlix-plugin-secret',
                 enabled: false,
@@ -491,6 +505,7 @@ final class PluginAdminControllerTest extends TestCase
 
         $response = $this->controller->index($this->makeRequest('admin-1'), []);
 
+        /** @var array{plugins: array<int, array{settings: array<string, mixed>}>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('***', $body['plugins'][0]['settings']['api_key']);
         $this->assertTrue($body['plugins'][0]['settings']['verbose']);
@@ -500,7 +515,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_show_returns_404_when_not_found(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->with('missing')->andThrow(
+        $this->expectCall($this->loader, 'getInstalled')->once()->with('missing')->andThrow(
             new PluginNotFoundException('No installed plugin named "missing".'),
         );
 
@@ -512,7 +527,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_show_returns_schema_and_masked_values(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->with('phlix-plugin-anidb')->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->once()->with('phlix-plugin-anidb')->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-anidb',
                 enabled: true,
@@ -528,6 +543,7 @@ final class PluginAdminControllerTest extends TestCase
         $response = $this->controller->show($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-anidb']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{name: mixed, enabled: mixed, settings_schema: array<string, array<string, mixed>>, settings: array<string, mixed>} $plugin */
         $plugin = $this->decode($response->body)['plugin'];
         $this->assertSame('phlix-plugin-anidb', $plugin['name']);
         $this->assertTrue($plugin['enabled']);
@@ -545,7 +561,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_update_settings_returns_404_when_not_found(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->with('missing')->andThrow(
+        $this->expectCall($this->loader, 'getInstalled')->once()->with('missing')->andThrow(
             new PluginNotFoundException('No installed plugin named "missing".'),
         );
         $this->loader->shouldNotReceive('updateSettings');
@@ -560,7 +576,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_update_settings_rejects_missing_settings_object(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->once()->andReturn(
             $this->fixturePlugin('phlix-plugin-demo', enabled: false),
         );
         $this->loader->shouldNotReceive('updateSettings');
@@ -576,7 +592,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_update_settings_rejects_unknown_key(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->once()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-demo',
                 enabled: false,
@@ -591,6 +607,7 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array{code: mixed, errors: array<string, mixed>} $body */
         $body = $this->decode($response->body);
         $this->assertSame('plugin.settings.validation_failed', $body['code']);
         $this->assertArrayHasKey('bogus', $body['errors']);
@@ -598,7 +615,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_update_settings_rejects_type_mismatch(): void
     {
-        $this->loader->shouldReceive('getInstalled')->once()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->once()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-demo',
                 enabled: false,
@@ -613,7 +630,9 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertArrayHasKey('use_dump', $this->decode($response->body)['errors']);
+        /** @var array{errors: array<string, mixed>} $body */
+        $body = $this->decode($response->body);
+        $this->assertArrayHasKey('use_dump', $body['errors']);
     }
 
     public function test_update_settings_preserves_secret_when_mask_echoed_back(): void
@@ -623,7 +642,7 @@ final class PluginAdminControllerTest extends TestCase
             'api_key'  => 'realsecret',
             'use_dump' => false,
         ];
-        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->twice()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-anidb',
                 enabled: true,
@@ -637,7 +656,7 @@ final class PluginAdminControllerTest extends TestCase
         );
 
         // The UI echoes the masked api_key back unchanged, changes username + use_dump.
-        $this->loader->shouldReceive('updateSettings')
+        $this->expectCall($this->loader, 'updateSettings')
             ->once()
             ->with('phlix-plugin-anidb', Mockery::on(static function ($settings): bool {
                 return is_array($settings)
@@ -646,7 +665,7 @@ final class PluginAdminControllerTest extends TestCase
                     && $settings['use_dump'] === true;         // coerced + updated
             }));
 
-        $this->audit->shouldReceive('logPluginAction')
+        $this->expectCall($this->audit, 'logPluginAction')
             ->once()
             ->with('admin-1', 'configure', 'phlix-plugin-anidb', Mockery::on(
                 static fn ($ctx) => is_array($ctx) && ($ctx['source'] ?? null) === 'ui'
@@ -663,12 +682,14 @@ final class PluginAdminControllerTest extends TestCase
 
         $this->assertSame(200, $response->statusCode);
         // refreshed detail returned (still the fixture, secret masked)
-        $this->assertSame('***', $this->decode($response->body)['plugin']['settings']['api_key']);
+        /** @var array{plugin: array{settings: array<string, mixed>}} $body */
+        $body = $this->decode($response->body);
+        $this->assertSame('***', $body['plugin']['settings']['api_key']);
     }
 
     public function test_update_settings_updates_secret_when_real_value_provided(): void
     {
-        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->twice()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-anidb',
                 enabled: true,
@@ -677,12 +698,12 @@ final class PluginAdminControllerTest extends TestCase
             ),
         );
 
-        $this->loader->shouldReceive('updateSettings')
+        $this->expectCall($this->loader, 'updateSettings')
             ->once()
             ->with('phlix-plugin-anidb', Mockery::on(static function ($settings): bool {
                 return is_array($settings) && $settings['api_key'] === 'newsecret';
             }));
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->updateSettings(
             $this->makeRequest('admin-1', ['settings' => ['api_key' => 'newsecret']]),
@@ -694,7 +715,7 @@ final class PluginAdminControllerTest extends TestCase
 
     public function test_update_settings_merges_over_existing_keys(): void
     {
-        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->twice()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-demo',
                 enabled: false,
@@ -706,13 +727,13 @@ final class PluginAdminControllerTest extends TestCase
             ),
         );
 
-        $this->loader->shouldReceive('updateSettings')
+        $this->expectCall($this->loader, 'updateSettings')
             ->once()
             ->with('phlix-plugin-demo', Mockery::on(static function ($settings): bool {
                 // 'a' not submitted → preserved; 'b' updated.
                 return is_array($settings) && $settings['a'] === 'keep' && $settings['b'] === 'new';
             }));
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->updateSettings(
             $this->makeRequest('admin-1', ['settings' => ['b' => 'new']]),
@@ -726,7 +747,7 @@ final class PluginAdminControllerTest extends TestCase
     {
         // A malformed manifest descriptor missing 'type' must be treated as
         // 'mixed' (accept the value) rather than triggering a strict-types 500.
-        $this->loader->shouldReceive('getInstalled')->twice()->andReturn(
+        $this->expectCall($this->loader, 'getInstalled')->twice()->andReturn(
             $this->fixturePlugin(
                 'phlix-plugin-demo',
                 enabled: false,
@@ -737,12 +758,12 @@ final class PluginAdminControllerTest extends TestCase
             ),
         );
 
-        $this->loader->shouldReceive('updateSettings')
+        $this->expectCall($this->loader, 'updateSettings')
             ->once()
             ->with('phlix-plugin-demo', Mockery::on(static function ($settings): bool {
                 return is_array($settings) && ($settings['note'] ?? null) === 'hello';
             }));
-        $this->audit->shouldReceive('logPluginAction')->once();
+        $this->expectCall($this->audit, 'logPluginAction')->once();
 
         $response = $this->controller->updateSettings(
             $this->makeRequest('admin-1', ['settings' => ['note' => 'hello']]),
@@ -807,5 +828,24 @@ final class PluginAdminControllerTest extends TestCase
         $decoded = json_decode($json, true);
         $this->assertIsArray($decoded);
         return $decoded;
+    }
+
+    /**
+     * Set up an expectation, typed as {@see \Mockery\Expectation} so its fluent
+     * methods (once/twice/times/with/andReturn/andThrow/...) type-check.
+     *
+     * Mockery's {@see MockInterface::shouldReceive()} PHPDoc collapses to an
+     * interface union that hides those methods; at runtime the returned
+     * `CompositeExpectation` forwards the same calls, so the narrowed type is a
+     * faithful description of the available fluent surface.
+     *
+     * @return \Mockery\Expectation
+     */
+    private function expectCall(MockInterface $mock, string $method)
+    {
+        /** @var \Mockery\Expectation $expectation */
+        $expectation = $mock->shouldReceive($method);
+
+        return $expectation;
     }
 }

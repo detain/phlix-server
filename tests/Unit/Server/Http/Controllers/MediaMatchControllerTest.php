@@ -25,7 +25,12 @@ use Phlix\Server\Http\Request;
  */
 class MediaMatchControllerTest extends TestCase
 {
-    /** Build an authenticated request with optional query + body. */
+    /**
+     * Build an authenticated request with optional query + body.
+     *
+     * @param array<string, mixed> $query
+     * @param array<string, mixed> $body
+     */
     private function authedRequest(array $query = [], array $body = []): Request
     {
         $request = new Request();
@@ -33,6 +38,18 @@ class MediaMatchControllerTest extends TestCase
         $request->query = $query;
         $request->body = $body;
         return $request;
+    }
+
+    /**
+     * Decode a JSON response body into an array for assertions.
+     *
+     * @return array<array-key, mixed>
+     */
+    private function decodeJson(string $json): array
+    {
+        $decoded = json_decode($json, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     public function testSearchRequiresAuth(): void
@@ -44,7 +61,7 @@ class MediaMatchControllerTest extends TestCase
 
         $response = $controller->search(new Request(), ['id' => 'm1']);
         $this->assertSame(401, $response->statusCode);
-        $this->assertSame('auth.required', json_decode($response->body, true)['code']);
+        $this->assertSame('auth.required', $this->decodeJson($response->body)['code']);
     }
 
     public function testSearch404WhenItemMissing(): void
@@ -78,7 +95,8 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{query: mixed, type: mixed, results: array<int, mixed>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertSame('Some Show', $body['query']);
         $this->assertSame('tv', $body['type']);
         $this->assertCount(1, $body['results']);
@@ -113,7 +131,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('metadata.no_query', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.no_query', $this->decodeJson($response->body)['code']);
     }
 
     public function testSearch422WhenTmdbUnconfigured(): void
@@ -128,7 +146,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unconfigured', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.tmdb_unconfigured', $this->decodeJson($response->body)['code']);
     }
 
     public function testSearch502WhenTmdbUnreachable(): void
@@ -143,7 +161,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(502, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unreachable', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.tmdb_unreachable', $this->decodeJson($response->body)['code']);
     }
 
     public function testApply400WhenNoTmdbId(): void
@@ -155,7 +173,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->apply($this->authedRequest([], []), ['id' => 'm1']);
 
         $this->assertSame(400, $response->statusCode);
-        $this->assertSame('metadata.bad_tmdb_id', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.bad_tmdb_id', $this->decodeJson($response->body)['code']);
     }
 
     public function testApply404WhenItemMissing(): void
@@ -193,7 +211,8 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{item: array<string, mixed>, applied: array<string, mixed>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertSame('m1', $body['item']['id']);
         $this->assertSame('The Matrix', $body['item']['name']);
         $this->assertTrue($body['applied']['matched']);
@@ -235,7 +254,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '0']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.no_match', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.no_match', $this->decodeJson($response->body)['code']);
     }
 
     public function testApply422WhenTmdbUnconfigured(): void
@@ -250,7 +269,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unconfigured', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.tmdb_unconfigured', $this->decodeJson($response->body)['code']);
     }
 
     /**
@@ -268,7 +287,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unconfigured', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.tmdb_unconfigured', $this->decodeJson($response->body)['code']);
     }
 
     /**
@@ -285,7 +304,7 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->apply($this->authedRequest([], ['tmdb_id' => '603']), ['id' => 'm1']);
 
         $this->assertSame(422, $response->statusCode);
-        $this->assertSame('metadata.tmdb_unconfigured', json_decode($response->body, true)['code']);
+        $this->assertSame('metadata.tmdb_unconfigured', $this->decodeJson($response->body)['code']);
     }
 
     /**
@@ -322,7 +341,8 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array<string, mixed>>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertCount(1, $body['results']);
         $this->assertSame('1399', $body['results'][0]['tmdb_id']);
     }
@@ -364,8 +384,10 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array<string, mixed>>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertArrayHasKey('context', $body['results'][0]);
+        /** @var array<string, mixed> $context */
         $context = $body['results'][0]['context'];
         $this->assertArrayHasKey('original_filename', $context);
         $this->assertArrayHasKey('path', $context);
@@ -392,7 +414,9 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array<string, mixed>>} $body */
+        $body = $this->decodeJson($response->body);
+        /** @var array<string, mixed> $context */
         $context = $body['results'][0]['context'];
         $this->assertIsArray($context);
         $this->assertArrayNotHasKey('original_filename', $context);
@@ -419,7 +443,8 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array{context: array<string, mixed>}>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertSame(
             'My.Movie.2020 PROPER.mkv',
             $body['results'][0]['context']['original_filename'],
@@ -444,7 +469,8 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array{context: array<string, mixed>}>} $body */
+        $body = $this->decodeJson($response->body);
         $this->assertSame(
             'S01E01.mkv',
             $body['results'][0]['context']['original_filename'],
@@ -478,7 +504,9 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 's1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array{context: array<string, mixed>}>} $body */
+        $body = $this->decodeJson($response->body);
+        /** @var array<string, mixed> $tags */
         $tags = $body['results'][0]['context']['tags'];
         $this->assertIsArray($tags);
         $this->assertSame('My Show', $tags['show']);
@@ -517,7 +545,9 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'a1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array{context: array<string, mixed>}>} $body */
+        $body = $this->decodeJson($response->body);
+        /** @var array<string, mixed> $tags */
         $tags = $body['results'][0]['context']['tags'];
         $this->assertIsArray($tags);
         $this->assertSame('Artist Name', $tags['artist']);
@@ -549,7 +579,9 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'x1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array<string, mixed>>} $body */
+        $body = $this->decodeJson($response->body);
+        /** @var array<string, mixed> $context */
         $context = $body['results'][0]['context'];
         $this->assertArrayNotHasKey('tags', $context);
     }
@@ -576,7 +608,9 @@ class MediaMatchControllerTest extends TestCase
         $response = $controller->search($this->authedRequest(), ['id' => 'm1']);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        /** @var array{results: array<int, array<string, mixed>>} $body */
+        $body = $this->decodeJson($response->body);
+        /** @var array{original_filename: string, path: string, parsed_title: string} $context */
         $context = $body['results'][0]['context'];
         $this->assertSame(500, mb_strlen($context['original_filename'], 'UTF-8'));
         $this->assertSame(500, mb_strlen($context['path'], 'UTF-8'));

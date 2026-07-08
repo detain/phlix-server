@@ -39,6 +39,7 @@ class TranscodeControllerTest extends TestCase
         $response = $controller->start(new Request(), ['id' => 'media-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{job_id: mixed, master_url: string, dash_url: string, reused: mixed, subtitles: array<int, array{url: string, label: mixed, default: mixed}>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('job-7', $body['job_id']);
         // Streaming URLs are now signed (prefix-scoped to the job dir) so the
@@ -197,6 +198,7 @@ class TranscodeControllerTest extends TestCase
 
         $response = $controller->start(new Request(), ['id' => 'media-1']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array{variants: array<int, array{url: string, id: mixed, height: mixed, label: mixed}>} $body */
         $body = json_decode($response->body, true);
 
         $this->assertIsArray($body['variants']);
@@ -226,6 +228,7 @@ class TranscodeControllerTest extends TestCase
 
         $response = $controller->start(new Request(), ['id' => 'media-1']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
@@ -254,6 +257,7 @@ class TranscodeControllerTest extends TestCase
 
         $response = $controller->status(new Request(), ['jobId' => 'job-7']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array{variants: array<int, array{url: string}>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(2, $body['variants']);
         $this->assertSignedUrlFor('/hls/job-7/media_v1080p.m3u8', $body['variants'][0]['url']);
@@ -276,6 +280,7 @@ class TranscodeControllerTest extends TestCase
 
         $response = $controller->status(new Request(), ['jobId' => 'job-7']);
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('variants', $body);
         $this->assertNull($body['variants']);
@@ -323,7 +328,9 @@ class TranscodeControllerTest extends TestCase
 
         $response = $controller->start(new Request(), ['id' => 'missing']);
         $this->assertSame(404, $response->statusCode);
-        $this->assertSame('Media item not found', json_decode($response->body, true)['error']);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame('Media item not found', $body['error']);
     }
 
     public function testStartReturns503WhenConcurrencyExhausted(): void
@@ -359,6 +366,7 @@ class TranscodeControllerTest extends TestCase
         $response = $controller->status(new Request(), ['jobId' => 'job-7']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{status: mixed, playlist_ready: mixed, master_url: string, dash_url: string, subtitles: array<int, array{url: string}>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('running', $body['status']);
         $this->assertTrue($body['playlist_ready']);
@@ -374,11 +382,13 @@ class TranscodeControllerTest extends TestCase
     {
         $this->assertStringStartsWith($expectedPath . '?', $url);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        $exp = $q['exp'] ?? '';
+        $sig = $q['sig'] ?? '';
         $this->assertTrue(
             \Phlix\Auth\SignedUrl::fromEnv()->verify(
                 $expectedPath,
-                (string) ($q['exp'] ?? ''),
-                (string) ($q['sig'] ?? ''),
+                is_string($exp) ? $exp : '',
+                is_string($sig) ? $sig : '',
             ),
             "{$url} must carry a valid signature for {$expectedPath}",
         );

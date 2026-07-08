@@ -79,6 +79,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->addFavorite($this->authedRequest(), ['id' => 'item-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
     }
@@ -238,6 +239,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
     }
@@ -279,6 +281,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->setLikeLevel($req, ['id' => 'item-1']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('level must be an integer between -2 and 2', $body['error']);
     }
@@ -384,13 +387,14 @@ class MediaUserDataControllerTest extends TestCase
 
         $itemRepo = $this->createMock(ItemRepository::class);
         $itemRepo->method('findById')->willReturnCallback(
-            fn (string $id): ?array => ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie']
+            fn (string $id): array => ['id' => $id, 'name' => 'Title ' . $id, 'type' => 'movie']
         );
 
         $controller = new MediaUserDataController($itemRepo, $userData);
         $response = $controller->listFavorites($this->authedRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertCount(2, $body['items']);
@@ -429,6 +433,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->listFavorites($req, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame(100, $body['limit']);
         $this->assertSame(0, $body['offset']);
@@ -450,7 +455,9 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->listFavorites($req, []);
 
         $this->assertSame(200, $response->statusCode);
-        $this->assertSame(1, json_decode($response->body, true)['limit']);
+        /** @var array<array-key, mixed> $body */
+        $body = json_decode($response->body, true);
+        $this->assertSame(1, $body['limit']);
     }
 
     public function testListFavoritesSkipsMissingMediaItems(): void
@@ -470,6 +477,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->listFavorites($this->authedRequest(), []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{items: array<int, array<string, mixed>>} $body */
         $body = json_decode($response->body, true);
         $this->assertCount(1, $body['items']);
         $this->assertSame('item-2', $body['items'][0]['id']);
@@ -522,6 +530,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->markWatched($this->authedRequest(), ['id' => 'item-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
         $this->assertSame('Item marked as watched', $body['message']);
@@ -574,6 +583,7 @@ class MediaUserDataControllerTest extends TestCase
         $response = $controller->markUnwatched($this->authedRequest(), ['id' => 'item-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('message', $body);
         $this->assertSame('Item marked as unwatched', $body['message']);

@@ -71,6 +71,7 @@ class HlsControllerTest extends TestCase
     {
         $res = $this->controller()->getPlaylist(new Request(), ['job_id' => 'job-9']);
         $this->assertSame(200, $res->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($res->body, true);
         $this->assertSame('/hls/job-9/master.m3u8', $body['playlist_url']);
         $this->assertSame('job-9', $body['job_id']);

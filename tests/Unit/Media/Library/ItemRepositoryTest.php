@@ -204,6 +204,78 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals(['year' => 2020], $result['metadata']);
     }
 
+    /**
+     * S8: an empty path list must never reach the database — a malformed
+     * `IN ()` clause would otherwise be sent to MySQL.
+     */
+    public function testFindPathsMapReturnsEmptyArrayWithoutQueryingForEmptyInput(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->never())->method('query');
+
+        $repo = new ItemRepository($db);
+
+        $this->assertSame([], $repo->findPathsMap([]));
+    }
+
+    /**
+     * S8: findPathsMap() issues exactly ONE query for N paths (not N queries)
+     * — the batch/N+1-prevention contract — with correctly-ordered
+     * placeholders and the paths bound positionally in the given order.
+     */
+    public function testFindPathsMapIssuesExactlyOneQueryWithCorrectPlaceholdersAndBindings(): void
+    {
+        $capturedSql = null;
+        $capturedParams = null;
+        $callCount = 0;
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams, &$callCount) {
+                $callCount++;
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return [];
+            });
+
+        $repo = new ItemRepository($db);
+        $repo->findPathsMap(['/a.mkv', '/b.mkv', '/c.mkv']);
+
+        $this->assertSame(1, $callCount, 'exactly one query for N paths, not N queries');
+        $this->assertStringContainsString('WHERE path IN (?,?,?)', $capturedSql);
+        $this->assertSame(['/a.mkv', '/b.mkv', '/c.mkv'], $capturedParams);
+    }
+
+    /**
+     * S8: the returned map is keyed by the row's `path` column (not by input
+     * order/index), hydrated exactly like {@see ItemRepository::findByPath()}
+     * (both `metadata_json` and decoded `metadata` present), and a path with
+     * no matching row is simply ABSENT from the map (never a null entry).
+     */
+    public function testFindPathsMapKeysResultsByPathAndOmitsMissingPaths(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'id-b',
+                'path' => '/b.mkv',
+                'type' => 'movie',
+                'metadata_json' => '{"year": 2021}',
+            ],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $map = $repo->findPathsMap(['/a.mkv', '/b.mkv', '/c.mkv']);
+
+        $this->assertCount(1, $map);
+        $this->assertArrayNotHasKey('/a.mkv', $map);
+        $this->assertArrayNotHasKey('/c.mkv', $map);
+        $this->assertArrayHasKey('/b.mkv', $map);
+        $this->assertSame('id-b', $map['/b.mkv']['id']);
+        $this->assertSame(['year' => 2021], $map['/b.mkv']['metadata']);
+    }
+
     public function testFindTopLevelByCanonicalReturnsNullForEmptyKeyWithoutQuerying(): void
     {
         // An empty canonical key is never a meaningful match, so the method must

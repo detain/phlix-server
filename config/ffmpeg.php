@@ -7,6 +7,10 @@ return [
     'segment_dir' => '/var/segments',
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
+    // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
+    // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors
+    // the max_concurrent_transcodes knob's style/placement.
+    'max_concurrent_scan_probes' => 4,
     'hwaccel' => [
         'enabled' => true,
         'prefer_hardware' => true,

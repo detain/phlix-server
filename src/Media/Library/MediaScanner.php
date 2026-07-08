@@ -76,6 +76,17 @@ class MediaScanner
     private ?array $noiseSuffixes = null;
 
     /**
+     * S8: bounded concurrency cap for {@see scanFlat()}'s coroutine ffprobe
+     * fan-out (`config/ffmpeg.php`'s `max_concurrent_scan_probes`). Only ever
+     * consulted when the scan actually runs inside a Swoole coroutine; the
+     * non-coroutine (CLI/PHPUnit) fallback probes one file at a time
+     * regardless of this value.
+     *
+     * @var int
+     */
+    private int $maxConcurrentScanProbes;
+
+    /**
      * Concrete media-item types whose source files carry a meaningful total
      * playback duration worth probing during the scan. Image/book/photo types
      * have no duration and are never probed.
@@ -83,6 +94,26 @@ class MediaScanner
      * @var array<int, string>
      */
     private const DURATION_PROBE_TYPES = ['video', 'movie', 'episode', 'audio'];
+
+    /**
+     * S8 default bounded fan-out cap for {@see scanFlat()}'s concurrent
+     * ffprobe pool, used when no {@see $maxConcurrentScanProbes} is injected
+     * (legacy callers/tests). Mirrors `config/ffmpeg.php`'s
+     * `max_concurrent_scan_probes` default.
+     */
+    private const DEFAULT_MAX_CONCURRENT_SCAN_PROBES = 4;
+
+    /**
+     * S8 batch size for {@see scanFlat()}'s two-phase (collect-then-process)
+     * walk: candidates are processed in chunks of this size rather than
+     * collecting an entire multi-thousand-file library into memory at once,
+     * or (the other extreme) probing/looking-up one file at a time. Smaller
+     * than {@see DuplicateFinder::DEFAULT_BATCH_SIZE} (500) because each
+     * scanFlat candidate may additionally hold open an ffprobe child process
+     * for the duration of a coroutine fan-out slot, which is materially
+     * heavier per-row than DuplicateFinder's plain SELECT paging.
+     */
+    private const SCAN_BATCH_SIZE = 200;
 
     /**
      * Library types whose files hold episodic/movie video content and should be
@@ -129,6 +160,11 @@ class MediaScanner
      *                           merged over `config/matching.php` by the DI
      *                           provider). Forwarded to the filename parsers; a
      *                           null/empty value falls back to the built-in const.
+     * @param int|null $maxConcurrentScanProbes S8: bounded concurrency cap for
+     *                           {@see scanFlat()}'s coroutine ffprobe fan-out
+     *                           (`config/ffmpeg.php`'s `max_concurrent_scan_probes`).
+     *                           Null/non-positive falls back to
+     *                           {@see DEFAULT_MAX_CONCURRENT_SCAN_PROBES}.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      */
@@ -139,7 +175,8 @@ class MediaScanner
         ?EventDispatcherInterface $eventDispatcher = null,
         ?TrailerFinder $trailerFinder = null,
         ?FfmpegRunner $ffmpeg = null,
-        ?array $noiseSuffixes = null
+        ?array $noiseSuffixes = null,
+        ?int $maxConcurrentScanProbes = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -153,6 +190,9 @@ class MediaScanner
         $this->noiseSuffixes = ($noiseSuffixes === null || $noiseSuffixes === [])
             ? null
             : array_values($noiseSuffixes);
+        $this->maxConcurrentScanProbes = ($maxConcurrentScanProbes !== null && $maxConcurrentScanProbes > 0)
+            ? $maxConcurrentScanProbes
+            : self::DEFAULT_MAX_CONCURRENT_SCAN_PROBES;
     }
 
     /**
@@ -378,6 +418,22 @@ class MediaScanner
      *        every episode found (0 = Specials), or null to keep filename-parsed
      *        seasons.
      * @return int Number of items added.
+     *
+     * @since 0.35.0 (S8) Two-phase batch processing: candidates are collected
+     *        in chunks of {@see SCAN_BATCH_SIZE}, the already-scanned check is
+     *        a single batched {@see ItemRepository::findPathsMap()} query
+     *        instead of one {@see ItemRepository::findByPath()} per file, and
+     *        brand-new files are probed via a BOUNDED CONCURRENT coroutine
+     *        pool (see {@see probeManyConcurrently()}) before the rest of
+     *        {@see processFile()}'s naming/dedup/create/persistStreams logic
+     *        runs sequentially, in original file order, exactly as before —
+     *        only the (read-only, DB-free) ffprobe call is parallelized, so
+     *        find-or-create/canonical-key ordering guarantees are unaffected
+     *        regardless of whether this scanFlat() call is the flat top-level
+     *        scan or a season/specials/loose SUBDIRECTORY walk issued by
+     *        {@see scanSeriesDir()} (`$forcedSeries !== null`) — see that
+     *        method's docblock for why episode-parent creation itself stays
+     *        untouched/sequential.
      */
     private function scanFlat(
         string $libraryId,
@@ -395,6 +451,9 @@ class MediaScanner
         $scanned = 0;
         $skipped = 0;
         $added = 0;
+
+        /** @var list<SplFileInfo> $candidates */
+        $candidates = [];
 
         foreach ($iterator as $file) {
             if (!$file instanceof SplFileInfo) {
@@ -416,13 +475,16 @@ class MediaScanner
                 continue;
             }
 
-            if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason)) {
-                $added++;
-            }
-            $scanned++;
-            if ($onFile !== null) {
-                $onFile($file->getPathname());
-            }
+            $candidates[] = $file;
+        }
+
+        // Process in bounded chunks (SCAN_BATCH_SIZE) rather than collecting
+        // an entire multi-thousand-file library's SplFileInfo list before
+        // doing any work, and rather than one file at a time — see
+        // SCAN_BATCH_SIZE's docblock for the size rationale.
+        foreach (array_chunk($candidates, self::SCAN_BATCH_SIZE) as $batch) {
+            $added += $this->processScanBatch($libraryId, $batch, $type, $forcedSeries, $forcedSeason, $onFile);
+            $scanned += count($batch);
         }
 
         $this->logger->info('Scan complete', [
@@ -434,6 +496,232 @@ class MediaScanner
         ]);
 
         return $added;
+    }
+
+    /**
+     * S8: process one bounded batch of already-filtered scan candidates.
+     *
+     * Two phases, preserving the ORIGINAL candidate order for both the
+     * per-file progress callback and the sequential create/dedup logic (so
+     * scan results stay stable/reproducible):
+     *
+     * 1. A single batched {@see ItemRepository::findPathsMap()} query
+     *    determines which candidate paths are already indexed (a rescan) and
+     *    which are brand new. For brand-new files whose eventual media type
+     *    would need a probe (mirrors {@see processFile()}'s
+     *    `DURATION_PROBE_TYPES` gate via {@see isProbeEligibleLibraryType()}),
+     *    a BOUNDED coroutine pool runs their `probeSummary()` concurrently
+     *    (see {@see probeManyConcurrently()}) — this is the only concurrent
+     *    step; it touches no shared/DB state.
+     * 2. The batch is walked once more, in original order: already-indexed
+     *    paths get the SAME `backfillItemSourceMetadata()` call
+     *    {@see processFile()} would have made (unchanged, sequential); brand
+     *    new files call {@see processFile()} with its precomputed probe
+     *    result (or `false` when this batch never probed, e.g. an
+     *    image/book library), so the naming/canonical-key/create/
+     *    persistStreams sequence — and any shared-parent find-or-create via
+     *    {@see resolveEpisodeParent()} — happens exactly as it always has,
+     *    one file at a time.
+     *
+     * @param list<SplFileInfo> $batch Filtered scan candidates for this chunk.
+     * @param array{title: string, year: int|null, slug_source?: string}|null $forcedSeries
+     * @param (callable(string): void)|null $onFile
+     * @return int Number of items added in this batch.
+     */
+    private function processScanBatch(
+        string $libraryId,
+        array $batch,
+        string $type,
+        ?array $forcedSeries,
+        ?int $forcedSeason,
+        ?callable $onFile
+    ): int {
+        if ($batch === []) {
+            return 0;
+        }
+
+        $paths = [];
+        foreach ($batch as $file) {
+            $paths[] = $file->getPathname();
+        }
+
+        $existingByPath = $this->itemRepository->findPathsMap($paths);
+        $probeEligible = $this->isProbeEligibleLibraryType($type);
+
+        $newPaths = [];
+        foreach ($batch as $file) {
+            $path = $file->getPathname();
+            if (!isset($existingByPath[$path]) && $probeEligible) {
+                $newPaths[] = $path;
+            }
+        }
+
+        // The ONLY concurrent step: a read-only, DB-free ffprobe fan-out for
+        // brand-new files. Empty when nothing is probe-eligible in this batch
+        // (e.g. image/book libraries), in which case this is a no-op.
+        $probeResults = $this->probeManyConcurrently($newPaths);
+
+        $added = 0;
+        foreach ($batch as $file) {
+            $path = $file->getPathname();
+
+            if (isset($existingByPath[$path])) {
+                // Rescan: identical to processFile()'s existing-item branch —
+                // no new item is added, only a source-metadata backfill.
+                $this->backfillItemSourceMetadata($existingByPath[$path]);
+            } else {
+                // `false` (processFile()'s "not supplied" sentinel) when this
+                // path was never fanned out (non-probe-eligible library type);
+                // otherwise the precomputed result, INCLUDING a legitimate
+                // `null` (the probe failed for this file) — array_key_exists
+                // distinguishes "probed and failed" from "never probed" so a
+                // failed probe is never silently retried a second time.
+                $precomputedProbe = array_key_exists($path, $probeResults)
+                    ? $probeResults[$path]
+                    : false;
+                if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason, $precomputedProbe)) {
+                    $added++;
+                }
+            }
+
+            if ($onFile !== null) {
+                $onFile($path);
+            }
+        }
+
+        return $added;
+    }
+
+    /**
+     * Whether a scanFlat()-level library type ever yields a probe-eligible
+     * media type for its files, mirroring {@see processFile()}'s
+     * `DURATION_PROBE_TYPES` gate WITHOUT duplicating its naming/dedup logic.
+     *
+     * This is decidable purely from the library `$type` (constant for an
+     * entire scanFlat() call) because {@see determineMediaType()} maps every
+     * video-content library type to `'movie'` and an episode is always typed
+     * `'episode'` — both members of `DURATION_PROBE_TYPES` — while `'audio'`
+     * passes through unchanged (also a member) and `'image'`/`'book'` never
+     * are. So per-file naming does not need to run before deciding whether a
+     * candidate is worth fanning out to the probe pool.
+     *
+     * @param string $type Library type passed into {@see scanFlat()}.
+     */
+    private function isProbeEligibleLibraryType(string $type): bool
+    {
+        return $this->isVideoContentLibrary($type) || $type === 'audio';
+    }
+
+    /**
+     * S8: probe every given path's source characteristics, running up to
+     * {@see $maxConcurrentScanProbes} {@see probeSummary()} calls
+     * CONCURRENTLY when this method executes inside a Swoole coroutine — the
+     * same non-blocking exec branch {@see FfmpegRunner::runProbeCommand()}
+     * (S6) uses — so a large batch's ffprobes overlap instead of running one
+     * after another. Outside a coroutine (PHPUnit CLI, a plain CLI scan
+     * script with no Swoole event loop) this degrades to the EXACT sequential
+     * behaviour that existed before S8: one `probeSummary()` call per path,
+     * in order, on the calling "thread" — so nothing regresses for
+     * non-coroutine callers.
+     *
+     * Bounded fan-out idiom: a `Swoole\Coroutine\Channel` sized to
+     * {@see $maxConcurrentScanProbes} acts as a semaphore (a `push()` before
+     * launching each probe coroutine blocks/yields once the channel is full,
+     * and each coroutine's `pop()` on completion frees a slot for the next),
+     * paired with a `Swoole\Coroutine\WaitGroup` so the caller always waits
+     * for every launched coroutine to finish — successfully or by catching
+     * its own exception — before returning, no matter how many probes fail.
+     * `probeSummary()` itself already never throws (see its docblock), but
+     * the coroutine body defensively catches anyway so a future change there
+     * can never leave the WaitGroup stuck.
+     *
+     * @param list<string> $paths Absolute filesystem paths to probe. An empty
+     *                             list short-circuits with no coroutine setup.
+     * @return array<string, array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * }|null> Probe summary (or null on failure) keyed by input path.
+     */
+    private function probeManyConcurrently(array $paths): array
+    {
+        if ($paths === []) {
+            return [];
+        }
+
+        if (!$this->coroutineFanOutAvailable()) {
+            $results = [];
+            foreach ($paths as $path) {
+                $results[$path] = $this->probeSummary($path);
+            }
+            return $results;
+        }
+
+        $results = [];
+        $semaphore = new \Swoole\Coroutine\Channel(max(1, $this->maxConcurrentScanProbes));
+        $waitGroup = new \Swoole\Coroutine\WaitGroup();
+
+        foreach ($paths as $path) {
+            // Blocks/yields once $maxConcurrentScanProbes probes are already
+            // in flight — this is what bounds the concurrency, not a fixed
+            // "launch N then wait" batch split.
+            $semaphore->push(true);
+            $waitGroup->add();
+            $cid = \Swoole\Coroutine::create(function () use ($path, &$results, $semaphore, $waitGroup): void {
+                try {
+                    $results[$path] = $this->probeSummary($path);
+                } catch (\Throwable $e) {
+                    // Defensive only — probeSummary() already catches every
+                    // Throwable internally. A probe failure must never abort
+                    // the scan or leave the WaitGroup unjoined.
+                    $this->logger->debug('Concurrent scan probe failed; continuing scan', [
+                        'path' => $path,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $results[$path] = null;
+                } finally {
+                    $semaphore->pop();
+                    $waitGroup->done();
+                }
+            });
+
+            // Coroutine::create() returns the new coroutine ID on success or
+            // `false` if it failed to SCHEDULE the coroutine at all (e.g. the
+            // process-wide `max_coroutine` ceiling was hit) — in that failure
+            // case the closure body above never runs, so the `push()`/`add()`
+            // reserved just above it would otherwise NEVER be released and
+            // `wait()` below would hang forever for this batch. Release them
+            // here ourselves and record the same `null`-on-failure outcome a
+            // thrown probe would produce, so a scheduling failure degrades
+            // exactly like any other single-path probe failure instead of
+            // stalling the whole scan.
+            if ($cid === false) {
+                $this->logger->debug('Failed to spawn scan-probe coroutine; continuing scan', [
+                    'path' => $path,
+                ]);
+                $results[$path] = null;
+                $semaphore->pop();
+                $waitGroup->done();
+            }
+        }
+
+        $waitGroup->wait();
+
+        return $results;
+    }
+
+    /**
+     * Whether the calling code is running inside a real Swoole coroutine
+     * (production Workerman/Swoole worker), mirroring
+     * {@see FfmpegRunner::runProbeCommand()}'s own guard exactly so
+     * {@see probeManyConcurrently()}'s coroutine fan-out and S6's per-probe
+     * non-blocking exec branch activate/deactivate together.
+     */
+    private function coroutineFanOutAvailable(): bool
+    {
+        return extension_loaded('swoole')
+            && class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0;
     }
 
     /**
@@ -537,6 +825,21 @@ class MediaScanner
      * scanned explicitly and the series-dir-level files are walked NON-recursively
      * (the recursive walk would otherwise re-enter the already-scanned subdirs;
      * findByPath() would dedup them, but the season assignment would be nondeterministic).
+     *
+     * **S8 scope note:** season/specials/loose subdirectories are still scanned
+     * via {@see scanFlat()} (unchanged call below), so they DO get scanFlat()'s
+     * batched already-scanned lookup and bounded-concurrent ffprobe fan-out —
+     * that part is safe here because it never touches the database (a pure
+     * `ffmpeg->probe()` + parse). What is deliberately NOT parallelized, in
+     * this step or ever inside scanFlat(), is the naming/canonical-key/
+     * create()/{@see resolveEpisodeParent()} sequence: those still run ONE
+     * FILE AT A TIME, in original order, exactly as before S8. That is the
+     * real hazard for series/episode content — two files racing to
+     * find-or-create the SAME shared series/season container — and it is
+     * unaffected by S8 because only the read-only probe step runs
+     * concurrently. A genuinely concurrent episode-parent resolution (e.g.
+     * memoizing in-flight find-or-creates across coroutines) is intentionally
+     * left for a dedicated future step rather than bolted on here.
      *
      * @param array<int, string> $extensions Allowed file extensions.
      * @param array{title: string, year: int|null, slug_source?: string} $forcedSeries
@@ -711,6 +1014,20 @@ class MediaScanner
      *        value (0 = Specials) — the directory wins over any filename-parsed
      *        season, and the file is treated as an episode even when the filename
      *        carries no SxxExx marker (it is nested under a season folder).
+     * @param array{
+     *     duration_seconds: int|null,
+     *     source: array<string, mixed>|null,
+     *     streams: list<array<string, mixed>>
+     * }|null|false $precomputedProbe S8: an already-computed
+     *        {@see probeSummary()} result supplied by {@see scanFlat()}'s
+     *        batch/coroutine-fan-out path, so this call never re-probes the
+     *        file. `false` (the default) means "no precomputed value" —
+     *        behave exactly as before S8 and call {@see probeSummary()}
+     *        internally when the media type warrants it. A supplied `null` is
+     *        itself a LEGITIMATE outcome (the fan-out probe failed for this
+     *        file) and is honoured as-is rather than triggering a second,
+     *        redundant probe attempt — this is why the sentinel is `false`
+     *        rather than `null` for "not supplied".
      *
      * @return bool True when a new item was added to the repository; false
      *              when the file was already known and was skipped.
@@ -720,7 +1037,8 @@ class MediaScanner
         SplFileInfo $file,
         string $type,
         ?array $forcedSeries = null,
-        ?int $forcedSeason = null
+        ?int $forcedSeason = null,
+        array|null|false $precomputedProbe = false
     ): bool {
         $path = $file->getPathname();
 
@@ -804,7 +1122,11 @@ class MediaScanner
         // once the row is created (below), so no second ffprobe is ever issued.
         $probeSummary = null;
         if (in_array($mediaType, self::DURATION_PROBE_TYPES, true)) {
-            $probeSummary = $this->probeSummary($path);
+            // S8: reuse a probe already run by scanFlat()'s coroutine fan-out
+            // when one was supplied, instead of probing this file a second
+            // time. See the parameter docblock for the `false`-vs-`null`
+            // sentinel distinction.
+            $probeSummary = $precomputedProbe !== false ? $precomputedProbe : $this->probeSummary($path);
             if ($probeSummary !== null) {
                 if (
                     $probeSummary['duration_seconds'] !== null

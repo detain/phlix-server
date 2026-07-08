@@ -247,6 +247,7 @@ final class ContextIsolationTest extends TestCase
             // so the test can drive the fallback branch deterministically
             // regardless of whether ext-swoole is actually loaded in
             // the test environment.
+            /** @var bool $swooleLoaded */
             $swooleLoaded = false; // simulate ext-swoole not loaded
             if (!$swooleLoaded) {
                 trigger_error(
@@ -283,6 +284,7 @@ final class ContextIsolationTest extends TestCase
         });
 
         try {
+            /** @var bool $swooleLoaded */
             $swooleLoaded = extension_loaded('swoole');
             if (!$swooleLoaded) {
                 trigger_error('should not fire', E_USER_WARNING);

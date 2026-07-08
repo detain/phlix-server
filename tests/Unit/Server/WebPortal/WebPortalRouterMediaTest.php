@@ -30,6 +30,44 @@ class WebPortalRouterMediaTest extends TestCase
         );
     }
 
+    /**
+     * Decode a portal JSON response body into the associative shape the
+     * assertions below inspect. The union of keys across the media/facet
+     * endpoints is described so nested offset access stays typed.
+     *
+     * @return array{
+     *     items: list<array<string, mixed>>,
+     *     buckets: list<array<string, mixed>>,
+     *     letters: list<array<string, mixed>>,
+     *     item: array<string, mixed>,
+     *     genres: mixed,
+     *     total: mixed,
+     *     limit: mixed,
+     *     offset: mixed,
+     *     code: mixed,
+     *     field: mixed,
+     * }
+     */
+    private function decodeBody(string $json): array
+    {
+        /**
+         * @var array{
+         *     items: list<array<string, mixed>>,
+         *     buckets: list<array<string, mixed>>,
+         *     letters: list<array<string, mixed>>,
+         *     item: array<string, mixed>,
+         *     genres: mixed,
+         *     total: mixed,
+         *     limit: mixed,
+         *     offset: mixed,
+         *     code: mixed,
+         *     field: mixed,
+         * } $decoded
+         */
+        $decoded = json_decode($json, true);
+        return $decoded;
+    }
+
     public function testGetMediaReturnsItemsWithPagination(): void
     {
         $itemRepo = $this->createMock(ItemRepository::class);
@@ -71,7 +109,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMedia($request, []);
 
         $this->assertEquals(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertArrayHasKey('items', $body);
         $this->assertArrayHasKey('total', $body);
         $this->assertArrayHasKey('limit', $body);
@@ -112,7 +150,7 @@ class WebPortalRouterMediaTest extends TestCase
 
         $request = new Request();
         $request->query = [];
-        $body = json_decode($this->makeRouter($itemRepo)->getMedia($request, [])->body, true);
+        $body = $this->decodeBody($this->makeRouter($itemRepo)->getMedia($request, [])->body);
 
         // TMDB poster → a width-descriptor srcset the browser can choose from
         $srcset = $body['items'][0]['poster_srcset'];
@@ -177,7 +215,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMedia($request, []);
 
         $this->assertEquals(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertEquals(25, $body['limit']);
         $this->assertEquals(50, $body['offset']);
     }
@@ -256,7 +294,7 @@ class WebPortalRouterMediaTest extends TestCase
         $request = new Request();
         $response = $router->getMedia($request, []);
 
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $item = $body['items'][0];
         $this->assertEquals('movie-1', $item['id']);
         $this->assertEquals('Test Movie', $item['name']);
@@ -295,7 +333,7 @@ class WebPortalRouterMediaTest extends TestCase
         ]);
 
         $router = $this->makeRouter($itemRepo);
-        $body = json_decode($router->getMedia(new Request(), [])->body, true);
+        $body = $this->decodeBody($router->getMedia(new Request(), [])->body);
         $item = $body['items'][0];
 
         $this->assertSame('episode', $item['type']);
@@ -335,7 +373,7 @@ class WebPortalRouterMediaTest extends TestCase
         ]);
 
         $router = $this->makeRouter($itemRepo);
-        $body = json_decode($router->getMedia(new Request(), [])->body, true);
+        $body = $this->decodeBody($router->getMedia(new Request(), [])->body);
 
         $this->assertSame('season', $body['items'][0]['type']);
         $this->assertSame('series-1', $body['items'][0]['parent_id']);
@@ -375,7 +413,7 @@ class WebPortalRouterMediaTest extends TestCase
         ]);
 
         $router = $this->makeRouter($itemRepo);
-        $body = json_decode($router->getMediaItem(new Request(), ['id' => 'ep-1'])->body, true);
+        $body = $this->decodeBody($router->getMediaItem(new Request(), ['id' => 'ep-1'])->body);
         $item = $body['item'];
 
         $this->assertSame('https://image.tmdb.org/t/p/w500/ep.jpg', $item['poster_url']);
@@ -387,13 +425,18 @@ class WebPortalRouterMediaTest extends TestCase
         $this->assertSame('Pilot', $item['episode_title']);
         // Single-item extras the list shape omits are preserved.
         $this->assertSame(12, $item['intro_start_seconds']);
-        $this->assertCount(1, $item['streams']);
-        $this->assertSame('video', $item['streams'][0]['stream_type']);
+        /** @var list<array<string, mixed>> $streams */
+        $streams = $item['streams'];
+        $this->assertCount(1, $streams);
+        $this->assertSame('video', $streams[0]['stream_type']);
 
         // The detail endpoint mints a signed direct-play URL (the <video src>
         // can't attach a Bearer header and /media/{id}/stream is now gated).
         $this->assertArrayHasKey('stream_url', $item);
-        parse_str((string) parse_url((string) $item['stream_url'], PHP_URL_QUERY), $q);
+        /** @var string $streamUrl */
+        $streamUrl = $item['stream_url'];
+        parse_str((string) parse_url($streamUrl, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
         $this->assertTrue(
             \Phlix\Auth\SignedUrl::fromEnv()->verify(
                 '/media/ep-1/stream',
@@ -503,7 +546,7 @@ class WebPortalRouterMediaTest extends TestCase
         $request = new Request();
         $response = $router->getMedia($request, []);
 
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $item = $body['items'][0];
         $this->assertNull($item['poster_url']);
         $this->assertEquals([], $item['genres']);
@@ -527,7 +570,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $this->makeRouter($itemRepo)->dispatch($request);
 
         $this->assertSame(401, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame('auth.required', $body['code']);
     }
 
@@ -576,7 +619,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaFacets($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertArrayHasKey('genres', $body);
         $this->assertSame(['Action', 'Drama', 'Sci-Fi'], $body['genres']);
     }
@@ -597,7 +640,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaFacets($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame(['Documentary'], $body['genres']);
     }
 
@@ -617,7 +660,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaFacets($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame([], $body['genres']);
     }
 
@@ -634,7 +677,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaFacets($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame(['genres' => []], $body);
     }
 
@@ -653,7 +696,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $this->makeRouter($itemRepo)->dispatch($request);
 
         $this->assertSame(401, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame('auth.required', $body['code']);
     }
 
@@ -675,7 +718,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $this->makeRouter($itemRepo)->dispatch($request);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame(['genres' => ['Action']], $body);
     }
 
@@ -692,7 +735,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $this->makeRouter($itemRepo)->dispatch($request);
 
         $this->assertSame(401, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame('auth.required', $body['code']);
     }
 
@@ -719,7 +762,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $this->makeRouter($itemRepo)->dispatch($request);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame('name', $body['field']);
         $this->assertArrayHasKey('buckets', $body);
         $this->assertArrayHasKey('total', $body);
@@ -749,7 +792,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertSame('year', $body['field']);
         $this->assertSame(18, $body['total']); // 10 + 5 + 3
 
@@ -788,7 +831,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         // Unknown field should default to 'name' in the response
         $this->assertSame('name', $body['field']);
         $this->assertSame(8, $body['total']); // 5 + 3 (sum of the mocked bucket counts)
@@ -815,7 +858,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getLetterIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
+        $body = $this->decodeBody($response->body);
         $this->assertArrayHasKey('letters', $body);
         $this->assertArrayHasKey('total', $body);
         $this->assertSame(8, $body['total']); // 5 + 3
@@ -866,8 +909,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
-        assert(is_array($body));
+        $body = $this->decodeBody($response->body);
 
         // Response shape contract: {field, buckets: [{key, label, offset, count}], total}
         $this->assertArrayHasKey('field', $body);
@@ -920,8 +962,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
-        assert(is_array($body));
+        $body = $this->decodeBody($response->body);
 
         $this->assertSame('name', $body['field']);
         $this->assertIsArray($body['buckets']);
@@ -954,8 +995,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
-        assert(is_array($body));
+        $body = $this->decodeBody($response->body);
         $this->assertSame('rating', $body['field']);
 
         // Must have all 8 fixed rating buckets
@@ -1010,8 +1050,7 @@ class WebPortalRouterMediaTest extends TestCase
         $response = $router->getMediaIndex($request, []);
 
         $this->assertSame(200, $response->statusCode);
-        $body = json_decode($response->body, true);
-        assert(is_array($body));
+        $body = $this->decodeBody($response->body);
 
         $this->assertSame('year', $body['field']);
         $this->assertCount(4, $body['buckets']);

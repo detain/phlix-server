@@ -88,6 +88,9 @@ final class HttpHandlerServeAvatarTest extends TestCase
         }
     }
 
+    /**
+     * @param array<string, mixed> $get
+     */
     private function makeWorkermanRequest(
         string $method,
         string $path,
@@ -197,7 +200,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
 
         $signer = SignedUrl::fromEnv();
         $signedUrl = $signer->mint('/api/v1/users/user-1/avatar');
-        parse_str(parse_url($signedUrl, PHP_URL_QUERY), $parsed);
+        parse_str((string) parse_url($signedUrl, PHP_URL_QUERY), $parsed);
 
         $wr = $this->makeWorkermanRequest('GET', '/api/v1/users/user-1/avatar', [
             'exp' => $parsed['exp'],
@@ -207,6 +210,7 @@ final class HttpHandlerServeAvatarTest extends TestCase
         $result = $this->reflection->invoke($handler, $wr, null);
 
         $this->assertNotNull($result);
+        /** @var \Workerman\Protocols\Http\Response $result */
         $this->assertSame(200, $result->getStatusCode());
 
         unlink($tmpAvatar);

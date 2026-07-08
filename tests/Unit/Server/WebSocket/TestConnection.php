@@ -25,7 +25,7 @@ class TestConnection implements ConnectionInterface
     /** @var array<string, mixed> */
     private array $sessionData = [];
 
-    /** @var list<array{type:string, data?:array<string,mixed>, payload?:array<string,mixed>}> */
+    /** @var list<array<array-key, mixed>> */
     private array $sentMessages = [];
 
     private bool $closed = false;
@@ -128,7 +128,7 @@ class TestConnection implements ConnectionInterface
     /**
      * Get all messages sent via send() or sendMessage()/sendFlat().
      *
-     * @return list<array{type:string, data?:array<string,mixed>, payload?:array<string,mixed>}>
+     * @return list<array<array-key, mixed>>
      */
     public function getSentMessages(): array
     {
@@ -146,7 +146,9 @@ class TestConnection implements ConnectionInterface
         $messages = [];
         foreach ($this->sentMessages as $msg) {
             if (($msg['type'] ?? '') === $type) {
-                $messages[] = $msg['payload'] ?? $msg;
+                /** @var array<string, mixed> $payload */
+                $payload = $msg['payload'] ?? $msg;
+                $messages[] = $payload;
             }
         }
 

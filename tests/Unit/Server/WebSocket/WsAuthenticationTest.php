@@ -57,24 +57,12 @@ class WsAuthenticationTest extends TestCase
     /**
      * Creates a SyncPlayManager with handleMessage exposed for testing.
      */
-    private function createTestableSyncPlayManager(): SyncPlayManager
+    private function createTestableSyncPlayManager(): TestableSyncPlayManager
     {
         $pool = ConnectionPool::getInstance();
         $handler = new MessageHandler($pool);
 
-        // Use anonymous class to expose protected handleMessage as public
-        return new class ($handler) extends SyncPlayManager {
-            public function __construct(MessageHandler $handler)
-            {
-                parent::__construct();
-                $this->initialize($handler);
-            }
-
-            public function publicHandleMessage(ConnectionInterface $connection, array $payload): void
-            {
-                $this->handleMessage($connection, $payload);
-            }
-        };
+        return new TestableSyncPlayManager($handler);
     }
 
     /**
@@ -358,6 +346,7 @@ class WsAuthenticationTest extends TestCase
         $this->assertNotNull($groupState);
 
         // The member should have the server-derived userId (not the client-supplied one)
+        /** @var array<string, mixed> $members */
         $members = $groupState['members'] ?? [];
         $this->assertArrayHasKey('server-user-id-123', $members, 'Should use server-derived userId');
         $this->assertArrayNotHasKey('client-claimed-member-id', $members, 'Should NOT use client-supplied member_id');
@@ -440,8 +429,32 @@ class WsAuthenticationTest extends TestCase
         $groupState = $syncPlayManager->getGroupState($groupId);
         $this->assertNotNull($groupState);
 
+        /** @var array<string, mixed> $members */
         $members = $groupState['members'] ?? [];
         $this->assertArrayHasKey('member-user', $members, 'Should use server-derived userId as member');
         $this->assertArrayNotHasKey('spoofed-member-id', $members, 'Should NOT use client-supplied member_id');
+    }
+}
+
+/**
+ * {@see SyncPlayManager} double that exposes the protected `handleMessage()`
+ * as public so the authentication paths can be driven directly in tests.
+ *
+ * @internal For testing only
+ */
+class TestableSyncPlayManager extends SyncPlayManager
+{
+    public function __construct(MessageHandler $handler)
+    {
+        parent::__construct();
+        $this->initialize($handler);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    public function publicHandleMessage(ConnectionInterface $connection, array $payload): void
+    {
+        $this->handleMessage($connection, $payload);
     }
 }

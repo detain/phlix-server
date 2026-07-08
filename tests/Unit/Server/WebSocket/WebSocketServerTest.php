@@ -77,9 +77,8 @@ class WebSocketServerTest extends TestCase
         $syncPlayManager = new SyncPlayManager();
 
         // setSyncPlayManager should not throw
+        $this->expectNotToPerformAssertions();
         $server->setSyncPlayManager($syncPlayManager);
-
-        $this->assertTrue(true); // If we get here, no exception was thrown
     }
 
     /**
@@ -121,6 +120,7 @@ class WebSocketServerTest extends TestCase
         $this->assertTrue($result['success']);
         $this->assertArrayHasKey('group', $result);
 
+        /** @var string $groupId */
         $groupId = $result['group']['group_id'];
 
         // Get group state
@@ -148,6 +148,7 @@ class WebSocketServerTest extends TestCase
         // Create a group
         $result = $syncPlayManager->createGroup('Join Test Group', null, 'host_1', 'Host');
         $this->assertTrue($result['success']);
+        /** @var string $groupId */
         $groupId = $result['group']['group_id'];
 
         // Join the group
@@ -220,9 +221,8 @@ class WebSocketServerTest extends TestCase
 
         // onStart should not throw even without Workerman\Timer
         // (the function_exists check will cause early return)
+        $this->expectNotToPerformAssertions();
         $server->onStart();
-
-        $this->assertTrue(true); // If we get here, no exception was thrown
     }
 
     /**
@@ -264,8 +264,7 @@ class WebSocketServerTest extends TestCase
         ConnectionPool::getInstance()->add(new Connection($tcp));
 
         // No collector wired -> must not throw / dereference null.
+        $this->expectNotToPerformAssertions();
         $server->touchActiveConnections();
-
-        $this->assertTrue(true);
     }
 }

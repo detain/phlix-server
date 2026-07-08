@@ -7,6 +7,8 @@ namespace Phlix\Tests\Unit\Server\WebPortal\Controllers;
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\Expectation;
+use Mockery\MockInterface;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
@@ -30,8 +32,11 @@ final class PluginAdminPageControllerTest extends TestCase
 
     public function test_detail_returns_404_when_plugin_is_unknown(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([]);
+        /** @var Expectation $listInstalled */
+        $listInstalled = $loader->shouldReceive('listInstalled');
+        $listInstalled->andReturn([]);
 
         $controller = new PluginAdminPageController(
             $loader,
@@ -46,6 +51,7 @@ final class PluginAdminPageControllerTest extends TestCase
 
     public function test_detail_returns_400_when_name_param_is_blank(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
         $loader->shouldNotReceive('listInstalled');
 
@@ -66,8 +72,11 @@ final class PluginAdminPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->fixturePlugin()]);
+        /** @var Expectation $listInstalled */
+        $listInstalled = $loader->shouldReceive('listInstalled');
+        $listInstalled->andReturn([$this->fixturePlugin()]);
 
         $controller = new PluginAdminPageController(
             $loader,
@@ -89,6 +98,7 @@ final class PluginAdminPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
         $controller = new PluginAdminPageController($loader, $this->realTemplateDir());
 
@@ -105,8 +115,11 @@ final class PluginAdminPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->fixturePlugin()]);
+        /** @var Expectation $listInstalled */
+        $listInstalled = $loader->shouldReceive('listInstalled');
+        $listInstalled->andReturn([$this->fixturePlugin()]);
 
         $controller = new PluginAdminPageController($loader, $this->realTemplateDir());
 

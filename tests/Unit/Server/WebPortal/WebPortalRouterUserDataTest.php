@@ -44,6 +44,16 @@ class WebPortalRouterUserDataTest extends TestCase
         );
     }
 
+    /**
+     * @return array{item: array<string, mixed>}
+     */
+    private function decodeBody(string $json): array
+    {
+        /** @var array{item: array<string, mixed>} $decoded */
+        $decoded = json_decode($json, true);
+        return $decoded;
+    }
+
     private function itemRepoWithItem(): ItemRepository
     {
         $repo = $this->createMock(ItemRepository::class);
@@ -68,7 +78,7 @@ class WebPortalRouterUserDataTest extends TestCase
 
         $req = new Request();
         $req->userId = 'user-1';
-        $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
+        $body = $this->decodeBody($router->getMediaItem($req, ['id' => 'item-1'])->body);
 
         $this->assertSame(
             ['favorite' => true, 'rating' => 9, 'like_level' => 2, 'watched' => true],
@@ -85,7 +95,7 @@ class WebPortalRouterUserDataTest extends TestCase
 
         $req = new Request();
         $req->userId = 'user-1';
-        $body = json_decode($router->getMediaItem($req, ['id' => 'item-1'])->body, true);
+        $body = $this->decodeBody($router->getMediaItem($req, ['id' => 'item-1'])->body);
 
         $this->assertSame(
             ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false],
@@ -102,7 +112,7 @@ class WebPortalRouterUserDataTest extends TestCase
 
         // Handler called directly (no userId) — the detail shape still carries the
         // key, but null, so the client can distinguish "unknown" from "not set".
-        $body = json_decode($router->getMediaItem(new Request(), ['id' => 'item-1'])->body, true);
+        $body = $this->decodeBody($router->getMediaItem(new Request(), ['id' => 'item-1'])->body);
 
         $this->assertNull($body['item']['user_data']);
         // The flat `actors` landmine + other keys must remain untouched.

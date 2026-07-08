@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Arr;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Server\Arr\CustomFormatSyncer;
 use Phlix\Shared\Arr\RadarrClient;
 use Phlix\Shared\Arr\SyncResult;
 use Phlix\Shared\Arr\TrashGuidesProvider;
-use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 use DateTimeImmutable;
 
@@ -23,8 +23,7 @@ class CustomFormatSyncerTest extends TestCase
 {
     private CustomFormatSyncerTestRadarrClient $radarr;
     private MockableTrashGuidesProvider $provider;
-    private Connection $db;
-    private ?StructuredLogger $logger;
+    private Connection&MockObject $db;
     private CustomFormatSyncer $syncer;
 
     protected function setUp(): void
@@ -32,13 +31,12 @@ class CustomFormatSyncerTest extends TestCase
         $this->radarr = new CustomFormatSyncerTestRadarrClient('http://localhost:7878', 'test-api-key');
         $this->provider = new MockableTrashGuidesProvider();
         $this->db = $this->createMock(Connection::class);
-        $this->logger = null;
 
         $this->syncer = new CustomFormatSyncer(
             $this->radarr,
             $this->provider,
             $this->db,
-            $this->logger
+            null
         );
     }
 
@@ -284,19 +282,25 @@ class CustomFormatSyncerTest extends TestCase
  */
 class MockableTrashGuidesProvider extends TrashGuidesProvider
 {
-    /** @var array<int, array<string, mixed>> */
+    /** @var array<string, mixed> */
     private array $customFormats = [];
 
-    /** @var array<int, array<string, mixed>> */
+    /** @var array<string, mixed> */
     private array $qualityProfiles = [];
 
     private string $version = 'test-version-123';
 
+    /**
+     * @param array<string, mixed> $formats
+     */
     public function setCustomFormats(array $formats): void
     {
         $this->customFormats = $formats;
     }
 
+    /**
+     * @param array<string, mixed> $profiles
+     */
     public function setQualityProfiles(array $profiles): void
     {
         $this->qualityProfiles = $profiles;
@@ -307,11 +311,17 @@ class MockableTrashGuidesProvider extends TrashGuidesProvider
         $this->version = $version;
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function getCustomFormats(): array
     {
         return $this->customFormats;
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function getQualityProfiles(): array
     {
         return $this->qualityProfiles;
@@ -342,11 +352,17 @@ class CustomFormatSyncerTestRadarrClient extends RadarrClient
     private ?int $createQualityProfileId = null;
     private ?int $updateQualityProfileId = null;
 
+    /**
+     * @param array<int, array<string, mixed>> $formats
+     */
     public function setMockCustomFormats(array $formats): void
     {
         $this->customFormats = $formats;
     }
 
+    /**
+     * @param array<int, array<string, mixed>> $profiles
+     */
     public function setMockQualityProfiles(array $profiles): void
     {
         $this->qualityProfiles = $profiles;
@@ -377,11 +393,27 @@ class CustomFormatSyncerTestRadarrClient extends RadarrClient
         return $this->lastMethodCalled;
     }
 
+    public function getUpdateCustomFormatId(): ?int
+    {
+        return $this->updateCustomFormatId;
+    }
+
+    public function getUpdateQualityProfileId(): ?int
+    {
+        return $this->updateQualityProfileId;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     public function getCustomFormats(): array
     {
         return $this->customFormats;
     }
 
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     public function getQualityProfiles(): array
     {
         return $this->qualityProfiles;

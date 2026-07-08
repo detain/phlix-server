@@ -6,6 +6,8 @@ namespace Phlix\Tests\Unit\Server\WebPortal\Controllers;
 
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\Expectation;
+use Mockery\MockInterface;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Server\Http\Request;
@@ -27,7 +29,9 @@ final class MusicPageControllerTest extends TestCase
 
     public function test_album_returns_400_when_name_blank(): void
     {
+        /** @var MusicLibraryManager&MockInterface $music */
         $music = Mockery::mock(MusicLibraryManager::class);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
         $library->shouldNotReceive('getAllLibraries');
 
@@ -39,10 +43,16 @@ final class MusicPageControllerTest extends TestCase
 
     public function test_album_returns_404_when_not_found(): void
     {
+        /** @var MusicLibraryManager&MockInterface $music */
         $music = Mockery::mock(MusicLibraryManager::class);
-        $music->shouldReceive('getAlbums')->with('lib1')->andReturn([]);
+        /** @var Expectation $getAlbums */
+        $getAlbums = $music->shouldReceive('getAlbums');
+        $getAlbums->with('lib1')->andReturn([]);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
-        $library->shouldReceive('getAllLibraries')->andReturn([['id' => 'lib1', 'type' => 'music']]);
+        /** @var Expectation $getAllLibraries */
+        $getAllLibraries = $library->shouldReceive('getAllLibraries');
+        $getAllLibraries->andReturn([['id' => 'lib1', 'type' => 'music']]);
 
         $controller = new MusicPageController($music, $library, $this->noSmartyDir());
         $response = $controller->album($this->makeRequest(), ['name' => 'Nope']);
@@ -52,10 +62,16 @@ final class MusicPageControllerTest extends TestCase
 
     public function test_artist_returns_404_when_not_found(): void
     {
+        /** @var MusicLibraryManager&MockInterface $music */
         $music = Mockery::mock(MusicLibraryManager::class);
-        $music->shouldReceive('getAlbums')->with('lib1')->andReturn([]);
+        /** @var Expectation $getAlbums */
+        $getAlbums = $music->shouldReceive('getAlbums');
+        $getAlbums->with('lib1')->andReturn([]);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
-        $library->shouldReceive('getAllLibraries')->andReturn([['id' => 'lib1', 'type' => 'music']]);
+        /** @var Expectation $getAllLibraries */
+        $getAllLibraries = $library->shouldReceive('getAllLibraries');
+        $getAllLibraries->andReturn([['id' => 'lib1', 'type' => 'music']]);
 
         $controller = new MusicPageController($music, $library, $this->noSmartyDir());
         $response = $controller->artist($this->makeRequest(), ['name' => 'Ghost']);
@@ -163,13 +179,23 @@ final class MusicPageControllerTest extends TestCase
             'albums' => ['Greatest Hits'],
         ];
 
+        /** @var MusicLibraryManager&MockInterface $music */
         $music = Mockery::mock(MusicLibraryManager::class);
-        $music->shouldReceive('getAlbums')->with('lib1')->andReturn([$album]);
-        $music->shouldReceive('getArtists')->with('lib1')->andReturn([$artist]);
-        $music->shouldReceive('getTracks')->with('lib1', Mockery::any(), Mockery::any())->andReturn([$track]);
+        /** @var Expectation $getAlbums */
+        $getAlbums = $music->shouldReceive('getAlbums');
+        $getAlbums->with('lib1')->andReturn([$album]);
+        /** @var Expectation $getArtists */
+        $getArtists = $music->shouldReceive('getArtists');
+        $getArtists->with('lib1')->andReturn([$artist]);
+        /** @var Expectation $getTracks */
+        $getTracks = $music->shouldReceive('getTracks');
+        $getTracks->with('lib1', Mockery::any(), Mockery::any())->andReturn([$track]);
 
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
-        $library->shouldReceive('getAllLibraries')->andReturn([['id' => 'lib1', 'type' => 'music']]);
+        /** @var Expectation $getAllLibraries */
+        $getAllLibraries = $library->shouldReceive('getAllLibraries');
+        $getAllLibraries->andReturn([['id' => 'lib1', 'type' => 'music']]);
 
         return new MusicPageController($music, $library, $this->realTemplateDir());
     }

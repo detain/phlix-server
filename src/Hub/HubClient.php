@@ -63,6 +63,15 @@ class HubClient
     /** @var int|null Workerman timer ID. */
     private ?int $heartbeatTimer = null;
 
+    /** @var \DateTimeImmutable|null Last heartbeat attempt timestamp. */
+    private ?\DateTimeImmutable $lastHeartbeatAttempt = null;
+
+    /** @var \DateTimeImmutable|null Last successful heartbeat timestamp. */
+    private ?\DateTimeImmutable $lastSuccessfulHeartbeat = null;
+
+    /** @var int Number of consecutive heartbeat failures. */
+    private int $consecutiveFailures = 0;
+
     /** @var int Process start time (for uptime calculation). */
     private int $processStartTime;
 
@@ -319,6 +328,63 @@ class HubClient
     }
 
     /**
+     * Returns the enrollment expiry date if the enrollment JWT can be decoded.
+     *
+     * @return \DateTimeImmutable|null The expiry DateTime or null if not enrolled or JWT invalid.
+     */
+    public function getEnrollmentExpiry(): ?\DateTimeImmutable
+    {
+        $enrollment = $this->loadEnrollment();
+        if ($enrollment === null) {
+            return null;
+        }
+
+        $parts = explode('.', $enrollment->enrollmentJwt);
+        if (count($parts) !== 3) {
+            return null;
+        }
+
+        $payload = $parts[1];
+        $decoded = base64_decode(strtr($payload, '-_', '+/'), true);
+        if ($decoded === false) {
+            return null;
+        }
+
+        $data = json_decode($decoded, true);
+        if (!is_array($data)) {
+            return null;
+        }
+
+        $exp = is_int($data['exp'] ?? null) ? $data['exp'] : 0;
+        if ($exp === 0) {
+            return null;
+        }
+
+        return new \DateTimeImmutable('@' . $exp);
+    }
+
+    /**
+     * Checks whether the enrollment JWT expires within the next 24 hours.
+     *
+     * Decodes the JWT payload (no signature validation — we trust the file)
+     * and returns true when the 'exp' claim is less than 24 hours away.
+     *
+     * @return bool True if renewal is needed within 24 hours.
+     */
+    public function needsReEnrollment(): bool
+    {
+        $expiry = $this->getEnrollmentExpiry();
+        if ($expiry === null) {
+            return false;
+        }
+
+        $now = new \DateTimeImmutable();
+        $threshold = $now->getTimestamp() + 86400;
+
+        return $expiry->getTimestamp() < $threshold;
+    }
+
+    /**
      * Starts the background heartbeat loop.
      *
      * Registers a Workerman timer to call sendHeartbeat() every 60 seconds.
@@ -343,12 +409,19 @@ class HubClient
         $this->heartbeatTimer = \Workerman\Timer::add(
             self::HEARTBEAT_INTERVAL,
             function (): void {
+                $this->lastHeartbeatAttempt = new \DateTimeImmutable();
                 $this->reEnrollIfNeeded();
                 $result = $this->sendHeartbeat();
-                if (!$result->ok) {
+                if ($result->ok) {
+                    $this->lastSuccessfulHeartbeat = $this->lastHeartbeatAttempt;
+                    $this->consecutiveFailures = 0;
+                } else {
+                    ++$this->consecutiveFailures;
                     $this->logger->warning('Heartbeat failed', [
                         'error' => $result->error,
                         'error_code' => $result->errorCode,
+                        'http_status' => $result->errorCode,
+                        'consecutive_failures' => $this->consecutiveFailures,
                     ]);
                 }
             },
@@ -504,6 +577,15 @@ class HubClient
             return false;
         }
 
+        // Proactively warn if enrollment is about to expire (within 24h).
+        if ($this->needsReEnrollment()) {
+            $expiry = $this->getEnrollmentExpiry();
+            $this->logger->warning('Enrollment expiring soon; proactive renewal needed', [
+                'server_id' => $enrollment->serverId,
+                'expires_at' => $expiry?->format('c'),
+            ]);
+        }
+
         $age = time() - $enrollment->enrolledAt;
 
         // Already fully expired: the JWT can no longer authenticate the
@@ -576,6 +658,28 @@ class HubClient
 
             return false;
         }
+    }
+
+    /**
+     * Returns the current heartbeat status for admin visibility.
+     *
+     * @return array{
+     *     lastHeartbeatAttempt: string|null,
+     *     lastSuccessfulHeartbeat: string|null,
+     *     consecutiveFailures: int,
+     *     enrollmentExpiresAt: string|null,
+     *     isEnrolled: bool
+     * }
+     */
+    public function getStatus(): array
+    {
+        return [
+            'lastHeartbeatAttempt' => $this->lastHeartbeatAttempt?->format('c'),
+            'lastSuccessfulHeartbeat' => $this->lastSuccessfulHeartbeat?->format('c'),
+            'consecutiveFailures' => $this->consecutiveFailures,
+            'enrollmentExpiresAt' => $this->getEnrollmentExpiry()?->format('c'),
+            'isEnrolled' => $this->loadEnrollment() !== null,
+        ];
     }
 
     /**

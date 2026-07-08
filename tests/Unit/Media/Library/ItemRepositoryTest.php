@@ -1600,6 +1600,345 @@ class ItemRepositoryTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // distinctGenres() in-worker TTL cache + invalidation (S5)
+    // -------------------------------------------------------------------------
+
+    /**
+     * A repeat lookup for the same scope within the TTL is served from the
+     * in-worker cache — the JSON_TABLE scan runs exactly once.
+     */
+    public function testDistinctGenresServesRepeatCallsFromCache(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturn([['genre' => 'Action'], ['genre' => 'Drama']]);
+
+        $repo = new ItemRepository($db);
+
+        $first = $repo->distinctGenres('lib-A');
+        $second = $repo->distinctGenres('lib-A');
+        $third = $repo->distinctGenres('lib-A');
+
+        $this->assertSame(['Action', 'Drama'], $first);
+        $this->assertSame($first, $second);
+        $this->assertSame($first, $third);
+    }
+
+    /**
+     * Each scope (per-library and the unscoped/global set) is cached
+     * independently, so distinct scopes each recompute once.
+     */
+    public function testDistinctGenresCachesEachScopeIndependently(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $bindings = []) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                    return $bindings === ['lib-B'] ? [['genre' => 'Horror']] : [['genre' => 'Action']];
+                }
+                return [];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $this->assertSame(['Action'], $repo->distinctGenres('lib-A'));
+        $this->assertSame(['Horror'], $repo->distinctGenres('lib-B'));
+        $this->assertSame(['Action'], $repo->distinctGenres()); // global scope
+        // Repeats — all cache hits.
+        $repo->distinctGenres('lib-A');
+        $repo->distinctGenres('lib-B');
+        $repo->distinctGenres();
+
+        $this->assertSame(3, $jsonTableCalls, 'one JSON_TABLE scan per distinct scope, no repeats');
+    }
+
+    /**
+     * The public invalidate hook drops the scope so the next call recomputes.
+     */
+    public function testInvalidateGenreFacetsForcesRecompute(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres('lib-A');            // compute #1
+        $repo->distinctGenres('lib-A');            // cached
+        $repo->invalidateGenreFacets('lib-A');     // drop scope
+        $repo->distinctGenres('lib-A');            // compute #2
+
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * Invalidating a library scope also drops the all-libraries (global) scope,
+     * since that set spans the library.
+     */
+    public function testInvalidateLibraryScopeAlsoDropsGlobalScope(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres();                   // global compute #1
+        $repo->distinctGenres();                   // cached
+        $repo->invalidateGenreFacets('lib-A');     // library write → also flush global
+        $repo->distinctGenres();                   // global compute #2
+
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * A flush with no library (null) clears every cached scope.
+     */
+    public function testInvalidateGenreFacetsNullFlushesAllScopes(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres('lib-A');            // compute
+        $repo->distinctGenres('lib-B');            // compute
+        $repo->invalidateGenreFacets(null);        // flush everything
+        $repo->distinctGenres('lib-A');            // recompute
+        $repo->distinctGenres('lib-B');            // recompute
+
+        $this->assertSame(4, $jsonTableCalls);
+    }
+
+    /**
+     * create() invalidates the affected library's facets (a new item can add a
+     * genre), so the next lookup recomputes.
+     */
+    public function testCreateInvalidatesGenreFacetsForItsLibrary(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                    return [['genre' => 'Action']];
+                }
+                return [];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres('lib-A');            // compute #1
+        $repo->distinctGenres('lib-A');            // cached
+        $repo->create([
+            'library_id' => 'lib-A',
+            'type' => 'movie',
+            'name' => 'New Movie',
+            'path' => '/media/new.mkv',
+            'metadata_json' => ['genres' => ['Comedy']],
+        ]);
+        $repo->distinctGenres('lib-A');            // compute #2
+
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * update() invalidates facets only when metadata_json (where genres live) is
+     * written; a non-metadata update leaves the cache warm.
+     */
+    public function testUpdateInvalidatesGenreFacetsOnlyWhenMetadataChanges(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        // Non-metadata update does NOT invalidate.
+        $repo->distinctGenres('lib-A');            // compute #1
+        $repo->update('item-1', ['name' => 'Renamed']);
+        $repo->distinctGenres('lib-A');            // still cached → no recompute
+        $this->assertSame(1, $jsonTableCalls);
+
+        // A metadata_json rewrite flushes all scopes.
+        $repo->update('item-1', ['metadata_json' => ['genres' => ['Sci-Fi']]]);
+        $repo->distinctGenres('lib-A');            // compute #2
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * delete() with no StatsCollector cannot resolve the owning library, so it
+     * flushes all scopes to stay correct.
+     */
+    public function testDeleteInvalidatesGenreFacets(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db); // no StatsCollector
+
+        $repo->distinctGenres('lib-A');            // compute #1
+        $repo->distinctGenres('lib-A');            // cached
+        $repo->delete('item-1');
+        $repo->distinctGenres('lib-A');            // compute #2
+
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * deleteByLibrary() empties a library's genre set, so its scope (and the
+     * global scope) recompute afterward.
+     */
+    public function testDeleteByLibraryInvalidatesGenreFacets(): void
+    {
+        $jsonTableCalls = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql) use (&$jsonTableCalls): array {
+                if (str_contains($sql, 'JSON_TABLE(')) {
+                    $jsonTableCalls++;
+                }
+                return [['genre' => 'Action']];
+            }
+        );
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres('lib-A');            // compute #1
+        $repo->distinctGenres('lib-A');            // cached
+        $repo->deleteByLibrary('lib-A');
+        $repo->distinctGenres('lib-A');            // compute #2
+
+        $this->assertSame(2, $jsonTableCalls);
+    }
+
+    /**
+     * Regression: a Reviewer finding on the recompute path (cache miss due to
+     * TTL expiry, key still physically present) — plain value reassignment of an
+     * ALREADY-PRESENT array key does NOT move it to the end in PHP; it stays at
+     * its original position. Without the fix (unset() before reassigning), the
+     * "MRU position" claim was false, and oldest-first (`array_key_first`)
+     * eviction could drop a just-recomputed (freshest) scope before a genuinely
+     * untouched one. This forces a scope stale WITHOUT going through
+     * invalidateGenreFacets() (which already unsets and would mask the bug) and
+     * asserts the recomputed key is physically repositioned to the last slot.
+     */
+    public function testStaleEntryRecomputeRepositionsToMruSlot(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['genre' => 'Action']]);
+
+        $repo = new ItemRepository($db);
+
+        $repo->distinctGenres('lib-A'); // populated first
+        $repo->distinctGenres('lib-B'); // populated second
+
+        // Directly expire 'lib-A' in place (key stays present) — the exact
+        // "stale but not invalidated" state the recompute path must handle.
+        $cacheProp = new \ReflectionProperty(ItemRepository::class, 'genreFacetCache');
+        $cache = $cacheProp->getValue($repo);
+        $cache['lib-A']['expires_at'] = 0;
+        $cacheProp->setValue($repo, $cache);
+
+        $repo->distinctGenres('lib-A'); // stale → recompute
+
+        $keysAfter = array_keys($cacheProp->getValue($repo));
+        $this->assertSame(
+            ['lib-B', 'lib-A'],
+            $keysAfter,
+            'a recomputed stale entry must move to the MRU (last) slot'
+        );
+    }
+
+    /**
+     * Security-critical bound (the CARDINAL rule this step exists for):
+     * WebPortalRouter::getMediaFacets passes the raw, unvalidated caller-supplied
+     * ?libraryId= straight into the cache scope key, and ItemRepository is a
+     * resident per-worker singleton — so an authenticated attacker can churn
+     * unbounded fake scopes. distinctGenres() must cap the map at
+     * GENRE_FACET_CACHE_MAX with oldest-first (LRU) eviction. This drives the
+     * cache PAST the bound to exercise the eviction branch (array_key_first() +
+     * unset(), otherwise uncovered) and proves both the hard cap and that a
+     * recently-touched (hot) scope survives while a genuinely-cold one is dropped.
+     */
+    public function testGenreFacetCacheEvictsOldestScopeBeyondBound(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([['genre' => 'Action']]);
+
+        $repo = new ItemRepository($db);
+
+        $max = (int) (new \ReflectionClassConstant(
+            ItemRepository::class,
+            'GENRE_FACET_CACHE_MAX'
+        ))->getValue();
+
+        // Fill exactly to the bound (scopes lib-0 .. lib-(max-1)) — no eviction yet.
+        for ($i = 0; $i < $max; $i++) {
+            $repo->distinctGenres('lib-' . $i);
+        }
+        $cacheProp = new \ReflectionProperty(ItemRepository::class, 'genreFacetCache');
+        $this->assertCount($max, $cacheProp->getValue($repo), 'at the bound, nothing evicted yet');
+
+        // Touch the oldest scope so it becomes MRU (LRU-hot), making lib-1 the
+        // new oldest.
+        $repo->distinctGenres('lib-0');
+
+        // One more distinct scope overflows the bound → the coldest scope (lib-1)
+        // is evicted, not the just-touched lib-0.
+        $repo->distinctGenres('lib-' . $max);
+
+        $keys = array_keys($cacheProp->getValue($repo));
+        $this->assertCount($max, $keys, 'the map stays hard-capped at the bound');
+        $this->assertNotContains('lib-1', $keys, 'the coldest (untouched) scope was evicted first (LRU)');
+        $this->assertContains('lib-0', $keys, 'a recently-touched hot scope survives eviction');
+        $this->assertContains('lib-' . $max, $keys, 'the newest scope is retained');
+    }
+
+    // -------------------------------------------------------------------------
     // valueBuckets() tests
     // -------------------------------------------------------------------------
 

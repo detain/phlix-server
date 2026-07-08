@@ -133,16 +133,19 @@ final class InstallEnableDisableTest extends TestCase
         $entryClass = 'Phlix\\Tests\\Fixtures\\Plugins\\FixturePlugin\\FixturePlugin';
         $this->assertTrue(class_exists($entryClass), 'Fixture plugin entry class must load.');
         $instance = $container->get($entryClass);
+        // The concrete fixture class is excluded from the classmap, so narrow to
+        // object and read its public properties via get_object_vars() for analysis.
+        $this->assertIsObject($instance);
         $this->assertObjectHasProperty('playbackStartedCount', $instance);
 
         $dispatcher->dispatch(new PlaybackStarted('sess', 'user', 'item', 'dev', 0));
-        $this->assertSame(1, $instance->playbackStartedCount);
+        $this->assertSame(1, get_object_vars($instance)['playbackStartedCount']);
 
         // 4. Disable — listener should stop firing.
         $loader->disable('phlix-plugin-fixture');
         $dispatcher->dispatch(new PlaybackStarted('sess', 'user', 'item', 'dev', 0));
-        $this->assertSame(1, $instance->playbackStartedCount, 'Listener should be removed after disable.');
-        $this->assertTrue($instance->onDisableCalled);
+        $this->assertSame(1, get_object_vars($instance)['playbackStartedCount'], 'Listener should be removed after disable.');
+        $this->assertSame(true, get_object_vars($instance)['onDisableCalled']);
 
         // 5. Uninstall — directory disappears, DB row gone.
         $loader->uninstall('phlix-plugin-fixture');
@@ -174,9 +177,23 @@ final class InMemoryPluginsTable
     private array $rows = [];
 
     /**
+     * Coerce a bound SQL parameter (always a scalar or null at runtime) to a
+     * string, so it can be used as an array key without casting `mixed`.
+     */
+    private static function toStr(mixed $value): string
+    {
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    private static function toInt(mixed $value): int
+    {
+        return is_numeric($value) ? (int) $value : 0;
+    }
+
+    /**
      * @param array<int, mixed> $params
      *
-     * @return array<int, array<string, mixed>>|null
+     * @return list<array<array-key, mixed>>|null
      */
     public function handle(string $sql, array $params)
     {
@@ -184,13 +201,13 @@ final class InMemoryPluginsTable
 
         if (str_starts_with($normalized, 'INSERT INTO PLUGINS')) {
             [$id, $name, $version, $type, $entry, $enabled, $installedAt, $settingsJson, $manifestJson] = $params;
-            $this->rows[(string) $name] = [
+            $this->rows[self::toStr($name)] = [
                 'id' => $id,
                 'name' => $name,
                 'version' => $version,
                 'type' => $type,
                 'entry' => $entry,
-                'enabled' => (int) $enabled,
+                'enabled' => self::toInt($enabled),
                 'installed_at' => $installedAt,
                 'settings_json' => $settingsJson,
                 'manifest_json' => $manifestJson,
@@ -199,13 +216,13 @@ final class InMemoryPluginsTable
         }
 
         if (str_starts_with($normalized, 'SELECT 1 FROM PLUGINS WHERE NAME')) {
-            return isset($this->rows[(string) $params[0]]) ? [[1]] : [];
+            return isset($this->rows[self::toStr($params[0])]) ? [[1]] : [];
         }
 
         if (
             str_starts_with($normalized, 'SELECT ID, NAME, VERSION, TYPE, ENTRY, ENABLED, INSTALLED_AT, SETTINGS_JSON, MANIFEST_JSON FROM PLUGINS WHERE NAME')
         ) {
-            $name = (string) $params[0];
+            $name = self::toStr($params[0]);
             return isset($this->rows[$name]) ? [$this->rows[$name]] : [];
         }
 
@@ -218,23 +235,23 @@ final class InMemoryPluginsTable
         }
 
         if (str_starts_with($normalized, 'UPDATE PLUGINS SET ENABLED')) {
-            $name = (string) $params[1];
+            $name = self::toStr($params[1]);
             if (isset($this->rows[$name])) {
-                $this->rows[$name]['enabled'] = (int) $params[0];
+                $this->rows[$name]['enabled'] = self::toInt($params[0]);
             }
             return null;
         }
 
         if (str_starts_with($normalized, 'UPDATE PLUGINS SET SETTINGS_JSON')) {
-            $name = (string) $params[1];
+            $name = self::toStr($params[1]);
             if (isset($this->rows[$name])) {
-                $this->rows[$name]['settings_json'] = (string) $params[0];
+                $this->rows[$name]['settings_json'] = self::toStr($params[0]);
             }
             return null;
         }
 
         if (str_starts_with($normalized, 'DELETE FROM PLUGINS')) {
-            unset($this->rows[(string) $params[0]]);
+            unset($this->rows[self::toStr($params[0])]);
             return null;
         }
 

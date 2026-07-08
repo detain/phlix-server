@@ -78,8 +78,8 @@ final class EventDispatcherFactoryTest extends TestCase
         $logger->expects($this->never())->method('debug');
 
         $dispatcher = EventDispatcherFactory::create($registry, $logger);
-        $this->assertInstanceOf(Dispatcher::class, $dispatcher);
         $this->assertNotInstanceOf(DebugEventDispatcher::class, $dispatcher);
+        $this->assertInstanceOf(Dispatcher::class, $dispatcher);
 
         $dispatcher->dispatch(new SampleEvent('hi'));
     }
@@ -224,7 +224,7 @@ final class EventDispatcherFactoryTest extends TestCase
 
         $registry = new ListenerRegistry();
         $dispatcher = EventDispatcherFactory::create($registry, null);
-        $this->assertInstanceOf(Dispatcher::class, $dispatcher);
         $this->assertNotInstanceOf(DebugEventDispatcher::class, $dispatcher);
+        $this->assertInstanceOf(Dispatcher::class, $dispatcher);
     }
 }

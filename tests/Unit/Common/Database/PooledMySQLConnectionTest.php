@@ -123,7 +123,7 @@ final class PooledMySQLConnectionTest extends TestCase
     {
         // Every Phlix service type-hints Workerman\MySQL\Connection; the pool
         // front MUST satisfy that hint.
-        $pool = $this->pool(static fn (): Connection => $this->createMock(Connection::class));
+        $pool = $this->pool(fn (): Connection => $this->createMock(Connection::class));
         $this->assertInstanceOf(Connection::class, $pool);
     }
 }

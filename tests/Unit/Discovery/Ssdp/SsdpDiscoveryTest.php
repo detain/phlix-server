@@ -28,7 +28,6 @@ class SsdpDiscoveryTest extends TestCase
         $discovery = new SsdpDiscovery($socket, null);
         $devices = $discovery->discoverDevices();
 
-        $this->assertIsArray($devices);
         $this->assertCount(1, $devices);
         $this->assertInstanceOf(SsdpDevice::class, $devices[0]);
     }
@@ -41,7 +40,6 @@ class SsdpDiscoveryTest extends TestCase
         $discovery = new SsdpDiscovery($socket, null);
         $devices = $discovery->discoverDevices();
 
-        $this->assertIsArray($devices);
         $this->assertEmpty($devices);
     }
 
@@ -56,7 +54,7 @@ class SsdpDiscoveryTest extends TestCase
         $discovery = new SsdpDiscovery($socket, null);
         $devices = $discovery->discoverDevices('urn:schemas-upnp-org:device:MediaRenderer:1');
 
-        $this->assertIsArray($devices);
+        $this->assertSame([], $devices);
     }
 
     public function testDeviceHasCorrectProperties(): void

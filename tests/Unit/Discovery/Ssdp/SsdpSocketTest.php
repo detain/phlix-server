@@ -17,7 +17,7 @@ class SsdpSocketTest extends TestCase
         // Note: Without actual network, this will return empty array
         $result = $socket->search('urn:schemas-upnp-org:device:*', 1);
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
 
         $socket->close();
     }
@@ -89,7 +89,7 @@ class SsdpSocketTest extends TestCase
 
         // Should not throw when closing
         $socket->close();
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testMultipleSearchesReturnIndependentResults(): void
@@ -99,8 +99,8 @@ class SsdpSocketTest extends TestCase
         $result1 = $socket->search('urn:schemas-upnp-org:device:MediaServer:1', 1);
         $result2 = $socket->search('urn:schemas-upnp-org:device:MediaRenderer:1', 1);
 
-        $this->assertIsArray($result1);
-        $this->assertIsArray($result2);
+        $this->assertSame([], $result1);
+        $this->assertSame([], $result2);
 
         $socket->close();
     }

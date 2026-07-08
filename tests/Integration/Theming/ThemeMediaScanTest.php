@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Integration\Theming;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Theming\ThemeMedia;
@@ -14,6 +15,7 @@ use Workerman\MySQL\Connection;
 class ThemeMediaScanTest extends TestCase
 {
     private string $fixturesDir;
+    /** @var Connection&MockObject */
     private Connection $db;
     private ThemeMediaFinder $finder;
     private ThemeMediaRepository $repository;
@@ -50,6 +52,7 @@ class ThemeMediaScanTest extends TestCase
             \RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $file) {
+            /** @var \SplFileInfo $file */
             if ($file->isDir()) {
                 rmdir($file->getPathname());
             } else {
@@ -74,6 +77,8 @@ class ThemeMediaScanTest extends TestCase
         $this->assertInstanceOf(ThemeMedia::class, $themeMedia);
         $this->assertTrue($themeMedia->hasAudio());
         $this->assertTrue($themeMedia->hasVideo());
+        $this->assertNotNull($themeMedia->audio);
+        $this->assertNotNull($themeMedia->video);
         $this->assertSame($themeMp3, $themeMedia->audio->path);
         $this->assertSame($backdropMp4, $themeMedia->video->path);
 
@@ -113,6 +118,7 @@ class ThemeMediaScanTest extends TestCase
         $this->assertInstanceOf(ThemeMedia::class, $result);
         $this->assertTrue($result->hasAudio());
         $this->assertFalse($result->hasVideo());
+        $this->assertNotNull($result->audio);
         $this->assertSame($themeMp3, $result->audio->path);
     }
 
@@ -126,6 +132,7 @@ class ThemeMediaScanTest extends TestCase
         $this->assertInstanceOf(ThemeMedia::class, $result);
         $this->assertFalse($result->hasAudio());
         $this->assertTrue($result->hasVideo());
+        $this->assertNotNull($result->video);
         $this->assertSame($backdropMp4, $result->video->path);
     }
 
@@ -144,6 +151,7 @@ class ThemeMediaScanTest extends TestCase
 
         $this->assertInstanceOf(ThemeMedia::class, $result);
         $this->assertTrue($result->hasAudio());
+        $this->assertNotNull($result->audio);
         $this->assertSame($themeMp3, $result->audio->path);
     }
 }

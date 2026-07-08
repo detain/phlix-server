@@ -16,7 +16,7 @@ class MdnsSocketTest extends TestCase
         // Without actual network, this returns empty array
         $result = $socket->query('_googlecast._tcp.local.');
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
 
         $socket->close();
     }
@@ -98,7 +98,7 @@ class MdnsSocketTest extends TestCase
 
         // Should not throw when closing
         $socket->close();
-        $this->assertTrue(true);
+        $this->addToAssertionCount(1);
     }
 
     public function testConstants(): void

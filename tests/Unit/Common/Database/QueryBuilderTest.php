@@ -39,22 +39,23 @@ class QueryBuilderTest extends TestCase
 
     private function getMockConnection(): Connection
     {
-        return new class('127.0.0.1', 3306, 'root', '', 'test') extends Connection {
-            public function __construct(
-                string $host = '127.0.0.1',
-                int $port = 3306,
-                string $user = 'root',
-                string $password = '',
-                string $dbname = '',
-                string $charset = 'utf8mb4'
-            ) {
-                // Skip parent constructor to avoid actual connection
+        return new class () extends Connection {
+            public function __construct()
+            {
+                // Skip parent constructor to avoid opening a real connection.
             }
 
+            /**
+             * @param array<int|string, mixed>|null $params
+             * @return array<int, array<string, mixed>>
+             */
             public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC) {
                 return [];
             }
 
+            /**
+             * @return string
+             */
             public function getLastInsertId() {
                 return 'test-id';
             }

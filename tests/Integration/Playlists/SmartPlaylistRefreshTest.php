@@ -16,7 +16,6 @@ use Workerman\MySQL\Connection;
 
 class SmartPlaylistRefreshTest extends TestCase
 {
-    private SmartPlaylistRepository $repo;
     private SmartPlaylistEngine $engine;
     private ListenerRegistry $listeners;
 
@@ -29,7 +28,6 @@ class SmartPlaylistRefreshTest extends TestCase
     {
         // Create a mock database connection that returns expected data
         $db = $this->createMock(Connection::class);
-        $this->repo = new SmartPlaylistRepository($db);
         $this->engine = $this->createMock(SmartPlaylistEngine::class);
 
         // Expect the repo's findByLibraryId to be called

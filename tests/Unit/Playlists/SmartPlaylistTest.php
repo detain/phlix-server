@@ -44,8 +44,8 @@ class SmartPlaylistTest extends TestCase
 
         $rules = $playlist->getRules();
 
-        $this->assertIsArray($rules);
         $this->assertSame('and', $rules['logic']);
+        $this->assertIsArray($rules['rules']);
         $this->assertCount(1, $rules['rules']);
     }
 

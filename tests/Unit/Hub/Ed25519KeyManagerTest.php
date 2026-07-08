@@ -25,7 +25,7 @@ class Ed25519KeyManagerTest extends TestCase
     protected function tearDown(): void
     {
         if (is_dir($this->tmpDir)) {
-        $files = glob($this->tmpDir . '/*');
+        $files = glob($this->tmpDir . '/*') ?: [];
         foreach ($files as $file) {
             @unlink($file);
         }

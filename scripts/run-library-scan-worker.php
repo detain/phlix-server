@@ -28,15 +28,15 @@
 
 declare(strict_types=1);
 
-$baseDir = dirname(__DIR__);
-chdir($baseDir);
-require_once $baseDir . '/vendor/autoload.php';
-require_once __DIR__ . '/bootstrap_env.php';
-
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Media\Library\LibraryScanWorker;
 use Workerman\Worker;
+
+$baseDir = dirname(__DIR__);
+chdir($baseDir);
+require_once $baseDir . '/vendor/autoload.php';
+require_once __DIR__ . '/bootstrap_env.php';
 
 // -----------------------------------------------------------------------------
 // 0. Coroutine runtime — mirror start.php: set Swoole as the eventLoop driver

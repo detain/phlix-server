@@ -51,9 +51,11 @@ final class PhlixMySQLConnectionTest extends TestCase
             $prop = new ReflectionProperty($class, $name);
             $prop->setAccessible(true);
 
+            $type = $prop->getType();
+            $this->assertInstanceOf(\ReflectionNamedType::class, $type);
             $this->assertSame(
                 $expectedType,
-                $prop->getType()?->getName(),
+                $type->getName(),
                 "Property \${$name} must be declared as {$expectedType}"
             );
         }
@@ -129,6 +131,7 @@ final class PhlixMySQLConnectionTest extends TestCase
 
         // Build a mock parent so we can record queries without a real socket.
         $mockParent = $this->createMock(Connection::class);
+        /** @var list<array{cid: int, sql: string, ts: int}> $log */
         $log = [];
 
         $mockParent->method('beginTrans')->willReturn(true);
@@ -169,7 +172,6 @@ final class PhlixMySQLConnectionTest extends TestCase
             }
         };
 
-        /** @var PhlixMySQLConnection $conn */
         $conn = new class($mockParent, $inMemoryPdo) extends PhlixMySQLConnection {
             public function __construct(
                 private Connection $mock,
@@ -192,7 +194,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         $aStarted = new \Swoole\Coroutine\Channel(1);
 
         // Coroutine A: acquires the trans lock first.
-        \Swoole\Coroutine\go(static function () use ($conn, &$log, $aStarted): void {
+        \Swoole\Coroutine\go(static function () use ($conn, $aStarted): void {
             $conn->beginTrans();         // Acquires transLock.
             $aStarted->push(true);       // Signal B it can try beginTrans.
             // B's beginTrans() will block on transLock because A holds it.
@@ -202,7 +204,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         });
 
         // Coroutine B: tries to beginTrans — must block until A commits.
-        \Swoole\Coroutine\go(static function () use ($conn, &$log, $aStarted): void {
+        \Swoole\Coroutine\go(static function () use ($conn, $aStarted): void {
             $aStarted->pop();           // Wait until A has acquired the lock.
             // This call BLOCKS on transLock until A commits.
             $conn->beginTrans();
@@ -212,7 +214,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         });
 
         // Give coroutines time to finish.
-        \Swoole\Event::wait(1.0);
+        \Swoole\Event::wait();
 
         // Both transactions must have completed.
         $this->assertCount(
@@ -228,6 +230,7 @@ final class PhlixMySQLConnectionTest extends TestCase
         // Group log indices by coroutine.
         $cidGroups = [];
         foreach ($callCids as $i => $cid) {
+            $this->assertIsInt($cid);
             $cidGroups[$cid][] = $i;
         }
         $this->assertCount(

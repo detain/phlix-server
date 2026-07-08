@@ -64,7 +64,7 @@ class S3ClientTest extends TestCase
         // Without a running S3, this should return empty array
         $result = $client->listObjects('test-bucket', 'prefix/');
 
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function testDeleteObjectReturnsBool(): void
@@ -79,7 +79,7 @@ class S3ClientTest extends TestCase
         // Without a running S3, this should return false
         $result = $client->deleteObject('test-bucket', 'test-key');
 
-        $this->assertIsBool($result);
+        $this->assertFalse($result);
     }
 
     public function testDownloadCreatesDestinationDirectory(): void
@@ -160,6 +160,6 @@ class S3ClientTest extends TestCase
 
         $result = $client->listObjects('test-bucket');
 
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 }

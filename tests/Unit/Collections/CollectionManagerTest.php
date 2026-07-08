@@ -278,10 +278,10 @@ class CollectionManagerTest extends TestCase
             $mediaItemRepo
         );
 
+        $this->expectNotToPerformAssertions();
+
         // Should not throw, just return without doing anything
         $manager->refreshSmartCollection('col-1');
-
-        $this->assertTrue(true); // Placeholder
     }
 
     public function testFindAllReturnsCollections(): void

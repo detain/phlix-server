@@ -61,7 +61,7 @@ class RokuSessionTest extends TestCase
 
         // sendKey should call sendKeypress on the client
         $result = $session->sendKey('Play');
-        $this->assertIsArray($result);
+        $this->assertSame(['success' => true], $result);
     }
 
     public function testPauseCallsSendKeyPause(): void

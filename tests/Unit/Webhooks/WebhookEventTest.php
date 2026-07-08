@@ -19,7 +19,6 @@ class WebhookEventTest extends TestCase
 
         $array = $event->toArray();
 
-        $this->assertIsArray($array);
         $this->assertEquals('playback.started', $array['event_type']);
         $this->assertEquals(['media_id' => 'media-123', 'position' => 0], $array['payload']);
         $this->assertEquals('2024-01-15T10:30:00+00:00', $array['occurred_at']);
@@ -37,7 +36,6 @@ class WebhookEventTest extends TestCase
         $secret = 'test-secret-key';
         $signature = $event->getSignature($secret);
 
-        $this->assertIsString($signature);
         $this->assertStringStartsWith('sha256=', $signature);
 
         $expectedPayload = json_encode($event->toArray(), JSON_THROW_ON_ERROR);

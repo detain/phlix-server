@@ -44,6 +44,22 @@ class SmartPlaylistEngineTest extends TestCase
         ];
     }
 
+    /**
+     * Reads the nested metadata.sortField value from an evaluated result item,
+     * narrowing the mixed nested structure for static analysis.
+     *
+     * @param array<int, mixed> $result
+     * @return mixed
+     */
+    private function metadataSortField(array $result, int $index): mixed
+    {
+        $item = $result[$index];
+        self::assertIsArray($item);
+        self::assertIsArray($item['metadata']);
+
+        return $item['metadata']['sortField'];
+    }
+
     public function testEvaluateOnScanWithNoLimitReturnsAllItems(): void
     {
         $items = [
@@ -95,9 +111,9 @@ class SmartPlaylistEngineTest extends TestCase
 
         $this->assertCount(3, $result);
         // Should be sorted descending: 20, 15, 10
-        $this->assertSame(20, $result[0]['metadata']['sortField']);
-        $this->assertSame(15, $result[1]['metadata']['sortField']);
-        $this->assertSame(10, $result[2]['metadata']['sortField']);
+        $this->assertSame(20, $this->metadataSortField($result, 0));
+        $this->assertSame(15, $this->metadataSortField($result, 1));
+        $this->assertSame(10, $this->metadataSortField($result, 2));
     }
 
     public function testEvaluateOnScanAscendingSortReturnsSmallestFirst(): void
@@ -117,9 +133,9 @@ class SmartPlaylistEngineTest extends TestCase
 
         $this->assertCount(3, $result);
         // Should be sorted ascending: 5, 10, 15
-        $this->assertSame(5, $result[0]['metadata']['sortField']);
-        $this->assertSame(10, $result[1]['metadata']['sortField']);
-        $this->assertSame(15, $result[2]['metadata']['sortField']);
+        $this->assertSame(5, $this->metadataSortField($result, 0));
+        $this->assertSame(10, $this->metadataSortField($result, 1));
+        $this->assertSame(15, $this->metadataSortField($result, 2));
     }
 
     public function testEvaluateOnScanWithRulesFiltersItems(): void
@@ -146,8 +162,8 @@ class SmartPlaylistEngineTest extends TestCase
 
         // Should only return items with sortField > 10: 20, 15
         $this->assertCount(2, $result);
-        $this->assertSame(20, $result[0]['metadata']['sortField']);
-        $this->assertSame(15, $result[1]['metadata']['sortField']);
+        $this->assertSame(20, $this->metadataSortField($result, 0));
+        $this->assertSame(15, $this->metadataSortField($result, 1));
     }
 
     public function testEvaluateOnScanRandomWithLimitUsesReservoirSampling(): void
@@ -216,9 +232,9 @@ class SmartPlaylistEngineTest extends TestCase
 
         $this->assertCount(3, $result);
         // Null values should be at the end for descending
-        $this->assertSame(10, $result[0]['metadata']['sortField']);
-        $this->assertSame(5, $result[1]['metadata']['sortField']);
-        $this->assertNull($result[2]['metadata']['sortField']);
+        $this->assertSame(10, $this->metadataSortField($result, 0));
+        $this->assertSame(5, $this->metadataSortField($result, 1));
+        $this->assertNull($this->metadataSortField($result, 2));
     }
 
     public function testEvaluateOnScanWithLimitOneReturnsSingleTopItem(): void
@@ -236,7 +252,7 @@ class SmartPlaylistEngineTest extends TestCase
         $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 1, 'sortField', true);
 
         $this->assertCount(1, $result);
-        $this->assertSame(20, $result[0]['metadata']['sortField']); // Largest
+        $this->assertSame(20, $this->metadataSortField($result, 0)); // Largest
     }
 
     public function testEvaluateOnScanDescendingAscendingReturnsSmallest(): void
@@ -254,7 +270,7 @@ class SmartPlaylistEngineTest extends TestCase
         $result = $this->engine->evaluateOnScan([], self::LIBRARY_ID, 1, 'sortField', false);
 
         $this->assertCount(1, $result);
-        $this->assertSame(5, $result[0]['metadata']['sortField']); // Smallest
+        $this->assertSame(5, $this->metadataSortField($result, 0)); // Smallest
     }
 
     public function testEvaluateReturnsItemsMatchingRules(): void
@@ -335,8 +351,11 @@ class SmartPlaylistEngineTest extends TestCase
         $json = $this->engine->toJson($node);
 
         $decoded = json_decode($json, true);
+        $this->assertIsArray($decoded);
         $this->assertSame('and', $decoded['logic']);
+        $this->assertIsArray($decoded['rules']);
         $this->assertCount(1, $decoded['rules']);
+        $this->assertIsArray($decoded['rules'][0]);
         $this->assertSame('genre', $decoded['rules'][0]['field']);
     }
 
@@ -387,8 +406,8 @@ class SmartPlaylistEngineTest extends TestCase
 
         $this->assertCount(100, $result);
         // Should return the top 100 highest values (10900-11000)
-        $this->assertSame(11000, $result[0]['metadata']['sortField']);
-        $this->assertSame(10901, $result[99]['metadata']['sortField']);
+        $this->assertSame(11000, $this->metadataSortField($result, 0));
+        $this->assertSame(10901, $this->metadataSortField($result, 99));
     }
 
     public function testEvaluateOnScanWithLargeDatasetAndRandomSortUsesReservoirSampling(): void

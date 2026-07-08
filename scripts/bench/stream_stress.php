@@ -99,7 +99,7 @@ HELP;
 /**
  * Parses command-line arguments into an associative array.
  *
- * @param array<string> $args Command-line arguments
+ * @param list<string> $args Command-line arguments
  * @return array<string, mixed> Parsed arguments
  */
 function parseArgs(array $args): array
@@ -227,7 +227,7 @@ function getSystemResources(): array
     $memInfo = [];
     if (file_exists('/proc/meminfo')) {
         $memContent = file_get_contents('/proc/meminfo');
-        if (preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
+        if ($memContent !== false && preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
             foreach ($matches as $match) {
                 $memInfo[$match[1]] = (int)$match[2];
             }
@@ -240,8 +240,12 @@ function getSystemResources(): array
 
     $cpuUsage = 0.0;
     if (function_exists('sys_getloadavg')) {
-        $cpuCount = shell_exec('nproc') ?? '1';
-        $cpuUsage = min(100.0, ($loadAverage[0] / (int)trim($cpuCount)) * 100);
+        $cpuCountRaw = shell_exec('nproc');
+        $cpuCount = is_string($cpuCountRaw) ? (int) trim($cpuCountRaw) : 0;
+        if ($cpuCount < 1) {
+            $cpuCount = 1;
+        }
+        $cpuUsage = min(100.0, ($loadAverage[0] / $cpuCount) * 100);
     }
 
     return [
@@ -323,7 +327,7 @@ function checkStreamHealth(string $server, string $mediaId, string $quality, int
  * @param int $interval Health check interval in seconds
  * @param int $timeout Request timeout per stream
  * @param int $rampUp Ramp-up period in seconds
- * @return array<string, mixed> Test results
+ * @return array{total_streams: int, streams_sustained: int, streams_dropped: int, drops: list<array<string, mixed>>, memory_leak_detected: bool, memory_growth_pct: float, cpu_creep_detected: bool, cpu_trend_pct: float, initial_memory_mb: float, final_memory_mb: float, session_health: list<array<string, mixed>>} Test results
  */
 function runStressTest(
     string $server,
@@ -340,7 +344,9 @@ function runStressTest(
     $sessionHealth = [];
     $drops = [];
     $initialMemoryMb = getSystemResources()['memory_usage_mb'];
+    /** @var list<float> $memorySamples */
     $memorySamples = [];
+    /** @var list<float> $cpuSamples */
     $cpuSamples = [];
     $streamIdCounter = 0;
 
@@ -431,14 +437,17 @@ function runStressTest(
     $activeCount = count(array_filter($streams, fn($s) => $s->active));
     $droppedCount = count($drops);
 
-    $memoryGrowth = count($memorySamples) > 1
-        ? (max($memorySamples) - min($memorySamples)) / $initialMemoryMb * 100
-        : 0;
+    $memoryGrowth = 0.0;
+    if (count($memorySamples) > 1) {
+        $memoryGrowth = (max($memorySamples) - min($memorySamples)) / $initialMemoryMb * 100;
+    }
 
     $cpuTrend = calculateTrend($cpuSamples);
     $cpuCreepDetected = $cpuTrend > 20;
 
     $memoryLeakDetected = $memoryGrowth > 50 && $cpuTrend < 10;
+
+    $finalMemory = end($memorySamples);
 
     return [
         'total_streams' => $numStreams,
@@ -450,7 +459,7 @@ function runStressTest(
         'cpu_creep_detected' => $cpuCreepDetected,
         'cpu_trend_pct' => round($cpuTrend, 1),
         'initial_memory_mb' => round($initialMemoryMb, 1),
-        'final_memory_mb' => round(end($memorySamples), 1),
+        'final_memory_mb' => round($finalMemory !== false ? $finalMemory : 0.0, 1),
         'session_health' => $sessionHealth,
     ];
 }
@@ -481,6 +490,8 @@ function calculateTrend(array $samples): float
 
 /**
  * Main entry point for the benchmark script.
+ *
+ * @param list<string> $argv
  */
 function main(array $argv): int
 {
@@ -503,14 +514,17 @@ function main(array $argv): int
         return 0;
     }
 
-    $mediaId = (string)$args['media_id'];
-    $numStreams = (int)$args['streams'];
-    $server = (string)$args['server'];
-    $duration = (int)$args['duration'];
-    $interval = (int)$args['interval'];
-    $timeout = (int)$args['timeout'];
-    $quality = (string)$args['quality'];
-    $rampUp = (int)$args['ramp_up'];
+    $asString = static fn (mixed $v): string => is_scalar($v) ? (string) $v : '';
+    $asInt = static fn (mixed $v): int => is_numeric($v) ? (int) $v : 0;
+
+    $mediaId = $asString($args['media_id'] ?? null);
+    $numStreams = $asInt($args['streams'] ?? null);
+    $server = $asString($args['server'] ?? null);
+    $duration = $asInt($args['duration'] ?? null);
+    $interval = $asInt($args['interval'] ?? null);
+    $timeout = $asInt($args['timeout'] ?? null);
+    $quality = $asString($args['quality'] ?? null);
+    $rampUp = $asInt($args['ramp_up'] ?? null);
 
     $durationFormatted = sprintf('%02d:%02d:%02d', (int)($duration / 3600), (int)(($duration % 3600) / 60), (int)($duration % 60));
 

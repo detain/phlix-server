@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Playlists;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Playlists\SmartPlaylist;
 use Phlix\Playlists\SmartPlaylistRepository;
@@ -12,6 +13,7 @@ use Workerman\MySQL\Connection;
 class SmartPlaylistRepositoryTest extends TestCase
 {
     private SmartPlaylistRepository $repo;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void

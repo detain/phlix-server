@@ -97,6 +97,7 @@ HELP;
  * Parses command-line arguments into an associative array.
  *
  * @param array<string> $args Command-line arguments
+ * @param list<string> $args
  * @return array<string, mixed> Parsed arguments
  */
 function parseArgs(array $args): array
@@ -195,8 +196,12 @@ function validateArgs(array $args): ?string
         return 'Error: --server must be a valid URL';
     }
 
-    if (!is_dir($args['output_dir']) && !mkdir($args['output_dir'], 0755, true)) {
-        return 'Error: Cannot create output directory: ' . $args['output_dir'];
+    $outputDir = $args['output_dir'] ?? null;
+    if (!is_string($outputDir)) {
+        return 'Error: --output-dir must be a string';
+    }
+    if (!is_dir($outputDir) && !mkdir($outputDir, 0755, true)) {
+        return 'Error: Cannot create output directory: ' . $outputDir;
     }
 
     return null;
@@ -215,7 +220,7 @@ function getSystemResources(): array
     $memInfo = [];
     if (file_exists('/proc/meminfo')) {
         $memContent = file_get_contents('/proc/meminfo');
-        if (preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
+        if ($memContent !== false && preg_match_all('/^(\w+):\s+(\d+)\s+kB$/m', $memContent, $matches, PREG_SET_ORDER)) {
             foreach ($matches as $match) {
                 $memInfo[$match[1]] = (int)$match[2];
             }
@@ -228,8 +233,12 @@ function getSystemResources(): array
 
     $cpuUsage = 0.0;
     if (function_exists('sys_getloadavg')) {
-        $cpuCount = shell_exec('nproc') ?? '1';
-        $cpuUsage = min(100.0, ($loadAverage[0] / (int)trim($cpuCount)) * 100);
+        $cpuCountRaw = shell_exec('nproc');
+        $cpuCount = is_string($cpuCountRaw) ? (int) trim($cpuCountRaw) : 0;
+        if ($cpuCount < 1) {
+            $cpuCount = 1;
+        }
+        $cpuUsage = min(100.0, ($loadAverage[0] / $cpuCount) * 100);
     }
 
     $gpuUsage = 0.0;
@@ -290,11 +299,13 @@ function getMediaFilePath(string $server, string $mediaId): ?string
     }
 
     $data = json_decode($response, true);
-    if (!is_array($data) || !isset($data['item']['path'])) {
+    if (!is_array($data) || !isset($data['item']) || !is_array($data['item']) || !isset($data['item']['path'])) {
         return null;
     }
 
-    return (string)$data['item']['path'];
+    $path = $data['item']['path'];
+
+    return is_string($path) ? $path : null;
 }
 
 /**
@@ -330,8 +341,8 @@ function runTranscode(string $inputPath, string $outputPath, string $encoder, st
 {
     $ffmpegPath = '/usr/bin/ffmpeg';
     if (!file_exists($ffmpegPath) || !is_executable($ffmpegPath)) {
-        $ffmpegPath = shell_exec('which ffmpeg') ?? 'ffmpeg';
-        $ffmpegPath = trim($ffmpegPath);
+        $which = shell_exec('which ffmpeg');
+        $ffmpegPath = is_string($which) ? trim($which) : 'ffmpeg';
     }
 
     $presetMap = [
@@ -449,7 +460,8 @@ function runTranscode(string $inputPath, string $outputPath, string $encoder, st
  * @param string $encoder FFmpeg encoder name
  * @param string $quality Quality preset
  * @param int $timeout Timeout per transcode
- * @return array<string, mixed> Benchmark results
+ * @param list<string> $inputPaths
+ * @return array{total_transcodes: int, successful: int, failed: int, success_rate: float|int, avg_time_to_first_byte_ms: float, avg_frame_rate_fps: float, concurrent_processes_peak: int} Benchmark results
  */
 function runConcurrentTranscodeBenchmark(array $inputPaths, string $outputDir, string $encoder, string $quality, int $timeout): array
 {
@@ -458,7 +470,9 @@ function runConcurrentTranscodeBenchmark(array $inputPaths, string $outputDir, s
     $results = [];
     $successCount = 0;
     $failCount = 0;
+    /** @var list<float> $timeToFirstBytes */
     $timeToFirstBytes = [];
+    /** @var list<float> $frameRates */
     $frameRates = [];
     $peakConcurrent = 0;
 
@@ -497,13 +511,17 @@ function runConcurrentTranscodeBenchmark(array $inputPaths, string $outputDir, s
     foreach ($pids as $pid) {
         $resultFile = '/tmp/bench_transcode_' . $pid . '.json';
         if (file_exists($resultFile)) {
-            $result = json_decode(file_get_contents($resultFile), true, 512, JSON_THROW_ON_ERROR);
+            $json = file_get_contents($resultFile);
+            $decoded = json_decode(is_string($json) ? $json : '{}', true, 512, JSON_THROW_ON_ERROR);
+            $result = is_array($decoded) ? $decoded : [];
             $results[] = $result;
-            if ($result['success']) {
+            if ($result['success'] ?? false) {
                 $successCount++;
-                $timeToFirstBytes[] = $result['time_to_first_byte_ms'];
-                if ($result['frame_rate'] !== null) {
-                    $frameRates[] = $result['frame_rate'];
+                $ttfb = $result['time_to_first_byte_ms'] ?? null;
+                $timeToFirstBytes[] = is_numeric($ttfb) ? (float) $ttfb : 0.0;
+                $frameRate = $result['frame_rate'] ?? null;
+                if ($frameRate !== null) {
+                    $frameRates[] = is_numeric($frameRate) ? (float) $frameRate : 0.0;
                 }
             } else {
                 $failCount++;
@@ -530,6 +548,8 @@ function runConcurrentTranscodeBenchmark(array $inputPaths, string $outputDir, s
 
 /**
  * Main entry point for the benchmark script.
+ *
+ * @param list<string> $argv
  */
 function main(array $argv): int
 {
@@ -557,13 +577,16 @@ function main(array $argv): int
         return 0;
     }
 
-    $mediaId = (string)$args['media_id'];
-    $numTranscodes = (int)$args['transcodes'];
-    $server = (string)$args['server'];
-    $outputDir = (string)$args['output_dir'];
-    $timeout = (int)$args['timeout'];
-    $vendor = (string)$args['vendor'];
-    $quality = (string)$args['quality'];
+    $asString = static fn (mixed $v): string => is_scalar($v) ? (string) $v : '';
+    $asInt = static fn (mixed $v): int => is_numeric($v) ? (int) $v : 0;
+
+    $mediaId = $asString($args['media_id'] ?? null);
+    $numTranscodes = $asInt($args['transcodes'] ?? null);
+    $server = $asString($args['server'] ?? null);
+    $outputDir = $asString($args['output_dir'] ?? null);
+    $timeout = $asInt($args['timeout'] ?? null);
+    $vendor = $asString($args['vendor'] ?? null);
+    $quality = $asString($args['quality'] ?? null);
 
     echo "Starting Transcode Throughput Benchmark\n";
     echo "=======================================\n";

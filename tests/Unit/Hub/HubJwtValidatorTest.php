@@ -15,6 +15,7 @@ use Psr\Log\NullLogger;
 
 class HubJwtValidatorTest extends TestCase
 {
+    /** @var non-empty-string */
     private string $privateKey;
     private string $publicKey;
     private string $kid;
@@ -22,7 +23,11 @@ class HubJwtValidatorTest extends TestCase
     protected function setUp(): void
     {
         $keyPair = sodium_crypto_sign_keypair();
-        $this->privateKey = substr($keyPair, 0, 64);
+        $privateKey = substr($keyPair, 0, 64);
+        if ($privateKey === '') {
+            self::fail('Failed to derive Ed25519 private key');
+        }
+        $this->privateKey = $privateKey;
         $this->publicKey = substr($keyPair, 64);
         $this->kid = 'test-key-id-123';
     }
@@ -32,6 +37,9 @@ class HubJwtValidatorTest extends TestCase
         return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function createJwt(array $payload, int $exp = null): string
     {
         $header = [
@@ -44,8 +52,8 @@ class HubJwtValidatorTest extends TestCase
             $payload['exp'] = $exp;
         }
 
-        $headerEncoded = $this->base64UrlEncode(json_encode($header));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload));
+        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
         $signedMessage = $headerEncoded . '.' . $payloadEncoded;
 
         $signature = sodium_crypto_sign_detached($signedMessage, $this->privateKey);
@@ -54,6 +62,9 @@ class HubJwtValidatorTest extends TestCase
         return $signedMessage . '.' . $signatureEncoded;
     }
 
+    /**
+     * @param array<int, array<string, mixed>> $additionalKeys
+     */
     private function createJwksResponse(array $additionalKeys = []): HttpResponse
     {
         $keys = [[
@@ -208,8 +219,8 @@ class HubJwtValidatorTest extends TestCase
             'exp' => time() + 3600,
         ];
 
-        $headerEncoded = $this->base64UrlEncode(json_encode($header));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload));
+        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
         $signedMessage = $headerEncoded . '.' . $payloadEncoded;
 
         $signature = sodium_crypto_sign_detached($signedMessage, $privateKey2);
@@ -291,8 +302,8 @@ class HubJwtValidatorTest extends TestCase
             'exp' => time() + 3600,
         ];
 
-        $headerEncoded = $this->base64UrlEncode(json_encode($header));
-        $payloadEncoded = $this->base64UrlEncode(json_encode($payload));
+        $headerEncoded = $this->base64UrlEncode(json_encode($header, JSON_THROW_ON_ERROR));
+        $payloadEncoded = $this->base64UrlEncode(json_encode($payload, JSON_THROW_ON_ERROR));
         $signedMessage = $headerEncoded . '.' . $payloadEncoded;
         $signature = sodium_crypto_sign_detached($signedMessage, $this->privateKey);
         $signatureEncoded = $this->base64UrlEncode($signature);

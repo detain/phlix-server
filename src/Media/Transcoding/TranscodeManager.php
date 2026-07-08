@@ -88,6 +88,33 @@ class TranscodeManager
     private const GLOB_CACHE_TTL = 5;
 
     /**
+     * In-worker LRU cache of narrowed transcode_jobs rows, keyed by job id.
+     *
+     * A job row is written once at creation; thereafter only its `status`/`error`
+     * change (completion, cancel, reap), and every such write invalidates the entry
+     * ({@see invalidateJobRowCache()}) — this class is the sole writer of the table —
+     * so a cache hit is always coherent with the DB. The parsed `variants` ladder is
+     * memoised alongside the raw row so per-segment readers ({@see ensureSegment()},
+     * {@see getJobVariants()}) never re-`json_decode` it. Bounded by
+     * {@see JOB_ROW_CACHE_MAX} with oldest-first eviction to cap memory in long-lived
+     * workers.
+     *
+     * @var array<string, array{row: array<string, mixed>, variants: array<mixed>|null}>
+     */
+    private array $jobRowCache = [];
+
+    /** @var int Max distinct job rows retained in the in-worker LRU before eviction. */
+    private const JOB_ROW_CACHE_MAX = 256;
+
+    /**
+     * Columns {@see getJobRow()} selects — the exact set its callers read. Narrowed
+     * from `SELECT *` so the per-segment hot path never fetches the wide row under the
+     * serialized DB mutex on a cache miss.
+     */
+    private const JOB_ROW_COLUMNS =
+        'id, status, input_path, hls_dir, duration_seconds, segment_seconds, segment_params, subtitle_tracks, variants';
+
+    /**
      * Profile resolution caps used to decide downscaling for HLS jobs.
      *
      * Mirrors {@see \Phlix\Media\Streaming\QualitySelector}'s max_resolution per
@@ -241,6 +268,7 @@ class TranscodeManager
 
         if (!$success) {
             $this->db->query("UPDATE transcode_jobs SET status = 'failed' WHERE id = ?", [$jobId]);
+            $this->invalidateJobRowCache($jobId);
             throw new \RuntimeException("Transcode failed");
         }
 
@@ -530,15 +558,17 @@ class TranscodeManager
      */
     public function ensureSegment(string $jobId, ?string $variant, int $index): ?string
     {
-        $row = $this->getJobRow($jobId);
-        if ($row === null || $index < 0) {
+        $entry = $this->jobRowEntry($jobId);
+        if ($entry === null || $index < 0) {
             return null;
         }
+        $row = $entry['row'];
 
         $variantsRaw = $row['variants'] ?? null;
         if (is_string($variantsRaw) && $variantsRaw !== '') {
-            // Multi-variant (A5+) job: resolve the rung from the persisted ladder.
-            $decoded = json_decode($variantsRaw, true);
+            // Multi-variant (A5+) job: resolve the rung from the persisted ladder,
+            // reusing the parse memoised in the cache entry.
+            $decoded = $entry['variants'];
             if (!is_array($decoded)) {
                 return null;
             }
@@ -1353,12 +1383,14 @@ class TranscodeManager
                     "UPDATE transcode_jobs SET status = 'completed', progress = 100, completed_at = NOW() WHERE id = ?",
                     [$jobId]
                 );
+                $this->invalidateJobRowCache($jobId);
             } elseif ($status === self::STATUS_FAILED) {
                 $error = $this->readFailureReason($dir);
                 $this->db->query(
                     "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ?",
                     [$error, $jobId]
                 );
+                $this->invalidateJobRowCache($jobId);
             }
         }
 
@@ -1405,17 +1437,18 @@ class TranscodeManager
      */
     public function getJobVariants(string $jobId): ?array
     {
-        $row = $this->getJobRow($jobId);
-        if ($row === null) {
+        $cacheEntry = $this->jobRowEntry($jobId);
+        if ($cacheEntry === null) {
             return null;
         }
+        $row = $cacheEntry['row'];
 
         $variantsRaw = $row['variants'] ?? null;
         if (!is_string($variantsRaw) || $variantsRaw === '') {
             return null; // legacy single-variant job (variants IS NULL / empty)
         }
 
-        $decoded = json_decode($variantsRaw, true);
+        $decoded = $cacheEntry['variants']; // parse memoised at cache population
         if (!is_array($decoded)) {
             return null; // corrupt/malformed JSON — never crash the request
         }
@@ -1612,9 +1645,74 @@ class TranscodeManager
      */
     private function getJobRow(string $jobId): ?array
     {
-        $result = $this->db->query("SELECT * FROM transcode_jobs WHERE id = ?", [$jobId]);
+        $entry = $this->jobRowEntry($jobId);
+        return $entry === null ? null : $entry['row'];
+    }
+
+    /**
+     * Fetches a job's cache entry (narrowed row + parsed variants ladder), populating
+     * the in-worker LRU on a miss.
+     *
+     * Coroutine-safe without an explicit lock: the only yield point is the DB query on
+     * a miss, and two coroutines that both miss simply repopulate the same immutable
+     * row (harmless last-write-wins). Every map mutation here (touch, insert, evict) is
+     * a plain array op with no interleaved yield, so it is atomic under Swoole's
+     * cooperative scheduler; the DB query itself is already serialized by the
+     * connection's coroutine mutex.
+     *
+     * @param string $jobId Job identifier.
+     *
+     * @return array{row: array<string, mixed>, variants: array<mixed>|null}|null
+     *         The cache entry, or null if the job does not exist.
+     */
+    private function jobRowEntry(string $jobId): ?array
+    {
+        if (isset($this->jobRowCache[$jobId])) {
+            $entry = $this->jobRowCache[$jobId];
+            unset($this->jobRowCache[$jobId]);
+            $this->jobRowCache[$jobId] = $entry; // move to MRU position for LRU eviction
+            return $entry;
+        }
+
+        $result = $this->db->query(
+            'SELECT ' . self::JOB_ROW_COLUMNS . ' FROM transcode_jobs WHERE id = ?',
+            [$jobId]
+        );
         $rows = RowMap::listFromMixed($result);
-        return $rows[0] ?? null;
+        $row = $rows[0] ?? null;
+        if ($row === null) {
+            return null;
+        }
+
+        $variants = null;
+        $variantsRaw = $row['variants'] ?? null;
+        if (is_string($variantsRaw) && $variantsRaw !== '') {
+            $decoded = json_decode($variantsRaw, true);
+            $variants = is_array($decoded) ? $decoded : null;
+        }
+
+        $entry = ['row' => $row, 'variants' => $variants];
+        $this->jobRowCache[$jobId] = $entry;
+        if (count($this->jobRowCache) > self::JOB_ROW_CACHE_MAX) {
+            $oldest = array_key_first($this->jobRowCache);
+            if ($oldest !== null) {
+                unset($this->jobRowCache[$oldest]);
+            }
+        }
+
+        return $entry;
+    }
+
+    /**
+     * Drops a job's cached row so the next read re-fetches from the DB. Called on
+     * every status write (completion, cancel, reap) to keep the cache coherent with
+     * the persisted terminal state.
+     *
+     * @param string $jobId Job identifier.
+     */
+    private function invalidateJobRowCache(string $jobId): void
+    {
+        unset($this->jobRowCache[$jobId]);
     }
 
     /**
@@ -1968,6 +2066,7 @@ class TranscodeManager
         }
 
         $this->db->query("UPDATE transcode_jobs SET status = 'cancelled' WHERE id = ?", [$jobId]);
+        $this->invalidateJobRowCache($jobId);
 
         unset($this->activeJobs[$jobId]);
 
@@ -2169,6 +2268,7 @@ class TranscodeManager
                 "UPDATE transcode_jobs SET status = 'failed', error = ? WHERE id = ? AND status = 'running'",
                 [$error, $id]
             );
+            $this->invalidateJobRowCache($id);
             unset($this->activeJobs[$id]);
             $reaped++;
         }

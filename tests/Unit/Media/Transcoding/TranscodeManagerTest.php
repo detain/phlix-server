@@ -41,7 +41,7 @@ class TranscodeManagerTest extends TestCase
      * @param array<string, mixed> $reuseRow     Row returned for the reuse lookup ([] = none).
      * @param int                  $runningCount Value returned by the COUNT(*) running query.
      * @param array<string, mixed> $mediaRow     Row returned for the media_items lookup ([] = not found).
-     * @param array<string, mixed> $jobRow       Row returned for SELECT * ... WHERE id (readiness).
+     * @param array<string, mixed> $jobRow       Row returned for the narrowed `... FROM transcode_jobs WHERE id = ?` lookup.
      * @param array<int, array{0: string, 1: array<int, mixed>}> $captured Receives [sql, params] of every call.
      */
     private function mockDb(
@@ -73,7 +73,7 @@ class TranscodeManagerTest extends TestCase
                 if (str_contains($sql, 'FROM media_items')) {
                     return $mediaRow === [] ? [] : [$mediaRow];
                 }
-                if (str_contains($sql, 'SELECT * FROM transcode_jobs WHERE id')) {
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
                     return $jobRow === [] ? [] : [$jobRow];
                 }
                 return [];
@@ -576,6 +576,204 @@ class TranscodeManagerTest extends TestCase
         $r = $this->manager($db, $ff)->getJobReadiness('nope');
 
         $this->assertSame('not_found', $r['status']);
+    }
+
+    /**
+     * Counts job-row SELECTs (the `getJobRow`/`jobRowEntry` narrowed query) captured
+     * from the DB mock.
+     *
+     * @param array<int, array{0: string, 1: array<int, mixed>}> $captured
+     */
+    private function countJobRowSelects(array $captured): int
+    {
+        $n = 0;
+        foreach ($captured as [$sql]) {
+            if (str_starts_with(ltrim($sql), 'SELECT') && str_contains($sql, 'transcode_jobs WHERE id = ?')) {
+                $n++;
+            }
+        }
+        return $n;
+    }
+
+    public function testJobRowCacheServesSecondReadWithoutSelectAndReusesParsedVariants(): void
+    {
+        // S1: an immutable job row is fetched once and cached in-worker; the parsed
+        // `variants` ladder is memoised alongside it so repeated readers neither
+        // re-SELECT nor re-json_decode.
+        $variants = json_encode([
+            'renditions' => [
+                ['id' => '1080p', 'width' => 1920, 'height' => 1080, 'bandwidth' => 5_000_000],
+                ['id' => '720p', 'width' => 1280, 'height' => 720, 'bandwidth' => 2_500_000],
+            ],
+            'original' => ['is_copy' => false],
+        ]);
+        $captured = [];
+        $db = $this->mockDb(
+            [],
+            0,
+            [],
+            ['id' => 'job-v', 'status' => 'completed', 'variants' => $variants],
+            $captured
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $first = $manager->getJobVariants('job-v');
+        $second = $manager->getJobVariants('job-v');
+
+        $this->assertNotNull($first);
+        $this->assertCount(2, $first); // non-copy "original" mirrors the top rung → dropped
+        $this->assertSame('/hls/job-v/media_v1080p.m3u8', $first[0]['url']);
+        $this->assertSame($first, $second);
+        $this->assertSame(1, $this->countJobRowSelects($captured), 'second read must hit the cache');
+    }
+
+    public function testTerminalTransitionInvalidatesCachedJobRow(): void
+    {
+        // S1: a completion transition (running → completed synced from the on-disk
+        // .complete marker) must invalidate the cached row so a stale status is never
+        // served — the next read re-SELECTs.
+        $dir = $this->segmentDir . '/job-inval';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/.complete", '');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $manager->getJobReadiness('job-inval'); // transitions → UPDATE + invalidate
+        $manager->getJobReadiness('job-inval'); // cache dropped → re-SELECT
+
+        $this->assertSame(2, $this->countJobRowSelects($captured), 'transition must invalidate the cache');
+    }
+
+    public function testReapInvalidatesCachedJobRow(): void
+    {
+        // S1: reaping a stale 'running' job invalidates its cached row so a later read
+        // reflects the reaped (failed) state instead of a stale cache hit.
+        $dir = $this->segmentDir . '/job-reap';
+        mkdir($dir, 0755, true);
+        $variants = json_encode([
+            'renditions' => [['id' => '720p', 'width' => 1280, 'height' => 720, 'bandwidth' => 2_500_000]],
+            'original' => ['is_copy' => false],
+        ]);
+        $captured = [];
+        $reapRow = ['id' => 'job-reap', 'hls_dir' => $dir . '/gone', 'output_path' => '', 'started_at' => '2000-01-01 00:00:00'];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, ?array $params = null) use ($variants, $dir, $reapRow, &$captured) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_starts_with(ltrim($sql), 'SELECT') && str_contains($sql, "status = 'running'")) {
+                    return [$reapRow]; // reaper's running-jobs scan
+                }
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
+                    return [['id' => 'job-reap', 'status' => 'completed', 'hls_dir' => $dir, 'variants' => $variants]];
+                }
+                return [];
+            }
+        );
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $this->assertNotNull($manager->getJobVariants('job-reap')); // primes the cache
+        $manager->reapStaleRunningJobs(0); // dir missing → reaped → invalidate
+        $manager->getJobVariants('job-reap'); // cache dropped → re-SELECT
+
+        $this->assertSame(2, $this->countJobRowSelects($captured), 'reap must invalidate the cache');
+    }
+
+    public function testCancelInvalidatesCachedJobRow(): void
+    {
+        // S1: stopTranscode() writes status='cancelled'; the cached row must be
+        // dropped so a subsequent read never serves the stale (pre-cancel) status.
+        $variants = json_encode([
+            'renditions' => [['id' => '720p', 'width' => 1280, 'height' => 720, 'bandwidth' => 2_500_000]],
+            'original' => ['is_copy' => false],
+        ]);
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'job-cancel', 'status' => 'running', 'variants' => $variants], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        // Register an active job so stopTranscode() proceeds to the UPDATE + invalidate
+        // (its dir does not exist on disk, so the file cleanup is a no-op).
+        $active = new \ReflectionProperty(TranscodeManager::class, 'activeJobs');
+        $active->setAccessible(true);
+        $active->setValue($manager, ['job-cancel' => ['output_path' => $this->segmentDir . '/job-cancel/out.m3u8']]);
+
+        $this->assertNotNull($manager->getJobVariants('job-cancel')); // primes the cache
+        $manager->stopTranscode('job-cancel');                        // → UPDATE cancelled + invalidate
+        $manager->getJobVariants('job-cancel');                       // cache dropped → re-SELECT
+
+        $this->assertSame(2, $this->countJobRowSelects($captured), 'cancel must invalidate the cache');
+    }
+
+    public function testLruEvictsOldestEntryBeyondCacheMax(): void
+    {
+        // S1: the in-worker cache is bounded at JOB_ROW_CACHE_MAX with oldest-first
+        // eviction. Priming max+1 distinct rows evicts the least-recently-used job
+        // (#0); it must then re-SELECT, while the most-recent job stays a cache hit.
+        $max = (new \ReflectionClassConstant(TranscodeManager::class, 'JOB_ROW_CACHE_MAX'))->getValue();
+        $this->assertIsInt($max);
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        // A 'completed' row never triggers a status write, so nothing here invalidates
+        // the cache — evictions are driven purely by the bound.
+        for ($i = 0; $i <= $max; $i++) {
+            $manager->getJobReadiness("lru-{$i}");
+        }
+
+        $selectsFor = static function (string $id) use (&$captured): int {
+            $n = 0;
+            foreach ($captured as [$sql, $params]) {
+                if (
+                    str_starts_with(ltrim($sql), 'SELECT')
+                    && str_contains($sql, 'transcode_jobs WHERE id = ?')
+                    && ($params[0] ?? null) === $id
+                ) {
+                    $n++;
+                }
+            }
+            return $n;
+        };
+
+        $manager->getJobReadiness('lru-0');        // evicted at the cap → re-SELECT
+        $manager->getJobReadiness("lru-{$max}");   // still cached → no new SELECT
+
+        $this->assertSame(2, $selectsFor('lru-0'), 'oldest entry must be evicted at the cap');
+        $this->assertSame(1, $selectsFor("lru-{$max}"), 'most-recent entry must remain cached');
+    }
+
+    public function testNarrowedJobRowColumnsCoverEveryColumnCallersRead(): void
+    {
+        // S1 guard: getJobRow() was narrowed from `SELECT *` to a fixed column list.
+        // Every column any caller reads MUST be in that list, else in production the
+        // caller silently gets null (the DB returns only the selected columns — the
+        // test DB mock returns the whole row regardless, so a dropped column can NOT
+        // be caught behaviourally). This pins the contract so a future narrowing that
+        // drops a still-needed column fails here, loudly, with the offending column.
+        $columns = (new \ReflectionClassConstant(TranscodeManager::class, 'JOB_ROW_COLUMNS'))->getValue();
+        $this->assertIsString($columns);
+        $selected = array_map('trim', explode(',', $columns));
+
+        $required = [
+            'id',               // job identity
+            'status',           // getJobReadiness() / statusOf()
+            'input_path',       // produceSegment() ffmpeg source
+            'hls_dir',          // getJobReadiness() / produceSegment() output dir
+            'duration_seconds', // ensureSegment() timeline (segment count / bounds)
+            'segment_seconds',  // ensureSegment() timeline
+            'segment_params',   // ensureSegment() legacy single-variant encode params
+            'subtitle_tracks',  // decodeSubtitleTracks()
+            'variants',         // getJobVariants() / ensureSegment() ladder
+        ];
+        foreach ($required as $col) {
+            $this->assertContains($col, $selected, "getJobRow() must SELECT `{$col}` — a caller reads it");
+        }
     }
 
     public function testSubtitleTracksOnlyAdvertisedWhenVttExistsOnDisk(): void

@@ -665,6 +665,204 @@ class TranscodeManagerTest extends TestCase
         return $n;
     }
 
+    // --- S9: epoch-guarded job-row cache (coherent under the coroutine DB pool) ---
+    //
+    // Under the connection pool a reader coroutine and a writer coroutine hold
+    // DIFFERENT physical connections, so a cache-miss SELECT and a concurrent
+    // invalidate are no longer serialised by a shared connection mutex and may
+    // complete in either order. The epoch guard makes the in-worker cache safe:
+    // jobRowEntry() snapshots the jobId's epoch BEFORE the SELECT and only
+    // populates the LRU if the epoch is unchanged on return; invalidateJobRowCache()
+    // bumps that epoch. These tests deterministically model "a write races in
+    // between the SELECT dispatch and its return" by having the DB mock's query
+    // callback invoke invalidateJobRowCache() WHILE the (mocked) SELECT is being
+    // served — exactly the window the pool exposes — with no real coroutine
+    // scheduler needed. (The real-MySQL pool behaviour is proven in
+    // tests/Integration/Media/Transcoding/PooledConnectionConcurrencyTest.php.)
+
+    private function readEpoch(TranscodeManager $m, string $jobId): int
+    {
+        $prop = new \ReflectionProperty(TranscodeManager::class, 'jobRowEpoch');
+        $prop->setAccessible(true);
+        $epochs = $prop->getValue($m);
+        $this->assertIsArray($epochs);
+        return is_numeric($epochs[$jobId] ?? null) ? (int) $epochs[$jobId] : 0;
+    }
+
+    private function cacheHas(TranscodeManager $m, string $jobId): bool
+    {
+        $prop = new \ReflectionProperty(TranscodeManager::class, 'jobRowCache');
+        $prop->setAccessible(true);
+        $cache = $prop->getValue($m);
+        $this->assertIsArray($cache);
+        return array_key_exists($jobId, $cache);
+    }
+
+    /**
+     * Builds a Connection mock for the job-row SELECT whose callback can fire
+     * $invalidations invalidateJobRowCache() calls on the manager during the
+     * FIRST job-row SELECT (simulating N concurrent writers completing while the
+     * reader's SELECT is in flight). The manager is supplied late via $holder.
+     *
+     * @param array<string, mixed>                             $jobRow
+     * @param object{m: ?TranscodeManager}                     $holder
+     * @param array<int, array{0: string, 1: array<int,mixed>}> $captured
+     */
+    private function racingJobRowDb(
+        array $jobRow,
+        object $holder,
+        int $invalidations,
+        string $jobId,
+        array &$captured
+    ): Connection {
+        $fired = false;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (
+                string $sql,
+                ?array $params = null
+            ) use (
+                $jobRow,
+                $holder,
+                $invalidations,
+                $jobId,
+                &$captured,
+                &$fired
+            ) {
+                $captured[] = [$sql, $params ?? []];
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
+                    // Model "a write completed while this SELECT was in flight":
+                    // invalidate the cache/epoch mid-query, once, on the first read.
+                    if (!$fired && $invalidations > 0 && $holder->m !== null) {
+                        $fired = true;
+                        for ($i = 0; $i < $invalidations; $i++) {
+                            $this->callPrivate($holder->m, 'invalidateJobRowCache', $jobId);
+                        }
+                    }
+                    return [$jobRow];
+                }
+                return [];
+            }
+        );
+        return $db;
+    }
+
+    public function testCacheMissPopulatesWhenEpochUnchanged(): void
+    {
+        // Baseline: with no racing write, the cache-miss SELECT populates the LRU
+        // (epoch unchanged) so the second read is a hit — one SELECT total.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'job-e0', 'status' => 'completed'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $first = $this->callPrivate($manager, 'jobRowEntry', 'job-e0');
+        $this->assertIsArray($first);
+        $this->assertTrue($this->cacheHas($manager, 'job-e0'), 'unraced miss must cache the row');
+        $this->assertSame(0, $this->readEpoch($manager, 'job-e0'));
+
+        $this->callPrivate($manager, 'jobRowEntry', 'job-e0'); // cache hit — no new SELECT
+        $this->assertSame(1, $this->countJobRowSelects($captured), 'second read must hit the cache');
+    }
+
+    public function testRacingWriteDuringSelectReturnsFreshRowButDoesNotCacheIt(): void
+    {
+        // A single writer invalidates while the reader's SELECT is in flight. The
+        // reader still gets its freshly-fetched row (one-shot, no throw) but MUST
+        // NOT cache it (its snapshot epoch is stale), so the next read re-queries.
+        $captured = [];
+        $holder = new class {
+            public ?TranscodeManager $m = null;
+        };
+        $row = ['id' => 'job-race1', 'status' => 'running'];
+        $db = $this->racingJobRowDb($row, $holder, 1, 'job-race1', $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+        $holder->m = $manager;
+
+        $entry = $this->callPrivate($manager, 'jobRowEntry', 'job-race1');
+        $this->assertIsArray($entry);
+        $this->assertSame($row, $entry['row'], 'the raced reader still receives its freshly-fetched row (one-shot)');
+        $this->assertFalse(
+            $this->cacheHas($manager, 'job-race1'),
+            'a row whose epoch advanced during the SELECT must NOT be cached (would be stale forever — no TTL)'
+        );
+        $this->assertSame(1, $this->readEpoch($manager, 'job-race1'), 'the racing write bumped the epoch once');
+
+        // Next read re-queries (cache was never populated); no writer races this
+        // time, so it caches cleanly and a third read is a hit.
+        $this->callPrivate($manager, 'jobRowEntry', 'job-race1');
+        $this->assertTrue($this->cacheHas($manager, 'job-race1'), 'once the race clears, caching resumes');
+        $this->callPrivate($manager, 'jobRowEntry', 'job-race1');
+        $this->assertSame(2, $this->countJobRowSelects($captured), 'exactly one re-query after the raced read');
+    }
+
+    public function testMultipleWritesRacingDuringOneSelectAreDetected(): void
+    {
+        // Two (or more) writers invalidate during a single in-flight SELECT: the
+        // epoch is monotonic (+1 each), so E -> E+2 and the E+2 === E check is
+        // false — the mismatch is still detected and the row is not cached.
+        $captured = [];
+        $holder = new class {
+            public ?TranscodeManager $m = null;
+        };
+        $row = ['id' => 'job-race2', 'status' => 'running'];
+        $db = $this->racingJobRowDb($row, $holder, 2, 'job-race2', $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+        $holder->m = $manager;
+
+        $entry = $this->callPrivate($manager, 'jobRowEntry', 'job-race2');
+        $this->assertIsArray($entry);
+        $this->assertSame($row, $entry['row']);
+        $this->assertFalse(
+            $this->cacheHas($manager, 'job-race2'),
+            'any number of concurrent invalidations (>=1) during the SELECT must block the populate'
+        );
+        $this->assertSame(2, $this->readEpoch($manager, 'job-race2'), 'both racing writes advanced the epoch');
+    }
+
+    public function testInvalidateBumpsEpochMonotonically(): void
+    {
+        // The core guarantee invalidateJobRowCache() must provide: every call
+        // both drops the cached entry and strictly increments the jobId's epoch,
+        // so a stale snapshot from before ANY of them is detectable on return.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['id' => 'job-ep', 'status' => 'running'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $this->callPrivate($manager, 'jobRowEntry', 'job-ep'); // prime cache, epoch 0
+        $this->assertTrue($this->cacheHas($manager, 'job-ep'));
+        for ($i = 1; $i <= 5; $i++) {
+            $this->callPrivate($manager, 'invalidateJobRowCache', 'job-ep');
+            $this->assertSame($i, $this->readEpoch($manager, 'job-ep'), "invalidate #$i must bump the epoch to $i");
+        }
+        $this->assertFalse($this->cacheHas($manager, 'job-ep'), 'invalidate must also drop the cached entry');
+    }
+
+    public function testCompletionTransitionBumpsEpochViaPublicPath(): void
+    {
+        // One of the 5 invalidateJobRowCache() call sites, reached through the
+        // public API: getJobReadiness() syncing a running->completed transition
+        // (line 1651) issues the status UPDATE and then invalidates — which must
+        // bump the epoch, not merely unset the cache, so a reader whose SELECT was
+        // in flight across this write cannot re-poison the cache under the pool.
+        $dir = $this->segmentDir . '/job-ep-pub';
+        mkdir($dir, 0755, true);
+        file_put_contents("{$dir}/master.m3u8", "#EXTM3U\n");
+        file_put_contents("{$dir}/.complete", '');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], ['hls_dir' => $dir, 'status' => 'running'], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->manager($db, $ff);
+
+        $this->assertSame(0, $this->readEpoch($manager, 'job-ep-pub'));
+        $manager->getJobReadiness('job-ep-pub'); // running -> completed => UPDATE + invalidate
+        $this->assertSame(1, $this->readEpoch($manager, 'job-ep-pub'), 'the public completion transition must bump the epoch');
+        $this->assertFalse($this->cacheHas($manager, 'job-ep-pub'), 'and drop the cached row');
+    }
+
     public function testJobRowCacheServesSecondReadWithoutSelectAndReusesParsedVariants(): void
     {
         // S1: an immutable job row is fetched once and cached in-worker; the parsed

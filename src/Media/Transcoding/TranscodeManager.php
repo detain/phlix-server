@@ -99,9 +99,28 @@ class TranscodeManager
      * {@see JOB_ROW_CACHE_MAX} with oldest-first eviction to cap memory in long-lived
      * workers.
      *
+     * Coherence is guarded by {@see $jobRowEpoch}, not by any assumption about DB
+     * query ordering: with the coroutine connection pool enabled a reader and a
+     * writer hold DIFFERENT physical connections, so a miss's `SELECT` and a
+     * concurrent state write are no longer mutex-serialised and can complete in
+     * either order. {@see jobRowEntry()} therefore only populates the cache when the
+     * epoch is unchanged across its query — see that method's docblock.
+     *
      * @var array<string, array{row: array<string, mixed>, variants: array<mixed>|null}>
      */
     private array $jobRowCache = [];
+
+    /**
+     * Per-jobId monotonically-increasing invalidation epoch (implicitly 0 for any
+     * jobId not yet present). {@see invalidateJobRowCache()} increments the jobId's
+     * epoch on every state write; {@see jobRowEntry()} snapshots it before a
+     * cache-miss `SELECT` and refuses to populate the cache if it changed while the
+     * query was in flight — so a write that raced a reader's in-flight query can
+     * never be overwritten by that reader's now-stale row.
+     *
+     * @var array<string, int>
+     */
+    private array $jobRowEpoch = [];
 
     /** @var int Max distinct job rows retained in the in-worker LRU before eviction. */
     private const JOB_ROW_CACHE_MAX = 256;
@@ -1899,12 +1918,24 @@ class TranscodeManager
      * Fetches a job's cache entry (narrowed row + parsed variants ladder), populating
      * the in-worker LRU on a miss.
      *
-     * Coroutine-safe without an explicit lock: the only yield point is the DB query on
-     * a miss, and two coroutines that both miss simply repopulate the same immutable
-     * row (harmless last-write-wins). Every map mutation here (touch, insert, evict) is
-     * a plain array op with no interleaved yield, so it is atomic under Swoole's
-     * cooperative scheduler; the DB query itself is already serialized by the
-     * connection's coroutine mutex.
+     * Coroutine-safe under the connection pool via an epoch guard (NOT via any DB
+     * query-ordering assumption). With `pool_enabled` a reader coroutine and a writer
+     * coroutine hold DIFFERENT physical connections, so a cache-miss `SELECT` and a
+     * concurrent state write (`completeJob()`/reap/cancel) are no longer serialised by
+     * a shared connection mutex and may complete in either order. The danger is a
+     * reader whose in-flight `SELECT` returns AFTER a writer already invalidated the
+     * cache: without a guard the reader would re-poison the cache with its pre-write
+     * row, and — this cache has no TTL — that stale row would persist until the next
+     * write on the same jobId (e.g. a completed job still reading `running` forever).
+     *
+     * Guard: snapshot the jobId's {@see $jobRowEpoch} BEFORE issuing the `SELECT`;
+     * after the query returns, re-read the epoch. If unchanged, populate the LRU as
+     * usual (including {@see JOB_ROW_CACHE_MAX} eviction). If it changed, a write
+     * raced in during the query, so DO NOT populate — return the freshly-fetched row
+     * to this one caller as a one-shot read and let the next caller retry the cache.
+     * The "read epoch → conditionally mutate the cache array" step has no yield point,
+     * so it is atomic relative to every other coroutine under Swoole's cooperative
+     * scheduler even though the DB queries themselves are no longer mutex-serialised.
      *
      * @param string $jobId Job identifier.
      *
@@ -1919,6 +1950,10 @@ class TranscodeManager
             $this->jobRowCache[$jobId] = $entry; // move to MRU position for LRU eviction
             return $entry;
         }
+
+        // Snapshot the epoch BEFORE the query yields, so a write that invalidates
+        // this jobId while our SELECT is in flight is detectable on return.
+        $epochAtQuery = $this->jobRowEpoch[$jobId] ?? 0;
 
         $result = $this->db->query(
             'SELECT ' . self::JOB_ROW_COLUMNS . ' FROM transcode_jobs WHERE id = ?',
@@ -1938,11 +1973,17 @@ class TranscodeManager
         }
 
         $entry = ['row' => $row, 'variants' => $variants];
-        $this->jobRowCache[$jobId] = $entry;
-        if (count($this->jobRowCache) > self::JOB_ROW_CACHE_MAX) {
-            $oldest = array_key_first($this->jobRowCache);
-            if ($oldest !== null) {
-                unset($this->jobRowCache[$oldest]);
+
+        // Atomic (no yield below): only cache the row if no write invalidated this
+        // jobId while our SELECT was in flight. If one did, this row may be stale —
+        // serve it once to this caller and let the next reader repopulate cleanly.
+        if (($this->jobRowEpoch[$jobId] ?? 0) === $epochAtQuery) {
+            $this->jobRowCache[$jobId] = $entry;
+            if (count($this->jobRowCache) > self::JOB_ROW_CACHE_MAX) {
+                $oldest = array_key_first($this->jobRowCache);
+                if ($oldest !== null) {
+                    unset($this->jobRowCache[$oldest]);
+                }
             }
         }
 
@@ -1950,15 +1991,21 @@ class TranscodeManager
     }
 
     /**
-     * Drops a job's cached row so the next read re-fetches from the DB. Called on
-     * every status write (completion, cancel, reap) to keep the cache coherent with
-     * the persisted terminal state.
+     * Drops a job's cached row so the next read re-fetches from the DB, and bumps the
+     * job's {@see $jobRowEpoch}. Called on every status write (completion, cancel,
+     * reap) to keep the cache coherent with the persisted terminal state.
+     *
+     * The epoch increment is what makes this correct under the connection pool: a
+     * reader whose cache-miss `SELECT` is in flight when this runs will see the epoch
+     * changed on return ({@see jobRowEntry()}) and refuse to re-poison the cache with
+     * its now-stale pre-write row.
      *
      * @param string $jobId Job identifier.
      */
     private function invalidateJobRowCache(string $jobId): void
     {
         unset($this->jobRowCache[$jobId]);
+        $this->jobRowEpoch[$jobId] = ($this->jobRowEpoch[$jobId] ?? 0) + 1;
     }
 
     /**

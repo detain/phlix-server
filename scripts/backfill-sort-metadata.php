@@ -16,8 +16,14 @@ declare(strict_types=1);
  * uses (SortTitle::from() and ItemRepository::extractContentRating()), so the
  * offline and live values never drift.
  *
- * Genres need NO backfill: they stay in metadata_json and the multi-valued index
- * (migration 050) is derived from that blob by MySQL automatically.
+ * Genres are NOT this script's concern: this script only derives sort_title/
+ * content_rating (via SortTitle::from()/ItemRepository::extractContentRating()).
+ * The `media_item_genres` join table (migration 051, which replaced migration
+ * 050's multi-valued genre index after it reproduced real InnoDB purge-thread
+ * errors under sustained churn) has its own idempotent SQL backfill inline in
+ * that migration file — it does not need a PHP CLI equivalent, since
+ * ItemRepository::syncGenreRows() keeps it in sync on every subsequent
+ * create()/update() going forward.
  *
  * Candidates are rows still missing a materialized value: `sort_title IS NULL`,
  * or `content_rating IS NULL` while metadata_json actually carries a rating (so a

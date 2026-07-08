@@ -38,12 +38,12 @@ class ItemRepository
     /**
      * In-worker TTL cache of the DISTINCT genre facet set, keyed by scope.
      *
-     * {@see distinctGenres()} unnests `metadata_json.$.genres` set-side via
-     * `JSON_TABLE` over the whole `media_items` table — an expensive scan run on
-     * every genre-filter-UI load, even though the genre set changes only when
-     * items are scanned or edited. This memoises the computed facet list per
-     * scope so repeat loads within the TTL are served from memory without
-     * touching the DB.
+     * {@see distinctGenres()} reads the `media_item_genres` join table
+     * (migration 051) joined back to `media_items` — a query run fresh on every
+     * genre-filter-UI load, even though the genre set changes only when items
+     * are scanned or edited. This memoises the computed facet list per scope so
+     * repeat loads within the TTL are served from memory without touching the
+     * DB.
      *
      * Contract:
      *  - Keyed by library UUID; the unscoped (all-libraries) set uses
@@ -572,6 +572,14 @@ class ItemRepository
             ]
         );
 
+        // Populate the `media_item_genres` join table (migration 051) with the
+        // metadata_json.$.genres this row was just created with. Uses
+        // insertGenreRows() (no preceding DELETE) rather than syncGenreRows() —
+        // a freshly-created item can never have pre-existing join-table rows,
+        // so the DELETE syncGenreRows() always issues would be a guaranteed
+        // no-op here (see insertGenreRows()'s docblock).
+        $this->insertGenreRows($id, self::extractGenres($data['metadata_json'] ?? null));
+
         $libraryId = isset($data['library_id']) && is_string($data['library_id'])
             ? $data['library_id']
             : null;
@@ -676,13 +684,130 @@ class ItemRepository
     }
 
     /**
+     * Extract the genre list from a `metadata_json` payload for the
+     * `media_item_genres` join table (migration 051).
+     *
+     * Mirrors {@see extractContentRating()}'s shape-handling: accepts the same
+     * shapes `create()`/`update()` accept for `metadata_json` — an
+     * already-decoded `array<string, mixed>` (the scanner path) or a raw JSON
+     * string. Reads `$.genres`; anything other than an array yields `[]`.
+     * Non-empty-string elements only survive the filter (matching
+     * {@see distinctGenres()}'s existing non-empty-string assumption) and the
+     * result is re-indexed (`array_values`) so it is always a plain `list`.
+     *
+     * @param mixed $metadataJson Array, JSON string, or anything else (→ []).
+     * @return list<string>
+     */
+    private static function extractGenres(mixed $metadataJson): array
+    {
+        if (is_string($metadataJson)) {
+            $decoded = json_decode($metadataJson, true);
+            $metadataJson = is_array($decoded) ? $decoded : null;
+        }
+
+        if (!is_array($metadataJson)) {
+            return [];
+        }
+
+        $raw = $metadataJson['genres'] ?? [];
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $raw,
+            static fn (mixed $g): bool => is_string($g) && $g !== ''
+        ));
+    }
+
+    /**
+     * Keep the `media_item_genres` join table (migration 051) in lockstep with
+     * an item's `metadata_json.$.genres` array whenever the blob is (re)written
+     * on an EXISTING item.
+     *
+     * `metadata_json.$.genres` remains the canonical source of truth (API
+     * responses, {@see \Phlix\Media\Library\MediaItemShaper} etc. all read it
+     * directly, unchanged by this method) — this table is purely a DERIVED
+     * secondary index used by {@see buildFilters()}, {@see getByAllowedGenres()},
+     * and {@see distinctGenres()} to avoid the multi-valued functional index
+     * migration 051 replaces (see that migration's comment header for the full
+     * InnoDB-purge-thread rationale).
+     *
+     * Always deletes the item's existing rows first, then delegates to
+     * {@see insertGenreRows()} to re-insert the current genre set. Used by
+     * {@see update()} only — an existing item may already hold rows from a
+     * PRIOR write that the new genre set must replace. {@see create()} calls
+     * {@see insertGenreRows()} directly instead: a freshly-created item (either
+     * a newly generated UUID, or a caller-supplied one that by definition must
+     * not already exist as a live row, since the INSERT would otherwise fail on
+     * the primary key) can never have pre-existing `media_item_genres` rows —
+     * cascade delete already guarantees no orphans survive a prior life of that
+     * id — so the DELETE this method always issues would be a guaranteed no-op
+     * there, one extra query per created item for no effect (Reviewer
+     * finding, S7b fix round).
+     *
+     * NOT wrapped in a transaction: the brief window between the DELETE and the
+     * INSERT is a pre-existing-shape tradeoff flagged by the Reviewer as an
+     * Info-level note (this repo has no transaction precedent elsewhere in
+     * `src/Media/`); left as-is per that review, see the S7b Fixer worklog
+     * entry for the full rationale.
+     *
+     * @param string        $itemId The media item whose genre rows to sync.
+     * @param list<string>  $genres The item's current genre set (may be empty).
+     */
+    private function syncGenreRows(string $itemId, array $genres): void
+    {
+        $this->db->query('DELETE FROM media_item_genres WHERE media_item_id = ?', [$itemId]);
+
+        $this->insertGenreRows($itemId, $genres);
+    }
+
+    /**
+     * Insert an item's genre set into `media_item_genres` (migration 051) with
+     * NO preceding DELETE — for {@see create()} only, where the item is
+     * guaranteed to have no pre-existing rows (see {@see syncGenreRows()}'s
+     * docblock). {@see update()} must use {@see syncGenreRows()} instead, since
+     * an existing item's PRIOR genre rows need clearing first.
+     *
+     * A single batched INSERT — never one query per genre (see this repo's
+     * "Batch Queries for N+1 Prevention" convention). De-duplicating up front
+     * avoids a duplicate-key error against the table's `(media_item_id, genre)`
+     * PRIMARY KEY should the metadata blob ever repeat a genre string. No-ops
+     * (issues no query at all) when `$genres` is empty.
+     *
+     * @param string        $itemId The media item whose genre rows to insert.
+     * @param list<string>  $genres The item's genre set (may be empty).
+     */
+    private function insertGenreRows(string $itemId, array $genres): void
+    {
+        $unique = array_values(array_unique($genres));
+        if ($unique === []) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($unique), '(?, ?)'));
+        $values = [];
+        foreach ($unique as $genre) {
+            $values[] = $itemId;
+            $values[] = $genre;
+        }
+
+        $this->db->query(
+            "INSERT INTO media_item_genres (media_item_id, genre) VALUES {$placeholders}",
+            $values
+        );
+    }
+
+    /**
      * Updates an existing media item's properties.
      *
      * When `$data` includes `metadata_json` (the only field genres live under),
      * this flushes the entire cached genre facet set via
      * {@see invalidateGenreFacets(null)} — the owning library isn't part of
      * `$data`, so a full flush is the only way to stay correct without an extra
-     * lookup query. Any other field update leaves the facet cache warm.
+     * lookup query. Any other field update leaves the facet cache warm. Also
+     * re-syncs the `media_item_genres` join table (migration 051) via
+     * {@see syncGenreRows()} when `metadata_json` is present.
      *
      * @param string $id The media item's unique identifier
      * @param array<string, mixed> $data Associative array of fields to update
@@ -692,8 +817,17 @@ class ItemRepository
     {
         $sets = [];
         $values = [];
+        // Captured only when $data carries a `metadata_json` key; null means
+        // "no metadata_json write in this call" so the join-table sync below is
+        // skipped entirely (an empty array() is a legitimate "clear all genres").
+        $genresToSync = null;
 
         foreach ($data as $key => $value) {
+            if ($key === 'metadata_json') {
+                $genresToSync = self::extractGenres($value);
+            }
+
+
             // Keep the indexed `canonical_key` column (migration 043) in lockstep
             // with `metadata_json.canonical_key` whenever the metadata blob is
             // (re)written, so the column stays the source of truth for
@@ -757,6 +891,12 @@ class ItemRepository
         // flush every scope (null) to guarantee correctness.
         if (array_key_exists('metadata_json', $data)) {
             $this->invalidateGenreFacets(null);
+        }
+
+        // Re-sync the media_item_genres join table (migration 051) whenever
+        // metadata_json was part of this update.
+        if ($genresToSync !== null) {
+            $this->syncGenreRows($id, $genresToSync);
         }
     }
 
@@ -1215,17 +1355,22 @@ class ItemRepository
     /**
      * Get items filtered by allowed genres.
      *
-     * Genres deliberately stay inside `metadata_json.$.genres` rather than being
-     * normalized into a separate genres/join table — migration 050 adds a MySQL 8
-     * multi-valued functional index directly over that JSON path instead, which
-     * makes this membership test index-resolvable with NO new genre write path
-     * and NO second genre-storage location to keep in sync. That matters
-     * specifically because {@see distinctGenres()}'s JSON_TABLE facet scan and its
-     * S5 TTL+LRU cache ({@see invalidateGenreFacets()}) already read genres from
-     * this exact blob; a join table would require every genre write to update
-     * BOTH locations (and would risk the facet cache silently drifting from the
-     * normalized table). A future "normalize genres properly" proposal should
-     * weigh this coherence cost, not just query ergonomics.
+     * Reads the normalized `media_item_genres` join table (migration 051)
+     * rather than a multi-valued functional index over `metadata_json.$.genres`
+     * — that MVI reproducibly triggered real InnoDB purge-thread errors
+     * (`[MY-012869]`) under sustained scan/rescan/re-match churn (confirmed via
+     * a dedicated stress test; see migration 051's comment header), so it was
+     * replaced with this ordinary, join-table-backed `EXISTS` test. The join
+     * table is kept in sync by {@see insertGenreRows()}/{@see syncGenreRows()}
+     * from `create()`/`update()` — `metadata_json.$.genres` remains the
+     * canonical source of truth.
+     *
+     * `media_item_genres.genre` is `utf8mb4_bin` (case/accent-SENSITIVE), so
+     * this `IN (...)` comparison is an exact-value match — the same semantics
+     * the pre-051 `? MEMBER OF (metadata_json->'$.genres')` predicate had
+     * (JSON string membership is exact-value). Do not add a query-time
+     * `COLLATE` override here: it is unnecessary (the column already carries
+     * the desired collation) and would defeat `idx_media_item_genres_genre`.
      *
      * @param string $libraryId Library to filter
      * @param array<string> $allowedGenres Array of allowed genre strings
@@ -1239,15 +1384,11 @@ class ItemRepository
             return $this->getByLibrary($libraryId, $limit, $offset);
         }
 
-        // One membership test per allowed genre against the multi-valued index on
-        // metadata_json.$.genres (migration 050). `? MEMBER OF (...)` binds the
-        // bare genre string and matches array elements exactly (case/accent
-        // sensitive — same semantics as the previous JSON_CONTAINS containment),
-        // but is resolvable from the index instead of full-scanning.
-        $genreWheres = implode(
-            ' OR ',
-            array_fill(0, count($allowedGenres), "? MEMBER OF (metadata_json->'\$.genres')")
-        );
+        // Items with at least one genre in the allowed set, OR items that carry
+        // no genres at all (preserves the previous
+        // `JSON_EXTRACT(metadata_json, '$.genres') IS NULL` fallback semantics —
+        // an ungenred item is never filtered out by a genre allow-list).
+        $genrePlaceholders = implode(',', array_fill(0, count($allowedGenres), '?'));
 
         $orderBy = self::titleOrder();
 
@@ -1255,8 +1396,15 @@ class ItemRepository
             "SELECT * FROM media_items
              WHERE library_id = ?
                AND (
-                   {$genreWheres}
-                   OR JSON_EXTRACT(metadata_json, '\$.genres') IS NULL
+                   EXISTS (
+                       SELECT 1 FROM media_item_genres mig
+                        WHERE mig.media_item_id = media_items.id
+                          AND mig.genre IN ({$genrePlaceholders})
+                   )
+                   OR NOT EXISTS (
+                       SELECT 1 FROM media_item_genres mig2
+                        WHERE mig2.media_item_id = media_items.id
+                   )
                )
              ORDER BY {$orderBy}
              LIMIT ? OFFSET ?",
@@ -1272,9 +1420,13 @@ class ItemRepository
      * @todo S10 (dead-code cleanup step): DELETE or repair this method. It is
      *       DEAD — no callers anywhere under src/, tests/, or scripts/ (verified
      *       repo-wide during S7). It is also the ONLY genre-filter path NOT
-     *       migrated to the indexed `? MEMBER OF (metadata_json->'$.genres')` form
-     *       (migration 050); it still uses an un-indexed, un-path-scoped
-     *       `JSON_CONTAINS(metadata_json, ?) = 0` that full-scans media_items.
+     *       migrated to the `media_item_genres` join table (migration 051, née
+     *       the migration 050 multi-valued index this superseded); it still
+     *       uses an un-indexed, un-path-scoped `JSON_CONTAINS(metadata_json, ?)
+     *       = 0` that full-scans media_items. Left as metadata_json-only
+     *       intentionally in S7b as well — this is dead, pre-existing-buggy
+     *       code out of scope for both S7 and S7b; S10 owns the delete/fix
+     *       decision.
      *       PRE-EXISTING PARAM-COUNT BUG: `$genrePlaceholders` is computed but
      *       never interpolated into the SQL (the WHERE has a single `?`), yet the
      *       binding `array_merge([$libraryId], $blockedGenres, [$limit, $offset])`
@@ -1426,8 +1578,8 @@ class ItemRepository
      * Queries media items with flexible filtering, sorting, and pagination.
      *
      * Honors the library-query schema params over metadata_json, building on the
-     * existing getByAllowedGenres() (`? MEMBER OF (metadata_json->'$.genres')`,
-     * the multi-valued index from migration 050) and search() (FULLTEXT/LIKE)
+     * existing getByAllowedGenres() (an `EXISTS` test against the
+     * `media_item_genres` join table, migration 051) and search() (FULLTEXT/LIKE)
      * patterns. All filter conditions are AND-combined; array-valued filters
      * (genres, ratings, actors) use OR logic within the array.
      *
@@ -1678,22 +1830,34 @@ class ItemRepository
         }
 
         if ($genres !== null && count($genres) > 0) {
-            $genreWheres = [];
-            foreach ($genres as $genre) {
-                if (is_string($genre) && $genre !== '') {
-                    // Membership test against the multi-valued index on
-                    // metadata_json.$.genres (migration 050). `? MEMBER OF (...)`
-                    // is index-resolvable and matches array elements exactly, the
-                    // same semantics the previous path-scoped JSON_CONTAINS had.
-                    // Genres deliberately stay in metadata_json rather than a join
-                    // table, to stay coherent with distinctGenres()'s S5 facet
-                    // cache — see {@see getByAllowedGenres()}'s docblock for why.
-                    $genreWheres[] = "? MEMBER OF (metadata_json->'\$.genres')";
-                    $bindings[] = $genre;
-                }
-            }
-            if (count($genreWheres) > 0) {
-                $wheres[] = '(' . implode(' OR ', $genreWheres) . ')';
+            $validGenres = array_values(array_filter(
+                $genres,
+                static fn (mixed $g): bool => is_string($g) && $g !== ''
+            ));
+            if (count($validGenres) > 0) {
+                // Membership test against the `media_item_genres` join table
+                // (migration 051), which replaced the migration 050 multi-valued
+                // functional index over metadata_json.$.genres — that MVI
+                // reproducibly triggered real InnoDB purge-thread errors under
+                // sustained create/delete churn (see migration 051's comment
+                // header). This EXISTS correlated subquery uses the join table's
+                // plain PRIMARY KEY / idx_media_item_genres_genre B-tree index
+                // instead. metadata_json.$.genres remains the canonical source
+                // of truth; the join table is kept in sync by
+                // insertGenreRows()/syncGenreRows() from create()/update().
+                // `media_item_genres.genre` is
+                // `utf8mb4_bin` (case/accent-SENSITIVE), so this `IN (...)`
+                // reproduces the pre-051 `? MEMBER OF (...)` exact-match
+                // semantics — do not add a query-time COLLATE override (the
+                // column already carries it, and an override would defeat the
+                // index).
+                $genrePlaceholders = implode(',', array_fill(0, count($validGenres), '?'));
+                $wheres[] = "EXISTS (
+                    SELECT 1 FROM media_item_genres mig
+                     WHERE mig.media_item_id = media_items.id
+                       AND mig.genre IN ({$genrePlaceholders})
+                )";
+                $bindings = array_merge($bindings, $validGenres);
             }
         }
 
@@ -1828,12 +1992,34 @@ class ItemRepository
      * The DISTINCT, sorted set of genres present across media items — the
      * authoritative genre facet list for the media-filter UI.
      *
-     * Genres live in the `metadata_json` JSON column under `$.genres` (an
-     * array of strings). Rather than load every row into PHP and unpack the
-     * arrays (an unbounded `SELECT *` scan — the P1 finding), this unnests the
-     * array set-side via `JSON_TABLE` (MySQL 8.0+) so the database returns one
-     * already-DISTINCT, already-sorted column. Blank/non-string elements are
-     * filtered out in SQL so the result is non-empty strings only.
+     * Reads the normalized `media_item_genres` join table (migration 051)
+     * rather than unnesting `metadata_json.$.genres` set-side via `JSON_TABLE`
+     * on every call (the pre-051 approach, and the original P1 finding this
+     * was written to fix — an unbounded `SELECT *` scan). The join table is
+     * kept in sync with `metadata_json.$.genres` — still the canonical source
+     * of truth — by {@see insertGenreRows()}/{@see syncGenreRows()} from
+     * `create()`/`update()`, so this DISTINCT read is now a plain indexed join
+     * instead of a per-row JSON
+     * unnest. `media_item_genres.genre` only ever holds non-empty strings (see
+     * {@see extractGenres()}'s filter on the write path), so — unlike the old
+     * JSON_TABLE query — this SELECT needs no `genre IS NOT NULL`/`genre <> ''`
+     * guard; there is nothing else to filter out.
+     *
+     * DELIBERATE COLLATION CHOICE (S7b fix round): `media_item_genres.genre`
+     * is declared `utf8mb4_bin` (case/accent-SENSITIVE) so the genre
+     * *filtering* predicates ({@see getByAllowedGenres()}, {@see
+     * buildFilters()}'s genre block) exactly reproduce the pre-051
+     * `? MEMBER OF (metadata_json->'$.genres')` exact-match semantics — see
+     * migration 051's comment header. Left unchecked, that same `_bin` column
+     * would ALSO make this facet-list DISTINCT case/accent-sensitive (two
+     * differently-cased spellings of the same genre would list as two facets)
+     * — a NEW behavior change this method never had (its pre-051 `JSON_TABLE`
+     * read used the connection's default case-insensitive collation, and this
+     * facet list is user/UI-facing, not a filter predicate). The query below
+     * explicitly re-asserts `COLLATE utf8mb4_unicode_ci` on the selected/
+     * ordered `genre` value so the facet list's DISTINCT/ORDER BY stay
+     * case-insensitive exactly as before, independent of the now
+     * case-sensitive storage/index collation used for filtering.
      *
      * Scoped to one library when `$libraryId` is given (bound, never
      * interpolated); otherwise it spans every library — the caller is
@@ -1850,8 +2036,9 @@ class ItemRepository
     public function distinctGenres(?string $libraryId = null): array
     {
         // Served from the in-worker TTL cache when a fresh entry exists so the
-        // JSON_TABLE scan below runs at most once per scope per TTL window (see
-        // $genreFacetCache). Cache misses/stale entries fall through and recompute.
+        // media_item_genres join query below runs at most once per scope per TTL
+        // window (see $genreFacetCache). Cache misses/stale entries fall through
+        // and recompute.
         $cacheKey = $libraryId ?? self::GENRE_FACET_GLOBAL_KEY;
         $now = $this->monotonicMs();
 
@@ -1863,13 +2050,11 @@ class ItemRepository
             return $cached['genres'];
         }
 
-        // Unnest metadata_json.$.genres[*] into one row per genre via JSON_TABLE
-        // (MySQL 8.0+), then DISTINCT + ORDER set-side so PHP never materialises
-        // the full media_items table. NULL/missing `$.genres` simply yields no
-        // JSON_TABLE rows for that item. The genre column is bounded to 255 chars
-        // (genre names are short labels); over-long values are truncated, not
-        // dropped, so the facet still appears.
-        $wheres = ["g.genre IS NOT NULL", "g.genre <> ''"];
+        // Read the join table + its owning media_items row (needed only to scope
+        // by library_id) and let DISTINCT + ORDER BY run set-side, exactly as the
+        // JSON_TABLE version did, but now over the indexed `media_item_genres`
+        // table instead of unnesting metadata_json per row.
+        $wheres = [];
         $bindings = [];
 
         if ($libraryId !== null) {
@@ -1877,14 +2062,19 @@ class ItemRepository
             $bindings[] = $libraryId;
         }
 
-        $sql = "SELECT DISTINCT g.genre AS genre
-                FROM media_items mi,
-                     JSON_TABLE(
-                         mi.metadata_json,
-                         '\$.genres[*]' COLUMNS (genre VARCHAR(255) PATH '\$')
-                     ) AS g
-                WHERE " . implode(' AND ', $wheres) . "
-                ORDER BY g.genre ASC";
+        $whereSql = $wheres === [] ? '1=1' : implode(' AND ', $wheres);
+
+        // `COLLATE utf8mb4_unicode_ci` re-asserted here (NOT relying on the
+        // column's own now-`utf8mb4_bin` collation, adopted for the exact-match
+        // filter predicates) so this facet list's DISTINCT/ORDER BY stay
+        // case-insensitive exactly as the pre-051 JSON_TABLE read was — see this
+        // method's docblock for why the storage collation and the facet-list
+        // collation are deliberately allowed to differ.
+        $sql = "SELECT DISTINCT mig.genre COLLATE utf8mb4_unicode_ci AS genre
+                FROM media_item_genres mig
+                JOIN media_items mi ON mi.id = mig.media_item_id
+                WHERE {$whereSql}
+                ORDER BY genre ASC";
 
         $rows = $this->db->query($sql, $bindings);
 
@@ -1982,6 +2172,12 @@ class ItemRepository
     /**
      * SQL expression for an item's PRIMARY (first) genre — shared by the genre
      * sort ORDER BY and the genre index buckets so they file items identically.
+     *
+     * Intentionally UNCHANGED by migrations 050/051: this reads
+     * `metadata_json.$.genres[0]` directly via `JSON_EXTRACT` — a plain
+     * per-row value extraction for sort/bucket display, never a membership
+     * filter — so it never touched the multi-valued functional index 051
+     * removed and has no join-table equivalent to migrate to.
      */
     private static function genrePrimaryExpression(): string
     {

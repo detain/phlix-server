@@ -11,11 +11,26 @@ use Throwable;
 use Workerman\MySQL\Connection;
 
 /**
- * Real-DB proof that migration 050's indexes actually satisfy the browse /
- * genre-filter hot paths — the whole point of step S7. A mocked connection
- * cannot exercise the optimizer, so this runs `EXPLAIN` against the queries
- * ItemRepository emits and asserts the new indexes are applicable and remove
- * the filesort / full-table-scan the pre-050 JSON/expression paths forced.
+ * Real-DB proof that migrations 050/051's indexes actually satisfy the browse
+ * / genre-filter hot paths — the whole point of steps S7/S7b. A mocked
+ * connection cannot exercise the optimizer, so this runs `EXPLAIN` against the
+ * queries ItemRepository emits and asserts the new indexes are applicable and
+ * remove the filesort / full-table-scan the pre-050 JSON/expression paths
+ * forced.
+ *
+ * The genre check specifically exercises migration 051's `media_item_genres`
+ * join table rather than migration 050's original multi-valued functional
+ * index (`idx_media_items_genres`, on `media_items` directly): that MVI
+ * reproducibly triggered real InnoDB purge-thread errors
+ * (`[MY-012869] Record in index ... was not found on update`) under sustained
+ * create/cascade-delete churn — CI's single round already logged 73 error
+ * lines, and a dedicated stress test at realistic scan-churn volume (50
+ * rounds x 300 rows = 15,000 rows) escalated this to 29,900, recurring
+ * continuously across the whole run rather than a single isolated burst — so
+ * S7b replaced it with an ordinary join table before that MVI could ever ship
+ * to production. `? MEMBER OF (metadata_json->'$.genres')` no longer exists
+ * anywhere in `ItemRepository`; the equivalent predicate is now an `EXISTS`
+ * correlated subquery against `media_item_genres`.
  *
  * CI applies all migrations to the `phlix_test` MySQL service before the suite
  * (see phpunit.yml); locally — with no reachable MySQL — the test self-skips,
@@ -32,7 +47,13 @@ use Workerman\MySQL\Connection;
  * `possible_keys`), and (2) it is STRUCTURALLY CAPABLE of satisfying the
  * ORDER BY without a filesort (forcing it yields `Extra` free of "filesort").
  * The genre membership predicate IS asserted on the natural plan because the
- * rare seeded genre makes the multi-valued index unambiguously selective.
+ * rare seeded genre makes the join table's index unambiguously selective —
+ * empirically verified (this session) against both MySQL 8.4.10 (prod's
+ * version) and 8.0.46 (CI's version): the optimizer semi-join-converts the
+ * `EXISTS` and drives from `media_item_genres` first via
+ * `idx_media_item_genres_genre` (`type=ref`), then joins back to
+ * `media_items` by its `PRIMARY` key — deterministic on both versions with
+ * this fixture's row counts/selectivity.
  * (Observation for the coordinator / S10: the surviving single-column
  * idx_library + idx_type can lure the optimizer into an index_merge that
  * defeats the composite index's no-filesort benefit on some distributions —
@@ -43,8 +64,25 @@ use Workerman\MySQL\Connection;
 final class BrowseIndexUsageTest extends TestCase
 {
     private const BROWSE_INDEX = 'idx_media_items_library_type_sort_title';
-    private const GENRE_INDEX  = 'idx_media_items_genres';
     private const RATING_INDEX = 'idx_media_items_content_rating';
+
+    /**
+     * The `media_item_genres` join table's standalone genre index (migration
+     * 051), which replaced the migration 050 multi-valued functional index
+     * `idx_media_items_genres` on `media_items` after that MVI reproducibly
+     * triggered real InnoDB purge-thread errors under sustained
+     * create/cascade-delete churn (see migration 051's comment header for the
+     * full incident: CI's single round already logged 73 `[MY-012869]` error
+     * lines; a dedicated stress test at realistic scan-churn volume — 50
+     * rounds x 300 rows — escalated this to 29,900, recurring continuously
+     * across the whole run rather than a single isolated burst).
+     */
+    private const GENRE_INDEX = 'idx_media_item_genres_genre';
+
+    /** The join table's composite PRIMARY KEY (media_item_id, genre) — the
+     *  other plausible access path the optimizer may pick for the genre
+     *  membership predicate instead of {@see GENRE_INDEX}. */
+    private const GENRE_TABLE_PRIMARY_KEY = 'PRIMARY';
 
     /** Rows to seed — enough to give the plans a non-trivial dataset to reason over. */
     private const ROW_COUNT = 300;
@@ -83,6 +121,14 @@ final class BrowseIndexUsageTest extends TestCase
             $this->markTestSkipped('media_items.sort_title absent — migration 050 not applied; skipping index-usage test.');
         }
 
+        // Same self-skip guard for migration 051's join table, checked
+        // separately from hasSortTitleColumn() — both migrations ship together
+        // in this program, but a stale/partially-migrated schema (or a future
+        // divergence) should still self-skip cleanly rather than error.
+        if (!$this->hasMediaItemGenresTable()) {
+            $this->markTestSkipped('media_item_genres absent — migration 051 not applied; skipping index-usage test.');
+        }
+
         $db = $this->db();
         $this->libraryId = $this->uuid();
         $db->query(
@@ -93,7 +139,8 @@ final class BrowseIndexUsageTest extends TestCase
         $repo = new ItemRepository($db);
         for ($i = 0; $i < self::ROW_COUNT; $i++) {
             // Vary the leading letter so sort_title spans the alphabet; give a
-            // rare genre to a handful of rows so `MEMBER OF` is selective.
+            // rare genre to a handful of rows so the genre membership test
+            // (media_item_genres) is selective.
             $letter = chr(ord('A') + ($i % 26));
             $name = sprintf('%s Browse Fixture %03d', $letter, $i);
             $genres = $i < 8 ? [self::RARE_GENRE] : ['Drama', 'Action'];
@@ -110,6 +157,7 @@ final class BrowseIndexUsageTest extends TestCase
 
         // Fresh, deterministic index statistics for the cost-based optimizer.
         $db->query('ANALYZE TABLE media_items');
+        $db->query('ANALYZE TABLE media_item_genres');
     }
 
     protected function tearDown(): void
@@ -169,18 +217,35 @@ final class BrowseIndexUsageTest extends TestCase
     }
 
     /**
-     * The browse genre filter (query()/buildFilters:
-     * `? MEMBER OF (metadata_json->'$.genres')`) must resolve against the
-     * multi-valued index rather than full-scanning media_items. Asserted on the
-     * NATURAL plan: the rare seeded genre is highly selective, so the optimizer
-     * deterministically picks the MV index (a full scan would be type=ALL).
+     * The browse genre filter (query()/buildFilters: an `EXISTS` correlated
+     * subquery against the `media_item_genres` join table, migration 051)
+     * must resolve against that table's index rather than full-scanning
+     * either `media_items` or `media_item_genres`. Migration 051 replaced
+     * migration 050's multi-valued functional index over
+     * `metadata_json.$.genres` after that index reproducibly triggered real
+     * InnoDB purge-thread errors under sustained churn (see this class's and
+     * migration 051's docblocks for the full incident).
+     *
+     * Asserted on the NATURAL plan: the rare seeded genre is highly
+     * selective, so the optimizer deterministically semi-join-converts the
+     * `EXISTS` and drives from `media_item_genres` first (a full scan of
+     * either table would be `type=ALL`). Empirically verified (this session)
+     * against MySQL 8.4.10 (prod's version) and 8.0.46 (CI's version): both
+     * pick `idx_media_item_genres_genre` (`type=ref`) as the first
+     * (driving-table) plan row, which is exactly the row {@see explain()}
+     * returns.
      */
-    public function testGenreMembershipUsesMultiValuedIndex(): void
+    public function testGenreMembershipUsesJoinTableIndex(): void
     {
-        // Mirrors the query()/buildFilters genre predicate (single genre).
+        // Mirrors the query()/buildFilters genre predicate (single genre): an
+        // EXISTS correlated subquery against media_item_genres.
         $plan = $this->explain(
-            "SELECT * FROM media_items WHERE library_id = ? "
-            . "AND (? MEMBER OF (metadata_json->'\$.genres')) "
+            'SELECT * FROM media_items WHERE library_id = ? '
+            . 'AND (EXISTS ('
+            . '    SELECT 1 FROM media_item_genres mig'
+            . '     WHERE mig.media_item_id = media_items.id'
+            . '       AND mig.genre IN (?)'
+            . ')) '
             . 'ORDER BY sort_title ASC, name ASC LIMIT 100 OFFSET 0',
             [$this->libraryId, self::RARE_GENRE],
         );
@@ -191,10 +256,18 @@ final class BrowseIndexUsageTest extends TestCase
             'Genre membership must NOT be a full table scan (type=ALL). Plan: ' . $this->planJson($plan),
         );
         $this->assertSame(
-            self::GENRE_INDEX,
+            'mig',
+            $this->planStr($plan, 'table'),
+            'Expected the media_item_genres join table (aliased mig) to be the driving table of this '
+            . 'plan row (the optimizer semi-join-converts the EXISTS and drives from the selective side '
+            . 'first). Plan: ' . $this->planJson($plan),
+        );
+        $this->assertContains(
             $this->planStr($plan, 'key'),
-            'Genre membership must resolve against the multi-valued index ' . self::GENRE_INDEX
-            . '. Plan: ' . $this->planJson($plan),
+            [self::GENRE_INDEX, self::GENRE_TABLE_PRIMARY_KEY],
+            'Genre membership must resolve against media_item_genres via its standalone genre index ('
+            . self::GENRE_INDEX . ') or its PRIMARY KEY (media_item_id, genre) — both plain B-tree indexes, '
+            . 'unlike the multi-valued functional index migration 051 removed. Plan: ' . $this->planJson($plan),
         );
     }
 
@@ -299,6 +372,23 @@ final class BrowseIndexUsageTest extends TestCase
     {
         try {
             $rows = $this->db()->query("SHOW COLUMNS FROM media_items LIKE 'sort_title'");
+
+            return is_array($rows) && $rows !== [];
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether migration 051's `media_item_genres` join table exists on this
+     * schema. A separate guard from {@see hasSortTitleColumn()} (migration
+     * 050) since the two migrations are independently discoverable/applicable
+     * — a schema could in principle have one without the other.
+     */
+    private function hasMediaItemGenresTable(): bool
+    {
+        try {
+            $rows = $this->db()->query("SHOW TABLES LIKE 'media_item_genres'");
 
             return is_array($rows) && $rows !== [];
         } catch (Throwable) {

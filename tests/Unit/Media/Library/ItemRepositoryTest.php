@@ -22,18 +22,18 @@ class ItemRepositoryTest extends TestCase
         // Regression: a name/path with invalid UTF-8 bytes must be scrubbed to
         // valid UTF-8 before the INSERT, else MySQL rejects it with error 1366
         // ("Incorrect string value") on the utf8mb4 column.
+        //
+        // create() also syncs the media_item_genres join table (migration 051)
+        // after the main INSERT — captured here only, so this test still
+        // isolates the main INSERT's params regardless of that extra call.
         $captured = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->anything(),
-                $this->callback(function ($params) use (&$captured): bool {
-                    $captured = $params;
-                    return true;
-                })
-            )
-            ->willReturn([]);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $captured = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->create([
@@ -55,16 +55,12 @@ class ItemRepositoryTest extends TestCase
     {
         $captured = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->anything(),
-                $this->callback(function ($params) use (&$captured): bool {
-                    $captured = $params;
-                    return true;
-                })
-            )
-            ->willReturn([]);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $captured = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $valid = "\u{201C}Gallavich!\u{201D}"; // curly quotes — valid UTF-8
@@ -491,24 +487,14 @@ class ItemRepositoryTest extends TestCase
 
     public function testCreateGeneratesUuidAndInsertsItem(): void
     {
+        $captured = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->stringContains('INSERT INTO media_items'),
-                $this->callback(function ($params) {
-                    // id, library_id, parent_id, name, type, path, canonical_key,
-                    // sort_title, content_rating, metadata_json
-                    return count($params) === 10
-                        && $params[1] === 'lib-1'
-                        && $params[3] === 'Test Movie'
-                        && $params[4] === 'movie'
-                        && $params[5] === '/movies/test.mkv'
-                        && $params[6] === null   // no canonical_key in metadata → column NULL
-                        && $params[7] === 'Test Movie' // sort_title (no leading article)
-                        && $params[8] === null;  // no rating in metadata → column NULL
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$captured) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $captured = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $id = $repo->create([
@@ -523,6 +509,18 @@ class ItemRepositoryTest extends TestCase
             '/^[0-9a-f]{4}[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}[0-9a-f]{4}[0-9a-f]{4}$/',
             $id
         );
+
+        // id, library_id, parent_id, name, type, path, canonical_key,
+        // sort_title, content_rating, metadata_json
+        $this->assertIsArray($captured);
+        $this->assertCount(10, $captured);
+        $this->assertSame('lib-1', $captured[1]);
+        $this->assertSame('Test Movie', $captured[3]);
+        $this->assertSame('movie', $captured[4]);
+        $this->assertSame('/movies/test.mkv', $captured[5]);
+        $this->assertNull($captured[6]);            // no canonical_key in metadata → column NULL
+        $this->assertSame('Test Movie', $captured[7]); // sort_title (no leading article)
+        $this->assertNull($captured[8]);            // no rating in metadata → column NULL
     }
 
     public function testCreateWritesCanonicalKeyColumnFromMetadataArray(): void
@@ -533,18 +531,13 @@ class ItemRepositoryTest extends TestCase
         $capturedSql = null;
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->callback(function ($sql) use (&$capturedSql): bool {
-                    $capturedSql = $sql;
-                    return true;
-                }),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->create([
@@ -571,15 +564,12 @@ class ItemRepositoryTest extends TestCase
         // metadata_json may arrive as a pre-encoded JSON string (legacy callers).
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->anything(),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedParams) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->create([
@@ -598,15 +588,12 @@ class ItemRepositoryTest extends TestCase
     {
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->anything(),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedParams) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->create([
@@ -648,18 +635,13 @@ class ItemRepositoryTest extends TestCase
         $capturedSql = null;
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->callback(function ($sql) use (&$capturedSql): bool {
-                    $capturedSql = $sql;
-                    return true;
-                }),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+            if (str_starts_with(trim($sql), 'UPDATE media_items')) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->update('series-1', [
@@ -688,18 +670,13 @@ class ItemRepositoryTest extends TestCase
         $capturedSql = null;
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->callback(function ($sql) use (&$capturedSql): bool {
-                    $capturedSql = $sql;
-                    return true;
-                }),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+            if (str_starts_with(trim($sql), 'UPDATE media_items')) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->update('movie-1', [
@@ -723,15 +700,12 @@ class ItemRepositoryTest extends TestCase
     {
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->anything(),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedParams) {
+            if (str_starts_with(trim($sql), 'UPDATE media_items')) {
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->update('series-1', [
@@ -757,15 +731,12 @@ class ItemRepositoryTest extends TestCase
         // the transform — writing $scrubbedName / null — would pass them all).
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->stringContains('INSERT INTO media_items'),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedParams) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->create([
@@ -820,15 +791,12 @@ class ItemRepositoryTest extends TestCase
         // wrote NULL to content_rating would pass them; this proves the live value.
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->stringContains('content_rating = ?'),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedParams) {
+            if (str_starts_with(trim($sql), 'UPDATE media_items')) {
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->update('movie-1', [
@@ -840,6 +808,184 @@ class ItemRepositoryTest extends TestCase
         $this->assertNull($capturedParams[0]);          // no canonical_key in metadata
         $this->assertSame('PG-13', $capturedParams[1]); // content_rating materialized
         $this->assertSame('movie-1', $capturedParams[3]);
+    }
+
+    // -----------------------------------------------------------------------
+    // media_item_genres join table (migration 051) write path — extractGenres()
+    // (private, exercised only indirectly through create()/update()),
+    // insertGenreRows() (create(), INSERT-only), syncGenreRows() (update(),
+    // DELETE-then-INSERT). The pre-existing genre-facet-cache-invalidation
+    // tests exercise this path with metadata but never assert on the resulting
+    // media_item_genres SQL/bindings — these tests close that gap.
+    // -----------------------------------------------------------------------
+
+    public function testCreateInsertsDedupedNonEmptyGenreRowsWithNoPrecedingDelete(): void
+    {
+        // Duplicate + blank-string genres must be deduped/dropped before the
+        // INSERT (the table's PRIMARY KEY is (media_item_id, genre); a
+        // duplicate would otherwise throw against real MySQL).
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = ['sql' => $sql, 'params' => $params];
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $id = $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'Genre Movie',
+            'type' => 'movie',
+            'path' => '/movies/genre-movie.mkv',
+            'metadata_json' => ['genres' => ['Action', 'Action', '', 'Drama', 'Action']],
+        ]);
+
+        $deleteCalls = array_values(array_filter(
+            $calls,
+            static fn (array $c): bool => str_starts_with(trim($c['sql']), 'DELETE FROM media_item_genres')
+        ));
+        $insertCalls = array_values(array_filter(
+            $calls,
+            static fn (array $c): bool => str_starts_with(trim($c['sql']), 'INSERT INTO media_item_genres')
+        ));
+
+        // create() must NEVER delete from media_item_genres — a freshly
+        // generated id can never have pre-existing rows (insertGenreRows(),
+        // not syncGenreRows()).
+        $this->assertCount(0, $deleteCalls);
+        $this->assertCount(1, $insertCalls);
+
+        $insertSql = $insertCalls[0]['sql'];
+        $insertParams = $insertCalls[0]['params'];
+
+        // Exactly 2 unique, non-empty genres survive → exactly 2 (?, ?) groups.
+        $this->assertStringContainsString(
+            'INSERT INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
+            $insertSql
+        );
+        $this->assertSame([$id, 'Action', $id, 'Drama'], $insertParams);
+    }
+
+    public function testCreateWithNoGenresKeyIssuesNoMediaItemGenresQueryAtAll(): void
+    {
+        // No metadata_json.genres at all → extractGenres() → [] →
+        // insertGenreRows() no-ops (issues NO query, not even an empty INSERT).
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = $sql;
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'No Genres',
+            'type' => 'movie',
+            'path' => '/movies/no-genres.mkv',
+            'metadata_json' => ['year' => 2000],
+        ]);
+
+        $genreCalls = array_filter($calls, static fn (string $sql): bool => str_contains($sql, 'media_item_genres'));
+        $this->assertCount(0, $genreCalls);
+    }
+
+    public function testCreateWithNonArrayGenresValueIssuesNoMediaItemGenresQuery(): void
+    {
+        // metadata_json.genres present but NOT an array (e.g. a raw string) —
+        // extractGenres() must yield [] rather than attempting to iterate a
+        // scalar, so no INSERT is issued.
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = $sql;
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'Malformed Genres',
+            'type' => 'movie',
+            'path' => '/movies/malformed-genres.mkv',
+            'metadata_json' => ['genres' => 'Action'],
+        ]);
+
+        $genreCalls = array_filter($calls, static fn (string $sql): bool => str_contains($sql, 'media_item_genres'));
+        $this->assertCount(0, $genreCalls);
+    }
+
+    public function testUpdateSyncsGenreRowsWithDeleteThenInsertInThatOrder(): void
+    {
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = ['sql' => $sql, 'params' => $params];
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->update('item-1', ['metadata_json' => ['genres' => ['Sci-Fi', 'Sci-Fi', 'Drama']]]);
+
+        $genreCalls = array_values(array_filter(
+            $calls,
+            static fn (array $c): bool => str_contains($c['sql'], 'media_item_genres')
+        ));
+
+        $this->assertCount(2, $genreCalls);
+        $this->assertStringStartsWith('DELETE FROM media_item_genres', trim($genreCalls[0]['sql']));
+        $this->assertSame(['item-1'], $genreCalls[0]['params']);
+        $this->assertStringStartsWith('INSERT INTO media_item_genres', trim($genreCalls[1]['sql']));
+        $this->assertStringContainsString(
+            'INSERT INTO media_item_genres (media_item_id, genre) VALUES (?, ?),(?, ?)',
+            $genreCalls[1]['sql']
+        );
+        $this->assertSame(['item-1', 'Sci-Fi', 'item-1', 'Drama'], $genreCalls[1]['params']);
+    }
+
+    public function testUpdateClearsGenreRowsWithDeleteOnlyWhenNewGenreListIsEmpty(): void
+    {
+        // metadata_json IS present (so the sync path runs) but carries no
+        // genres key → extractGenres() → [] → syncGenreRows() DELETEs the
+        // item's prior rows, then insertGenreRows() no-ops (must NOT issue an
+        // empty/degenerate INSERT).
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = ['sql' => $sql, 'params' => $params];
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->update('item-1', ['metadata_json' => ['year' => 2000]]);
+
+        $genreCalls = array_values(array_filter(
+            $calls,
+            static fn (array $c): bool => str_contains($c['sql'], 'media_item_genres')
+        ));
+
+        $this->assertCount(1, $genreCalls);
+        $this->assertStringStartsWith('DELETE FROM media_item_genres', trim($genreCalls[0]['sql']));
+        $this->assertSame(['item-1'], $genreCalls[0]['params']);
+    }
+
+    public function testUpdateWithoutMetadataJsonNeverTouchesGenreTable(): void
+    {
+        // No metadata_json key in $data at all → genresToSync stays null →
+        // syncGenreRows() must never be called (distinct from the previous
+        // test, where metadata_json IS present but genre-less).
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = $sql;
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->update('item-1', ['name' => 'Renamed Only']);
+
+        $genreCalls = array_filter($calls, static fn (string $sql): bool => str_contains($sql, 'media_item_genres'));
+        $this->assertCount(0, $genreCalls);
     }
 
     // -----------------------------------------------------------------------
@@ -962,21 +1108,20 @@ class ItemRepositoryTest extends TestCase
     {
         // If a caller passes canonical_key explicitly AND a metadata_json, the
         // explicit column value must win (no double-set of the column).
+        //
+        // update() also syncs the media_item_genres join table (migration 051)
+        // after the main UPDATE when metadata_json is present — captured here
+        // only, so this test still isolates the main UPDATE's SQL/params.
         $capturedSql = null;
         $capturedParams = null;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->once())
-            ->method('query')
-            ->with(
-                $this->callback(function ($sql) use (&$capturedSql): bool {
-                    $capturedSql = $sql;
-                    return true;
-                }),
-                $this->callback(function ($params) use (&$capturedParams): bool {
-                    $capturedParams = $params;
-                    return true;
-                })
-            );
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+            if (str_starts_with(trim($sql), 'UPDATE media_items')) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $repo->update('series-1', [
@@ -1180,10 +1325,17 @@ class ItemRepositoryTest extends TestCase
 
     public function testBatchCreateCreatesMultipleItems(): void
     {
+        // Each create() also syncs the media_item_genres join table (migration
+        // 051) after its INSERT, so `query()` is called more than once per
+        // item overall — count only the media_items INSERTs specifically.
+        $insertCount = 0;
         $db = $this->createMock(Connection::class);
-        $db->expects($this->exactly(2))
-            ->method('query')
-            ->with($this->stringContains('INSERT INTO media_items'));
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$insertCount) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $insertCount++;
+            }
+            return [];
+        });
 
         $repo = new ItemRepository($db);
         $ids = $repo->batchCreate([
@@ -1202,6 +1354,7 @@ class ItemRepositoryTest extends TestCase
         ]);
 
         $this->assertCount(2, $ids);
+        $this->assertSame(2, $insertCount);
     }
 
     public function testHydrateItemDecodesMetadata(): void
@@ -1685,18 +1838,131 @@ class ItemRepositoryTest extends TestCase
     public function testQueryWithGenresFilterAppliesCorrectly(): void
     {
         $db = $this->createMock(Connection::class);
-        // Genre filtering is a membership test against the multi-valued index on
-        // metadata_json.$.genres (migration 050): `? MEMBER OF (...)`, one per
-        // requested genre, OR'd together.
+        // Genre filtering is an EXISTS correlated subquery against the
+        // media_item_genres join table (migration 051), which replaced the
+        // migration 050 multi-valued functional index over
+        // metadata_json.$.genres after that index reproducibly triggered real
+        // InnoDB purge-thread errors under sustained churn.
         $db->expects($this->exactly(2))
             ->method('query')
             ->with(
-                $this->stringContains("? MEMBER OF (metadata_json->'\$.genres')")
+                $this->stringContains('EXISTS (')
             )
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
         $repo = new ItemRepository($db);
         $repo->query(['genres' => ['Action', 'Drama']]);
+    }
+
+    public function testQueryGenresFilterBuildsExactExistsClauseAndBindingOrder(): void
+    {
+        // Strengthens testQueryWithGenresFilterAppliesCorrectly (which only
+        // asserts stringContains('EXISTS (')) with the EXACT clause shape,
+        // exact placeholder count, and exact binding order — a swapped
+        // binding, a wrong placeholder count, or a dropped array_filter (that
+        // would let '' or a non-string genre leak into the bindings) would
+        // pass the weaker assertion but fails here.
+        $calls = [];
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$calls) {
+            $calls[] = ['sql' => $sql, 'params' => $params];
+            return str_starts_with(trim($sql), 'SELECT COUNT') ? [['count' => 0]] : [];
+        });
+
+        $repo = new ItemRepository($db);
+        // '' and 123 (non-string) must be filtered out of both the SQL
+        // placeholder count and the bound values.
+        $repo->query(['genres' => ['Action', '', 123, 'Drama'], 'limit' => 10, 'offset' => 5], 'lib-1');
+
+        $this->assertCount(2, $calls);
+        [$countCall, $selectCall] = $calls;
+
+        foreach ([$countCall, $selectCall] as $call) {
+            $this->assertStringContainsString('library_id = ?', $call['sql']);
+            $this->assertStringContainsString('EXISTS (', $call['sql']);
+            $this->assertStringContainsString('FROM media_item_genres mig', $call['sql']);
+            $this->assertStringContainsString('mig.media_item_id = media_items.id', $call['sql']);
+            // Exactly 2 placeholders — proves the blank string and the
+            // non-string 123 were filtered out, not just "some" of them.
+            $this->assertStringContainsString('mig.genre IN (?,?)', $call['sql']);
+        }
+
+        $this->assertSame(['lib-1', 'Action', 'Drama'], $countCall['params']);
+        $this->assertSame(['lib-1', 'Action', 'Drama', 10, 5], $selectCall['params']);
+    }
+
+    public function testGetByAllowedGenresWithEmptyArrayDelegatesToGetByLibrary(): void
+    {
+        // The empty-allow-list short circuit (line ~1383) must never build
+        // the EXISTS/NOT EXISTS genre clause at all — it must be
+        // byte-identical to a plain getByLibrary() call.
+        $capturedSql = null;
+        $capturedBindings = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function (array $bindings) use (&$capturedBindings): bool {
+                    $capturedBindings = $bindings;
+                    return true;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->getByAllowedGenres('lib-1', [], 50, 10);
+
+        $this->assertSame([], $result);
+        $this->assertIsString($capturedSql);
+        $this->assertStringNotContainsString('EXISTS', $capturedSql);
+        $this->assertStringContainsString('WHERE library_id = ?', $capturedSql);
+        $this->assertSame(['lib-1', 50, 10], $capturedBindings);
+    }
+
+    public function testGetByAllowedGenresBuildsExistsOrNotExistsQueryWithExactBindingOrder(): void
+    {
+        $capturedSql = null;
+        $capturedBindings = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->callback(function (string $sql) use (&$capturedSql): bool {
+                    $capturedSql = $sql;
+                    return true;
+                }),
+                $this->callback(function (array $bindings) use (&$capturedBindings): bool {
+                    $capturedBindings = $bindings;
+                    return true;
+                })
+            )
+            ->willReturn([]);
+
+        $repo = new ItemRepository($db);
+        $repo->getByAllowedGenres('lib-1', ['Action', 'Drama'], 50, 10);
+
+        $this->assertIsString($capturedSql);
+        $this->assertStringContainsString('WHERE library_id = ?', $capturedSql);
+        $this->assertStringContainsString('EXISTS (', $capturedSql);
+        $this->assertStringContainsString('FROM media_item_genres mig', $capturedSql);
+        $this->assertStringContainsString('mig.media_item_id = media_items.id', $capturedSql);
+        // Exactly 2 placeholders for the 2 allowed genres.
+        $this->assertStringContainsString('mig.genre IN (?,?)', $capturedSql);
+        // The "or has no genres at all" fallback — a SEPARATE join-table
+        // reference (mig2), never re-using mig's row scope.
+        $this->assertStringContainsString('OR NOT EXISTS (', $capturedSql);
+        $this->assertStringContainsString('FROM media_item_genres mig2', $capturedSql);
+        $this->assertStringContainsString('mig2.media_item_id = media_items.id', $capturedSql);
+        $this->assertStringContainsString('ORDER BY sort_title ASC, name ASC', $capturedSql);
+        $this->assertStringContainsString('LIMIT ? OFFSET ?', $capturedSql);
+
+        // Exact binding order: libraryId, then each allowed genre (in the
+        // caller-supplied order), then limit, then offset.
+        $this->assertSame(['lib-1', 'Action', 'Drama', 50, 10], $capturedBindings);
     }
 
     public function testQueryWithActorsFilterAppliesCorrectly(): void
@@ -1758,19 +2024,25 @@ class ItemRepositoryTest extends TestCase
         $this->assertEquals(['year' => 2020, 'poster_url' => 'http://example.com/poster.jpg', 'genres' => ['Action'], 'rating' => 'PG-13'], $result['items'][0]['metadata']);
     }
 
-    public function testDistinctGenresUnnestsViaJsonTableAndShapesRows(): void
+    public function testDistinctGenresJoinsMediaItemGenresTableAndShapesRows(): void
     {
         $db = $this->createMock(Connection::class);
         $db->expects($this->once())
             ->method('query')
             ->with(
                 $this->callback(function (string $sql): bool {
-                    // Set-based unnest of $.genres via JSON_TABLE — no unbounded
-                    // SELECT * scan into PHP — DISTINCT + ORDER done server-side.
-                    return str_contains($sql, 'JSON_TABLE(')
-                        && str_contains($sql, "'\$.genres[*]'")
-                        && str_contains($sql, 'SELECT DISTINCT')
-                        && str_contains($sql, 'ORDER BY g.genre ASC')
+                    // Set-based read of the media_item_genres join table
+                    // (migration 051) — no unbounded SELECT * scan into PHP —
+                    // DISTINCT + ORDER done server-side, same as the pre-051
+                    // JSON_TABLE unnest it replaced. `COLLATE utf8mb4_unicode_ci`
+                    // is re-asserted on the selected genre value so this
+                    // case-insensitive facet DISTINCT stays independent of the
+                    // column's storage collation (utf8mb4_bin, adopted for the
+                    // exact-match filter predicates — see the method's docblock).
+                    return str_contains($sql, 'FROM media_item_genres mig')
+                        && str_contains($sql, 'JOIN media_items mi')
+                        && str_contains($sql, 'SELECT DISTINCT mig.genre COLLATE utf8mb4_unicode_ci')
+                        && str_contains($sql, 'ORDER BY genre ASC')
                         && !str_contains($sql, 'SELECT *');
                 }),
                 $this->callback(fn (array $bindings): bool => $bindings === []),
@@ -1838,7 +2110,7 @@ class ItemRepositoryTest extends TestCase
 
     /**
      * A repeat lookup for the same scope within the TTL is served from the
-     * in-worker cache — the JSON_TABLE scan runs exactly once.
+     * in-worker cache — the media_item_genres join-table read (migration 051) runs exactly once.
      */
     public function testDistinctGenresServesRepeatCallsFromCache(): void
     {
@@ -1864,12 +2136,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testDistinctGenresCachesEachScopeIndependently(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql, array $bindings = []) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql, array $bindings = []) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                     return $bindings === ['lib-B'] ? [['genre' => 'Horror']] : [['genre' => 'Action']];
                 }
                 return [];
@@ -1886,7 +2158,7 @@ class ItemRepositoryTest extends TestCase
         $repo->distinctGenres('lib-B');
         $repo->distinctGenres();
 
-        $this->assertSame(3, $jsonTableCalls, 'one JSON_TABLE scan per distinct scope, no repeats');
+        $this->assertSame(3, $distinctGenresQueryCalls, 'one media_item_genres read per distinct scope, no repeats');
     }
 
     /**
@@ -1894,12 +2166,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testInvalidateGenreFacetsForcesRecompute(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -1912,7 +2184,7 @@ class ItemRepositoryTest extends TestCase
         $repo->invalidateGenreFacets('lib-A');     // drop scope
         $repo->distinctGenres('lib-A');            // compute #2
 
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**
@@ -1921,12 +2193,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testInvalidateLibraryScopeAlsoDropsGlobalScope(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -1939,7 +2211,7 @@ class ItemRepositoryTest extends TestCase
         $repo->invalidateGenreFacets('lib-A');     // library write → also flush global
         $repo->distinctGenres();                   // global compute #2
 
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**
@@ -1947,12 +2219,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testInvalidateGenreFacetsNullFlushesAllScopes(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -1966,7 +2238,7 @@ class ItemRepositoryTest extends TestCase
         $repo->distinctGenres('lib-A');            // recompute
         $repo->distinctGenres('lib-B');            // recompute
 
-        $this->assertSame(4, $jsonTableCalls);
+        $this->assertSame(4, $distinctGenresQueryCalls);
     }
 
     /**
@@ -1975,12 +2247,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testCreateInvalidatesGenreFacetsForItsLibrary(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                     return [['genre' => 'Action']];
                 }
                 return [];
@@ -2000,7 +2272,7 @@ class ItemRepositoryTest extends TestCase
         ]);
         $repo->distinctGenres('lib-A');            // compute #2
 
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**
@@ -2009,12 +2281,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testUpdateInvalidatesGenreFacetsOnlyWhenMetadataChanges(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -2026,12 +2298,12 @@ class ItemRepositoryTest extends TestCase
         $repo->distinctGenres('lib-A');            // compute #1
         $repo->update('item-1', ['name' => 'Renamed']);
         $repo->distinctGenres('lib-A');            // still cached → no recompute
-        $this->assertSame(1, $jsonTableCalls);
+        $this->assertSame(1, $distinctGenresQueryCalls);
 
         // A metadata_json rewrite flushes all scopes.
         $repo->update('item-1', ['metadata_json' => ['genres' => ['Sci-Fi']]]);
         $repo->distinctGenres('lib-A');            // compute #2
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**
@@ -2040,12 +2312,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testDeleteInvalidatesGenreFacets(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -2058,7 +2330,7 @@ class ItemRepositoryTest extends TestCase
         $repo->delete('item-1');
         $repo->distinctGenres('lib-A');            // compute #2
 
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**
@@ -2067,12 +2339,12 @@ class ItemRepositoryTest extends TestCase
      */
     public function testDeleteByLibraryInvalidatesGenreFacets(): void
     {
-        $jsonTableCalls = 0;
+        $distinctGenresQueryCalls = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(
-            function (string $sql) use (&$jsonTableCalls): array {
-                if (str_contains($sql, 'JSON_TABLE(')) {
-                    $jsonTableCalls++;
+            function (string $sql) use (&$distinctGenresQueryCalls): array {
+                if (str_contains($sql, 'FROM media_item_genres mig')) {
+                    $distinctGenresQueryCalls++;
                 }
                 return [['genre' => 'Action']];
             }
@@ -2085,7 +2357,7 @@ class ItemRepositoryTest extends TestCase
         $repo->deleteByLibrary('lib-A');
         $repo->distinctGenres('lib-A');            // compute #2
 
-        $this->assertSame(2, $jsonTableCalls);
+        $this->assertSame(2, $distinctGenresQueryCalls);
     }
 
     /**

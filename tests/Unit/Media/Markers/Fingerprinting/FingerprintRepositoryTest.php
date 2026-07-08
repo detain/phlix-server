@@ -26,6 +26,11 @@ class FingerprintRepositoryTest extends TestCase
             ],
             // storeFingerprint: update (UPDATE returns void, so [])
             [],
+            // storeFingerprint: update() also re-syncs the media_item_genres
+            // join table (migration 051) since metadata_json is present — this
+            // item's metadata carries no genres, so syncGenreRows() only issues
+            // the DELETE (no INSERT); its return value is discarded ([]).
+            [],
             // getFingerprint: findById
             [
                 [
@@ -123,7 +128,10 @@ class FingerprintRepositoryTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
 
-        $db->expects($this->exactly(2))
+        // findById, the UPDATE, then update()'s media_item_genres re-sync
+        // (migration 051) — this item's metadata carries no genres, so
+        // syncGenreRows() only issues the DELETE (no INSERT).
+        $db->expects($this->exactly(3))
             ->method('query')
             ->willReturnOnConsecutiveCalls(
                 [
@@ -137,6 +145,7 @@ class FingerprintRepositoryTest extends TestCase
                         'metadata_json' => '{"existing_key": "existing_value"}',
                     ]
                 ],
+                [],
                 []
             );
 

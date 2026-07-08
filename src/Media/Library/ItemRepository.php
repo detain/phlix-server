@@ -1456,55 +1456,6 @@ class ItemRepository
     }
 
     /**
-     * Get items excluding blocked genres.
-     *
-     * @todo S10 (dead-code cleanup step): DELETE or repair this method. It is
-     *       DEAD — no callers anywhere under src/, tests/, or scripts/ (verified
-     *       repo-wide during S7). It is also the ONLY genre-filter path NOT
-     *       migrated to the `media_item_genres` join table (migration 051, née
-     *       the migration 050 multi-valued index this superseded); it still
-     *       uses an un-indexed, un-path-scoped `JSON_CONTAINS(metadata_json, ?)
-     *       = 0` that full-scans media_items. Left as metadata_json-only
-     *       intentionally in S7b as well — this is dead, pre-existing-buggy
-     *       code out of scope for both S7 and S7b; S10 owns the delete/fix
-     *       decision.
-     *       PRE-EXISTING PARAM-COUNT BUG: `$genrePlaceholders` is computed but
-     *       never interpolated into the SQL (the WHERE has a single `?`), yet the
-     *       binding `array_merge([$libraryId], $blockedGenres, [$limit, $offset])`
-     *       expands ALL of $blockedGenres — so with >1 blocked genre the bound
-     *       param count exceeds the placeholder count and the query throws. Left
-     *       untouched in S7 (out of the browse/filter hot path) to avoid scope
-     *       creep into buggy dead code; S10 owns the delete/fix decision.
-     *
-     * @param string $libraryId Library to filter
-     * @param array<string> $blockedGenres Array of blocked genre strings
-     * @param int $limit Max items to return
-     * @param int $offset Pagination offset
-     * @return array<int, array<string, mixed>> Filtered media items
-     */
-    public function getExcludingGenres(string $libraryId, array $blockedGenres, int $limit = 100, int $offset = 0): array
-    {
-        if (empty($blockedGenres)) {
-            return $this->getByLibrary($libraryId, $limit, $offset);
-        }
-
-        $genrePlaceholders = implode(',', array_fill(0, count($blockedGenres), '?'));
-
-        $orderBy = self::titleOrder();
-
-        $results = $this->db->query(
-            "SELECT * FROM media_items
-             WHERE library_id = ?
-               AND JSON_CONTAINS(metadata_json, ?) = 0
-             ORDER BY {$orderBy}
-             LIMIT ? OFFSET ?",
-            array_merge([$libraryId], $blockedGenres, [$limit, $offset])
-        );
-
-        return $this->hydrateRows($results);
-    }
-
-    /**
      * Hydrates a database row with decoded metadata.
      *
      * @param array<string, mixed> $row Database row with metadata_json field

@@ -19,6 +19,12 @@ use function DI\factory;
  * encoding-parameter helper and the {@see TranscodeManager} that owns HLS job
  * lifecycle.
  *
+ * NOTE: as of Stream Quality/ABR step S10, {@see EncodingHelper}'s registration
+ * below is no longer consumed by TranscodeManager (its constructor param was
+ * removed as dead code) — it is retained here only because deleting a public
+ * DI-registered class wasn't in that step's scope; see the registration's own
+ * comment.
+ *
  * The crucial wiring here is the segment directory: the TranscodeManager WRITES
  * HLS variants to the very same `config['hls']['segment_dir']` that
  * {@see \Phlix\Media\Streaming\HlsStreamer} and
@@ -82,13 +88,17 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 }
             ),
 
+            // NOTE (Stream Quality/ABR step S10): EncodingHelper's only consumer was
+            // TranscodeManager's constructor, via a $encodingHelper param that S10
+            // removed as dead (write-only once the legacy startTranscode() reader was
+            // deleted). This registration — and the EncodingHelper class itself — are
+            // now fully unconsumed and are a clean candidate for a future removal.
             EncodingHelper::class => factory(static fn(): EncodingHelper => new EncodingHelper()),
 
             TranscodeManager::class => factory(
                 static function (
                     ContainerInterface $c
                 ) use (
-                    $transcodeDir,
                     $segmentDir,
                     $segmentSeconds,
                     $maxConcurrentSegments,
@@ -101,13 +111,9 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $db = $c->get(Connection::class);
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
-                    /** @var EncodingHelper $encodingHelper */
-                    $encodingHelper = $c->get(EncodingHelper::class);
                     return new TranscodeManager(
                         $db,
                         $ffmpeg,
-                        $encodingHelper,
-                        $transcodeDir,
                         $segmentDir,
                         $logger,
                         $segmentSeconds,

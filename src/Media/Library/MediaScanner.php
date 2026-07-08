@@ -624,16 +624,35 @@ class MediaScanner
      * in order, on the calling "thread" — so nothing regresses for
      * non-coroutine callers.
      *
-     * Bounded fan-out idiom: a `Swoole\Coroutine\Channel` sized to
-     * {@see $maxConcurrentScanProbes} acts as a semaphore (a `push()` before
-     * launching each probe coroutine blocks/yields once the channel is full,
-     * and each coroutine's `pop()` on completion frees a slot for the next),
-     * paired with a `Swoole\Coroutine\WaitGroup` so the caller always waits
-     * for every launched coroutine to finish — successfully or by catching
-     * its own exception — before returning, no matter how many probes fail.
+     * Bounded fan-out idiom: TWO separate `Swoole\Coroutine\Channel`s, kept
+     * strictly apart because they serve different purposes.
+     *
+     * 1. A semaphore channel sized to {@see $maxConcurrentScanProbes}: a
+     *    `push()` before launching each probe coroutine blocks/yields once
+     *    the channel is full, and each coroutine's `pop()` on completion
+     *    frees a slot for the next — this is what BOUNDS the concurrency.
+     * 2. A "done" signal channel, sized to `count($paths)`, that every
+     *    launched coroutine `push()`es to exactly once on completion
+     *    (success, a caught exception, or the `Coroutine::create() === false`
+     *    scheduling-failure branch below) — the caller then `pop()`s it
+     *    exactly `count($paths)` times, blocking until every coroutine has
+     *    signaled. This is functionally equivalent to a `WaitGroup::wait()`
+     *    join. `\Swoole\Coroutine\WaitGroup` is deliberately NOT used here:
+     *    PHPStan's bundled JetBrains PhpStorm swoole stubs (loaded when the
+     *    real `ext-swoole` is not present — e.g. CI's PHPStan job runs with
+     *    only `ext-json`) ship `Coroutine.stub`/`Coroutine/Channel.stub`/
+     *    `Coroutine/System.stub` but NO `Coroutine/WaitGroup.stub`, so any
+     *    use of that class fails `phpstan analyze --level=9` with
+     *    "Instantiated class Swoole\Coroutine\WaitGroup not found" in that
+     *    environment even though the real extension resolves it fine
+     *    locally. `Channel` IS covered by the bundled stub (already relied
+     *    on for the semaphore above), so a second channel keeps this method
+     *    fully PHPStan-clean in both environments while producing the exact
+     *    same join semantics as the WaitGroup it replaces.
+     *
      * `probeSummary()` itself already never throws (see its docblock), but
      * the coroutine body defensively catches anyway so a future change there
-     * can never leave the WaitGroup stuck.
+     * can never leave the done-channel short a signal.
      *
      * @param list<string> $paths Absolute filesystem paths to probe. An empty
      *                             list short-circuits with no coroutine setup.
@@ -659,21 +678,22 @@ class MediaScanner
 
         $results = [];
         $semaphore = new \Swoole\Coroutine\Channel(max(1, $this->maxConcurrentScanProbes));
-        $waitGroup = new \Swoole\Coroutine\WaitGroup();
+        // Sized to the exact number of completion signals it will ever
+        // receive (one per path) so no producer can ever block on push().
+        $done = new \Swoole\Coroutine\Channel(count($paths));
 
         foreach ($paths as $path) {
             // Blocks/yields once $maxConcurrentScanProbes probes are already
             // in flight — this is what bounds the concurrency, not a fixed
             // "launch N then wait" batch split.
             $semaphore->push(true);
-            $waitGroup->add();
-            $cid = \Swoole\Coroutine::create(function () use ($path, &$results, $semaphore, $waitGroup): void {
+            $cid = \Swoole\Coroutine::create(function () use ($path, &$results, $semaphore, $done): void {
                 try {
                     $results[$path] = $this->probeSummary($path);
                 } catch (\Throwable $e) {
                     // Defensive only — probeSummary() already catches every
                     // Throwable internally. A probe failure must never abort
-                    // the scan or leave the WaitGroup unjoined.
+                    // the scan or leave the done-channel short a signal.
                     $this->logger->debug('Concurrent scan probe failed; continuing scan', [
                         'path' => $path,
                         'error' => $e->getMessage(),
@@ -681,31 +701,37 @@ class MediaScanner
                     $results[$path] = null;
                 } finally {
                     $semaphore->pop();
-                    $waitGroup->done();
+                    $done->push(true);
                 }
             });
 
             // Coroutine::create() returns the new coroutine ID on success or
             // `false` if it failed to SCHEDULE the coroutine at all (e.g. the
             // process-wide `max_coroutine` ceiling was hit) — in that failure
-            // case the closure body above never runs, so the `push()`/`add()`
-            // reserved just above it would otherwise NEVER be released and
-            // `wait()` below would hang forever for this batch. Release them
-            // here ourselves and record the same `null`-on-failure outcome a
-            // thrown probe would produce, so a scheduling failure degrades
-            // exactly like any other single-path probe failure instead of
-            // stalling the whole scan.
+            // case the closure body above never runs, so the `push()`
+            // reserved just above it on the semaphore would otherwise NEVER
+            // be released, and the done-channel would never receive this
+            // path's signal, so the final pop loop below would hang forever
+            // waiting for it. Release/signal them here ourselves and record
+            // the same `null`-on-failure outcome a thrown probe would
+            // produce, so a scheduling failure degrades exactly like any
+            // other single-path probe failure instead of stalling the scan.
             if ($cid === false) {
                 $this->logger->debug('Failed to spawn scan-probe coroutine; continuing scan', [
                     'path' => $path,
                 ]);
                 $results[$path] = null;
                 $semaphore->pop();
-                $waitGroup->done();
+                $done->push(true);
             }
         }
 
-        $waitGroup->wait();
+        // Block until every launched coroutine (or synchronous
+        // scheduling-failure fallback above) has signaled completion —
+        // exactly one pop() per path, mirroring WaitGroup::wait()'s join.
+        for ($i = 0, $total = count($paths); $i < $total; $i++) {
+            $done->pop();
+        }
 
         return $results;
     }

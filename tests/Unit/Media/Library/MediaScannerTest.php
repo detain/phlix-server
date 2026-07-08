@@ -1978,9 +1978,14 @@ class MediaScannerTest extends TestCase
      * Reviewer finding (S8, Low): `\Swoole\Coroutine::create()`'s return value
      * was unchecked — if Swoole itself refuses to SCHEDULE a coroutine (e.g.
      * the process-wide `max_coroutine` ceiling is hit) the closure body never
-     * runs, so the `WaitGroup::add()`/`Channel::push()` reserved just before
-     * the `create()` call would never be released by that closure's `finally`,
-     * and `WaitGroup::wait()` would hang forever for the batch.
+     * runs, so the semaphore `Channel::push()` reserved just before the
+     * `create()` call would never be released by that closure's `finally`,
+     * and the "done" signal channel would never receive that path's
+     * completion push — so the final `pop()` loop in
+     * {@see MediaScanner::probeManyConcurrently()} (the `WaitGroup::wait()`-
+     * equivalent join, since PHPStan's bundled stub-only environment doesn't
+     * recognise `WaitGroup` — see that method's own docblock) would hang
+     * forever waiting for a signal that will never arrive.
      *
      * This is forced DETERMINISTICALLY (not merely asserted-by-inspection) by
      * lowering Swoole's own `max_coroutine` to `1` from inside the coroutine
@@ -1996,15 +2001,15 @@ class MediaScannerTest extends TestCase
      * `failOnWarning="true"`.
      *
      * Asserts: (1) `probeManyConcurrently()` returns promptly rather than
-     * hanging — `$completed` would remain false if `wait()` blocked forever;
-     * (2) every path resolves to `null` (a refused coroutine spawn is treated
-     * exactly like any other single-path probe failure); (3) the ffmpeg
-     * mock's `probe()` is NEVER invoked, proving the closure body genuinely
-     * never ran for any path (this is the `create() === false` branch, not
-     * the ordinary in-coroutine-throw branch already covered by the
-     * isolation test above).
+     * hanging — `$completed` would remain false if the done-channel join
+     * blocked forever; (2) every path resolves to `null` (a refused coroutine
+     * spawn is treated exactly like any other single-path probe failure);
+     * (3) the ffmpeg mock's `probe()` is NEVER invoked, proving the closure
+     * body genuinely never ran for any path (this is the `create() === false`
+     * branch, not the ordinary in-coroutine-throw branch already covered by
+     * the isolation test above).
      */
-    public function testProbeManyConcurrentlyReleasesWaitGroupWhenCoroutineCreateFailsToSchedule(): void
+    public function testProbeManyConcurrentlyReleasesDoneSignalWhenCoroutineCreateFailsToSchedule(): void
     {
         if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
             $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');

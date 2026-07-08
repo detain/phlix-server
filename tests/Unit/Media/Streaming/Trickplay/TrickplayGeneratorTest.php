@@ -103,8 +103,9 @@ class TrickplayGeneratorTest extends TestCase
         $ffmpeg = $this->createMock(FfmpegRunner::class);
         $generator = new TrickplayGenerator($ffmpeg, '/tmp/trickplay');
 
-        // Should not throw
+        // Should not throw, and no job directory is left behind for an
+        // unknown job id.
         $generator->cleanup('nonexistent-job');
-        $this->assertTrue(true);
+        $this->assertDirectoryDoesNotExist('/tmp/trickplay/trickplay/nonexistent-job');
     }
 }

@@ -122,6 +122,7 @@ class MarkerSetTest extends TestCase
         $chapter = new ChapterMarker(90, 300, 'Chapter One');
         $arr = $chapter->toArray();
 
-        $this->assertEquals('Chapter One', $arr['title']);
+        $this->assertArrayHasKey('title', $arr);
+        $this->assertEquals('Chapter One', $arr['title'] ?? null);
     }
 }

@@ -35,6 +35,7 @@ class TrailerFinderTest extends TestCase
             new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::CHILD_FIRST
         );
+        /** @var \SplFileInfo $file */
         foreach ($iterator as $file) {
             if ($file->isDir()) {
                 rmdir($file->getPathname());
@@ -114,7 +115,6 @@ class TrailerFinderTest extends TestCase
         $finder = new TrailerFinder();
         $trailers = $finder->findLocalTrailers($mediaDir, $mediaFilename);
 
-        $this->assertIsArray($trailers);
         $this->assertCount(0, $trailers);
     }
 

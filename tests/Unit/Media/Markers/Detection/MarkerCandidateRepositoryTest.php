@@ -9,11 +9,12 @@ use Phlix\Media\Markers\Detection\IntroMarkerCandidate;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\Detection\OutroMarkerCandidate;
 use Phlix\Media\Markers\Detection\StoredMarkers;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class MarkerCandidateRepositoryTest extends TestCase
 {
-    private function createMockConnection(): Connection
+    private function createMockConnection(): Connection&MockObject
     {
         return $this->createMock(Connection::class);
     }
@@ -33,7 +34,8 @@ class MarkerCandidateRepositoryTest extends TestCase
             episodes_processed: ['ep-1', 'ep-2', 'ep-3'],
         );
 
-        $db->method('query')
+        $db->expects($this->atLeastOnce())
+            ->method('query')
             ->willReturnCallback(function ($sql, $params) {
                 if (strpos($sql, 'SELECT') !== false) {
                     return [
@@ -54,9 +56,9 @@ class MarkerCandidateRepositoryTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $repo = new MarkerCandidateRepository($itemRepo);
 
+        // storeCandidates persists via the DB; the atLeastOnce() query
+        // expectation above asserts the write path executed.
         $repo->storeCandidates('show-1', $result);
-
-        $this->assertTrue(true);
     }
 
     public function testGetCandidatesReturnsNullWhenNotFound(): void

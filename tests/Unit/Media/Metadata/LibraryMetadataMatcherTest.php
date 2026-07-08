@@ -224,7 +224,7 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $resolver = $this->createMock(MovieMetadataResolver::class);
         $resolver->method('resolve')->willReturnCallback(
-            static function (string $title): ?array {
+            static function (string $title): array {
                 if ($title === 'Boom') {
                     throw new RuntimeException('resolver exploded');
                 }
@@ -479,11 +479,17 @@ class LibraryMetadataMatcherTest extends TestCase
 
         $ep = $updates['ep-1'];
         // Episode-level cast/crew in the canonical people shape + per-episode rating.
-        $this->assertSame('Kiefer Sutherland', $ep['cast'][0]['name']);
-        $this->assertSame('Jack Bauer', $ep['cast'][0]['role']);
-        $this->assertSame('https://i/w185/k.jpg', $ep['cast'][0]['profile_url']);
-        $this->assertSame('Stephen Hopkins', $ep['crew'][0]['name']);
-        $this->assertSame('Director', $ep['crew'][0]['job']);
+        $cast = $ep['cast'];
+        $this->assertIsArray($cast);
+        $this->assertIsArray($cast[0]);
+        $this->assertSame('Kiefer Sutherland', $cast[0]['name']);
+        $this->assertSame('Jack Bauer', $cast[0]['role']);
+        $this->assertSame('https://i/w185/k.jpg', $cast[0]['profile_url']);
+        $crew = $ep['crew'];
+        $this->assertIsArray($crew);
+        $this->assertIsArray($crew[0]);
+        $this->assertSame('Stephen Hopkins', $crew[0]['name']);
+        $this->assertSame('Director', $crew[0]['job']);
         $this->assertSame(7.8, $ep['vote_average']);
         // Inherited series-level fields.
         $this->assertSame(['Drama', 'Action & Adventure'], $ep['genres']);

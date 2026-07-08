@@ -21,8 +21,6 @@ class HwaccelProbeTest extends TestCase
 
         $capabilities = $probe->probe();
 
-        $this->assertIsArray($capabilities);
-
         foreach ($capabilities as $vendor => $capability) {
             $this->assertIsString($vendor);
             $this->assertInstanceOf(HwaccelCapability::class, $capability);
@@ -39,7 +37,12 @@ class HwaccelProbeTest extends TestCase
         $invalid_available = $probe->isVendorAvailable('invalid_vendor');
 
         $this->assertTrue($software_available);
-        $this->assertIsBool($nvenc_available);
+        // nvenc availability is environment-dependent, but the boolean must be
+        // consistent with what getAvailableVendors() reports.
+        $this->assertSame(
+            in_array('nvenc', $probe->getAvailableVendors(), true),
+            $nvenc_available
+        );
         $this->assertFalse($invalid_available);
     }
 
@@ -68,7 +71,6 @@ class HwaccelProbeTest extends TestCase
 
         $vendors = $probe->getAvailableVendors();
 
-        $this->assertIsArray($vendors);
         $this->assertContains('software', $vendors);
     }
 

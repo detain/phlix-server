@@ -651,7 +651,7 @@ final class AbrLadderTest extends TestCase
     public function testDegenerateZeroProfileIsCoercedToSafeDefaults(): void
     {
         $selector = new class extends QualitySelector {
-            public function getProfile(string $name): ?array
+            public function getProfile(string $name): array
             {
                 return [
                     'max_bitrate' => 0,
@@ -675,7 +675,7 @@ final class AbrLadderTest extends TestCase
     public function testPartialProfileResolutionUsesDefaultHeight(): void
     {
         $selector = new class extends QualitySelector {
-            public function getProfile(string $name): ?array
+            public function getProfile(string $name): array
             {
                 return [
                     'max_bitrate' => 8_000_000,

@@ -87,7 +87,6 @@ class TrailerTest extends TestCase
 
         $array = $trailer->toArray();
 
-        $this->assertIsArray($array);
         $this->assertSame('trailer-123', $array['id']);
         $this->assertSame('media-456', $array['media_item_id']);
         $this->assertSame('Official Trailer', $array['title']);

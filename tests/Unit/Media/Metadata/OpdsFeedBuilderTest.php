@@ -143,6 +143,7 @@ class OpdsFeedBuilderTest extends TestCase
         // Import the entry into the DOM
         $dom->appendChild($dom->importNode($entry, true));
         $xml = $dom->saveXML();
+        $this->assertNotFalse($xml);
 
         // Should contain Dublin Core fields
         $this->assertStringContainsString('dc:title', $xml);
@@ -171,6 +172,7 @@ class OpdsFeedBuilderTest extends TestCase
         // Should not throw, should handle gracefully
         $dom->appendChild($dom->importNode($entry, true));
         $xml = $dom->saveXML();
+        $this->assertNotFalse($xml);
 
         // Should still have an entry
         $this->assertStringContainsString('<entry', $xml);

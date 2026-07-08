@@ -19,7 +19,7 @@ class HwaccelCapabilityTest extends TestCase
             max_resolution_w: 3840,
             max_resolution_h: 2160,
             max_bitrate: 50000000,
-            extra_args: ['-preset:v', 'p4'],
+            extra_args: ['preset' => 'p4'],
         );
 
         $this->assertEquals('nvenc', $capability->vendor);
@@ -31,7 +31,7 @@ class HwaccelCapabilityTest extends TestCase
         $this->assertEquals(3840, $capability->max_resolution_w);
         $this->assertEquals(2160, $capability->max_resolution_h);
         $this->assertEquals(50000000, $capability->max_bitrate);
-        $this->assertEquals(['-preset:v', 'p4'], $capability->extra_args);
+        $this->assertEquals(['preset' => 'p4'], $capability->extra_args);
     }
 
     public function test_immutable(): void

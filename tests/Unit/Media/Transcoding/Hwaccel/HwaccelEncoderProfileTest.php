@@ -16,14 +16,15 @@ class HwaccelEncoderProfileTest extends TestCase
     public function test_interface_all_methods_defined(): void
     {
         $profile = new NvencProfile();
+        $reflection = new \ReflectionObject($profile);
 
-        $this->assertTrue(method_exists($profile, 'getVendor'));
-        $this->assertTrue(method_exists($profile, 'getEncoderName'));
-        $this->assertTrue(method_exists($profile, 'getInputDeviceArgs'));
-        $this->assertTrue(method_exists($profile, 'getCodecArg'));
-        $this->assertTrue(method_exists($profile, 'getQualityArgs'));
-        $this->assertTrue(method_exists($profile, 'getFilterArgs'));
-        $this->assertTrue(method_exists($profile, 'getMaxConcurrent'));
+        $this->assertTrue($reflection->hasMethod('getVendor'));
+        $this->assertTrue($reflection->hasMethod('getEncoderName'));
+        $this->assertTrue($reflection->hasMethod('getInputDeviceArgs'));
+        $this->assertTrue($reflection->hasMethod('getCodecArg'));
+        $this->assertTrue($reflection->hasMethod('getQualityArgs'));
+        $this->assertTrue($reflection->hasMethod('getFilterArgs'));
+        $this->assertTrue($reflection->hasMethod('getMaxConcurrent'));
     }
 
     public function test_software_profile_encoder_name(): void

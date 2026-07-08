@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Metadata;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\ItemRepository;
@@ -163,8 +164,10 @@ class LibraryMetadataMatcherApplyTest extends TestCase
         $this->assertSame('https://image.tmdb.org/t/p/w500/p.jpg', $meta['poster_url']);
         $this->assertSame(136, $meta['runtime']);
         $this->assertSame(['Action', 'Sci-Fi'], $meta['genres']);
-        $this->assertSame('603', $meta['external_ids']['tmdb']);
-        $this->assertSame('tt0133093', $meta['external_ids']['imdb']);
+        $externalIds = $meta['external_ids'];
+        $this->assertIsArray($externalIds);
+        $this->assertSame('603', $externalIds['tmdb']);
+        $this->assertSame('tt0133093', $externalIds['imdb']);
         $this->assertArrayHasKey('metadata_refreshed_at', $captured);
     }
 
@@ -295,7 +298,7 @@ class LibraryMetadataMatcherApplyTest extends TestCase
      * A TmdbProvider mock whose {@see TmdbProvider::hasApiKey()} reports a
      * configured key, so the matcher proceeds to the real search/apply path.
      */
-    private function configuredTmdb(): TmdbProvider
+    private function configuredTmdb(): TmdbProvider&MockObject
     {
         $tmdb = $this->createMock(TmdbProvider::class);
         $tmdb->method('hasApiKey')->willReturn(true);

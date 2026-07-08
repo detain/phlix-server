@@ -63,7 +63,6 @@ class FingerprintRepositoryTest extends TestCase
 
         $fingerprint = $repo->getFingerprint('nonexistent-id');
 
-        $this->assertIsString($fingerprint);
         $this->assertEquals('', $fingerprint);
     }
 
@@ -105,7 +104,6 @@ class FingerprintRepositoryTest extends TestCase
 
         $result = $repo->getFingerprintedIdsForShow('show-1');
 
-        $this->assertIsArray($result);
         $this->assertCount(2, $result);
         $this->assertContains('ep-1', $result);
         $this->assertContains('ep-3', $result);
@@ -152,8 +150,8 @@ class FingerprintRepositoryTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $repo = new FingerprintRepository($itemRepo);
 
+        // The DB interaction (findById + UPDATE + genre re-sync) is asserted by
+        // the exactly(3) query expectation configured above.
         $repo->storeFingerprint('media-1', 'new-fingerprint');
-
-        $this->assertTrue(true);
     }
 }

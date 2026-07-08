@@ -53,11 +53,9 @@ class HwaccelRegistryTest extends TestCase
 
         $capability = $registry->getEncoder('hevc', true);
 
-        if ($capability !== null) {
-            $this->assertTrue($capability->supports_hdr_tone_mapping);
-        } else {
-            $this->assertNull($capability);
-        }
+        // An HDR-capable hevc encoder is optional in this environment; when one
+        // is returned it must advertise HDR tone-mapping.
+        $this->assertTrue($capability === null || $capability->supports_hdr_tone_mapping);
     }
 
     public function test_get_decoder(): void
@@ -75,7 +73,6 @@ class HwaccelRegistryTest extends TestCase
 
         $priority = $registry->getVendorPriority();
 
-        $this->assertIsArray($priority);
         $this->assertArrayHasKey('nvenc', $priority);
         $this->assertArrayHasKey('vaapi', $priority);
         $this->assertArrayHasKey('qsv', $priority);
@@ -117,7 +114,6 @@ class HwaccelRegistryTest extends TestCase
 
         $all = $registry->getAll();
 
-        $this->assertIsArray($all);
         $this->assertContainsOnlyInstancesOf(HwaccelCapability::class, $all);
     }
 }

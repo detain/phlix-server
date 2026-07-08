@@ -112,9 +112,9 @@ class AdaptationSetTest extends TestCase
             codecs: 'avc1.64001f',
             bandwidth: 5000000,
             segments: [
-                ['duration' => 6.0],
-                ['duration' => 6.0],
-                ['duration' => 6.0],
+                ['duration' => 6.0, 'url' => 'seg-0.m4s'],
+                ['duration' => 6.0, 'url' => 'seg-1.m4s'],
+                ['duration' => 6.0, 'url' => 'seg-2.m4s'],
             ]
         );
 

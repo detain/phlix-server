@@ -244,19 +244,25 @@ final class BrowseIndexUsageTest extends TestCase
     /**
      * Run EXPLAIN and return the first (driving-table) plan row as an assoc array.
      *
+     * `Connection::query()` only returns fetched rows when the statement's
+     * leading keyword is `select`/`show` (see `workerman/mysql`'s `query()` —
+     * every other keyword, including `explain`, falls through to `return
+     * null`, regardless of whether the statement actually produces a result
+     * set). `Connection::row()` has no such gate — it always calls
+     * `fetch()` — so it is the correct primitive for a row-returning
+     * statement this library doesn't special-case. Mirrors the existing
+     * `$db->query() must start with SELECT` gotcha documented in memory.
+     *
      * @param list<mixed> $params
      * @return array<string, mixed>
      */
     private function explain(string $sql, array $params): array
     {
-        $rows = $this->db()->query('EXPLAIN ' . $sql, $params);
-        $this->assertIsArray($rows);
-        $this->assertNotEmpty($rows, 'EXPLAIN returned no plan rows for: ' . $sql);
-        $first = $rows[0];
-        $this->assertIsArray($first);
+        $row = $this->db()->row('EXPLAIN ' . $sql, $params);
+        $this->assertIsArray($row, 'EXPLAIN returned no plan row for: ' . $sql);
 
-        /** @var array<string, mixed> $first */
-        return $first;
+        /** @var array<string, mixed> $row */
+        return $row;
     }
 
     /**

@@ -52,6 +52,16 @@ use Workerman\Protocols\Http\Response as WorkermanResponse;
  */
 final class HttpHandler
 {
+    /**
+     * Minimum response-body size (bytes) at or above which gzip is applied.
+     *
+     * Compressing a body smaller than a single ~1.5 KB TCP segment spends CPU and
+     * adds the ~20-byte gzip envelope for no wire benefit (it can even grow a tiny
+     * body), so bodies below this floor are sent as-is. 1 KiB is the conventional
+     * threshold used by CDNs / web servers for exactly this trade-off.
+     */
+    private const GZIP_MIN_BYTES = 1024;
+
     public function __construct(
         private readonly ContainerInterface $container,
         private readonly RequestAuthenticator $authenticator,
@@ -68,7 +78,9 @@ final class HttpHandler
     {
         $startBytesRead = $connection->bytesRead;
         $startBytesWritten = $connection->bytesWritten;
-        $startTime = microtime(true);
+        // Monotonic clock for request duration (L2): hrtime(true) is immune to
+        // wall-clock adjustments (NTP/DST), unlike microtime(true).
+        $startTime = hrtime(true);
         $responseStatus = 200;
 
         try {
@@ -147,7 +159,9 @@ final class HttpHandler
             $appResponse = $this->application->dispatch($request);
             if ($appResponse->statusCode !== 404) {
                 $responseStatus = $appResponse->statusCode;
-                $connection->send($cors->decorate($request, $appResponse)->toWorkermanResponse());
+                $decorated = $cors->decorate($request, $appResponse);
+                $this->compressResponse($wr, $decorated);
+                $connection->send($decorated->toWorkermanResponse());
                 return;
             }
 
@@ -166,7 +180,9 @@ final class HttpHandler
                 $webPortalRouter = $this->container->get(WebPortalRouter::class);
                 $apiResponse = $webPortalRouter->dispatch($request);
                 $responseStatus = $apiResponse->statusCode;
-                $connection->send($cors->decorate($request, $apiResponse)->toWorkermanResponse());
+                $decorated = $cors->decorate($request, $apiResponse);
+                $this->compressResponse($wr, $decorated);
+                $connection->send($decorated->toWorkermanResponse());
                 return;
             }
 
@@ -179,7 +195,9 @@ final class HttpHandler
             $theme = $this->container->get(ThemeMiddleware::class);
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
             $responseStatus = $response->statusCode;
-            $connection->send($cors->decorate($request, $response)->toWorkermanResponse());
+            $decorated = $cors->decorate($request, $response);
+            $this->compressResponse($wr, $decorated);
+            $connection->send($decorated->toWorkermanResponse());
         } catch (Throwable $e) {
             $responseStatus = 500;
             LoggerFactory::get(LogChannels::HTTP)->error(
@@ -215,16 +233,21 @@ final class HttpHandler
      * Record the just-completed request into the metrics subsystem.
      *
      * No-op when metrics is absent/disabled. Computes the per-request byte deltas
-     * from the connection counters and the wall-clock duration, and records against
+     * from the connection counters and the monotonic duration, and records against
      * the low-cardinality route template (see {@see routeTemplate()}) plus the real
      * captured HTTP status. Method/path come from the Workerman request, which is
      * always in scope in the caller's `finally` even if request parsing threw.
+     *
+     * `$startTime` is a {@see hrtime()} nanosecond reading (monotonic — see the
+     * capture in {@see self::__invoke()}); duration is derived in nanosecond
+     * integer space and only then converted to milliseconds, so a long-running
+     * worker's large hrtime values keep full sub-millisecond precision.
      */
     private function recordRequestMetrics(
         TcpConnection $connection,
         WorkermanRequest $wr,
         int $status,
-        float $startTime,
+        int $startTime,
         int $startBytesRead,
         int $startBytesWritten,
     ): void {
@@ -233,7 +256,7 @@ final class HttpHandler
         }
         $bytesIn = (int) max(0, $connection->bytesRead - $startBytesRead);
         $bytesOut = (int) max(0, $connection->bytesWritten - $startBytesWritten);
-        $elapsedMs = (microtime(true) - $startTime) * 1000;
+        $elapsedMs = (hrtime(true) - $startTime) / 1_000_000.0;
         $this->metrics->recordRequest(
             $wr->method(),
             self::routeTemplate($wr->path()),
@@ -319,8 +342,161 @@ final class HttpHandler
             return null;
         }
         $resp = new WorkermanResponse(200, ['Content-Type' => self::mimeFor($real)]);
+        // The Vite-built web-ui bundle under /assets/app/** has content-hashed
+        // filenames (e.g. index-DaB12cd3.js): the bytes for a given URL never
+        // change, so it is safe to cache forever. `immutable` also tells browsers
+        // not to revalidate on reload.
+        //
+        // Gated on the RESOLVED/jailed `$real` path (not the raw `$path` request
+        // string) so a traversal-style URL that merely *starts with* `/assets/app/`
+        // but resolves outside that directory (e.g. `/assets/app/../foo.js`) cannot
+        // get tagged immutable — mirrors the jail check two lines above this method
+        // already performs on `$real`.
+        $assetsAppRoot = $this->publicRoot . DIRECTORY_SEPARATOR . 'assets' . DIRECTORY_SEPARATOR . 'app'
+            . DIRECTORY_SEPARATOR;
+        if (str_starts_with($real, $assetsAppRoot)) {
+            $resp->header('Cache-Control', 'public, max-age=31536000, immutable');
+        }
         $resp->withFile($real);
         return $resp;
+    }
+
+    /**
+     * Apply `Content-Encoding: gzip` to a text/JSON/HTML response when the client
+     * advertises gzip support and the body is worth compressing. Mutates the
+     * {@see Response} in place; a no-op for anything it must not touch.
+     *
+     * This is deliberately conservative and NEVER compresses media/streaming
+     * responses. Two independent guards keep the streaming surface untouched:
+     *
+     *  1. **File-backed responses are skipped outright** (`filePath !== null`).
+     *     Every HLS/DASH playlist AND segment is streamed via
+     *     {@see Response::withFile()} (see {@see TranscodeFileServer}), and
+     *     direct-play byte ranges / avatars are served as raw
+     *     {@see WorkermanResponse}s that never reach this method at all — so no
+     *     media body is ever present here to compress.
+     *  2. **Content-Type must be on a strict text allowlist**
+     *     ({@see self::isCompressibleType()}). Image/audio/video/`octet-stream`
+     *     and the HLS `application/vnd.apple.mpegurl` / DASH `application/dash+xml`
+     *     playlist types are all absent, so even a hypothetical buffered media
+     *     body would not match.
+     *
+     * Additionally skips bodies already carrying a `Content-Encoding`, empty
+     * bodies, bodies below {@see self::GZIP_MIN_BYTES}, and clients that don't
+     * send `Accept-Encoding: gzip`. On success it sets `Content-Encoding: gzip`,
+     * appends `Accept-Encoding` to `Vary` (so shared caches key correctly), and
+     * refreshes `Content-Length` to the compressed size.
+     */
+    private function compressResponse(WorkermanRequest $wr, Response $response): void
+    {
+        // Guard 1: file-backed responses stream via withFile() — never buffer or
+        // compress them. This single check excludes the whole HLS/DASH/media surface.
+        if ($response->filePath !== null || $response->body === '') {
+            return;
+        }
+        // Don't double-encode an already-encoded body.
+        if (self::headerLookup($response->headers, 'Content-Encoding') !== null) {
+            return;
+        }
+        // Not worth compressing below the threshold.
+        if (strlen($response->body) < self::GZIP_MIN_BYTES) {
+            return;
+        }
+        // Guard 2: only known text-based representations.
+        if (!self::isCompressibleType(self::headerLookup($response->headers, 'Content-Type'))) {
+            return;
+        }
+        // Honour the client's declared support.
+        $accept = $wr->header('accept-encoding');
+        if (!is_string($accept) || stripos($accept, 'gzip') === false) {
+            return;
+        }
+        $gzipped = gzencode($response->body, 6);
+        if ($gzipped === false || strlen($gzipped) >= strlen($response->body)) {
+            // Compression failed or didn't help — leave the plain body in place.
+            return;
+        }
+
+        // Drop any stale Content-Length (case-insensitively) before setting the new
+        // one, so framing matches the compressed body regardless of header casing.
+        foreach (array_keys($response->headers) as $name) {
+            if (strcasecmp($name, 'Content-Length') === 0) {
+                unset($response->headers[$name]);
+            }
+        }
+        $response->body = $gzipped;
+        $response->headers['Content-Encoding'] = 'gzip';
+        $response->headers['Vary'] = self::mergeVaryAcceptEncoding(
+            self::headerLookup($response->headers, 'Vary'),
+        );
+        $response->headers['Content-Length'] = (string) strlen($gzipped);
+    }
+
+    /**
+     * Whether a Content-Type header value names a text-based, compression-friendly
+     * representation. Strict allowlist: any `text/*` plus a fixed set of textual
+     * `application/*` (and SVG) types. Every media/binary type — images, audio,
+     * video, `application/octet-stream`, and crucially the HLS
+     * `application/vnd.apple.mpegurl` and DASH `application/dash+xml` playlist
+     * types — is intentionally absent, so streaming responses can never match.
+     */
+    private static function isCompressibleType(?string $contentType): bool
+    {
+        if ($contentType === null) {
+            return false;
+        }
+        // Strip any parameters (e.g. "; charset=utf-8") and normalise.
+        $base = strtolower(trim(explode(';', $contentType, 2)[0]));
+        if ($base === '') {
+            return false;
+        }
+        if (str_starts_with($base, 'text/')) {
+            return true;
+        }
+        return in_array($base, [
+            'application/json',
+            'application/javascript',
+            'application/xml',
+            'application/manifest+json',
+            'application/ld+json',
+            'application/rss+xml',
+            'application/atom+xml',
+            'image/svg+xml',
+        ], true);
+    }
+
+    /**
+     * Case-insensitive lookup into a {@see Response} header map. Different producers
+     * store headers as `Content-Type` or `content-type`; this normalises the read.
+     *
+     * @param array<string, string> $headers
+     */
+    private static function headerLookup(array $headers, string $name): ?string
+    {
+        foreach ($headers as $key => $value) {
+            if (strcasecmp($key, $name) === 0) {
+                return $value;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Merge `Accept-Encoding` into an existing `Vary` header value without
+     * duplicating it. Returns the canonical `Accept-Encoding` when there is no
+     * prior value.
+     */
+    private static function mergeVaryAcceptEncoding(?string $existing): string
+    {
+        if ($existing === null || trim($existing) === '') {
+            return 'Accept-Encoding';
+        }
+        foreach (explode(',', $existing) as $token) {
+            if (strcasecmp(trim($token), 'Accept-Encoding') === 0) {
+                return $existing;
+            }
+        }
+        return $existing . ', Accept-Encoding';
     }
 
     /**

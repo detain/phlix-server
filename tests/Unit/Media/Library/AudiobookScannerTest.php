@@ -124,7 +124,6 @@ class AudiobookScannerTest extends TestCase
 
         $result = $scanner->harvestChapters('/non/existent/file.m4b');
 
-        $this->assertIsArray($result);
         $this->assertEmpty($result);
     }
 
@@ -137,7 +136,6 @@ class AudiobookScannerTest extends TestCase
 
         $result = $scanner->harvestAudiobookMetadata('/non/existent/file.m4b');
 
-        $this->assertIsArray($result);
         $this->assertEmpty($result);
     }
 
@@ -162,7 +160,6 @@ class AudiobookScannerTest extends TestCase
         // Clean up
         rmdir($tempDir);
 
-        $this->assertIsArray($items);
         $this->assertEmpty($items); // No files, so no items
     }
 
@@ -184,7 +181,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestChapters($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertCount(3, $result);
             $this->assertEquals('Chapter 1', $result[0]['title']);
             $this->assertEquals(0, $result[0]['start_ms']);
@@ -210,7 +206,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestChapters($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertEmpty($result);
         } finally {
             unlink($tempFile);
@@ -234,7 +229,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestChapters($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertEmpty($result);
         } finally {
             unlink($tempFile);
@@ -255,7 +249,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestChapters($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertEmpty($result);
         } finally {
             unlink($tempFile);
@@ -276,7 +269,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestAudiobookMetadata($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertEmpty($result);
         } finally {
             unlink($tempFile);
@@ -300,7 +292,6 @@ class AudiobookScannerTest extends TestCase
         try {
             $result = $scanner->harvestAudiobookMetadata($tempFile);
 
-            $this->assertIsArray($result);
             $this->assertEmpty($result);
         } finally {
             unlink($tempFile);
@@ -346,7 +337,6 @@ class AudiobookScannerTest extends TestCase
             // If the entire file was loaded, it would use 1MB+
             $this->assertLessThan(200 * 1024, $memoryUsed, 'Chunked reading should not use excessive memory');
 
-            $this->assertIsArray($result);
             $this->assertCount(1, $result);
             $this->assertEquals('Test', $result[0]['title']);
         } finally {

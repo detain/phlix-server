@@ -76,7 +76,7 @@ class SeriesMergerTest extends TestCase
         self::assertSame($primaryS1, $repo->parentOf($de2));
         self::assertCount(1, array_filter(
             $repo->childrenOfType($primary, 'season'),
-            fn (array $s): bool => ($s['metadata_json']['season'] ?? null) === 1
+            fn (array $s): bool => is_array($s['metadata_json']) && ($s['metadata_json']['season'] ?? null) === 1
         ));
         self::assertCount(3, $repo->childrenOfType($primaryS1, 'episode'));
         self::assertNull($repo->find($dupS1));
@@ -209,7 +209,7 @@ class SeriesMergerTest extends TestCase
         self::assertSame(0, $result['moved']);
         self::assertSame(1, $result['deleted']);
 
-        $meta = $repo->find($primary)['metadata_json'];
+        $meta = ($repo->find($primary) ?? [])['metadata_json'];
         self::assertIsArray($meta);
         // canonical_key is the primary's own identity — NEVER overwritten by the
         // duplicate's (the canonical_key skip branch in fillGaps).
@@ -249,7 +249,7 @@ class SeriesMergerTest extends TestCase
         self::assertSame(0, $result['moved']);
         self::assertSame(1, $result['deleted']);
 
-        $meta = $repo->find($primary)['metadata_json'];
+        $meta = ($repo->find($primary) ?? [])['metadata_json'];
         self::assertIsArray($meta);
         // Values decoded from the duplicate's raw JSON string filled the gaps.
         self::assertSame('Decoded from JSON.', $meta['overview']);
@@ -287,7 +287,7 @@ class SeriesMergerTest extends TestCase
         self::assertSame(1, $result['deleted']);
         self::assertNull($repo->find($dup));
         // Nothing to fill from an empty duplicate — primary metadata unchanged.
-        self::assertSame(['overview' => ''], $repo->find($primary)['metadata_json']);
+        self::assertSame(['overview' => ''], ($repo->find($primary) ?? [])['metadata_json']);
     }
 
     public function testSeasonMatchingDecodesRawMetadataJsonStringForSeasonNumber(): void
@@ -315,7 +315,10 @@ class SeriesMergerTest extends TestCase
             1,
             array_filter(
                 $repo->childrenOfType($primary, 'season'),
-                fn (array $s): bool => $repo->seasonNumber($s['id']) === 1
+                static function (array $s) use ($repo): bool {
+                    $id = $s['id'] ?? null;
+                    return is_string($id) && $repo->seasonNumber($id) === 1;
+                }
             )
         );
         self::assertSame(0, $repo->orphanCount());
@@ -481,11 +484,30 @@ class SeriesMergerTest extends TestCase
      * In-memory ItemRepository double: a simple id-keyed store supporting the
      * find/re-parent/delete primitives SeriesMerger uses, plus test helpers.
      */
-    private function makeRepo(bool $failOnUpdate = false): ItemRepository
+    private function makeRepo(bool $failOnUpdate = false): InMemorySeriesRepository
     {
         $mockConn = $this->createMock(Connection::class);
 
-        return new class ($mockConn, $failOnUpdate) extends ItemRepository {
+        return new InMemorySeriesRepository($mockConn, $failOnUpdate);
+    }
+
+    private function mockConn(): PhlixMySQLConnection
+    {
+        $conn = $this->createMock(PhlixMySQLConnection::class);
+        $conn->method('beginTrans')->willReturn(true);
+        $conn->method('commitTrans')->willReturn(true);
+        $conn->method('rollBackTrans')->willReturn(true);
+        return $conn;
+    }
+}
+
+
+/**
+ * In-memory ItemRepository double: a simple id-keyed store supporting the
+ * find/re-parent/delete primitives SeriesMerger uses, plus test helpers.
+ */
+class InMemorySeriesRepository extends ItemRepository
+{
             /** @var array<string, array<string, mixed>> */
             private array $store = [];
             private int $seq = 0;
@@ -688,15 +710,4 @@ class SeriesMergerTest extends TestCase
                 }
                 return $count;
             }
-        };
-    }
-
-    private function mockConn(): PhlixMySQLConnection
-    {
-        $conn = $this->createMock(PhlixMySQLConnection::class);
-        $conn->method('beginTrans')->willReturn(true);
-        $conn->method('commitTrans')->willReturn(true);
-        $conn->method('rollBackTrans')->willReturn(true);
-        return $conn;
-    }
 }

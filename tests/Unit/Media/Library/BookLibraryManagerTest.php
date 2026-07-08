@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Library;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\BookLibraryManager;
 use Phlix\Media\Library\BookScanner;
@@ -22,6 +23,7 @@ class BookLibraryManagerTest extends TestCase
     private BookLibraryManager $manager;
     private BookScanner $scanner;
     private ItemRepository $itemRepo;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -48,7 +50,7 @@ class BookLibraryManagerTest extends TestCase
 
         // Setup mock to return empty for findByPath (item doesn't exist yet)
         $this->db->method('query')
-            ->willReturnCallback(function ($sql, $params) use ($libraryId) {
+            ->willReturnCallback(function ($sql, $params) {
                 if (strpos($sql, 'DELETE FROM media_items') === 0) {
                     return [];
                 }

@@ -45,7 +45,7 @@ class BookScannerTest extends TestCase
         $metadata = $this->scanner->harvestEpub($epubPath);
 
         // Should return an array
-        $this->assertIsArray($metadata);
+        $this->assertSame([], $metadata);
 
         // Clean up
         unlink($epubPath);
@@ -93,7 +93,7 @@ class BookScannerTest extends TestCase
         $metadata = $this->scanner->harvestPdf($pdfPath);
 
         // Should return an array
-        $this->assertIsArray($metadata);
+        $this->assertSame(['page_count' => 1], $metadata);
 
         // Clean up
         unlink($pdfPath);
@@ -117,7 +117,6 @@ class BookScannerTest extends TestCase
         $metadata = $this->scanner->harvestCbz($cbzPath);
 
         // Should return an array
-        $this->assertIsArray($metadata);
 
         // Should have page_count
         $this->assertArrayHasKey('page_count', $metadata);

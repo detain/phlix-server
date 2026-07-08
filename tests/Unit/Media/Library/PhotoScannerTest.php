@@ -60,7 +60,6 @@ class PhotoScannerTest extends TestCase
     {
         $extensions = $this->scanner->getSupportedExtensions();
 
-        $this->assertIsArray($extensions);
         $this->assertContains('jpg', $extensions);
         $this->assertContains('jpeg', $extensions);
         $this->assertContains('png', $extensions);
@@ -71,7 +70,6 @@ class PhotoScannerTest extends TestCase
     {
         $result = $this->scanner->harvestExif('/non/existent/path.jpg');
 
-        $this->assertIsArray($result);
         // When file doesn't exist, it returns basic metadata (empty values)
         $this->assertArrayHasKey('camera_make', $result);
         $this->assertArrayHasKey('camera_model', $result);
@@ -101,7 +99,6 @@ class PhotoScannerTest extends TestCase
         try {
             $result = $this->scanner->harvestExif($testFile);
 
-            $this->assertIsArray($result);
             $this->assertArrayHasKey('camera_make', $result);
             $this->assertArrayHasKey('camera_model', $result);
             $this->assertArrayHasKey('lens', $result);
@@ -143,7 +140,6 @@ class PhotoScannerTest extends TestCase
         try {
             $result = $this->scanner->harvestExif($testFile);
 
-            $this->assertIsArray($result);
             // PNG returns basic metadata without EXIF
             $this->assertNull($result['camera_make']);
             $this->assertNull($result['camera_model']);
@@ -231,7 +227,8 @@ class PhotoScannerTest extends TestCase
 
             // Should only contain the visible file
             $this->assertCount(1, $items);
-            $this->assertStringNotContainsString('.hidden', $items[0]['path']);
+            $firstPath = $items[0]['path'] ?? null;
+            $this->assertStringNotContainsString('.hidden', is_string($firstPath) ? $firstPath : '');
         } finally {
             unlink($visibleFile);
             unlink($hiddenFile);

@@ -63,7 +63,7 @@ class AudioScannerTest extends TestCase
         $tags = $this->scanner->harvestTags($filePath);
 
         // FLAC parsing should return array (may be empty for minimal file)
-        $this->assertIsArray($tags);
+        $this->assertSame([], $tags);
 
         unlink($filePath);
         rmdir($tempDir);
@@ -85,7 +85,7 @@ class AudioScannerTest extends TestCase
 
         $tags = $this->scanner->harvestTags($filePath);
 
-        $this->assertIsArray($tags);
+        $this->assertSame([], $tags);
 
         unlink($filePath);
         rmdir($tempDir);
@@ -107,7 +107,7 @@ class AudioScannerTest extends TestCase
 
         $tags = $this->scanner->harvestTags($filePath);
 
-        $this->assertIsArray($tags);
+        $this->assertSame([], $tags);
 
         unlink($filePath);
         rmdir($tempDir);
@@ -326,7 +326,7 @@ class AudioScannerTest extends TestCase
         $tags = $this->scanner->harvestTags($filePath);
 
         // Should be an array with documented fields or empty
-        $this->assertIsArray($tags);
+        $this->assertContainsOnly('string', array_keys($tags));
 
         // If tags were found, verify structure
         if (!empty($tags)) {
@@ -380,7 +380,6 @@ class AudioScannerTest extends TestCase
         $tags = $this->scanner->harvestTags($filePath);
 
         // Should return array with duration_secs
-        $this->assertIsArray($tags);
         $this->assertArrayHasKey('duration_secs', $tags);
         $this->assertEquals(10, $tags['duration_secs']);
 
@@ -405,7 +404,6 @@ class AudioScannerTest extends TestCase
         $tags = $this->scanner->harvestTags($filePath);
 
         // Should return array without duration_secs (or duration is null/0)
-        $this->assertIsArray($tags);
         // When total_samples is 0, duration cannot be calculated
         $this->assertArrayNotHasKey('duration_secs', $tags);
 
@@ -531,7 +529,8 @@ class AudioScannerTest extends TestCase
         try {
             $reflection = new \ReflectionMethod($this->scanner, 'getFlacDurationFromHandle');
             $reflection->setAccessible(true);
-            return $reflection->invoke($this->scanner, $handle);
+            $result = $reflection->invoke($this->scanner, $handle);
+            return is_int($result) ? $result : null;
         } finally {
             fclose($handle);
         }

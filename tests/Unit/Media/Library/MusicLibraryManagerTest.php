@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Library;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
@@ -20,8 +21,11 @@ use Workerman\MySQL\Connection;
  */
 class MusicLibraryManagerTest extends TestCase
 {
+    /** @var Connection&MockObject */
     private Connection $db;
+    /** @var AudioScanner&MockObject */
     private AudioScanner $scanner;
+    /** @var MetadataManager&MockObject */
     private MetadataManager $metadata;
     private ItemRepository $itemRepo;
     private MusicLibraryManager $manager;
@@ -60,9 +64,8 @@ class MusicLibraryManagerTest extends TestCase
         ]);
 
         // Mock scanner to yield empty generator
-        $emptyGenerator = function(): \Generator {
-            return;
-            yield; // Force this to be a generator
+        $emptyGenerator = function (): \Generator {
+            yield from [];
         };
         $this->scanner->method('scanMusicLibrary')
             ->willReturn($emptyGenerator());
@@ -94,9 +97,8 @@ class MusicLibraryManagerTest extends TestCase
         ]);
 
         // Create a generator that yields nothing
-        $emptyGenerator = function(): \Generator {
-            return;
-            yield;
+        $emptyGenerator = function (): \Generator {
+            yield from [];
         };
 
         // Scanner should be called with music library
@@ -135,7 +137,7 @@ class MusicLibraryManagerTest extends TestCase
 
         // Mock item repository
         $this->db->method('query')
-            ->willReturnCallback(function($sql, $params) use ($tempFile) {
+            ->willReturnCallback(function ($sql, $params) {
                 if (strpos($sql, 'SELECT') === 0) {
                     return []; // No existing item
                 }
@@ -364,7 +366,7 @@ class MusicLibraryManagerTest extends TestCase
 
         $tracks = $this->manager->getTracks($libraryId, 50, 0);
 
-        $this->assertIsArray($tracks);
+        $this->assertNotEmpty($tracks);
     }
 
     /**

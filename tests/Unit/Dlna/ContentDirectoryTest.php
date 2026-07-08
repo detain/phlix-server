@@ -30,6 +30,7 @@ class ContentDirectoryTest extends TestCase
         $this->assertArrayHasKey('UpdateID', $result);
         
         // Root should have library containers
+        /** @var array{Result: string, TotalMatches: int} $result */
         $this->assertGreaterThan(0, $result['TotalMatches']);
         $this->assertStringContainsString('DIDL-Lite', $result['Result']);
     }
@@ -49,6 +50,7 @@ class ContentDirectoryTest extends TestCase
         $result = $this->contentDirectory->browse('non-existent-id', 'BrowseDirectChildren');
 
         $this->assertArrayHasKey('Error', $result);
+        /** @var array{Error: array{code: int}} $result */
         $this->assertEquals(701, $result['Error']['code']);
     }
 
@@ -76,6 +78,7 @@ class ContentDirectoryTest extends TestCase
 
         // Should return error for unsupported search criteria
         if (isset($result['Error'])) {
+            /** @var array{Error: array{code: int}} $result */
             $this->assertEquals(800, $result['Error']['code']);
         }
     }
@@ -130,7 +133,7 @@ class ContentDirectoryTest extends TestCase
     public function testSystemUpdateId(): void
     {
         $initialId = $this->contentDirectory->getSystemUpdateId();
-        $this->assertIsInt($initialId);
+        $this->assertGreaterThanOrEqual(0, $initialId);
 
         $this->contentDirectory->incrementSystemUpdateId();
         $this->assertGreaterThan($initialId, $this->contentDirectory->getSystemUpdateId());

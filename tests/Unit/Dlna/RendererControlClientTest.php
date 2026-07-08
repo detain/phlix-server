@@ -41,7 +41,7 @@ class RendererControlClientTest extends TestCase
         // (Actual HTTP request will fail in test environment, but we can verify structure)
         $result = $client->setAvTransportUri($uri, $metadata);
         // If HTTP request succeeds, check result. If it fails, we get an error array.
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -51,7 +51,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->play('1');
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -61,7 +61,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->getPositionInfo();
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -71,7 +71,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->pause();
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -81,7 +81,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->stop();
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -91,7 +91,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->seek('00:05:30');
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -101,7 +101,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->getTransportInfo();
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     /**
@@ -111,7 +111,7 @@ class RendererControlClientTest extends TestCase
     {
         $client = new RendererControlClient('http://192.168.1.100:8200', $this->logger);
         $result = $client->getMediaInfo();
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 
     public function testUrlIsTrimmedOfTrailingSlash(): void
@@ -123,6 +123,6 @@ class RendererControlClientTest extends TestCase
         // We can verify this by attempting a request
         $result = $client->getTransportInfo();
         // Just verify we get a result array (even if it's an error)
-        $this->assertIsArray($result);
+        $this->assertGreaterThanOrEqual(0, count($result));
     }
 }

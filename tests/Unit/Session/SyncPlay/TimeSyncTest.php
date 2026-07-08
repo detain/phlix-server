@@ -59,7 +59,6 @@ class TimeSyncTest extends TestCase
             'client_time' => $clientSendTime,
             'server_time' => $serverTime,
             'server_receive_time' => $serverReceiveTime,
-            'server_receive_time' => $serverReceiveTime,
         ]);
 
         $this->assertArrayHasKey('offset', $pong);
@@ -85,12 +84,11 @@ class TimeSyncTest extends TestCase
                 'client_time' => (int)(microtime(true) * 1000),
                 'server_time' => (int)(microtime(true) * 1000) + 30,
                 'server_receive_time' => (int)(microtime(true) * 1000) + 50,
-                'server_receive_time' => (int)(microtime(true) * 1000) + 50,
             ]);
         }
 
         // May or may not be stable depending on timing
-        $this->assertIsBool($timeSync->isSyncStable());
+        $this->assertContains($timeSync->isSyncStable(), [true, false]);
     }
 
     public function testGetTimeOffsetReturnsZeroWithNoSamples(): void
@@ -169,7 +167,7 @@ class TimeSyncTest extends TestCase
         $this->assertGreaterThanOrEqual(0, $pos);
 
         // Test upper bound
-        $pos = $timeSync->adjustPlaybackPosition(200000, 100000, 100000);
+        $pos = $timeSync->adjustPlaybackPosition(200000, 100000);
         $this->assertLessThanOrEqual(100000, $pos);
     }
 
@@ -181,7 +179,6 @@ class TimeSyncTest extends TestCase
         $timeSync->processPong([
             'client_time' => (int)(microtime(true) * 1000),
             'server_time' => (int)(microtime(true) * 1000) + 50,
-            'server_receive_time' => (int)(microtime(true) * 1000) + 100,
             'server_receive_time' => (int)(microtime(true) * 1000) + 100,
         ]);
 
@@ -215,7 +212,6 @@ class TimeSyncTest extends TestCase
         $timeSync->processPong([
             'client_time' => (int)(microtime(true) * 1000),
             'server_time' => (int)(microtime(true) * 1000) + 50,
-            'server_receive_time' => (int)(microtime(true) * 1000) + 100,
             'server_receive_time' => (int)(microtime(true) * 1000) + 100,
         ]);
 

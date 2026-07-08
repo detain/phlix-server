@@ -40,7 +40,7 @@ class LibraryBridgeTest extends TestCase
     {
         $containers = $this->bridge->getRootContainers();
 
-        $this->assertIsArray($containers);
+        $this->assertArrayHasKey(0, $containers);
         $this->assertGreaterThanOrEqual(3, count($containers));
 
         // Verify structure of each container
@@ -95,7 +95,7 @@ class LibraryBridgeTest extends TestCase
 
         $children = $this->bridge->getContainerChildren($parentId);
 
-        $this->assertIsArray($children);
+        $this->assertArrayHasKey(0, $children);
         $this->assertCount(2, $children);
 
         // Verify items are converted to CDS objects
@@ -113,7 +113,7 @@ class LibraryBridgeTest extends TestCase
         // since we don't have library_id in this context
         $children = $this->bridge->getContainerChildren('library-video');
 
-        $this->assertIsArray($children);
+        $this->assertCount(0, $children);
         // Without a real library_id, this returns empty
         $this->assertEmpty($children);
     }

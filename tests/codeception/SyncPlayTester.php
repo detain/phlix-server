@@ -13,6 +13,18 @@ use Phlix\Tests\Codeception\Helper\SyncPlay;
  * It wraps the SyncPlay helper to provide a clean API for test scenarios.
  *
  * Test flow: WS connection → JWT auth → member join → playback sync → host transfer → leave
+ *
+ * The assertion methods below are provided at runtime by Codeception's Asserts
+ * module (mixed into the actor via the generated actions trait); they are declared
+ * here so static analysis can resolve them.
+ *
+ * @method void assertNotEmpty(mixed $actual, string $message = '')
+ * @method void assertEquals(mixed $expected, mixed $actual, string $message = '')
+ * @method void assertNotEquals(mixed $expected, mixed $actual, string $message = '')
+ * @method void assertTrue(mixed $condition, string $message = '')
+ * @method void assertFalse(mixed $condition, string $message = '')
+ * @method void assertArrayHasKey(mixed $key, mixed $array, string $message = '')
+ * @method void assertStringStartsWith(string $prefix, string $string, string $message = '')
  */
 class SyncPlayTester
 {
@@ -49,6 +61,8 @@ class SyncPlayTester
 
     /**
      * Create a SyncPlay group.
+     *
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
      */
     public function createGroup(
         string $connectionId,
@@ -61,6 +75,8 @@ class SyncPlayTester
 
     /**
      * Join a SyncPlay group.
+     *
+     * @return array{success: true, group: array<string, mixed>}|array{success: false, error: string}
      */
     public function joinGroup(
         string $connectionId,
@@ -73,6 +89,8 @@ class SyncPlayTester
 
     /**
      * Leave a SyncPlay group.
+     *
+     * @return array{success: true, message?: string}|array{success: false, error: string}
      */
     public function leaveGroup(string $connectionId): array
     {
@@ -105,6 +123,8 @@ class SyncPlayTester
 
     /**
      * Get messages sent to a connection.
+     *
+     * @return array<int, array<array-key, mixed>>
      */
     public function getMessagesForConnection(string $connectionId, ?string $type = null): array
     {
@@ -121,6 +141,8 @@ class SyncPlayTester
 
     /**
      * Get group state.
+     *
+     * @return array<string, mixed>|null
      */
     public function getGroupState(string $groupId): ?array
     {

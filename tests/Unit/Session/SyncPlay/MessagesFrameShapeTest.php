@@ -189,10 +189,12 @@ class MessagesFrameShapeTest extends TestCase
             'timestamp' => 1234567890,
         ]);
 
+        /** @var non-empty-string $flatJson */
         $result = Messages::deserialize($flatJson);
 
         $this->assertTrue($result['valid']);
-        $this->assertIsArray($result['message']);
+        /** @var array{valid: true, message: array<string, mixed>} $result */
+        $this->assertArrayHasKey('type', $result['message']);
         $this->assertEquals(Messages::TYPE_GROUP_CREATE, $result['message']['type']);
         $this->assertEquals('Test Group', $result['message']['group_name']);
     }

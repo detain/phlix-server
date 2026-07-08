@@ -47,7 +47,7 @@ class CdsServerTest extends TestCase
     {
         $xml = $this->cdsServer->getDeviceDescriptionXml();
 
-        $this->assertIsString($xml);
+        $this->assertNotEmpty($xml);
         $this->assertStringContainsString('<?xml', $xml);
         $this->assertStringContainsString('urn:schemas-upnp-org:device:MediaServer:1', $xml);
         $this->assertStringContainsString('Phlix CDS Test Server', $xml);
@@ -111,7 +111,7 @@ class CdsServerTest extends TestCase
 
         $response = $this->cdsServer->processControl($soapBody);
 
-        $this->assertIsString($response);
+        $this->assertNotEmpty($response);
         $this->assertStringContainsString('Envelope', $response);
         $this->assertStringContainsString('BrowseResponse', $response);
     }
@@ -123,10 +123,12 @@ class CdsServerTest extends TestCase
     {
         // Test /description.xml
         $response = $this->cdsServer->handleRequest('/description.xml', 'GET', [], '');
+        /** @var string $response */
         $this->assertStringContainsString('MediaServer', $response);
 
         // Test /scpd/ContentDirectory.xml
         $response = $this->cdsServer->handleRequest('/scpd/ContentDirectory.xml', 'GET', [], '');
+        /** @var string $response */
         $this->assertStringContainsString('Browse', $response);
 
         // Test /cds/control (POST)
@@ -144,6 +146,7 @@ class CdsServerTest extends TestCase
     </s:Body>
 </s:Envelope>';
         $response = $this->cdsServer->handleRequest('/cds/control', 'POST', [], $soapBody);
+        /** @var string $response */
         $this->assertStringContainsString('BrowseResponse', $response);
     }
 

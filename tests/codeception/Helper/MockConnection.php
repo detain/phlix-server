@@ -24,10 +24,10 @@ class MockConnection implements ConnectionInterface
     /** @var bool Whether connection is authenticated */
     private bool $authenticated = false;
 
-    /** @var array<int, array> Received messages */
+    /** @var array<int, array<array-key, mixed>> Received messages */
     private array $receivedMessages = [];
 
-    /** @var array<int, array> Sent messages */
+    /** @var array<int, array<array-key, mixed>> Sent messages */
     private array $sentMessages = [];
 
     /** @var bool Connection open status */
@@ -48,6 +48,7 @@ class MockConnection implements ConnectionInterface
     public function send(string|array $data): void
     {
         if (is_string($data)) {
+            /** @var array<array-key, mixed> $data */
             $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
         }
         $this->sentMessages[] = $data;
@@ -146,6 +147,8 @@ class MockConnection implements ConnectionInterface
     /**
      * Simulate receiving a message from the client.
      * This is used by tests to simulate server receiving client messages.
+     *
+     * @param array<array-key, mixed> $data
      */
     public function simulateReceive(array $data): void
     {
@@ -154,6 +157,8 @@ class MockConnection implements ConnectionInterface
 
     /**
      * Get all messages received by this connection (server → client).
+     *
+     * @return array<int, array<array-key, mixed>>
      */
     public function getReceivedMessages(): array
     {
@@ -162,6 +167,8 @@ class MockConnection implements ConnectionInterface
 
     /**
      * Get all messages sent by this connection (client → server).
+     *
+     * @return array<int, array<array-key, mixed>>
      */
     public function getSentMessages(): array
     {

@@ -80,6 +80,7 @@ class SyncPlayCest
         $I->assertTrue($result['success']);
 
         // Verify group structure
+        /** @var array{success: bool, group: array{group_id: string, group_name: string, host_id: string, member_count: int}} $result */
         $group = $result['group'];
         $I->assertArrayHasKey('group_id', $group);
         $I->assertArrayHasKey('group_name', $group);
@@ -115,6 +116,7 @@ class SyncPlayCest
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Movie Night');
         $I->assertTrue($createResult['success']);
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Member joins group
@@ -130,6 +132,7 @@ class SyncPlayCest
 
         // Verify member is in group
         $memberId = $I->getMemberId($memberConn);
+        /** @var string $memberId */
         $I->assertMemberInGroup($memberId, $groupId);
     }
 
@@ -149,6 +152,7 @@ class SyncPlayCest
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Private Watch Party', 'secret123');
         $I->assertTrue($createResult['success']);
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Member joins with correct password
@@ -160,6 +164,7 @@ class SyncPlayCest
         $member2Conn = $I->createConnection('member2_user', true);
         $joinFailResult = $I->joinGroup($member2Conn, $groupId, 'wrongpassword');
         $I->assertFalse($joinFailResult['success']);
+        /** @var array{success: false, error: string} $joinFailResult */
         $I->assertEquals('Invalid password', $joinFailResult['error']);
     }
 
@@ -178,6 +183,7 @@ class SyncPlayCest
         // Setup: Host creates group, member joins
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Movie Night');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $memberConn = $I->createConnection('member_user', true);
@@ -188,6 +194,7 @@ class SyncPlayCest
 
         // Verify group state shows playing
         $state = $I->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $I->assertEquals('playing', $state['playback_state']);
 
         // Host sends pause command
@@ -195,6 +202,7 @@ class SyncPlayCest
 
         // Verify group state shows paused
         $state = $I->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $I->assertEquals('paused', $state['playback_state']);
     }
 
@@ -213,12 +221,15 @@ class SyncPlayCest
         // Setup: Host creates group, member joins
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Movie Night');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
         $hostMemberId = $I->getMemberId($hostConn);
+        /** @var string $hostMemberId */
 
         $memberConn = $I->createConnection('member_user', true);
         $I->joinGroup($memberConn, $groupId);
         $newHostMemberId = $I->getMemberId($memberConn);
+        /** @var string $newHostMemberId */
 
         // Verify original host
         $I->assertMemberIsHost($hostMemberId, $groupId);
@@ -231,6 +242,7 @@ class SyncPlayCest
 
         // Verify old host is still in group but not host
         $state = $I->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $I->assertNotEquals($hostMemberId, $state['host_id']);
     }
 
@@ -249,6 +261,7 @@ class SyncPlayCest
         // Setup: Host creates group, 2 members join
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Movie Night');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $member1Conn = $I->createConnection('member1', true);
@@ -286,12 +299,14 @@ class SyncPlayCest
         // Setup: Host creates group, member joins
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Movie Night');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
         $hostMemberId = $I->getMemberId($hostConn);
 
         $memberConn = $I->createConnection('member_user', true);
         $I->joinGroup($memberConn, $groupId);
         $memberMemberId = $I->getMemberId($memberConn);
+        /** @var string $memberMemberId */
 
         // Host leaves
         $I->leaveGroup($hostConn);
@@ -317,6 +332,7 @@ class SyncPlayCest
         // Setup: Host creates group (only member)
         $hostConn = $I->createConnection('host_user', true);
         $createResult = $I->createGroup($hostConn, 'Solo Movie Night');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Host (only member) leaves
@@ -350,8 +366,10 @@ class SyncPlayCest
         // === Phase 2: Group Creation (Alice is host) ===
         $createResult = $I->createGroup($aliceConn, 'Friday Movie Night');
         $I->assertTrue($createResult['success']);
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
         $aliceMemberId = $I->getMemberId($aliceConn);
+        /** @var string $aliceMemberId */
 
         // Verify Alice is host
         $I->assertMemberIsHost($aliceMemberId, $groupId);
@@ -367,6 +385,7 @@ class SyncPlayCest
         $I->assertGroupMemberCount($groupId, 3);
 
         $bobMemberId = $I->getMemberId($bobConn);
+        /** @var string $bobMemberId */
         $charlieMemberId = $I->getMemberId($charlieConn);
 
         // === Phase 4: Playback Control ===
@@ -374,12 +393,14 @@ class SyncPlayCest
         $I->sendPlaybackPlay($aliceConn, 0);
 
         $state = $I->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $I->assertEquals('playing', $state['playback_state']);
 
         // Alice pauses
         $I->sendPlaybackPause($aliceConn, 5000);
 
         $state = $I->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $I->assertEquals('paused', $state['playback_state']);
 
         // === Phase 5: Host Transfer ===
@@ -417,14 +438,17 @@ class SyncPlayCest
         // Create 3 separate groups
         $conn1 = $I->createConnection('user1', true);
         $result1 = $I->createGroup($conn1, 'Group 1');
+        /** @var array{group: array{group_id: string}} $result1 */
         $groupId1 = $result1['group']['group_id'];
 
         $conn2 = $I->createConnection('user2', true);
         $result2 = $I->createGroup($conn2, 'Group 2');
+        /** @var array{group: array{group_id: string}} $result2 */
         $groupId2 = $result2['group']['group_id'];
 
         $conn3 = $I->createConnection('user3', true);
         $result3 = $I->createGroup($conn3, 'Group 3');
+        /** @var array{group: array{group_id: string}} $result3 */
         $groupId3 = $result3['group']['group_id'];
 
         // Verify all groups exist
@@ -453,6 +477,7 @@ class SyncPlayCest
         // Host creates group
         $hostConn = $I->createConnection('host', true);
         $result = $I->createGroup($hostConn, 'Full Group');
+        /** @var array{group: array{group_id: string}} $result */
         $groupId = $result['group']['group_id'];
 
         // Add maximum number of additional members (MAX_MEMBERS - 1 since host is already 1)
@@ -474,6 +499,7 @@ class SyncPlayCest
         $extraConn = $I->createConnection('extra_member', true);
         $extraResult = $I->joinGroup($extraConn, $groupId, null, 'Extra');
         $I->assertFalse($extraResult['success']);
+        /** @var array{success: false, error: string} $extraResult */
         $I->assertEquals('Group is full', $extraResult['error']);
     }
 }

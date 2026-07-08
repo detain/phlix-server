@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Dlna;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Dlna\PlayToSession;
@@ -14,6 +15,7 @@ use Workerman\MySQL\Connection;
 
 class PlayToSessionTest extends TestCase
 {
+    /** @var RendererControlClient&MockObject */
     private RendererControlClient $clientMock;
     private PlaybackController $playbackControllerMock;
     private StructuredLogger $logger;

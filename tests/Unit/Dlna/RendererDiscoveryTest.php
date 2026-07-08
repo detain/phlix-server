@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Dlna;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Discovery\Ssdp\SsdpDevice;
@@ -12,6 +13,7 @@ use Phlix\Dlna\RendererDiscovery;
 
 class RendererDiscoveryTest extends TestCase
 {
+    /** @var SsdpDiscovery&MockObject */
     private SsdpDiscovery $ssdpDiscoveryMock;
     private RendererDiscovery $rendererDiscovery;
     private StructuredLogger $logger;
@@ -68,7 +70,7 @@ class RendererDiscoveryTest extends TestCase
 
         $renderers = $this->rendererDiscovery->discoverRenderers();
 
-        $this->assertIsArray($renderers);
+        $this->assertArrayHasKey(0, $renderers);
         $this->assertCount(1, $renderers);
         $this->assertEquals('Living Room TV', $renderers[0]['friendly_name']);
         $this->assertEquals('Samsung', $renderers[0]['manufacturer']);
@@ -85,7 +87,7 @@ class RendererDiscoveryTest extends TestCase
 
         $renderers = $this->rendererDiscovery->discoverRenderers();
 
-        $this->assertIsArray($renderers);
+        $this->assertCount(0, $renderers);
         $this->assertEmpty($renderers);
     }
 

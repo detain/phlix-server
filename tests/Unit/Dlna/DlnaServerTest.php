@@ -70,7 +70,9 @@ class DlnaServerTest extends TestCase
     public function testGetScpdXml(): void
     {
         $contentDirScpd = $this->server->getScpdXml('ContentDirectory');
+        /** @var string $contentDirScpd */
         $avTransportScpd = $this->server->getScpdXml('AVTransport');
+        /** @var string $avTransportScpd */
         $unknownScpd = $this->server->getScpdXml('UnknownService');
 
         $this->assertStringContainsString('scpd', $contentDirScpd);
@@ -116,6 +118,7 @@ class DlnaServerTest extends TestCase
         $result = $this->server->processSoapRequest('ContentDirectory', 'GetSearchCapabilities', $body);
 
         $this->assertArrayHasKey('SearchCaps', $result);
+        /** @var array{SearchCaps: string} $result */
         $this->assertStringContainsString('dc:title', $result['SearchCaps']);
     }
 
@@ -236,7 +239,7 @@ class DlnaServerTest extends TestCase
     {
         $array = $this->server->toArray();
 
-        $this->assertIsArray($array);
+        $this->assertArrayHasKey('server_id', $array);
         $this->assertEquals('test-server-001', $array['server_id']);
         $this->assertEquals('Phlix Test Server', $array['friendly_name']);
         $this->assertEquals('192.168.1.100', $array['base_url']);

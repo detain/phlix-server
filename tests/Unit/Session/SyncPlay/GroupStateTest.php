@@ -197,6 +197,7 @@ class GroupStateTest extends TestCase
         $group->updateMember('member_1', ['is_active' => false]);
 
         $member = $group->getMember('member_1');
+        /** @var array{name: string, connection_id: string|null, joined_at: int, is_active: bool} $member */
         $this->assertFalse($member['is_active']);
     }
 
@@ -256,7 +257,7 @@ class GroupStateTest extends TestCase
         $group->addToQueue('media_2', ['name' => 'Video 2']);
 
         $next = $group->getNextInQueue();
-
+        /** @var array{media_id: string, media_info: array<string, mixed>, added_at: int, added_by: string|null} $next */
         $this->assertEquals('media_1', $next['media_id']);
     }
 
@@ -386,7 +387,7 @@ class GroupStateTest extends TestCase
     {
         $group = new GroupState('group_123', 'Test Group');
 
-        $this->assertIsInt($group->getCreatedAt());
+        $this->assertLessThanOrEqual(time(), $group->getCreatedAt());
         $this->assertGreaterThan(0, $group->getCreatedAt());
     }
 

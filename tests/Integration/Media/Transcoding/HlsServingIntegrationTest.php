@@ -170,7 +170,7 @@ class HlsServingIntegrationTest extends TestCase
                     ];
                     return [];
                 }
-                if (str_contains($sql, 'SELECT * FROM transcode_jobs WHERE id')) {
+                if (str_contains($sql, 'transcode_jobs WHERE id = ?')) {
                     return $this->insertedJob === [] ? [] : [$this->insertedJob];
                 }
                 return [];

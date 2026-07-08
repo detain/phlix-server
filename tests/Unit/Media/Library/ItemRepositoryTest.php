@@ -497,13 +497,16 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->stringContains('INSERT INTO media_items'),
                 $this->callback(function ($params) {
-                    // id, library_id, parent_id, name, type, path, canonical_key, metadata_json
-                    return count($params) === 8
+                    // id, library_id, parent_id, name, type, path, canonical_key,
+                    // sort_title, content_rating, metadata_json
+                    return count($params) === 10
                         && $params[1] === 'lib-1'
                         && $params[3] === 'Test Movie'
                         && $params[4] === 'movie'
                         && $params[5] === '/movies/test.mkv'
-                        && $params[6] === null; // no canonical_key in metadata → column NULL
+                        && $params[6] === null   // no canonical_key in metadata → column NULL
+                        && $params[7] === 'Test Movie' // sort_title (no leading article)
+                        && $params[8] === null;  // no rating in metadata → column NULL
                 })
             );
 
@@ -555,10 +558,12 @@ class ItemRepositoryTest extends TestCase
         $this->assertIsString($capturedSql);
         $this->assertStringContainsString('canonical_key', $capturedSql);
         $this->assertIsArray($capturedParams);
-        // canonical_key is the 7th bound value (index 6), the blob the 8th.
+        // Bound order (migration 050): id, library_id, parent_id, name, type,
+        // path, canonical_key(6), sort_title(7), content_rating(8), blob(9).
         $this->assertSame('hunterxhunter', $capturedParams[6]);
-        $this->assertIsString($capturedParams[7]);
-        $this->assertStringContainsString('hunterxhunter', $capturedParams[7]); // blob still carries it
+        $this->assertSame('Hunter x Hunter', $capturedParams[7]); // sort_title (no leading article)
+        $this->assertIsString($capturedParams[9]);
+        $this->assertStringContainsString('hunterxhunter', $capturedParams[9]); // blob still carries it
     }
 
     public function testCreateDerivesCanonicalKeyColumnFromRawJsonStringMetadata(): void
@@ -624,7 +629,11 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->stringContains('UPDATE media_items SET'),
                 $this->callback(function ($params) {
-                    return $params[0] === 'New Name' && $params[1] === 'test-id';
+                    // A name update also materializes sort_title (migration 050):
+                    // SET sort_title = ?, name = ? WHERE id = ?
+                    return $params[0] === 'New Name' // sort_title (no leading article)
+                        && $params[1] === 'New Name' // name
+                        && $params[2] === 'test-id';
                 })
             );
 
@@ -659,12 +668,15 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertIsString($capturedSql);
         $this->assertStringContainsString('canonical_key = ?', $capturedSql);
+        $this->assertStringContainsString('content_rating = ?', $capturedSql);
         $this->assertStringContainsString('metadata_json = ?', $capturedSql);
         $this->assertIsArray($capturedParams);
-        // SET canonical_key = ?, metadata_json = ? WHERE id = ?
+        // A metadata_json rewrite also syncs content_rating (migration 050):
+        // SET canonical_key = ?, content_rating = ?, metadata_json = ? WHERE id = ?
         $this->assertSame('hunterxhunter:2011', $capturedParams[0]);
-        $this->assertIsString($capturedParams[1]);
-        $this->assertSame('series-1', $capturedParams[2]);
+        $this->assertNull($capturedParams[1]); // no rating in this metadata
+        $this->assertIsString($capturedParams[2]);
+        $this->assertSame('series-1', $capturedParams[3]);
     }
 
     public function testUpdateSyncsCanonicalKeyColumnFromRawJsonStringMetadata(): void
@@ -696,13 +708,15 @@ class ItemRepositoryTest extends TestCase
 
         $this->assertIsString($capturedSql);
         $this->assertStringContainsString('canonical_key = ?', $capturedSql);
+        $this->assertStringContainsString('content_rating = ?', $capturedSql);
         $this->assertStringContainsString('metadata_json = ?', $capturedSql);
         $this->assertIsArray($capturedParams);
-        // SET canonical_key = ?, metadata_json = ? WHERE id = ?
+        // SET canonical_key = ?, content_rating = ?, metadata_json = ? WHERE id = ?
         $this->assertSame('madmaxfuryroad:2015', $capturedParams[0]);
+        $this->assertNull($capturedParams[1]); // no rating in this metadata
         // The raw string blob is passed through unchanged (not array-encoded).
-        $this->assertSame('{"canonical_key":"madmaxfuryroad:2015","year":2015}', $capturedParams[1]);
-        $this->assertSame('movie-1', $capturedParams[2]);
+        $this->assertSame('{"canonical_key":"madmaxfuryroad:2015","year":2015}', $capturedParams[2]);
+        $this->assertSame('movie-1', $capturedParams[3]);
     }
 
     public function testUpdateClearsCanonicalKeyColumnWhenMetadataLosesKey(): void
@@ -724,9 +738,202 @@ class ItemRepositoryTest extends TestCase
             'metadata_json' => ['year' => 2011], // no canonical_key → column NULLed
         ]);
 
+        // SET canonical_key = ?, content_rating = ?, metadata_json = ? WHERE id = ?
         $this->assertIsArray($capturedParams);
-        $this->assertNull($capturedParams[0]);
-        $this->assertSame('series-1', $capturedParams[2]);
+        $this->assertNull($capturedParams[0]);          // canonical_key nulled
+        $this->assertNull($capturedParams[1]);          // content_rating nulled (no rating)
+        $this->assertSame('series-1', $capturedParams[3]);
+    }
+
+    public function testCreateMaterializesStrippedSortTitleAndContentRating(): void
+    {
+        // The headline S7 write-path behavior: create() must persist the
+        // ARTICLE-STRIPPED sort key (not the raw display name) into the indexed
+        // sort_title column, and the extracted rating into content_rating — while
+        // leaving the DISPLAY name intact. The other create() tests use
+        // article-free, rating-free inputs where SortTitle::from() is the identity
+        // and extractContentRating() is null, so neither transform is actually
+        // proven on the write path without this case (a regression that dropped
+        // the transform — writing $scrubbedName / null — would pass them all).
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('INSERT INTO media_items'),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->create([
+            'library_id' => 'lib-1',
+            'name' => 'The Matrix',
+            'type' => 'movie',
+            'path' => '/movies/the-matrix.mkv',
+            'metadata_json' => ['rating' => 'R', 'year' => 1999],
+        ]);
+
+        $this->assertIsArray($capturedParams);
+        // Bound order: id, library_id, parent_id, name(3), type, path,
+        // canonical_key(6), sort_title(7), content_rating(8), blob(9).
+        $this->assertSame('The Matrix', $capturedParams[3]); // display name preserved
+        $this->assertSame('Matrix', $capturedParams[7]);     // sort_title = article-STRIPPED
+        $this->assertSame('R', $capturedParams[8]);          // content_rating materialized
+    }
+
+    public function testUpdateMaterializesStrippedSortTitleOnArticleLeadingNameChange(): void
+    {
+        // A name change to an article-leading title must persist the STRIPPED key
+        // into sort_title while the display name keeps its article. Guards against
+        // a regression that wrote the raw name into sort_title (the existing
+        // name-change test uses "New Name", where SortTitle::from() is identity).
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('UPDATE media_items SET'),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('movie-1', ['name' => 'The Godfather']);
+
+        // SET sort_title = ?, name = ? WHERE id = ?
+        $this->assertIsArray($capturedParams);
+        $this->assertSame('Godfather', $capturedParams[0]);    // sort_title = STRIPPED
+        $this->assertSame('The Godfather', $capturedParams[1]); // display name preserved
+        $this->assertSame('movie-1', $capturedParams[2]);
+    }
+
+    public function testUpdateMaterializesContentRatingFromMetadataRating(): void
+    {
+        // A metadata_json rewrite carrying a real rating must populate the indexed
+        // content_rating column with that value. The other update tests only cover
+        // rating-less metadata (content_rating → NULL), so a regression that always
+        // wrote NULL to content_rating would pass them; this proves the live value.
+        $capturedParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('content_rating = ?'),
+                $this->callback(function ($params) use (&$capturedParams): bool {
+                    $capturedParams = $params;
+                    return true;
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->update('movie-1', [
+            'metadata_json' => ['rating' => 'PG-13', 'year' => 1994],
+        ]);
+
+        // SET canonical_key = ?, content_rating = ?, metadata_json = ? WHERE id = ?
+        $this->assertIsArray($capturedParams);
+        $this->assertNull($capturedParams[0]);          // no canonical_key in metadata
+        $this->assertSame('PG-13', $capturedParams[1]); // content_rating materialized
+        $this->assertSame('movie-1', $capturedParams[3]);
+    }
+
+    // -----------------------------------------------------------------------
+    // extractContentRating() — the shared helper that materializes the indexed
+    // content_rating column from metadata_json (migration 050). Must exactly
+    // reproduce the old `JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.rating'))`
+    // read: a STRING rating when present, NULL for every other shape, whether
+    // the blob arrives already-decoded (scanner path) or as a raw JSON string
+    // (CLI/backfill path). No mock needed — it is a pure static function.
+    // -----------------------------------------------------------------------
+
+    public function testExtractContentRatingReturnsStringRatingFromArray(): void
+    {
+        $this->assertSame('R', ItemRepository::extractContentRating(['rating' => 'R', 'year' => 1999]));
+    }
+
+    public function testExtractContentRatingPreservesComplexCertificateLabels(): void
+    {
+        // VARCHAR(32) certificate labels pass through verbatim, unquoted.
+        $this->assertSame('TV-Y7-FV', ItemRepository::extractContentRating(['rating' => 'TV-Y7-FV']));
+        $this->assertSame('NC-17', ItemRepository::extractContentRating(['rating' => 'NC-17']));
+    }
+
+    public function testExtractContentRatingReturnsNullWhenRatingKeyAbsent(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating(['year' => 2020, 'genres' => ['Drama']]));
+    }
+
+    public function testExtractContentRatingReturnsNullForEmptyArray(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating([]));
+    }
+
+    public function testExtractContentRatingReturnsNullWhenRatingIsExplicitNull(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating(['rating' => null]));
+    }
+
+    /**
+     * A non-string rating (array/int/float/bool) is NOT materialized — the
+     * column stays NULL, exactly as JSON_UNQUOTE(JSON_EXTRACT()) yielded no
+     * usable scalar string for these shapes.
+     *
+     * @dataProvider malformedRatingShapes
+     */
+    public function testExtractContentRatingReturnsNullForMalformedRatingShapes(mixed $rating): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating(['rating' => $rating]));
+    }
+
+    /**
+     * @return array<string, array{0: mixed}>
+     */
+    public static function malformedRatingShapes(): array
+    {
+        return [
+            'array rating'  => [['R', 'PG']],
+            'object rating' => [['label' => 'R']],
+            'int rating'    => [13],
+            'float rating'  => [1.5],
+            'bool rating'   => [true],
+        ];
+    }
+
+    public function testExtractContentRatingDecodesRawJsonStringBlob(): void
+    {
+        // The CLI/backfill path can hand it the raw JSON string.
+        $this->assertSame('PG-13', ItemRepository::extractContentRating('{"rating":"PG-13","year":2012}'));
+    }
+
+    public function testExtractContentRatingReturnsNullForJsonStringWithoutRating(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating('{"year":2012}'));
+    }
+
+    public function testExtractContentRatingReturnsNullForInvalidJsonString(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating('not-json-at-all'));
+        $this->assertNull(ItemRepository::extractContentRating('{"rating":'));
+    }
+
+    public function testExtractContentRatingReturnsNullForNonArrayNonStringInput(): void
+    {
+        $this->assertNull(ItemRepository::extractContentRating(null));
+        $this->assertNull(ItemRepository::extractContentRating(42));
+        $this->assertNull(ItemRepository::extractContentRating(true));
+    }
+
+    public function testExtractContentRatingReturnsNullWhenJsonStringDecodesToScalar(): void
+    {
+        // A JSON string that decodes to a non-array (e.g. a bare string/number)
+        // is not a metadata blob → NULL.
+        $this->assertNull(ItemRepository::extractContentRating('"R"'));
+        $this->assertNull(ItemRepository::extractContentRating('123'));
     }
 
     public function testUpdateDoesNotTouchCanonicalKeyColumnWhenMetadataJsonAbsent(): void
@@ -1252,10 +1459,9 @@ class ItemRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with($this->callback(function (string $sql): bool {
-                // Buckets by the first letter of the article-stripped sort key
-                // (so "The Plot" counts under P), not the raw first char.
-                return str_contains($sql, 'UPPER(LEFT(')
-                    && str_contains($sql, "COLLATE utf8mb4_bin = 'the '")
+                // Buckets by the first letter of the materialized sort key
+                // column (so "The Plot" counts under P), not the raw first char.
+                return str_contains($sql, 'UPPER(LEFT(sort_title, 1))')
                     && str_contains($sql, 'AS letter')
                     && str_contains($sql, 'GROUP BY letter');
             }))
@@ -1304,9 +1510,9 @@ class ItemRepositoryTest extends TestCase
                 if (str_contains($sql, 'COUNT(*)')) {
                     return true; // the count query has no ORDER BY
                 }
-                return str_contains($sql, 'ORDER BY TRIM(CASE')
-                    && str_contains($sql, "COLLATE utf8mb4_bin = 'the '")
-                    && str_contains($sql, 'ELSE name END) ASC, name ASC');
+                // Materialized sort_title column first (files "The Plot" under P),
+                // then the raw name as a stable tiebreak.
+                return str_contains($sql, 'ORDER BY sort_title ASC, name ASC');
             }))
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
@@ -1323,7 +1529,7 @@ class ItemRepositoryTest extends TestCase
                 if (str_contains($sql, 'COUNT(*)')) {
                     return true;
                 }
-                return str_contains($sql, 'ELSE name END) DESC, name DESC');
+                return str_contains($sql, 'ORDER BY sort_title DESC, name DESC');
             }))
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
@@ -1340,14 +1546,41 @@ class ItemRepositoryTest extends TestCase
                 if (str_contains($sql, 'COUNT(*)')) {
                     return true;
                 }
-                // Year primary, then the article-stripped title as the tiebreak.
+                // Year primary, then the materialized sort_title as the tiebreak.
                 return str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.year')")
-                    && str_contains($sql, 'ELSE name END) ASC, name ASC');
+                    && str_contains($sql, 'ASC, sort_title ASC, name ASC');
             }))
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
         $repo = new ItemRepository($db);
         $repo->query(['sort' => 'year']);
+    }
+
+    public function testQueryRatingSortOrdersByMaterializedContentRatingColumn(): void
+    {
+        // Browse "sort by rating" (?sort=rating → rating_sort) must build its
+        // restriction-rank CASE off the materialized `content_rating` column
+        // (migration 050), NOT the old JSON_EXTRACT(metadata_json,'$.rating') blob
+        // read. This is a live query() ORDER-BY path S7 rewrote; without this case
+        // the branch is uncovered and a regression to the JSON read would pass.
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->exactly(2))
+            ->method('query')
+            ->with($this->callback(function (string $sql): bool {
+                if (str_contains($sql, 'COUNT(*)')) {
+                    return true;
+                }
+                // Rank CASE reads the indexed column, article-insensitive tiebreak
+                // follows, and the old JSON extraction is gone from the ORDER BY.
+                return str_contains($sql, "WHEN content_rating = 'G' THEN")
+                    && str_contains($sql, 'ELSE 999 END')
+                    && str_contains($sql, ', sort_title ASC, name ASC')
+                    && !str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.rating')");
+            }))
+            ->willReturnOnConsecutiveCalls([['count' => 0]], []);
+
+        $repo = new ItemRepository($db);
+        $repo->query(['sort' => 'rating']);
     }
 
     public function testQueryDateAddedSortIsNotArticleStripped(): void
@@ -1376,8 +1609,7 @@ class ItemRepositoryTest extends TestCase
         $db->expects($this->once())
             ->method('query')
             ->with($this->callback(function (string $sql): bool {
-                return str_contains($sql, 'ORDER BY TRIM(CASE')
-                    && str_contains($sql, 'ELSE name END) ASC, name ASC')
+                return str_contains($sql, 'ORDER BY sort_title ASC, name ASC')
                     && str_contains($sql, 'LIMIT ? OFFSET ?');
             }))
             ->willReturn([]);
@@ -1453,12 +1685,13 @@ class ItemRepositoryTest extends TestCase
     public function testQueryWithGenresFilterAppliesCorrectly(): void
     {
         $db = $this->createMock(Connection::class);
-        // The genre containment MUST be scoped to the '$.genres' path — a path-less
-        // JSON_CONTAINS tests the whole document and matches nothing.
+        // Genre filtering is a membership test against the multi-valued index on
+        // metadata_json.$.genres (migration 050): `? MEMBER OF (...)`, one per
+        // requested genre, OR'd together.
         $db->expects($this->exactly(2))
             ->method('query')
             ->with(
-                $this->stringContains("JSON_CONTAINS(metadata_json, ?, '\$.genres') > 0")
+                $this->stringContains("? MEMBER OF (metadata_json->'\$.genres')")
             )
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);
 
@@ -1988,8 +2221,9 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->callback(function (string $sql) use (&$capturedSql): bool {
                     $capturedSql = $sql;
-                    // Rating groups/orders by the rating string from metadata.
-                    $e = "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '\$.rating'))";
+                    // Rating groups/orders by the materialized content_rating
+                    // column (migration 050), not a per-row JSON extraction.
+                    $e = 'content_rating';
                     return str_contains($sql, "{$e} AS bucket_value")
                         && str_contains($sql, "GROUP BY {$e}")
                         && str_contains($sql, "ORDER BY {$e} ASC");

@@ -225,7 +225,7 @@ class ItemRepositoryTest extends TestCase
      */
     public function testFindPathsMapIssuesExactlyOneQueryWithCorrectPlaceholdersAndBindings(): void
     {
-        $capturedSql = null;
+        $capturedSql = '';
         $capturedParams = null;
         $callCount = 0;
 
@@ -1446,7 +1446,7 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->findById('test-id');
 
-        $this->assertEquals(['year' => 2020, 'director' => 'Test Director'], $result['metadata']);
+        $this->assertEquals(['year' => 2020, 'director' => 'Test Director'], ($result ?? [])['metadata']);
     }
 
     public function testFindShowsWithUnfingerprintedEpisodesReturnsDistinctShowIds(): void
@@ -1460,7 +1460,6 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
 
-        $this->assertIsArray($result);
         $this->assertCount(2, $result);
         $this->assertEquals('show-1', $result[0]);
         $this->assertEquals('show-2', $result[1]);
@@ -1474,7 +1473,6 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
 
-        $this->assertIsArray($result);
         $this->assertEmpty($result);
     }
 
@@ -1486,7 +1484,6 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->findShowsWithUnfingerprintedEpisodes(20);
 
-        $this->assertIsArray($result);
         $this->assertEmpty($result);
     }
 
@@ -1536,7 +1533,6 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->query(['limit' => 50, 'offset' => 0]);
 
-        $this->assertIsArray($result);
         $this->assertArrayHasKey('items', $result);
         $this->assertArrayHasKey('total', $result);
         $this->assertArrayHasKey('limit', $result);
@@ -1903,7 +1899,6 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->query(['ratings' => ['PG', 'R']]);
 
-        $this->assertIsArray($result);
         $this->assertEquals(0, $result['total']);
     }
 
@@ -2457,12 +2452,16 @@ class ItemRepositoryTest extends TestCase
         // "stale but not invalidated" state the recompute path must handle.
         $cacheProp = new \ReflectionProperty(ItemRepository::class, 'genreFacetCache');
         $cache = $cacheProp->getValue($repo);
-        $cache['lib-A']['expires_at'] = 0;
+        $cache = is_array($cache) ? $cache : [];
+        $entry = is_array($cache['lib-A'] ?? null) ? $cache['lib-A'] : [];
+        $entry['expires_at'] = 0;
+        $cache['lib-A'] = $entry;
         $cacheProp->setValue($repo, $cache);
 
         $repo->distinctGenres('lib-A'); // stale → recompute
 
-        $keysAfter = array_keys($cacheProp->getValue($repo));
+        $after = $cacheProp->getValue($repo);
+        $keysAfter = array_keys(is_array($after) ? $after : []);
         $this->assertSame(
             ['lib-B', 'lib-A'],
             $keysAfter,
@@ -2488,17 +2487,19 @@ class ItemRepositoryTest extends TestCase
 
         $repo = new ItemRepository($db);
 
-        $max = (int) (new \ReflectionClassConstant(
+        $maxConst = (new \ReflectionClassConstant(
             ItemRepository::class,
             'GENRE_FACET_CACHE_MAX'
         ))->getValue();
+        $max = is_int($maxConst) ? $maxConst : 0;
 
         // Fill exactly to the bound (scopes lib-0 .. lib-(max-1)) — no eviction yet.
         for ($i = 0; $i < $max; $i++) {
             $repo->distinctGenres('lib-' . $i);
         }
         $cacheProp = new \ReflectionProperty(ItemRepository::class, 'genreFacetCache');
-        $this->assertCount($max, $cacheProp->getValue($repo), 'at the bound, nothing evicted yet');
+        $cacheNow = $cacheProp->getValue($repo);
+        $this->assertCount($max, is_array($cacheNow) ? $cacheNow : [], 'at the bound, nothing evicted yet');
 
         // Touch the oldest scope so it becomes MRU (LRU-hot), making lib-1 the
         // new oldest.
@@ -2508,7 +2509,8 @@ class ItemRepositoryTest extends TestCase
         // is evicted, not the just-touched lib-0.
         $repo->distinctGenres('lib-' . $max);
 
-        $keys = array_keys($cacheProp->getValue($repo));
+        $cacheKeys = $cacheProp->getValue($repo);
+        $keys = array_keys(is_array($cacheKeys) ? $cacheKeys : []);
         $this->assertCount($max, $keys, 'the map stays hard-capped at the bound');
         $this->assertNotContains('lib-1', $keys, 'the coldest (untouched) scope was evicted first (LRU)');
         $this->assertContains('lib-0', $keys, 'a recently-touched hot scope survives eviction');
@@ -2538,8 +2540,7 @@ class ItemRepositoryTest extends TestCase
                 $this->callback(function (array $params) use (&$capturedParams): bool {
                     $capturedParams = $params;
                     // libraryId bound as positional placeholder (colon-free)
-                    return is_array($params)
-                        && in_array('lib-year-test', $params, true)
+                    return in_array('lib-year-test', $params, true)
                         && !str_contains(print_r($params, true), ':');
                 })
             )
@@ -2673,7 +2674,7 @@ class ItemRepositoryTest extends TestCase
         $repo = new ItemRepository($db);
         $result = $repo->valueBuckets('foobar', []);
 
-        $this->assertIsArray($result);
+        $this->assertSame([], $result);
     }
 
     public function testValueBucketsRuntimeFieldUsesRuntimeSort(): void
@@ -2762,8 +2763,7 @@ class ItemRepositoryTest extends TestCase
                 $this->callback(function (array $params) use (&$capturedParams): bool {
                     $capturedParams = $params;
                     // libraryId + search term bound as positional placeholders
-                    return is_array($params)
-                        && in_array('lib-multi', $params, true)
+                    return in_array('lib-multi', $params, true)
                         && in_array('batman', $params, true);
                 })
             )

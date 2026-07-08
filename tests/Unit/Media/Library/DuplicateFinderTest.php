@@ -23,55 +23,11 @@ class DuplicateFinderTest extends TestCase
      * @param list<array<string, mixed>> $topLevel       Seeded top-level rows.
      * @param array<string, int>         $descendantCount id => descendant count.
      */
-    private function makeRepo(array $topLevel, array $descendantCount = []): ItemRepository
+    private function makeRepo(array $topLevel, array $descendantCount = []): InMemoryDuplicateRepo
     {
         $mockConn = $this->createMock(Connection::class);
 
-        return new class ($mockConn, $topLevel, $descendantCount) extends ItemRepository {
-            /** @var list<array<string, mixed>> */
-            private array $rows;
-            /** @var array<string, int> */
-            private array $descendants;
-            /** Spy: number of getTopLevelByLibrary() pages requested. */
-            public int $pageCalls = 0;
-            /** Spy: number of countDescendants() calls. */
-            public int $countCalls = 0;
-
-            /**
-             * @param list<array<string, mixed>> $rows
-             * @param array<string, int>         $descendants
-             */
-            public function __construct(Connection $db, array $rows, array $descendants)
-            {
-                parent::__construct($db);
-                // Ensure each row exposes a decoded 'metadata' array like the
-                // real hydrateItem() does.
-                $this->rows = array_map(static function (array $row): array {
-                    if (!isset($row['metadata']) || !is_array($row['metadata'])) {
-                        $row['metadata'] = [];
-                    }
-                    return $row;
-                }, $rows);
-                $this->descendants = $descendants;
-            }
-
-            public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
-            {
-                $this->pageCalls++;
-                $matching = array_values(array_filter(
-                    $this->rows,
-                    static fn (array $r): bool => ($r['library_id'] ?? null) === $libraryId
-                ));
-
-                return array_slice($matching, $offset, $limit);
-            }
-
-            public function countDescendants(string $itemId): int
-            {
-                $this->countCalls++;
-                return $this->descendants[$itemId] ?? 0;
-            }
-        };
+        return new InMemoryDuplicateRepo($mockConn, $topLevel, $descendantCount);
     }
 
     /**
@@ -340,7 +296,13 @@ class DuplicateFinderTest extends TestCase
         $this->assertCount(1, $groups);
         $this->assertSame('s-rich', $groups[0]['primary']['id']);
         $this->assertSame(50, $groups[0]['primary']['descendant_count']);
-        $duplicateIds = array_map(static fn (array $d): string => $d['id'], $groups[0]['duplicates']);
+        $duplicateIds = array_map(
+            static function (array $d): string {
+                $id = $d['id'] ?? null;
+                return is_string($id) ? $id : '';
+            },
+            $groups[0]['duplicates'],
+        );
         sort($duplicateIds);
         $this->assertSame(['s-mid', 's-thin'], $duplicateIds);
     }
@@ -387,4 +349,57 @@ class DuplicateFinderTest extends TestCase
         $this->assertSame('aaa', $groups[0]['primary']['id'], 'tie → smallest id wins even when it is later');
         $this->assertSame('zzz', $groups[0]['duplicates'][0]['id']);
     }
+}
+
+
+/**
+ * In-memory ItemRepository double for DuplicateFinder: serves a seeded set
+ * of top-level rows through getTopLevelByLibrary() (honouring limit/offset
+ * paging) and counts descendants from a parent_id map.
+ */
+class InMemoryDuplicateRepo extends ItemRepository
+{
+            /** @var list<array<string, mixed>> */
+            private array $rows;
+            /** @var array<string, int> */
+            private array $descendants;
+            /** Spy: number of getTopLevelByLibrary() pages requested. */
+            public int $pageCalls = 0;
+            /** Spy: number of countDescendants() calls. */
+            public int $countCalls = 0;
+
+            /**
+             * @param list<array<string, mixed>> $rows
+             * @param array<string, int>         $descendants
+             */
+            public function __construct(Connection $db, array $rows, array $descendants)
+            {
+                parent::__construct($db);
+                // Ensure each row exposes a decoded 'metadata' array like the
+                // real hydrateItem() does.
+                $this->rows = array_map(static function (array $row): array {
+                    if (!isset($row['metadata']) || !is_array($row['metadata'])) {
+                        $row['metadata'] = [];
+                    }
+                    return $row;
+                }, $rows);
+                $this->descendants = $descendants;
+            }
+
+            public function getTopLevelByLibrary(string $libraryId, int $limit = 500, int $offset = 0): array
+            {
+                $this->pageCalls++;
+                $matching = array_values(array_filter(
+                    $this->rows,
+                    static fn (array $r): bool => ($r['library_id'] ?? null) === $libraryId
+                ));
+
+                return array_slice($matching, $offset, $limit);
+            }
+
+            public function countDescendants(string $itemId): int
+            {
+                $this->countCalls++;
+                return $this->descendants[$itemId] ?? 0;
+            }
 }

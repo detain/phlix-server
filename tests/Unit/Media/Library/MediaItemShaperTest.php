@@ -12,6 +12,28 @@ use PHPUnit\Framework\TestCase;
  */
 final class MediaItemShaperTest extends TestCase
 {
+    /**
+     * Narrow a shaped-response list key (cast/crew/files/production_companies)
+     * — MediaItemShaper::shapeDetail() is typed array<string, mixed>, so these
+     * nested list-of-rows values arrive as mixed — into a list of array rows
+     * for offset-based assertions, preserving element count.
+     *
+     * @param array<string, mixed> $shaped
+     * @return array<int, array<array-key, mixed>>
+     */
+    private function rows(array $shaped, string $key): array
+    {
+        $value = $shaped[$key] ?? [];
+        if (!is_array($value)) {
+            return [];
+        }
+        $rows = [];
+        foreach ($value as $row) {
+            $rows[] = is_array($row) ? $row : [];
+        }
+        return $rows;
+    }
+
     public function testShapeExposesArticleStrippedSortTitleWhileKeepingDisplayName(): void
     {
         $shaped = MediaItemShaper::shape([
@@ -214,16 +236,16 @@ final class MediaItemShaperTest extends TestCase
         $this->assertSame('Lana Wachowski', $shaped['director']);
 
         // Rich blocks normalized, nameless entries dropped.
-        $this->assertCount(1, $shaped['cast']);
+        $this->assertCount(1, $this->rows($shaped, 'cast'));
         $this->assertSame([
             'name' => 'Keanu Reeves',
             'role' => 'Neo',
             'profile_url' => 'https://i/w185/k.jpg',
-        ], $shaped['cast'][0]);
-        $this->assertSame('Director', $shaped['crew'][0]['job']);
-        $this->assertNull($shaped['crew'][0]['profile_url']);
-        $this->assertSame('Warner Bros.', $shaped['production_companies'][0]['name']);
-        $this->assertSame('US', $shaped['production_companies'][0]['origin_country']);
+        ], $this->rows($shaped, 'cast')[0]);
+        $this->assertSame('Director', $this->rows($shaped, 'crew')[0]['job']);
+        $this->assertNull($this->rows($shaped, 'crew')[0]['profile_url']);
+        $this->assertSame('Warner Bros.', $this->rows($shaped, 'production_companies')[0]['name']);
+        $this->assertSame('US', $this->rows($shaped, 'production_companies')[0]['origin_country']);
         $this->assertSame('Warner Bros.', $shaped['studio']);
     }
 
@@ -241,10 +263,10 @@ final class MediaItemShaperTest extends TestCase
             ],
         ], []);
 
-        $this->assertCount(1, $shaped['cast']);
-        $this->assertSame('Old Actor', $shaped['cast'][0]['name']);
-        $this->assertSame('Hero', $shaped['cast'][0]['role']);
-        $this->assertNull($shaped['cast'][0]['profile_url']);
+        $this->assertCount(1, $this->rows($shaped, 'cast'));
+        $this->assertSame('Old Actor', $this->rows($shaped, 'cast')[0]['name']);
+        $this->assertSame('Hero', $this->rows($shaped, 'cast')[0]['role']);
+        $this->assertNull($this->rows($shaped, 'cast')[0]['profile_url']);
     }
 
     public function testShapeDetailFallsBackToFlatActorNamesForCast(): void
@@ -258,7 +280,7 @@ final class MediaItemShaperTest extends TestCase
 
         $this->assertSame([
             ['name' => 'Solo Name', 'role' => '', 'profile_url' => null],
-        ], $shaped['cast']);
+        ], $this->rows($shaped, 'cast'));
     }
 
     public function testShapeDetailDefensivelyHandlesMalformedRichMetadata(): void
@@ -275,9 +297,9 @@ final class MediaItemShaperTest extends TestCase
             ],
         ], []);
 
-        $this->assertSame([], $shaped['cast']);
-        $this->assertSame([], $shaped['crew']);
-        $this->assertSame([], $shaped['production_companies']);
+        $this->assertSame([], $this->rows($shaped, 'cast'));
+        $this->assertSame([], $this->rows($shaped, 'crew'));
+        $this->assertSame([], $this->rows($shaped, 'production_companies'));
         $this->assertNull($shaped['studio']);
     }
 
@@ -395,10 +417,10 @@ final class MediaItemShaperTest extends TestCase
         ], []);
 
         // Episode cast/crew flow through the generic detail shaper unchanged.
-        $this->assertCount(1, $shaped['cast']);
-        $this->assertSame('Kiefer Sutherland', $shaped['cast'][0]['name']);
-        $this->assertSame('Jack Bauer', $shaped['cast'][0]['role']);
-        $this->assertSame('Director', $shaped['crew'][0]['job']);
+        $this->assertCount(1, $this->rows($shaped, 'cast'));
+        $this->assertSame('Kiefer Sutherland', $this->rows($shaped, 'cast')[0]['name']);
+        $this->assertSame('Jack Bauer', $this->rows($shaped, 'cast')[0]['role']);
+        $this->assertSame('Director', $this->rows($shaped, 'crew')[0]['job']);
         // Inherited genres (list shape) + tags (detail-only).
         $this->assertSame(['Drama'], $shaped['genres']);
         $this->assertSame(['terrorism', 'counter terrorism'], $shaped['tags']);
@@ -573,21 +595,21 @@ final class MediaItemShaperTest extends TestCase
         ], $streams, true);
 
         $this->assertArrayHasKey('files', $shaped);
-        $this->assertCount(2, $shaped['files']);
+        $this->assertCount(2, $this->rows($shaped, 'files'));
 
         // First file — video with full path, size, container, codec, resolution.
-        $this->assertSame('/mnt/media/movie.mkv', $shaped['files'][0]['path']);
-        $this->assertSame(1_500_000_000, $shaped['files'][0]['size_bytes']);
-        $this->assertSame('mkv', $shaped['files'][0]['container']);
-        $this->assertSame('h264', $shaped['files'][0]['codec']);
-        $this->assertSame('1920x1080', $shaped['files'][0]['resolution']);
+        $this->assertSame('/mnt/media/movie.mkv', $this->rows($shaped, 'files')[0]['path']);
+        $this->assertSame(1_500_000_000, $this->rows($shaped, 'files')[0]['size_bytes']);
+        $this->assertSame('mkv', $this->rows($shaped, 'files')[0]['container']);
+        $this->assertSame('h264', $this->rows($shaped, 'files')[0]['codec']);
+        $this->assertSame('1920x1080', $this->rows($shaped, 'files')[0]['resolution']);
 
         // Second file — subtitle; no stream so codec/resolution null.
-        $this->assertSame('/mnt/media/movie.srt', $shaped['files'][1]['path']);
-        $this->assertSame(5000, $shaped['files'][1]['size_bytes']);
-        $this->assertSame('srt', $shaped['files'][1]['container']);
-        $this->assertNull($shaped['files'][1]['codec']);
-        $this->assertNull($shaped['files'][1]['resolution']);
+        $this->assertSame('/mnt/media/movie.srt', $this->rows($shaped, 'files')[1]['path']);
+        $this->assertSame(5000, $this->rows($shaped, 'files')[1]['size_bytes']);
+        $this->assertSame('srt', $this->rows($shaped, 'files')[1]['container']);
+        $this->assertNull($this->rows($shaped, 'files')[1]['codec']);
+        $this->assertNull($this->rows($shaped, 'files')[1]['resolution']);
     }
 
     public function testShapeDetailDoesNotExposeFilesBlockWhenNotAdmin(): void
@@ -618,7 +640,7 @@ final class MediaItemShaperTest extends TestCase
         ], [], true);
 
         $this->assertArrayHasKey('files', $shaped);
-        $this->assertSame([], $shaped['files']);
+        $this->assertSame([], $this->rows($shaped, 'files'));
     }
 
     public function testFilesBlockExcludesEntriesWithMissingOrEmptyPath(): void
@@ -638,8 +660,8 @@ final class MediaItemShaperTest extends TestCase
             ],
         ], $streams, true);
 
-        $this->assertCount(1, $shaped['files']);
-        $this->assertSame('/valid/path.mkv', $shaped['files'][0]['path']);
+        $this->assertCount(1, $this->rows($shaped, 'files'));
+        $this->assertSame('/valid/path.mkv', $this->rows($shaped, 'files')[0]['path']);
     }
 
     public function testListShapeDoesNotExposeFiles(): void
@@ -675,10 +697,10 @@ final class MediaItemShaperTest extends TestCase
             ],
         ], [], true);
 
-        $this->assertCount(4, $shaped['files']);
-        $this->assertSame('mp4', $shaped['files'][0]['container']);
-        $this->assertSame('avi', $shaped['files'][1]['container']);
-        $this->assertSame('mkv', $shaped['files'][2]['container']);
-        $this->assertNull($shaped['files'][3]['container']);
+        $this->assertCount(4, $this->rows($shaped, 'files'));
+        $this->assertSame('mp4', $this->rows($shaped, 'files')[0]['container']);
+        $this->assertSame('avi', $this->rows($shaped, 'files')[1]['container']);
+        $this->assertSame('mkv', $this->rows($shaped, 'files')[2]['container']);
+        $this->assertNull($this->rows($shaped, 'files')[3]['container']);
     }
 }

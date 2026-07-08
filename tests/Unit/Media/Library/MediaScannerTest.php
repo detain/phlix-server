@@ -27,6 +27,42 @@ class MediaScannerTest extends TestCase
         }
     }
 
+    /**
+     * Narrow a loosely-typed item row's metadata_json into an array for
+     * assertions (the in-memory repo double stores it as mixed).
+     *
+     * @param array<string, mixed> $item
+     * @return array<string, mixed>
+     */
+    private function metaOf(array $item): array
+    {
+        $meta = $item['metadata_json'] ?? [];
+        return is_array($meta) ? $meta : [];
+    }
+
+    /**
+     * Narrow a nested array-valued key (e.g. metadata_json's `source` block).
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function arrOf(array $data, string $key): array
+    {
+        $value = $data[$key] ?? [];
+        return is_array($value) ? $value : [];
+    }
+
+    /**
+     * Narrow a scalar row field to a string for path/name assertions.
+     *
+     * @param array<string, mixed> $data
+     */
+    private function strOf(array $data, string $key): string
+    {
+        $value = $data[$key] ?? '';
+        return is_scalar($value) ? (string) $value : '';
+    }
+
     public function testCanCreateMediaScanner(): void
     {
         $scanner = new MediaScanner(
@@ -118,8 +154,8 @@ class MediaScannerTest extends TestCase
         foreach ($episodes as $ep) {
             $this->assertNotNull($ep['parent_id'], 'episode must have a season parent');
             $this->assertContains($ep['parent_id'], $seasonIds, 'episode parent is a season');
-            $this->assertArrayHasKey('season', $ep['metadata_json']);
-            $this->assertArrayHasKey('episode', $ep['metadata_json']);
+            $this->assertArrayHasKey('season', $this->metaOf($ep));
+            $this->assertArrayHasKey('episode', $this->metaOf($ep));
         }
     }
 
@@ -174,7 +210,7 @@ class MediaScannerTest extends TestCase
             $this->assertSame($series[0]['id'], $season['parent_id']);
         }
         // The canonical key was persisted onto the container metadata.
-        $this->assertSame('hunterxhunter', $series[0]['metadata_json']['canonical_key'] ?? null);
+        $this->assertSame('hunterxhunter', $this->metaOf($series[0])['canonical_key'] ?? null);
     }
 
     /**
@@ -199,7 +235,7 @@ class MediaScannerTest extends TestCase
         $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
         $this->assertCount(2, $series, 'distinct years must NOT collapse into one container');
 
-        $keys = array_map(fn ($s) => $s['metadata_json']['canonical_key'] ?? null, $series);
+        $keys = array_map(fn ($s) => $this->metaOf($s)['canonical_key'] ?? null, $series);
         sort($keys);
         $this->assertSame(['hunterxhunter:1999', 'hunterxhunter:2011'], $keys);
     }
@@ -263,7 +299,7 @@ class MediaScannerTest extends TestCase
 
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(1, $movies, 'two slug-variant copies collapse to ONE movie row');
-        $this->assertSame('madmaxfuryroad:2015', $movies[0]['metadata_json']['canonical_key'] ?? null);
+        $this->assertSame('madmaxfuryroad:2015', $this->metaOf($movies[0])['canonical_key'] ?? null);
     }
 
     /**
@@ -433,12 +469,12 @@ class MediaScannerTest extends TestCase
         // The folder-derived series_title (year-stripped) + year are persisted as
         // the match hint on the series container metadata.
         $someShow = $this->seriesByName($series, 'Some Show');
-        $this->assertSame('Some Show', $someShow['metadata_json']['series_title']);
-        $this->assertSame(2013, $someShow['metadata_json']['year']);
+        $this->assertSame('Some Show', $this->metaOf($someShow)['series_title']);
+        $this->assertSame(2013, $this->metaOf($someShow)['year']);
 
         $bebop = $this->seriesByName($series, 'Cowboy Bebop');
-        $this->assertSame('Cowboy Bebop', $bebop['metadata_json']['series_title']);
-        $this->assertSame(1998, $bebop['metadata_json']['year']);
+        $this->assertSame('Cowboy Bebop', $this->metaOf($bebop)['series_title']);
+        $this->assertSame(1998, $this->metaOf($bebop)['year']);
 
         // 3 episodes total (2 under Some Show, 1 under Cowboy Bebop). The loose
         // root file is NOT an episode and must not crash the scan.
@@ -473,8 +509,8 @@ class MediaScannerTest extends TestCase
         // ONE series regardless of the divergent filename titles — the whole point.
         $this->assertCount(1, $series);
         $this->assertSame('Assassination Classroom', $series[0]['name']);
-        $this->assertSame('Assassination Classroom', $series[0]['metadata_json']['series_title']);
-        $this->assertSame(2013, $series[0]['metadata_json']['year']);
+        $this->assertSame('Assassination Classroom', $this->metaOf($series[0])['series_title']);
+        $this->assertSame(2013, $this->metaOf($series[0])['year']);
 
         // One shared season; both episodes hang off it.
         $this->assertCount(1, $seasons);
@@ -516,7 +552,7 @@ class MediaScannerTest extends TestCase
 
         // And the folder-derived series_title hint is NOT written in flat mode.
         foreach ($series as $s) {
-            $this->assertArrayNotHasKey('series_title', $s['metadata_json']);
+            $this->assertArrayNotHasKey('series_title', $this->metaOf($s));
         }
     }
 
@@ -575,7 +611,7 @@ class MediaScannerTest extends TestCase
         // Exactly one series container (the existing one was reused, not duped).
         $series = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
         $this->assertCount(1, $series);
-        $meta = $series[0]['metadata_json'];
+        $meta = $this->metaOf($series[0]);
 
         // Hint stamped...
         $this->assertSame('Assassination Classroom', $meta['series_title']);
@@ -702,7 +738,7 @@ class MediaScannerTest extends TestCase
         // Season numbers come from the directories: 1, 2 and 0 (Specials). The
         // junk dir contributes NO season and NO episode.
         $seasonNumbers = array_map(
-            fn ($s) => $s['metadata_json']['season'] ?? null,
+            fn ($s) => $this->metaOf($s)['season'] ?? null,
             $seasons
         );
         sort($seasonNumbers);
@@ -715,12 +751,12 @@ class MediaScannerTest extends TestCase
         // Every episode's forced season matches its owning season container.
         $seasonById = [];
         foreach ($seasons as $s) {
-            $seasonById[$s['id']] = $s['metadata_json']['season'] ?? null;
+            $seasonById[$this->strOf($s, 'id')] = $this->metaOf($s)['season'] ?? null;
         }
         $episodeSeasons = [];
         foreach ($episodes as $ep) {
             $this->assertArrayHasKey($ep['parent_id'], $seasonById, 'episode parent is a season container');
-            $episodeSeasons[] = $ep['metadata_json']['season'] ?? null;
+            $episodeSeasons[] = $this->metaOf($ep)['season'] ?? null;
         }
         sort($episodeSeasons);
         $this->assertSame([0, 1, 1, 2], $episodeSeasons, 'episodes inherit their folder season');
@@ -729,7 +765,7 @@ class MediaScannerTest extends TestCase
         foreach ($items as $item) {
             $this->assertStringNotContainsString(
                 'junk.mkv',
-                (string) ($item['path'] ?? ''),
+                $this->strOf($item, 'path'),
                 'the junk pointer dir must not be scanned'
             );
         }
@@ -760,7 +796,7 @@ class MediaScannerTest extends TestCase
 
         $seasonsSeen = [];
         foreach ($episodes as $ep) {
-            $seasonsSeen[] = $ep['metadata_json']['season'] ?? null;
+            $seasonsSeen[] = $this->metaOf($ep)['season'] ?? null;
         }
         sort($seasonsSeen);
         // Nested file → forced season 1; direct file → filename-parsed season 3.
@@ -805,7 +841,7 @@ class MediaScannerTest extends TestCase
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(1, $movies);
         // (int) round((float) "5432.7") = 5433 — matches persistProbedDuration().
-        $this->assertSame(5433, $movies[0]['metadata_json']['duration_seconds']);
+        $this->assertSame(5433, $this->metaOf($movies[0])['duration_seconds']);
     }
 
     public function testDurationSecondsPopulatedForAudioItem(): void
@@ -827,7 +863,7 @@ class MediaScannerTest extends TestCase
         $items = $repo->items();
         $this->assertCount(1, $items);
         $this->assertSame('audio', $items[0]['type']);
-        $this->assertSame(212, $items[0]['metadata_json']['duration_seconds']);
+        $this->assertSame(212, $this->metaOf($items[0])['duration_seconds']);
     }
 
     public function testImageAndBookItemsAreNeverProbedForDuration(): void
@@ -858,7 +894,7 @@ class MediaScannerTest extends TestCase
         foreach ($repo->items() as $item) {
             $this->assertArrayNotHasKey(
                 'duration_seconds',
-                $item['metadata_json'],
+                $this->metaOf($item),
                 'image/book items must carry no probed duration'
             );
         }
@@ -884,7 +920,7 @@ class MediaScannerTest extends TestCase
 
         $items = $repo->items();
         $this->assertCount(1, $items, 'scan still indexes the file when probe yields nothing');
-        $this->assertArrayNotHasKey('duration_seconds', $items[0]['metadata_json']);
+        $this->assertArrayNotHasKey('duration_seconds', $this->metaOf($items[0]));
     }
 
     public function testProbeThrowingDoesNotAbortScanAndLeavesNoDuration(): void
@@ -909,7 +945,7 @@ class MediaScannerTest extends TestCase
         $items = $repo->items();
         $this->assertCount(2, $items, 'both files still indexed despite probe throwing');
         foreach ($items as $item) {
-            $this->assertArrayNotHasKey('duration_seconds', $item['metadata_json']);
+            $this->assertArrayNotHasKey('duration_seconds', $this->metaOf($item));
         }
     }
 
@@ -952,8 +988,8 @@ class MediaScannerTest extends TestCase
         // other metadata keys.
         $updates = array_values(array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie'));
         $this->assertCount(1, $updates, 'exactly one backfill update');
-        $this->assertSame(8880, $updates[0]['data']['metadata_json']['duration_seconds']);
-        $this->assertSame(27205, $updates[0]['data']['metadata_json']['tmdb_id'], 'existing metadata preserved');
+        $this->assertSame(8880, $this->metaOf($updates[0]['data'])['duration_seconds']);
+        $this->assertSame(27205, $this->metaOf($updates[0]['data'])['tmdb_id'], 'existing metadata preserved');
     }
 
     public function testRescanDoesNotReprobeWhenDurationAndSourceAlreadyPresent(): void
@@ -1112,10 +1148,10 @@ class MediaScannerTest extends TestCase
             'format' => ['duration' => '600', 'bit_rate' => '18000000'],
         ]);
 
-        $this->assertSame(18000000, $summary['source']['video_bitrate'], 'falls back to format.bit_rate');
+        $this->assertSame(18000000, $this->arrOf($summary, 'source')['video_bitrate'], 'falls back to format.bit_rate');
         $this->assertSame(18000000, $summary['streams'][0]['bitrate'], 'stream row uses the fallback too');
         // Audio has no bitrate and there is NO audio-side format fallback → null.
-        $this->assertNull($summary['source']['audio_bitrate']);
+        $this->assertNull($this->arrOf($summary, 'source')['audio_bitrate']);
         $this->assertNull($summary['streams'][1]['bitrate']);
     }
 
@@ -1180,10 +1216,10 @@ class MediaScannerTest extends TestCase
             'format' => ['duration' => '1800.0'],
         ]);
 
-        $this->assertSame(1920, $summary['source']['width']);
-        $this->assertSame(1080, $summary['source']['height']);
-        $this->assertSame('h264', $summary['source']['video_codec']);
-        $this->assertSame(6000000, $summary['source']['video_bitrate']);
+        $this->assertSame(1920, $this->arrOf($summary, 'source')['width']);
+        $this->assertSame(1080, $this->arrOf($summary, 'source')['height']);
+        $this->assertSame('h264', $this->arrOf($summary, 'source')['video_codec']);
+        $this->assertSame(6000000, $this->arrOf($summary, 'source')['video_bitrate']);
 
         // The video row is the h264 at index 1 — never the mjpeg poster.
         $this->assertSame('video', $summary['streams'][0]['stream_type']);
@@ -1209,10 +1245,10 @@ class MediaScannerTest extends TestCase
             'format' => ['duration' => '240.0'],
         ]);
 
-        $this->assertSame(500, $summary['source']['width']);
-        $this->assertSame('png', $summary['source']['video_codec']);
+        $this->assertSame(500, $this->arrOf($summary, 'source')['width']);
+        $this->assertSame('png', $this->arrOf($summary, 'source')['video_codec']);
         $this->assertSame('png', $summary['streams'][0]['codec']);
-        $this->assertSame('flac', $summary['source']['audio_codec']);
+        $this->assertSame('flac', $this->arrOf($summary, 'source')['audio_codec']);
     }
 
     /**
@@ -1288,15 +1324,15 @@ class MediaScannerTest extends TestCase
 
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(1, $movies);
-        $meta = $movies[0]['metadata_json'];
+        $meta = $this->metaOf($movies[0]);
 
         // Parsed-from-filename keys are NOT clobbered by the source merge.
         $this->assertSame('2010', $meta['year']);
         $this->assertSame('Inception', $meta['name']);
         // Probed scalars merged in.
         $this->assertSame(5433, $meta['duration_seconds']);
-        $this->assertSame('h264', $meta['source']['video_codec']);
-        $this->assertSame(1920, $meta['source']['width']);
+        $this->assertSame('h264', $this->arrOf($meta, 'source')['video_codec']);
+        $this->assertSame(1920, $this->arrOf($meta, 'source')['width']);
 
         // Streams persisted against the created item's id: video then audio.
         $this->assertNotSame([], $repo->addedStreams);
@@ -1339,7 +1375,7 @@ class MediaScannerTest extends TestCase
 
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(1, $movies);
-        $this->assertSame(1920, $movies[0]['metadata_json']['source']['width'], 'source is the real video, not the poster');
+        $this->assertSame(1920, $this->arrOf($this->metaOf($movies[0]), 'source')['width'], 'source is the real video, not the poster');
 
         $videoRows = array_values(array_filter($repo->addedStreams, fn ($s) => $s['data']['stream_type'] === 'video'));
         $this->assertCount(1, $videoRows);
@@ -1386,9 +1422,9 @@ class MediaScannerTest extends TestCase
         $this->assertCount(1, $repo->items(), 'no duplicate row on rescan');
         $updates = array_values(array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-movie'));
         $this->assertCount(1, $updates, 'exactly one source-backfill update');
-        $meta = $updates[0]['data']['metadata_json'];
+        $meta = $this->metaOf($updates[0]['data']);
 
-        $this->assertSame('h264', $meta['source']['video_codec'], 'source merged in');
+        $this->assertSame('h264', $this->arrOf($meta, 'source')['video_codec'], 'source merged in');
         $this->assertSame(27205, $meta['tmdb_id'], 'tmdb_id preserved');
         $this->assertSame(['Action', 'Sci-Fi'], $meta['genres'], 'genres preserved');
         $this->assertSame(8880, $meta['duration_seconds'], 'existing positive duration not overwritten by the 5433 probe');
@@ -1583,8 +1619,8 @@ class MediaScannerTest extends TestCase
 
         $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
         $this->assertCount(1, $movies, 'file still indexed without an ffprobe runner');
-        $this->assertArrayNotHasKey('source', $movies[0]['metadata_json']);
-        $this->assertArrayNotHasKey('duration_seconds', $movies[0]['metadata_json']);
+        $this->assertArrayNotHasKey('source', $this->metaOf($movies[0]));
+        $this->assertArrayNotHasKey('duration_seconds', $this->metaOf($movies[0]));
         $this->assertSame([], $repo->streamOps, 'no media_streams writes without an ffprobe runner');
     }
 
@@ -1602,8 +1638,8 @@ class MediaScannerTest extends TestCase
             'format' => ['duration' => '10.0'],
         ]);
 
-        $this->assertSame('h264', $summary['source']['video_codec']);
-        $this->assertSame(1280, $summary['source']['width']);
+        $this->assertSame('h264', $this->arrOf($summary, 'source')['video_codec']);
+        $this->assertSame(1280, $this->arrOf($summary, 'source')['width']);
     }
 
     /**
@@ -1795,8 +1831,8 @@ class MediaScannerTest extends TestCase
         $items = $repo->items();
         $this->assertCount(2, $items);
         foreach ($items as $item) {
-            $expected = str_contains((string) $item['path'], 'One') ? 100 : 200;
-            $this->assertSame($expected, $item['metadata_json']['duration_seconds']);
+            $expected = str_contains($this->strOf($item, 'path'), 'One') ? 100 : 200;
+            $this->assertSame($expected, $this->metaOf($item)['duration_seconds']);
         }
     }
 
@@ -2106,10 +2142,10 @@ class MediaScannerTest extends TestCase
 
         $itemA = $repoA->items()[0];
         $itemB = $repoB->items()[0];
-        $this->assertSame(300, $itemA['metadata_json']['duration_seconds']);
+        $this->assertSame(300, $this->metaOf($itemA)['duration_seconds']);
         $this->assertSame(
-            $itemA['metadata_json']['duration_seconds'],
-            $itemB['metadata_json']['duration_seconds'],
+            $this->metaOf($itemA)['duration_seconds'],
+            $this->metaOf($itemB)['duration_seconds'],
             'precomputed-probe path must produce the same item as the self-probing path'
         );
     }
@@ -2139,7 +2175,7 @@ class MediaScannerTest extends TestCase
         $items = $repo->items();
         $this->assertArrayNotHasKey(
             'duration_seconds',
-            $items[0]['metadata_json'],
+            $this->metaOf($items[0]),
             'a precomputed null probe must be honoured as-is, not re-probed'
         );
     }
@@ -2262,8 +2298,8 @@ class MediaScannerTest extends TestCase
             $updates,
             'the already-indexed path routed to backfillItemSourceMetadata() (update), not create()'
         );
-        $this->assertSame(999, $updates[0]['data']['metadata_json']['duration_seconds']);
-        $this->assertSame(111, $updates[0]['data']['metadata_json']['tmdb_id'], 'existing metadata preserved');
+        $this->assertSame(999, $this->metaOf($updates[0]['data'])['duration_seconds']);
+        $this->assertSame(111, $this->metaOf($updates[0]['data'])['tmdb_id'], 'existing metadata preserved');
 
         $newItem = null;
         foreach ($items as $item) {
@@ -2272,7 +2308,7 @@ class MediaScannerTest extends TestCase
             }
         }
         $this->assertNotNull($newItem, 'the brand-new path routed to processFile()/create()');
-        $this->assertSame(555, $newItem['metadata_json']['duration_seconds']);
+        $this->assertSame(555, $this->metaOf($newItem)['duration_seconds']);
 
         // Load-bearing routing proof: processFile()'s OWN internal
         // findByPath() existence re-check must NEVER be reached for the
@@ -2328,7 +2364,7 @@ class MediaScannerTest extends TestCase
             // so any cross-batch mixup (wrong duration on the wrong file)
             // is directly observable independent of iteration/batch order.
             preg_match('/Movie (\d{4})/', $path, $m);
-            $index = (int) $m[1];
+            $index = isset($m[1]) ? (int) $m[1] : 0;
             return ['streams' => [], 'format' => ['duration' => (string) ($index * 10) . '.0']];
         });
 
@@ -2357,15 +2393,15 @@ class MediaScannerTest extends TestCase
 
         $seenPaths = [];
         foreach ($items as $item) {
-            $path = (string) $item['path'];
+            $path = $this->strOf($item, 'path');
             $this->assertArrayNotHasKey($path, $seenPaths, 'no duplicate path created');
             $seenPaths[$path] = true;
 
             preg_match('/Movie (\d{4})/', $path, $m);
-            $index = (int) $m[1];
+            $index = isset($m[1]) ? (int) $m[1] : 0;
             $this->assertSame(
                 $index * 10,
-                $item['metadata_json']['duration_seconds'],
+                $this->metaOf($item)['duration_seconds'],
                 "file at index {$index} must carry its OWN probed duration, "
                     . "not a neighbour's (batch-boundary misattribution check)"
             );
@@ -2434,7 +2470,7 @@ class MediaScannerTest extends TestCase
         );
         $scannerBaseline->scan('lib-1', $this->tmpDir, 'movie');
         $baselineOrder = array_map(
-            fn (array $item): string => basename((string) $item['path']),
+            fn (array $item): string => basename($this->strOf($item, 'path')),
             $repoBaseline->items()
         );
         $this->assertSame($groundTruthOrder, $baselineOrder, 'baseline (non-coroutine) order matches ground truth');
@@ -2470,7 +2506,7 @@ class MediaScannerTest extends TestCase
         });
 
         $concurrentOrder = array_map(
-            fn (array $item): string => basename((string) $item['path']),
+            fn (array $item): string => basename($this->strOf($item, 'path')),
             $repoConcurrent->items()
         );
 
@@ -2554,7 +2590,7 @@ class MediaScannerTest extends TestCase
         // Casing follows whichever file created the container first ("Dr. Stone"
         // vs "Dr. STONE"); both share one slug, so only the count is asserted
         // exactly while the name is matched case-insensitively.
-        $this->assertEqualsIgnoringCase('Dr. Stone', (string) $series[0]['name']);
+        $this->assertEqualsIgnoringCase('Dr. Stone', $this->strOf($series[0], 'name'));
     }
 
     /**
@@ -2578,11 +2614,11 @@ class MediaScannerTest extends TestCase
         $this->assertNotEmpty($items, 'scan persisted at least one row');
         foreach ($items as $item) {
             $this->assertTrue(
-                mb_check_encoding((string) $item['name'], 'UTF-8'),
+                mb_check_encoding($this->strOf($item, 'name'), 'UTF-8'),
                 'every stored name must be valid UTF-8'
             );
             $this->assertTrue(
-                mb_check_encoding((string) $item['path'], 'UTF-8'),
+                mb_check_encoding($this->strOf($item, 'path'), 'UTF-8'),
                 'every stored path must be valid UTF-8'
             );
         }
@@ -2592,11 +2628,54 @@ class MediaScannerTest extends TestCase
      * In-memory ItemRepository double: records create()s and supports findByPath
      * for the scanner's dedup + find-or-create-container logic.
      */
-    private function makeFakeRepo(): ItemRepository
+    private function makeFakeRepo(): InMemoryScannerRepo
     {
         $mockConn = $this->createMock(Connection::class);
 
-        return new class ($mockConn) extends ItemRepository {
+        return new InMemoryScannerRepo($mockConn);
+    }
+
+    /**
+     * @param array<int, string> $filenames
+     */
+    private function makeTempDirWith(array $filenames): string
+    {
+        $dir = sys_get_temp_dir() . '/phlix_scan_test_' . uniqid();
+        mkdir($dir, 0775, true);
+        foreach ($filenames as $name) {
+            file_put_contents($dir . '/' . $name, 'x');
+        }
+        return $dir;
+    }
+
+    private function removeDir(string $dir): void
+    {
+        $items = scandir($dir);
+        if ($items === false) {
+            return;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $item;
+            if (is_dir($path)) {
+                $this->removeDir($path);
+            } else {
+                unlink($path);
+            }
+        }
+        rmdir($dir);
+    }
+}
+
+
+/**
+ * In-memory ItemRepository double for MediaScanner: faithful create/update/
+ * findByPath/findPathsMap/media_streams behaviour plus test-inspection spies.
+ */
+class InMemoryScannerRepo extends ItemRepository
+{
             /** @var array<int, array<string, mixed>> */
             private array $store = [];
             private int $seq = 0;
@@ -2810,39 +2889,4 @@ class MediaScannerTest extends TestCase
             {
                 return $this->store;
             }
-        };
-    }
-
-    /**
-     * @param array<int, string> $filenames
-     */
-    private function makeTempDirWith(array $filenames): string
-    {
-        $dir = sys_get_temp_dir() . '/phlix_scan_test_' . uniqid();
-        mkdir($dir, 0775, true);
-        foreach ($filenames as $name) {
-            file_put_contents($dir . '/' . $name, 'x');
-        }
-        return $dir;
-    }
-
-    private function removeDir(string $dir): void
-    {
-        $items = scandir($dir);
-        if ($items === false) {
-            return;
-        }
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
-            $path = $dir . '/' . $item;
-            if (is_dir($path)) {
-                $this->removeDir($path);
-            } else {
-                unlink($path);
-            }
-        }
-        rmdir($dir);
-    }
 }

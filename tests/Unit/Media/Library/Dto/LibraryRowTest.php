@@ -238,19 +238,21 @@ class LibraryRowTest extends TestCase
         $arr = $row->toArray();
 
         $this->assertArrayHasKey('image_types', $arr);
-        $this->assertArrayHasKey('available', $arr['image_types']);
-        $this->assertArrayHasKey('enabled', $arr['image_types']);
+        $imageTypes = is_array($arr['image_types'] ?? null) ? $arr['image_types'] : [];
+        $this->assertArrayHasKey('available', $imageTypes);
+        $this->assertArrayHasKey('enabled', $imageTypes);
 
         // Every canonical type is offered in `available`.
+        $available = is_array($imageTypes['available'] ?? null) ? $imageTypes['available'] : [];
         $availableTypes = array_map(
-            static fn(array $e): string => $e['type'],
-            $arr['image_types']['available']
+            static fn (mixed $e): string => is_array($e) && is_string($e['type'] ?? null) ? $e['type'] : '',
+            $available
         );
         $this->assertContains('poster', $availableTypes);
         $this->assertContains('character_art', $availableTypes);
 
         // `enabled` reflects the stored selection (catalogue-ordered).
-        $this->assertSame(['poster', 'logo'], $arr['image_types']['enabled']);
+        $this->assertSame(['poster', 'logo'], $imageTypes['enabled']);
     }
 
     /**
@@ -266,9 +268,10 @@ class LibraryRowTest extends TestCase
         ]);
         $arr = $row->toArray();
 
+        $imageTypes = is_array($arr['image_types'] ?? null) ? $arr['image_types'] : [];
         $this->assertSame(
             ['poster', 'backdrop', 'logo', 'banner', 'thumb', 'season_poster', 'episode_still'],
-            $arr['image_types']['enabled']
+            $imageTypes['enabled']
         );
     }
 }

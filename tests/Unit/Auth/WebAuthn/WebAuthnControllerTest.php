@@ -13,11 +13,14 @@ use Phlix\Server\Http\Response;
 use Phlix\Auth\WebAuthn\WebAuthnCredential;
 use Phlix\Shared\Auth\AuthResult;
 use Workerman\MySQL\Connection;
+use PHPUnit\Framework\MockObject\MockObject;
 
 final class WebAuthnControllerTest extends TestCase
 {
     private WebAuthnController $controller;
+    /** @var WebAuthnManager&MockObject */
     private WebAuthnManager $webauthnManager;
+    /** @var AuthManager&MockObject */
     private AuthManager $authManager;
 
     protected function setUp(): void
@@ -51,6 +54,7 @@ final class WebAuthnControllerTest extends TestCase
         $response = $this->controller->startRegistration($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $data */
         $data = json_decode($response->body, true);
         $this->assertSame($options['challenge'], $data['challenge']);
     }
@@ -76,7 +80,7 @@ final class WebAuthnControllerTest extends TestCase
                 'clientDataJSON' => base64_encode(json_encode([
                     'type' => 'webauthn.create',
                     'challenge' => base64_encode(random_bytes(32)),
-                ])),
+                ], JSON_THROW_ON_ERROR)),
             ],
             'challenge' => random_bytes(32),
         ];
@@ -91,6 +95,7 @@ final class WebAuthnControllerTest extends TestCase
         $response = $this->controller->finishRegistration($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $data */
         $data = json_decode($response->body, true);
         $this->assertArrayHasKey('credential_id', $data);
     }
@@ -132,9 +137,12 @@ final class WebAuthnControllerTest extends TestCase
         $response = $this->controller->listCredentials($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $data */
         $data = json_decode($response->body, true);
         $this->assertArrayHasKey('credentials', $data);
-        $this->assertCount(1, $data['credentials']);
+        $credentials = $data['credentials'];
+        $this->assertIsArray($credentials);
+        $this->assertCount(1, $credentials);
     }
 
     public function test_list_credentials_requires_auth(): void
@@ -161,6 +169,7 @@ final class WebAuthnControllerTest extends TestCase
         $response = $this->controller->deleteCredential($request, ['id' => $credentialId]);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $data */
         $data = json_decode($response->body, true);
         $this->assertSame('Credential deleted successfully', $data['message']);
     }

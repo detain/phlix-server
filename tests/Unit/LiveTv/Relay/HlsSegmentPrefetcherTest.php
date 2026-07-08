@@ -108,7 +108,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->prefetcher->prefetch('http://nonexistent.local/playlist.m3u8');
 
         // Should complete without throwing
-        $this->assertTrue(true);
+        $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
     /**
@@ -132,7 +132,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->prefetcher->stopPrefetch($sessionId);
 
         // Reaching here means start/stop completed without throwing.
-        $this->assertTrue(true);
+        $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
     public function testStopPrefetchWithoutStartDoesNotThrow(): void
@@ -140,7 +140,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         // Should not throw even if no prefetch was started
         $this->prefetcher->stopPrefetch('nonexistent-session');
 
-        $this->assertTrue(true);
+        $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
     /**
@@ -159,7 +159,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->prefetcher->stopPrefetch($sessionId);
 
         // If we get here without error, test passes
-        $this->assertTrue(true);
+        $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
     }
 
     /**
@@ -181,7 +181,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         $this->prefetcher->startPrefetch($sessionId, 'http://second.local/playlist.m3u8');
 
         // Should not throw - old timer replaced
-        $this->assertTrue(true);
+        $this->assertSame(0, $this->prefetcher->getCacheStats()['entries']);
 
         // Clean up
         $this->prefetcher->stopPrefetch($sessionId);
@@ -201,7 +201,7 @@ class HlsSegmentPrefetcherTest extends TestCase
         // Since we can't fetch real segments, just verify the prefetcher works
         $prefetcher->prefetch('http://nonexistent.local/playlist.m3u8');
 
-        $this->assertTrue(true);
+        $this->assertSame(0, $prefetcher->getCacheStats()['entries']);
     }
 
     public function testParsePlaylistSegmentsWithRelativeUrls(): void
@@ -222,6 +222,7 @@ segment2.ts
         $method = $reflection->getMethod('parsePlaylistSegments');
         $method->setAccessible(true);
 
+        /** @var list<string> $result */
         $result = $method->invoke($this->prefetcher, $playlist, 'http://example.com/live/stream.m3u8');
 
         $this->assertCount(3, $result);
@@ -246,6 +247,7 @@ segment1.ts
         $method = $reflection->getMethod('parsePlaylistSegments');
         $method->setAccessible(true);
 
+        /** @var list<string> $result */
         $result = $method->invoke($this->prefetcher, $playlist, 'http://example.com/live.m3u8');
 
         $this->assertCount(2, $result);
@@ -258,6 +260,7 @@ segment1.ts
         $method->setAccessible(true);
 
         $url = 'http://example.com/segment.ts';
+        /** @var string $key1 */
         $key1 = $method->invoke($this->prefetcher, $url);
         $key2 = $method->invoke($this->prefetcher, $url);
 

@@ -8,10 +8,12 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Auth\WebAuthnProvider;
 use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Shared\Auth\AuthResult;
+use PHPUnit\Framework\MockObject\MockObject;
 
 final class WebAuthnProviderTest extends TestCase
 {
     private WebAuthnProvider $provider;
+    /** @var WebAuthnManager&MockObject */
     private WebAuthnManager $webauthnManager;
 
     protected function setUp(): void
@@ -50,7 +52,7 @@ final class WebAuthnProviderTest extends TestCase
             'challenge' => random_bytes(32),
             'credential' => [
                 'id' => base64_encode(random_bytes(32)),
-                'clientDataJSON' => base64_encode(json_encode(['type' => 'webauthn.get', 'challenge' => ''])),
+                'clientDataJSON' => base64_encode(json_encode(['type' => 'webauthn.get', 'challenge' => ''], JSON_THROW_ON_ERROR)),
                 'authenticatorData' => base64_encode(random_bytes(37)),
                 'signature' => base64_encode(random_bytes(64)),
             ],
@@ -80,7 +82,7 @@ final class WebAuthnProviderTest extends TestCase
             'challenge' => random_bytes(32),
             'credential' => [
                 'id' => base64_encode(random_bytes(32)),
-                'clientDataJSON' => base64_encode(json_encode(['type' => 'webauthn.get', 'challenge' => ''])),
+                'clientDataJSON' => base64_encode(json_encode(['type' => 'webauthn.get', 'challenge' => ''], JSON_THROW_ON_ERROR)),
                 'authenticatorData' => base64_encode(random_bytes(37)),
                 'signature' => base64_encode(random_bytes(64)),
             ],

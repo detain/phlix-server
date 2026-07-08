@@ -89,7 +89,7 @@ final class WebAuthnCredentialTest extends TestCase
 
         $array = $credential->toArray();
 
-        $this->assertIsArray($array);
+        $this->assertArrayHasKey('credential_id', $array);
         $this->assertSame(base64_encode($credentialId), $array['credential_id']);
         $this->assertSame('user-id', $array['user_id']);
         $this->assertSame('public-key', $array['type']);

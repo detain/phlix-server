@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\LiveTv;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\ChannelManager;
 use Phlix\Common\Logger\StructuredLogger;
@@ -10,7 +11,9 @@ use Workerman\MySQL\Connection;
 class ChannelManagerTest extends TestCase
 {
     private ChannelManager $manager;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
 
     protected function setUp(): void
@@ -86,7 +89,7 @@ class ChannelManagerTest extends TestCase
             ->willReturn([]);
 
         $channels = $this->manager->getAllChannels();
-        $this->assertIsArray($channels);
+        $this->assertSame([], $channels);
     }
 
     public function testGetChannelByNumberReturnsNullForNonexistent(): void
@@ -140,7 +143,7 @@ class ChannelManagerTest extends TestCase
             ->willReturn([]);
 
         $favorites = $this->manager->getFavoriteChannels('user123');
-        $this->assertIsArray($favorites);
+        $this->assertSame([], $favorites);
     }
 
     public function testGetChannelCountReturnsZero(): void
@@ -199,7 +202,7 @@ class ChannelManagerTest extends TestCase
             ->willReturn([]);
 
         $lineups = $this->manager->getUserLineups('user123');
-        $this->assertIsArray($lineups);
+        $this->assertSame([], $lineups);
     }
 
     public function testGetLineupChannelsReturnsArray(): void
@@ -208,7 +211,7 @@ class ChannelManagerTest extends TestCase
             ->willReturn([]);
 
         $channels = $this->manager->getLineupChannels('lineup-1');
-        $this->assertIsArray($channels);
+        $this->assertSame([], $channels);
     }
 
     public function testDeleteLineupReturnsTrue(): void

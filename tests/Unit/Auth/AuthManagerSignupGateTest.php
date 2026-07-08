@@ -132,6 +132,7 @@ final class AuthManagerSignupGateTest extends TestCase
         $repo->expects($this->never())->method('setAdmin');
         $repo->method('findById')->willReturn($this->userRow());
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $this->manager($repo, 'open')->register('nina', 'nina@example.com', 'topsecret123');
 
         $this->assertArrayHasKey('access_token', $result);
@@ -197,6 +198,7 @@ final class AuthManagerSignupGateTest extends TestCase
             'is_admin' => 1,
         ]));
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $this->manager($repo, 'disabled')->register('root', 'root@example.com', 'topsecret123');
 
         // First user bootstraps active + admin and gets tokens despite mode=disabled.
@@ -221,6 +223,7 @@ final class AuthManagerSignupGateTest extends TestCase
             'is_admin' => 1,
         ]));
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $this->manager($repo, 'approval')->register('root', 'root@example.com', 'topsecret123');
 
         $this->assertArrayHasKey('access_token', $result);
@@ -301,6 +304,7 @@ final class AuthManagerSignupGateTest extends TestCase
         $repo->method('verifyPassword')->willReturn(true);
         $repo->method('findById')->willReturn($this->userRow(['status' => 'active']));
 
+        /** @var array{user: array<string, mixed>, access_token?: mixed} $result */
         $result = $this->manager($repo, 'open')->login('nina', 'topsecret123', 'device-1');
 
         $this->assertArrayHasKey('access_token', $result);
@@ -390,6 +394,7 @@ final class AuthManagerSignupGateTest extends TestCase
         $repo->expects($this->once())->method('getStatus')->with('user-9')->willReturn('active');
         $repo->method('findById')->willReturn($this->userRow(['status' => 'active']));
 
+        /** @var array{user: array<string, mixed>, access_token?: mixed, refresh_token?: mixed} $result */
         $result = $this->manager($repo, 'open', $jwt)->refreshToken($refreshToken);
 
         $this->assertArrayHasKey('access_token', $result);

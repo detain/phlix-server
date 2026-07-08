@@ -83,18 +83,18 @@ XML;
     public function testParseHandlesEmptyXml(): void
     {
         $programmes = $this->parser->parse('');
-        $this->assertIsArray($programmes);
+        $this->assertCount(0, $programmes);
         $this->assertEmpty($programmes);
 
         $programmes = $this->parser->parse('   ');
-        $this->assertIsArray($programmes);
+        $this->assertCount(0, $programmes);
         $this->assertEmpty($programmes);
     }
 
     public function testParseInvalidXmlReturnsEmpty(): void
     {
         $programmes = $this->parser->parse('not valid xml at all');
-        $this->assertIsArray($programmes);
+        $this->assertCount(0, $programmes);
         $this->assertEmpty($programmes);
     }
 

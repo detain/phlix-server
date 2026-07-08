@@ -16,7 +16,8 @@ class SdApiClientTest extends TestCase
         // Without a real server, this will return null (false) or throw
         // The method should return bool, so we test its contract
         $result = $client->validateToken();
-        $this->assertIsBool($result);
+        // Fake token cannot be validated against SD, so the contract yields false
+        $this->assertFalse($result);
     }
 
     public function test_fetch_token_returns_string_on_success(): void
@@ -38,43 +39,44 @@ class SdApiClientTest extends TestCase
     {
         $client = new SdApiClient('test-token');
         $result = $client->getStations('USA-OTA-00000');
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function test_get_schedules_returns_array(): void
     {
         $client = new SdApiClient('test-token');
         $result = $client->getSchedules(['station1', 'station2'], time(), time() + 86400);
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function test_get_programs_returns_array(): void
     {
         $client = new SdApiClient('test-token');
         $result = $client->getPrograms(['program1', 'program2']);
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function test_get_schedule_md5_returns_array(): void
     {
         $client = new SdApiClient('test-token');
         $result = $client->getScheduleMd5(['station1', 'station2']);
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function test_get_available_lineups_returns_array(): void
     {
         $client = new SdApiClient('test-token');
         $result = $client->getAvailableLineups();
-        $this->assertIsArray($result);
+        $this->assertEmpty($result);
     }
 
     public function test_set_token_updates_token(): void
     {
         $client = new SdApiClient('original-token');
         $client->setToken('new-token');
-        // Validate that the token was updated (via reflection or by checking behavior)
-        $this->assertTrue(true); // Token setter doesn't throw
+        // Validate that the token was actually updated by reading the private property
+        $tokenProperty = new \ReflectionProperty($client, 'token');
+        $this->assertSame('new-token', $tokenProperty->getValue($client));
     }
 
     public function test_empty_station_ids_returns_empty_array(): void

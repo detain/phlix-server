@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\LiveTv\Tuners\Iptv;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Tuners\Iptv\IptvDevice;
 use Phlix\LiveTv\Tuners\Iptv\IptvTunerDriver;
@@ -15,7 +16,9 @@ use Phlix\LiveTv\Tuners\Iptv\XmlTvProgramme;
 class IptvTunerDriverTest extends TestCase
 {
     private IptvDevice $device;
+    /** @var M3UParser&MockObject */
     private M3UParser $m3uParser;
+    /** @var XmlTvParser&MockObject */
     private XmlTvParser $xmlTvParser;
 
     protected function setUp(): void

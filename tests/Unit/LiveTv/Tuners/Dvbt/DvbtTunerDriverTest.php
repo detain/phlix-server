@@ -83,7 +83,7 @@ class DvbtTunerDriverTest extends TestCase
 
         $devices = $driver->discoverDevices();
 
-        $this->assertIsArray($devices);
+        $this->assertCount(0, $devices);
         $this->assertEmpty($devices);
     }
 
@@ -104,7 +104,7 @@ class DvbtTunerDriverTest extends TestCase
 
         $lineup = $driver->getChannelLineup($device);
 
-        $this->assertIsArray($lineup);
+        $this->assertCount(0, $lineup);
         $this->assertEmpty($lineup);
     }
 
@@ -125,7 +125,7 @@ class DvbtTunerDriverTest extends TestCase
 
         $channels = $driver->scanChannels($device);
 
-        $this->assertIsArray($channels);
+        $this->assertCount(0, $channels);
         $this->assertEmpty($channels);
     }
 

@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Auth;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\WatchHistory;
 use Workerman\MySQL\Connection;
@@ -9,6 +10,7 @@ use Workerman\MySQL\Connection;
 class WatchHistoryTest extends TestCase
 {
     private WatchHistory $watchHistory;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -51,7 +53,7 @@ class WatchHistoryTest extends TestCase
 
         $result = $this->watchHistory->getHistory('profile-1', 10, 5);
 
-        $this->assertIsArray($result);
+        $this->assertCount(0, $result);
         $this->assertEmpty($result);
     }
 
@@ -178,7 +180,7 @@ class WatchHistoryTest extends TestCase
         );
 
         // Verify a new entry was created with progress
-        $this->assertIsArray($result);
+        $this->assertArrayHasKey('id', $result);
         $this->assertEquals('entry-new', $result['id']);
     }
 
@@ -203,7 +205,7 @@ class WatchHistoryTest extends TestCase
                 return [];
             });
 
-        $this->watchHistory->updateProgress(
+        $result = $this->watchHistory->updateProgress(
             'profile-1',
             'media-1',
             3600000000,
@@ -211,8 +213,8 @@ class WatchHistoryTest extends TestCase
             'playing'
         );
 
-        // Verify update was called (no exception thrown)
-        $this->assertTrue(true);
+        // The upsert re-reads and returns the persisted entry
+        $this->assertArrayHasKey('id', $result);
     }
 
     public function testUpdateProgressMarksCompletedWhenThresholdReached(): void
@@ -236,7 +238,7 @@ class WatchHistoryTest extends TestCase
                 return [];
             });
 
-        $this->watchHistory->updateProgress(
+        $result = $this->watchHistory->updateProgress(
             'profile-1',
             'media-1',
             6840000000, // 95% of 7200000000
@@ -244,8 +246,8 @@ class WatchHistoryTest extends TestCase
             'playing'
         );
 
-        // Verify update was called (no exception thrown)
-        $this->assertTrue(true);
+        // The upsert re-reads and returns the persisted entry
+        $this->assertArrayHasKey('id', $result);
     }
 
     public function testMarkCompleted(): void
@@ -269,10 +271,10 @@ class WatchHistoryTest extends TestCase
                 return [];
             });
 
-        $this->watchHistory->markCompleted('profile-1', 'media-1');
+        $result = $this->watchHistory->markCompleted('profile-1', 'media-1');
 
-        // Verify update was called (no exception thrown)
-        $this->assertTrue(true);
+        // markCompleted re-reads and returns the persisted entry
+        $this->assertArrayHasKey('id', $result);
     }
 
     public function testRemoveFromHistory(): void

@@ -16,7 +16,9 @@ use Workerman\MySQL\Connection;
 class ComskipLifecycleManagerTest extends TestCase
 {
     private ComskipLifecycleManager $manager;
+    /** @var ComskipIntegration&\PHPUnit\Framework\MockObject\MockObject */
     private $mockIntegration;
+    /** @var Connection&\PHPUnit\Framework\MockObject\MockObject */
     private $mockDb;
 
     protected function setUp(): void
@@ -64,7 +66,7 @@ class ComskipLifecycleManagerTest extends TestCase
         // Item was processed immediately via processNext() call inside enqueue()
         // So pending count may be 0 or 1 depending on timing
         // Let's verify enqueue didn't throw
-        $this->assertTrue(true);
+        $this->assertLessThanOrEqual(1, $this->manager->getPendingCount());
     }
 
     public function testEnqueueSkipsAlreadyProcessed(): void
@@ -143,7 +145,7 @@ class ComskipLifecycleManagerTest extends TestCase
         // After enqueue, processNext is called but returns false because getRecordingData returns []
         // So pending count may be 0 after processing, or 1 if it was added then processed
         // Let's just verify enqueue doesn't throw
-        $this->assertTrue(true);
+        $this->assertLessThanOrEqual(1, $this->manager->getPendingCount());
     }
 
     public function testEnqueueProcessesImmediatelyWhenQueueDisabled(): void
@@ -203,7 +205,7 @@ class ComskipLifecycleManagerTest extends TestCase
         $this->manager->enqueue($recordingId, $filePath);
 
         // Verify enqueue completed without throwing
-        $this->assertTrue(true);
+        $this->assertLessThanOrEqual(1, $this->manager->getPendingCount());
     }
 
     public function testGetRunningCount(): void

@@ -117,6 +117,7 @@ final class PhlixTestStreamWrapper
         return $this->position >= strlen(self::$payload);
     }
 
+    /** @return array<string, int> */
     public function stream_stat(): array
     {
         return [
@@ -128,6 +129,7 @@ final class PhlixTestStreamWrapper
         ];
     }
 
+    /** @return array<string, int> */
     public function url_stat(string $path, int $flags): array
     {
         return $this->stream_stat();

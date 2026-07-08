@@ -53,6 +53,7 @@ final class UserRepositoryAvatarTest extends TestCase
         $repo->clearAvatar('user-uuid-456');
 
         // Must use NULL keyword, not empty string ''
+        $this->assertNotNull($capturedSql);
         $this->assertStringContainsString('avatar_url = NULL', $capturedSql);
         $this->assertStringNotContainsString("avatar_url = ''", $capturedSql);
         $this->assertStringNotContainsString('avatar_url = ""', $capturedSql);

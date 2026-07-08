@@ -14,14 +14,21 @@ use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
 use Phlix\LiveTv\Tuners\TunerDriverInterface;
 use Phlix\Common\Logger\StructuredLogger;
+use PHPUnit\Framework\MockObject\MockObject;
+use Workerman\MySQL\Connection;
 
 class LiveTvManagerTest extends TestCase
 {
     private LiveTvManager $manager;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var ChannelManager&MockObject */
     private $mockChannelManager;
+    /** @var GuideManager&MockObject */
     private $mockGuideManager;
+    /** @var Recorder&MockObject */
     private $mockRecorder;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
     private TunerDriverInterface $tunerDriver;
 
@@ -64,7 +71,7 @@ class LiveTvManagerTest extends TestCase
     public function testGetTunersReturnsArray(): void
     {
         $tuners = $this->manager->getTuners();
-        $this->assertIsArray($tuners);
+        $this->assertEmpty($tuners);
     }
 
     public function testTuneToChannelThrowsOnNonexistentChannel(): void
@@ -98,14 +105,14 @@ class LiveTvManagerTest extends TestCase
     public function testGetActiveTuneRequestsReturnsArray(): void
     {
         $requests = $this->manager->getActiveTuneRequests();
-        $this->assertIsArray($requests);
+        $this->assertEmpty($requests);
     }
 
     public function testStopTuningDoesNotThrow(): void
     {
         // Should not throw even for non-existent tune request
         $this->manager->stopTuning('nonexistent_request');
-        $this->assertTrue(true);
+        $this->assertEmpty($this->manager->getActiveTuneRequests());
     }
 
     public function testGetChannelManagerReturnsChannelManager(): void

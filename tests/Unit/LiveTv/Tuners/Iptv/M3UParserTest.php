@@ -100,7 +100,7 @@ M3U;
     public function testParseHandlesEmptyContent(): void
     {
         $entries = $this->parser->parse('');
-        $this->assertIsArray($entries);
+        $this->assertCount(0, $entries);
         $this->assertEmpty($entries);
     }
 

@@ -244,6 +244,10 @@ final class AbrLadder
         if ($highest === null) {
             // Source (or profile width) is below the lowest ladder tier: emit one
             // clamped rung at the largest resolution that fits every constraint.
+            // NOTE: this rung's id is `{height}p` at the source height (e.g.
+            // '144p'), i.e. a NON-canonical rung id outside the 240p..2160p set —
+            // clients must treat a Rendition id as an opaque string, not a closed
+            // enum (mirrored in `@phlix/contracts` `RenditionId = … | `${number}p``).
             $fallbackHeight = min($srcHeight, $maxHeight);
             if ($fallbackHeight * $aspect > $maxWidth) {
                 $fallbackHeight = (int) floor($maxWidth / $aspect);

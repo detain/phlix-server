@@ -86,8 +86,9 @@ final class HttpHandlerMetricsRecordingTest extends TestCase
     ): void {
         $m = new \ReflectionMethod(HttpHandler::class, 'recordRequestMetrics');
         $m->setAccessible(true);
-        // startTime slightly in the past so the elapsed millis are > 0.
-        $m->invoke($handler, $conn, $wr, $status, microtime(true) - 0.05, $startIn, $startOut);
+        // startTime is a monotonic hrtime(true) nanosecond reading (as captured in
+        // __invoke); place it ~50 ms in the past so the elapsed millis are > 0.
+        $m->invoke($handler, $conn, $wr, $status, hrtime(true) - 50_000_000, $startIn, $startOut);
     }
 
     private function invokeRouteTemplate(string $path): string

@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Plugins\Catalog;
 use DateTimeImmutable;
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\MockInterface;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Net\SsrfGuard;
 use Phlix\Plugins\Catalog\PluginCatalogService;
@@ -14,6 +15,7 @@ use Phlix\Plugins\Catalog\PluginUpdateService;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Tests\Unit\Plugins\MockeryExpectationTrait;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -22,6 +24,7 @@ use PHPUnit\Framework\TestCase;
 final class PluginUpdateServiceTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
+    use MockeryExpectationTrait;
 
     protected function setUp(): void
     {
@@ -106,8 +109,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_reports_an_available_update(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
 
         $svc = $this->service($loader, [
             self::ANIDB_MANIFEST_RAW => json_encode(['version' => '0.2.0'], JSON_THROW_ON_ERROR),
@@ -126,8 +130,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_reports_up_to_date(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.2.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.2.0')]);
 
         $svc = $this->service($loader, [
             self::ANIDB_MANIFEST_RAW => json_encode(['version' => '0.2.0'], JSON_THROW_ON_ERROR),
@@ -140,8 +145,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_marks_not_in_catalog_as_uncheckable(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-orphan', '1.0.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-orphan', '1.0.0')]);
 
         $result = $this->service($loader, [])->checkUpdates();
         $row = $result['updates'][0];
@@ -152,8 +158,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_manifest_fetch_failure_is_isolated(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
 
         // No manifest body for the repo → the fetch throws, captured per-row.
         $result = $this->service($loader, [])->checkUpdates();
@@ -166,8 +173,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_update_reinstalls_from_the_catalog_repo(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
         $manifest = Manifest::fromArray([
             'name' => 'phlix-plugin-anidb',
             'version' => '0.2.0',
@@ -177,7 +185,7 @@ final class PluginUpdateServiceTest extends TestCase
         ]);
         // SV-B2: the un-pinned catalog entry resolves to [null, null], so the
         // reinstall threads a null pin (stays on the SV-S2b default-deny path).
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
+        $this->expect($loader, 'install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $result = $this->service($loader, [])->update('phlix-plugin-anidb');
         self::assertSame('0.2.0', $result->version);
@@ -215,8 +223,9 @@ final class PluginUpdateServiceTest extends TestCase
                 : throw new \RuntimeException("unexpected catalog fetch: $url"),
         );
 
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
         $manifest = Manifest::fromArray([
             'name' => 'phlix-plugin-anidb',
             'version' => '0.2.0',
@@ -224,7 +233,7 @@ final class PluginUpdateServiceTest extends TestCase
             'type' => 'metadata-provider',
             'entry' => 'Demo\\Plugin',
         ]);
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, $sha, $ref)->andReturn($manifest);
+        $this->expect($loader, 'install')->once()->with(self::ANIDB_REPO, $sha, $ref)->andReturn($manifest);
 
         $svc = new PluginUpdateService($loader, $catalog, fn (string $u, int $t): string => throw new \RuntimeException('no manifest fetch'));
         $result = $svc->update('phlix-plugin-anidb');
@@ -233,8 +242,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_update_throws_when_not_in_catalog(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([]);
+        $this->expect($loader, 'listInstalled')->andReturn([]);
         $loader->shouldNotReceive('install');
 
         $this->expectException(\RuntimeException::class);
@@ -243,8 +253,9 @@ final class PluginUpdateServiceTest extends TestCase
 
     public function test_update_all_updates_only_outdated_plugins(): void
     {
+        /** @var PluginLoader&MockInterface $loader */
         $loader = Mockery::mock(PluginLoader::class);
-        $loader->shouldReceive('listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
+        $this->expect($loader, 'listInstalled')->andReturn([$this->installed('phlix-plugin-anidb', '0.1.0')]);
         $manifest = Manifest::fromArray([
             'name' => 'phlix-plugin-anidb',
             'version' => '0.2.0',
@@ -254,7 +265,7 @@ final class PluginUpdateServiceTest extends TestCase
         ]);
         // SV-B2: the un-pinned catalog entry resolves to [null, null], so the
         // reinstall threads a null pin (stays on the SV-S2b default-deny path).
-        $loader->shouldReceive('install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
+        $this->expect($loader, 'install')->once()->with(self::ANIDB_REPO, null, null)->andReturn($manifest);
 
         $svc = $this->service($loader, [
             self::ANIDB_MANIFEST_RAW => json_encode(['version' => '0.2.0'], JSON_THROW_ON_ERROR),

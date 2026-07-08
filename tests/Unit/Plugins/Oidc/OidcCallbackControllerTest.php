@@ -33,7 +33,7 @@ final class OidcCallbackControllerTest extends TestCase
     {
         parent::tearDown();
         if (is_dir($this->cacheDir)) {
-            $files = glob($this->cacheDir . '/*');
+            $files = glob($this->cacheDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -55,6 +55,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->authorize($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('missing_redirect_uri', $body['error']);
     }
@@ -72,6 +73,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->authorize($request, []);
 
         $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('provider_not_configured', $body['error']);
     }
@@ -121,6 +123,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->callback($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('missing_code', $body['error']);
     }
@@ -138,6 +141,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->callback($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('missing_state', $body['error']);
     }
@@ -158,6 +162,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->callback($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('invalid_state', $body['error']);
     }
@@ -178,6 +183,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->callback($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('access_denied', $body['error']);
         $this->assertSame('The user denied the request', $body['message']);
@@ -206,7 +212,7 @@ final class OidcCallbackControllerTest extends TestCase
         $stateData = json_encode([
             'sid' => 'sid-xyz',
             'redirect_uri' => 'http://localhost/callback',
-        ]);
+        ], JSON_THROW_ON_ERROR);
         $state = base64_encode($stateData);
 
         $request = new Request();
@@ -218,6 +224,7 @@ final class OidcCallbackControllerTest extends TestCase
         $response = $controller->callback($request, []);
 
         $this->assertSame(503, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('provider_not_configured', $body['error']);
     }

@@ -8,6 +8,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\Util\RecursiveDelete;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -17,7 +18,7 @@ final class HttpInstallerTest extends TestCase
 {
     private string $base = '';
     private string $work = '';
-    private StructuredLogger $logger;
+    private StructuredLogger&MockObject $logger;
 
     protected function setUp(): void
     {

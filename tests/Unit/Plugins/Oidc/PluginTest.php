@@ -26,8 +26,9 @@ final class PluginTest extends TestCase
     protected function tearDown(): void
     {
         parent::tearDown();
+        Plugin::setPluginDirectory($this->originalDir);
         if (is_dir($this->pluginDir)) {
-            $files = glob($this->pluginDir . '/*');
+            $files = glob($this->pluginDir . '/*') ?: [];
             foreach ($files as $file) {
                 unlink($file);
             }
@@ -55,7 +56,7 @@ final class PluginTest extends TestCase
 
         $events = $plugin->subscribedEvents();
 
-        $this->assertIsArray($events);
+        $this->assertCount(0, $events);
         $this->assertEmpty($events);
     }
 
@@ -65,7 +66,8 @@ final class PluginTest extends TestCase
         $plugin = new Plugin();
 
         $plugin->onDisable();
-        $this->assertTrue(true);
+        // onDisable is a no-op and must not create or corrupt settings.
+        $this->assertSame([], $plugin->getSettings());
     }
 
     public function test_save_and_get_settings(): void
@@ -96,7 +98,7 @@ final class PluginTest extends TestCase
 
         $loaded = $plugin->getSettings();
 
-        $this->assertIsArray($loaded);
+        $this->assertSame([], $loaded);
     }
 
     public function test_get_settings_returns_existing_secret_when_not_provided_in_save(): void

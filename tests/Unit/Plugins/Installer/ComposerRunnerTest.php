@@ -142,7 +142,7 @@ final class ComposerRunnerTest extends TestCase
         $runner = new ComposerRunner(30, $fake, $logger);
         // No exception: the dump-autoload fallback installed the plugin.
         $runner->install($this->tmpDir);
-        $this->assertTrue(true);
+        $this->assertFileExists($this->tmpDir . '/composer.json');
     }
 
     public function test_install_times_out_and_logs_when_timeout_exceeded(): void
@@ -256,7 +256,7 @@ final class ComposerRunnerTest extends TestCase
 
         $runner = new ComposerRunner(30, $fake, $logger);
         $runner->install($this->tmpDir);
-        $this->assertTrue(true); // reached without exception
+        $this->assertFileExists($this->tmpDir . '/composer.json');
     }
 
     private function okComposer(): string

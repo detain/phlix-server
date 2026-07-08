@@ -66,7 +66,9 @@ final class UserMapperTest extends TestCase
 
         $this->assertSame('ldap', $result['provider']);
         $this->assertSame('testuser', $result['username']);
-        $this->assertStringStartsWith('data:image/jpeg;base64,', $result['avatarUrl']);
+        /** @var string $avatarUrl */
+        $avatarUrl = $result['avatarUrl'];
+        $this->assertStringStartsWith('data:image/jpeg;base64,', $avatarUrl);
     }
 
     public function test_map_with_thumbnail_photo(): void
@@ -86,7 +88,9 @@ final class UserMapperTest extends TestCase
 
         $this->assertSame('ldap', $result['provider']);
         $this->assertSame('testuser', $result['username']);
-        $this->assertStringStartsWith('data:image/jpeg;base64,', $result['avatarUrl']);
+        /** @var string $avatarUrl */
+        $avatarUrl = $result['avatarUrl'];
+        $this->assertStringStartsWith('data:image/jpeg;base64,', $avatarUrl);
     }
 
     public function test_map_prefers_mail_over_userprincipalname(): void
@@ -170,9 +174,11 @@ final class UserMapperTest extends TestCase
         $result = $mapper->map($ldapEntry);
 
         $this->assertArrayHasKey('rawAttributes', $result);
-        $this->assertSame('testuser', $result['rawAttributes']['uid']);
-        $this->assertSame('Test User', $result['rawAttributes']['cn']);
-        $this->assertSame('testuser@example.com', $result['rawAttributes']['mail']);
+        /** @var array<string, mixed> $rawAttributes */
+        $rawAttributes = $result['rawAttributes'];
+        $this->assertSame('testuser', $rawAttributes['uid']);
+        $this->assertSame('Test User', $rawAttributes['cn']);
+        $this->assertSame('testuser@example.com', $rawAttributes['mail']);
     }
 
     public function test_map_excludes_dn_from_raw_attributes(): void
@@ -188,7 +194,9 @@ final class UserMapperTest extends TestCase
         $result = $mapper->map($ldapEntry);
 
         $this->assertArrayHasKey('rawAttributes', $result);
-        $this->assertArrayNotHasKey('dn', $result['rawAttributes']);
+        /** @var array<string, mixed> $rawAttributes */
+        $rawAttributes = $result['rawAttributes'];
+        $this->assertArrayNotHasKey('dn', $rawAttributes);
     }
 
     public function test_avatar_download(): void
@@ -205,8 +213,10 @@ final class UserMapperTest extends TestCase
 
         $result = $mapper->map($ldapEntry);
 
-        $this->assertStringStartsWith('data:image/jpeg;base64,', $result['avatarUrl']);
-        $decoded = base64_decode(substr($result['avatarUrl'], strlen('data:image/jpeg;base64,')));
+        /** @var string $avatarUrl */
+        $avatarUrl = $result['avatarUrl'];
+        $this->assertStringStartsWith('data:image/jpeg;base64,', $avatarUrl);
+        $decoded = base64_decode(substr($avatarUrl, strlen('data:image/jpeg;base64,')));
         $this->assertSame($jpegData, $decoded);
     }
 

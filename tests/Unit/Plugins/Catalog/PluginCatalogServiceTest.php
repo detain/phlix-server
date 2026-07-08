@@ -375,7 +375,7 @@ final class PluginCatalogServiceTest extends TestCase
         // SWOOLE_HOOK_NATIVE_CURL); we assert only that the factory yields the
         // expected callable signature. Its network behaviour is exercised by
         // the @group network test below, which the default suite excludes.
-        self::assertIsCallable(PluginCatalogService::defaultFetcher());
+        self::assertInstanceOf(\Closure::class, PluginCatalogService::defaultFetcher());
     }
 
     /**

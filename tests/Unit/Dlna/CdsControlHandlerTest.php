@@ -346,6 +346,8 @@ class CdsControlHandlerTest extends TestCase
 
     /**
      * Helper to build a BrowseResponse SOAP envelope.
+     *
+     * @param array{Result?: string, NumberReturned?: int, TotalMatches?: int, UpdateID?: int} $result
      */
     private function buildBrowseResponse(array $result): string
     {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Dlna;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Dlna\PlayToManager;
@@ -26,6 +27,7 @@ use Phlix\Session\SessionManager;
  */
 class PlayToManagerTest extends TestCase
 {
+    /** @var RendererDiscovery&MockObject */
     private RendererDiscovery $rendererDiscoveryMock;
     private PlaybackController $playbackControllerMock;
     private StructuredLogger $logger;
@@ -216,7 +218,8 @@ class PlayToManagerTest extends TestCase
         // Should not throw
         $manager->stopSession('uuid:nonexistent');
 
-        $this->assertTrue(true); // If we get here, no error was thrown
+        // If we get here, no error was thrown; the inactive renderer stays absent.
+        $this->assertNull($manager->getSession('uuid:nonexistent'));
     }
 
     public function testGetActiveSessionsReturnsAllActiveSessions(): void

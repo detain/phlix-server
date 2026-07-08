@@ -94,6 +94,7 @@ class SyncPlayE2ETest extends TestCase
 
         $this->assertTrue($result['success']);
         $this->assertArrayHasKey('group', $result);
+        /** @var array{group: array{group_id: string, host_id: string, member_count: int}} $result */
         $groupId = $result['group']['group_id'];
         $this->assertStringStartsWith('sp_', $groupId);
 
@@ -134,6 +135,7 @@ class SyncPlayE2ETest extends TestCase
             'conn-host'
         );
         $this->assertTrue($result['success']);
+        /** @var array{group: array{group_id: string}} $result */
         $groupId = $result['group']['group_id'];
 
         // Member joins with correct password
@@ -168,6 +170,7 @@ class SyncPlayE2ETest extends TestCase
         // Setup: Host creates group, member joins
         $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
         $createResult = $this->manager->createGroup('Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $memberConn = $this->createMockConnection('conn-member', 'member_user', true);
@@ -185,6 +188,7 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify playback state
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('playing', $state['playback_state']);
 
         // Host sends pause command
@@ -196,6 +200,7 @@ class SyncPlayE2ETest extends TestCase
         ]);
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('paused', $state['playback_state']);
     }
 
@@ -207,6 +212,7 @@ class SyncPlayE2ETest extends TestCase
         // Setup: Host creates group, member joins
         $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
         $createResult = $this->manager->createGroup('Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
         $hostMemberId = 'host_user';
 
@@ -216,6 +222,7 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify original host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals($hostMemberId, $state['host_id']);
 
         // Transfer host to member
@@ -227,6 +234,7 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify new host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals($newHostMemberId, $state['host_id']);
         $this->assertNotEquals($hostMemberId, $state['host_id']);
     }
@@ -239,6 +247,7 @@ class SyncPlayE2ETest extends TestCase
         // Setup: Host creates group, 2 members join
         $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
         $createResult = $this->manager->createGroup('Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         $member1Conn = $this->createMockConnection('conn-member1', 'member1_user', true);
@@ -270,6 +279,7 @@ class SyncPlayE2ETest extends TestCase
         // Setup: Host creates group, member joins
         $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
         $createResult = $this->manager->createGroup('Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
         $hostMemberId = 'host_user';
 
@@ -282,6 +292,7 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify member is now host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals($memberMemberId, $state['host_id']);
 
         // Verify only 1 member remains
@@ -296,6 +307,7 @@ class SyncPlayE2ETest extends TestCase
         // Host creates group (only member)
         $hostConn = $this->createMockConnection('conn-host', 'host_user', true);
         $createResult = $this->manager->createGroup('Solo Movie Night', null, 'host_user', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Host (only member) leaves
@@ -325,10 +337,12 @@ class SyncPlayE2ETest extends TestCase
             'conn-alice'
         );
         $this->assertTrue($createResult['success']);
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Verify Alice is host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('alice', $state['host_id']);
 
         // === Phase 3: Members Join ===
@@ -347,6 +361,7 @@ class SyncPlayE2ETest extends TestCase
         ]);
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('playing', $state['playback_state']);
 
         // Alice pauses
@@ -358,6 +373,7 @@ class SyncPlayE2ETest extends TestCase
         ]);
 
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('paused', $state['playback_state']);
 
         // === Phase 5: Host Transfer ===
@@ -369,12 +385,14 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify Bob is now host
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('bob', $state['host_id']);
 
         // === Phase 6: Original Host Leaves ===
         $this->manager->leaveGroup('alice');
         $this->assertGroupMemberCount($groupId, 2);
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('bob', $state['host_id']);
 
         // === Phase 7: Charlie Leaves ===
@@ -402,8 +420,11 @@ class SyncPlayE2ETest extends TestCase
         $conn3 = $this->createMockConnection('conn-3', 'user3', true);
         $result3 = $this->manager->createGroup('Group 3', null, 'user3', 'User 3', 'conn-3');
 
+        /** @var array{group: array{group_id: string}} $result1 */
         $groupId1 = $result1['group']['group_id'];
+        /** @var array{group: array{group_id: string}} $result2 */
         $groupId2 = $result2['group']['group_id'];
+        /** @var array{group: array{group_id: string}} $result3 */
         $groupId3 = $result3['group']['group_id'];
 
         // Verify all groups exist
@@ -430,6 +451,7 @@ class SyncPlayE2ETest extends TestCase
         // Host creates group
         $hostConn = $this->createMockConnection('conn-host', 'host', true);
         $result = $this->manager->createGroup('Full Group', null, 'host', 'Host', 'conn-host');
+        /** @var array{group: array{group_id: string}} $result */
         $groupId = $result['group']['group_id'];
         $maxMembers = GroupState::MAX_MEMBERS;
 
@@ -476,6 +498,7 @@ class SyncPlayE2ETest extends TestCase
             'Host',
             'conn-host'
         );
+        /** @var array{group: array{group_id: string}} $createResult */
         $groupId = $createResult['group']['group_id'];
 
         // Member joins
@@ -493,6 +516,7 @@ class SyncPlayE2ETest extends TestCase
 
         // Verify host is still there
         $state = $this->manager->getGroupState($groupId);
+        /** @var array<string, mixed> $state */
         $this->assertEquals('host_user', $state['host_id']);
     }
 
@@ -503,10 +527,12 @@ class SyncPlayE2ETest extends TestCase
     {
         $state = $this->manager->getGroupState($groupId);
         $this->assertNotNull($state, "Group {$groupId} should exist");
+        $actualCount = $state['member_count'] ?? null;
         $this->assertEquals(
             $expected,
-            $state['member_count'],
-            "Group {$groupId} should have {$expected} members, has " . $state['member_count']
+            $actualCount,
+            "Group {$groupId} should have {$expected} members, has "
+                . (is_int($actualCount) ? $actualCount : 0)
         );
     }
 }

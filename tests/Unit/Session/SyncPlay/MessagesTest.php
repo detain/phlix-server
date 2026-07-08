@@ -223,6 +223,7 @@ class MessagesTest extends TestCase
     {
         $msg = Messages::error('ERR_CODE', 'Error message', ['detail' => 'value']);
 
+        /** @var array{type: string, protocol_version: int, error_code: string, message: string, details: array<string, mixed>} $msg */
         $this->assertEquals(Messages::TYPE_ERROR, $msg['type']);
         $this->assertEquals('ERR_CODE', $msg['error_code']);
         $this->assertEquals('Error message', $msg['message']);
@@ -233,6 +234,7 @@ class MessagesTest extends TestCase
     {
         $msg = Messages::info('Info message', ['key' => 'value']);
 
+        /** @var array{type: string, message: string, data: array<string, mixed>} $msg */
         $this->assertEquals(Messages::TYPE_INFO, $msg['type']);
         $this->assertEquals('Info message', $msg['message']);
         $this->assertEquals(['key' => 'value'], $msg['data']);
@@ -355,6 +357,7 @@ class MessagesTest extends TestCase
         $result = Messages::deserialize($json);
 
         $this->assertTrue($result['valid']);
+        /** @var array{valid: true, message: array<string, mixed>} $result */
         $this->assertEquals($message, $result['message']);
     }
 
@@ -363,6 +366,7 @@ class MessagesTest extends TestCase
         $result = Messages::deserialize('not valid json');
 
         $this->assertFalse($result['valid']);
+        /** @var array{valid: false, error: string} $result */
         $this->assertStringContainsString('JSON parse error', $result['error']);
     }
 
@@ -389,6 +393,7 @@ class MessagesTest extends TestCase
         $hash2 = $method->invoke(null, 'password123');
 
         $this->assertEquals($hash1, $hash2);
+        /** @var string $hash1 */
         $this->assertEquals(64, strlen($hash1)); // SHA256 produces 64 hex chars
     }
 }

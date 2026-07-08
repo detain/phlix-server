@@ -89,10 +89,10 @@ class HlsServingIntegrationTest extends TestCase
         $master = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'master.m3u8']);
         $this->assertSame(200, $master->statusCode);
         $this->assertSame('application/vnd.apple.mpegurl', $master->headers['Content-Type']);
-        $this->assertGreaterThanOrEqual(2, substr_count($master->body, '#EXT-X-STREAM-INF:'));
+        $this->assertGreaterThanOrEqual(2, substr_count($this->bodyOf($master), '#EXT-X-STREAM-INF:'));
         $this->assertSame(
-            preg_match_all('/^(media_v[A-Za-z0-9]+\.m3u8)$/m', $master->body, $mm),
-            substr_count($master->body, '#EXT-X-STREAM-INF:')
+            preg_match_all('/^(media_v[A-Za-z0-9]+\.m3u8)$/m', $this->bodyOf($master), $mm),
+            substr_count($this->bodyOf($master), '#EXT-X-STREAM-INF:')
         );
         $this->assertContains('media_v240p.m3u8', $mm[1]);
 
@@ -100,10 +100,10 @@ class HlsServingIntegrationTest extends TestCase
         // ENDLIST) up front, with per-variant seg-v240p-NNNNN.ts names.
         $media = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'media_v240p.m3u8']);
         $this->assertSame(200, $media->statusCode);
-        $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $media->body);
-        $this->assertStringContainsString('#EXT-X-ENDLIST', $media->body);
+        $this->assertStringContainsString('#EXT-X-PLAYLIST-TYPE:VOD', $this->bodyOf($media));
+        $this->assertStringContainsString('#EXT-X-ENDLIST', $this->bodyOf($media));
         // ~8s at 2s segments → 4 (or 5 if ffmpeg's real duration rounds up) entries.
-        $this->assertGreaterThanOrEqual(4, preg_match_all('/^seg-v240p-\d+\.ts$/m', $media->body));
+        $this->assertGreaterThanOrEqual(4, preg_match_all('/^seg-v240p-\d+\.ts$/m', $this->bodyOf($media)));
 
         // On-demand: the FIRST 240p segment is transcoded when requested.
         $seg0 = $manager->ensureSegment($jobId, '240p', 0);
@@ -131,12 +131,28 @@ class HlsServingIntegrationTest extends TestCase
         $seg0Served = $hls->serveFile($req, ['job_id' => $jobId, 'file' => 'seg-v240p-00000.ts']);
         $this->assertSame(200, $seg0Served->statusCode);
         $this->assertSame('video/mp2t', $seg0Served->headers['Content-Type']);
-        $this->assertGreaterThan(0, strlen($seg0Served->body));
+        $this->assertGreaterThan(0, strlen($this->bodyOf($seg0Served)));
 
         // An out-of-range segment is null (→ 404), not an endless wait.
         $this->assertNull($manager->ensureSegment($jobId, '240p', 99));
         // An unknown variant is null, too.
         $this->assertNull($manager->ensureSegment($jobId, '4320p', 0));
+    }
+
+    /**
+     * Resolves the served bytes of a response. Playlists and segments now stream via
+     * {@see \Phlix\Server\Http\Response::withFile()} rather than buffering into
+     * `->body`, so read the file window from disk.
+     */
+    private function bodyOf(\Phlix\Server\Http\Response $res): string
+    {
+        if ($res->filePath === null) {
+            return $res->body;
+        }
+        $bytes = $res->fileLength > 0
+            ? file_get_contents($res->filePath, false, null, $res->fileOffset, $res->fileLength)
+            : file_get_contents($res->filePath, false, null, $res->fileOffset);
+        return $bytes === false ? '' : $bytes;
     }
 
     private function mockDb(string $clipPath): Connection

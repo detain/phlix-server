@@ -124,6 +124,9 @@ final class RelayConsumer
     /** @var int|null */
     private ?int $heartbeatTimer = null;
 
+    /** @var int Number of consecutive reconnection attempts (exponential backoff). */
+    private int $reconnectAttempts = 0;
+
     /** @var string Buffered incoming binary data awaiting frame boundaries. */
     private string $recvBuffer = '';
 
@@ -454,6 +457,7 @@ final class RelayConsumer
         }
 
         $this->state = self::STATE_ACTIVE;
+        $this->reconnectAttempts = 0;
 
         $this->logger->info('RelayConsumer: tunnel active', [
             'relay_session_id' => is_string($ack['relay_session_id'] ?? null) ? $ack['relay_session_id'] : null,
@@ -1114,6 +1118,7 @@ final class RelayConsumer
             return;
         }
 
+        $this->reconnectAttempts++;
         $this->scheduleReconnect();
     }
 
@@ -1134,10 +1139,23 @@ final class RelayConsumer
             return;
         }
 
-        $delay = $this->config->reconnectDelay;
+        // Exponential backoff: base_delay * 2^attempts, capped at maxDelay
+        $baseDelay = $this->config->reconnectDelay;
+        $maxDelay = $this->config->reconnectMaxDelay;
+        $jitterFactor = $this->config->reconnectJitterFactor;
+        $attempts = $this->reconnectAttempts;
+
+        $exponentialDelay = min($baseDelay * (2 ** $attempts), $maxDelay);
+        // Apply ±jitterFactor as a multiplier (e.g., 0.3 → 0.7 to 1.3)
+        $jitterMultiplier = 1 + $jitterFactor * (((mt_rand() / mt_getrandmax()) * 2) - 1);
+        $delay = $exponentialDelay * $jitterMultiplier;
 
         $this->logger->info('RelayConsumer scheduling reconnect', [
-            'delay' => $delay,
+            'delay' => round($delay, 2),
+            'attempts' => $attempts,
+            'base_delay' => $baseDelay,
+            'max_delay' => $maxDelay,
+            'jitter_factor' => $jitterFactor,
         ]);
 
         try {

@@ -27,6 +27,9 @@ final class SyncControllerTest extends TestCase
         $this->controller = new SyncController($this->syncer);
     }
 
+    /**
+     * @return array<array-key, mixed>
+     */
     private function decodeBody(string $body): array
     {
         $decoded = json_decode($body, true);
@@ -52,6 +55,7 @@ final class SyncControllerTest extends TestCase
         $response = $this->controller->triggerSync($request, []);
 
         self::assertSame(200, $response->statusCode);
+        /** @var array{success: mixed, message: mixed, data: array<string, mixed>} $body */
         $body = $this->decodeBody($response->body);
         self::assertTrue($body['success']);
         self::assertSame('TRaSH-Guides sync completed', $body['message']);

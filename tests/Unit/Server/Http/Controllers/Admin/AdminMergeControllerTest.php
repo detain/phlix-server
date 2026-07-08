@@ -15,6 +15,17 @@ use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
 /**
+ * Test-double capability marker: an {@see ItemRepository} that also exposes a
+ * `seed()` helper for populating the in-memory store. Lets the test type the
+ * double as `ItemRepository&SeedableItemRepository` so `seed()` is visible.
+ */
+interface SeedableItemRepository
+{
+    /** @param array<string, mixed> $row */
+    public function seed(array $row): string;
+}
+
+/**
  * Unit tests for AdminMergeController (Step 1.6, Feature 1).
  *
  * Auth (401/403) is enforced by {@see \Phlix\Server\Http\Middleware\AdminMiddleware}
@@ -54,11 +65,13 @@ final class AdminMergeControllerTest extends TestCase
         $response = $controller->duplicates(new Request(), ['id' => 'lib-1']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array{groups: array<int, array<string, mixed>>} $body */
         $body = $this->decode($response->body);
         $this->assertArrayHasKey('groups', $body);
         $this->assertCount(1, $body['groups']);
 
         // Group shape (from Step 1.3): canonical_key, type, library_id, primary, duplicates[].
+        /** @var array{type: mixed, library_id: mixed, primary: array<string, mixed>, duplicates: array<int, array<string, mixed>>} $group */
         $group = $body['groups'][0];
         $this->assertArrayHasKey('canonical_key', $group);
         $this->assertSame('series', $group['type']);
@@ -380,12 +393,14 @@ final class AdminMergeControllerTest extends TestCase
      * find/page/count/re-parent/delete primitives DuplicateFinder + SeriesMerger
      * use, plus a `seed()` helper. Mirrors the doubles used in
      * DuplicateFinderTest / SeriesMergerTest.
+     *
+     * @return ItemRepository&SeedableItemRepository
      */
     private function makeRepo(): ItemRepository
     {
         $mockConn = $this->createMock(Connection::class);
 
-        return new class ($mockConn) extends ItemRepository {
+        return new class ($mockConn) extends ItemRepository implements SeedableItemRepository {
             /** @var array<string, array<string, mixed>> */
             private array $store = [];
             private int $seq = 0;
@@ -419,7 +434,11 @@ final class AdminMergeControllerTest extends TestCase
                         $matches[] = $this->hydrate($row);
                     }
                 }
-                usort($matches, static fn (array $a, array $b): int => strcmp((string) $a['id'], (string) $b['id']));
+                usort($matches, static function (array $a, array $b): int {
+                    $idA = is_string($a['id']) ? $a['id'] : '';
+                    $idB = is_string($b['id']) ? $b['id'] : '';
+                    return strcmp($idA, $idB);
+                });
                 return array_slice($matches, $offset, $limit);
             }
 
@@ -432,7 +451,10 @@ final class AdminMergeControllerTest extends TestCase
                     foreach ($this->store as $row) {
                         if (($row['parent_id'] ?? null) === $parent) {
                             $count++;
-                            $stack[] = (string) $row['id'];
+                            $rowId = $row['id'];
+                            if (is_string($rowId)) {
+                                $stack[] = $rowId;
+                            }
                         }
                     }
                 }

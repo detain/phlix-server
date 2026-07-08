@@ -74,6 +74,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamAudio($request, ['libraryId' => '']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library ID is required', $body['error']);
     }
@@ -96,6 +97,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamAudio($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme audio not found', $body['error']);
     }
@@ -130,6 +132,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamAudio($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme audio not found', $body['error']);
     }
@@ -159,6 +162,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamAudio($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme audio file not found on disk', $body['error']);
     }
@@ -213,6 +217,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamVideo($request, ['libraryId' => '']);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Library ID is required', $body['error']);
     }
@@ -235,6 +240,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamVideo($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme video not found', $body['error']);
     }
@@ -262,6 +268,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamVideo($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme video not found', $body['error']);
     }
@@ -291,6 +298,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         $response = $controller->streamVideo($request, ['libraryId' => 'lib-1']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Theme video file not found on disk', $body['error']);
     }
@@ -536,6 +544,8 @@ class ThemeMediaStreamControllerTest extends TestCase
 
     /**
      * Data provider for audio format to content type mapping.
+     *
+     * @return array<string, array{string, string}>
      */
     public static function audioFormatProvider(): array
     {
@@ -551,6 +561,8 @@ class ThemeMediaStreamControllerTest extends TestCase
 
     /**
      * Data provider for video format to content type mapping.
+     *
+     * @return array<string, array{string, string}>
      */
     public static function videoFormatProvider(): array
     {

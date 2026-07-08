@@ -37,6 +37,9 @@ final class LogControllerTest extends TestCase
         @rmdir($this->dir);
     }
 
+    /**
+     * @param array<string, mixed> $query
+     */
     private function req(array $query): Request
     {
         $r = new Request();
@@ -48,9 +51,16 @@ final class LogControllerTest extends TestCase
     public function testIndexListsOnlyLogFiles(): void
     {
         $controller = new LogController($this->dir);
+        /** @var array{files: array<int, array<string, mixed>>} $body */
         $body = json_decode($controller->index(new Request(), [])->body, true);
 
-        $names = array_map(static fn (array $f): string => $f['name'], $body['files']);
+        $names = array_map(
+            static function (array $f): string {
+                $name = $f['name'] ?? '';
+                return is_string($name) ? $name : '';
+            },
+            $body['files'],
+        );
         sort($names);
         $this->assertSame(['app.log', 'error.log'], $names); // notes.txt excluded
         $this->assertArrayHasKey('size', $body['files'][0]);
@@ -63,6 +73,7 @@ final class LogControllerTest extends TestCase
         $resp = $controller->tail($this->req(['file' => 'app.log', 'lines' => '2']), []);
 
         $this->assertSame(200, $resp->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($resp->body, true);
         $this->assertSame(['l4', 'l5'], $body['lines']);
         $this->assertSame('app.log', $body['file']);
@@ -71,6 +82,7 @@ final class LogControllerTest extends TestCase
     public function testTailDefaultsAndReturnsAllWhenFewerLines(): void
     {
         $controller = new LogController($this->dir);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($controller->tail($this->req(['file' => 'error.log']), [])->body, true);
         $this->assertSame(['e1', 'e2'], $body['lines']);
     }
@@ -108,6 +120,7 @@ final class LogControllerTest extends TestCase
     public function testTailAllMergesEveryLogFileTaggedBySource(): void
     {
         $controller = new LogController($this->dir);
+        /** @var array{files: array<int, mixed>, lines: array<int, string>, truncated: mixed} $body */
         $body = json_decode($controller->tailAll($this->req([]), [])->body, true);
 
         // Lists every .log file that was merged (notes.txt excluded).
@@ -143,6 +156,7 @@ final class LogControllerTest extends TestCase
         );
 
         $controller = new LogController($this->dir);
+        /** @var array{lines: array<int, string>} $body */
         $body = json_decode($controller->tailAll($this->req([]), [])->body, true);
         $joined = implode("\n", $body['lines']);
 
@@ -158,6 +172,7 @@ final class LogControllerTest extends TestCase
     {
         $controller = new LogController($this->dir);
         // app.log has 5, error.log 2 → 7 total; cap at 3.
+        /** @var array{lines: array<int, mixed>, truncated: mixed} $body */
         $body = json_decode($controller->tailAll($this->req(['lines' => '3']), [])->body, true);
 
         $this->assertCount(3, $body['lines']);

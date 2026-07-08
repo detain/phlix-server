@@ -52,11 +52,14 @@ class AuthControllerTest extends TestCase
 
         $this->assertSame(201, $response->statusCode);
 
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertIsArray($body);
         $this->assertSame('access-tok', $body['access_token']);
         $this->assertSame('refresh-tok', $body['refresh_token']);
-        $this->assertSame('alice', $body['user']['username']);
+        /** @var array<string, mixed> $user */
+        $user = $body['user'];
+        $this->assertSame('alice', $user['username']);
     }
 
     /**
@@ -80,6 +83,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->register($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Username already taken', $body['error']);
     }
@@ -108,6 +112,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->login($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('access-tok', $body['access_token']);
     }
@@ -130,6 +135,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->login($request, []);
 
         $this->assertSame(401, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Invalid credentials', $body['error']);
     }
@@ -178,6 +184,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->login($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Missing required fields: username, password', $body['error']);
     }
@@ -204,6 +211,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->refresh($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('new-access', $body['access_token']);
         $this->assertSame('new-refresh', $body['refresh_token']);
@@ -226,6 +234,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->refresh($request, []);
 
         $this->assertSame(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('refresh_token is required', $body['error']);
     }
@@ -257,6 +266,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->refresh($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('new-access', $body['access_token']);
         $this->assertSame('new-refresh', $body['refresh_token']);
@@ -354,8 +364,11 @@ class AuthControllerTest extends TestCase
         $response = $controller->me($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
-        $this->assertSame('alice', $body['user']['username']);
+        /** @var array<string, mixed> $user */
+        $user = $body['user'];
+        $this->assertSame('alice', $user['username']);
     }
 
     /**
@@ -376,6 +389,7 @@ class AuthControllerTest extends TestCase
         $response = $controller->me($request, []);
 
         $this->assertSame(401, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Unauthorized', $body['error']);
     }

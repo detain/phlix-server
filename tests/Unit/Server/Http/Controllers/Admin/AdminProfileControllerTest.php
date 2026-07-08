@@ -21,6 +21,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class AdminProfileControllerTest extends TestCase
 {
+    /**
+     * @param array<string, mixed> $body
+     */
     private function makeRequest(array $body = []): Request
     {
         $request = new Request();
@@ -56,7 +59,7 @@ final class AdminProfileControllerTest extends TestCase
         $response = $controller->listForUser($this->makeRequest(), ['userId' => '1']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{profiles: array<int, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('profiles', $body);
         $this->assertCount(2, $body['profiles']);
@@ -255,7 +258,7 @@ final class AdminProfileControllerTest extends TestCase
         $response = $controller->get($this->makeRequest(), ['id' => '1']);
 
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{profile: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('profile', $body);
         $this->assertSame('Alice', $body['profile']['name']);
@@ -306,7 +309,7 @@ final class AdminProfileControllerTest extends TestCase
 
         $this->assertLessThan(500, $response->statusCode);
         $this->assertSame(200, $response->statusCode);
-        /** @var array<string, mixed> */
+        /** @var array{profile: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertSame('Alice', $body['profile']['name']);
     }

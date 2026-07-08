@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\PhotoLibraryManager;
@@ -19,9 +20,9 @@ class PhotoControllerTest extends TestCase
 {
     private PhotoController $controller;
     private ItemRepository $itemRepo;
-    private PhotoLibraryManager $photoManager;
+    private PhotoLibraryManager&MockObject $photoManager;
     private ExifProvider $exifProvider;
-    private Connection $db;
+    private Connection&MockObject $db;
 
     protected function setUp(): void
     {
@@ -57,6 +58,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->listAlbums($request);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('albums', $body);
         $this->assertIsArray($body['albums']);
@@ -70,6 +72,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->listAlbums($request);
 
         $this->assertEquals(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
     }
@@ -93,6 +96,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->getPhoto($request, $params);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array{photo: array<string, mixed>} $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('photo', $body);
         $this->assertEquals('photo-123', $body['photo']['id']);
@@ -109,6 +113,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->getPhoto($request, $params);
 
         $this->assertEquals(404, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
     }
@@ -142,6 +147,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->listPhotos($request);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('photos', $body);
         $this->assertArrayHasKey('pagination', $body);
@@ -178,6 +184,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->getAlbum($request, $params);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('album', $body);
     }
@@ -281,6 +288,7 @@ class PhotoControllerTest extends TestCase
         try {
             $response = $this->controller->getThumbnail($request, $params);
             $this->assertEquals(404, $response->statusCode);
+            /** @var array<array-key, mixed> $body */
             $body = json_decode($response->body, true);
             $this->assertArrayHasKey('error', $body);
         } finally {
@@ -325,6 +333,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->slideshow($request);
 
         $this->assertEquals(200, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('slideshow', $body);
         $this->assertArrayHasKey('interval', $body);
@@ -492,6 +501,7 @@ class PhotoControllerTest extends TestCase
         $response = $this->controller->getFull($request, $params);
 
         $this->assertEquals(400, $response->statusCode);
+        /** @var array<array-key, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('error', $body);
     }
@@ -567,6 +577,7 @@ class PhotoControllerTest extends TestCase
         ]);
 
         $response = $this->controller->getPhoto($request, ['id' => 'photo-123']);
+        /** @var array{photo: array<string, string>} $body */
         $body = json_decode($response->body, true);
 
         $signer = \Phlix\Auth\SignedUrl::fromEnv();
@@ -576,9 +587,11 @@ class PhotoControllerTest extends TestCase
         ];
         foreach ($expected as $field => $path) {
             $this->assertArrayHasKey($field, $body['photo']);
-            parse_str((string) parse_url((string) $body['photo'][$field], PHP_URL_QUERY), $q);
+            parse_str((string) parse_url($body['photo'][$field], PHP_URL_QUERY), $q);
+            $exp = $q['exp'] ?? '';
+            $sig = $q['sig'] ?? '';
             $this->assertTrue(
-                $signer->verify($path, (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+                $signer->verify($path, is_string($exp) ? $exp : '', is_string($sig) ? $sig : ''),
                 "{$field} must be a verifiable signed URL for {$path}",
             );
         }

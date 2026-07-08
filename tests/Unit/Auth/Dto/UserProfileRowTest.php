@@ -74,10 +74,13 @@ class UserProfileRowTest extends TestCase
             'allow_unrated' => true,
         ]);
 
+        /** @var array<string, mixed> $arr */
         $arr = $row->toArray();
         $this->assertSame('p-1', $arr['id']);
         $this->assertArrayHasKey('settings', $arr);
-        $this->assertSame('R', $arr['settings']['content_rating']);
+        $settings = $arr['settings'];
+        $this->assertIsArray($settings);
+        $this->assertSame('R', $settings['content_rating']);
     }
 
     public function testFromRowToleratesMissingColumns(): void

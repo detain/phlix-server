@@ -54,7 +54,7 @@ class SdEpgServiceTest extends TestCase
 
         $result = $service->syncEpg(['station123'], 14);
 
-        $this->assertIsArray($result);
+        $this->assertCount(2, $result);
         $this->assertArrayHasKey('imported', $result);
         $this->assertArrayHasKey('errors', $result);
         $this->assertEquals(1, $result['imported']);
@@ -76,7 +76,7 @@ class SdEpgServiceTest extends TestCase
 
         $result = $service->syncStation('station123', 7);
 
-        $this->assertIsArray($result);
+        $this->assertCount(2, $result);
         $this->assertArrayHasKey('imported', $result);
         $this->assertArrayHasKey('errors', $result);
     }
@@ -96,7 +96,7 @@ class SdEpgServiceTest extends TestCase
 
         $result = $service->syncEpg(['station123'], 14);
 
-        $this->assertIsArray($result);
+        $this->assertCount(2, $result);
         $this->assertEquals(0, $result['imported']);
         $this->assertGreaterThanOrEqual(0, $result['errors']);
     }
@@ -156,7 +156,7 @@ class SdEpgServiceTest extends TestCase
 
         $result = $service->importLineupAndSync('USA-OTA-00000');
 
-        $this->assertIsArray($result);
+        $this->assertCount(2, $result);
         $this->assertArrayHasKey('channels', $result);
         $this->assertArrayHasKey('stats', $result);
     }

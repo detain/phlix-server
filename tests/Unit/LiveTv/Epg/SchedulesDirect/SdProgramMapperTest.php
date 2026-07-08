@@ -42,7 +42,7 @@ class SdProgramMapperTest extends TestCase
 
         $result = $this->mapper->map($scheduleEntry, $programData);
 
-        $this->assertIsArray($result);
+        $this->assertArrayHasKey('channel_id', $result);
         $this->assertEquals('station123', $result['channel_id']);
         $this->assertEquals('Test Program', $result['title']);
         $this->assertEquals('A test program description', $result['description']);
@@ -103,7 +103,7 @@ class SdProgramMapperTest extends TestCase
 
         $result = $this->mapper->map($scheduleEntry, $programData);
 
-        $this->assertIsArray($result);
+        $this->assertArrayHasKey('episode_title', $result);
         $this->assertNull($result['episode_title']);
         $this->assertEquals(GuideManager::CATEGORY_MOVIE, $result['category']);
         $this->assertTrue($result['is_film']);
@@ -235,6 +235,7 @@ class SdProgramMapperTest extends TestCase
         ];
 
         $result = $this->mapper->mapStation($station);
+        $this->assertNotNull($result);
         $this->assertEquals(5, $result['number']);
     }
 }

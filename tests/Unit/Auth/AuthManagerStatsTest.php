@@ -112,6 +112,7 @@ final class AuthManagerStatsTest extends TestCase
             $this->silentLogger(),
         );
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $manager->login('alice', 'topsecret123', 'device-1');
         $this->assertSame('user-42', $result['user']['id']);
     }

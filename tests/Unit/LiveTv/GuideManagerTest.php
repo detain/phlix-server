@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\LiveTv;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\GuideManager;
 use Phlix\Common\Logger\StructuredLogger;
@@ -10,7 +11,9 @@ use Workerman\MySQL\Connection;
 class GuideManagerTest extends TestCase
 {
     private GuideManager $manager;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
 
     protected function setUp(): void
@@ -49,7 +52,7 @@ class GuideManagerTest extends TestCase
     public function testGetProgramsForChannelsReturnsEmptyArrayForEmptyInput(): void
     {
         $programs = $this->manager->getProgramsForChannels([], time(), time() + 3600);
-        $this->assertIsArray($programs);
+        $this->assertCount(0, $programs);
         $this->assertEmpty($programs);
     }
 
@@ -59,7 +62,7 @@ class GuideManagerTest extends TestCase
             ['title' => 'Missing channel_id'],
         ]);
 
-        $this->assertIsArray($result);
+        $this->assertArrayHasKey('imported', $result);
         $this->assertEquals(0, $result['imported']);
         $this->assertNotEmpty($result['errors']);
     }
@@ -74,7 +77,7 @@ class GuideManagerTest extends TestCase
     public function testGetCacheStatsReturnsArray(): void
     {
         $stats = $this->manager->getCacheStats();
-        $this->assertIsArray($stats);
+        $this->assertCount(2, $stats);
         $this->assertArrayHasKey('entries', $stats);
         $this->assertArrayHasKey('ttl', $stats);
         $this->assertEquals(3600, $stats['ttl']); // default TTL
@@ -83,6 +86,8 @@ class GuideManagerTest extends TestCase
     public function testClearCacheDoesNotThrow(): void
     {
         $this->manager->clearCache();
-        $this->assertTrue(true); // If we get here, no exception was thrown
+        // After clearing, the cache reports zero entries
+        $stats = $this->manager->getCacheStats();
+        $this->assertSame(0, $stats['entries']);
     }
 }

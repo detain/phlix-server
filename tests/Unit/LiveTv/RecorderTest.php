@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\LiveTv;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Recorder;
 use Phlix\Common\Logger\StructuredLogger;
@@ -10,7 +11,9 @@ use Workerman\MySQL\Connection;
 class RecorderTest extends TestCase
 {
     private Recorder $recorder;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
 
     protected function setUp(): void
@@ -58,7 +61,7 @@ class RecorderTest extends TestCase
     {
         $result = $this->recorder->startTimeShift('session_1', 'channel_1');
 
-        $this->assertIsArray($result);
+        $this->assertCount(4, $result);
         $this->assertArrayHasKey('time_shift_id', $result);
         $this->assertArrayHasKey('stream_url', $result);
         $this->assertArrayHasKey('buffer_start', $result);

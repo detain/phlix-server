@@ -17,7 +17,7 @@ class DvbtDeviceScannerTest extends TestCase
 
         $devices = $scanner->scan();
 
-        $this->assertIsArray($devices);
+        $this->assertEmpty($devices);
     }
 
     public function testScanReturnsEmptyWhenNoDevDvb(): void
@@ -28,7 +28,7 @@ class DvbtDeviceScannerTest extends TestCase
         $devices = $scanner->scan();
 
         // The scan method should handle missing /dev/dvb gracefully
-        $this->assertIsArray($devices);
+        $this->assertEmpty($devices);
     }
 
     public function testScanReturnsEmptyWhenNoFrontends(): void
@@ -38,6 +38,6 @@ class DvbtDeviceScannerTest extends TestCase
         // Even if adapter dirs exist but no frontends, should return empty
         $devices = $scanner->scan();
 
-        $this->assertIsArray($devices);
+        $this->assertEmpty($devices);
     }
 }

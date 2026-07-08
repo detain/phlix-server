@@ -51,6 +51,7 @@ final class AuthManagerFirstUserAdminTest extends TestCase
             $this->silentLogger(),
         );
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $manager->register('root', 'root@example.com', 'topsecret123');
         $this->assertSame('user-1', $result['user']['id']);
     }
@@ -79,6 +80,7 @@ final class AuthManagerFirstUserAdminTest extends TestCase
             $this->silentLogger(),
         );
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $manager->register('alice', 'alice@example.com', 'topsecret123');
         $this->assertSame('user-4', $result['user']['id']);
     }
@@ -229,6 +231,7 @@ final class AuthManagerFirstUserAdminTest extends TestCase
             null, // explicitly no db
         );
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $manager->register('root', 'root@example.com', 'topsecret123');
         $this->assertSame('user-1', $result['user']['id']);
     }

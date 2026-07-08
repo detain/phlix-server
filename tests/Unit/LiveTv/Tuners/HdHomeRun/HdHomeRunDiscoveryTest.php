@@ -25,7 +25,7 @@ class HdHomeRunDiscoveryTest extends TestCase
         // but verify the method returns an array
         $devices = $discovery->discover();
 
-        $this->assertIsArray($devices);
+        $this->assertEmpty($devices);
     }
 
     public function testDiscoverReturnsEmptyOnNetworkError(): void
@@ -36,7 +36,7 @@ class HdHomeRunDiscoveryTest extends TestCase
         $devices = $discovery->discover();
 
         // Should return empty array on network error
-        $this->assertIsArray($devices);
+        $this->assertCount(0, $devices);
         $this->assertEmpty($devices);
     }
 
@@ -48,7 +48,7 @@ class HdHomeRunDiscoveryTest extends TestCase
         // When no devices are found (network unavailable), we get empty array
         $devices = $discovery->discover();
 
-        $this->assertIsArray($devices);
+        $this->assertEmpty($devices);
     }
 
     public function testHdHomeRunDeviceGetterMethods(): void

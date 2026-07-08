@@ -75,6 +75,7 @@ final class AuthManagerEmailLoginTest extends TestCase
             'password_hash' => 'xxx',
         ]);
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $this->manager($repo)->login('alice@example.com', 'topsecret123', 'device-1');
 
         $this->assertSame('user-42', $result['user']['id']);
@@ -96,6 +97,7 @@ final class AuthManagerEmailLoginTest extends TestCase
             'password_hash' => 'xxx',
         ]);
 
+        /** @var array{user: array<string, mixed>} $result */
         $result = $this->manager($repo)->login('alice', 'topsecret123', 'device-1');
 
         $this->assertSame('user-42', $result['user']['id']);

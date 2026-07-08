@@ -9,6 +9,7 @@ use Phlix\LiveTv\ComskipPostProcessor;
 use Phlix\Media\Markers\ChapterMarker;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\NullLogger;
 
 /**
@@ -16,8 +17,11 @@ use Psr\Log\NullLogger;
  */
 class ComskipPostProcessorTest extends TestCase
 {
+    /** @var ComskipRunner&MockObject */
     private $mockComskip;
+    /** @var ComskipEdlParser&MockObject */
     private $mockEdlParser;
+    /** @var MarkerService&MockObject */
     private $mockMarkerService;
     private ComskipPostProcessor $processor;
 

@@ -15,6 +15,7 @@ use Phlix\Media\Markers\ChapterMarker;
 class ChapterMarkerServiceTest extends TestCase
 {
     private ChapterMarkerService $service;
+    /** @var ItemRepository&\PHPUnit\Framework\MockObject\MockObject */
     private $mockItemRepo;
 
     protected function setUp(): void
@@ -122,13 +123,17 @@ class ChapterMarkerServiceTest extends TestCase
             ->with(
                 $mediaItemId,
                 $this->callback(function ($data) {
-                    if (!isset($data['metadata_json'])) {
+                    if (!is_array($data) || !isset($data['metadata_json']) || !is_string($data['metadata_json'])) {
                         return false;
                     }
                     $decoded = json_decode($data['metadata_json'], true);
-                    return isset($decoded['commercial_chapters'])
-                        && count($decoded['commercial_chapters']) === 1
-                        && $decoded['title'] === 'Test Show';
+                    if (!is_array($decoded)) {
+                        return false;
+                    }
+                    $chapters = $decoded['commercial_chapters'] ?? null;
+                    return is_array($chapters)
+                        && count($chapters) === 1
+                        && ($decoded['title'] ?? null) === 'Test Show';
                 })
             );
 

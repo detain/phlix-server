@@ -17,8 +17,8 @@ class JwtHandlerTest extends TestCase
     public function testCreateAccessToken(): void
     {
         $token = $this->jwtHandler->createAccessToken('user-123');
-        
-        $this->assertIsString($token);
+
+        $this->assertNotEmpty($token);
         $this->assertCount(3, explode('.', $token));
     }
 
@@ -73,14 +73,17 @@ class JwtHandlerTest extends TestCase
         $this->assertIsArray($payload);
         $this->assertEquals('refresh', $payload['type']);
         $this->assertArrayHasKey('jti', $payload);
-        $this->assertEquals(32, strlen($payload['jti'])); // 16 bytes = 32 hex chars
+        $jti = $payload['jti'];
+        $this->assertIsString($jti);
+        $this->assertEquals(32, strlen($jti)); // 16 bytes = 32 hex chars
     }
 
     public function testTokenWithCustomClaims(): void
     {
         $token = $this->jwtHandler->createAccessToken('user-123', ['role' => 'admin']);
         $payload = $this->jwtHandler->validateToken($token);
-        
+
+        $this->assertNotNull($payload);
         $this->assertEquals('admin', $payload['role']);
     }
 
@@ -100,12 +103,13 @@ class JwtHandlerTest extends TestCase
         // Manually craft a token with wrong issuer by decoding and re-encoding
         $token = $this->jwtHandler->createAccessToken('user-123');
         $parts = explode('.', $token);
+        /** @var array<string, mixed> $payload */
         $payload = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
         $payload['iss'] = 'wrong-issuer';
-        
+
         $header = ['alg' => 'HS256', 'typ' => 'JWT'];
-        $headerEncoded = rtrim(strtr(base64_encode(json_encode($header)), '+/', '-_'), '=');
-        $payloadEncoded = rtrim(strtr(base64_encode(json_encode($payload)), '+/', '-_'), '=');
+        $headerEncoded = rtrim(strtr(base64_encode(json_encode($header, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+        $payloadEncoded = rtrim(strtr(base64_encode(json_encode($payload, JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
         $signature = hash_hmac('sha256', "{$headerEncoded}.{$payloadEncoded}", 'test-secret-key-12345', true);
         $signatureEncoded = rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
         

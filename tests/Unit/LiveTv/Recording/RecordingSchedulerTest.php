@@ -10,14 +10,19 @@ use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
 use Phlix\LiveTv\Recording\RecordingScheduler;
 use Phlix\Common\Logger\StructuredLogger;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class RecordingSchedulerTest extends TestCase
 {
     private RecordingScheduler $scheduler;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var Recorder&MockObject */
     private $mockRecorder;
+    /** @var LiveTvManager&MockObject */
     private $mockLiveTvManager;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
 
     protected function setUp(): void
@@ -98,7 +103,7 @@ class RecordingSchedulerTest extends TestCase
 
         $upcoming = $this->scheduler->getUpcomingRecordings(10);
 
-        $this->assertIsArray($upcoming);
+        $this->assertCount(0, $upcoming);
         $this->assertEmpty($upcoming);
     }
 

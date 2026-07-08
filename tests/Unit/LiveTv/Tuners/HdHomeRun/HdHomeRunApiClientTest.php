@@ -16,7 +16,7 @@ class HdHomeRunApiClientTest extends TestCase
         // In unit test environment without actual device, this will return empty
         $lineup = $client->getChannelLineup();
 
-        $this->assertIsArray($lineup);
+        $this->assertEmpty($lineup);
     }
 
     public function testGetStreamUrlBuildsCorrectUrl(): void
@@ -50,10 +50,11 @@ class HdHomeRunApiClientTest extends TestCase
     {
         $client = new HdHomeRunApiClient('http://127.0.0.1');
 
-        // In unit test environment, this will return false due to connection failure
+        // triggerScan reports whether the POST succeeded; the concrete outcome is
+        // environment-dependent, but it must be deterministic for the same endpoint.
         $result = $client->triggerScan();
 
-        $this->assertIsBool($result);
+        $this->assertSame($result, $client->triggerScan());
     }
 
     public function testBaseUrlIsNormalized(): void
@@ -82,7 +83,7 @@ class HdHomeRunApiClientTest extends TestCase
 
         $result = $client->discover();
 
-        // Result is either array or false on failure
-        $this->assertTrue($result === false || is_array($result));
+        // No HDHomeRun device at 127.0.0.1, so discovery fails and returns false
+        $this->assertFalse($result);
     }
 }

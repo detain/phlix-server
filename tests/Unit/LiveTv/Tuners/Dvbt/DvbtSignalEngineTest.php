@@ -25,8 +25,8 @@ class DvbtSignalEngineTest extends TestCase
 
         $streamUrl = $engine->getStreamUrl($device, 1);
 
-        $this->assertIsString($streamUrl);
         $this->assertNotEmpty($streamUrl);
+        $this->assertSame('/dev/dvb/adapter0/dvr0', $streamUrl);
     }
 
     public function testTuneReturnsIngestUrl(): void
@@ -44,7 +44,7 @@ class DvbtSignalEngineTest extends TestCase
 
         $ingestUrl = $engine->tune($device, 474000000, 'auto');
 
-        $this->assertIsString($ingestUrl);
+        $this->assertNotEmpty($ingestUrl);
     }
 
     public function testGetSignalStrengthReturnsArray(): void
@@ -62,7 +62,7 @@ class DvbtSignalEngineTest extends TestCase
 
         $signalStrength = $engine->getSignalStrength($device);
 
-        $this->assertIsArray($signalStrength);
+        $this->assertCount(4, $signalStrength);
         $this->assertArrayHasKey('signal', $signalStrength);
         $this->assertArrayHasKey('snr', $signalStrength);
         $this->assertArrayHasKey('ber', $signalStrength);

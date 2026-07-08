@@ -7,11 +7,13 @@ namespace Phlix\Tests\Unit\LiveTv\Recording;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Recording\RecordingDeduplicator;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class RecordingDeduplicatorTest extends TestCase
 {
     private RecordingDeduplicator $deduplicator;
+    /** @var Connection&MockObject */
     private $mockDb;
 
     protected function setUp(): void
@@ -30,8 +32,8 @@ class RecordingDeduplicatorTest extends TestCase
     public function testIsDuplicateQueriesCorrectly(): void
     {
         $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+            public int $num_rows = 0;
+            public function fetch(): false { return false; }
         };
 
         $this->mockDb->expects($this->once())
@@ -51,7 +53,7 @@ class RecordingDeduplicatorTest extends TestCase
     {
         $mockResult = new class extends ResultSet {
             public int $num_rows = 1;
-            public function fetch(): array|false
+            public function fetch(): array
             {
                 return ['recording_id' => 'rec_existing'];
             }
@@ -69,8 +71,8 @@ class RecordingDeduplicatorTest extends TestCase
     public function testGetCanonicalReturnsNullWhenEmpty(): void
     {
         $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+            public int $num_rows = 0;
+            public function fetch(): false { return false; }
         };
 
         $this->mockDb->expects($this->once())
@@ -85,8 +87,8 @@ class RecordingDeduplicatorTest extends TestCase
     public function testFindDuplicatesReturnsEmptyWhenNone(): void
     {
         $mockResult = new class {
-            public $num_rows = 0;
-            public function fetch() { return false; }
+            public int $num_rows = 0;
+            public function fetch(): false { return false; }
         };
 
         $this->mockDb->expects($this->once())
@@ -95,7 +97,7 @@ class RecordingDeduplicatorTest extends TestCase
 
         $duplicates = $this->deduplicator->findDuplicates('prog_123');
 
-        $this->assertIsArray($duplicates);
+        $this->assertCount(0, $duplicates);
         $this->assertEmpty($duplicates);
     }
 

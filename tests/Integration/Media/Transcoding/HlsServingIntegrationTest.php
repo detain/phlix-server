@@ -7,7 +7,6 @@ namespace Phlix\Tests\Integration\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
-use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\HlsController;
@@ -67,8 +66,6 @@ class HlsServingIntegrationTest extends TestCase
         $manager = new TranscodeManager(
             $this->mockDb($clip),
             $this->ffmpeg,
-            new EncodingHelper(),
-            $this->segmentDir,
             $this->segmentDir,
             null,
             2

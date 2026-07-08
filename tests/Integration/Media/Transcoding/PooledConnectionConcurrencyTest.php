@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Phlix\Tests\Integration\Media\Transcoding;
 
 use Phlix\Common\Database\PooledMySQLConnection;
-use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use PHPUnit\Framework\TestCase;
@@ -267,7 +266,7 @@ final class PooledConnectionConcurrencyTest extends TestCase
     ): void {
         $pool = $this->pool($poolSize);
         $ff = $this->createMock(FfmpegRunner::class);
-        $manager = new TranscodeManager($pool, $ff, new EncodingHelper(), $this->segmentDir, $this->segmentDir, null, 6);
+        $manager = new TranscodeManager($pool, $ff, $this->segmentDir, null, 6);
 
         $jobId = $this->uuid();
         $libraryId = $this->uuid();

@@ -69,38 +69,62 @@ class ConnectionPoolTest extends TestCase
     /**
      * Creates a mock connection for testing.
      *
+     * The named double (rather than the bare {@see ConnectionInterface}) is
+     * returned so callers can drive its `setUserId()` test helper, which is
+     * not part of the production interface contract.
+     *
      * @param string $id The connection ID
-     * @return ConnectionInterface Mock connection instance
      */
-    private function createMockConnection(string $id): ConnectionInterface
+    private function createMockConnection(string $id): ConnectionPoolTestConnection
     {
-        return new class($id) implements ConnectionInterface {
-            private string $id;
-            private ?string $userId = null;
-            private ?string $sessionId = null;
-            private bool $authenticated = false;
-            private int $lastActivity;
-            private array $sessionData = [];
-
-            public function __construct(string $id) { $this->id = $id; $this->lastActivity = time(); }
-            public function getId(): string { return $this->id; }
-            public function getUserId(): ?string { return $this->userId; }
-            public function setUserId(?string $userId): void { $this->userId = $userId; }
-            public function getSessionId(): ?string { return $this->sessionId; }
-            public function setSessionId(?string $sessionId): void { $this->sessionId = $sessionId; }
-            public function isAuthenticated(): bool { return $this->authenticated; }
-            public function setAuthenticated(bool $a, ?string $u = null): void { $this->authenticated = $a; $this->userId = $u; }
-            public function getLastActivity(): int { return $this->lastActivity; }
-            public function send($data): void {}
-            public function close(): void {}
-            public function sendMessage($type, $data = []): void {}
-            public function sendFlat($type, $payload): void {}
-            public function updateActivity(): void { $this->lastActivity = time(); }
-            public function set(string $key, mixed $value): void { $this->sessionData[$key] = $value; }
-            public function get(string $key, mixed $default = null): mixed { return $this->sessionData[$key] ?? $default; }
-            public function has(string $key): bool { return isset($this->sessionData[$key]); }
-            public function remove(string $key): void { unset($this->sessionData[$key]); }
-            public function getAll(): array { return $this->sessionData; }
-        };
+        return new ConnectionPoolTestConnection($id);
     }
+}
+
+/**
+ * In-memory {@see ConnectionInterface} double for {@see ConnectionPoolTest}.
+ *
+ * Exposes a `setUserId()` helper (not on the production interface) so
+ * findByUserId() can be exercised directly.
+ *
+ * @internal For testing only
+ */
+class ConnectionPoolTestConnection implements ConnectionInterface
+{
+    private string $id;
+    private ?string $userId = null;
+    private ?string $sessionId = null;
+    private bool $authenticated = false;
+    private int $lastActivity;
+    /** @var array<string, mixed> */
+    private array $sessionData = [];
+
+    public function __construct(string $id)
+    {
+        $this->id = $id;
+        $this->lastActivity = time();
+    }
+
+    public function getId(): string { return $this->id; }
+    public function getUserId(): ?string { return $this->userId; }
+    public function setUserId(?string $userId): void { $this->userId = $userId; }
+    public function getSessionId(): ?string { return $this->sessionId; }
+    public function setSessionId(?string $sessionId): void { $this->sessionId = $sessionId; }
+    public function isAuthenticated(): bool { return $this->authenticated; }
+    public function setAuthenticated(bool $a, ?string $u = null): void { $this->authenticated = $a; $this->userId = $u; }
+    public function getLastActivity(): int { return $this->lastActivity; }
+    public function send(string|array $data): void {}
+    public function close(): void {}
+    public function sendMessage(string $type, array $data = []): void {}
+    public function sendFlat(string $type, array $payload): void {}
+    public function updateActivity(): void { $this->lastActivity = time(); }
+    public function set(string $key, mixed $value): void { $this->sessionData[$key] = $value; }
+    public function get(string $key, mixed $default = null): mixed { return $this->sessionData[$key] ?? $default; }
+    public function has(string $key): bool { return isset($this->sessionData[$key]); }
+    public function remove(string $key): void { unset($this->sessionData[$key]); }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getAll(): array { return $this->sessionData; }
 }

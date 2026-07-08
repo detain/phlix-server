@@ -6,6 +6,8 @@ namespace Phlix\Tests\Unit\Server\WebPortal\Controllers;
 
 use Mockery;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
+use Mockery\Expectation;
+use Mockery\MockInterface;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\PhotoLibraryManager;
@@ -41,8 +43,11 @@ final class PhotoPageControllerTest extends TestCase
 
     public function test_photo_returns_404_when_not_a_photo(): void
     {
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('x1')->andReturn(['id' => 'x1', 'type' => 'movie']);
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('x1')->andReturn(['id' => 'x1', 'type' => 'movie']);
         $controller = $this->controller($this->noSmartyDir(), $itemRepo);
 
         $response = $controller->photo($this->makeRequest(), ['id' => 'x1']);
@@ -57,16 +62,26 @@ final class PhotoPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var PhotoLibraryManager&MockInterface $photoManager */
         $photoManager = Mockery::mock(PhotoLibraryManager::class);
-        $photoManager->shouldReceive('getPhotosGroupedByDate')->with('lib1')
+        /** @var Expectation $grouped */
+        $grouped = $photoManager->shouldReceive('getPhotosGroupedByDate');
+        $grouped->with('lib1')
             ->andReturn(['2020-01-01' => [$this->photoItem()]]);
+        /** @var LibraryManager&MockInterface $library */
         $library = Mockery::mock(LibraryManager::class);
-        $library->shouldReceive('getAllLibraries')->andReturn([['id' => 'lib1', 'type' => 'photo']]);
+        /** @var Expectation $getAllLibraries */
+        $getAllLibraries = $library->shouldReceive('getAllLibraries');
+        $getAllLibraries->andReturn([['id' => 'lib1', 'type' => 'photo']]);
 
+        /** @var ItemRepository&MockInterface $itemRepo */
+        $itemRepo = Mockery::mock(ItemRepository::class);
+        /** @var ExifProvider&MockInterface $exif */
+        $exif = Mockery::mock(ExifProvider::class);
         $controller = new PhotoPageController(
-            Mockery::mock(ItemRepository::class),
+            $itemRepo,
             $photoManager,
-            Mockery::mock(ExifProvider::class),
+            $exif,
             $library,
             $this->realTemplateDir(),
         );
@@ -84,15 +99,24 @@ final class PhotoPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var PhotoLibraryManager&MockInterface $photoManager */
         $photoManager = Mockery::mock(PhotoLibraryManager::class);
-        $photoManager->shouldReceive('getPhotosGroupedByDate')->with('lib1')
+        /** @var Expectation $grouped */
+        $grouped = $photoManager->shouldReceive('getPhotosGroupedByDate');
+        $grouped->with('lib1')
             ->andReturn(['2020-01-01' => [$this->photoItem()]]);
 
+        /** @var ItemRepository&MockInterface $itemRepo */
+        $itemRepo = Mockery::mock(ItemRepository::class);
+        /** @var ExifProvider&MockInterface $exif */
+        $exif = Mockery::mock(ExifProvider::class);
+        /** @var LibraryManager&MockInterface $library */
+        $library = Mockery::mock(LibraryManager::class);
         $controller = new PhotoPageController(
-            Mockery::mock(ItemRepository::class),
+            $itemRepo,
             $photoManager,
-            Mockery::mock(ExifProvider::class),
-            Mockery::mock(LibraryManager::class),
+            $exif,
+            $library,
             $this->realTemplateDir(),
         );
 
@@ -110,21 +134,31 @@ final class PhotoPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('findById')->with('p1')->andReturn($this->photoItem());
+        /** @var Expectation $findById */
+        $findById = $itemRepo->shouldReceive('findById');
+        $findById->with('p1')->andReturn($this->photoItem());
+        /** @var ExifProvider&MockInterface $exif */
         $exif = Mockery::mock(ExifProvider::class);
-        $exif->shouldReceive('getPhotoMetadata')->with('p1')->andReturn([
+        /** @var Expectation $photoMeta */
+        $photoMeta = $exif->shouldReceive('getPhotoMetadata');
+        $photoMeta->with('p1')->andReturn([
             'camera_model' => 'Canon EOS',
             'iso' => 200,
             'width' => 4000,
             'height' => 3000,
         ]);
 
+        /** @var PhotoLibraryManager&MockInterface $photoManager */
+        $photoManager = Mockery::mock(PhotoLibraryManager::class);
+        /** @var LibraryManager&MockInterface $library */
+        $library = Mockery::mock(LibraryManager::class);
         $controller = new PhotoPageController(
             $itemRepo,
-            Mockery::mock(PhotoLibraryManager::class),
+            $photoManager,
             $exif,
-            Mockery::mock(LibraryManager::class),
+            $library,
             $this->realTemplateDir(),
         );
 
@@ -142,15 +176,24 @@ final class PhotoPageControllerTest extends TestCase
     {
         $this->skipWithoutSmarty();
 
+        /** @var ItemRepository&MockInterface $itemRepo */
         $itemRepo = Mockery::mock(ItemRepository::class);
-        $itemRepo->shouldReceive('getByLibrary')->with('lib1', Mockery::any(), Mockery::any())
+        /** @var Expectation $getByLibrary */
+        $getByLibrary = $itemRepo->shouldReceive('getByLibrary');
+        $getByLibrary->with('lib1', Mockery::any(), Mockery::any())
             ->andReturn([$this->photoItem()]);
 
+        /** @var PhotoLibraryManager&MockInterface $photoManager */
+        $photoManager = Mockery::mock(PhotoLibraryManager::class);
+        /** @var ExifProvider&MockInterface $exif */
+        $exif = Mockery::mock(ExifProvider::class);
+        /** @var LibraryManager&MockInterface $library */
+        $library = Mockery::mock(LibraryManager::class);
         $controller = new PhotoPageController(
             $itemRepo,
-            Mockery::mock(PhotoLibraryManager::class),
-            Mockery::mock(ExifProvider::class),
-            Mockery::mock(LibraryManager::class),
+            $photoManager,
+            $exif,
+            $library,
             $this->realTemplateDir(),
         );
 
@@ -162,11 +205,22 @@ final class PhotoPageControllerTest extends TestCase
 
     private function controller(string $templateDir, ?ItemRepository $itemRepo = null): PhotoPageController
     {
+        if ($itemRepo === null) {
+            /** @var ItemRepository&MockInterface $itemRepo */
+            $itemRepo = Mockery::mock(ItemRepository::class);
+        }
+        /** @var PhotoLibraryManager&MockInterface $photoManager */
+        $photoManager = Mockery::mock(PhotoLibraryManager::class);
+        /** @var ExifProvider&MockInterface $exif */
+        $exif = Mockery::mock(ExifProvider::class);
+        /** @var LibraryManager&MockInterface $library */
+        $library = Mockery::mock(LibraryManager::class);
+
         return new PhotoPageController(
-            $itemRepo ?? Mockery::mock(ItemRepository::class),
-            Mockery::mock(PhotoLibraryManager::class),
-            Mockery::mock(ExifProvider::class),
-            Mockery::mock(LibraryManager::class),
+            $itemRepo,
+            $photoManager,
+            $exif,
+            $library,
             $templateDir,
         );
     }

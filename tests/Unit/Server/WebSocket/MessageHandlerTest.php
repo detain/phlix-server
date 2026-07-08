@@ -22,12 +22,11 @@ class MessageHandlerTest extends TestCase
         $pool->clear();
         $handler = new MessageHandler($pool);
 
+        $this->expectNotToPerformAssertions();
         $called = false;
         $handler->on('test_event', function ($conn, $payload) use (&$called) {
             $called = true;
         });
-
-        $this->assertTrue(true); // If we get here, no exception was thrown
     }
 
     /**

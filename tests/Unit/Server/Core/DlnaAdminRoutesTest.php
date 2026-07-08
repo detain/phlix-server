@@ -159,6 +159,7 @@ final class DlnaAdminRoutesTest extends TestCase
         // The route group must carry AdminMiddleware.
         $status = $this->findRoute($routes['GET'], '/api/v1/admin/dlna/status');
         $this->assertNotNull($status);
+        /** @var array<int, mixed> $middleware */
         $middleware = $status['middleware'] ?? [];
         $hasAdmin = false;
         foreach ($middleware as $mw) {

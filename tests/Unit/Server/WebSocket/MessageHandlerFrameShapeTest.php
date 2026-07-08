@@ -23,7 +23,7 @@ class MessageHandlerFrameShapeTest extends TestCase
     /**
      * Tracks sent messages for verification.
      *
-     * @var array<int, array{type: string, data?: array, timestamp: int}>
+     * @var array<int, array<string, mixed>>
      */
     private array $sentMessages = [];
 
@@ -34,9 +34,9 @@ class MessageHandlerFrameShapeTest extends TestCase
     {
         $mockTcp = $this->createMock(TcpConnection::class);
         $mockTcp->method('send')->willReturnCallback(function ($data) {
-            $this->sentMessages[] = is_string($data)
-                ? json_decode($data, true)
-                : $data;
+            $decoded = is_string($data) ? json_decode($data, true) : $data;
+            /** @var array<string, mixed> $decoded */
+            $this->sentMessages[] = $decoded;
         });
 
         return new class($mockTcp) extends Connection {
@@ -90,7 +90,9 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertArrayNotHasKey('data', $sent);
 
         // Verify group and your_id are correct
-        $this->assertEquals('sp_abc123', $sent['group']['group_id']);
+        /** @var array<string, mixed> $group */
+        $group = $sent['group'];
+        $this->assertEquals('sp_abc123', $group['group_id']);
         $this->assertEquals('member_1', $sent['your_id']);
     }
 
@@ -115,8 +117,10 @@ class MessageHandlerFrameShapeTest extends TestCase
         $this->assertArrayHasKey('timestamp', $sent);
 
         // Payload is under 'data'
-        $this->assertArrayHasKey('group', $sent['data']);
-        $this->assertArrayHasKey('your_id', $sent['data']);
+        /** @var array<string, mixed> $data */
+        $data = $sent['data'];
+        $this->assertArrayHasKey('group', $data);
+        $this->assertArrayHasKey('your_id', $data);
     }
 
     /**
@@ -140,7 +144,7 @@ class MessageHandlerFrameShapeTest extends TestCase
             'member_name' => 'Test User',
             'group_name' => 'Test Group',
             'timestamp' => 1234567890,
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         $handler->handle($connection, $flatMessage);
 
@@ -167,7 +171,7 @@ class MessageHandlerFrameShapeTest extends TestCase
             'type' => 'subscribe_dashboard',
             'data' => ['session_id' => 'sess_123'],
             'timestamp' => 1234567890,
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         $handler->handle($connection, $deprecatedMessage);
 
@@ -179,8 +183,10 @@ class MessageHandlerFrameShapeTest extends TestCase
         $sent = $this->sentMessages[0];
         $this->assertEquals('dashboard_now_playing', $sent['type']);
         $this->assertArrayHasKey('data', $sent);
-        $this->assertArrayHasKey('subscribed', $sent['data']);
-        $this->assertTrue($sent['data']['subscribed']);
+        /** @var array<string, mixed> $data */
+        $data = $sent['data'];
+        $this->assertArrayHasKey('subscribed', $data);
+        $this->assertTrue($data['subscribed']);
     }
 
     /**
@@ -202,7 +208,7 @@ class MessageHandlerFrameShapeTest extends TestCase
             'protocol_version' => 999, // Future version
             'member_id' => 'member_1',
             'timestamp' => 1234567890,
-        ]);
+        ], JSON_THROW_ON_ERROR);
 
         $handler->handle($connection, $futureMessage);
 

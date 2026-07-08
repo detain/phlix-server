@@ -10,12 +10,14 @@ use Phlix\Auth\WebAuthn\WebAuthnManager;
 use Phlix\Auth\WebAuthn\WebAuthnCredentialRepository;
 use Phlix\Auth\WebAuthn\WebAuthnSettings;
 use Phlix\Auth\WebAuthn\WebAuthnCredential;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 final class WebAuthnManagerTest extends TestCase
 {
     private WebAuthnManager $manager;
     private UserRepository $userRepo;
+    /** @var Connection&MockObject */
     private Connection $db;
     private WebAuthnCredentialRepository $credentialRepo;
 
@@ -62,7 +64,7 @@ final class WebAuthnManagerTest extends TestCase
 
         $options = $this->manager->startRegistration($userId, $username);
 
-        $this->assertIsArray($options);
+        $this->assertNotEmpty($options);
         $this->assertArrayHasKey('challenge', $options);
         $this->assertArrayHasKey('rp', $options);
         $this->assertArrayHasKey('user', $options);
@@ -115,7 +117,7 @@ final class WebAuthnManagerTest extends TestCase
 
         $options = $this->manager->startAuthentication($username);
 
-        $this->assertIsArray($options);
+        $this->assertNotEmpty($options);
         $this->assertArrayHasKey('challenge', $options);
         $this->assertArrayHasKey('rpId', $options);
         $this->assertArrayHasKey('allowCredentials', $options);
@@ -183,7 +185,7 @@ final class WebAuthnManagerTest extends TestCase
 
         $credentials = $this->manager->listCredentials($userId);
 
-        $this->assertIsArray($credentials);
+        $this->assertContainsOnlyInstancesOf(WebAuthnCredential::class, $credentials);
         $this->assertCount(1, $credentials);
         $this->assertInstanceOf(WebAuthnCredential::class, $credentials[0]);
     }
@@ -196,7 +198,7 @@ final class WebAuthnManagerTest extends TestCase
 
         $credentials = $this->manager->listCredentials($userId);
 
-        $this->assertIsArray($credentials);
+        $this->assertCount(0, $credentials);
         $this->assertEmpty($credentials);
     }
 
@@ -206,7 +208,7 @@ final class WebAuthnManagerTest extends TestCase
         $credentialId = base64_encode(random_bytes(32));
 
         $this->db->method('query')
-            ->willReturnCallback(function (string $sql, array $params) use ($userId) {
+            ->willReturnCallback(function (string $sql, array $params) {
                 if (strpos($sql, 'DELETE FROM webauthn_credentials') !== false) {
                     return 1;
                 }

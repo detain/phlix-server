@@ -24,7 +24,7 @@ final class ProviderManagerTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $this->userRepo = new UserRepository($db);
-        $this->registry = new AuthProviderRegistry($this->createMock(\Psr\Container\ContainerInterface::class));
+        $this->registry = new AuthProviderRegistry();
     }
 
     public function test_parse_provider_prefix(): void
@@ -127,7 +127,7 @@ final class ProviderManagerTest extends TestCase
             });
 
         $repo = new UserRepository($db);
-        $registry = new AuthProviderRegistry($this->createMock(\Psr\Container\ContainerInterface::class));
+        $registry = new AuthProviderRegistry();
         $manager = new ProviderManager($registry, $repo);
 
         $result = $manager->authenticate('alice', ['password' => 'secret123']);
@@ -142,7 +142,7 @@ final class ProviderManagerTest extends TestCase
         $db->method('query')->willReturn([]);
 
         $repo = new UserRepository($db);
-        $registry = new AuthProviderRegistry($this->createMock(\Psr\Container\ContainerInterface::class));
+        $registry = new AuthProviderRegistry();
         $manager = new ProviderManager($registry, $repo);
 
         $result = $manager->authenticate('nobody', ['password' => 'secret']);
@@ -176,7 +176,7 @@ final class ProviderManagerTest extends TestCase
             });
 
         $repo = new UserRepository($db);
-        $registry = new AuthProviderRegistry($this->createMock(\Psr\Container\ContainerInterface::class));
+        $registry = new AuthProviderRegistry();
         $manager = new ProviderManager($registry, $repo);
 
         $result = $manager->authenticate('alice', ['password' => 'wrong-password']);

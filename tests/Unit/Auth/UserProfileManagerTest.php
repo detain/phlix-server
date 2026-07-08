@@ -2,6 +2,7 @@
 
 namespace Phlix\Tests\Unit\Auth;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Auth\UserProfileManager;
 use Workerman\MySQL\Connection;
@@ -9,6 +10,7 @@ use Workerman\MySQL\Connection;
 class UserProfileManagerTest extends TestCase
 {
     private UserProfileManager $manager;
+    /** @var Connection&MockObject */
     private Connection $db;
 
     protected function setUp(): void
@@ -160,8 +162,10 @@ class UserProfileManagerTest extends TestCase
 
     public function testUpdateProfile(): void
     {
+        $capturedSql = [];
         $this->db->method('query')
-            ->willReturnCallback(function ($sql) {
+            ->willReturnCallback(function ($sql) use (&$capturedSql) {
+                $capturedSql[] = $sql;
                 if (strpos($sql, 'SELECT') !== false) {
                     return [[
                         'id' => 'profile-1',
@@ -179,8 +183,8 @@ class UserProfileManagerTest extends TestCase
 
         $this->manager->update('profile-1', ['name' => 'New Name']);
 
-        // Verify profile was found (no exception thrown)
-        $this->assertTrue(true);
+        // update() reads the profile to confirm it exists, then issues the UPDATE
+        $this->assertGreaterThanOrEqual(2, count($capturedSql));
     }
 
     public function testUpdateProfileThrowsExceptionWhenNotFound(): void
@@ -239,8 +243,10 @@ class UserProfileManagerTest extends TestCase
 
     public function testDeleteProfile(): void
     {
+        $capturedSql = [];
         $this->db->method('query')
-            ->willReturnCallback(function ($sql) {
+            ->willReturnCallback(function ($sql) use (&$capturedSql) {
+                $capturedSql[] = $sql;
                 if (strpos($sql, 'SELECT') !== false) {
                     return [[
                         'id' => 'profile-1',
@@ -258,8 +264,8 @@ class UserProfileManagerTest extends TestCase
 
         $this->manager->delete('profile-1');
 
-        // Verify delete was called (no exception thrown)
-        $this->assertTrue(true);
+        // delete() reads the profile to confirm it exists, then issues the delete
+        $this->assertGreaterThanOrEqual(2, count($capturedSql));
     }
 
     public function testDeleteProfileThrowsExceptionWhenNotFound(): void

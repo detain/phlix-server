@@ -83,6 +83,7 @@ final class SignedUrlTest extends TestCase
 
         // The signature must verify against the query-LESS path the middleware sees.
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
         $this->assertTrue($signer->verify(
             '/api/v1/photo/photos/p1/thumbnail',
             (string) $q['exp'],
@@ -96,6 +97,7 @@ final class SignedUrlTest extends TestCase
         $signer = new SignedUrl(self::SECRET);
         $url = $signer->mint('/media/abc/stream', 3600, 1000);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
 
         $this->assertTrue($signer->verify('/media/abc/stream', (string) $q['exp'], (string) $q['sig'], 1500));
     }
@@ -138,6 +140,7 @@ final class SignedUrlTest extends TestCase
         $signer = new SignedUrl(self::SECRET);
         $url = $signer->mint('/hls/job123/master.m3u8', 3600, 1000);
         parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+        /** @var array<string, string> $q */
         $exp = (string) $q['exp'];
         $sig = (string) $q['sig'];
 

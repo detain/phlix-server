@@ -9,13 +9,17 @@ use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Recording\SeriesRuleManager;
 use Phlix\LiveTv\Recorder;
 use Phlix\Common\Logger\StructuredLogger;
+use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
 
 class SeriesRuleManagerTest extends TestCase
 {
     private SeriesRuleManager $ruleManager;
+    /** @var Connection&MockObject */
     private $mockDb;
+    /** @var Recorder&MockObject */
     private $mockRecorder;
+    /** @var StructuredLogger&MockObject */
     private $mockLogger;
 
     protected function setUp(): void
@@ -43,7 +47,7 @@ class SeriesRuleManagerTest extends TestCase
         $queryCount = 0;
         $mockResult = new class extends ResultSet {
             public int $num_rows = 1;
-            public function fetch(): array|false
+            public function fetch(): array
             {
                 return [
                     'rule_id' => 'newly-created-rule',
@@ -68,7 +72,7 @@ class SeriesRuleManagerTest extends TestCase
 
         $rule = $this->ruleManager->createRule('series_123', 'ch_1', ['title' => 'Test Series']);
 
-        $this->assertIsArray($rule);
+        $this->assertArrayHasKey('rule_id', $rule);
         $this->assertEquals('newly-created-rule', $rule['rule_id']);
     }
 
@@ -90,7 +94,7 @@ class SeriesRuleManagerTest extends TestCase
 
         $rules = $this->ruleManager->getRules();
 
-        $this->assertIsArray($rules);
+        $this->assertCount(0, $rules);
         $this->assertEmpty($rules);
     }
 
@@ -136,7 +140,7 @@ class SeriesRuleManagerTest extends TestCase
     {
         $mockResultGet = new class extends ResultSet {
             public int $num_rows = 1;
-            public function fetch(): array|false
+            public function fetch(): array
             {
                 return [
                     'rule_id' => 'rule_1',

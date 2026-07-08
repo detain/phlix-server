@@ -11,6 +11,7 @@ use Phlix\LiveTv\Relay\HlsRelaySession;
 use Phlix\LiveTv\Relay\HlsSegmentPrefetcher;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Common\Logger\StructuredLogger;
+use PHPUnit\Framework\MockObject\MockObject;
 
 /**
  * Stub RelayConsumer for testing since RelayConsumer is final.
@@ -19,6 +20,7 @@ use Phlix\Common\Logger\StructuredLogger;
  */
 class StubRelayConsumer
 {
+    /** @var array<string, callable> */
     public array $registeredMounts = [];
 
     public function registerMount(string $pathPrefix, callable $handler): void
@@ -40,11 +42,13 @@ class StubRelayConsumer
 class HlsRelayManagerTest extends TestCase
 {
     private HlsRelayManager $manager;
+    /** @var \Workerman\MySQL\Connection&MockObject */
     private $mockDb;
+    /** @var LiveTvManager&MockObject */
     private $mockLiveTvManager;
+    /** @var HlsStreamer&MockObject */
     private $mockHlsStreamer;
     private StubRelayConsumer $stubRelayConsumer;
-    private $mockLogger;
     private HlsSegmentPrefetcher $segmentPrefetcher;
 
     protected function setUp(): void
@@ -55,7 +59,6 @@ class HlsRelayManagerTest extends TestCase
         $this->mockLiveTvManager = $this->createMock(LiveTvManager::class);
         $this->mockHlsStreamer = $this->createMock(HlsStreamer::class);
         $this->stubRelayConsumer = new StubRelayConsumer();
-        $this->mockLogger = $this->createMock(StructuredLogger::class);
 
         $this->segmentPrefetcher = new HlsSegmentPrefetcher(null, 3, 10485760, 30);
 
@@ -238,8 +241,8 @@ class HlsRelayManagerTest extends TestCase
 
         $this->manager->stopRelaySession($sessionId);
 
-        // If we get here without error, test passes
-        $this->assertTrue(true);
+        // Nonexistent session leaves the manager with no active relay sessions
+        $this->assertEmpty($this->manager->getActiveSessions());
     }
 
     public function testGetActiveSessionsIncludesLimit(): void

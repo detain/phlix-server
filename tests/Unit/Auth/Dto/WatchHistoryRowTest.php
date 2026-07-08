@@ -57,6 +57,7 @@ class WatchHistoryRowTest extends TestCase
             'metadata_json' => '{"poster_url":"/p.jpg","thumbnail_url":"/t.jpg"}',
         ]);
 
+        /** @var array<string, mixed> $arr */
         $arr = $row->toArray();
         $this->assertSame('My Movie', $arr['media_name']);
         $this->assertSame('movie', $arr['media_type']);
@@ -114,6 +115,7 @@ class WatchHistoryRowTest extends TestCase
         ]);
 
         $this->assertSame(['poster_url' => '/x.jpg'], $row->metadata);
+        /** @var array<string, mixed> $arr */
         $arr = $row->toArray();
         $this->assertSame('/x.jpg', $arr['poster_url']);
     }

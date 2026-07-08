@@ -97,7 +97,7 @@ final class UserRepositoryExternalIdTest extends TestCase
             'New User',
         );
 
-        $this->assertIsString($userId);
+        $this->assertStringContainsString('-', $userId);
         $this->assertNotEmpty($userId);
     }
 
@@ -125,18 +125,20 @@ final class UserRepositoryExternalIdTest extends TestCase
         $repo = new UserRepository($db);
         $userId = $repo->findOrCreateByExternalId('https://idp.example.com/abc', null, null);
 
-        $this->assertIsString($userId);
+        $this->assertNotEmpty($userId);
     }
 
     public function test_update_provider_data(): void
     {
         $db = $this->createMock(Connection::class);
+        $capturedBindings = null;
         $db->expects($this->once())
             ->method('query')
-            ->with(
-                $this->stringContains('UPDATE users SET provider_data'),
-                $this->callback(fn($v) => is_array($v) && is_string($v[0]) && strpos($v[0], 'refresh_token') !== false),
-            );
+            ->willReturnCallback(function (string $sql, array $params = []) use (&$capturedBindings) {
+                $this->assertStringContainsString('UPDATE users SET provider_data', $sql);
+                $capturedBindings = $params;
+                return [];
+            });
 
         $repo = new UserRepository($db);
         $repo->updateProviderData('user-uuid-123', [
@@ -144,6 +146,8 @@ final class UserRepositoryExternalIdTest extends TestCase
             'expires_at' => 1717000000,
         ]);
 
-        $this->assertTrue(true);
+        $this->assertNotNull($capturedBindings);
+        $this->assertIsString($capturedBindings[0]);
+        $this->assertStringContainsString('refresh_token', $capturedBindings[0]);
     }
 }

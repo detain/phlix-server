@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Auth;
 
 use Phlix\Auth\UserRepository;
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -17,6 +18,7 @@ use Workerman\MySQL\Connection;
  */
 final class UserRepositoryCacheTest extends TestCase
 {
+    /** @var Connection&MockObject */
     private Connection $db;
     private UserRepository $repo;
 
@@ -51,10 +53,12 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([$user]);
 
         // First call - should hit DB
+        /** @var array<string, mixed> $result1 */
         $result1 = $this->repo->findById('user-1');
         $this->assertSame('user-1', $result1['id']);
 
         // Second call - should hit cache (DB not called again)
+        /** @var array<string, mixed> $result2 */
         $result2 = $this->repo->findById('user-1');
         $this->assertSame('user-1', $result2['id']);
     }
@@ -68,9 +72,11 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([$user]);
 
         // First call hits DB
+        /** @var array<string, mixed> $result1 */
         $result1 = $this->repo->findById('user-1');
 
         // Second call should return identical data from cache
+        /** @var array<string, mixed> $result2 */
         $result2 = $this->repo->findById('user-1');
 
         $this->assertSame($result1['id'], $result2['id']);
@@ -102,6 +108,7 @@ final class UserRepositoryCacheTest extends TestCase
         // Clear cache to ensure test isolation
         $this->repo->clearCache();
 
+        /** @var array<string, mixed> $result */
         $result = $this->repo->findById('user-1');
         $this->assertSame('user-1', $result['id']);
     }
@@ -123,10 +130,12 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([$user]);
 
         // First call - should hit DB
+        /** @var array<string, mixed> $result1 */
         $result1 = $this->repo->findByUsername('testuser');
         $this->assertSame('testuser', $result1['username']);
 
         // Second call - should hit cache
+        /** @var array<string, mixed> $result2 */
         $result2 = $this->repo->findByUsername('testuser');
         $this->assertSame('testuser', $result2['username']);
     }
@@ -161,10 +170,12 @@ final class UserRepositoryCacheTest extends TestCase
             ->willReturn([$user]);
 
         // First call - should hit DB
+        /** @var array<string, mixed> $result1 */
         $result1 = $this->repo->findByEmail('test@example.com');
         $this->assertSame('test@example.com', $result1['email']);
 
         // Second call - should hit cache
+        /** @var array<string, mixed> $result2 */
         $result2 = $this->repo->findByEmail('test@example.com');
         $this->assertSame('test@example.com', $result2['email']);
     }
@@ -291,7 +302,7 @@ final class UserRepositoryCacheTest extends TestCase
 
         $callCount = 0;
         $this->db->method('query')->willReturnCallback(
-            function (string $sql) use (&$callCount, $user1, $user2): mixed {
+            function (string $sql) use (&$callCount, $user1): mixed {
                 $callCount++;
                 if (str_contains($sql, 'SELECT status')) {
                     return [['status' => 'active']];

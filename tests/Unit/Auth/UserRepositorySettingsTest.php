@@ -77,6 +77,7 @@ final class UserRepositorySettingsTest extends TestCase
 
         $this->assertIsString($capturedSql);
         $this->assertStringContainsString('(user_id, transcoding_preferences)', $capturedSql);
+        $this->assertNotNull($capturedBindings);
         $this->assertSame('user-1', $capturedBindings[0]);
         $this->assertSame('{"codec":"h264"}', $capturedBindings[1]);
     }

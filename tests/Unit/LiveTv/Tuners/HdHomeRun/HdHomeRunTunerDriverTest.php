@@ -56,7 +56,7 @@ class HdHomeRunTunerDriverTest extends TestCase
 
         $devices = $driver->discoverDevices();
 
-        $this->assertIsArray($devices);
+        $this->assertCount(0, $devices);
         $this->assertEmpty($devices);
     }
 

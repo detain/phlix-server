@@ -80,12 +80,12 @@ SCRIPT;
         try {
             $edlPath = $runner->run($recordingPath);
 
-            $expectedEdlPath = substr($recordingPath, 0, strrpos($recordingPath, '.')) . '.edl';
+            $expectedEdlPath = substr($recordingPath, 0, -3) . '.edl';
             $this->assertEquals($expectedEdlPath, $edlPath);
             $this->assertFileExists($edlPath);
         } finally {
             @unlink($recordingPath);
-            $expectedEdlPath = substr($recordingPath, 0, strrpos($recordingPath, '.')) . '.edl';
+            $expectedEdlPath = substr($recordingPath, 0, -3) . '.edl';
             @unlink($expectedEdlPath);
             if (file_exists($tempScript)) {
                 unlink($tempScript);

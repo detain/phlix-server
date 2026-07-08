@@ -9,6 +9,7 @@ use Phlix\LiveTv\ComskipEdlParser;
 use Phlix\LiveTv\ComskipRunner;
 use Phlix\LiveTv\Recording\ComskipIntegration;
 use Phlix\Media\Markers\ChapterMarker;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
 
@@ -18,10 +19,13 @@ use Workerman\MySQL\Connection;
 class ComskipIntegrationTest extends TestCase
 {
     private ComskipIntegration $integration;
+    /** @var ComskipRunner&MockObject */
     private $mockRunner;
+    /** @var ComskipEdlParser&MockObject */
     private $mockParser;
+    /** @var Connection&MockObject */
     private $mockDb;
-    private $tempDir;
+    private string $tempDir;
 
     protected function setUp(): void
     {
@@ -45,7 +49,7 @@ class ComskipIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         // Clean up temp files
-        $files = glob($this->tempDir . '/*');
+        $files = glob($this->tempDir . '/*') ?: [];
         foreach ($files as $file) {
             @unlink($file);
         }
@@ -98,7 +102,7 @@ class ComskipIntegrationTest extends TestCase
 
         $result = $this->integration->processRecording($recordingId, $recordingPath);
 
-        $this->assertIsArray($result);
+        $this->assertCount(4, $result);
         $this->assertArrayHasKey('edl_path', $result);
         $this->assertArrayHasKey('frame_count', $result);
         $this->assertArrayHasKey('duration_seconds', $result);
@@ -175,7 +179,7 @@ class ComskipIntegrationTest extends TestCase
 
         $segments = $this->integration->getEdlSegments($recordingId);
 
-        $this->assertIsArray($segments);
+        $this->assertContainsOnlyInstancesOf(ChapterMarker::class, $segments);
         $this->assertCount(1, $segments);
         $this->assertInstanceOf(ChapterMarker::class, $segments[0]);
         $this->assertEquals(0, $segments[0]->start_seconds);
@@ -186,16 +190,20 @@ class ComskipIntegrationTest extends TestCase
     {
         $recordingId = 'test-recording-id';
 
-        // Mock UPDATE query which returns rowCount
+        // Mock UPDATE query which returns rowCount and capture the bound params
+        $capturedParams = null;
         $this->mockDb
             ->expects($this->once())
             ->method('query')
-            ->willReturn(1); // rowCount for UPDATE
+            ->willReturnCallback(function ($query = '', $params = null) use (&$capturedParams) {
+                $capturedParams = $params;
+                return 1; // rowCount for UPDATE
+            });
 
         $this->integration->markProcessed($recordingId);
 
-        // Assert that query was called
-        $this->assertTrue(true);
+        // The recording id must be bound as the sole query parameter
+        $this->assertSame([$recordingId], $capturedParams);
     }
 
     public function testProcessRecordingThrowsWhenComskipUnavailable(): void

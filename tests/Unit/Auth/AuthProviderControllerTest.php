@@ -10,12 +10,14 @@ use Phlix\Shared\Auth\ProviderInterface;
 use Phlix\Server\Http\Controllers\AuthProviderController;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
+use PHPUnit\Framework\MockObject\MockObject;
 
 /**
  * @covers \Phlix\Server\Http\Controllers\AuthProviderController
  */
 final class AuthProviderControllerTest extends TestCase
 {
+    /** @var AuthProviderRegistry&MockObject */
     private AuthProviderRegistry $registry;
     private AuthProviderController $controller;
 
@@ -56,6 +58,7 @@ final class AuthProviderControllerTest extends TestCase
         $response = $this->controller->listProviders($request, []);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame([], $body['providers']);
     }
@@ -69,6 +72,7 @@ final class AuthProviderControllerTest extends TestCase
         $response = $this->controller->enableProvider($request, ['name' => 'oidc']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('oidc', $body['name']);
         $this->assertTrue($body['enabled']);
@@ -83,6 +87,7 @@ final class AuthProviderControllerTest extends TestCase
         $response = $this->controller->enableProvider($request, ['name' => 'nonexistent']);
 
         $this->assertSame(404, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('provider_not_found', $body['error']);
     }
@@ -96,6 +101,7 @@ final class AuthProviderControllerTest extends TestCase
         $response = $this->controller->disableProvider($request, ['name' => 'ldap']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertSame('ldap', $body['name']);
         $this->assertFalse($body['enabled']);
@@ -125,10 +131,13 @@ final class AuthProviderControllerTest extends TestCase
         $response = $this->controller->getConfigSchema($request, ['name' => 'saml']);
 
         $this->assertSame(200, $response->statusCode);
+        /** @var array<string, mixed> $body */
         $body = json_decode($response->body, true);
         $this->assertArrayHasKey('schema', $body);
-        $this->assertSame('https://json-schema.org/draft/2020-12/schema', $body['schema']['$schema']);
-        $this->assertSame('Saml Provider Configuration', $body['schema']['title']);
+        $schema = $body['schema'];
+        $this->assertIsArray($schema);
+        $this->assertSame('https://json-schema.org/draft/2020-12/schema', $schema['$schema']);
+        $this->assertSame('Saml Provider Configuration', $schema['title']);
     }
 
     public function test_config_schema_not_found(): void

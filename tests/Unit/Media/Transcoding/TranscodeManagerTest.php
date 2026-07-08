@@ -1698,6 +1698,366 @@ class TranscodeManagerTest extends TestCase
         $this->assertNull($this->manager($db, $ff)->getJobVariants('seg-job'));
     }
 
+    // --- S2: in-worker in-flight segment counter (drop hot-path globbing) ---
+
+    /**
+     * Reads the private in-worker in-flight set.
+     *
+     * @return array<string, int> final segment path → monotonic launch ms
+     */
+    private function inFlightSet(TranscodeManager $m): array
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
+        $p->setAccessible(true);
+        /** @var array<string, int> $value */
+        $value = $p->getValue($m);
+
+        return $value;
+    }
+
+    /**
+     * Reads the private global in-flight snapshot.
+     *
+     * @return array<string, true>
+     */
+    private function inFlightSnapshot(TranscodeManager $m): array
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, 'globalInFlightSnapshot');
+        $p->setAccessible(true);
+        /** @var array<string, true> $value */
+        $value = $p->getValue($m);
+
+        return $value;
+    }
+
+    private function setPrivate(TranscodeManager $m, string $prop, mixed $value): void
+    {
+        $p = new \ReflectionProperty(TranscodeManager::class, $prop);
+        $p->setAccessible(true);
+        $p->setValue($m, $value);
+    }
+
+    private function callPrivate(TranscodeManager $m, string $method, mixed ...$args): mixed
+    {
+        $r = new ReflectionMethod(TranscodeManager::class, $method);
+        $r->setAccessible(true);
+
+        return $r->invoke($m, ...$args);
+    }
+
+    public function testInFlightCounterIncrementsOnLaunchThenReleasesOnCompletion(): void
+    {
+        $dir = $this->segmentDir . '/s2-complete';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$dir}/seg-00002.ts";
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use ($manager, $final): int {
+                // The launch is recorded in-worker BEFORE ffmpeg is spawned, so a
+                // concurrent same-segment request dedups against it immediately.
+                $this->assertArrayHasKey($final, $this->inFlightSet($manager));
+                file_put_contents($out, 'encoded'); // encode completes
+                return 4242;
+            }
+        );
+
+        $path = $manager->ensureSegment('seg-job', null, 2);
+
+        $this->assertSame($final, $path);
+        // Completion → the launcher's finally releases the slot.
+        $this->assertSame([], $this->inFlightSet($manager));
+    }
+
+    public function testInFlightCounterReleasedViaFinallyWhenEncodeFails(): void
+    {
+        // A launched encode that never publishes its segment (ffmpeg died) must
+        // still release this worker's slot via the finally — a leaked increment
+        // would otherwise permanently over-count and wrongly 503 forever.
+        $dir = $this->segmentDir . '/s2-fail';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff, null, null, null, 100); // 100ms wait ceiling
+
+        $final = "{$dir}/seg-00001.ts";
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $final): int {
+                $this->assertArrayHasKey($final, $this->inFlightSet($manager)); // incremented
+                return 0; // launch "failed" — no segment file ever appears
+            }
+        );
+
+        $this->assertNull($manager->ensureSegment('seg-job', null, 1));
+        $this->assertSame([], $this->inFlightSet($manager), 'finally releases the slot on failure');
+    }
+
+    public function testInFlightCounterReleasedWhenLaunchThrowsBeforePolling(): void
+    {
+        // Review Finding 2 regression: the increment + touchJobDir() + the ffmpeg
+        // launch call must ALL run inside the try, so a throwable from the launch
+        // itself (not just a poll-loop failure) still reaches the finally and
+        // releases the slot. Before the fix, the increment sat OUTSIDE the try, so
+        // this exact scenario leaked the entry permanently (a worker that leaks and
+        // then goes idle never revisits this code to self-heal).
+        $dir = $this->segmentDir . '/s2-throw';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff, null, null, null, 100);
+
+        $final = "{$dir}/seg-00003.ts";
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $final): int {
+                $this->assertArrayHasKey($final, $this->inFlightSet($manager)); // incremented first
+                throw new \RuntimeException('ffmpeg arg builder blew up');
+            }
+        );
+
+        $thrown = null;
+        try {
+            $manager->ensureSegment('seg-job', null, 3);
+        } catch (\RuntimeException $e) {
+            $thrown = $e;
+        }
+
+        $this->assertNotNull($thrown, 'the RuntimeException must propagate, not be swallowed');
+        $this->assertSame([], $this->inFlightSet($manager), 'finally releases the slot even on a launch-time throw');
+    }
+
+    public function testInFlightCounterKeyedPerJobVariantAndIndex(): void
+    {
+        // segmentEncodeInFlight() (DEDUP) is memory-based and keyed per exact
+        // (job, variant, index) path — this is unaffected by the review fix, which
+        // only changed countInFlightSegmentEncodes() (the CAP) to read the shared
+        // tree live instead of this in-worker set.
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $a = "{$this->segmentDir}/jobA/seg-v720p-00000.ts";
+        $b = "{$this->segmentDir}/jobA/seg-v480p-00000.ts"; // same job, different variant
+        $c = "{$this->segmentDir}/jobB/seg-v720p-00000.ts"; // different job, untracked
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [$a => 10, $b => 20]);
+
+        $this->assertTrue($this->callPrivate($manager, 'segmentEncodeInFlight', $a));
+        $this->assertTrue($this->callPrivate($manager, 'segmentEncodeInFlight', $b)); // isolated key
+        $this->assertFalse($this->callPrivate($manager, 'segmentEncodeInFlight', $c)); // untracked
+    }
+
+    public function testGlobalCapIgnoresInWorkerCounterAndReadsSharedTreeLive(): void
+    {
+        // Review Finding 1 fix: the CAP must NOT fire from the in-worker counter
+        // alone. Two "phantom" entries are tracked in-worker with no backing
+        // `.part-*` files on disk — if the cap still consulted memory, this would
+        // wrongly throw SegmentBusyException at a ceiling of 2. It must NOT, because
+        // the cap now reads the shared tree live and the tree is empty.
+        $dir = $this->segmentDir . '/s2-cap-live';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out): int {
+                file_put_contents($out, 'encoded');
+                return 4242;
+            }
+        );
+        $manager = $this->segManager($db, $ff, 2); // ceiling = 2
+
+        $now = (int) (hrtime(true) / 1_000_000);
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [
+            "{$this->segmentDir}/x/seg-00000.ts" => $now,
+            "{$this->segmentDir}/y/seg-00000.ts" => $now,
+        ]);
+
+        // No SegmentBusyException: the live glob sees zero real `.part-*` files, so
+        // the encode is launched normally despite the (stale/phantom) in-worker count.
+        $path = $manager->ensureSegment('seg-job', null, 5);
+        $this->assertNotNull($path);
+    }
+
+    public function testGlobalCapEnforcedFromRealPartFilesOnDiskNotInWorkerState(): void
+    {
+        // Mirror of the above: the cap MUST fire from genuine `.part-*` files on
+        // disk even with an EMPTY in-worker set (e.g. a fresh worker, or one that
+        // never launched these particular encodes itself — a sibling process did).
+        $dir = $this->segmentDir . '/s2-cap-disk';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $otherA = $this->segmentDir . '/s2-cap-disk-a';
+        $otherB = $this->segmentDir . '/s2-cap-disk-b';
+        mkdir($otherA, 0755, true);
+        mkdir($otherB, 0755, true);
+        file_put_contents("{$otherA}/seg-00000.ts.part-aaaaaaaa", 'p');
+        file_put_contents("{$otherB}/seg-00000.ts.part-bbbbbbbb", 'p');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+        $manager = $this->segManager($db, $ff, 2); // ceiling = 2
+
+        // segmentEncodesInFlight is empty here — this worker launched nothing — yet
+        // the cap still trips because it reads the real files on disk directly.
+        $this->assertSame([], $this->inFlightSet($manager));
+
+        $this->expectException(SegmentBusyException::class);
+        $manager->ensureSegment('seg-job', null, 5);
+    }
+
+    public function testReconcileKeepsLiveDropsCompletedAndDeadEntries(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $jobDir = "{$this->segmentDir}/recon";
+        mkdir($jobDir, 0755, true);
+
+        $live = "{$jobDir}/seg-v720p-00000.ts";        // has a live .part-* → keep
+        file_put_contents($live . '.part-deadbeef', 'p');
+        $done = "{$jobDir}/seg-v720p-00001.ts";        // final published, no part → drop
+        file_put_contents($done, 'x');
+        $dead = "{$jobDir}/seg-v720p-00002.ts";        // no part, no final, stale → drop
+
+        $now = (int) (hrtime(true) / 1_000_000);
+        $grace = (new \ReflectionClassConstant(TranscodeManager::class, 'SEGMENT_INFLIGHT_STALE_GRACE_MS'))
+            ->getValue();
+        $this->assertIsInt($grace);
+        $this->setPrivate($manager, 'segmentEncodesInFlight', [
+            $live => $now,
+            $done => $now,
+            $dead => $now - $grace - 1000, // past the grace window
+        ]);
+
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+
+        $this->assertSame([$live], array_keys($this->inFlightSet($manager)), 'only the live encode is retained');
+        // The global snapshot mirrors the live `.part-*` across the shared tree.
+        $this->assertSame([$live => true], $this->inFlightSnapshot($manager));
+    }
+
+    public function testReconcileGlobThrottledWithinWindow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $jobDir = "{$this->segmentDir}/throttle";
+        mkdir($jobDir, 0755, true);
+
+        // First reconcile: empty tree → empty snapshot (and stamps the throttle).
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+        $this->assertSame([], $this->inFlightSnapshot($manager));
+
+        // A new encode appears on disk...
+        file_put_contents("{$jobDir}/seg-v720p-00000.ts.part-abcd1234", 'p');
+
+        // ...but a second reconcile within the throttle window must NOT re-glob:
+        // the hot path is served from memory, not the filesystem, between windows.
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+        $this->assertSame([], $this->inFlightSnapshot($manager), 'throttled: snapshot not refreshed within the window');
+    }
+
+    public function testReconcileReglobsAfterThrottleWindowElapses(): void
+    {
+        // The other half of the throttle contract (testReconcileGlobThrottledWithinWindow
+        // proves the "within window → no re-glob" side): once more than
+        // SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS has passed since the last glob, the
+        // NEXT reconcile MUST re-glob the shared tree and pick up a sibling worker's
+        // freshly-appeared `.part-*` — otherwise cross-worker dedup would go
+        // permanently stale after the very first refresh. This exercises the throttle
+        // end-to-end (expiry actually fires the glob), not just the stamp-before-glob
+        // ordering.
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $jobDir = "{$this->segmentDir}/throttle-expiry";
+        mkdir($jobDir, 0755, true);
+
+        // Prime the throttle, then make it look like the last glob happened well
+        // outside the window (window is 1000ms; back-date by 2000ms).
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+        $this->assertSame([], $this->inFlightSnapshot($manager));
+
+        $interval = (new \ReflectionClassConstant(
+            TranscodeManager::class,
+            'SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS'
+        ))->getValue();
+        $this->assertIsInt($interval);
+        $now = (int) (hrtime(true) / 1_000_000);
+        $this->setPrivate($manager, 'lastInFlightReconcileMs', $now - $interval - 1000);
+
+        // A sibling worker's encode appears on the shared tree...
+        $final = "{$jobDir}/seg-v720p-00007.ts";
+        file_put_contents($final . '.part-cafebabe', 'p');
+
+        // ...and because the window has elapsed, this reconcile DOES re-glob and
+        // refreshes the cross-worker snapshot to include it.
+        $this->callPrivate($manager, 'reconcileInFlightSegments');
+        $this->assertSame([$final => true], $this->inFlightSnapshot($manager), 'window elapsed: snapshot re-globbed and refreshed');
+    }
+
+    public function testDedupIgnoresOnDiskPartFilesProvingNoHotPathGlob(): void
+    {
+        // The core hot-path-relief claim, proven from the opposite direction: a live
+        // `.part-*` for this exact segment sits on disk, yet BOTH in-worker bookkeeping
+        // structures are empty. The pre-S2 glob-based segmentEncodeInFlight() would
+        // have returned TRUE here (it globbed `{final}.part-*`); the memory-based
+        // version must return FALSE, proving the dedup check genuinely performs zero
+        // filesystem access on the hot path and reads only in-worker state.
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $jobDir = "{$this->segmentDir}/no-glob";
+        mkdir($jobDir, 0755, true);
+        $final = "{$jobDir}/seg-v720p-00000.ts";
+        file_put_contents($final . '.part-deadbeef', 'p'); // a real in-flight temp on disk
+
+        $this->assertSame([], $this->inFlightSet($manager));
+        $this->assertSame([], $this->inFlightSnapshot($manager));
+        $this->assertFalse(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'dedup must ignore on-disk .part-* files — it reads only in-worker state (no hot-path glob)'
+        );
+    }
+
+    public function testDedupMatchesSiblingWorkerViaGlobalSnapshot(): void
+    {
+        // Cross-worker dedup relief: an encode this worker never launched (empty local
+        // set) is still deduplicated when it appears in the throttled global snapshot
+        // that reconcileInFlightSegments() populates from sibling workers' `.part-*`
+        // temps — again with no per-call glob.
+        $db = $this->createMock(Connection::class);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff);
+
+        $final = "{$this->segmentDir}/sibling/seg-v480p-00003.ts";
+        $this->setPrivate($manager, 'globalInFlightSnapshot', [$final => true]);
+
+        $this->assertSame([], $this->inFlightSet($manager), 'this worker launched nothing');
+        $this->assertTrue(
+            $this->callPrivate($manager, 'segmentEncodeInFlight', $final),
+            'a sibling worker in-flight encode is deduplicated via the global snapshot'
+        );
+    }
+
     private function rrmdir(string $dir): void
     {
         if (!is_dir($dir)) {

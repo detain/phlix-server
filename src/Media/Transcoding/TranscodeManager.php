@@ -107,6 +107,69 @@ class TranscodeManager
     private const JOB_ROW_CACHE_MAX = 256;
 
     /**
+     * In-worker set of on-demand segment encodes THIS worker launched and believes
+     * are still running, keyed by the absolute final segment path
+     * (`.../{jobId}/seg-v{variant}-NNNNN.ts`, which embeds the (jobId, variant,
+     * index) tuple) → the monotonic launch time in milliseconds.
+     *
+     * Backs the memory-based per-segment DEDUP check
+     * ({@see segmentEncodeInFlight()}) so a client retry of a slow segment (the
+     * common hls.js first-byte-timeout re-request — by far the more frequent of the
+     * two hot-path checks) no longer globs `{final}.part-*` per request. **The
+     * GLOBAL CAP is intentionally NOT derived from this set** — see
+     * {@see countInFlightSegmentEncodes()} for why that check stays a real-time,
+     * whole-tree glob. An entry is added the instant an encode is launched and
+     * removed when its launcher observes completion or failure
+     * ({@see produceSegment()}'s `finally`, which now wraps the launch itself so the
+     * removal is guaranteed on every exit path); any drift (e.g. a hard coroutine
+     * kill that skips the `finally`) is corrected by
+     * {@see reconcileInFlightSegments()}. Because the path carries the variant
+     * prefix, accounting is naturally per (jobId, variant).
+     *
+     * @var array<string, int>
+     */
+    private array $segmentEncodesInFlight = [];
+
+    /**
+     * Last global snapshot of EVERY worker's in-flight segment encodes, keyed by
+     * absolute final segment path, refreshed by {@see reconcileInFlightSegments()}
+     * at most once per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
+     *
+     * Feeds ONLY the memory-based per-segment dedup ({@see segmentEncodeInFlight()})
+     * — a sibling worker's in-flight encode is deduplicated eventually-consistently
+     * (bounded by this interval), which is an acceptable staleness because dedup
+     * merely avoids a redundant duplicate encode of the exact same segment; it does
+     * not gate the GLOBAL CAP (that stays a real-time glob — see
+     * {@see countInFlightSegmentEncodes()} for why the cap cannot tolerate this same
+     * staleness after the S2 review found that a ≤1s × 14-worker-process product
+     * meaningfully widens the seek-cascade protection's overshoot window versus the
+     * pre-S2 ~100ms `.part-*`-visibility latency).
+     *
+     * @var array<string, true>
+     */
+    private array $globalInFlightSnapshot = [];
+
+    /** @var int|null Monotonic ms of the last in-flight reconciliation glob, or null. */
+    private ?int $lastInFlightReconcileMs = null;
+
+    /**
+     * Minimum spacing (ms) between in-flight reconciliation globs that refresh
+     * {@see $globalInFlightSnapshot} (the DEDUP-only cross-worker view) and self-heal
+     * {@see $segmentEncodesInFlight}. Does NOT throttle or otherwise govern the
+     * global-cap glob in {@see countInFlightSegmentEncodes()}, which always reads
+     * the shared tree live.
+     */
+    private const SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS = 1000;
+
+    /**
+     * Grace (ms) before a tracked encode with neither a live `.part-*` temp nor a
+     * finished segment on disk is treated as dead and dropped from
+     * {@see $segmentEncodesInFlight}. Covers the brief launch→temp-file-appears
+     * latency so a just-launched encode is never mistaken for a dead one.
+     */
+    private const SEGMENT_INFLIGHT_STALE_GRACE_MS = 5000;
+
+    /**
      * Columns {@see getJobRow()} selects — the exact set its callers read. Narrowed
      * from `SELECT *` so the per-segment hot path never fetches the wide row under the
      * serialized DB mutex on a cache miss.
@@ -667,37 +730,90 @@ class TranscodeManager
             @mkdir($dir, 0775, true);
         }
 
-        // Only launch an encode if one for THIS exact segment is not already
-        // running. Without this, every client retry of a slow segment (hls.js
-        // re-requests the same fragment on a first-byte timeout) spawns a duplicate
-        // ffmpeg, and the redundant load is exactly what pushes encodes past the
-        // client timeout — a self-amplifying cascade. A retry now piggybacks on the
-        // in-flight encode instead. `$final` already carries the per-variant name, so
-        // dedup + the global cap are naturally scoped per (job, variant).
-        if (!$this->segmentEncodeInFlight($final)) {
-            // Global ceiling: bound total concurrent encodes so a burst of cold
-            // seeks (many viewers, or one frantic scrub) can't saturate the CPU.
-            // Over the ceiling we fast-fail (503 + Retry-After) rather than pile on
-            // — the client backs off briefly and the in-flight encodes finish fast.
-            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                throw new SegmentBusyException(
-                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                );
-            }
-            $this->touchJobDir($dir);
-            $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
-        }
+        // Refresh the DEDUP-only cross-worker snapshot from the shared segment tree
+        // at most once per reconcile window (see reconcileInFlightSegments()). This
+        // does NOT feed the global cap (that stays a real-time glob below) — it only
+        // lets segmentEncodeInFlight() catch a sibling worker's in-flight encode
+        // without a per-request glob, since that dedup check is the more frequent of
+        // the two hot-path checks (every retry of a slow segment hits it).
+        $this->reconcileInFlightSegments();
 
-        // Poll using non-blocking sleep when in Swoole coroutine context.
-        // Falls back to usleep when not in coroutine (e.g., Swoole hooks disabled).
-        $waited = 0;
-        while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
-            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
-                \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
-            } else {
-                usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+        $launched = false;
+        try {
+            // Only launch an encode if one for THIS exact segment is not already
+            // running. Without this, every client retry of a slow segment (hls.js
+            // re-requests the same fragment on a first-byte timeout) spawns a
+            // duplicate ffmpeg, and the redundant load is exactly what pushes
+            // encodes past the client timeout — a self-amplifying cascade. A retry
+            // now piggybacks on the in-flight encode instead. `$final` already
+            // carries the per-variant name, so dedup + the global cap are naturally
+            // scoped per (job, variant).
+            if (!$this->segmentEncodeInFlight($final)) {
+                // Global ceiling: bound total concurrent encodes so a burst of cold
+                // seeks (many viewers, or one frantic scrub) can't saturate the CPU.
+                // Over the ceiling we fast-fail (503 + Retry-After) rather than pile
+                // on — the client backs off briefly and the in-flight encodes finish
+                // fast. This check reads the shared tree LIVE (not the throttled
+                // snapshot): a memory-only cap sums to a ≤1s-stale view PER WORKER
+                // across all 14 HTTP worker processes, which the S2 review found
+                // could let the fleet collectively overshoot the ceiling by up to
+                // ~14x during exactly the seek-storm scenario this cap exists to
+                // prevent — a materially larger window than the pre-existing
+                // ~100ms `.part-*`-visibility latency the original glob-based cap
+                // tolerated. Real-time accuracy here is preserved by only ever
+                // reaching this glob on an actual launch decision (i.e. after the
+                // memory-based dedup check above already found no in-flight encode
+                // for this exact segment) — not on every cache-miss/dedup hit — so
+                // the higher-frequency check still gets the hot-path relief.
+                if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                // Record the launch in-worker BEFORE spawning ffmpeg so a concurrent
+                // request for this exact segment dedups against it immediately. The
+                // add and the two checks above run with no coroutine yield between
+                // them, so the gate decision is atomic within this worker's event
+                // loop. This, touchJobDir(), and startSegmentEncode() all run inside
+                // this try so that ANY throwable after the increment — not just a
+                // poll-loop failure — reaches the finally below and releases the
+                // slot; an increment that were left outside the try could leak
+                // permanently (a worker that leaks and then goes idle never revisits
+                // this code path to self-heal).
+                $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+                $launched = true;
+                $this->touchJobDir($dir);
+                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
             }
-            $waited += self::SEGMENT_POLL_INTERVAL_MS;
+
+            // Poll using non-blocking sleep when in Swoole coroutine context.
+            // Falls back to usleep when not in coroutine (e.g., Swoole hooks disabled).
+            $waited = 0;
+            while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
+                if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                    \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
+                } else {
+                    usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+                }
+                $waited += self::SEGMENT_POLL_INTERVAL_MS;
+            }
+        } finally {
+            // Release this worker's fast-path record for the encode WE launched,
+            // whether it completed, failed before/while launching, timed out, or the
+            // poll threw. Always removing it here means a launched increment can
+            // never leak (no permanent over-count that would wrongly 503 forever).
+            // $launched only flips true AFTER the increment, so a throw from the cap
+            // check (SegmentBusyException) or anything before it leaves $launched
+            // false and this is a correct no-op — nothing was ever recorded to
+            // release. A still-running or slow encode does NOT stop counting against
+            // the global cap: its `.part-*` temp lives on disk until it renames, so
+            // the LIVE glob in countInFlightSegmentEncodes() keeps counting it until
+            // it genuinely finishes. The reconcile self-heal remains only a safety
+            // net for the dedup-only snapshot (the rare case this finally never runs,
+            // e.g. a hard coroutine kill).
+            if ($launched) {
+                unset($this->segmentEncodesInFlight[$final]);
+            }
         }
 
         return is_file($final) ? $final : null;
@@ -846,29 +962,126 @@ class TranscodeManager
     }
 
     /**
-     * True when an on-demand encode for exactly this segment is already running,
-     * detected by its atomic-write temp file ({@see FfmpegRunner::startSegmentEncode}
-     * writes `{final}.part-XXXX` then renames on success).
+     * True when an on-demand encode for exactly this segment is already running.
      *
-     * @param string $final Absolute path of the target segment (`.../seg-NNNNN.ts`).
+     * DEDUP ONLY (does not gate the global cap — see {@see countInFlightSegmentEncodes()}).
+     * Reads purely from the in-worker bookkeeping — this worker's exact
+     * {@see $segmentEncodesInFlight} launches plus the last global snapshot of every
+     * worker's `.part-*` temps ({@see $globalInFlightSnapshot}) — so this,
+     * the MORE FREQUENT of the two hot-path checks (every retry of a slow segment
+     * hits it, not just genuine new-encode launches), no longer globs
+     * `{final}.part-*` on every cache-miss. A same-worker retry (the common hls.js
+     * first-byte-timeout re-request) is deduplicated immediately; a sibling worker's
+     * in-flight encode is deduplicated eventually-consistently, as of the last
+     * {@see reconcileInFlightSegments()} — acceptable staleness here because a missed
+     * dedup only costs one redundant duplicate encode of the same segment, never a
+     * cap breach. Callers refresh the snapshot (throttled) via
+     * reconcileInFlightSegments() immediately before consulting this.
+     *
+     * @param string $final Absolute path of the target segment (`.../seg-…NNNNN.ts`).
      */
     private function segmentEncodeInFlight(string $final): bool
     {
-        $parts = glob($final . '.part-*');
-        return is_array($parts) && $parts !== [];
+        return isset($this->segmentEncodesInFlight[$final])
+            || isset($this->globalInFlightSnapshot[$final]);
     }
 
     /**
-     * Count on-demand segment encodes in flight across ALL jobs, by globbing the
-     * shared segment directory for the `*.part-*` atomic-write temp files. Bounds
-     * the global concurrency ceiling in {@see ensureSegment()}.
+     * Count on-demand segment encodes in flight across ALL jobs and ALL workers, by
+     * globbing the shared segment directory for the `*.part-*` atomic-write temp
+     * files. Bounds the global concurrency ceiling in {@see produceSegment()}.
      *
-     * @return int Number of segment encodes currently running.
+     * INTENTIONALLY a real-time, whole-tree glob — NOT derived from the throttled
+     * in-worker snapshot. A prior version of this step summed the exact local set
+     * with the ≤1s-stale {@see $globalInFlightSnapshot} for the cap too; review
+     * found that because the ceiling is enforced independently by each of the 14 HTTP
+     * worker processes, a shared ≤1s staleness window lets the fleet collectively
+     * overshoot the advertised ceiling by up to ~14x before every worker's snapshot
+     * converges — precisely during the seek-storm scenario this cap exists to
+     * prevent (see `[[project_hls_seek_cascade_fix]]`), and a materially larger
+     * overshoot window than the pre-existing ~100ms `.part-*`-visibility latency the
+     * original (pre-S2) glob-based cap tolerated. This call site is reached ONLY on
+     * an actual launch decision — i.e. only after {@see segmentEncodeInFlight()}
+     * (the memory-based, much-higher-frequency check) already found no in-flight
+     * encode for this exact segment — so the cap glob does not run on every
+     * cache-miss/dedup hit, preserving most of the hot-path relief while keeping the
+     * enforcement point itself real-time-accurate.
+     *
+     * @return int Number of segment encodes currently in flight.
      */
     private function countInFlightSegmentEncodes(): int
     {
         $parts = glob("{$this->segmentDir}/*/seg-*.ts.part-*");
         return is_array($parts) ? count($parts) : 0;
+    }
+
+    /**
+     * Reconcile the in-worker DEDUP bookkeeping against the shared segment tree —
+     * throttled to at most one glob per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
+     * Does NOT feed the global cap (that is always a live glob — see
+     * {@see countInFlightSegmentEncodes()}); this only keeps
+     * {@see segmentEncodeInFlight()}'s cross-worker dedup view fresh and self-heals
+     * {@see $segmentEncodesInFlight}.
+     *
+     * Two jobs:
+     *   1. Refresh {@see $globalInFlightSnapshot} — the set of live `.part-*` temp
+     *      files across every worker — so cross-worker dedup keeps working without a
+     *      per-request tree glob.
+     *   2. Self-heal {@see $segmentEncodesInFlight}: drop any entry whose encode is
+     *      provably finished (its final segment exists) or dead (no `.part-*`, no
+     *      final, past {@see SEGMENT_INFLIGHT_STALE_GRACE_MS}). An entry still backed
+     *      by a live `.part-*` is kept — it is genuinely encoding. This is a secondary
+     *      safety net for the dedup set (the `finally` in {@see produceSegment()} is
+     *      the primary guard against a leaked increment — this only covers the rare
+     *      case that `finally` itself never ran, e.g. a hard coroutine kill).
+     */
+    private function reconcileInFlightSegments(): void
+    {
+        $now = $this->monotonicMs();
+        if (
+            $this->lastInFlightReconcileMs !== null
+            && ($now - $this->lastInFlightReconcileMs) < self::SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS
+        ) {
+            return; // throttled — the gate is served from memory between refreshes
+        }
+        // Stamp BEFORE globbing: if the glob yields (hooked file IO) and another
+        // coroutine reaches here, it sees the throttle and skips its own glob,
+        // keeping each gate decision synchronous and atomic within the worker.
+        $this->lastInFlightReconcileMs = $now;
+
+        $snapshot = [];
+        $parts = glob("{$this->segmentDir}/*/seg-*.ts.part-*");
+        if (is_array($parts)) {
+            foreach ($parts as $part) {
+                $final = preg_replace('/\.part-[0-9a-f]+$/', '', $part);
+                if (is_string($final) && $final !== $part) {
+                    $snapshot[$final] = true;
+                }
+            }
+        }
+        $this->globalInFlightSnapshot = $snapshot;
+
+        foreach ($this->segmentEncodesInFlight as $final => $launchedAtMs) {
+            if (isset($snapshot[$final])) {
+                continue; // a live `.part-*` → still encoding, keep counting it
+            }
+            if (is_file($final)) {
+                unset($this->segmentEncodesInFlight[$final]); // completed
+                continue;
+            }
+            if (($now - $launchedAtMs) > self::SEGMENT_INFLIGHT_STALE_GRACE_MS) {
+                unset($this->segmentEncodesInFlight[$final]); // died without cleanup
+            }
+        }
+    }
+
+    /**
+     * Monotonic millisecond clock for in-flight bookkeeping — immune to wall-clock
+     * jumps (NTP / DST), per the repo's `hrtime(true)` convention.
+     */
+    private function monotonicMs(): int
+    {
+        return (int) (hrtime(true) / 1_000_000);
     }
 
     /**

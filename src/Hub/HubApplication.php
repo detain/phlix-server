@@ -122,4 +122,20 @@ final class HubApplication
     {
         return $this->hubClient->loadEnrollment() !== null;
     }
+
+    /**
+     * Returns the heartbeat status from the hub client.
+     *
+     * @return array{
+     *     lastHeartbeatAttempt: string|null,
+     *     lastSuccessfulHeartbeat: string|null,
+     *     consecutiveFailures: int,
+     *     enrollmentExpiresAt: string|null,
+     *     isEnrolled: bool
+     * }
+     */
+    public function getHeartbeatStatus(): array
+    {
+        return $this->hubClient->getStatus();
+    }
 }

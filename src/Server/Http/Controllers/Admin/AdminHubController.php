@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Hub\HubApplication;
 use Phlix\Hub\HubClient;
 use Phlix\Hub\RelayApplication;
 use Phlix\Hub\RelayConsumer;
@@ -63,7 +64,7 @@ final class AdminHubController
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { paired, serverId, hubUrl, enrolledAt, lastHeartbeat }.
+     * @return Response JSON { paired, serverId, hubUrl, enrolledAt, lastHeartbeat, consecutiveFailures, enrollmentExpiresAt, isEnrolled }.
      */
     public function hubStatus(Request $request, array $params): Response
     {
@@ -75,6 +76,8 @@ final class AdminHubController
                 ]);
             }
 
+            $heartbeatStatus = $this->getHeartbeatStatus();
+
             return (new Response())->json([
                 'paired' => true,
                 'serverId' => $enrollment['server_id'] ?? null,
@@ -82,7 +85,10 @@ final class AdminHubController
                 'enrolledAt' => isset($enrollment['enrolled_at']) && is_int($enrollment['enrolled_at'])
                     ? date('c', $enrollment['enrolled_at'])
                     : null,
-                'lastHeartbeat' => null, // Not persisted by HubClient
+                'lastHeartbeat' => $heartbeatStatus['lastSuccessfulHeartbeat'],
+                'consecutiveFailures' => $heartbeatStatus['consecutiveFailures'],
+                'enrollmentExpiresAt' => $heartbeatStatus['enrollmentExpiresAt'],
+                'isEnrolled' => $heartbeatStatus['isEnrolled'],
             ]);
         } catch (Throwable $e) {
             return (new Response())->status(500)->json([
@@ -917,6 +923,48 @@ final class AdminHubController
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Returns a HubApplication instance from the container or null.
+     *
+     * @return HubApplication|null The HubApplication instance or null.
+     */
+    private function getHubApplication(): ?HubApplication
+    {
+        if ($this->container === null) {
+            return null;
+        }
+
+        try {
+            /** @var HubApplication */
+            return $this->container->get(HubApplication::class);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns the heartbeat status from HubApplication.
+     *
+     * @return array{
+     *     lastHeartbeatAttempt: string|null,
+     *     lastSuccessfulHeartbeat: string|null,
+     *     consecutiveFailures: int,
+     *     enrollmentExpiresAt: string|null,
+     *     isEnrolled: bool
+     * }
+     */
+    private function getHeartbeatStatus(): array
+    {
+        $hubApp = $this->getHubApplication();
+        if ($hubApp !== null) {
+            return $hubApp->getHeartbeatStatus();
+        }
+
+        // Fallback: construct HubClient directly to get status
+        $hubClient = $this->getHubClient();
+        return $hubClient->getStatus();
     }
 
     /**

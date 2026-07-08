@@ -118,12 +118,9 @@ final class AliasCompatShimTest extends TestCase
 
     public function test_event_aliases_share_abstract_event_ancestor(): void
     {
+        $reflection = new \ReflectionClass(\Phlix\Common\Events\Playback\PlaybackStarted::class);
         $this->assertTrue(
-            is_a(
-                \Phlix\Common\Events\Playback\PlaybackStarted::class,
-                \Phlix\Shared\Events\AbstractEvent::class,
-                true
-            ),
+            $reflection->isSubclassOf(\Phlix\Shared\Events\AbstractEvent::class),
             'Aliased event classes must inherit Phlix\\Shared\\Events\\AbstractEvent.'
         );
     }

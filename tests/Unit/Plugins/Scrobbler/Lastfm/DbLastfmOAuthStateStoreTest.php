@@ -207,7 +207,9 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
         }
         self::assertNotNull($insertIndex, 'INSERT statement not found');
         // Verify the JSON data contains the user_id (params: id, provider, state, data, expires)
-        $data = json_decode($this->seenParams[$insertIndex][3], true);
+        /** @var string $insertData */
+        $insertData = $this->seenParams[$insertIndex][3];
+        $data = json_decode($insertData, true);
         self::assertIsArray($data);
         self::assertSame('user-xyz-789', $data['user_id']);
     }
@@ -389,9 +391,11 @@ final class DbLastfmOAuthStateStoreTest extends TestCase
         }
         self::assertNotNull($insertIndex, 'INSERT statement not found');
         // UUID format: 8-4-4-4-12 hex characters (first param is the id)
+        /** @var string $insertId */
+        $insertId = $this->seenParams[$insertIndex][0];
         self::assertMatchesRegularExpression(
             '/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/',
-            $this->seenParams[$insertIndex][0]
+            $insertId
         );
     }
 }

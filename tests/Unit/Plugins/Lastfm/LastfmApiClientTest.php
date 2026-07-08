@@ -24,8 +24,8 @@ final class LastfmApiClientTest extends TestCase
             api_secret: 'test_api_secret',
         );
 
-        // Mock successful response
-        $this->assertNotEmpty($api);
+        // The API client should expose the mobile-session entry point.
+        $this->assertTrue((new \ReflectionClass($api))->hasMethod('getMobileSession'));
     }
 
     public function testGetMobileSessionThrowsWhenNotConfigured(): void

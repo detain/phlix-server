@@ -37,6 +37,7 @@ use Psr\Container\ContainerInterface;
 final class PluginLoaderSourceRegistryTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
+    use MockeryExpectationTrait;
 
     private HttpInstaller&MockInterface $installer;
     private ComposerRunner&MockInterface $composer;
@@ -56,17 +57,33 @@ final class PluginLoaderSourceRegistryTest extends TestCase
         $this->stagedDir = sys_get_temp_dir() . '/phlix_srcreg_' . uniqid('', true);
         mkdir($this->stagedDir, 0775, true);
 
-        $this->installer = Mockery::mock(HttpInstaller::class);
-        $this->composer = Mockery::mock(ComposerRunner::class);
-        $this->verifier = Mockery::mock(SignatureVerifier::class);
-        $this->repository = Mockery::mock(PluginRepository::class);
+        /** @var HttpInstaller&MockInterface $installer */
+        $installer = Mockery::mock(HttpInstaller::class);
+        $this->installer = $installer;
+        /** @var ComposerRunner&MockInterface $composer */
+        $composer = Mockery::mock(ComposerRunner::class);
+        $this->composer = $composer;
+        /** @var SignatureVerifier&MockInterface $verifier */
+        $verifier = Mockery::mock(SignatureVerifier::class);
+        $this->verifier = $verifier;
+        /** @var PluginRepository&MockInterface $repository */
+        $repository = Mockery::mock(PluginRepository::class);
+        $this->repository = $repository;
+        /** @var StructuredLogger&MockInterface $registryLogger */
+        $registryLogger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
         $this->listenerRegistry = new ListenerRegistry(
             null,
-            Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing(),
+            $registryLogger,
         );
-        $this->container = Mockery::mock(ContainerInterface::class);
-        $this->auditLogger = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
-        $this->logger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
+        /** @var ContainerInterface&MockInterface $container */
+        $container = Mockery::mock(ContainerInterface::class);
+        $this->container = $container;
+        /** @var AuditLogger&MockInterface $auditLogger */
+        $auditLogger = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        $this->auditLogger = $auditLogger;
+        /** @var StructuredLogger&MockInterface $logger */
+        $logger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
+        $this->logger = $logger;
         $this->sourceRegistry = new SourceRegistry();
     }
 
@@ -122,10 +139,10 @@ final class PluginLoaderSourceRegistryTest extends TestCase
         $manifest = $this->manifest('phlix-plugin-fakesource', FakeMetadataSourcePlugin::class);
         $plugin = new FakeMetadataSourcePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->with(FakeMetadataSourcePlugin::class)->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fakesource', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fakesource', false)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->with(FakeMetadataSourcePlugin::class)->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fakesource', true)->once();
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fakesource', false)->once();
 
         $loader = $this->makeLoader();
 
@@ -146,12 +163,12 @@ final class PluginLoaderSourceRegistryTest extends TestCase
         $manifest = $this->manifest('phlix-plugin-fakesource', FakeMetadataSourcePlugin::class);
 
         // Fresh instance each enable (the loader resolves it from the container).
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')
             ->with(FakeMetadataSourcePlugin::class)
             ->andReturnUsing(static fn (): FakeMetadataSourcePlugin => new FakeMetadataSourcePlugin());
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fakesource', true);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fakesource', false);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fakesource', true);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fakesource', false);
 
         $loader = $this->makeLoader();
 
@@ -168,9 +185,9 @@ final class PluginLoaderSourceRegistryTest extends TestCase
         $manifest = $this->manifest('phlix-plugin-plain', PlainLifecyclePlugin::class);
         $plugin = new PlainLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->with(PlainLifecyclePlugin::class)->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-plain', true)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->with(PlainLifecyclePlugin::class)->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-plain', true)->once();
 
         $this->makeLoader()->enable('phlix-plugin-plain');
 
@@ -184,9 +201,9 @@ final class PluginLoaderSourceRegistryTest extends TestCase
         $manifest = $this->manifest('phlix-plugin-fakesource', FakeMetadataSourcePlugin::class);
         $plugin = new FakeMetadataSourcePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->with(FakeMetadataSourcePlugin::class)->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fakesource', true)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->with(FakeMetadataSourcePlugin::class)->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fakesource', true)->once();
 
         $loaderNoRegistry = new PluginLoader(
             $this->installer,

@@ -211,7 +211,7 @@ final class LdapProviderTest extends TestCase
         $this->assertTrue($result->isSuccess());
         $this->assertNotNull($result->externalId);
         $this->assertStringStartsWith('ldap.', $result->externalId);
-        $this->assertNotNull($result->attributes);
+        $this->assertNotEmpty($result->attributes);
         $this->assertSame('testuser', $result->attributes['username']);
         $this->assertSame('testuser@example.com', $result->attributes['email']);
     }
@@ -237,7 +237,9 @@ final class LdapProviderTest extends TestCase
         $result = $provider->authenticate(['username' => 'testuser', 'password' => 'testpass']);
 
         $this->assertFalse($result->isSuccess());
-        $this->assertStringContainsString('ldap_error', $result->error);
+        /** @var string $error */
+        $error = $result->error;
+        $this->assertStringContainsString('ldap_error', $error);
     }
 
     public function test_get_user_info_returns_null(): void
@@ -271,7 +273,8 @@ final class LdapProviderTest extends TestCase
         );
 
         $provider->linkAccount('local-user-id', ['ldap' => 'external-id']);
-        $this->assertTrue(true);
+        // linkAccount is a no-op; the provider stays intact and configured.
+        $this->assertSame('ldap.example.com', $provider->getHost());
     }
 
     public function test_get_host(): void

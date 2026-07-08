@@ -36,6 +36,7 @@ use Psr\Container\ContainerInterface;
 final class PluginLoaderTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
+    use MockeryExpectationTrait;
 
     private HttpInstaller&MockInterface $installer;
     private ComposerRunner&MockInterface $composer;
@@ -55,17 +56,33 @@ final class PluginLoaderTest extends TestCase
         $this->stagedDir = sys_get_temp_dir() . '/phlix_loadertest_' . uniqid('', true);
         mkdir($this->stagedDir, 0775, true);
 
-        $this->installer = Mockery::mock(HttpInstaller::class);
-        $this->composer = Mockery::mock(ComposerRunner::class);
-        $this->verifier = Mockery::mock(SignatureVerifier::class);
-        $this->repository = Mockery::mock(PluginRepository::class);
+        /** @var HttpInstaller&MockInterface $installer */
+        $installer = Mockery::mock(HttpInstaller::class);
+        $this->installer = $installer;
+        /** @var ComposerRunner&MockInterface $composer */
+        $composer = Mockery::mock(ComposerRunner::class);
+        $this->composer = $composer;
+        /** @var SignatureVerifier&MockInterface $verifier */
+        $verifier = Mockery::mock(SignatureVerifier::class);
+        $this->verifier = $verifier;
+        /** @var PluginRepository&MockInterface $repository */
+        $repository = Mockery::mock(PluginRepository::class);
+        $this->repository = $repository;
+        /** @var StructuredLogger&MockInterface $registryLogger */
+        $registryLogger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
         $this->listenerRegistry = new ListenerRegistry(
             null,
-            Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing(),
+            $registryLogger,
         );
-        $this->container = Mockery::mock(ContainerInterface::class);
-        $this->auditLogger = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
-        $this->logger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
+        /** @var ContainerInterface&MockInterface $container */
+        $container = Mockery::mock(ContainerInterface::class);
+        $this->container = $container;
+        /** @var AuditLogger&MockInterface $auditLogger */
+        $auditLogger = Mockery::mock(AuditLogger::class)->shouldIgnoreMissing();
+        $this->auditLogger = $auditLogger;
+        /** @var StructuredLogger&MockInterface $logger */
+        $logger = Mockery::mock(StructuredLogger::class)->shouldIgnoreMissing();
+        $this->logger = $logger;
     }
 
     protected function tearDown(): void
@@ -121,14 +138,14 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
 
-        $this->installer->shouldReceive('installFromDirectory')
+        $this->expect($this->installer, 'installFromDirectory')
             ->once()
             ->with('/path/to/source')
             ->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
-        $this->composer->shouldReceive('install')->once()->with($this->stagedDir);
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
-        $this->repository->shouldReceive('insert')
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
+        $this->expect($this->composer, 'install')->once()->with($this->stagedDir);
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->expect($this->repository, 'insert')
             ->once()
             ->with(Mockery::on(fn ($m) => $m === $manifest), false, []);
 
@@ -140,7 +157,7 @@ final class PluginLoaderTest extends TestCase
 
     public function test_install_rejects_invalid_manifest_with_install_exception(): void
     {
-        $this->installer->shouldReceive('installFromDirectory')
+        $this->expect($this->installer, 'installFromDirectory')
             ->andThrow(new PluginInstallException('bad manifest', []));
         $this->composer->shouldNotReceive('install');
         $this->repository->shouldNotReceive('insert');
@@ -159,7 +176,7 @@ final class PluginLoaderTest extends TestCase
             'entry' => FakeLifecyclePlugin::class,
         ]);
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
         $this->composer->shouldNotReceive('install');
         $this->repository->shouldNotReceive('insert');
 
@@ -173,13 +190,13 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest('phlix-plugin-bar');
 
-        $this->installer->shouldReceive('installFromDirectory')
+        $this->expect($this->installer, 'installFromDirectory')
             ->once()
             ->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
-        $this->repository->shouldReceive('insert')->once();
-        $this->composer->shouldReceive('install')->once()->with($this->stagedDir);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->expect($this->repository, 'insert')->once();
+        $this->expect($this->composer, 'install')->once()->with($this->stagedDir);
 
         $this->makeLoader()->installFromDirectory('/anywhere');
     }
@@ -188,16 +205,16 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
-        $this->repository->shouldReceive('insert')->once();
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_UNSIGNED);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->expect($this->repository, 'insert')->once();
 
-        $this->logger->shouldReceive('warning')
+        $this->expect($this->logger, 'warning')
             ->atLeast()->once()
             ->with(Mockery::on(fn ($m) => str_contains($m, 'unsigned plugin')), Mockery::any());
-        $this->logger->shouldReceive('info')->withAnyArgs();
+        $this->expect($this->logger, 'info')->withAnyArgs();
 
         $this->makeLoader()->installFromDirectory('/x');
     }
@@ -206,8 +223,8 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_INVALID);
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_INVALID);
         $this->composer->shouldNotReceive('install');
 
         $this->expectException(PluginInstallException::class);
@@ -223,14 +240,14 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $sha = str_repeat('a', 64);
         $ref = str_repeat('b', 40);
-        $this->installer->shouldReceive('install')
+        $this->expect($this->installer, 'install')
             ->once()
             ->with('https://example.test/plugin.tar.gz', $sha, $ref)
             ->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
-        $this->repository->shouldReceive('insert')->once();
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->expect($this->repository, 'insert')->once();
 
         $returned = $this->makeLoader()->install('https://example.test/plugin.tar.gz', $sha, $ref);
         $this->assertSame($manifest, $returned);
@@ -257,14 +274,14 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         putenv('PHLIX_PLUGINS_ALLOW_UNVERIFIED=1');
         try {
-            $this->installer->shouldReceive('install')
+            $this->expect($this->installer, 'install')
                 ->once()
                 ->with('https://example.test/plugin.tar.gz', null, null)
                 ->andReturn([$manifest, $this->stagedDir]);
-            $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-            $this->composer->shouldReceive('install')->once();
-            $this->repository->shouldReceive('existsByName')->andReturn(false);
-            $this->repository->shouldReceive('insert')->once();
+            $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+            $this->expect($this->composer, 'install')->once();
+            $this->expect($this->repository, 'existsByName')->andReturn(false);
+            $this->expect($this->repository, 'insert')->once();
 
             $returned = $this->makeLoader()->install('https://example.test/plugin.tar.gz');
             $this->assertSame($manifest, $returned);
@@ -279,14 +296,14 @@ final class PluginLoaderTest extends TestCase
         // bytes, not a remote catalog artifact — the supply-chain pin does not
         // apply, so they install un-pinned without the override.
         $manifest = $this->manifest();
-        $this->installer->shouldReceive('install')
+        $this->expect($this->installer, 'install')
             ->once()
             ->with('file:///tmp/plugin.tar.gz', null, null)
             ->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
-        $this->repository->shouldReceive('insert')->once();
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
+        $this->expect($this->repository, 'insert')->once();
 
         $returned = $this->makeLoader()->install('file:///tmp/plugin.tar.gz');
         $this->assertSame($manifest, $returned);
@@ -302,8 +319,8 @@ final class PluginLoaderTest extends TestCase
             'entry' => \stdClass::class,
         ]);
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->with(\stdClass::class)->andReturn(new \stdClass());
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->with(\stdClass::class)->andReturn(new \stdClass());
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('must implement');
@@ -316,9 +333,9 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->with(FakeLifecyclePlugin::class)->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->with(FakeLifecyclePlugin::class)->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-fixture', true);
 
         $this->makeLoader()->enable('phlix-plugin-fixture');
 
@@ -332,9 +349,9 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once();
 
         $loader = $this->makeLoader();
         $loader->enable('phlix-plugin-fixture');
@@ -357,8 +374,8 @@ final class PluginLoaderTest extends TestCase
             'entry' => FakeLifecyclePluginMissingEvent::class,
         ]);
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn(new FakeLifecyclePluginMissingEvent());
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn(new FakeLifecyclePluginMissingEvent());
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('non-existent event class');
@@ -371,9 +388,9 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-fixture', true);
 
         $this->makeLoader()->enable('phlix-plugin-fixture');
     }
@@ -383,9 +400,9 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once()->with('phlix-plugin-fixture', true);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-fixture', true);
 
         $loader = $this->makeLoader();
         $loader->enable('phlix-plugin-fixture');
@@ -398,10 +415,10 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', false)->once();
 
         $loader = $this->makeLoader();
         $loader->enable('phlix-plugin-fixture');
@@ -419,10 +436,10 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new FakeLifecyclePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', false)->once();
 
         $loader = $this->makeLoader();
         $loader->enable('phlix-plugin-fixture');
@@ -440,10 +457,10 @@ final class PluginLoaderTest extends TestCase
         mkdir($tempDir, 0775, true);
 
         $installed = $this->makeInstalled($manifest, enabled: true, directory: $tempDir);
-        $this->repository->shouldReceive('findByName')->andReturn($installed);
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
-        $this->repository->shouldReceive('delete')->once()->with('phlix-plugin-fixture');
+        $this->expect($this->repository, 'findByName')->andReturn($installed);
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', false)->once();
+        $this->expect($this->repository, 'delete')->once()->with('phlix-plugin-fixture');
 
         $this->makeLoader()->uninstall('phlix-plugin-fixture');
 
@@ -457,8 +474,8 @@ final class PluginLoaderTest extends TestCase
         mkdir($tempDir . '/sub', 0775, true);
         file_put_contents($tempDir . '/sub/file.txt', 'x');
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest, directory: $tempDir));
-        $this->repository->shouldReceive('delete')->once()->with('phlix-plugin-fixture');
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest, directory: $tempDir));
+        $this->expect($this->repository, 'delete')->once()->with('phlix-plugin-fixture');
 
         $this->makeLoader()->uninstall('phlix-plugin-fixture');
 
@@ -467,7 +484,7 @@ final class PluginLoaderTest extends TestCase
 
     public function test_uninstall_throws_when_plugin_not_found(): void
     {
-        $this->repository->shouldReceive('findByName')
+        $this->expect($this->repository, 'findByName')
             ->andThrow(new PluginNotFoundException('missing'));
 
         $this->expectException(PluginNotFoundException::class);
@@ -485,7 +502,7 @@ final class PluginLoaderTest extends TestCase
             settings: ['k' => 'v'],
             directory: $this->stagedDir,
         );
-        $this->repository->shouldReceive('listAll')->andReturn([$dto]);
+        $this->expect($this->repository, 'listAll')->andReturn([$dto]);
 
         $result = $this->makeLoader()->listInstalled();
         $this->assertSame([$dto], $result);
@@ -493,7 +510,7 @@ final class PluginLoaderTest extends TestCase
 
     public function test_getEnabled_delegates_to_repository(): void
     {
-        $this->repository->shouldReceive('listEnabled')->andReturn([]);
+        $this->expect($this->repository, 'listEnabled')->andReturn([]);
         $this->assertSame([], $this->makeLoader()->getEnabled());
     }
 
@@ -503,10 +520,10 @@ final class PluginLoaderTest extends TestCase
         $plugin = new FakeLifecyclePlugin();
         $installed = $this->makeInstalled($manifest, enabled: true);
 
-        $this->repository->shouldReceive('listEnabled')->andReturn([$installed]);
-        $this->repository->shouldReceive('findByName')->andReturn($installed);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true);
-        $this->container->shouldReceive('get')->andReturn($plugin);
+        $this->expect($this->repository, 'listEnabled')->andReturn([$installed]);
+        $this->expect($this->repository, 'findByName')->andReturn($installed);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', true);
+        $this->expect($this->container, 'get')->andReturn($plugin);
 
         $this->makeLoader()->bootstrapEnabled();
         $this->assertTrue($plugin->onEnableCalled);
@@ -518,9 +535,9 @@ final class PluginLoaderTest extends TestCase
         $stagedDir = sys_get_temp_dir() . '/phlix_loader_failure_' . uniqid('', true);
         mkdir($stagedDir, 0775, true);
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->andThrow(new PluginInstallException('boom'));
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->andThrow(new PluginInstallException('boom'));
         $this->repository->shouldNotReceive('insert');
 
         try {
@@ -537,19 +554,19 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(true);
-        $this->repository->shouldReceive('delete')->once()->with($manifest->name);
-        $this->repository->shouldReceive('insert')->once();
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(true);
+        $this->expect($this->repository, 'delete')->once()->with($manifest->name);
+        $this->expect($this->repository, 'insert')->once();
 
         $this->makeLoader()->installFromDirectory('/x');
     }
 
     public function test_install_validationErrors_attached_to_exception(): void
     {
-        $this->installer->shouldReceive('installFromDirectory')
+        $this->expect($this->installer, 'installFromDirectory')
             ->andThrow(new PluginInstallException('bad', [new \Phlix\Shared\Plugin\ManifestValidationError('x', 'y', 'z')]));
 
         try {
@@ -570,7 +587,7 @@ final class PluginLoaderTest extends TestCase
             'entry' => 'Phlix\\Definitely\\Not\\Real\\Plugin',
         ]);
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('does not exist');
@@ -582,8 +599,8 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andThrow(new \RuntimeException('cannot resolve'));
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andThrow(new \RuntimeException('cannot resolve'));
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('could not be resolved');
@@ -596,8 +613,8 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new ThrowingOnEnablePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('onEnable() threw');
@@ -616,8 +633,8 @@ final class PluginLoaderTest extends TestCase
             'events' => ['phlix.not.a.real.event'],
         ]);
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn(new FakeLifecyclePlugin());
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn(new FakeLifecyclePlugin());
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('unknown event alias');
@@ -630,8 +647,8 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new MissingMethodPlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('the entry class does not implement it');
@@ -644,12 +661,13 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new ClosureHandlerPlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once();
 
         $this->makeLoader()->enable('phlix-plugin-fixture');
-        $this->assertTrue(true); // No throw means success.
+        // A closure handler is a valid subscription target; the plugin exposes it.
+        $this->assertNotEmpty($plugin->subscribedEvents());
     }
 
     public function test_enable_throws_when_subscribed_handler_is_garbage(): void
@@ -657,8 +675,8 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new GarbageHandlerPlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
 
         $this->expectException(PluginEnableException::class);
         $this->expectExceptionMessage('must be a method name or callable');
@@ -671,12 +689,12 @@ final class PluginLoaderTest extends TestCase
         $manifest = $this->manifest();
         $plugin = new ThrowingOnDisablePlugin();
 
-        $this->repository->shouldReceive('findByName')->andReturn($this->makeInstalled($manifest));
-        $this->container->shouldReceive('get')->andReturn($plugin);
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', true)->once();
-        $this->repository->shouldReceive('setEnabled')->with('phlix-plugin-fixture', false)->once();
+        $this->expect($this->repository, 'findByName')->andReturn($this->makeInstalled($manifest));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', true)->once();
+        $this->expect($this->repository, 'setEnabled')->with('phlix-plugin-fixture', false)->once();
 
-        $this->logger->shouldReceive('warning')->atLeast()->once();
+        $this->expect($this->logger, 'warning')->atLeast()->once();
 
         $loader = $this->makeLoader();
         $loader->enable('phlix-plugin-fixture');
@@ -697,14 +715,14 @@ final class PluginLoaderTest extends TestCase
             ],
         ]);
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
         // `host` is required: true with NO default — it is materialised as a
         // `null` slot (Option (b) null-fill), NOT dropped. `required` is
         // advisory metadata for the settings UI, not a load-time rejection.
-        $this->repository->shouldReceive('insert')
+        $this->expect($this->repository, 'insert')
             ->once()
             ->with(Mockery::any(), false, ['retries' => 5, 'host' => null]);
 
@@ -730,13 +748,13 @@ final class PluginLoaderTest extends TestCase
             ],
         ]);
 
-        $this->installer->shouldReceive('installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
-        $this->verifier->shouldReceive('verify')->andReturn(SignatureVerifier::RESULT_VALID);
-        $this->composer->shouldReceive('install')->once();
-        $this->repository->shouldReceive('existsByName')->andReturn(false);
+        $this->expect($this->installer, 'installFromDirectory')->andReturn([$manifest, $this->stagedDir]);
+        $this->expect($this->verifier, 'verify')->andReturn(SignatureVerifier::RESULT_VALID);
+        $this->expect($this->composer, 'install')->once();
+        $this->expect($this->repository, 'existsByName')->andReturn(false);
 
         $captured = null;
-        $this->repository->shouldReceive('insert')
+        $this->expect($this->repository, 'insert')
             ->once()
             ->with(
                 Mockery::any(),
@@ -766,11 +784,11 @@ final class PluginLoaderTest extends TestCase
     {
         $manifest = $this->manifest();
         $installed = $this->makeInstalled($manifest, enabled: true);
-        $this->repository->shouldReceive('listEnabled')->andReturn([$installed]);
-        $this->repository->shouldReceive('findByName')->andReturn($installed);
-        $this->container->shouldReceive('get')->andThrow(new \RuntimeException('boom'));
+        $this->expect($this->repository, 'listEnabled')->andReturn([$installed]);
+        $this->expect($this->repository, 'findByName')->andReturn($installed);
+        $this->expect($this->container, 'get')->andThrow(new \RuntimeException('boom'));
 
-        $this->logger->shouldReceive('error')
+        $this->expect($this->logger, 'error')
             ->atLeast()->once()
             ->with(Mockery::on(fn ($m) => str_contains($m, 'failed to bootstrap')), Mockery::any());
 
@@ -826,6 +844,19 @@ final class FakeLifecyclePluginMissingEvent implements LifecycleInterface
     }
 
     public function subscribedEvents(): array
+    {
+        /** @var array<class-string, string|callable> $events */
+        $events = $this->malformedSubscriptions();
+
+        return $events;
+    }
+
+    /**
+     * Intentionally malformed subscriptions: the key is not a real event
+     * class, which exercises the loader's rejection path. Typed `mixed` so the
+     * deliberately-invalid shape stays out of the interface's return contract.
+     */
+    private function malformedSubscriptions(): mixed
     {
         return [
             'Phlix\\Definitely\\Not\\AnEvent' => 'handle',
@@ -922,6 +953,20 @@ final class GarbageHandlerPlugin implements LifecycleInterface
     {
     }
     public function subscribedEvents(): array
+    {
+        /** @var array<class-string, string|callable> $events */
+        $events = $this->malformedSubscriptions();
+
+        return $events;
+    }
+
+    /**
+     * Intentionally malformed subscriptions: the handler value is neither a
+     * method name nor a callable, which exercises the loader's rejection path.
+     * Typed `mixed` so the deliberately-invalid shape stays out of the
+     * interface's return contract.
+     */
+    private function malformedSubscriptions(): mixed
     {
         return [PlaybackStarted::class => 12345];
     }

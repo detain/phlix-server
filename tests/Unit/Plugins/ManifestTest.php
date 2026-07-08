@@ -34,9 +34,11 @@ final class ManifestTest extends TestCase
             $manifest->events,
         );
         $this->assertArrayHasKey('api_key', $manifest->settings);
-        $this->assertSame('string', $manifest->settings['api_key']['type']);
-        $this->assertTrue($manifest->settings['api_key']['required']);
-        $this->assertTrue($manifest->settings['api_key']['secret']);
+        /** @var array<string, mixed> $apiKeySetting */
+        $apiKeySetting = $manifest->settings['api_key'];
+        $this->assertSame('string', $apiKeySetting['type']);
+        $this->assertTrue($apiKeySetting['required']);
+        $this->assertTrue($apiKeySetting['secret']);
         $this->assertSame(
             'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
             $manifest->signature,
@@ -50,8 +52,12 @@ final class ManifestTest extends TestCase
         $this->assertSame('phlix-plugin-oidc-google', $manifest->name);
         $this->assertSame(ManifestType::AuthProvider, $manifest->manifestType());
         $this->assertNull($manifest->signature);
-        $this->assertTrue($manifest->settings['client_secret']['secret']);
-        $this->assertArrayHasKey('default', $manifest->settings['discovery_url']);
+        /** @var array<string, mixed> $clientSecretSetting */
+        $clientSecretSetting = $manifest->settings['client_secret'];
+        $this->assertTrue($clientSecretSetting['secret']);
+        /** @var array<string, mixed> $discoveryUrlSetting */
+        $discoveryUrlSetting = $manifest->settings['discovery_url'];
+        $this->assertArrayHasKey('default', $discoveryUrlSetting);
     }
 
     public function test_fromJson_throws_on_malformed_json(): void

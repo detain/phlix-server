@@ -194,16 +194,18 @@ final class MockHttpClient implements HttpClientInterface
 {
     public string $lastMethod = '';
     public string $lastUrl = '';
+    /** @var array<string, mixed> */
     public array $lastData = [];
+    /** @var array<string, mixed> */
     public array $lastHeaders = [];
     public int $postCallCount = 0;
 
-    /** @var array<array> */
+    /** @var array<int, array<array-key, mixed>> */
     private array $responses;
     private int $responseIndex = 0;
 
     /**
-     * @param array<array> $responses Queue of responses to return
+     * @param array<int, array<array-key, mixed>> $responses Queue of responses to return
      */
     public function __construct(array $responses = [])
     {
@@ -234,6 +236,9 @@ final class MockHttpClient implements HttpClientInterface
         return $this->getNextResponse();
     }
 
+    /**
+     * @return array<array-key, mixed>
+     */
     private function getNextResponse(): array
     {
         if ($this->responseIndex >= count($this->responses)) {

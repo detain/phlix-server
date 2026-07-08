@@ -7,6 +7,7 @@ namespace Phlix\Tests\Integration\Container;
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use PHPUnit\Framework\TestCase;
@@ -58,6 +59,31 @@ final class BootstrapTest extends TestCase
         // / DB_PASSWORD=root) provides the actual credentials used to
         // talk to CI's MySQL service container.
         $dbConfigPath = dirname(__DIR__, 3) . '/config/database.php';
+
+        // Explicitly (re)initialise the process-wide ConnectionPool singleton
+        // HERE rather than relying on it having been lazily initialised by
+        // some earlier-run test elsewhere in the suite.
+        //
+        // `Application::loadRoutes()` (invoked by both test methods below)
+        // eagerly builds several controllers — e.g. `getTraktOAuthController()`
+        // — that call `ConnectionPool::getConnection('mysql')` DIRECTLY,
+        // bypassing the DI container entirely (see that method's own comment
+        // on `test_container_resolves_application_with_mocked_connection()`
+        // below). `ConnectionPool::getConnection()` only lazily calls
+        // `ConnectionPool::init()` itself via `CoreServicesProvider`'s
+        // `Connection::class` factory — a path `test_container_resolves_...`
+        // never exercises because it REPLACES that container binding with a
+        // mock. With PHPUnit's `executionOrder="random"` (phpunit.xml), this
+        // test previously passed ONLY BY LUCK — whenever some unrelated
+        // earlier-run test in the whole suite happened to initialise the same
+        // static `ConnectionPool` singleton first (e.g. `ConnectionPoolTest`)
+        // — and threw `ConnectionPool has no database config path` whenever
+        // it did not, as CI's own random seed once did. `ConnectionPool::init()`
+        // only assigns static properties (no connection is opened), so
+        // calling it unconditionally here is cheap and makes this test
+        // self-contained/order-independent regardless of what else in the
+        // suite has or hasn't run first.
+        ConnectionPool::init($dbConfigPath);
 
         $serverConfig = "<?php\nreturn [\n"
             . "    'server' => ['name' => 'Test Server'],\n"

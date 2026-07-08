@@ -1766,6 +1766,722 @@ class MediaScannerTest extends TestCase
         return is_string($result) ? $result : null;
     }
 
+    // --- S8: bounded concurrent scan probes ---------------------------------
+
+    /**
+     * Outside a Swoole coroutine (PHPUnit CLI's default context — exactly
+     * like every other test in this file), scanFlat()'s new batch/fan-out
+     * path must degrade to the EXACT sequential per-file probing behaviour
+     * that existed before S8: each file's probe result attaches to the
+     * RIGHT path (no cross-file mixup) with no coroutine machinery involved.
+     * This is the regression-safety test for the non-coroutine fallback.
+     */
+    public function testScanFlatSequentialFallbackAttachesCorrectDurationPerFileOutsideCoroutine(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(function (string $path) {
+            return [
+                'streams' => [],
+                'format' => ['duration' => str_contains($path, 'One') ? '100.0' : '200.0'],
+            ];
+        });
+
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+
+        $this->tmpDir = $this->makeTempDirWith(['Movie One (2020).mkv', 'Movie Two (2021).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $items = $repo->items();
+        $this->assertCount(2, $items);
+        foreach ($items as $item) {
+            $expected = str_contains((string) $item['path'], 'One') ? 100 : 200;
+            $this->assertSame($expected, $item['metadata_json']['duration_seconds']);
+        }
+    }
+
+    /**
+     * S8 CORE MECHANISM: inside a real Swoole coroutine, {@see
+     * MediaScanner::probeManyConcurrently()}'s bounded fan-out genuinely caps
+     * concurrency at the configured `maxConcurrentScanProbes` — an
+     * instrumented fake probe records the live in-flight count via a shared
+     * counter (yielding mid-call with `Swoole\Coroutine::sleep()` so probes
+     * actually overlap) and asserts it never exceeds the bound, while still
+     * proving real overlap occurred (not accidentally serialized).
+     */
+    public function testProbeManyConcurrentlyCapsBoundedConcurrencyAtConfiguredLimit(): void
+    {
+        if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');
+        }
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        $maxConcurrency = 3;
+        $inFlight = 0;
+        $maxObservedInFlight = 0;
+        $totalCalls = 0;
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(
+            function (string $path) use (&$inFlight, &$maxObservedInFlight, &$totalCalls) {
+                $totalCalls++;
+                $inFlight++;
+                $maxObservedInFlight = max($maxObservedInFlight, $inFlight);
+                // Yield so other fanned-out probes get a chance to start
+                // concurrently — without this every call would resolve
+                // synchronously and never overlap.
+                \Swoole\Coroutine::sleep(0.02);
+                $inFlight--;
+                return ['streams' => [], 'format' => ['duration' => '10.0']];
+            }
+        );
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,
+            null,
+            null,
+            $ffmpeg,
+            null,
+            $maxConcurrency
+        );
+
+        $paths = array_map(fn (int $i): string => "/movies/movie-{$i}.mkv", range(1, 10));
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
+        $method->setAccessible(true);
+
+        $results = null;
+        \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results): void {
+            $results = $method->invoke($scanner, $paths);
+        });
+
+        $this->assertSame(10, $totalCalls, 'every path is probed exactly once');
+        $this->assertLessThanOrEqual(
+            $maxConcurrency,
+            $maxObservedInFlight,
+            'in-flight probe count must never exceed the configured bound'
+        );
+        $this->assertGreaterThan(
+            1,
+            $maxObservedInFlight,
+            'the pool must genuinely run probes concurrently, not one at a time'
+        );
+        $this->assertIsArray($results);
+        $this->assertCount(10, $results);
+    }
+
+    /**
+     * S8: inside a coroutine, each fanned-out probe's result attaches to the
+     * RIGHT path — a classic bug site in concurrent-map-collection code. Two
+     * files with DIFFERENT durations are probed concurrently, with the file
+     * that logically "should" resolve first deliberately made to sleep
+     * LONGER, so a naive implementation that mixed up which coroutine wrote
+     * which map key would be caught by mismatched durations.
+     */
+    public function testProbeManyConcurrentlyAttachesEachResultToItsOwnPathInsideACoroutine(): void
+    {
+        if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');
+        }
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(function (string $path) {
+            // The "A" file sleeps longer than "B", so B resolves first even
+            // though A was launched first — proving the result map keys by
+            // path, not by completion/launch order.
+            \Swoole\Coroutine::sleep(str_contains($path, 'A') ? 0.03 : 0.01);
+            return ['streams' => [], 'format' => ['duration' => str_contains($path, 'A') ? '111.0' : '222.0']];
+        });
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,
+            null,
+            null,
+            $ffmpeg,
+            null,
+            4
+        );
+
+        $paths = ['/movies/A.mkv', '/movies/B.mkv'];
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
+        $method->setAccessible(true);
+
+        $results = null;
+        $cid = null;
+        \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results, &$cid): void {
+            $cid = \Swoole\Coroutine::getCid();
+            $results = $method->invoke($scanner, $paths);
+        });
+
+        $this->assertGreaterThan(0, $cid, 'test must genuinely run inside a coroutine');
+        $this->assertIsArray($results);
+        $this->assertSame(111, $results['/movies/A.mkv']['duration_seconds'] ?? null);
+        $this->assertSame(222, $results['/movies/B.mkv']['duration_seconds'] ?? null);
+    }
+
+    /**
+     * S8: a probe failure (the underlying ffmpeg->probe() throwing) for ONE
+     * file in a concurrently-fanned-out batch must never abort the batch or
+     * corrupt the results for the OTHER files — the failing path resolves to
+     * `null` while its siblings still resolve normally.
+     */
+    public function testProbeManyConcurrentlyIsolatesOneFailureFromOtherFilesInTheBatch(): void
+    {
+        if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');
+        }
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(function (string $path) {
+            if (str_contains($path, 'bad')) {
+                throw new \RuntimeException('ffprobe boom');
+            }
+            return ['streams' => [], 'format' => ['duration' => '50.0']];
+        });
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,
+            null,
+            null,
+            $ffmpeg,
+            null,
+            4
+        );
+
+        $paths = ['/movies/good1.mkv', '/movies/bad.mkv', '/movies/good2.mkv'];
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
+        $method->setAccessible(true);
+
+        $results = null;
+        \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results): void {
+            $results = $method->invoke($scanner, $paths);
+        });
+
+        $this->assertIsArray($results);
+        $this->assertArrayHasKey('/movies/bad.mkv', $results);
+        $this->assertNull($results['/movies/bad.mkv'], 'a failed probe resolves to null, not an exception');
+        $this->assertSame(50, $results['/movies/good1.mkv']['duration_seconds'] ?? null);
+        $this->assertSame(50, $results['/movies/good2.mkv']['duration_seconds'] ?? null);
+    }
+
+    /**
+     * Reviewer finding (S8, Low): `\Swoole\Coroutine::create()`'s return value
+     * was unchecked — if Swoole itself refuses to SCHEDULE a coroutine (e.g.
+     * the process-wide `max_coroutine` ceiling is hit) the closure body never
+     * runs, so the semaphore `Channel::push()` reserved just before the
+     * `create()` call would never be released by that closure's `finally`,
+     * and the "done" signal channel would never receive that path's
+     * completion push — so the final `pop()` loop in
+     * {@see MediaScanner::probeManyConcurrently()} (the `WaitGroup::wait()`-
+     * equivalent join, since PHPStan's bundled stub-only environment doesn't
+     * recognise `WaitGroup` — see that method's own docblock) would hang
+     * forever waiting for a signal that will never arrive.
+     *
+     * This is forced DETERMINISTICALLY (not merely asserted-by-inspection) by
+     * lowering Swoole's own `max_coroutine` to `1` from inside the coroutine
+     * this test runs in — that root coroutine already occupies the single
+     * permitted slot, so EVERY subsequent `Coroutine::create()` call inside
+     * {@see MediaScanner::probeManyConcurrently()} is refused and returns
+     * `false`, real production Swoole behaviour (confirmed empirically: a
+     * throwaway script reproduced the exact
+     * "Swoole\Coroutine::create(): exceed max number of coroutine N" PHP
+     * E_WARNING Swoole emits on refusal). That warning is expected and
+     * deliberately provoked, so it is swallowed for the duration of this call
+     * via a scoped `set_error_handler()` rather than tripping phpunit.xml's
+     * `failOnWarning="true"`.
+     *
+     * Asserts: (1) `probeManyConcurrently()` returns promptly rather than
+     * hanging — `$completed` would remain false if the done-channel join
+     * blocked forever; (2) every path resolves to `null` (a refused coroutine
+     * spawn is treated exactly like any other single-path probe failure);
+     * (3) the ffmpeg mock's `probe()` is NEVER invoked, proving the closure
+     * body genuinely never ran for any path (this is the `create() === false`
+     * branch, not the ordinary in-coroutine-throw branch already covered by
+     * the isolation test above).
+     */
+    public function testProbeManyConcurrentlyReleasesDoneSignalWhenCoroutineCreateFailsToSchedule(): void
+    {
+        if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');
+        }
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        // The closure body (which calls probeSummary() -> ffmpeg->probe())
+        // must NEVER run when Coroutine::create() itself is refused.
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,
+            null,
+            null,
+            $ffmpeg,
+            null,
+            5
+        );
+
+        $paths = ['/movies/a.mkv', '/movies/b.mkv', '/movies/c.mkv'];
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'probeManyConcurrently');
+        $method->setAccessible(true);
+
+        $previousHandler = set_error_handler(
+            function (int $errno, string $errstr): bool {
+                // Swallow ONLY the expected, deliberately-provoked warning;
+                // let anything else propagate to phpunit's own handler.
+                return str_contains($errstr, 'exceed max number of coroutine');
+            },
+            E_WARNING
+        );
+
+        $results = null;
+        $completed = false;
+        try {
+            \Swoole\Coroutine\run(function () use ($method, $scanner, $paths, &$results, &$completed): void {
+                // Force EVERY Coroutine::create() call inside
+                // probeManyConcurrently() to fail: this run() root coroutine
+                // already occupies the one and only permitted slot.
+                \Swoole\Coroutine::set(['max_coroutine' => 1]);
+                $results = $method->invoke($scanner, $paths);
+                $completed = true;
+            });
+        } finally {
+            set_error_handler($previousHandler);
+            // Restore Swoole's default ceiling so it cannot leak into any
+            // other test running later in this same process.
+            \Swoole\Coroutine::set(['max_coroutine' => 100000]);
+        }
+
+        $this->assertTrue($completed, 'wait() must return (not hang) when every Coroutine::create() call fails');
+        $this->assertSame(
+            ['/movies/a.mkv' => null, '/movies/b.mkv' => null, '/movies/c.mkv' => null],
+            $results,
+            'a refused coroutine spawn must resolve to null for its path, like any other probe failure'
+        );
+    }
+
+    /**
+     * processFile()'s new optional `$precomputedProbe` parameter, in
+     * isolation: supplying a precomputed probe result produces the SAME
+     * created item as when processFile() computes the probe itself, and the
+     * ffmpeg mock's probe() is NEVER invoked in that path.
+     */
+    public function testProcessFileWithPrecomputedProbeSkipsInternalProbeAndMatchesSelfProbedResult(): void
+    {
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $file = new \SplFileInfo($this->tmpDir . '/Inception (2010).mkv');
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'processFile');
+        $method->setAccessible(true);
+
+        // Baseline: processFile() computes its own probe (precomputed = false,
+        // the "not supplied" sentinel — today's unmodified behaviour).
+        $repoA = $this->makeFakeRepo();
+        $ffmpegA = $this->makeFfmpegStub('300.0');
+        $scannerA = new MediaScanner($this->createMock(Connection::class), $repoA, null, null, null, $ffmpegA);
+        $addedA = $method->invoke($scannerA, 'lib-1', $file, 'movie', null, null, false);
+        $this->assertTrue($addedA);
+
+        // Precomputed: the SAME probe summary supplied directly. The
+        // ffmpeg mock's probe() must never be called.
+        $repoB = $this->makeFakeRepo();
+        $ffmpegB = $this->createMock(FfmpegRunner::class);
+        $ffmpegB->expects($this->never())->method('probe');
+        $scannerB = new MediaScanner($this->createMock(Connection::class), $repoB, null, null, null, $ffmpegB);
+        $precomputed = ['duration_seconds' => 300, 'source' => null, 'streams' => []];
+        $addedB = $method->invoke($scannerB, 'lib-1', $file, 'movie', null, null, $precomputed);
+        $this->assertTrue($addedB);
+
+        $itemA = $repoA->items()[0];
+        $itemB = $repoB->items()[0];
+        $this->assertSame(300, $itemA['metadata_json']['duration_seconds']);
+        $this->assertSame(
+            $itemA['metadata_json']['duration_seconds'],
+            $itemB['metadata_json']['duration_seconds'],
+            'precomputed-probe path must produce the same item as the self-probing path'
+        );
+    }
+
+    /**
+     * A precomputed probe of `null` (the fan-out probe genuinely failed for
+     * this file) is a LEGITIMATE, honoured outcome — processFile() must NOT
+     * silently re-trigger a second internal probe attempt for it. This is
+     * the `false`-vs-`null` sentinel distinction the parameter docblock
+     * describes.
+     */
+    public function testProcessFileWithPrecomputedNullProbeNeverReprobesInternally(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+
+        $this->tmpDir = $this->makeTempDirWith(['Movie One (2020).mkv']);
+        $file = new \SplFileInfo($this->tmpDir . '/Movie One (2020).mkv');
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'processFile');
+        $method->setAccessible(true);
+        $added = $method->invoke($scanner, 'lib-1', $file, 'movie', null, null, null);
+
+        $this->assertTrue($added);
+        $items = $repo->items();
+        $this->assertArrayNotHasKey(
+            'duration_seconds',
+            $items[0]['metadata_json'],
+            'a precomputed null probe must be honoured as-is, not re-probed'
+        );
+    }
+
+    /**
+     * TestEngineer (S8) line-coverage gap: {@see MediaScanner::processScanBatch()}'s
+     * `if ($batch === []) { return 0; }` early-return guard is unreachable
+     * from {@see MediaScanner::scanFlat()}'s own call site — `array_chunk()`
+     * over an empty `$candidates` list yields zero chunks, so the calling
+     * `foreach` body (and therefore `processScanBatch()`) never runs at all
+     * for an empty candidate set. The guard only protects the method's own
+     * contract as a private helper (e.g. against a future direct call with
+     * an empty batch), so it is exercised here directly via reflection
+     * rather than via `scan()`.
+     */
+    public function testProcessScanBatchWithEmptyBatchReturnsZeroWithoutAnyLookupOrProbe(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'processScanBatch');
+        $method->setAccessible(true);
+        $added = $method->invoke($scanner, 'lib-1', [], 'movie', null, null, null);
+
+        $this->assertSame(0, $added);
+        $this->assertSame([], $repo->findPathsMapCallSizes, 'an empty batch must never call findPathsMap()');
+        $this->assertSame([], $repo->items(), 'no items created for an empty batch');
+    }
+
+    /**
+     * TestEngineer (S8) gap: `isProbeEligibleLibraryType()` is the gate that
+     * decides, PURELY from the library `$type`, whether a batch's brand-new
+     * files are fanned out to the concurrent probe pool at all — the chosen
+     * design (confirmed by reading {@see MediaScanner::processScanBatch()})
+     * is "decide eligibility BEFORE probing", never "probe everything and
+     * discard the result for ineligible types". Every `DURATION_PROBE_TYPES`
+     * member reachable at the scanFlat() library-type level ('video',
+     * 'series', 'movie' — all mapped via {@see isVideoContentLibrary()} —
+     * plus 'audio') must gate true; every non-probe-eligible type ('image',
+     * 'book', an unrecognised/empty string) must gate false.
+     */
+    public function testIsProbeEligibleLibraryTypeGatesVideoContentAndAudioTrueEverythingElseFalse(): void
+    {
+        $scanner = new MediaScanner($this->createMock(Connection::class), $this->makeFakeRepo());
+
+        $method = new \ReflectionMethod(MediaScanner::class, 'isProbeEligibleLibraryType');
+        $method->setAccessible(true);
+
+        foreach (['video', 'series', 'movie', 'audio'] as $type) {
+            $this->assertTrue($method->invoke($scanner, $type), "'{$type}' must be probe-eligible");
+        }
+        foreach (['image', 'book', 'unknown-type', ''] as $type) {
+            $this->assertFalse($method->invoke($scanner, $type), "'{$type}' must NOT be probe-eligible");
+        }
+    }
+
+    /**
+     * TestEngineer (S8) gap: a batch mixing an ALREADY-INDEXED path with a
+     * BRAND-NEW path (the realistic incremental-rescan shape — most scans
+     * are mostly-unchanged with a few new files) must route each path to the
+     * CORRECT one of {@see MediaScanner::processScanBatch()}'s two branches,
+     * in the SAME batch — not just in isolation (every pre-existing test
+     * scanned either an all-new or an all-already-indexed directory, never
+     * both together). Proven via: exactly one `update()` (the existing
+     * path's backfill, preserving its prior metadata) and exactly one
+     * `create()` (the new path); each path's ffmpeg probe is invoked exactly
+     * ONCE and attaches to the CORRECT item (no cross-path mixup, no
+     * double-probe, no dropped path).
+     */
+    public function testProcessScanBatchRoutesExistingPathsToBackfillAndNewPathsToProbePoolInTheSameBatch(): void
+    {
+        $repo = $this->makeFakeRepo();
+
+        $this->tmpDir = $this->makeTempDirWith(['Existing Movie (2010).mkv', 'New Movie (2020).mkv']);
+        $existingPath = $this->tmpDir . '/Existing Movie (2010).mkv';
+        $newPath = $this->tmpDir . '/New Movie (2020).mkv';
+
+        $repo->seed([
+            'id' => 'existing-1',
+            'library_id' => 'lib-1',
+            'parent_id' => null,
+            'name' => 'Existing Movie',
+            'type' => 'movie',
+            'path' => $existingPath,
+            // No duration/source yet — eligible for backfill (mirrors
+            // testRescanBackfillsMissingDurationOnExistingItem's shape).
+            'metadata_json' => ['tmdb_id' => 111],
+        ]);
+
+        $probedPaths = [];
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(function (string $path) use (&$probedPaths) {
+            $probedPaths[] = $path;
+            return [
+                'streams' => [],
+                'format' => ['duration' => str_contains($path, 'Existing') ? '999.0' : '555.0'],
+            ];
+        });
+
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        // Each path probed exactly once — no double-probe, no missed probe,
+        // regardless of which branch (backfill vs. probe-pool) it went
+        // through.
+        sort($probedPaths);
+        $expectedProbed = [$existingPath, $newPath];
+        sort($expectedProbed);
+        $this->assertSame($expectedProbed, $probedPaths, 'each path in the mixed batch is probed exactly once');
+
+        $items = $repo->items();
+        $this->assertCount(2, $items, 'exactly one NEW item created; the existing item is not duplicated');
+
+        $updates = array_values(array_filter($repo->updates, fn ($u) => $u['id'] === 'existing-1'));
+        $this->assertCount(
+            1,
+            $updates,
+            'the already-indexed path routed to backfillItemSourceMetadata() (update), not create()'
+        );
+        $this->assertSame(999, $updates[0]['data']['metadata_json']['duration_seconds']);
+        $this->assertSame(111, $updates[0]['data']['metadata_json']['tmdb_id'], 'existing metadata preserved');
+
+        $newItem = null;
+        foreach ($items as $item) {
+            if ($item['path'] === $newPath) {
+                $newItem = $item;
+            }
+        }
+        $this->assertNotNull($newItem, 'the brand-new path routed to processFile()/create()');
+        $this->assertSame(555, $newItem['metadata_json']['duration_seconds']);
+
+        // Load-bearing routing proof: processFile()'s OWN internal
+        // findByPath() existence re-check must NEVER be reached for the
+        // already-indexed path — batching's whole point (avoiding N+1
+        // lookups on a rescan) is defeated if the already-indexed branch
+        // falls through to processFile() and lets ITS redundant per-file
+        // findByPath() call re-derive the same answer findPathsMap() already
+        // gave. The new path's own single findByPath() call inside
+        // processFile() (its pre-existing, S8-unrelated defensive check) is
+        // expected and not what this assertion targets.
+        $this->assertSame(
+            [$newPath],
+            $repo->findByPathCalls,
+            'the already-indexed path must be routed directly to backfillItemSourceMetadata() by '
+                . "processScanBatch()'s own findPathsMap()-derived routing, never falling through to "
+                . "processFile()'s internal per-file findByPath() re-check"
+        );
+    }
+
+    /**
+     * TestEngineer (S8) gap: {@see MediaScanner::SCAN_BATCH_SIZE} (200)
+     * chunking must not drop, duplicate, or misattribute files across a
+     * batch boundary. 250 candidates (> SCAN_BATCH_SIZE) forces EXACTLY
+     * `ceil(250 / SCAN_BATCH_SIZE)` batches; every item's probed duration is
+     * derived deterministically from its OWN filename-embedded index, so a
+     * cross-batch misattribution bug (a file receiving a neighbour's probe
+     * result) is directly observable regardless of filesystem iteration
+     * order. Batch sizes are asserted against the ACTUAL SCAN_BATCH_SIZE
+     * constant (via reflection) rather than a hardcoded 200, so this test
+     * keeps validating chunking correctness even if that constant is ever
+     * deliberately retuned — the important invariant is "no file lost or
+     * duplicated across chunk boundaries", not the specific chunk size.
+     */
+    public function testScanFlatChunksCandidatesAcrossMultipleBatchesWithoutDroppingDuplicatingOrMisattributingFiles(): void
+    {
+        $constant = new \ReflectionClassConstant(MediaScanner::class, 'SCAN_BATCH_SIZE');
+        $batchSize = $constant->getValue();
+        $this->assertIsInt($batchSize);
+
+        $fileCount = $batchSize + 50; // guarantees at least 2 batches
+        $this->assertGreaterThan($batchSize, $fileCount);
+
+        $filenames = [];
+        for ($i = 1; $i <= $fileCount; $i++) {
+            $filenames[] = sprintf('Movie %04d (2020).mkv', $i);
+        }
+        $repo = $this->makeFakeRepo();
+        $this->tmpDir = $this->makeTempDirWith($filenames);
+
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->method('probe')->willReturnCallback(function (string $path) {
+            // Duration is derived SOLELY from the file's own embedded index,
+            // so any cross-batch mixup (wrong duration on the wrong file)
+            // is directly observable independent of iteration/batch order.
+            preg_match('/Movie (\d{4})/', $path, $m);
+            $index = (int) $m[1];
+            return ['streams' => [], 'format' => ['duration' => (string) ($index * 10) . '.0']];
+        });
+
+        $scanner = new MediaScanner($this->createMock(Connection::class), $repo, null, null, null, $ffmpeg);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $items = $repo->items();
+        $this->assertCount(
+            $fileCount,
+            $items,
+            'every candidate across ALL batches was created exactly once — none dropped, none duplicated'
+        );
+
+        $expectedBatchSizes = [];
+        $remaining = $fileCount;
+        while ($remaining > 0) {
+            $chunk = min($batchSize, $remaining);
+            $expectedBatchSizes[] = $chunk;
+            $remaining -= $chunk;
+        }
+        $this->assertSame(
+            $expectedBatchSizes,
+            $repo->findPathsMapCallSizes,
+            'candidates were chunked into the expected number of SCAN_BATCH_SIZE-bounded batches'
+        );
+
+        $seenPaths = [];
+        foreach ($items as $item) {
+            $path = (string) $item['path'];
+            $this->assertArrayNotHasKey($path, $seenPaths, 'no duplicate path created');
+            $seenPaths[$path] = true;
+
+            preg_match('/Movie (\d{4})/', $path, $m);
+            $index = (int) $m[1];
+            $this->assertSame(
+                $index * 10,
+                $item['metadata_json']['duration_seconds'],
+                "file at index {$index} must carry its OWN probed duration, "
+                    . "not a neighbour's (batch-boundary misattribution check)"
+            );
+        }
+    }
+
+    /**
+     * TestEngineer (S8) gap: item CREATION order must track the ORIGINAL
+     * candidate (filesystem-iteration) order, not the completion order of
+     * the concurrent probe pool — this is {@see MediaScanner::scanFlat()}'s
+     * documented "reproducible scan results" guarantee (see its `@since
+     * 0.35.0 (S8)` docblock).
+     *
+     * Ground truth is computed INDEPENDENTLY of the scanner under test — by
+     * walking the same directory with the identical `RecursiveDirectoryIterator`
+     * + `RecursiveIteratorIterator` idiom `scanFlat()`'s own Phase 1 uses,
+     * entirely outside any `MediaScanner` call — rather than comparing two
+     * scanner runs only against EACH OTHER. Comparing two scanner runs
+     * against each other cannot catch a reordering bug that both runs share
+     * (e.g. a mutation that always processes a batch in reverse would
+     * reverse both the "baseline" and "concurrent" run identically and the
+     * two would still match); comparing each run against this independently
+     * derived ground truth closes that gap.
+     *
+     * The concurrent run forces the FIRST-in-ground-truth-order file to sleep
+     * LONGEST (finishes probing LAST) and the LAST-in-ground-truth-order file
+     * to sleep SHORTEST (finishes FIRST) — an aggressive attempt to force
+     * completion order to diverge from candidate order. If creation order
+     * ever tracked completion order instead of original candidate order,
+     * this reversal would surface it.
+     */
+    public function testItemCreationOrderMatchesOriginalCandidateOrderDespiteReversedProbeCompletionTiming(): void
+    {
+        if (!extension_loaded('swoole') || !class_exists(\Swoole\Coroutine::class)) {
+            $this->markTestSkipped('ext-swoole not loaded; coroutine fan-out not exercisable');
+        }
+        \Swoole\Coroutine::set(['log_level' => SWOOLE_LOG_ERROR, 'trace_flags' => 0]);
+
+        $this->tmpDir = $this->makeTempDirWith(['A.mkv', 'B.mkv', 'C.mkv', 'D.mkv', 'E.mkv']);
+
+        // Ground truth: an INDEPENDENT walk of the directory (same iterator
+        // idiom as scanFlat()'s own Phase 1), computed WITHOUT ever calling
+        // into MediaScanner, so a bug shared by every scanner run cannot
+        // hide from this comparison.
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($this->tmpDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+        );
+        $groundTruthOrder = [];
+        foreach ($iterator as $file) {
+            if ($file instanceof \SplFileInfo && !$file->isDir() && strtolower($file->getExtension()) === 'mkv') {
+                $groundTruthOrder[] = $file->getFilename();
+            }
+        }
+        $this->assertCount(5, $groundTruthOrder, 'sanity: ground-truth walk sees all 5 files');
+
+        // Baseline: no coroutine, uniform/no delay.
+        $repoBaseline = $this->makeFakeRepo();
+        $ffmpegBaseline = $this->makeFfmpegStub('10.0');
+        $scannerBaseline = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repoBaseline,
+            null,
+            null,
+            null,
+            $ffmpegBaseline
+        );
+        $scannerBaseline->scan('lib-1', $this->tmpDir, 'movie');
+        $baselineOrder = array_map(
+            fn (array $item): string => basename((string) $item['path']),
+            $repoBaseline->items()
+        );
+        $this->assertSame($groundTruthOrder, $baselineOrder, 'baseline (non-coroutine) order matches ground truth');
+
+        // Concurrent run over the SAME (untouched) directory: reverse the
+        // probe-completion order relative to the ground-truth candidate
+        // order.
+        $delayByName = [];
+        $total = count($groundTruthOrder);
+        foreach ($groundTruthOrder as $i => $name) {
+            $delayByName[$name] = ($total - $i) * 0.01; // first-in-order sleeps longest
+        }
+
+        $repoConcurrent = $this->makeFakeRepo();
+        $ffmpegConcurrent = $this->createMock(FfmpegRunner::class);
+        $ffmpegConcurrent->method('probe')->willReturnCallback(function (string $path) use ($delayByName) {
+            \Swoole\Coroutine::sleep($delayByName[basename($path)] ?? 0.0);
+            return ['streams' => [], 'format' => ['duration' => '10.0']];
+        });
+        $scannerConcurrent = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repoConcurrent,
+            null,
+            null,
+            null,
+            $ffmpegConcurrent,
+            null,
+            5 // cap high enough that all 5 probes genuinely overlap in one wave
+        );
+
+        \Swoole\Coroutine\run(function () use ($scannerConcurrent): void {
+            $scannerConcurrent->scan('lib-1', $this->tmpDir, 'movie');
+        });
+
+        $concurrentOrder = array_map(
+            fn (array $item): string => basename((string) $item['path']),
+            $repoConcurrent->items()
+        );
+
+        $this->assertSame(
+            $groundTruthOrder,
+            $concurrentOrder,
+            'item creation order must match the INDEPENDENTLY-derived original candidate order, '
+                . 'not probe-completion order'
+        );
+    }
+
     // --- helpers -----------------------------------------------------------
 
     /**
@@ -1930,9 +2646,32 @@ class MediaScannerTest extends TestCase
              * persist cleanly) into the guarded catch → 'failed' path.
              */
             public bool $throwOnUpdate = false;
+            /**
+             * S8: size (path count) of every findPathsMap() call, in call
+             * order — lets a test prove {@see MediaScanner::scanFlat()}'s
+             * SCAN_BATCH_SIZE chunking issues exactly the expected number of
+             * batched lookups (one per chunk, not one per file and not one
+             * giant call for the whole scan).
+             *
+             * @var list<int>
+             */
+            public array $findPathsMapCallSizes = [];
+            /**
+             * S8: every path passed to findByPath(), in call order — lets a
+             * test prove {@see MediaScanner::processScanBatch()}'s routing
+             * genuinely BYPASSES processFile()'s own (redundant, per-file)
+             * findByPath() existence re-check for paths already resolved by
+             * the batched findPathsMap() lookup, rather than merely relying
+             * on that inner check to reach the same end result by a
+             * different, N+1-reintroducing route.
+             *
+             * @var list<string>
+             */
+            public array $findByPathCalls = [];
 
             public function findByPath(string $path): ?array
             {
+                $this->findByPathCalls[] = $path;
                 foreach ($this->store as $item) {
                     if (($item['path'] ?? null) === $path) {
                         // Mirror the real repo: expose decoded metadata under
@@ -1945,6 +2684,36 @@ class MediaScannerTest extends TestCase
                     }
                 }
                 return null;
+            }
+
+            /**
+             * S8: batch counterpart to findByPath() — mirrors the real
+             * ItemRepository::findPathsMap() (a single lookup for many
+             * paths) but reads from the in-memory $store instead of issuing
+             * a mocked-Connection query, so scanFlat()'s new batched
+             * already-scanned check behaves identically to the old
+             * per-file findByPath() loop for every existing test.
+             *
+             * @param array<int, string> $paths
+             * @return array<string, array<string, mixed>>
+             */
+            public function findPathsMap(array $paths): array
+            {
+                $this->findPathsMapCallSizes[] = count($paths);
+                $wanted = array_flip($paths);
+                $map = [];
+                foreach ($this->store as $item) {
+                    $path = $item['path'] ?? null;
+                    if (!is_string($path) || !isset($wanted[$path])) {
+                        continue;
+                    }
+                    $row = $item;
+                    $row['metadata'] = is_array($item['metadata_json'] ?? null)
+                        ? $item['metadata_json']
+                        : [];
+                    $map[$path] = $row;
+                }
+                return $map;
             }
 
             public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array

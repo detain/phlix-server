@@ -80,6 +80,13 @@ final class MediaServicesProvider implements ServiceProviderInterface
         $baseUrlRaw = $hlsConfig['base_url'] ?? null;
         $baseUrl = is_string($baseUrlRaw) ? $baseUrlRaw : 'http://localhost:8096';
 
+        // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent
+        // ffprobe pool. Null lets MediaScanner apply its own safe default
+        // (mirrors TranscodeServicesProvider's max_concurrent_segments style).
+        $ffmpegConfigForScan = is_array($appConfig['ffmpeg'] ?? null) ? $appConfig['ffmpeg'] : [];
+        $maxConcurrentScanProbesRaw = $ffmpegConfigForScan['max_concurrent_scan_probes'] ?? null;
+        $maxConcurrentScanProbes = is_int($maxConcurrentScanProbesRaw) ? $maxConcurrentScanProbesRaw : null;
+
         // TMDB API key — prefer $appConfig['tmdb']['api_key'] (loaded by the
         // bootstrap from config/tmdb.php when available), otherwise fall back
         // to the TMDB_API_KEY environment variable. An empty key is harmless:
@@ -262,7 +269,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('ffmpeg', get(FfmpegRunner::class))
                 // Effective (settings-merged) noise-suffix list; named because
                 // PHP-DI skips defaulted optional ctor params during autowiring.
-                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes')),
+                ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes'))
+                // S8: bounded concurrent-ffprobe cap for scanFlat(); named for
+                // the same reason (PHP-DI skips defaulted optional params).
+                ->constructorParameter('maxConcurrentScanProbes', $maxConcurrentScanProbes),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),

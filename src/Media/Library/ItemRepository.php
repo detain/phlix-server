@@ -207,6 +207,47 @@ class ItemRepository
     }
 
     /**
+     * Batch lookup of media items by filesystem path — a single `WHERE path
+     * IN (...)` query rather than one {@see findByPath()} call per candidate.
+     *
+     * Used by {@see MediaScanner::scanFlat()} (S8) to determine, for a whole
+     * batch of scan candidates at once, which ones are already indexed
+     * (rescan → backfill only) versus brand new (probe + create), avoiding an
+     * N+1 query pattern on every scan/rescan.
+     *
+     * @param array<int, string> $paths Absolute filesystem paths to look up.
+     *                                  Duplicates are harmless (the map is
+     *                                  keyed by path, so a repeat collapses).
+     * @return array<string, array<string, mixed>> Hydrated media item rows
+     *         keyed by their `path` column. Paths with no matching row are
+     *         simply absent from the map (never a null entry). Empty input
+     *         short-circuits to `[]` without querying (a malformed
+     *         `IN ()` would otherwise be sent to MySQL).
+     */
+    public function findPathsMap(array $paths): array
+    {
+        if ($paths === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($paths), '?'));
+        $results = $this->db->query(
+            "SELECT * FROM media_items WHERE path IN ({$placeholders})",
+            $paths
+        );
+
+        $map = [];
+        foreach ($this->hydrateRows($results) as $row) {
+            $path = $row['path'] ?? null;
+            if (is_string($path) && $path !== '') {
+                $map[$path] = $row;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
      * Finds a TOP-LEVEL (parent-less) media item whose stored canonical dedup
      * key matches, scoped to one library and type.
      *

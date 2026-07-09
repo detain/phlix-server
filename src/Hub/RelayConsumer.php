@@ -511,6 +511,7 @@ final class RelayConsumer
             RelayFrameType::CLIENT_DISCONNECT => $this->onClientDisconnect($frame),
             RelayFrameType::DATA => $this->onData($frame),
             RelayFrameType::HTTP_REQUEST => $this->onHttpRequest($frame),
+            RelayFrameType::HTTP_CANCEL => $this->onHttpCancel($frame),
             RelayFrameType::HEARTBEAT => $this->onHeartbeat(),
             RelayFrameType::DISCONNECTED => $this->onDisconnectedFrame($frame),
             RelayFrameType::ERROR => $this->onErrorFrame($frame),
@@ -882,6 +883,29 @@ final class RelayConsumer
     }
 
     /**
+     * Send an HTTP_CANCEL frame to the hub for a given relay request id.
+     *
+     * Issued when the server needs to signal that a request has been cancelled
+     * locally (e.g., the resource was deleted mid-request). The request id is
+     * carried in the frame's seq field.
+     *
+     * @param int $requestId The relay request id to cancel.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function sendCancel(int $requestId): void
+    {
+        if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
+            return;
+        }
+
+        $encoded = $this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, '');
+        $this->connection->send($encoded);
+    }
+
+    /**
      * Handle a HEARTBEAT frame from the hub by replying with a HEARTBEAT.
      *
      * @return void
@@ -891,6 +915,29 @@ final class RelayConsumer
     private function onHeartbeat(): void
     {
         $this->sendFrame(RelayFrameType::HEARTBEAT, '');
+    }
+
+    /**
+     * Handle an HTTP_CANCEL frame from the hub.
+     *
+     * The hub sends this when the browser abandons a streaming request so the
+     * server can stop transferring bytes for that request early. The request id
+     * is carried in the frame's seq field. In the current synchronous dispatch
+     * model the request has already completed by the time this arrives, so this
+     * is a no-op with a debug log. It exists for symmetry and to prevent the
+     * unexpected-frame close path.
+     *
+     * @param RelayFrame $frame HTTP_CANCEL frame; request id in seq.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    private function onHttpCancel(RelayFrame $frame): void
+    {
+        $this->logger->debug('RelayConsumer: HTTP_CANCEL received from hub', [
+            'request_id' => $frame->channelId(),
+        ]);
     }
 
     /**

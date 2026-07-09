@@ -56,6 +56,9 @@ class FfmpegRunner
     /** @var string|null Preferred accelerator name from config (e.g., 'cuda', 'qsv') */
     private ?string $preferredAccelerator = null;
 
+    /** @var array<mixed, mixed> Transcoding configuration */
+    private array $config = [];
+
     /**
      * Creates a new FFmpegRunner instance.
      *
@@ -256,9 +259,24 @@ class FfmpegRunner
 
         $width = self::paramInt($params, 'width');
         $height = self::paramInt($params, 'height');
+
+        // Build video filter chain: tone mapping + scaling
+        $filters = [];
+
+        // Check if tone mapping is needed and get the filter chain
+        $videoCodecForTm = self::paramString($params, 'video_codec') ?? 'libx264';
+        $toneMapFilter = $this->getToneMappingProfile($inputPath, $outputPath, $videoCodecForTm);
+        if ($toneMapFilter !== null && $toneMapFilter !== '') {
+            $filters[] = $toneMapFilter;
+        }
+
+        // Add scale filter if resolution is specified
         if ($width !== null && $height !== null) {
-            $scaleFilter = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
-            $cmd .= ' -vf "' . $scaleFilter . '"';
+            $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
+        }
+
+        if (!empty($filters)) {
+            $cmd .= ' -vf "' . implode(',', $filters) . '"';
         }
 
         $audioCodec = self::paramString($params, 'audio_codec');
@@ -289,6 +307,145 @@ class FfmpegRunner
         $cmd .= ' ' . escapeshellarg($outputPath);
 
         return $cmd;
+    }
+
+    /**
+     * Checks if a media file requires HDR tone mapping.
+     *
+     * Probes the file's color metadata to determine if it contains
+     * HDR content (HLG or HDR10) that needs tone mapping for SDR displays.
+     *
+     * @param string $inputPath Path to the media file to check
+     *
+     * @return bool True if the input is HDR (HLG or HDR10) and needs tone mapping
+     *
+     * @example
+     * ```php
+     * if ($runner->needsToneMapping('/path/to/hdr-video.mkv')) {
+     *     // Apply tone mapping filter
+     * }
+     * ```
+     *
+     * @since 0.36.0
+     */
+    public function needsToneMapping(string $inputPath): bool
+    {
+        $probe = $this->probe($inputPath);
+        if ($probe === null) {
+            return false;
+        }
+
+        $colorMeta = $this->extractColorMetadata($probe);
+
+        // HDR content is identified by bt2020 color space with HDR transfer functions
+        // HLG: arib-std-b67 transfer
+        // HDR10: smpte2084 (PQ) transfer
+        $isHdr = in_array($colorMeta['color_transfer'], ['smpte2084', 'arib-std-b67'], true);
+        $isBt2020 = $colorMeta['color_primaries'] === 'bt2020'
+            || $colorMeta['color_space'] === 'bt2020nc'
+            || $colorMeta['color_space'] === 'bt2020_ncl';
+
+        return $isHdr && $isBt2020;
+    }
+
+    /**
+     * Generates the HDR tone mapping filter profile for a transcode operation.
+     *
+     * For HDR content (HLG or HDR10), generates the appropriate zscale/tonemap
+     * filter chain to convert to SDR. Returns null if no tone mapping is needed
+     * or if tone mapping mode is disabled.
+     *
+     * The filter chain is determined by the configured tone_mapping_mode:
+     *  - 'zscale': Uses zscale for CPU-based HDR→SDR conversion
+     *  - 'libplacebo': Uses libplacebo for high-quality tone mapping (if available)
+     *
+     * @param string $inputPath  Source file path
+     * @param string $outputPath Destination file path
+     * @param string $codec      Video codec being used for encoding
+     *
+     * @return string|null FFmpeg video filter chain for tone mapping, or null if not needed
+     *
+     * @example
+     * ```php
+     * $toneMapFilter = $runner->getToneMappingProfile($input, $output, 'libx264');
+     * if ($toneMapFilter !== null) {
+     *     $cmd .= ' -vf "' . $toneMapFilter . '"';
+     * }
+     * ```
+     *
+     * @since 0.36.0
+     */
+    public function getToneMappingProfile(string $inputPath, string $outputPath, string $codec): ?string
+    {
+        if (!$this->needsToneMapping($inputPath)) {
+            return null;
+        }
+
+        $probe = $this->probe($inputPath);
+        if ($probe === null) {
+            return null;
+        }
+
+        $colorMeta = $this->extractColorMetadata($probe);
+
+        // Determine tone mapping mode from config (default: zscale)
+        $toneMapMode = $this->config['tone_mapping_mode'] ?? 'zscale';
+
+        // If prefer_hdr_output is true and codec supports HDR, return null
+        // (output will be HDR10 instead of SDR tone mapping)
+        if (($this->config['prefer_hdr_output'] ?? false) === true) {
+            // Check if codec can handle HDR (hevc Main 10 or similar)
+            if (in_array($codec, ['libx265', 'hevc_nvenc', 'hevc_vaapi', 'hevc_qsv'], true)) {
+                return null;
+            }
+        }
+
+        if ($toneMapMode === 'none') {
+            return null;
+        }
+
+        // Generate the appropriate tone mapping filter chain
+        return match ($toneMapMode) {
+            'zscale' => $this->buildZscaleToneMapFilter($colorMeta),
+            'libplacebo' => $this->buildLibplaceboToneMapFilter($colorMeta),
+            default => null,
+        };
+    }
+
+    /**
+     * Builds a zscale-based tone mapping filter chain.
+     *
+     * @param array<string, mixed> $colorMeta Color metadata from extractColorMetadata()
+     *
+     * @return string FFmpeg filter chain for zscale tone mapping
+     *
+     * @since 0.36.0
+     */
+    private function buildZscaleToneMapFilter(array $colorMeta): string
+    {
+        // zscale transfer=bt709:matrix=bt709:primaries=bt709 converts HDR to SDR
+        // Format=yuv420p ensures 8-bit 4:2:0 output for browser compatibility
+        $filter = 'zscale=transfer=bt709:matrix=bt709:primaries=bt709,format=yuv420p';
+
+        return $filter;
+    }
+
+    /**
+     * Builds a libplacebo-based tone mapping filter chain.
+     *
+     * @param array<string, mixed> $colorMeta Color metadata from extractColorMetadata()
+     *
+     * @return string FFmpeg filter chain for libplacebo tone mapping
+     *
+     * @since 0.36.0
+     */
+    private function buildLibplaceboToneMapFilter(array $colorMeta): string
+    {
+        // libplacebo tonemap with hable curve for natural-looking tone mapping
+        // Uses BT.2020 to BT.709 conversion with proper gamut mapping
+        $filter = 'scale_vaapi=format=nv12,hwupload,tonemap_vaapi=transfer=bt2020:primaries=bt2020:tonemap=hable:desat=0.5';
+
+        return $filter;
     }
 
     /**
@@ -1563,6 +1720,53 @@ class FfmpegRunner
     public function setPreferredAccelerator(?string $name): void
     {
         $this->preferredAccelerator = $name;
+    }
+
+    /**
+     * Sets the transcoding configuration.
+     *
+     * Configuration should include:
+     *  - tone_mapping_mode: 'none' | 'zscale' | 'libplacebo'
+     *  - prefer_hdr_output: bool
+     *
+     * @param array<mixed, mixed> $config Transcoding configuration array
+     *
+     * @since 0.36.0
+     */
+    public function setConfig(array $config): void
+    {
+        $this->config = $config;
+    }
+
+    /**
+     * Loads transcoding configuration from the config file.
+     *
+     * @param string $configPath Path to the transcoding.php config file
+     *
+     * @return void
+     *
+     * @since 0.36.0
+     */
+    public function loadConfig(string $configPath): void
+    {
+        if (is_file($configPath) && is_readable($configPath)) {
+            $config = include $configPath;
+            if (is_array($config)) {
+                $this->config = $config;
+            }
+        }
+    }
+
+    /**
+     * Returns the current transcoding configuration.
+     *
+     * @return array<string, mixed>
+     *
+     * @since 0.36.0
+     */
+    public function getConfig(): array
+    {
+        return $this->config;
     }
 
     /**

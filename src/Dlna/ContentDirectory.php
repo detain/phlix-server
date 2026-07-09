@@ -32,6 +32,18 @@ class ContentDirectory
     /** Root object ID for the content directory hierarchy */
     public const OBJECT_ID_ROOT = '0';
 
+    /** Music library container ID */
+    public const OBJECT_ID_MUSIC = '1';
+
+    /** Artists container ID */
+    public const OBJECT_ID_ARTISTS = '2';
+
+    /** Albums container ID */
+    public const OBJECT_ID_ALBUMS = '3';
+
+    /** Tracks container ID */
+    public const OBJECT_ID_TRACKS = '4';
+
     /** Result format constant for XML output */
     public const RESULT_FORMAT_XML = 'xml';
 
@@ -251,8 +263,41 @@ class ContentDirectory
      */
     private function browseRoot(string $filter, int $startingIndex, int $requestedCount, string $sortCriteria): array
     {
-        // Root contains library containers
-        $libraries = $this->getLibraryContainers();
+        // Root contains library containers with fixed object IDs per spec
+        $libraries = [
+            [
+                'id' => self::OBJECT_ID_MUSIC,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Music',
+                'type' => 'container',
+                'class' => 'object.container',
+                'child_count' => 0,
+            ],
+            [
+                'id' => self::OBJECT_ID_ARTISTS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Artists',
+                'type' => 'container',
+                'class' => 'object.container',
+                'child_count' => 0,
+            ],
+            [
+                'id' => self::OBJECT_ID_ALBUMS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Albums',
+                'type' => 'container',
+                'class' => 'object.container',
+                'child_count' => 0,
+            ],
+            [
+                'id' => self::OBJECT_ID_TRACKS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Tracks',
+                'type' => 'container',
+                'class' => 'object.container',
+                'child_count' => 0,
+            ],
+        ];
 
         $this->totalMatches = count($libraries);
 
@@ -334,28 +379,36 @@ class ContentDirectory
             return $this->libraryBridge->getRootContainers();
         }
 
-        // Fallback to predefined library containers
+        // Fallback to predefined library containers with spec-defined IDs
         return [
             [
-                'id' => 'library-video',
-                'parent_id' => '0',
-                'name' => 'Video',
+                'id' => self::OBJECT_ID_MUSIC,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Music',
                 'type' => 'container',
                 'class' => 'object.container',
                 'child_count' => 0,
             ],
             [
-                'id' => 'library-audio',
-                'parent_id' => '0',
-                'name' => 'Audio',
+                'id' => self::OBJECT_ID_ARTISTS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Artists',
                 'type' => 'container',
                 'class' => 'object.container',
                 'child_count' => 0,
             ],
             [
-                'id' => 'library-images',
-                'parent_id' => '0',
-                'name' => 'Images',
+                'id' => self::OBJECT_ID_ALBUMS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Albums',
+                'type' => 'container',
+                'class' => 'object.container',
+                'child_count' => 0,
+            ],
+            [
+                'id' => self::OBJECT_ID_TRACKS,
+                'parent_id' => self::OBJECT_ID_ROOT,
+                'name' => 'Tracks',
                 'type' => 'container',
                 'class' => 'object.container',
                 'child_count' => 0,
@@ -375,7 +428,13 @@ class ContentDirectory
             return $this->libraryBridge->getContainerChildren($objectId);
         }
 
-        // Handle library containers with fallback
+        // Handle numeric library container IDs (spec-defined hierarchy)
+        // 1 = music, 2 = artists, 3 = albums, 4 = tracks
+        if (in_array($objectId, [self::OBJECT_ID_MUSIC, self::OBJECT_ID_ARTISTS, self::OBJECT_ID_ALBUMS, self::OBJECT_ID_TRACKS], true)) {
+            return $this->getLibraryItemsById($objectId);
+        }
+
+        // Handle legacy library-* prefixed IDs for backwards compatibility
         if (strpos($objectId, 'library-') === 0) {
             $libraryType = substr($objectId, 8); // Remove 'library-' prefix
             return $this->getLibraryItems($libraryType);
@@ -411,6 +470,24 @@ class ContentDirectory
 
         // This would typically come from a library manager
         // For now, return empty array as libraries need to be set up
+        return [];
+    }
+
+    /**
+     * Get items from a library container by numeric ID.
+     *
+     * Handles the spec-defined object IDs: 1=music, 2=artists, 3=albums, 4=tracks
+     *
+     * @param string $objectId The container object ID
+     * @return array<int, array<string, mixed>>
+     *
+     * @since 0.12.0
+     */
+    private function getLibraryItemsById(string $objectId): array
+    {
+        // For now, return empty arrays - real implementation would query library
+        // This is a placeholder that will be replaced with actual library queries
+        // when LibraryBridge is properly integrated
         return [];
     }
 

@@ -139,7 +139,7 @@ final class BootstrapTest extends TestCase
 
         $this->assertInstanceOf(ContainerInterface::class, $container);
 
-        $application = new Application($container, $config);
+        $application = new Application($container, $config, $container->get(ConnectionPool::class));
         $this->assertSame($container, $application->getContainer());
 
         // Resolving a few canonical bindings end-to-end should not throw.

@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 /**
@@ -23,7 +24,8 @@ final readonly class Marker
         public ?string $thumbnailPath,
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $updatedAt,
-    ) {}
+    ) {
+    }
 
     /**
      * Create a Marker from a database row.

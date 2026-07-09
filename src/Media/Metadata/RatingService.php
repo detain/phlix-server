@@ -22,7 +22,8 @@ class RatingService
 {
     public function __construct(
         private readonly Connection $db,
-    ) {}
+    ) {
+    }
 
     /**
      * Find all ratings for a given media item.

@@ -6,6 +6,7 @@
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
  */
+
 declare(strict_types=1);
 
 namespace Phlix\Media;
@@ -29,7 +30,8 @@ final class ChapterSearchService
     public function __construct(
         private readonly Connection $db,
         private readonly ItemRepository $itemRepository,
-    ) {}
+    ) {
+    }
 
     /**
      * Search for media items with markers near a specific playhead position.

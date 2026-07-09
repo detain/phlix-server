@@ -17,6 +17,7 @@ use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\RecommendationService;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
@@ -108,6 +109,9 @@ class WebPortalRouter
     /** @var SimilarityService|null Computes and retrieves item similarity scores; null when not wired */
     private ?SimilarityService $similarityService;
 
+    /** @var RecommendationService|null Computes and retrieves because-you-watched recommendations; null when not wired */
+    private ?RecommendationService $recommendationService;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -133,6 +137,7 @@ class WebPortalRouter
      * @param AvatarStorage|null $avatarStorage Stores user avatar images (optional)
      * @param UserAvatarController|null $userAvatarController Avatar upload/delete routes (optional)
      * @param SimilarityService|null $similarityService Computes item similarity scores (optional)
+     * @param RecommendationService|null $recommendationService Computes because-you-watched recs (optional)
      *
      * @example
      * ```php
@@ -167,7 +172,8 @@ class WebPortalRouter
         ?AvatarStorage $avatarStorage = null,
         ?UserAvatarController $userAvatarController = null,
         ?MediaRatingsController $mediaRatingsController = null,
-        ?SimilarityService $similarityService = null
+        ?SimilarityService $similarityService = null,
+        ?RecommendationService $recommendationService = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -189,6 +195,7 @@ class WebPortalRouter
         $this->userAvatarController = $userAvatarController;
         $this->mediaRatingsController = $mediaRatingsController;
         $this->similarityService = $similarityService;
+        $this->recommendationService = $recommendationService;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -249,6 +256,10 @@ class WebPortalRouter
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
             $r->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
             $r->get('/api/v1/users/me/favorites', [$this, 'listFavorites']);
+
+            // P4-S2: because-you-watched recommendations
+            $r->get('/api/v1/me/recommendations', [$this, 'getRecommendations']);
+            $r->delete('/api/v1/me/recommendations/{mediaItemId}', [$this, 'dismissRecommendation']);
 
             // Watch history routes
             $r->delete('/api/v1/users/me/history/{mediaItemId}', [$this, 'removeFromHistory']);
@@ -1564,6 +1575,97 @@ class WebPortalRouter
         $items = $this->similarityService->getSimilar($itemId, $limit);
 
         return (new Response())->json(['items' => $items]);
+    }
+
+    /**
+     * Retrieves because-you-watched recommendations for the authenticated user (P4-S2).
+     *
+     * Returns the user's pre-computed recommendations ordered by score.
+     * Requires authentication.
+     *
+     * @param Request $request The HTTP request with optional `limit` query param.
+     * @param array<string, string> $params Route parameters (unused).
+     *
+     * @return Response JSON response with recommendations array or 401/503 error.
+     *
+     * @api_endpoint GET /api/v1/me/recommendations
+     *
+     * @requires Authentication
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "recommendations": [
+     *     {
+     *       "id": "abc-123",
+     *       "title": "Recommended Movie Title",
+     *       "posterUrl": "https://example.com/poster.jpg",
+     *       "reason": "because_you_watched",
+     *       "score": 1.234
+     *     }
+     *   ]
+     * }
+     * ```
+     */
+    public function getRecommendations(Request $request, array $params): Response
+    {
+        if ($this->recommendationService === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Recommendations are not configured on this server',
+            ]);
+        }
+
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        $limit = $request->queryInt('limit', 20);
+        if ($limit < 1 || $limit > 100) {
+            $limit = 20;
+        }
+
+        $recommendations = $this->recommendationService->getBecauseYouWatched($userId, $limit);
+
+        return (new Response())->json(['recommendations' => $recommendations]);
+    }
+
+    /**
+     * Dismisses a because-you-watched recommendation (P4-S2).
+     *
+     * Marks the recommendation as dismissed so it no longer appears.
+     * Requires authentication.
+     *
+     * @param Request $request The HTTP request (userId set from auth).
+     * @param array<string, string> $params Route params including 'mediaItemId'.
+     *
+     * @return Response JSON response with success message or 401/400 error.
+     *
+     * @api_endpoint DELETE /api/v1/me/recommendations/{mediaItemId}
+     *
+     * @requires Authentication
+     */
+    public function dismissRecommendation(Request $request, array $params): Response
+    {
+        if ($this->recommendationService === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Recommendations are not configured on this server',
+            ]);
+        }
+
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        $mediaItemId = $params['mediaItemId'] ?? '';
+        if ($mediaItemId === '') {
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+        }
+
+        $this->recommendationService->dismissRecommendation($userId, $mediaItemId);
+
+        return (new Response())->json(['message' => 'Recommendation dismissed']);
     }
 
     /**

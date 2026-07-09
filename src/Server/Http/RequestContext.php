@@ -62,6 +62,14 @@ final class RequestContext
     public const KEY_USER_ID = 'phlix.userId';
 
     /**
+     * Namespaced context key for the active profile-id of the
+     * current request.
+     *
+     * @var string
+     */
+    public const KEY_PROFILE_ID = 'phlix.profileId';
+
+    /**
      * Static-only helper — instantiation is intentionally forbidden.
      */
     private function __construct()
@@ -134,5 +142,50 @@ final class RequestContext
     public static function clearUserId(): void
     {
         Context::set(self::KEY_USER_ID, null);
+    }
+
+    /**
+     * Store the active profile-id of the current request.
+     *
+     * @param int|null $profileId Active profile-id, or null to clear.
+     *
+     * @return void
+     */
+    public static function setProfileId(?int $profileId): void
+    {
+        Context::set(self::KEY_PROFILE_ID, $profileId);
+    }
+
+    /**
+     * Read the active profile-id of the current request.
+     *
+     * @return int|null Active profile-id, or null if unset.
+     */
+    public static function getProfileId(): ?int
+    {
+        $value = Context::get(self::KEY_PROFILE_ID);
+        return is_int($value) ? $value : null;
+    }
+
+    /**
+     * Returns true if a profile-id has been published into the current
+     * coroutine's context.
+     *
+     * @return bool
+     */
+    public static function hasProfileId(): bool
+    {
+        $value = Context::get(self::KEY_PROFILE_ID);
+        return is_int($value);
+    }
+
+    /**
+     * Drop the profile-id from the current coroutine's context.
+     *
+     * @return void
+     */
+    public static function clearProfileId(): void
+    {
+        Context::set(self::KEY_PROFILE_ID, null);
     }
 }

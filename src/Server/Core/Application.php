@@ -598,6 +598,9 @@ class Application
         // Access schedule management routes (P5-S1)
         $this->loadAccessScheduleRoutes();
 
+        // Profile tag management routes (P5-S2)
+        $this->loadProfileTagRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -1014,6 +1017,28 @@ class Application
     }
 
     /**
+     * Wires endpoints for profile tag management that define content
+     * filtering restrictions (blocked/allowed tags) per profile.
+     *
+     * Endpoints:
+     * - GET    /api/v1/profiles/{profileId}/tags       — list all tags for a profile
+     * - POST   /api/v1/profiles/{profileId}/tags       — add a tag
+     * - DELETE /api/v1/profiles/{profileId}/tags/{id}  — remove a tag
+     *
+     * @since 0.15.0
+     */
+    private function loadProfileTagRoutes(): void
+    {
+        $controller = $this->getProfileTagController();
+
+        // AuthMiddleware gates these routes; tag filtering is applied
+        // in ItemRepository::query() based on RequestContext profileId.
+        $this->router->get('/api/v1/profiles/{profileId}/tags', [$controller, 'listForProfile']);
+        $this->router->post('/api/v1/profiles/{profileId}/tags', [$controller, 'createForProfile']);
+        $this->router->delete('/api/v1/profiles/{profileId}/tags/{tagId}', [$controller, 'deleteTag']);
+    }
+
+    /**
      * Returns an AccessScheduleController instance.
      *
      * @return \Phlix\Server\Http\Controllers\AccessScheduleController The controller instance.
@@ -1031,6 +1056,26 @@ class Application
 
         /** @var \Phlix\Server\Http\Controllers\AccessScheduleController */
         return $this->container->get(\Phlix\Server\Http\Controllers\AccessScheduleController::class);
+    }
+
+    /**
+     * Returns a ProfileTagController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\ProfileTagController The controller instance.
+     *
+     * @since 0.15.0
+     */
+    private function getProfileTagController(): \Phlix\Server\Http\Controllers\ProfileTagController
+    {
+        if ($this->container === null) {
+            // Fallback: create with direct DB connection
+            $db = $this->connectionPool->getPooledConnection('mysql');
+            $profileTagService = new \Phlix\Access\ProfileTagService($db);
+            return new \Phlix\Server\Http\Controllers\ProfileTagController($profileTagService);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\ProfileTagController */
+        return $this->container->get(\Phlix\Server\Http\Controllers\ProfileTagController::class);
     }
 
     /**

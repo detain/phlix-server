@@ -22,8 +22,10 @@ use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MusicLibraryManager;
+use Phlix\Media\Library\MusicScanner;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
+use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\RecommendationService;
@@ -166,6 +168,15 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $similarityService = $c->get(SimilarityService::class);
                     /** @var RecommendationService|null $recommendationService */
                     $recommendationService = $c->get(RecommendationService::class);
+                    /** @var Connection $db */
+                    $db = $c->get(Connection::class);
+                    /** @var MetadataManager $metadataManager */
+                    $metadataManager = $c->get(MetadataManager::class);
+
+                    // Create MusicScanner and MusicLibraryService for P7-S1
+                    $audioScanner = new AudioScanner($db, $itemRepository);
+                    $musicScanner = new MusicScanner($db, $audioScanner);
+                    $musicLibraryService = new MusicLibraryService($db, $musicScanner);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -187,6 +198,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         null, // MediaRatingsController (not wired in this context)
                         $similarityService,
                         $recommendationService,
+                        null, // CollectionService (not wired in this context)
+                        $musicLibraryService,
                     );
                 }
             ),

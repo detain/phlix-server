@@ -75,6 +75,18 @@ class FfmpegRunner
     }
 
     /**
+     * Returns the configured FFprobe binary path.
+     *
+     * @return string Absolute path to the ffprobe binary.
+     *
+     * @since 0.13.0
+     */
+    public function getFfprobePath(): string
+    {
+        return $this->ffprobePath;
+    }
+
+    /**
      * Probes a media file for technical information.
      *
      * Uses FFprobe to extract stream details and format information. The actual

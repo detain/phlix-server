@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Library;
 
+use Phlix\Collection\SmartRuleVocabulary;
 use Phlix\Common\Uuid;
 use Phlix\Stats\StatsCollector;
 use Throwable;
@@ -2424,6 +2425,106 @@ class ItemRepository
             return (int) $count;
         }
         return 0;
+    }
+
+    /**
+     * Query media items by smart-collection rules.
+     *
+     * Applies one or more rule descriptors (type + value) against the media_items
+     * table using the SQL clause builders in {@see SmartRuleVocabulary}.
+     * Combines all rules with AND logic. Optionally scoped to a single library.
+     *
+     * @param array<array{type: string, value: mixed}> $rules     List of rule descriptors
+     * @param array<string, mixed>                    $params    Optional params (sort, order, limit, offset)
+     * @param string|null                             $libraryId Optional library UUID scope
+     *
+     * @return array{items: list<array<string, mixed>>, total: int, limit: int, offset: int}
+     */
+    public function queryWithSmartRules(array $rules, array $params = [], ?string $libraryId = null): array
+    {
+        if ($rules === []) {
+            return ['items' => [], 'total' => 0, 'limit' => 50, 'offset' => 0];
+        }
+
+        $wheres = ['1=1'];
+        $bindings = [];
+        $needsRatingJoin = false;
+
+        foreach ($rules as $rule) {
+            $type = isset($rule['type']) && is_string($rule['type']) ? $rule['type'] : '';
+            if ($type === '') {
+                continue;
+            }
+
+            if (!isset(SmartRuleVocabulary::RULES[$type])) {
+                continue;
+            }
+
+            $ruleParams = ['value' => $rule['value'] ?? null];
+            $result = (SmartRuleVocabulary::RULES[$type])($ruleParams);
+
+            foreach ($result['wheres'] as $where) {
+                $wheres[] = $where;
+            }
+            foreach ($result['bindings'] as $binding) {
+                $bindings[] = $binding;
+            }
+
+            if (isset($result['needsRatingJoin']) && $result['needsRatingJoin'] === true) {
+                $needsRatingJoin = true;
+            }
+        }
+
+        if ($libraryId !== null) {
+            $wheres[] = 'library_id = ?';
+            $bindings[] = $libraryId;
+        }
+
+        $baseWhere = implode(' AND ', $wheres);
+
+        $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
+        $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
+        $sort = $this->normalizeSortField($sortRaw);
+        $order = $this->normalizeSortOrder($orderRaw);
+        $limit = $this->normalizeLimit($params['limit'] ?? 50);
+        $offset = $this->normalizeOffset($params['offset'] ?? 0);
+        $orderClause = $this->buildOrderClause($sort, $order);
+
+        if ($needsRatingJoin) {
+            $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
+
+            $countSql = "SELECT COUNT(DISTINCT media_items.id) as count"
+                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}";
+            $countResult = $this->db->query($countSql, $bindings);
+            $total = $this->extractCount($countResult);
+
+            // Rating sort: ORDER BY average numeric score from metadata_ratings.
+            if ($sort === 'rating_sort') {
+                $orderClause = 'avg_rating DESC, ' . self::titleOrder('desc');
+            }
+
+            $selectSql = "SELECT media_items.*, AVG(r.score) AS avg_rating"
+                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
+                . " GROUP BY media_items.id"
+                . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+            $fetchBindings = array_merge($bindings, [$limit, $offset]);
+            $results = $this->db->query($selectSql, $fetchBindings);
+        } else {
+            $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . $baseWhere;
+            $countResult = $this->db->query($countSql, $bindings);
+            $total = $this->extractCount($countResult);
+
+            $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+            $fetchBindings = array_merge($bindings, [$limit, $offset]);
+            $results = $this->db->query($selectSql, $fetchBindings);
+        }
+
+        return [
+            'items' => $this->hydrateRows($results),
+            'total' => $total,
+            'limit' => $limit,
+            'offset' => $offset,
+        ];
     }
 
     /**

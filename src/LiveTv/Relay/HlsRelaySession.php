@@ -21,11 +21,12 @@ namespace Phlix\LiveTv\Relay;
 final class HlsRelaySession
 {
     /**
-     * @param string $sessionId        Unique session identifier (UUID).
-     * @param string $channelId         Channel being streamed.
-     * @param string $tuneRequestId     Associated tune request ID.
-     * @param int    $createdAt         Unix timestamp when session was created.
-     * @param string $relayPathPrefix   URL prefix for relay paths (e.g., '/relay/live').
+     * @param string  $sessionId        Unique session identifier (UUID).
+     * @param string  $channelId         Channel being streamed.
+     * @param string  $tuneRequestId     Associated tune request ID.
+     * @param int     $createdAt         Unix timestamp when session was created.
+     * @param string  $relayPathPrefix   URL prefix for relay paths (e.g., '/relay/live').
+     * @param int|null $maxBandwidthKbps Maximum allowed bandwidth in kbps, or null for unlimited.
      */
     public function __construct(
         public readonly string $sessionId,
@@ -33,6 +34,7 @@ final class HlsRelaySession
         public readonly string $tuneRequestId,
         public readonly int $createdAt,
         private readonly string $relayPathPrefix = '/relay/live',
+        public readonly ?int $maxBandwidthKbps = null,
     ) {
     }
 
@@ -114,5 +116,31 @@ final class HlsRelaySession
     public function getCreatedAt(): int
     {
         return $this->createdAt;
+    }
+
+    /**
+     * Get the maximum allowed bandwidth in kbps.
+     *
+     * @return int|null Maximum bandwidth in kbps, or null if unlimited.
+     *
+     * @since 0.12.0
+     */
+    public function getMaxBandwidthKbps(): ?int
+    {
+        return $this->maxBandwidthKbps;
+    }
+
+    /**
+     * Get the maximum allowed bandwidth in bits per second.
+     *
+     * @return int|null Maximum bandwidth in bps, or null if unlimited.
+     *
+     * @since 0.12.0
+     */
+    public function getMaxBandwidthBps(): ?int
+    {
+        return $this->maxBandwidthKbps !== null
+            ? $this->maxBandwidthKbps * 1000
+            : null;
     }
 }

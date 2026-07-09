@@ -20,6 +20,7 @@ use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\ChapterSearchService;
+use Phlix\Media\CollectionService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -282,7 +283,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('noiseSuffixes', get('matching.noise_suffixes'))
                 // S8: bounded concurrent-ffprobe cap for scanFlat(); named for
                 // the same reason (PHP-DI skips defaulted optional params).
-                ->constructorParameter('maxConcurrentScanProbes', $maxConcurrentScanProbes),
+                ->constructorParameter('maxConcurrentScanProbes', $maxConcurrentScanProbes)
+                // P4-S3: TMDB box-set collection sync
+                ->constructorParameter('collectionService', get(CollectionService::class)),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),
@@ -443,6 +446,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // P4-S2: because-you-watched recommendations engine
             \Phlix\Media\RecommendationService::class => autowire()
                 ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
+
+            // P4-S3: TMDB box-set collection sync
+            CollectionService::class => autowire()
+                ->constructorParameter('itemRepository', get(ItemRepository::class))
+                ->constructorParameter('tmdbProvider', get(TmdbProvider::class)),
         ]);
     }
 

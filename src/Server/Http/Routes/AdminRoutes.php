@@ -201,6 +201,10 @@ final class AdminRoutes
 
                 $r->get('/transcoding/accelerators', [$transcodingController, 'accelerators']);
 
+                // HDR tone-mapping settings (P6-S3).
+                $r->get('/transcoding/tone-mapping', [$transcodingController, 'toneMapping']);
+                $r->put('/transcoding/tone-mapping', [$transcodingController, 'setToneMapping']);
+
                 // Filesystem browse for the library path picker (Step 0.6).
                 /** @var FsBrowseController $fsBrowseController */
                 $fsBrowseController = $container->get(FsBrowseController::class);

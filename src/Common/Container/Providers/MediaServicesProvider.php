@@ -19,6 +19,7 @@ use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
@@ -430,6 +431,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
 
             PlaybackMarkerService::class => autowire()
                 ->constructorParameter('marker_service', get(MarkerService::class)),
+
+            // P3B-S8: marker-based media search
+            ChapterSearchService::class => autowire()
+                ->constructorParameter('itemRepository', get(ItemRepository::class)),
+
+            // P4-S1: similar items engine
+            \Phlix\Media\SimilarityService::class => autowire()
+                ->constructorParameter('itemRepository', get(ItemRepository::class)),
         ]);
     }
 

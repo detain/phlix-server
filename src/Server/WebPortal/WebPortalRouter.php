@@ -19,6 +19,7 @@ use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
@@ -67,6 +68,9 @@ class WebPortalRouter
     /** @var PlaybackMarkerService Provides skip-button specs for playback */
     private PlaybackMarkerService $playbackMarkerService;
 
+    /** @var MarkerService Provides chapter marker storage and retrieval */
+    private MarkerService $markerService;
+
     /** @var UserRepository|null Persists/reads user settings; null when not wired */
     private ?UserRepository $userRepository;
 
@@ -103,6 +107,7 @@ class WebPortalRouter
      * @param PlaybackController $playbackController Handles playback state tracking
      * @param AuthManager $authManager Handles authentication operations
      * @param PlaybackMarkerService $playbackMarkerService Provides skip-button specs
+     * @param MarkerService $markerService Provides chapter marker storage and retrieval
      * @param UserRepository|null $userRepository Persists user settings (optional;
      *        when null the settings endpoints respond 503 instead of faking success)
      * @param WatchHistory|null $watchHistory Tracks watch history per profile (optional;
@@ -137,6 +142,7 @@ class WebPortalRouter
         PlaybackController $playbackController,
         AuthManager $authManager,
         PlaybackMarkerService $playbackMarkerService,
+        MarkerService $markerService,
         ?UserRepository $userRepository = null,
         ?WatchHistory $watchHistory = null,
         ?UserProfileManager $profileManager = null,
@@ -154,6 +160,7 @@ class WebPortalRouter
         $this->itemRepository = $itemRepository;
         $this->playbackController = $playbackController;
         $this->playbackMarkerService = $playbackMarkerService;
+        $this->markerService = $markerService;
         $this->userRepository = $userRepository;
         $this->watchHistory = $watchHistory;
         $this->profileManager = $profileManager;
@@ -206,6 +213,7 @@ class WebPortalRouter
             $r->get('/api/v1/media/index', [$this, 'getMediaIndex']);
             $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
             $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
+            $r->get('/api/v1/media/{id}/chapters', [$this, 'getMediaChapters']);
 
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
@@ -885,6 +893,41 @@ class WebPortalRouter
         ];
 
         return (new Response())->json(['playback_info' => $playbackInfo]);
+    }
+
+    /**
+     * Retrieves chapter markers for a media item.
+     *
+     * @api_endpoint GET /api/v1/media/{id}/chapters
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters (id => media item ID)
+     *
+     * @return Response JSON response with chapter list:
+     *   {chapters: [{start_seconds: int, end_seconds: int, title: string|null}, ...]}
+     *
+     * @since 0.13.0
+     */
+    public function getMediaChapters(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $markerSet = $this->markerService->getMarkers($params['id']);
+
+        $chapters = array_map(
+            static fn (\Phlix\Media\Markers\ChapterMarker $chapter): array => [
+                'start_seconds' => $chapter->start_seconds,
+                'end_seconds' => $chapter->end_seconds,
+                'title' => $chapter->title,
+            ],
+            $markerSet->chapters
+        );
+
+        return (new Response())->json(['chapters' => $chapters]);
     }
 
     /**

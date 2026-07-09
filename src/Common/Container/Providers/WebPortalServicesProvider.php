@@ -23,6 +23,7 @@ use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\UserItemDataRepository;
@@ -139,6 +140,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $authManager = $c->get(AuthManager::class);
                     /** @var PlaybackMarkerService $playbackMarkerService */
                     $playbackMarkerService = $c->get(PlaybackMarkerService::class);
+                    /** @var MarkerService $markerService */
+                    $markerService = $c->get(MarkerService::class);
                     /** @var UserRepository $userRepository */
                     $userRepository = $c->get(UserRepository::class);
                     /** @var WatchHistory $watchHistory */
@@ -162,6 +165,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $playbackController,
                         $authManager,
                         $playbackMarkerService,
+                        $markerService,
                         $userRepository,
                         $watchHistory,
                         $profileManager,

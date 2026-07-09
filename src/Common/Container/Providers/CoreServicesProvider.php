@@ -66,6 +66,15 @@ final class CoreServicesProvider implements ServiceProviderInterface
             'app.db_config_path' => $dbConfigPath,
             'app.logger_config_path' => $loggerConfigPath,
 
+            // R5: ConnectionPool bound to DI container so it can be injected
+            // into Application (replacing static ConnectionPool::getConnection calls).
+            ConnectionPool::class => factory(static function () use ($dbConfigPath): ConnectionPool {
+                if (is_string($dbConfigPath) && $dbConfigPath !== '' && ConnectionPool::getInstance() === null) {
+                    ConnectionPool::init($dbConfigPath);
+                }
+                return ConnectionPool::getInstance() ?? new ConnectionPool();
+            }),
+
             // Initialise the static pools exactly once on first resolve.
             Connection::class => factory(static function () use ($dbConfigPath): Connection {
                 if (is_string($dbConfigPath) && $dbConfigPath !== '' && ConnectionPool::getInstance() === null) {

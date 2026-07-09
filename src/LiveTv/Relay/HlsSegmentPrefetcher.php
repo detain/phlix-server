@@ -255,23 +255,24 @@ class HlsSegmentPrefetcher
      *
      * @param string $sessionId           Session ID for this prefetch task.
      * @param string $variantPlaylistUrl   URL of the variant playlist.
+     * @param int|null $maxBandwidthKbps  Optional max bandwidth in kbps to limit prefetch to renditions at or below this rate.
      *
      * @return void
      *
      * @since 0.12.0
      */
-    public function startPrefetch(string $sessionId, string $variantPlaylistUrl): void
+    public function startPrefetch(string $sessionId, string $variantPlaylistUrl, ?int $maxBandwidthKbps = null): void
     {
         // Stop any existing prefetch for this session
         $this->stopPrefetch($sessionId);
 
-        // Initial prefetch
-        $this->prefetch($variantPlaylistUrl);
+        // Initial prefetch (respecting bandwidth limit if set)
+        $this->prefetchWithBandwidth($variantPlaylistUrl, $maxBandwidthKbps);
 
         // Schedule periodic prefetch (every 5 seconds)
         $interval = 5.0;
-        $timerId = Timer::add($interval, function () use ($variantPlaylistUrl): void {
-            $this->prefetch($variantPlaylistUrl);
+        $timerId = Timer::add($interval, function () use ($variantPlaylistUrl, $maxBandwidthKbps): void {
+            $this->prefetchWithBandwidth($variantPlaylistUrl, $maxBandwidthKbps);
         });
 
         $this->prefetchTimers[$sessionId] = $timerId;
@@ -280,7 +281,137 @@ class HlsSegmentPrefetcher
             'session_id' => $sessionId,
             'playlist_url' => $variantPlaylistUrl,
             'prefetch_segments' => $this->prefetchSegments,
+            'max_bandwidth_kbps' => $maxBandwidthKbps,
         ]);
+    }
+
+    /**
+     * Prefetch segments from a variant playlist, optionally filtered by bandwidth.
+     *
+     * When maxBandwidthKbps is set, only prefetches renditions at or below that
+     * bandwidth. This is used when a client has a bandwidth preference and we
+     * want to prefetch only suitable renditions.
+     *
+     * @param string $variantPlaylistUrl  URL of the variant playlist (or master playlist for bandwidth filtering).
+     * @param int|null $maxBandwidthKbps  Optional max bandwidth in kbps to filter renditions.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function prefetchWithBandwidth(string $variantPlaylistUrl, ?int $maxBandwidthKbps = null): void
+    {
+        if ($maxBandwidthKbps === null) {
+            $this->prefetch($variantPlaylistUrl);
+            return;
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'timeout' => 10,
+                'user_agent' => 'Phlix Media Server/1.0',
+            ],
+        ]);
+
+        $playlistContent = @file_get_contents($variantPlaylistUrl, false, $context);
+        if ($playlistContent === false) {
+            $this->logger?->warning('HlsSegmentPrefetcher: failed to fetch playlist for bandwidth prefetch', [
+                'url' => $variantPlaylistUrl,
+            ]);
+            return;
+        }
+
+        // Parse the playlist to find available renditions and their bandwidths
+        $renditions = $this->parseRenditionsFromPlaylist($playlistContent, $variantPlaylistUrl);
+
+        // Filter renditions to only those at or below max bandwidth
+        $maxBandwidthBps = $maxBandwidthKbps * 1000;
+        $filteredRenditions = [];
+        foreach ($renditions as $rendition) {
+            if ($rendition['bandwidth'] <= $maxBandwidthBps) {
+                $filteredRenditions[] = $rendition;
+            }
+        }
+
+        // Prefetch segments from filtered renditions (up to prefetchSegments total)
+        $segmentsToFetch = [];
+        foreach ($filteredRenditions as $rendition) {
+            $variantSegments = $this->parsePlaylistSegments($rendition['playlist_url'], $variantPlaylistUrl);
+            $segmentsToFetch = array_merge($segmentsToFetch, array_slice($variantSegments, 0, (int) ceil($this->prefetchSegments / count($filteredRenditions))));
+            if (count($segmentsToFetch) >= $this->prefetchSegments) {
+                break;
+            }
+        }
+
+        $segmentsToFetch = array_slice($segmentsToFetch, 0, $this->prefetchSegments);
+
+        foreach ($segmentsToFetch as $segmentUrl) {
+            $this->fetchAndCacheSegment($segmentUrl);
+        }
+    }
+
+    /**
+     * Parse renditions from a master playlist content.
+     *
+     * Returns an array of rendition info including bandwidth and playlist URL.
+     *
+     * @param string $playlistContent The master playlist m3u8 content.
+     * @param string $baseUrl         Base URL for resolving relative segment URLs.
+     *
+     * @return array<int, array{bandwidth: int, playlist_url: string}> Array of rendition info.
+     *
+     * @since 0.12.0
+     */
+    private function parseRenditionsFromPlaylist(string $playlistContent, string $baseUrl): array
+    {
+        $renditions = [];
+        $lines = explode("\n", $playlistContent);
+        $baseDir = dirname($baseUrl);
+        $i = 0;
+        $totalLines = count($lines);
+
+        while ($i < $totalLines) {
+            $line = trim($lines[$i]);
+
+            // Check if this is a variant stream info line
+            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                $bandwidth = null;
+                if (preg_match('/BANDWIDTH=(\d+)/', $line, $matches)) {
+                    $bandwidth = (int) $matches[1];
+                }
+
+                // Find the URL line that follows
+                $i++;
+                while ($i < $totalLines) {
+                    $urlLine = trim($lines[$i]);
+                    if ($urlLine === '') {
+                        $i++;
+                        continue;
+                    }
+                    if (str_starts_with($urlLine, '#')) {
+                        // Comments before URL are part of the variant, keep them
+                        $i++;
+                        continue;
+                    }
+
+                    // This is the URL - resolve relative URLs
+                    if (!str_starts_with($urlLine, '/') && !preg_match('/^https?:/', $urlLine)) {
+                        $urlLine = rtrim($baseDir, '/') . '/' . $urlLine;
+                    }
+
+                    if ($bandwidth !== null) {
+                        $renditions[] = [
+                            'bandwidth' => $bandwidth,
+                            'playlist_url' => $urlLine,
+                        ];
+                    }
+                    break;
+                }
+            }
+            $i++;
+        }
+
+        return $renditions;
     }
 
     /**

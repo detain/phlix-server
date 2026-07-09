@@ -98,6 +98,20 @@ class Application
             });
         }
 
+        // Register AccessScheduleMiddleware from container if available
+        // Runs after auth to enforce time-based access restrictions
+        if ($container->has(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\AccessScheduleMiddleware */
+            $accessScheduleMiddleware = $container->get(\Phlix\Server\Http\Middleware\AccessScheduleMiddleware::class);
+            $this->middleware(function (Request $request, callable $next) use ($accessScheduleMiddleware): Response {
+                $result = $accessScheduleMiddleware($request);
+                if ($result !== null) {
+                    return $result;
+                }
+                return $next($request);
+            });
+        }
+
         self::$instance = $this;
     }
 
@@ -581,6 +595,9 @@ class Application
         // SyncPlay group watching routes (3.5).
         $this->loadSyncPlayRoutes();
 
+        // Access schedule management routes (P5-S1)
+        $this->loadAccessScheduleRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -965,6 +982,55 @@ class Application
         /** @var \Phlix\Session\SyncPlay\SyncPlayManager */
         $syncPlayManager = $this->container->get(\Phlix\Session\SyncPlay\SyncPlayManager::class);
         return new \Phlix\Server\Http\Controllers\SyncPlayController($syncPlayManager, $snapshotService);
+    }
+
+    /**
+     * Registers access schedule management API routes (P5-S1).
+     *
+     * Wires endpoints for profile access schedules that define time-based
+     * access control windows. These routes are auth-gated and enforce
+     * schedule restrictions via AccessScheduleMiddleware.
+     *
+     * Endpoints:
+     * - GET    /api/v1/profiles/{profileId}/schedules       — list all schedules
+     * - POST   /api/v1/profiles/{profileId}/schedules       — create a new schedule
+     * - GET    /api/v1/profiles/{profileId}/schedules/{id} — get a specific schedule
+     * - PUT    /api/v1/profiles/{profileId}/schedules/{id} — update a schedule
+     * - DELETE /api/v1/profiles/{profileId}/schedules/{id} — delete a schedule
+     *
+     * @since 0.15.0
+     */
+    private function loadAccessScheduleRoutes(): void
+    {
+        $controller = $this->getAccessScheduleController();
+
+        // AuthMiddleware gates these routes; AccessScheduleMiddleware
+        // runs globally after auth to enforce schedule restrictions.
+        $this->router->get('/api/v1/profiles/{profileId}/schedules', [$controller, 'listForProfile']);
+        $this->router->post('/api/v1/profiles/{profileId}/schedules', [$controller, 'createForProfile']);
+        $this->router->get('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'getSchedule']);
+        $this->router->put('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'updateSchedule']);
+        $this->router->delete('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'deleteSchedule']);
+    }
+
+    /**
+     * Returns an AccessScheduleController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\AccessScheduleController The controller instance.
+     *
+     * @since 0.15.0
+     */
+    private function getAccessScheduleController(): \Phlix\Server\Http\Controllers\AccessScheduleController
+    {
+        if ($this->container === null) {
+            // Fallback: create with direct DB connection
+            $db = $this->connectionPool->getPooledConnection('mysql');
+            $accessScheduleService = new \Phlix\Access\AccessScheduleService($db);
+            return new \Phlix\Server\Http\Controllers\AccessScheduleController($accessScheduleService);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\AccessScheduleController */
+        return $this->container->get(\Phlix\Server\Http\Controllers\AccessScheduleController::class);
     }
 
     /**

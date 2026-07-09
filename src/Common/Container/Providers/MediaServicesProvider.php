@@ -439,6 +439,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // P4-S1: similar items engine
             \Phlix\Media\SimilarityService::class => autowire()
                 ->constructorParameter('itemRepository', get(ItemRepository::class)),
+
+            // P4-S2: because-you-watched recommendations engine
+            \Phlix\Media\RecommendationService::class => autowire()
+                ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
         ]);
     }
 

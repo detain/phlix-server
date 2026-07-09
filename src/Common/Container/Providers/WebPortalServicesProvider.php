@@ -26,6 +26,7 @@ use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\RecommendationService;
 use Phlix\Media\SimilarityService;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\UserItemDataRepository;
@@ -163,6 +164,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $userAvatarController = new UserAvatarController($avatarStorage, $userRepository);
                     /** @var SimilarityService|null $similarityService */
                     $similarityService = $c->get(SimilarityService::class);
+                    /** @var RecommendationService|null $recommendationService */
+                    $recommendationService = $c->get(RecommendationService::class);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -183,6 +186,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $userAvatarController,
                         null, // MediaRatingsController (not wired in this context)
                         $similarityService,
+                        $recommendationService,
                     );
                 }
             ),

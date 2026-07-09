@@ -14,6 +14,7 @@ use Phlix\Auth\Dto\UserRow;
 use Phlix\Auth\Dto\WatchHistoryRow;
 use Phlix\Common\Uuid;
 use Phlix\Common\Util\RowMap;
+use Phlix\Media\RecommendationService;
 use Workerman\MySQL\Connection;
 
 /**
@@ -54,6 +55,14 @@ class WatchHistory
      * @var Connection
      */
     private Connection $db;
+
+    /**
+     * Recommendation service for computing because-you-watched recs (P4-S2).
+     * Null when not wired — recommendation computation is best-effort.
+     *
+     * @var RecommendationService|null
+     */
+    private ?RecommendationService $recommendationService = null;
 
     /**
      * Playback status: Media is actively playing.
@@ -141,12 +150,15 @@ class WatchHistory
      * Constructs a new WatchHistory instance.
      *
      * @param Connection $db Database connection for watch history persistence
+     * @param RecommendationService|null $recommendationService Optional recommendation
+     *        engine for P4-S2 background recomputation on watch completion.
      *
      * @throws void
      */
-    public function __construct(Connection $db)
+    public function __construct(Connection $db, ?RecommendationService $recommendationService = null)
     {
         $this->db = $db;
+        $this->recommendationService = $recommendationService;
     }
 
     /**
@@ -326,8 +338,10 @@ class WatchHistory
         ?int $durationTicks = null,
         string $status = self::STATUS_PLAYING
     ): array {
-        // Get existing entry to calculate progress
+        // Get existing entry to calculate progress.
         $existing = $this->getForMediaItem($profileId, $mediaItemId);
+        $wasAlreadyCompleted = $existing !== null
+            && ($existing['playback_status'] ?? '') === self::STATUS_COMPLETED;
 
         $progressPercent = 0.0;
         if ($durationTicks && $durationTicks > 0) {
@@ -335,9 +349,11 @@ class WatchHistory
         }
 
         $completedAt = null;
+        $newlyCompleted = false;
         if ($progressPercent >= self::COMPLETED_THRESHOLD) {
             $status = self::STATUS_COMPLETED;
             $completedAt = date('Y-m-d H:i:s');
+            $newlyCompleted = !$wasAlreadyCompleted;
         }
 
         $now = date('Y-m-d H:i:s');
@@ -390,6 +406,16 @@ class WatchHistory
                 'Failed to read back watch_history entry after upsert'
             );
         }
+
+        // P4-S2: background step — recompute because-you-watched recommendations
+        // when the user first completes a media item (not on every progress ping).
+        if ($newlyCompleted && $this->recommendationService !== null) {
+            $userId = $this->resolveUserIdFromProfile($profileId);
+            if ($userId !== null) {
+                $this->recommendationService->computeBecauseYouWatched($userId);
+            }
+        }
+
         return $entry;
     }
 
@@ -672,6 +698,27 @@ class WatchHistory
     private function hydrateEntry(array $row): array
     {
         return WatchHistoryRow::fromRow($row)->toArray();
+    }
+
+    /**
+     * Looks up the user_id for a given profile_id.
+     *
+     * @param string $profileId The profile UUID.
+     *
+     * @return string|null The user UUID, or null if not found.
+     *
+     * @internal
+     */
+    private function resolveUserIdFromProfile(string $profileId): ?string
+    {
+        $row = UserRow::firstFromMixed(
+            $this->db->query(
+                "SELECT user_id FROM user_profiles WHERE id = ?",
+                [$profileId]
+            )
+        );
+
+        return UserRow::string($row, 'user_id');
     }
 
     /**

@@ -10,6 +10,7 @@ use Phlix\Auth\UserRepository;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Server\Http\Request;
 use Phlix\Server\WebPortal\WebPortalRouter;
@@ -26,7 +27,8 @@ class WebPortalRouterMediaTest extends TestCase
             $this->createMock(SessionManager::class),
             $this->createMock(PlaybackController::class),
             $this->createMock(AuthManager::class),
-            $this->createMock(PlaybackMarkerService::class)
+            $this->createMock(PlaybackMarkerService::class),
+            $this->createMock(MarkerService::class)
         );
     }
 

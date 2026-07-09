@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Server\WebPortal;
 use Phlix\Auth\AuthManager;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
@@ -36,6 +37,8 @@ class WebPortalRouterUserDataTest extends TestCase
             $this->createMock(PlaybackController::class),
             $this->createMock(AuthManager::class),
             $this->createMock(PlaybackMarkerService::class),
+            $this->createMock(MarkerService::class),
+            null,
             null,
             null,
             null,

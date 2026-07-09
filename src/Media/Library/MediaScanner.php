@@ -16,8 +16,10 @@ use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\MarkerService;
+use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
-use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\MarkerService as MarkersMarkerService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -1245,8 +1247,30 @@ class MediaScanner
                 $chapters = $chapterService->extractFromFile($path);
                 if (!empty($chapters)) {
                     $candidateRepo = new MarkerCandidateRepository($this->itemRepository);
-                    $markerService = new MarkerService($this->itemRepository, $candidateRepo);
+                    $markerService = new MarkersMarkerService($this->itemRepository, $candidateRepo);
                     $markerService->storeChapters((string) $itemId, $chapters);
+
+                    // Generate per-chapter thumbnails and store chapter markers in media_markers
+                    $chapterDir = $this->ffmpeg->getTranscodeDir() . '/chapters/' . $itemId;
+                    if (!is_dir($chapterDir)) {
+                        mkdir($chapterDir, 0755, true);
+                    }
+                    $mediaMarkerService = new MarkerService($this->db);
+                    foreach ($chapters as $index => $chapter) {
+                        $thumbPath = $chapterDir . '/' . $index . '.jpg';
+                        $startSeconds = $chapter->start_seconds;
+                        $success = $this->ffmpeg->generateThumbnail($path, $thumbPath, $startSeconds);
+                        if ($success) {
+                            $mediaMarkerService->upsert(
+                                (string) $itemId,
+                                MarkerType::Chapter,
+                                $startSeconds * 1000,
+                                $chapter->end_seconds * 1000,
+                                $chapter->title ?? ('Chapter ' . ($index + 1)),
+                                $thumbPath
+                            );
+                        }
+                    }
                 }
 
                 // Generate trickplay sprite sheet (best-effort): a 60-thumb grid

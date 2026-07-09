@@ -8,4 +8,5 @@ enum MarkerType: string
     case Outro = 'outro';
     case Credits = 'credits';
     case Ad = 'ad';
+    case Chapter = 'chapter';
 }

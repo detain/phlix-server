@@ -17,6 +17,7 @@ use Phlix\Auth\UserProfileManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
+use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\AudioScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -25,6 +26,7 @@ use Phlix\Media\Library\PhotoLibraryManager;
 use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\SimilarityService;
 use Phlix\Media\Storage\AvatarStorage;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\ExifProvider;
@@ -142,6 +144,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $playbackMarkerService = $c->get(PlaybackMarkerService::class);
                     /** @var MarkerService $markerService */
                     $markerService = $c->get(MarkerService::class);
+                    /** @var ChapterSearchService|null $chapterSearchService */
+                    $chapterSearchService = $c->get(ChapterSearchService::class);
                     /** @var UserRepository $userRepository */
                     $userRepository = $c->get(UserRepository::class);
                     /** @var WatchHistory $watchHistory */
@@ -157,6 +161,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     /** @var AvatarStorage $avatarStorage */
                     $avatarStorage = $c->get(AvatarStorage::class);
                     $userAvatarController = new UserAvatarController($avatarStorage, $userRepository);
+                    /** @var SimilarityService|null $similarityService */
+                    $similarityService = $c->get(SimilarityService::class);
 
                     return new WebPortalRouter(
                         $libraryManager,
@@ -166,6 +172,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $authManager,
                         $playbackMarkerService,
                         $markerService,
+                        $chapterSearchService,
                         $userRepository,
                         $watchHistory,
                         $profileManager,
@@ -174,6 +181,8 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $auditLogger,
                         $avatarStorage,
                         $userAvatarController,
+                        null, // MediaRatingsController (not wired in this context)
+                        $similarityService,
                     );
                 }
             ),

@@ -22,6 +22,7 @@ use Phlix\Media\Markers\ChapterMarkerService;
 use Phlix\Media\Markers\MarkerService as MarkersMarkerService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
+use Phlix\Media\SimilarityService;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Workerman\MySQL\Connection;
@@ -60,6 +61,9 @@ class MediaScanner
 
     /** @var TrailerFinder|null Finder for local trailers */
     private ?TrailerFinder $trailerFinder = null;
+
+    /** @var SimilarityService|null Computes item similarity after scan; null when not wired */
+    private ?SimilarityService $similarityService = null;
 
     /**
      * Optional ffprobe runner used to read each time-based file's total
@@ -176,8 +180,14 @@ class MediaScanner
      *                           (`config/ffmpeg.php`'s `max_concurrent_scan_probes`).
      *                           Null/non-positive falls back to
      *                           {@see DEFAULT_MAX_CONCURRENT_SCAN_PROBES}.
+     * @param SimilarityService|null $similarityService P4-S1: optional similarity
+     *                           engine; when supplied, {@see computeSimilarForItem()}
+     *                           is called (best-effort) after each newly scanned
+     *                           item is indexed so its similarity scores are
+     *                           populated without an explicit backfill run.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
+     * @since 0.35.0 SimilarityService parameter added for P4-S1
      */
     public function __construct(
         Connection $db,
@@ -187,7 +197,8 @@ class MediaScanner
         ?TrailerFinder $trailerFinder = null,
         ?FfmpegRunner $ffmpeg = null,
         ?array $noiseSuffixes = null,
-        ?int $maxConcurrentScanProbes = null
+        ?int $maxConcurrentScanProbes = null,
+        ?SimilarityService $similarityService = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -204,6 +215,7 @@ class MediaScanner
         $this->maxConcurrentScanProbes = ($maxConcurrentScanProbes !== null && $maxConcurrentScanProbes > 0)
             ? $maxConcurrentScanProbes
             : self::DEFAULT_MAX_CONCURRENT_SCAN_PROBES;
+        $this->similarityService = $similarityService;
     }
 
     /**
@@ -1296,6 +1308,19 @@ class MediaScanner
         }
 
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
+
+        // P4-S1: best-effort similarity computation after a new item is indexed.
+        // This runs in the scan path so failures must never abort the scan.
+        if ($this->similarityService !== null) {
+            try {
+                $this->similarityService->computeSimilarForItem((string) $itemId);
+            } catch (\Throwable $e) {
+                $this->logger->debug('Similarity computation failed for item', [
+                    'item_id' => $itemId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
 
         return true;
     }

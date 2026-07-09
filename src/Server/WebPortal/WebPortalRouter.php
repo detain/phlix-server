@@ -15,12 +15,15 @@ use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Middleware\AuthMiddleware;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Router;
+use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\IndexBuckets;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
+use Phlix\Media\SimilarityService;
 use Phlix\Session\SessionManager;
 use Phlix\Session\PlaybackController;
 use Phlix\Auth\AuthManager;
@@ -72,6 +75,9 @@ class WebPortalRouter
     /** @var MarkerService Provides chapter marker storage and retrieval */
     private MarkerService $markerService;
 
+    /** @var ChapterSearchService|null Searches media by marker content (P3B-S8); null when not wired */
+    private ?ChapterSearchService $chapterSearchService;
+
     /** @var UserRepository|null Persists/reads user settings; null when not wired */
     private ?UserRepository $userRepository;
 
@@ -99,6 +105,9 @@ class WebPortalRouter
     /** @var UserAvatarController|null Handles avatar upload/delete routes; null when not wired */
     private ?UserAvatarController $userAvatarController;
 
+    /** @var SimilarityService|null Computes and retrieves item similarity scores; null when not wired */
+    private ?SimilarityService $similarityService;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -123,6 +132,7 @@ class WebPortalRouter
      * @param AuditLogger|null $auditLogger Security-event logger for admin operations (optional)
      * @param AvatarStorage|null $avatarStorage Stores user avatar images (optional)
      * @param UserAvatarController|null $userAvatarController Avatar upload/delete routes (optional)
+     * @param SimilarityService|null $similarityService Computes item similarity scores (optional)
      *
      * @example
      * ```php
@@ -147,6 +157,7 @@ class WebPortalRouter
         AuthManager $authManager,
         PlaybackMarkerService $playbackMarkerService,
         MarkerService $markerService,
+        ?ChapterSearchService $chapterSearchService = null,
         ?UserRepository $userRepository = null,
         ?WatchHistory $watchHistory = null,
         ?UserProfileManager $profileManager = null,
@@ -155,7 +166,8 @@ class WebPortalRouter
         ?AuditLogger $auditLogger = null,
         ?AvatarStorage $avatarStorage = null,
         ?UserAvatarController $userAvatarController = null,
-        ?MediaRatingsController $mediaRatingsController = null
+        ?MediaRatingsController $mediaRatingsController = null,
+        ?SimilarityService $similarityService = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -166,6 +178,7 @@ class WebPortalRouter
         $this->playbackController = $playbackController;
         $this->playbackMarkerService = $playbackMarkerService;
         $this->markerService = $markerService;
+        $this->chapterSearchService = $chapterSearchService;
         $this->userRepository = $userRepository;
         $this->watchHistory = $watchHistory;
         $this->profileManager = $profileManager;
@@ -175,6 +188,7 @@ class WebPortalRouter
         $this->avatarStorage = $avatarStorage;
         $this->userAvatarController = $userAvatarController;
         $this->mediaRatingsController = $mediaRatingsController;
+        $this->similarityService = $similarityService;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -208,6 +222,9 @@ class WebPortalRouter
         // Public media-item ratings endpoint (P1-S1): no auth required.
         $this->router->get('/api/v1/media/{id}/ratings', [$this, 'getRatings']);
 
+        // P4-S1: similar items endpoint — no auth required.
+        $this->router->get('/api/v1/media/{id}/similar', [$this, 'getSimilarItems']);
+
         $this->router->group('', function (Router $r): void {
             // Library routes
             $r->get('/api/v1/libraries', [$this, 'getLibraries']);
@@ -220,9 +237,13 @@ class WebPortalRouter
             $r->get('/api/v1/media/letter-index', [$this, 'getLetterIndex']);
             $r->get('/api/v1/media/facets', [$this, 'getMediaFacets']);
             $r->get('/api/v1/media/index', [$this, 'getMediaIndex']);
+            // P3B-S8: marker-based search — registered before {id} so path is not swallowed
+            $r->get('/api/v1/media/search/by-marker', [$this, 'searchByMarker']);
             $r->get('/api/v1/media/{id}', [$this, 'getMediaItem']);
             $r->get('/api/v1/media/{id}/playback', [$this, 'getPlaybackInfo']);
             $r->get('/api/v1/media/{id}/chapters', [$this, 'getMediaChapters']);
+            // P3B-S8: marker-type search for a specific media item
+            $r->get('/api/v1/media/{id}/markers/search', [$this, 'searchMediaMarkers']);
 
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
@@ -528,6 +549,33 @@ class WebPortalRouter
 
         return $this->userItemData->getItemData($userId, $itemId)
             ?? ['favorite' => false, 'rating' => null, 'like_level' => 0, 'watched' => false];
+    }
+
+    /**
+     * Resolve the active profile ID for an authenticated user.
+     *
+     * Used to determine which profile's watch history to check when excluding
+     * already-watched items from search results.
+     *
+     * @param Request $request The HTTP request (carries the authenticated userId)
+     * @param string  $userId  The authenticated user's ID (already validated non-empty)
+     *
+     * @return string|null The profile ID string, or null when the profile manager
+     *                     is unavailable or no active profile exists for the user.
+     */
+    private function resolveProfileId(Request $request, string $userId): ?string
+    {
+        if ($this->profileManager === null) {
+            return null;
+        }
+
+        $profile = $this->profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            return null;
+        }
+
+        $profileId = is_string($profile['id'] ?? null) ? $profile['id'] : '';
+        return $profileId !== '' ? $profileId : null;
     }
 
     /**
@@ -950,6 +998,131 @@ class WebPortalRouter
     }
 
     /**
+     * Search for media items with markers near a specific playhead position (P3B-S8).
+     *
+     * Finds media items that have a marker of the specified type within $around
+     * seconds of the given position. Used for "similar content" recommendations.
+     * Excludes items the user has already watched.
+     *
+     * @param Request $request The HTTP request with query params:
+     *   - type: Marker type (intro|outro|credits|ad)
+     *   - around: Search window in seconds (default: 30)
+     *   - position: Current playhead position in milliseconds (default: 0)
+     *   - limit: Maximum results (default: 20)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with items array:
+     *   {items: [...], marker_type: string, around: int, position: int}
+     *
+     * @api_endpoint GET /api/v1/media/search/by-marker
+     *
+     * @requires Authentication
+     *
+     * @since 0.14.0
+     */
+    public function searchByMarker(Request $request, array $params): Response
+    {
+        if ($this->chapterSearchService === null) {
+            return (new Response())->status(503)->json(['error' => 'Chapter search not available']);
+        }
+
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        $typeStr = $request->queryString('type');
+        if ($typeStr === null || $typeStr === '') {
+            return (new Response())->status(400)->json(['error' => 'type query parameter is required']);
+        }
+
+        $type = MarkerType::tryFrom($typeStr);
+        if ($type === null) {
+            return (new Response())->status(400)->json(['error' => 'Invalid marker type']);
+        }
+
+        $position = $request->queryInt('position', 0);
+        $around = $request->queryInt('around', 30);
+        $limit = $request->queryInt('limit', 20);
+
+        if ($around < 1 || $around > 300) {
+            return (new Response())->status(400)->json(['error' => 'around must be between 1 and 300']);
+        }
+
+        if ($limit < 1 || $limit > 100) {
+            return (new Response())->status(400)->json(['error' => 'limit must be between 1 and 100']);
+        }
+
+        // Resolve profile ID from user for watch-history exclusion
+        $profileId = $this->resolveProfileId($request, $userId);
+        if ($profileId === null) {
+            return (new Response())->status(503)->json(['error' => 'Profile not available']);
+        }
+
+        $items = $this->chapterSearchService->searchByMarkerProximity(
+            $type,
+            $position,
+            $around,
+            $profileId,
+            $limit
+        );
+
+        return (new Response())->json([
+            'items' => $items,
+            'marker_type' => $type->value,
+            'around' => $around,
+            'position' => $position,
+        ]);
+    }
+
+    /**
+     * Get markers of a specific type for a media item (P3B-S8).
+     *
+     * Returns all markers of the specified type for a media item,
+     * useful for finding all ad markers, all intro markers, etc.
+     *
+     * @param Request $request The HTTP request with query params:
+     *   - type: Marker type (intro|outro|credits|ad)
+     * @param array<string, string> $params Route parameters (id => media item ID)
+     *
+     * @return Response JSON response with markers array:
+     *   {markers: [{id, type, startMs, endMs, label}, ...]}
+     *
+     * @api_endpoint GET /api/v1/media/{id}/markers/search
+     *
+     * @requires Authentication
+     *
+     * @since 0.14.0
+     */
+    public function searchMediaMarkers(Request $request, array $params): Response
+    {
+        if ($this->chapterSearchService === null) {
+            return (new Response())->status(503)->json(['error' => 'Chapter search not available']);
+        }
+
+        $item = $this->itemRepository->findById($params['id']);
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $typeStr = $request->queryString('type');
+        if ($typeStr === null || $typeStr === '') {
+            return (new Response())->status(400)->json(['error' => 'type query parameter is required']);
+        }
+
+        $type = MarkerType::tryFrom($typeStr);
+        if ($type === null) {
+            return (new Response())->status(400)->json(['error' => 'Invalid marker type']);
+        }
+
+        $markers = $this->chapterSearchService->getMarkersByType($params['id'], $type);
+
+        return (new Response())->json([
+            'markers' => array_map(fn($m) => $m->toArray(), $markers),
+        ]);
+    }
+
+    /**
      * Retrieves the user's continue watching list.
      *
      * Returns media items that the user has partially watched and
@@ -1339,6 +1512,58 @@ class WebPortalRouter
             ]);
         }
         return $this->mediaRatingsController->createRating($request, $params);
+    }
+
+    /**
+     * Retrieves similar items for a media item (P4-S1).
+     *
+     * Returns the top-K most similar items based on pre-computed similarity
+     * scores using genre overlap, actor overlap, director overlap, rating
+     * proximity, and year proximity.
+     *
+     * @param Request $request The HTTP request (unused).
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint GET /api/v1/media/{id}/similar
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "items": [
+     *     {
+     *       "id": "abc-123",
+     *       "title": "Similar Movie Title",
+     *       "posterUrl": "https://example.com/poster.jpg",
+     *       "score": 0.875,
+     *       "reason": "genre"
+     *     }
+     *   ]
+     * }
+     * ```
+     */
+    public function getSimilarItems(Request $request, array $params): Response
+    {
+        if ($this->similarityService === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Similar items are not configured on this server',
+            ]);
+        }
+
+        $itemId = $params['id'] ?? '';
+        if ($itemId === '') {
+            return (new Response())->status(400)->json(['error' => 'Item ID is required']);
+        }
+
+        // Check that the item exists.
+        $item = $this->itemRepository->findById($itemId);
+        if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $limit = $request->queryInt('limit', 10);
+        $items = $this->similarityService->getSimilar($itemId, $limit);
+
+        return (new Response())->json(['items' => $items]);
     }
 
     /**

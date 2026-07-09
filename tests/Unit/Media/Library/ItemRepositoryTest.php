@@ -1788,7 +1788,7 @@ class ItemRepositoryTest extends TestCase
         $db->expects($this->exactly(2))
             ->method('query')
             ->with($this->callback(function (string $sql): bool {
-                if (str_contains($sql, 'COUNT(*)')) {
+                if (str_contains($sql, 'COUNT(*)') || str_contains($sql, 'metadata_ratings')) {
                     return true;
                 }
                 // Rank CASE reads the indexed column, article-insensitive tiebreak

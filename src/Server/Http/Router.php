@@ -249,6 +249,12 @@ class Router
         $path = $request->path;
 
         if (!isset($this->routes[$method])) {
+            // HEAD fallback: if no explicit HEAD route registered, fall back to
+            // matching GET handler to get headers (Content-Type, Content-Length,
+            // etc.) without body (RFC 7231).
+            if ($method === 'HEAD' && isset($this->routes['GET'])) {
+                return $this->dispatchAsHead($request, $path);
+            }
             return $this->notFound();
         }
 
@@ -266,6 +272,37 @@ class Router
 
                 // Call the route handler
                 return $this->callHandler($route['handler'], $request, $params);
+            }
+        }
+
+        // HEAD fallback: route registered but no pattern matched — try GET.
+        if ($method === 'HEAD' && isset($this->routes['GET'])) {
+            return $this->dispatchAsHead($request, $path);
+        }
+
+        return $this->notFound();
+    }
+
+    /**
+     * Dispatches a HEAD request by finding a matching GET route and
+     * invoking its handler with body suppression (RFC 7231).
+     */
+    private function dispatchAsHead(Request $request, string $path): Response
+    {
+        foreach ($this->routes['GET'] as $pattern => $route) {
+            if (preg_match($pattern, $path, $matches)) {
+                $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
+                $request->pathParams = $params;
+
+                $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
+                if ($middlewareResponse instanceof Response) {
+                    $middlewareResponse->headOnly = true;
+                    return $middlewareResponse;
+                }
+
+                $response = $this->callHandler($route['handler'], $request, $params);
+                $response->headOnly = true;
+                return $response;
             }
         }
 

@@ -61,6 +61,9 @@ class Response
      */
     public ?string $filePath = null;
 
+    /** @var bool If true, suppress body output for HEAD requests (RFC 7231). */
+    public bool $headOnly = false;
+
     /** @var int Byte offset into {@see $filePath} to start streaming from (0 = start). */
     public int $fileOffset = 0;
 
@@ -473,7 +476,13 @@ class Response
         // Send body — stream a file-backed response in bounded chunks, otherwise
         // emit the buffered body.
         if ($this->filePath !== null) {
+            if ($this->headOnly) {
+                return;
+            }
             $this->streamFileToOutput();
+            return;
+        }
+        if ($this->headOnly) {
             return;
         }
         echo $this->body;
@@ -551,7 +560,8 @@ class Response
      */
     public function toWorkermanResponse(): WorkermanResponse
     {
-        $wr = new WorkermanResponse($this->statusCode, $this->headers, $this->body);
+        $body = $this->headOnly ? '' : $this->body;
+        $wr = new WorkermanResponse($this->statusCode, $this->headers, $body);
 
         // Workerman's Response::cookie() builds a proper Set-Cookie
         // header and supports stacking multiple cookies — match the
@@ -572,7 +582,7 @@ class Response
         // Event-loop file streaming: Workerman sends the file (chunked for bodies
         // ≥ 2 MB) and auto-emits Content-Length / Accept-Ranges / Last-Modified,
         // plus Content-Range + 206 when an offset/length window is given.
-        if ($this->filePath !== null) {
+        if ($this->filePath !== null && !$this->headOnly) {
             $wr->withFile($this->filePath, $this->fileOffset, $this->fileLength);
         }
 

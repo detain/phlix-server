@@ -127,6 +127,9 @@ final class RelayConsumer
     /** @var int Number of consecutive reconnection attempts (exponential backoff). */
     private int $reconnectAttempts = 0;
 
+    /** @var \DateTimeImmutable|null Timestamp of the last tunnel disconnect. */
+    private ?\DateTimeImmutable $lastDisconnectTime = null;
+
     /** @var string Buffered incoming binary data awaiting frame boundaries. */
     private string $recvBuffer = '';
 
@@ -282,6 +285,42 @@ final class RelayConsumer
     public function isActive(): bool
     {
         return $this->state === self::STATE_ACTIVE;
+    }
+
+    /**
+     * Returns the number of consecutive reconnection attempts.
+     *
+     * @return int Reconnect attempts count.
+     *
+     * @since 0.13.0
+     */
+    public function getReconnectAttempts(): int
+    {
+        return $this->reconnectAttempts;
+    }
+
+    /**
+     * Returns the count of currently active relay sessions (connected clients).
+     *
+     * @return int Active session count.
+     *
+     * @since 0.13.0
+     */
+    public function getActiveSessionCount(): int
+    {
+        return count($this->localConnections);
+    }
+
+    /**
+     * Returns the timestamp of the last tunnel disconnect.
+     *
+     * @return string|null ISO 8601 timestamp or null if never disconnected.
+     *
+     * @since 0.13.0
+     */
+    public function getLastDisconnectTime(): ?string
+    {
+        return $this->lastDisconnectTime?->format('c');
     }
 
     /**
@@ -1151,6 +1190,7 @@ final class RelayConsumer
     private function handleDisconnect(): void
     {
         $this->state = self::STATE_DISCONNECTED;
+        $this->lastDisconnectTime = new \DateTimeImmutable();
         $this->connection = null;
         $this->recvBuffer = '';
 

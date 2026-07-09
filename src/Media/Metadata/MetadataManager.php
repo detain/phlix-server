@@ -15,6 +15,8 @@ use Phlix\Common\Logger\LogChannels;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\Dto\MetadataValue;
+use Phlix\Media\Metadata\RatingSource;
+use Phlix\Media\Metadata\RatingType;
 
 /**
  * MetadataManager coordinates metadata fetching from multiple providers.
@@ -83,19 +85,31 @@ class MetadataManager
     private ?LibraryManager $libraries;
 
     /**
+     * Rating persistence. Nullable for back-compat: when null (legacy / unit
+     * tests) no rating capture happens after a TMDB fetch.
+     *
+     * @var RatingService|null
+     */
+    private ?RatingService $ratingService;
+
+    /**
      * Constructor for MetadataManager.
      *
      * @param ItemRepository $itemRepository Repository for media item operations
      * @param LibraryManager|null $libraries Library data access used to load the
      *     per-library `options.image_types` selection (M5); when null, provider
      *     image sets are stored unfiltered (back-compat).
+     * @param RatingService|null $ratingService Rating persistence; when null
+     *     (legacy / unit tests) rating capture is skipped silently.
      */
     public function __construct(
         ItemRepository $itemRepository,
-        ?LibraryManager $libraries = null
+        ?LibraryManager $libraries = null,
+        ?RatingService $ratingService = null,
     ) {
         $this->itemRepository = $itemRepository;
         $this->libraries = $libraries;
+        $this->ratingService = $ratingService;
         $this->logger = LoggerFactory::get(LogChannels::MEDIA);
     }
 
@@ -334,6 +348,25 @@ class MetadataManager
             'external_id' => $externalId,
             'provider' => $providerName,
         ]);
+
+        // Capture TMDB ratings (P1-S1): extract vote_average and vote_count from
+        // the TMDB details payload and persist them so the aggregate is kept
+        // current after every metadata refresh. Skip silently when the service
+        // is not wired (back-compat / unit tests).
+        if ($this->ratingService !== null && $providerName === 'tmdb') {
+            $score = MetadataValue::asNullableFloat($details['vote_average'] ?? null);
+            $votes = MetadataValue::asNullableInt($details['vote_count'] ?? null);
+            if ($score !== null && $score >= 0.0) {
+                $this->ratingService->upsert(
+                    $itemId,
+                    RatingSource::Tmdb,
+                    RatingType::User,
+                    $score,
+                    $votes,
+                );
+                $this->ratingService->aggregate($itemId);
+            }
+        }
 
         return true;
     }

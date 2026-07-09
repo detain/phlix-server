@@ -55,7 +55,7 @@ class ContentDirectoryService
      *
      * @since 0.12.0
      */
-    public function Browse(
+    public function browse(
         string $objectId,
         string $browseFlag,
         int $startingIndex,

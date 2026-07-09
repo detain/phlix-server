@@ -15,6 +15,7 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
+use Phlix\Media\Transcoding\HardwareAccelerator;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -48,6 +49,12 @@ class FfmpegRunner
 
     /** @var bool Whether hardware acceleration has been probed */
     private bool $hwaccelProbed = false;
+
+    /** @var array<string, HardwareAccelerator>|null Cached hardware accelerators */
+    private ?array $hardwareAccelerators = null;
+
+    /** @var string|null Preferred accelerator name from config (e.g., 'cuda', 'qsv') */
+    private ?string $preferredAccelerator = null;
 
     /**
      * Creates a new FFmpegRunner instance.
@@ -1541,5 +1548,188 @@ class FfmpegRunner
         file_put_contents($timelinePath, $json);
 
         return [$spritePath, $timelinePath];
+    }
+
+    /**
+     * Sets the preferred hardware accelerator from configuration.
+     *
+     * When set, {@see getBestAcceleratorForCodec()} will prefer this accelerator
+     * over others when it supports the requested codec.
+     *
+     * @param string|null $name Accelerator name (e.g., 'cuda', 'qsv', 'vaapi') or null to clear
+     *
+     * @since 0.36.0
+     */
+    public function setPreferredAccelerator(?string $name): void
+    {
+        $this->preferredAccelerator = $name;
+    }
+
+    /**
+     * Returns the preferred accelerator name from configuration.
+     *
+     * @return string|null
+     *
+     * @since 0.36.0
+     */
+    public function getPreferredAccelerator(): ?string
+    {
+        return $this->preferredAccelerator;
+    }
+
+    /**
+     * Detects and returns all available hardware accelerators on this machine.
+     *
+     * Runs `ffmpeg -hide_banner -hwaccels` to discover available hwaccel methods,
+     * then probes each for specific encoders using `ffmpeg -hide_banner -encoders`.
+     *
+     * Results are cached after the first call.
+     *
+     * @return array<string, HardwareAccelerator> Map of accelerator name to accelerator object
+     *
+     * @since 0.36.0
+     */
+    public function getHardwareAccelerators(): array
+    {
+        if ($this->hardwareAccelerators !== null) {
+            return $this->hardwareAccelerators;
+        }
+
+        $accelerators = [];
+
+        // Get list of available hwaccels from ffmpeg
+        $cmd = sprintf(
+            '%s -hide_banner -hwaccels 2>/dev/null',
+            escapeshellarg($this->ffmpegPath)
+        );
+
+        $output = shell_exec($cmd);
+        if (!is_string($output)) {
+            $this->hardwareAccelerators = [];
+            return [];
+        }
+
+        $lines = explode("\n", trim($output));
+        // First line is "Hardware accelerator methods:" or empty, skip it
+        $hwaccelNames = [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || $line === 'Hardware accelerator methods:') {
+                continue;
+            }
+            $hwaccelNames[] = $line;
+        }
+
+        // Get all available encoders in one shot
+        $encodersCmd = sprintf(
+            '%s -hide_banner -encoders 2>/dev/null',
+            escapeshellarg($this->ffmpegPath)
+        );
+        $encodersOutput = shell_exec($encodersCmd);
+        $allEncoders = is_string($encodersOutput) ? $encodersOutput : '';
+
+        // Map hwaccel name → encoder suffixes to check
+        $encoderMap = [
+            'cuda'          => ['h264_nvenc', 'hevc_nvenc'],
+            'qsv'           => ['h264_qsv', 'hevc_qsv'],
+            'vaapi'         => ['h264_vaapi', 'hevc_vaapi'],
+            'opencl'        => ['hevc_cl'],
+            'videotoolbox'  => ['h264_videotoolbox', 'hevc_videotoolbox'],
+            'amf'           => ['h264_amf', 'hevc_amf'],
+            'd3d11va'       => ['h264_d3d11va', 'hevc_d3d11va'],
+            'dxva2'         => ['h264_dxva2', 'hevc_dxva2'],
+            'v4l2m2m'       => ['h264_v4l2m2m', 'hevc_v4l2m2m'],
+        ];
+
+        foreach ($hwaccelNames as $name) {
+            if (!isset($encoderMap[$name])) {
+                // Unknown hwaccel — still expose it with no known encoders
+                $accelerators[$name] = new HardwareAccelerator($name, [], true);
+                continue;
+            }
+
+            $encoderSuffixes = $encoderMap[$name];
+            $foundEncoders = [];
+
+            foreach ($encoderSuffixes as $suffix) {
+                if (str_contains($allEncoders, $suffix)) {
+                    $foundEncoders[] = $suffix;
+                }
+            }
+
+            $accelerators[$name] = new HardwareAccelerator($name, $foundEncoders, true);
+        }
+
+        $this->hardwareAccelerators = $accelerators;
+        $this->logger->info('Hardware accelerators detected', [
+            'accelerators' => array_keys($accelerators),
+        ]);
+
+        return $accelerators;
+    }
+
+    /**
+     * Returns all available hardware accelerators as a flat array.
+     *
+     * Alias for {@see getHardwareAccelerators()} for callers that need a list.
+     *
+     * @return array<string, HardwareAccelerator>
+     *
+     * @since 0.36.0
+     */
+    public function getAvailableHardwareAccelerators(): array
+    {
+        return $this->getHardwareAccelerators();
+    }
+
+    /**
+     * Returns the accelerator with the given name, or null if not available.
+     *
+     * @param string $name Accelerator name (e.g., 'cuda', 'qsv', 'vaapi')
+     *
+     * @return HardwareAccelerator|null
+     *
+     * @since 0.36.0
+     */
+    public function getAcceleratorByName(string $name): ?HardwareAccelerator
+    {
+        $accelerators = $this->getHardwareAccelerators();
+
+        return $accelerators[$name] ?? null;
+    }
+
+    /**
+     * Returns the best accelerator for a given codec.
+     *
+     * Preference order:
+     *  1. Configured preferred accelerator (if it supports the codec)
+     *  2. First available accelerator that has an encoder for the codec
+     *
+     * @param string $codec Codec name (e.g., 'h264', 'hevc', 'av1')
+     *
+     * @return HardwareAccelerator|null Best matching accelerator or null if none support the codec
+     *
+     * @since 0.36.0
+     */
+    public function getBestAcceleratorForCodec(string $codec): ?HardwareAccelerator
+    {
+        $accelerators = $this->getHardwareAccelerators();
+
+        // Prefer configured preferred accelerator first
+        if ($this->preferredAccelerator !== null) {
+            $preferred = $accelerators[$this->preferredAccelerator] ?? null;
+            if ($preferred !== null && $preferred->supportsCodec($codec)) {
+                return $preferred;
+            }
+        }
+
+        // Fall back to first accelerator that has an encoder for this codec
+        foreach ($accelerators as $accelerator) {
+            if ($accelerator->supportsCodec($codec)) {
+                return $accelerator;
+            }
+        }
+
+        return null;
     }
 }

@@ -18,42 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/my/.nvm/versions/node/v24.15.0/bin/caliber refresh --quiet",
-            "description": "Caliber: auto-refreshing docs based on code changes"
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
             "command": "/home/my/.nvm/versions/node/v24.15.0/bin/caliber learn finalize --auto",
             "description": "Caliber: finalizing session learnings"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/caliber-session-freshness.sh",
-            "description": "Caliber: check config freshness on session start"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/caliber-freshness-notify.sh",
-            "description": "Caliber: warn when agent configs are stale"
           }
         ]
       }

@@ -1485,9 +1485,18 @@ class FfmpegRunner
         $cmd .= ' -i ' . escapeshellarg($inputPath);
         $cmd .= ' -t ' . $durArg;
 
-        // Only the first video + first audio track; drop data/subtitle/attachment
-        // streams (anime MKVs carry font attachments + embedded subs that break the mux).
-        $cmd .= ' -map 0:v:0 -map 0:a:0? -dn -sn';
+        // Video: first video track always. Audio: either a specific stream index
+        // (P3B-S3 multi-audio, via audio_stream_index param) or the first audio track.
+        $audioStreamIndex = self::paramInt($params, 'audio_stream_index');
+        $cmd .= ' -map 0:v:0';
+        if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
+            // P3B-S3: map the specific audio stream by index (e.g. -map 0:a:1 for the second audio track).
+            $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
+        } else {
+            // Default: first audio track (backward compatible).
+            $cmd .= ' -map 0:a:0?';
+        }
+        $cmd .= ' -dn -sn';
 
         // Video: a transcoded rung (capped-CRF) OR a genuine stream copy for "Original".
         $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';

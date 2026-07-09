@@ -14,6 +14,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
@@ -192,6 +193,12 @@ final class AdminRoutes
 
                 $r->get('/settings', [$settingsController, 'index']);
                 $r->put('/settings', [$settingsController, 'update']);
+
+                // Hardware accelerator introspection (P6-S1).
+                /** @var AdminTranscodingController $transcodingController */
+                $transcodingController = $container->get(AdminTranscodingController::class);
+
+                $r->get('/transcoding/accelerators', [$transcodingController, 'accelerators']);
 
                 // Filesystem browse for the library path picker (Step 0.6).
                 /** @var FsBrowseController $fsBrowseController */

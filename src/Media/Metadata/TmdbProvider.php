@@ -982,6 +982,78 @@ class TmdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * Get collection (box-set) details from TMDB.
+     *
+     * Fetches the /collection/{id} endpoint to retrieve collection metadata
+     * including name, overview, and the ordered list of parts.
+     *
+     * @param int $collectionId TMDB collection ID
+     * @return array{name: string, overview: string|null, poster_path: string|null,
+     *     backdrop_path: string|null, parts: array<int, array{id: int, title: string,
+     *     overview: string|null, poster_path: string|null, backdrop_path: string|null,
+     *     release_date: string, vote_average: float}>}|null Collection details or null on failure
+     *
+     * @since 0.36.0
+     */
+    public function getCollection(int $collectionId): ?array
+    {
+        $response = $this->http->get("/collection/{$collectionId}");
+
+        if ($response === null || !isset($response['id'])) {
+            return null;
+        }
+
+        $parts = [];
+        foreach (MetadataValue::asAssocList($response['parts'] ?? null) as $part) {
+            $parts[] = [
+                'id' => MetadataValue::asInt($part['id'] ?? null),
+                'title' => MetadataValue::asString($part['title'] ?? null),
+                'overview' => MetadataValue::asNullableString($part['overview'] ?? null),
+                'poster_path' => MetadataValue::asNullableString($part['poster_path'] ?? null),
+                'backdrop_path' => MetadataValue::asNullableString($part['backdrop_path'] ?? null),
+                'release_date' => MetadataValue::asString($part['release_date'] ?? null),
+                'vote_average' => MetadataValue::asFloat($part['vote_average'] ?? null),
+            ];
+        }
+
+        return [
+            'name' => MetadataValue::asString($response['name'] ?? null),
+            'overview' => MetadataValue::asNullableString($response['overview'] ?? null),
+            'poster_path' => MetadataValue::asNullableString($response['poster_path'] ?? null),
+            'backdrop_path' => MetadataValue::asNullableString($response['backdrop_path'] ?? null),
+            'parts' => $parts,
+        ];
+    }
+
+    /**
+     * Get the TMDB collection ID for a movie.
+     *
+     * Fetches /movie/{id} and returns the belongs_to_collection.id field
+     * if the movie is part of a box-set/collection.
+     *
+     * @param int $tmdbId TMDB movie ID
+     * @return int|null The collection ID if the movie belongs to a collection, null otherwise
+     *
+     * @since 0.36.0
+     */
+    public function getCollectionIdForMovie(int $tmdbId): ?int
+    {
+        $response = $this->http->get("/movie/{$tmdbId}");
+
+        if ($response === null) {
+            return null;
+        }
+
+        $belongsToCollection = MetadataValue::asAssoc($response['belongs_to_collection'] ?? null);
+        if ($belongsToCollection === []) {
+            return null;
+        }
+
+        $id = MetadataValue::asInt($belongsToCollection['id'] ?? null);
+        return $id > 0 ? $id : null;
+    }
+
+    /**
      * Get trailers for a movie from TMDB.
      *
      * Fetches the /movie/{id}/videos endpoint to retrieve trailer URLs.

@@ -36,6 +36,7 @@ use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Media\Playback\PlaybackPreferences;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Controllers\MediaRatingsController;
@@ -299,6 +300,10 @@ class WebPortalRouter
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
             $r->put('/api/v1/users/me/settings', [$this, 'updateUserSettings']);
+
+            // P7-S3: Playback preferences (gapless / crossfade)
+            $r->get('/api/v1/me/playback/preferences', [$this, 'getPlaybackPreferences']);
+            $r->put('/api/v1/me/playback/preferences', [$this, 'updatePlaybackPreferences']);
 
             // Avatar routes (Step 12.3)
             $r->post('/api/v1/users/me/avatar', [$this, 'uploadAvatar']);
@@ -1821,6 +1826,144 @@ class WebPortalRouter
         $this->recommendationService->dismissRecommendation($userId, $mediaItemId);
 
         return (new Response())->json(['message' => 'Recommendation dismissed']);
+    }
+
+    /**
+     * Retrieves the current user's playback preferences (P7-S3).
+     *
+     * Returns crossfade duration and fade fraction settings for gapless
+     * playback and crossfade mixing. Falls back to server config defaults
+     * when no persisted preferences exist or when the settings service
+     * is not wired.
+     *
+     * @param Request $request The HTTP request (userId set from auth)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with preferences object
+     *
+     * @api_endpoint GET /api/v1/me/playback/preferences
+     *
+     * @requires Authentication
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "preferences": {
+     *     "crossfadeDuration": 5,
+     *     "crossfadeFadeOut": 0.3,
+     *     "crossfadeFadeIn": 0.3
+     *   }
+     * }
+     * ```
+     */
+    public function getPlaybackPreferences(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        // Load server config defaults
+        $configPath = dirname(__DIR__, 3) . '/config/playback.php';
+        $configDefaults = is_file($configPath) ? require $configPath : [];
+        $preferences = PlaybackPreferences::fromConfig($configDefaults);
+
+        // Override with persisted user preferences if available
+        if ($this->userRepository !== null) {
+            $settings = $this->userRepository->getSettings($userId);
+            if ($settings !== null && isset($settings['playback_preferences'])) {
+                $stored = is_string($settings['playback_preferences'])
+                    ? json_decode($settings['playback_preferences'], true)
+                    : $settings['playback_preferences'];
+                if (is_array($stored)) {
+                    $preferences = PlaybackPreferences::fromRaw(
+                        $stored['crossfadeDuration'] ?? null,
+                        $stored['crossfadeFadeOut'] ?? null,
+                        $stored['crossfadeFadeIn'] ?? null
+                    );
+                }
+            }
+        }
+
+        return (new Response())->json(['preferences' => $preferences->toArray()]);
+    }
+
+    /**
+     * Updates the current user's playback preferences (P7-S3).
+     *
+     * Saves crossfade duration and fade fraction settings for gapless
+     * playback and crossfade mixing. Persists to user_settings when
+     * the settings service is wired; returns 503 when it is not.
+     *
+     * Body: `{ "crossfadeDuration": <int 0-300>, "crossfadeFadeOut": <float 0.0-1.0>, "crossfadeFadeIn": <float 0.0-1.0> }`
+     * All fields are optional; omitted fields retain their current value.
+     *
+     * @param Request $request The HTTP request (userId set from auth)
+     * @param array<string, string> $params Route parameters (unused)
+     *
+     * @return Response JSON response with success message or error
+     *
+     * @api_endpoint PUT /api/v1/me/playback/preferences
+     *
+     * @requires Authentication
+     *
+     * @example Request body:
+     * ```json
+     * {
+     *   "crossfadeDuration": 5,
+     *   "crossfadeFadeOut": 0.3,
+     *   "crossfadeFadeIn": 0.3
+     * }
+     * ```
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "message": "Playback preferences updated"
+     * }
+     * ```
+     */
+    public function updatePlaybackPreferences(Request $request, array $params): Response
+    {
+        $userId = $request->userId ?? '';
+        if ($userId === '') {
+            return (new Response())->status(401)->json(['error' => 'Unauthorized']);
+        }
+
+        if ($this->userRepository === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Settings persistence is not configured on this server',
+            ]);
+        }
+
+        // Fetch current preferences to merge with updates
+        $settings = $this->userRepository->getSettings($userId) ?? [];
+        $currentPrefs = isset($settings['playback_preferences'])
+            ? (is_string($settings['playback_preferences'])
+                ? json_decode($settings['playback_preferences'], true)
+                : $settings['playback_preferences'])
+            : [];
+
+        if (!is_array($currentPrefs)) {
+            $currentPrefs = [];
+        }
+
+        // Parse and validate incoming values
+        $rawDuration = $request->input('crossfadeDuration');
+        $rawFadeOut = $request->input('crossfadeFadeOut');
+        $rawFadeIn = $request->input('crossfadeFadeIn');
+
+        $newPrefs = PlaybackPreferences::fromRaw(
+            $rawDuration ?? ($currentPrefs['crossfadeDuration'] ?? 0),
+            $rawFadeOut ?? ($currentPrefs['crossfadeFadeOut'] ?? 0.3),
+            $rawFadeIn ?? ($currentPrefs['crossfadeFadeIn'] ?? 0.3)
+        );
+
+        // Persist within user_settings.playback_preferences
+        $settings['playback_preferences'] = json_encode($newPrefs->toArray());
+        $this->userRepository->updateSettings($userId, $settings);
+
+        return (new Response())->json(['message' => 'Playback preferences updated']);
     }
 
     /**

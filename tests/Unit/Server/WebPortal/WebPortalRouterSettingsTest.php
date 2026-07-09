@@ -35,7 +35,9 @@ class WebPortalRouterSettingsTest extends TestCase
             $this->createMock(PlaybackController::class),
             $this->createMock(AuthManager::class),
             $this->createMock(PlaybackMarkerService::class),
-            $this->createMock(MarkerService::class)
+            $this->createMock(MarkerService::class),
+            null, // chapterSearchService
+            $userRepository
         );
     }
 

@@ -1606,7 +1606,11 @@ class ItemRepository
      */
     public function query(array $params, ?string $libraryId = null): array
     {
-        ['wheres' => $wheres, 'bindings' => $bindings] = $this->buildFilters($params, $libraryId);
+        $filters = $this->buildFilters($params, $libraryId);
+        $wheres = $filters['wheres'];
+        $bindings = $filters['bindings'];
+        $ratingJoin = $filters['ratingJoin'];
+        $minRating = $filters['minRating'];
 
         $sortRaw = isset($params['sort']) && is_scalar($params['sort']) ? (string) $params['sort'] : 'name';
         $orderRaw = isset($params['order']) && is_scalar($params['order']) ? (string) $params['order'] : 'asc';
@@ -1615,15 +1619,52 @@ class ItemRepository
         $limit = $this->normalizeLimit($params['limit'] ?? 50);
         $offset = $this->normalizeOffset($params['offset'] ?? 0);
 
+        // When sort=rating or minRating is set, we need the metadata_ratings
+        // LEFT JOIN + GROUP BY + HAVING. The join is built in buildFilters()
+        // only when minRating is set; for sort=rating we add it here as well.
+        $sortIsRating = $sort === 'rating_sort';
+        $needsRatingJoin = $sortIsRating || $minRating !== null;
+
+        if ($needsRatingJoin && $ratingJoin === '') {
+            $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
+        }
+
+        $baseWhere = implode(' AND ', $wheres);
         $orderClause = $this->buildOrderClause($sort, $order);
 
-        $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . implode(' AND ', $wheres);
-        $countResult = $this->db->query($countSql, $bindings);
-        $total = $this->extractCount($countResult);
+        if ($needsRatingJoin) {
+            // Rating sort: ORDER BY average numeric score from metadata_ratings.
+            if ($sortIsRating) {
+                $orderClause = 'avg_rating DESC, ' . self::titleOrder('desc');
+            }
+            // HAVING clause: items with no rating row get COALESCE(avg_rating, 0) = 0.
+            $having = $minRating !== null
+                ? 'HAVING COALESCE(avg_rating, 0) >= ?'
+                : '';
+            if ($minRating !== null) {
+                $bindings[] = $minRating;
+            }
 
-        $selectSql = 'SELECT * FROM media_items WHERE ' . implode(' AND ', $wheres) . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
-        $fetchBindings = array_merge($bindings, [$limit, $offset]);
-        $results = $this->db->query($selectSql, $fetchBindings);
+            $countSql = "SELECT COUNT(DISTINCT media_items.id) as count"
+                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}";
+            $countResult = $this->db->query($countSql, $bindings);
+            $total = $this->extractCount($countResult);
+
+            $selectSql = "SELECT media_items.*, AVG(r.score) AS avg_rating"
+                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
+                . " GROUP BY media_items.id {$having}"
+                . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+            $fetchBindings = array_merge($bindings, [$limit, $offset]);
+            $results = $this->db->query($selectSql, $fetchBindings);
+        } else {
+            $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . $baseWhere;
+            $countResult = $this->db->query($countSql, $bindings);
+            $total = $this->extractCount($countResult);
+
+            $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+            $fetchBindings = array_merge($bindings, [$limit, $offset]);
+            $results = $this->db->query($selectSql, $fetchBindings);
+        }
 
         return [
             'items' => $this->hydrateRows($results),
@@ -1783,12 +1824,14 @@ class ItemRepository
      *
      * @param array<string, mixed> $params
      *
-     * @return array{wheres: list<string>, bindings: list<mixed>}
+     * @return array{wheres: list<string>, bindings: list<mixed>, ratingJoin: string, minRating: float|null}
      */
     private function buildFilters(array $params, ?string $libraryId): array
     {
         $wheres = ['1=1'];
         $bindings = [];
+        $ratingJoin = '';
+        $minRating = null;
 
         if ($libraryId !== null) {
             $wheres[] = 'library_id = ?';
@@ -1931,9 +1974,29 @@ class ItemRepository
             $wheres[] = 'metadata_refreshed_at IS NULL';
         }
 
+        // Minimum numeric rating filter (e.g. ?minRating=7.5). Uses the
+        // metadata_ratings table (migration 052) which holds TMDB/IMDb/user
+        // scores. Items with no rating row get COALESCE(avg_rating, 0) = 0,
+        // so they are excluded when minRating > 0.
+        $minRatingRaw = isset($params['minRating']) && is_numeric($params['minRating'])
+            ? (float) $params['minRating']
+            : null;
+
+        if ($minRatingRaw !== null) {
+            $minRating = $minRatingRaw;
+            // ratingJoin is built here but used in query() which adds GROUP BY.
+            // We build it eagerly so callers that don't need GROUP BY can ignore it.
+            $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
+        }
+
         // array_values keeps `bindings` a positional list after the array_merge
         // calls above (they can widen the inferred key type).
-        return ['wheres' => $wheres, 'bindings' => array_values($bindings)];
+        return [
+            'wheres' => $wheres,
+            'bindings' => array_values($bindings),
+            'ratingJoin' => $ratingJoin,
+            'minRating' => $minRating,
+        ];
     }
 
     /**

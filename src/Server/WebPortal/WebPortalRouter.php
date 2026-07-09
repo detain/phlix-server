@@ -830,6 +830,13 @@ class WebPortalRouter
             $params['topLevel'] = true;
         }
 
+        // min_rating filter (e.g. ?minRating=7.5) — filters by numeric average
+        // score from metadata_ratings (TMDB/IMDb/user), not the MPAA content_rating.
+        $minRating = $request->queryString('minRating');
+        if ($minRating !== null && is_numeric($minRating)) {
+            $params['minRating'] = (float) $minRating;
+        }
+
         return $params;
     }
 

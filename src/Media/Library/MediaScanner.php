@@ -15,6 +15,7 @@ use Phlix\Shared\Events\Library\LibraryScanStarted;
 use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Media\CollectionService;
 use Phlix\Media\Extras\TrailerFinder;
 use Phlix\Media\MarkerService;
 use Phlix\Media\MarkerType;
@@ -64,6 +65,9 @@ class MediaScanner
 
     /** @var SimilarityService|null Computes item similarity after scan; null when not wired */
     private ?SimilarityService $similarityService = null;
+
+    /** @var CollectionService|null Syncs TMDB box-set collections after scan; null when not wired */
+    private ?CollectionService $collectionService = null;
 
     /**
      * Optional ffprobe runner used to read each time-based file's total
@@ -185,9 +189,15 @@ class MediaScanner
      *                           is called (best-effort) after each newly scanned
      *                           item is indexed so its similarity scores are
      *                           populated without an explicit backfill run.
+     * @param CollectionService|null $collectionService P4-S3: optional collection
+     *                           sync; when supplied, {@see syncCollectionForMovie()}
+     *                           is called (best-effort) after each newly scanned
+     *                           movie is indexed so its TMDB box-set membership
+     *                           is synced without an explicit backfill run.
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
+     * @since 0.36.0 CollectionService parameter added for P4-S3
      */
     public function __construct(
         Connection $db,
@@ -198,7 +208,8 @@ class MediaScanner
         ?FfmpegRunner $ffmpeg = null,
         ?array $noiseSuffixes = null,
         ?int $maxConcurrentScanProbes = null,
-        ?SimilarityService $similarityService = null
+        ?SimilarityService $similarityService = null,
+        ?CollectionService $collectionService = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -216,6 +227,7 @@ class MediaScanner
             ? $maxConcurrentScanProbes
             : self::DEFAULT_MAX_CONCURRENT_SCAN_PROBES;
         $this->similarityService = $similarityService;
+        $this->collectionService = $collectionService;
     }
 
     /**
@@ -1316,6 +1328,33 @@ class MediaScanner
                 $this->similarityService->computeSimilarForItem((string) $itemId);
             } catch (\Throwable $e) {
                 $this->logger->debug('Similarity computation failed for item', [
+                    'item_id' => $itemId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // P4-S3: best-effort TMDB collection sync after a new item is indexed.
+        // Only runs when the item has a tmdb_id in metadata_json (populated by
+        // LibraryMetadataMatcher in a separate metadata scan job, not at scan time).
+        // This path handles items that were already matched before this scan.
+        if ($this->collectionService !== null) {
+            try {
+                $item = $this->itemRepository->findById((string) $itemId);
+                if ($item !== null) {
+                    $metaRaw = $item['metadata_json'] ?? null;
+                    if (is_string($metaRaw)) {
+                        $decoded = json_decode($metaRaw, true);
+                        $meta = is_array($decoded) ? $decoded : null;
+                    } else {
+                        $meta = is_array($metaRaw) ? $metaRaw : null;
+                    }
+                    if ($meta !== null && isset($meta['tmdb_id']) && is_numeric($meta['tmdb_id'])) {
+                        $this->collectionService->syncCollectionForMovie((int) $itemId, '');
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->logger->debug('Collection sync failed for item', [
                     'item_id' => $itemId,
                     'error' => $e->getMessage(),
                 ]);

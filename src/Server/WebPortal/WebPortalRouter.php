@@ -16,6 +16,7 @@ use Phlix\Server\Http\Middleware\AuthMiddleware;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Router;
 use Phlix\Media\ChapterSearchService;
+use Phlix\Media\CollectionService;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\RecommendationService;
 use Phlix\Media\Library\IndexBuckets;
@@ -112,6 +113,9 @@ class WebPortalRouter
     /** @var RecommendationService|null Computes and retrieves because-you-watched recommendations; null when not wired */
     private ?RecommendationService $recommendationService;
 
+    /** @var CollectionService|null Manages TMDB box-set collections; null when not wired */
+    private ?CollectionService $collectionService;
+
     /**
      * Constructs a new WebPortalRouter instance.
      *
@@ -173,7 +177,8 @@ class WebPortalRouter
         ?UserAvatarController $userAvatarController = null,
         ?MediaRatingsController $mediaRatingsController = null,
         ?SimilarityService $similarityService = null,
-        ?RecommendationService $recommendationService = null
+        ?RecommendationService $recommendationService = null,
+        ?CollectionService $collectionService = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -196,6 +201,7 @@ class WebPortalRouter
         $this->mediaRatingsController = $mediaRatingsController;
         $this->similarityService = $similarityService;
         $this->recommendationService = $recommendationService;
+        $this->collectionService = $collectionService;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -252,6 +258,9 @@ class WebPortalRouter
             // P3B-S8: marker-type search for a specific media item
             $r->get('/api/v1/media/{id}/markers/search', [$this, 'searchMediaMarkers']);
 
+            // P4-S3: TMDB box-set collection membership for a media item
+            $r->get('/api/v1/media/{id}/collection', [$this, 'getMediaItemCollection']);
+
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
             $r->get('/api/v1/users/me/recently-watched', [$this, 'getRecentlyWatched']);
@@ -288,6 +297,9 @@ class WebPortalRouter
             // Avatar routes (Step 12.3)
             $r->post('/api/v1/users/me/avatar', [$this, 'uploadAvatar']);
             $r->delete('/api/v1/users/me/avatar', [$this, 'deleteAvatar']);
+
+            // P4-S3: TMDB box-set collection with members
+            $r->get('/api/v1/collections/{id}', [$this, 'getCollection']);
         }, [$auth]);
 
         // Admin-only: delete a media item (Step 11.6). Gate with AdminMiddleware
@@ -1575,6 +1587,136 @@ class WebPortalRouter
         $items = $this->similarityService->getSimilar($itemId, $limit);
 
         return (new Response())->json(['items' => $items]);
+    }
+
+    /**
+     * Retrieves the TMDB box-set collection that a media item belongs to (P4-S3).
+     *
+     * Returns the collection details if the item is part of a box-set,
+     * including the collection name, overview, poster, and backdrop images.
+     * Requires authentication.
+     *
+     * @param Request $request The HTTP request (unused).
+     * @param array<string, string> $params Route parameters including 'id' (media item ID).
+     *
+     * @return Response JSON response with collection object or 404 if not in a collection.
+     *
+     * @api_endpoint GET /api/v1/media/{id}/collection
+     *
+     * @requires Authentication
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "collection": {
+     *     "id": 123,
+     *     "tmdb_collection_id": 10,
+     *     "name": "The Lord of the Rings Collection",
+     *     "overview": "...]",
+     *     "poster_url": "https://image.tmdb.org/t/p/w500/...",
+     *     "backdrop_url": "https://image.tmdb.org/t/p/w1280/..."
+     *   }
+     * }
+     * ```
+     */
+    public function getMediaItemCollection(Request $request, array $params): Response
+    {
+        if ($this->collectionService === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Collection service is not configured on this server',
+            ]);
+        }
+
+        $itemId = $params['id'] ?? '';
+        if ($itemId === '') {
+            return (new Response())->status(400)->json(['error' => 'Item ID is required']);
+        }
+
+        // Check that the item exists.
+        $item = $this->itemRepository->findById($itemId);
+        if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $collection = $this->collectionService->getCollectionForItem((int) $itemId);
+
+        if ($collection === null) {
+            return (new Response())->status(404)->json(['error' => 'Item is not part of any collection']);
+        }
+
+        return (new Response())->json(['collection' => $collection]);
+    }
+
+    /**
+     * Retrieves a TMDB box-set collection with all its member items (P4-S3).
+     *
+     * Returns the collection details including all movies in the collection,
+     * ordered by their TMDB part order.
+     * Requires authentication.
+     *
+     * @param Request $request The HTTP request (unused).
+     * @param array<string, string> $params Route parameters including 'id' (collection ID).
+     *
+     * @return Response JSON response with collection object, members array, or 404 error.
+     *
+     * @api_endpoint GET /api/v1/collections/{id}
+     *
+     * @requires Authentication
+     *
+     * @example Response structure:
+     * ```json
+     * {
+     *   "collection": {
+     *     "id": 123,
+     *     "tmdb_collection_id": 10,
+     *     "name": "The Lord of the Rings Collection",
+     *     "overview": "...]",
+     *     "poster_url": "https://image.tmdb.org/t/p/w500/...",
+     *     "backdrop_url": "https://image.tmdb.org/t/p/w1280/..."
+     *   },
+     *   "members": [
+     *     {
+     *       "id": "abc-123",
+     *       "name": "The Lord of the Rings: The Fellowship of the Ring",
+     *       "type": "movie",
+     *       "poster_url": "...",
+     *       "backdrop_url": "...",
+     *       "tmdb_part_order": 1
+     *     }
+     *   ]
+     * }
+     * ```
+     */
+    public function getCollection(Request $request, array $params): Response
+    {
+        if ($this->collectionService === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Collection service is not configured on this server',
+            ]);
+        }
+
+        $collectionId = $params['id'] ?? '';
+        if ($collectionId === '') {
+            return (new Response())->status(400)->json(['error' => 'Collection ID is required']);
+        }
+
+        if (!is_numeric($collectionId)) {
+            return (new Response())->status(400)->json(['error' => 'Invalid collection ID']);
+        }
+
+        $collection = $this->collectionService->getCollectionById((int) $collectionId);
+
+        if ($collection === null) {
+            return (new Response())->status(404)->json(['error' => 'Collection not found']);
+        }
+
+        $members = $this->collectionService->getCollectionMembers((int) $collectionId);
+
+        // Re-index members array so keys are strings (required by Response::json())
+        return (new Response())->json([
+            'collection' => $collection,
+            'members' => array_values($members),
+        ]);
     }
 
     /**

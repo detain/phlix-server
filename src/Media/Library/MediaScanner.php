@@ -16,6 +16,9 @@ use Phlix\Shared\Events\Library\MediaItemAdded;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Extras\TrailerFinder;
+use Phlix\Media\Markers\ChapterMarkerService;
+use Phlix\Media\Markers\MarkerService;
+use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -1228,6 +1231,26 @@ class MediaScanner
         // stream-write failure never aborts the scan.
         if ($probeSummary !== null && $probeSummary['streams'] !== []) {
             $this->persistStreams((string) $itemId, $probeSummary['streams']);
+        }
+
+        // Extract and persist chapter markers from the container file (MKV/MP4/WebM).
+        // Guard: only when ffmpeg is wired and the container format carries chapters.
+        // Extraction is a read-only ffprobe call so it never modifies the source
+        // file. Failure is best-effort — a bad chapter on one file must not abort
+        // the whole library scan.
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if (in_array($ext, ['mkv', 'mp4', 'webm'], true) && $this->ffmpeg !== null) {
+            try {
+                $chapterService = new ChapterMarkerService($this->ffmpeg);
+                $chapters = $chapterService->extractFromFile($path);
+                if (!empty($chapters)) {
+                    $candidateRepo = new MarkerCandidateRepository($this->itemRepository);
+                    $markerService = new MarkerService($this->itemRepository, $candidateRepo);
+                    $markerService->storeChapters((string) $itemId, $chapters);
+                }
+            } catch (\Throwable) {
+                // Best-effort only — swallow and continue.
+            }
         }
 
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);

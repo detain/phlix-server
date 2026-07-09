@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 /**
@@ -16,7 +17,8 @@ final readonly class MediaMarkerController
 {
     public function __construct(
         private MarkerService $markerService,
-    ) {}
+    ) {
+    }
 
     public function getMarkers(string $id): Response
     {

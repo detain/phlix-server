@@ -25,7 +25,8 @@ final readonly class Rating
         public ?int $votes,
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $updatedAt,
-    ) {}
+    ) {
+    }
 
     /**
      * @param array<string, mixed> $row

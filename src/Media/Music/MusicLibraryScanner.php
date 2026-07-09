@@ -6,6 +6,7 @@
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
  */
+
 declare(strict_types=1);
 
 namespace Phlix\Media\Music;
@@ -565,7 +566,8 @@ class MusicLibraryScanner
                 $existingDiscNum = isset($existingTrack['disc_number']) && is_numeric($existingTrack['disc_number']) ? (int)$existingTrack['disc_number'] : 1;
                 $existingDuration = isset($existingTrack['duration_secs']) && is_numeric($existingTrack['duration_secs']) ? (int)$existingTrack['duration_secs'] : 0;
 
-                if ($existingTitle === $title
+                if (
+                    $existingTitle === $title
                     && $existingTrackNum === $trackNumber
                     && $existingDiscNum === $discNumber
                     && $existingDuration === $durationSecs

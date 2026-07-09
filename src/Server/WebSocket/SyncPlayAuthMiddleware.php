@@ -6,6 +6,7 @@
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
  */
+
 declare(strict_types=1);
 
 namespace Phlix\Server\WebSocket;
@@ -182,7 +183,6 @@ class SyncPlayAuthMiddleware
             // ensures invalid connections are closed early.
             // Store userId in $_GET for WebSocketServer to pick up
             $_GET['syncplay_user_id'] = $sub;
-
         } catch (\Throwable $e) {
             $this->logger?->error('SyncPlay authentication error', [
                 'remote_ip' => $connection->getRemoteIp(),

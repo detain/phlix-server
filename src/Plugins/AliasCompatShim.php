@@ -6,6 +6,7 @@
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
  */
+
 /**
  * Deprecation aliases registered on Composer autoload.
  *

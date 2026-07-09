@@ -34,7 +34,8 @@ class MediaRatingsController
     public function __construct(
         private readonly ItemRepository $itemRepository,
         private readonly RatingService $ratingService,
-    ) {}
+    ) {
+    }
 
     /**
      * Return all ratings for a media item.

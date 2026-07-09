@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 /**
@@ -15,7 +16,8 @@ final class MarkerService
      */
     public function __construct(
         private \Workerman\MySQL\Connection $db,
-    ) {}
+    ) {
+    }
 
     /**
      * Find all markers for a media item.

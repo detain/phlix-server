@@ -230,7 +230,7 @@ class MusicScanner
 
         // Sort files within each album by track number
         foreach ($albumMap as $key => $albumData) {
-            usort($albumMap[$key]['files'], function (SplFileInfo $a, SplFileInfo $b) use ($albumData) {
+            usort($albumMap[$key]['files'], function (SplFileInfo $a, SplFileInfo $b) {
                 $tagsA = $this->audioScanner->harvestTags($a->getPathname());
                 $tagsB = $this->audioScanner->harvestTags($b->getPathname());
 
@@ -294,14 +294,14 @@ class MusicScanner
         }
 
         // Check if artist exists
-        $escapedName = $this->db->escape($name);
         $existing = $this->db->query(
             "SELECT id FROM music_artists WHERE name = ?",
             [$name]
         );
 
         if (is_array($existing) && count($existing) > 0) {
-            $id = (int)($existing[0]['id'] ?? 0);
+            $firstRow = $existing[0];
+            $id = is_array($firstRow) && isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
             $cache[$cacheKey] = $id;
             return $id;
         }
@@ -317,7 +317,7 @@ class MusicScanner
             return null;
         }
 
-        $id = (int)$this->db->getLastInsertId();
+        $id = (int)$this->db->lastInsertId();
         $cache[$cacheKey] = $id;
 
         $this->logger->debug('Upserted artist', ['id' => $id, 'name' => $name]);
@@ -344,14 +344,14 @@ class MusicScanner
         }
 
         // Check if album exists for this artist
-        $escapedTitle = $this->db->escape($title);
         $existing = $this->db->query(
             "SELECT id FROM music_albums WHERE artist_id = ? AND title = ?",
             [$artistId, $title]
         );
 
         if (is_array($existing) && count($existing) > 0) {
-            $id = (int)($existing[0]['id'] ?? 0);
+            $firstRow = $existing[0];
+            $id = is_array($firstRow) && isset($firstRow['id']) && is_numeric($firstRow['id']) ? (int)$firstRow['id'] : 0;
 
             // Update existing album with new track count and year
             $this->db->query(
@@ -374,7 +374,7 @@ class MusicScanner
             return null;
         }
 
-        $id = (int)$this->db->getLastInsertId();
+        $id = (int)$this->db->lastInsertId();
         $cache[$cacheKey] = $id;
 
         $this->logger->debug('Upserted album', ['id' => $id, 'title' => $title, 'artist_id' => $artistId]);
@@ -400,7 +400,6 @@ class MusicScanner
         $durationSeconds = $this->extractTagInt($tags, 'duration_secs') ?? 0;
 
         // Check if track exists by audio file path
-        $escapedPath = $this->db->escape($path);
         $existing = $this->db->query(
             "SELECT id, title, track_number, disc_number, duration_seconds FROM music_tracks WHERE audio_file_path = ?",
             [$path]
@@ -408,13 +407,13 @@ class MusicScanner
 
         if (is_array($existing) && count($existing) > 0) {
             $existingTrack = $existing[0];
-            $existingId = (int)($existingTrack['id'] ?? 0);
+            $existingId = is_array($existingTrack) && isset($existingTrack['id']) && is_numeric($existingTrack['id']) ? (int)$existingTrack['id'] : 0;
 
             // Check if anything changed
-            $existingTitle = $existingTrack['title'] ?? '';
-            $existingTrackNum = (int)($existingTrack['track_number'] ?? 1);
-            $existingDiscNum = (int)($existingTrack['disc_number'] ?? 1);
-            $existingDuration = (int)($existingTrack['duration_seconds'] ?? 0);
+            $existingTitle = is_array($existingTrack) ? ($existingTrack['title'] ?? '') : '';
+            $existingTrackNum = is_array($existingTrack) && isset($existingTrack['track_number']) && is_numeric($existingTrack['track_number']) ? (int)$existingTrack['track_number'] : 1;
+            $existingDiscNum = is_array($existingTrack) && isset($existingTrack['disc_number']) && is_numeric($existingTrack['disc_number']) ? (int)$existingTrack['disc_number'] : 1;
+            $existingDuration = is_array($existingTrack) && isset($existingTrack['duration_seconds']) && is_numeric($existingTrack['duration_seconds']) ? (int)$existingTrack['duration_seconds'] : 0;
 
             if ($existingTitle === $title
                 && $existingTrackNum === $trackNumber
@@ -511,7 +510,7 @@ class MusicScanner
     private function generateSortName(string $name): string
     {
         // Strip common leading articles
-        $name = preg_replace('/^(the|a|an)\s+/i', '', $name);
+        $name = preg_replace('/^(the|a|an)\s+/i', '', $name) ?? '';
         return trim($name);
     }
 }

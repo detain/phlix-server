@@ -1531,7 +1531,7 @@ class WebPortalRouter
         }
         $ratings = $this->mediaRatingsController->getRatings($params);
 
-        return (new Response())->json($ratings);
+        return (new Response())->json(['ratings' => $ratings]);
     }
 
     /**

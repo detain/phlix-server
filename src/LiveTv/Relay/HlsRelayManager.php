@@ -231,11 +231,27 @@ class HlsRelayManager
                 return null;
             }
 
-            // Generate variant playlist
-            $variantPlaylistUrl = $this->hlsStreamer->getVariantPlaylistUrl($sessionId, 0);
+            // Fetch the master playlist (lists all variants)
+            $masterPlaylistUrl = $this->hlsStreamer->getPlaylistUrl($sessionId);
+            $playlistContent = $this->fetchPlaylistContent($masterPlaylistUrl);
 
-            // Return redirect or proxy to variant playlist
-            return $this->fetchPlaylistContent($variantPlaylistUrl);
+            if ($playlistContent === null) {
+                return null;
+            }
+
+            // Apply bandwidth filtering if session has a preference
+            $sessionMaxBandwidthKbps = null;
+            if (isset($sessionRow['max_bandwidth_kbps']) && is_numeric($sessionRow['max_bandwidth_kbps'])) {
+                $sessionMaxBandwidthKbps = (int) $sessionRow['max_bandwidth_kbps'];
+            }
+
+            if ($sessionMaxBandwidthKbps !== null) {
+                // Convert kbps to bps for filter function
+                $maxBandwidthBps = $sessionMaxBandwidthKbps * 1000;
+                $playlistContent = $this->filterPlaylistByBandwidth($playlistContent, $maxBandwidthBps);
+            }
+
+            return $playlistContent;
         }
 
         // Check segment cache first
@@ -398,13 +414,213 @@ class HlsRelayManager
             $createdAt = time();
         }
 
+        $maxBandwidthKbps = null;
+        if (isset($row['max_bandwidth_kbps']) && is_numeric($row['max_bandwidth_kbps'])) {
+            $maxBandwidthKbps = (int) $row['max_bandwidth_kbps'];
+        }
+
         return new HlsRelaySession(
             $sessionId,
             $channelId,
             $tuneRequestId,
             $createdAt,
             $this->relayPathPrefix,
+            $maxBandwidthKbps,
         );
+    }
+
+    /**
+     * Set the maximum bandwidth for a relay session.
+     *
+     * @param string $sessionId      Session ID to update.
+     * @param int|null $maxBandwidthKbps Maximum bandwidth in kbps, or null to remove limit.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function setMaxBandwidth(string $sessionId, ?int $maxBandwidthKbps): void
+    {
+        if ($maxBandwidthKbps !== null) {
+            $this->db->query(
+                "UPDATE livetv_relay_sessions SET max_bandwidth_kbps = ? WHERE session_id = ?",
+                [$maxBandwidthKbps, $sessionId]
+            );
+        } else {
+            $this->db->query(
+                "UPDATE livetv_relay_sessions SET max_bandwidth_kbps = NULL WHERE session_id = ?",
+                [$sessionId]
+            );
+        }
+
+        $this->logger?->info('HlsRelayManager: updated session bandwidth', [
+            'session_id' => $sessionId,
+            'max_bandwidth_kbps' => $maxBandwidthKbps,
+        ]);
+    }
+
+    /**
+     * Get a relay session by its ID.
+     *
+     * @param string $sessionId Session ID to look up.
+     *
+     * @return HlsRelaySession|null The session or null if not found.
+     *
+     * @since 0.12.0
+     */
+    public function getSession(string $sessionId): ?HlsRelaySession
+    {
+        /** @var array<int, array<string, mixed>> $rows */
+        $rows = $this->db->query(
+            "SELECT * FROM livetv_relay_sessions WHERE session_id = ?",
+            [$sessionId]
+        );
+
+        if (empty($rows)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $rows[0];
+
+        /** @var string $channelId */
+        $channelId = $row['channel_id'];
+        /** @var string $tuneRequestId */
+        $tuneRequestId = $row['tune_request_id'];
+        /** @var string $startedAt */
+        $startedAt = $row['started_at'];
+        $createdAt = strtotime($startedAt);
+        if ($createdAt === false) {
+            $createdAt = time();
+        }
+
+        $maxBandwidthKbps = null;
+        if (isset($row['max_bandwidth_kbps']) && is_numeric($row['max_bandwidth_kbps'])) {
+            $maxBandwidthKbps = (int) $row['max_bandwidth_kbps'];
+        }
+
+        return new HlsRelaySession(
+            $sessionId,
+            $channelId,
+            $tuneRequestId,
+            $createdAt,
+            $this->relayPathPrefix,
+            $maxBandwidthKbps,
+        );
+    }
+
+    /**
+     * Filter a master playlist content to only include renditions at or below
+     * the specified maximum bandwidth.
+     *
+     * @param string $playlistContent The original master playlist content.
+     * @param int|null $maxBandwidthBps Maximum bandwidth in bits per second, or null for no limit.
+     *
+     * @return string The filtered playlist content.
+     *
+     * @since 0.12.0
+     */
+    public function filterPlaylistByBandwidth(string $playlistContent, ?int $maxBandwidthBps): string
+    {
+        if ($maxBandwidthBps === null) {
+            return $playlistContent;
+        }
+
+        $lines = explode("\n", $playlistContent);
+        $result = [];
+        $skipNext = false;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+
+            // Skip empty lines and comments
+            if ($line === '' || str_starts_with($line, '#')) {
+                $result[] = $line;
+                continue;
+            }
+
+            // This is a variant URL line - check if previous line had bandwidth info
+            // We need to look back at the last #EXT-X-STREAM-INF line
+            $result[] = $line;
+        }
+
+        // Actually, let's do a different approach: parse properly
+        return $this->filterPlaylistByBandwidthInternal($playlistContent, $maxBandwidthBps);
+    }
+
+    /**
+     * Internal implementation of playlist filtering.
+     *
+     * @param string $playlistContent The original master playlist content.
+     * @param int $maxBandwidthBps Maximum bandwidth in bits per second.
+     *
+     * @return string The filtered playlist content.
+     *
+     * @since 0.12.0
+     */
+    private function filterPlaylistByBandwidthInternal(string $playlistContent, int $maxBandwidthBps): string
+    {
+        $lines = explode("\n", $playlistContent);
+        $result = [];
+        $i = 0;
+        $totalLines = count($lines);
+
+        while ($i < $totalLines) {
+            $line = trim($lines[$i]);
+
+            // Check if this is a variant stream info line
+            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                // Extract bandwidth from BANDWIDTH=<value>
+                $bandwidth = null;
+                if (preg_match('/BANDWIDTH=(\d+)/', $line, $matches)) {
+                    $bandwidth = (int) $matches[1];
+                }
+
+                // If bandwidth exceeds limit, skip this variant and the URL line after it
+                if ($bandwidth !== null && $bandwidth > $maxBandwidthBps) {
+                    $i++;
+                    // Skip the URL line that follows
+                    while ($i < $totalLines && !str_starts_with(trim($lines[$i]), '#') && trim($lines[$i]) !== '') {
+                        if (!str_starts_with(trim($lines[$i]), '/') && !preg_match('/^https?:/', trim($lines[$i]))) {
+                            // This is a relative URL, skip it
+                        }
+                        $i++;
+                        break;
+                    }
+                    continue;
+                }
+
+                // Keep this variant
+                $result[] = $line;
+                $i++;
+
+                // Also add the next non-empty, non-comment line (the URL)
+                while ($i < $totalLines) {
+                    $nextLine = trim($lines[$i]);
+                    if ($nextLine === '') {
+                        $i++;
+                        continue;
+                    }
+                    if (str_starts_with($nextLine, '#')) {
+                        // Comments before URL are part of the variant, keep them
+                        $result[] = $nextLine;
+                        $i++;
+                        continue;
+                    }
+                    // This is the URL
+                    $result[] = $nextLine;
+                    $i++;
+                    break;
+                }
+                continue;
+            }
+
+            // Keep all other lines as-is
+            $result[] = $line;
+            $i++;
+        }
+
+        return implode("\n", $result);
     }
 
     /**

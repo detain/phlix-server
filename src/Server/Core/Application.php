@@ -435,6 +435,18 @@ class Application
             [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
         );
 
+        // Skip/intros marker CRUD (P3-S1) — user-editable markers stored in media_markers table
+        $mediaMarkerController = $this->getMediaMarkerController();
+        $this->router->group(
+            '',
+            function (Router $r) use ($mediaMarkerController): void {
+                $r->get('/api/v1/media/{id}/markers', [$mediaMarkerController, 'getMarkers']);
+                $r->post('/api/v1/media/{id}/markers', [$mediaMarkerController, 'createMarker']);
+                $r->delete('/api/v1/media/{id}/markers/{markerId}', [$mediaMarkerController, 'deleteMarker']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
+
         // Session management endpoints
         $sessionController = $this->getSessionController();
         $this->router->post('/api/v1/sessions', [$sessionController, 'createSession']);
@@ -2542,6 +2554,33 @@ class Application
 
         /** @var \Phlix\Server\Http\Controllers\MarkerController */
         $controller = $this->container->get(\Phlix\Server\Http\Controllers\MarkerController::class);
+        return $controller;
+    }
+
+    /**
+     * Returns a MediaMarkerController instance for the P3-S1 marker API.
+     *
+     * Provides CRUD operations on the media_markers table for user-editable
+     * skip intro/outro/credits/ad markers.
+     *
+     * @return \Phlix\Server\Http\Controllers\MediaMarkerController The controller instance.
+     */
+    private function getMediaMarkerController(): \Phlix\Server\Http\Controllers\MediaMarkerController
+    {
+        if ($this->container === null) {
+            $db = new \Phlix\Common\Database\PhlixMySQLConnection(
+                '127.0.0.1',
+                3306,
+                'phlix',
+                'root',
+                'password'
+            );
+            $markerService = new \Phlix\Media\MarkerService($db);
+            return new \Phlix\Server\Http\Controllers\MediaMarkerController($markerService);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\MediaMarkerController */
+        $controller = $this->container->get(\Phlix\Server\Http\Controllers\MediaMarkerController::class);
         return $controller;
     }
 

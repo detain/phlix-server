@@ -12,6 +12,7 @@ namespace Phlix\Media\Library;
 
 use Phlix\Collection\SmartRuleVocabulary;
 use Phlix\Common\Uuid;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Stats\StatsCollector;
 use Throwable;
 use Workerman\MySQL\Connection;
@@ -1676,8 +1677,15 @@ class ItemRepository
             $results = $this->db->query($selectSql, $fetchBindings);
         }
 
+        /** @var list<array<string, mixed>> $items */
+        $items = $this->hydrateRows($results);
+
+        // P5-S2: filter items by profile tag restrictions (blocked/allowed tags)
+        $items = $this->filterItemsByTags($items);
+        $total = count($items);
+
         return [
-            'items' => $this->hydrateRows($results),
+            'items' => $items,
             'total' => $total,
             'limit' => $limit,
             'offset' => $offset,
@@ -2535,5 +2543,124 @@ class ItemRepository
     private function generateUuid(): string
     {
         return Uuid::v4();
+    }
+
+    /**
+     * Filter items by profile tag restrictions (P5-S2).
+     *
+     * Checks the current profile's tag restrictions from profile_tags table:
+     * - Blocked tags: items containing any blocked tag are excluded
+     * - Allowed tags: if an allow-list exists, only items with at least one
+     *   allowed tag are included (after blocked tag filtering)
+     *
+     * Tags are read from the item's tags_json column (JSON array of strings).
+     *
+     * @param list<array<string, mixed>> $items Hydrated media items to filter.
+     *
+     * @return list<array<string, mixed>> Filtered items.
+     */
+    private function filterItemsByTags(array $items): array
+    {
+        $profileId = RequestContext::getProfileId();
+        if ($profileId === null) {
+            return $items;
+        }
+
+        // Get blocked and allowed tags for this profile
+        /** @var array<array<string, mixed>> $blockedRows */
+        $blockedRows = $this->db->query(
+            'SELECT tag FROM profile_tags WHERE profile_id = ? AND tag_type = ?',
+            [$profileId, 'blocked'],
+        );
+
+        /** @var array<array<string, mixed>> $allowedRows */
+        $allowedRows = $this->db->query(
+            'SELECT tag FROM profile_tags WHERE profile_id = ? AND tag_type = ?',
+            [$profileId, 'allowed'],
+        );
+
+        // Build tag arrays
+        $blockedTags = [];
+        if (is_array($blockedRows)) {
+            foreach ($blockedRows as $row) {
+                if (is_array($row) && isset($row['tag']) && is_string($row['tag'])) {
+                    $blockedTags[] = $row['tag'];
+                }
+            }
+        }
+
+        $allowedTags = [];
+        if (is_array($allowedRows)) {
+            foreach ($allowedRows as $row) {
+                if (is_array($row) && isset($row['tag']) && is_string($row['tag'])) {
+                    $allowedTags[] = $row['tag'];
+                }
+            }
+        }
+
+        // No restrictions at all
+        if ($blockedTags === [] && $allowedTags === []) {
+            return $items;
+        }
+
+        // Filter items
+        $filtered = [];
+        foreach ($items as $item) {
+            if (!$this->itemMatchesTagRestrictions($item, $blockedTags, $allowedTags)) {
+                continue;
+            }
+            $filtered[] = $item;
+        }
+
+        /** @var list<array<string, mixed>> */
+        return $filtered;
+    }
+
+    /**
+     * Check if a single item matches the tag restrictions.
+     *
+     * @param array<string, mixed> $item         Media item to check.
+     * @param list<string>          $blockedTags  Blocked tags for the profile.
+     * @param list<string>          $allowedTags  Allowed tags for the profile.
+     *
+     * @return bool True if the item passes tag restrictions.
+     */
+    private function itemMatchesTagRestrictions(array $item, array $blockedTags, array $allowedTags): bool
+    {
+        // Get tags from the item's tags_json column
+        $tagsJson = $item['tags_json'] ?? null;
+        $itemTags = [];
+
+        if (is_string($tagsJson) && $tagsJson !== '') {
+            $decoded = json_decode($tagsJson, true);
+            if (is_array($decoded)) {
+                foreach ($decoded as $tag) {
+                    if (is_string($tag) && $tag !== '') {
+                        $itemTags[] = $tag;
+                    }
+                }
+            }
+        }
+
+        // Check blocked tags first - if item has any blocked tag, it's excluded
+        if ($blockedTags !== []) {
+            foreach ($itemTags as $itemTag) {
+                if (in_array($itemTag, $blockedTags, true)) {
+                    return false;
+                }
+            }
+        }
+
+        // If there's an allowed list, item must have at least one allowed tag
+        if ($allowedTags !== []) {
+            foreach ($itemTags as $itemTag) {
+                if (in_array($itemTag, $allowedTags, true)) {
+                    return true;
+                }
+            }
+            return false; // Item has no allowed tag
+        }
+
+        return true;
     }
 }

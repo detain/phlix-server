@@ -189,25 +189,27 @@ class SyncPlayManager
         if ($this->messageHandler === null) {
             return;
         }
+        /** @var MessageHandler $messageHandler */
+        $messageHandler = $this->messageHandler;
 
         $handler = function (ConnectionInterface $connection, array $payload) {
             $this->handleMessage($connection, $payload);
         };
 
-        $this->messageHandler->on(Messages::TYPE_GROUP_CREATE, $handler);
-        $this->messageHandler->on(Messages::TYPE_GROUP_JOIN, $handler);
-        $this->messageHandler->on(Messages::TYPE_GROUP_LEAVE, $handler);
-        $this->messageHandler->on(Messages::TYPE_PLAYBACK_PLAY, $handler);
-        $this->messageHandler->on(Messages::TYPE_PLAYBACK_PAUSE, $handler);
-        $this->messageHandler->on(Messages::TYPE_PLAYBACK_SEEK, $handler);
-        $this->messageHandler->on(Messages::TYPE_PLAYBACK_QUEUE, $handler);
-        $this->messageHandler->on(Messages::TYPE_CHAT_MESSAGE, $handler);
-        $this->messageHandler->on(Messages::TYPE_CHAT_TYPING, $handler);
-        $this->messageHandler->on(Messages::TYPE_TIME_PING, $handler);
-        $this->messageHandler->on(Messages::TYPE_HOST_TRANSFER, $handler);
-        $this->messageHandler->on(Messages::TYPE_PLAYBACK_SYNC, $handler);
-        $this->messageHandler->on(Messages::TYPE_TIME_SYNC, $handler);
-        $this->messageHandler->on(Messages::TYPE_GROUP_LIST, $handler);
+        $messageHandler->on(Messages::TYPE_GROUP_CREATE, $handler);
+        $messageHandler->on(Messages::TYPE_GROUP_JOIN, $handler);
+        $messageHandler->on(Messages::TYPE_GROUP_LEAVE, $handler);
+        $messageHandler->on(Messages::TYPE_PLAYBACK_PLAY, $handler);
+        $messageHandler->on(Messages::TYPE_PLAYBACK_PAUSE, $handler);
+        $messageHandler->on(Messages::TYPE_PLAYBACK_SEEK, $handler);
+        $messageHandler->on(Messages::TYPE_PLAYBACK_QUEUE, $handler);
+        $messageHandler->on(Messages::TYPE_CHAT_MESSAGE, $handler);
+        $messageHandler->on(Messages::TYPE_CHAT_TYPING, $handler);
+        $messageHandler->on(Messages::TYPE_TIME_PING, $handler);
+        $messageHandler->on(Messages::TYPE_HOST_TRANSFER, $handler);
+        $messageHandler->on(Messages::TYPE_PLAYBACK_SYNC, $handler);
+        $messageHandler->on(Messages::TYPE_TIME_SYNC, $handler);
+        $messageHandler->on(Messages::TYPE_GROUP_LIST, $handler);
     }
 
     /**

@@ -77,12 +77,13 @@ class HlsController
     /**
      * GET /hls/{job_id}/{file} — serve a playlist, subtitle sidecar, or segment.
      *
-     * `master.m3u8` / `media_0.m3u8` / `media_v{V}.m3u8` / `sub-*.vtt` (and legacy
-     * `chunk-*.m4s`) are static files served verbatim by {@see serveJobFile()} — no
-     * transcoder involvement (the multi-variant media playlists are written up front
-     * by {@see TranscodeManager}). Only segment requests are routed through the
-     * transcoder, which returns a cached segment immediately or transcodes it on
-     * demand first. Two segment shapes are recognized:
+     * `master.m3u8` / `media_0.m3u8` / `media_v{V}.m3u8` / `media_a{N}.m3u8` /
+     * `sub-*.vtt` (and legacy `chunk-*.m4s`) are static files served verbatim by
+     * {@see serveJobFile()} — no transcoder involvement (the multi-variant media
+     * playlists are written up front by {@see TranscodeManager}). Only segment
+     * requests are routed through the transcoder, which returns a cached segment
+     * immediately or transcodes it on demand first. Three segment shapes are
+     * recognized:
      *
      *   - Legacy `seg-NNNNN.ts` → `ensureSegment($jobId, null, NNNNN)` (the null
      *     variant selects the single-variant `variants IS NULL` job path).
@@ -90,6 +91,9 @@ class HlsController
      *     where `{V}` is a rendition id (`[a-z0-9]+`, e.g. `1080p`, `original`). An
      *     unknown variant / out-of-range index resolves to 404 (self-heals via client
      *     retry once the segment exists).
+     *   - Audio-only `seg-a{A}-NNNNN.ts` (P3B-S3) → `ensureSegment($jobId, null, NNNNN, '{A}')`,
+     *     where `{A}` is an audio stream index (e.g. `0`, `1`). Produces an audio-only
+     *     segment for multi-audio HLS playback.
      *
      * The variant character class `[a-z0-9]+` is anchored inside `^…$` and excludes
      * `.` `/` `\`, so it is a defense-in-depth allowlist that cannot smuggle a
@@ -107,13 +111,18 @@ class HlsController
         }
 
         // On-demand MPEG-TS segment: produce (or serve cached) this segment before
-        // handing it to the static file server. Two filename shapes route here — the
-        // legacy unprefixed name (null variant) and the multi-variant name (rendition
-        // id parsed from the URL and validated against the [a-z0-9]+ allowlist).
+        // handing it to the static file server. Three filename shapes route here —
+        // the legacy unprefixed name (null variant), the multi-variant name (rendition
+        // id parsed from the URL), and the audio-only name (audio group id).
         $variant = null;
+        $audioId = null;
         $index = null;
         if (preg_match('/^seg-v([a-z0-9]+)-(\d{1,9})\.ts$/', $file, $m) === 1) {
             $variant = $m[1];
+            $index = (int) $m[2];
+        } elseif (preg_match('/^seg-a([a-z0-9]+)-(\d{1,9})\.ts$/', $file, $m) === 1) {
+            // P3B-S3 audio-only segment: seg-a{A}-NNNNN.ts → audio group id A, index NNNNN.
+            $audioId = 'a' . $m[1];
             $index = (int) $m[2];
         } elseif (preg_match('/^seg-(\d{1,9})\.ts$/', $file, $m) === 1) {
             $index = (int) $m[1];
@@ -124,7 +133,8 @@ class HlsController
                 // A5 changed ensureSegment() to (jobId, variant, index): a null
                 // variant selects the legacy single-variant job; a rendition id
                 // string selects the matching rung of the multi-variant ladder.
-                $ready = $this->transcodeManager?->ensureSegment($jobId, $variant, $index);
+                // P3B-S3 adds $audioId for audio-only segment production.
+                $ready = $this->transcodeManager?->ensureSegment($jobId, $variant, $index, $audioId);
             } catch (SegmentBusyException $e) {
                 // Transient overload — tell the player to retry shortly rather than
                 // blocking a worker or timing out. hls.js treats 503 as a retryable

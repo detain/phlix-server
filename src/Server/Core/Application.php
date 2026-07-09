@@ -601,6 +601,9 @@ class Application
         // Profile tag management routes (P5-S2)
         $this->loadProfileTagRoutes();
 
+        // Stream limit management routes (P5-S3)
+        $this->loadStreamLimitRoutes();
+
         // Typed admin router (plugin admin, auth providers, OIDC/LDAP
         // config, stats). These were previously only wired in
         // public/index.php as a separate `Router` instance gated by
@@ -1079,6 +1082,47 @@ class Application
     }
 
     /**
+     * Registers stream limit management API routes (P5-S3).
+     *
+     * Wires endpoints for per-profile concurrent stream limits:
+     * - GET    /api/v1/profiles/{profileId}/stream-limits  — get stream limits
+     * - PUT    /api/v1/profiles/{profileId}/stream-limits  — update stream limits
+     * - GET    /api/v1/profiles/{profileId}/active-streams — list active streams
+     *
+     * @since 0.15.0
+     */
+    private function loadStreamLimitRoutes(): void
+    {
+        $controller = $this->getStreamLimitController();
+
+        // AuthMiddleware gates these routes; StreamLimitMiddleware
+        // runs globally after auth to enforce stream limits.
+        $this->router->get('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'getStreamLimits']);
+        $this->router->put('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'updateStreamLimits']);
+        $this->router->get('/api/v1/profiles/{profileId}/active-streams', [$controller, 'getActiveStreams']);
+    }
+
+    /**
+     * Returns a StreamLimitController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\StreamLimitController The controller instance.
+     *
+     * @since 0.15.0
+     */
+    private function getStreamLimitController(): \Phlix\Server\Http\Controllers\StreamLimitController
+    {
+        if ($this->container === null) {
+            // Fallback: create with direct DB connection
+            $db = $this->connectionPool->getPooledConnection('mysql');
+            $streamSessionService = new \Phlix\Access\StreamSessionService($db);
+            return new \Phlix\Server\Http\Controllers\StreamLimitController($streamSessionService);
+        }
+
+        /** @var \Phlix\Server\Http\Controllers\StreamLimitController */
+        return $this->container->get(\Phlix\Server\Http\Controllers\StreamLimitController::class);
+    }
+
+    /**
      * Returns a BackupController instance.
      *
      * @return \Phlix\Server\Http\Controllers\Admin\BackupController The controller instance.
@@ -1309,6 +1353,13 @@ class Application
         // signed-URL token. The token is prefix-scoped to the per-job directory
         // (see SignedUrl::canonicalResource), so a single signature on the master
         // playlist URL authorises every variant playlist and segment under it.
+        // StreamLimitMiddleware enforces per-profile concurrent stream limits (P5-S3).
+        $middleware = [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()];
+        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\StreamLimitMiddleware::class)) {
+            /** @var \Phlix\Server\Http\Middleware\StreamLimitMiddleware */
+            $streamLimitMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\StreamLimitMiddleware::class);
+            $middleware[] = $streamLimitMiddleware;
+        }
         $this->router->group('', function (Router $r) use ($hlsController, $dashController): void {
             // HLS: JSON info, then the generic file server (master.m3u8, media_N.m3u8,
             // init-N.m4s, chunk-*.m4s).
@@ -1318,7 +1369,7 @@ class Application
             // DASH: JSON info, then the generic file server (manifest.mpd + .m4s).
             $r->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
             $r->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
-        }, [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]);
+        }, $middleware);
     }
 
     /**

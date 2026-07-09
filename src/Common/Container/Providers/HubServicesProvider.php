@@ -68,6 +68,8 @@ final class HubServicesProvider implements ServiceProviderInterface
         $heartbeatInterval = is_int($hubConfig['heartbeat_interval'] ?? null) ? $hubConfig['heartbeat_interval'] : 60;
         $cacheTtl = is_int($hubConfig['jwks_cache_ttl'] ?? null) ? $hubConfig['jwks_cache_ttl'] : 900;
         $publicUrl = is_string($hubConfig['public_url'] ?? null) ? $hubConfig['public_url'] : '';
+        // R5: renewal threshold extracted from config (was hardcoded constant in HubClient)
+        $renewalThreshold = is_int($hubConfig['renewal_threshold'] ?? null) ? $hubConfig['renewal_threshold'] : 518400;
 
         $builder->addDefinitions([
             Ed25519KeyManager::class => autowire()
@@ -97,6 +99,7 @@ final class HubServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('configDir', $configDir)
                 ->constructorParameter('httpClient', get(HttpClientInterface::class))
                 ->constructorParameter('publicUrl', $publicUrl)
+                ->constructorParameter('renewalThreshold', $renewalThreshold)
                 // Advertise this server's libraries in each heartbeat so the hub
                 // caches them (server_libraries) and the owner's dashboard can list
                 // them. Resolved lazily per heartbeat; failures degrade to empty.

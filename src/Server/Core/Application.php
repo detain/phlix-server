@@ -11,6 +11,7 @@ declare(strict_types=1);
 namespace Phlix\Server\Core;
 
 use Phlix\Common\Container\ContainerFactory;
+use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Version;
@@ -58,6 +59,9 @@ class Application
     /** @var ContainerInterface|null PSR-11 container backing this application. */
     private ?ContainerInterface $container = null;
 
+    /** @var ConnectionPool Database connection pool (R5: injected, replacing static calls) */
+    private ConnectionPool $connectionPool;
+
     /** @var Application|null Singleton instance of the application */
     private static ?Application $instance = null;
 
@@ -73,13 +77,15 @@ class Application
      * @param array<string, mixed> $config    Application config (the array
      *                                         returned by config/server.php
      *                                         plus any runtime additions).
+     * @param ConnectionPool       $connectionPool Database connection pool (R5).
      *
      * @since 0.10.0
      */
-    public function __construct(ContainerInterface $container, array $config)
+    public function __construct(ContainerInterface $container, array $config, ConnectionPool $connectionPool)
     {
         $this->container = $container;
         $this->config = $config;
+        $this->connectionPool = $connectionPool;
         $this->router = new Router();
         $this->loadRoutes();
 
@@ -138,7 +144,9 @@ class Application
         }
 
         $container = ContainerFactory::create($normalized);
-        return new self($container, $normalized);
+        /** @var ConnectionPool $connectionPool */
+        $connectionPool = $container->get(ConnectionPool::class);
+        return new self($container, $normalized, $connectionPool);
     }
 
     /**
@@ -961,7 +969,7 @@ class Application
         $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
             is_array($rawConfig) ? $rawConfig : []
         );
-        $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+        $db = $this->connectionPool->getPooledConnection('mysql');
         $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
         $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
             $config->apiKey,
@@ -991,7 +999,7 @@ class Application
             $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
                 is_array($rawConfig) ? $rawConfig : []
             );
-            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $db = $this->connectionPool->getPooledConnection('mysql');
             $sessions = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmSessionRepository($db);
             $api = new \Phlix\Plugins\Scrobbler\Lastfm\LastfmApi(
                 $config->apiKey,
@@ -1610,7 +1618,7 @@ class Application
             $batchSize = self::intConfig($newsletterConfig, 'batch_size', 50);
             $templateDir = self::stringConfig($newsletterConfig, 'template_dir', 'public/templates');
 
-            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $db = $this->connectionPool->getPooledConnection('mysql');
 
             $sender = new \Phlix\Admin\NewsletterSender(
                 $db,
@@ -1768,7 +1776,7 @@ class Application
         }
 
         try {
-            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $db = $this->connectionPool->getPooledConnection('mysql');
             $backupManager = new \Phlix\Admin\BackupManager(
                 $db,
                 \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION)
@@ -1851,7 +1859,7 @@ class Application
         $logger = \Phlix\Common\Logger\LoggerFactory::get(\Phlix\Common\Logger\LogChannels::APPLICATION);
 
         try {
-            $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+            $db = $this->connectionPool->getPooledConnection('mysql');
             $collector = new \Phlix\Stats\StatsCollector($db);
 
             // Initial snapshot so the dashboard has data without waiting a cycle.
@@ -3136,7 +3144,7 @@ class Application
             }
         }
 
-        $db = \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+        $db = $this->connectionPool->getPooledConnection('mysql');
 
         return new \Phlix\Server\Http\Controllers\TraktOAuthController(
             logger: $logger,
@@ -3173,7 +3181,7 @@ class Application
                 // Container has no Connection binding; continue to pool.
             }
             try {
-                return \Phlix\Common\Database\ConnectionPool::getConnection('mysql');
+                return $this->connectionPool->getPooledConnection('mysql');
             } catch (\Throwable) {
                 // Fall back to direct connection if pool not initialized
             }

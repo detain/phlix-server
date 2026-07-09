@@ -1,5 +1,6 @@
 {
     "name": "detain/phlix-server",
+    "description": "Phlix media server - streaming, library management, user auth, and SyncPlay coordination",
     "type": "project",
     "license": "proprietary",
     "repositories": [

@@ -2288,13 +2288,12 @@ class Application
                 return;
             }
 
-            // Device description endpoint
+            // Device description endpoint (legacy path)
             $deviceDescController = new \Phlix\Server\Http\Controllers\Dlna\DeviceDescriptionController($cdsServer);
             $this->router->get('/description.xml', [$deviceDescController, 'handle']);
 
-            // CDS control endpoint
-            $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
-            $this->router->post('/cds/control', [$cdsControlController, 'handle']);
+            // P10-S1: DLNA routes with /dlna/ prefix
+            $this->router->get('/dlna/description.xml', [$deviceDescController, 'handle']);
 
             // SCPD XML endpoints - route pattern matches /scpd/{service}.xml
             $this->router->get('/scpd/{service}.xml', function (
@@ -2314,6 +2313,24 @@ class Application
                     ->header('Cache-Control', 'no-cache, must-revalidate')
                     ->text($scpdXml);
             });
+
+            // P10-S1: DLNA ContentDirectory SOAP endpoint
+            // Try to get ContentDirectory from container for the SOAP controller
+            try {
+                if ($this->container->has(\Phlix\Dlna\ContentDirectory::class)) {
+                    $contentDirectory = $this->container->get(\Phlix\Dlna\ContentDirectory::class);
+                    if ($contentDirectory instanceof \Phlix\Dlna\ContentDirectory) {
+                        $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController($contentDirectory);
+                        $this->router->post('/dlna/content_directory', [$cdsController, 'handle']);
+                    }
+                }
+            } catch (\Throwable $e) {
+                // ContentDirectory not available - skip SOAP route
+            }
+
+            // CDS control endpoint (legacy path)
+            $cdsControlController = new \Phlix\Server\Http\Controllers\Dlna\CdsControlController($cdsServer);
+            $this->router->post('/cds/control', [$cdsControlController, 'handle']);
         } catch (\Throwable $e) {
             // CDS not configured - silent ignore
         }

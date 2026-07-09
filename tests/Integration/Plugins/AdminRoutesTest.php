@@ -12,6 +12,7 @@ use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Ldap\Controller\LdapAdminController;
@@ -20,6 +21,7 @@ use Phlix\Plugins\Manifest;
 use Phlix\Plugins\Oidc\Controller\OidcAdminController;
 use Phlix\Plugins\Oidc\Plugin;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Webhooks\WebhookService;
 use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
@@ -28,7 +30,9 @@ use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
+use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
@@ -146,6 +150,18 @@ final class AdminRoutesTest extends TestCase
             $this->createMock(MetricsRepositoryInterface::class),
         );
 
+        // Hardware accelerator introspection (P6-S1). AdminRoutes::register()
+        // eagerly resolves it at bind time; the plugin-only tests below never
+        // dispatch to /transcoding/*, so a mock FfmpegRunner is sufficient here.
+        $ffmpegRunner = $this->createMock(FfmpegRunner::class);
+        $adminTranscodingController = new AdminTranscodingController($ffmpegRunner, []);
+
+        // Webhook controller (P9-S1). AdminRoutes::register() eagerly resolves
+        // it at bind time; the plugin-only tests below never dispatch to
+        // /webhooks/*, so a mock WebhookService is sufficient here.
+        $webhookService = $this->createMock(WebhookService::class);
+        $adminWebhooksController = new AdminWebhooksController($webhookService);
+
         $container = new class (
             $this->loader,
             $this->users,
@@ -165,6 +181,8 @@ final class AdminRoutesTest extends TestCase
             $pluginCatalogController,
             $catalogService,
             $metricsController,
+            $adminTranscodingController,
+            $adminWebhooksController,
         ) implements ContainerInterface {
             private Plugin $oidcPlugin;
             private LdapPlugin $ldapPlugin;
@@ -188,6 +206,8 @@ final class AdminRoutesTest extends TestCase
                 private readonly PluginCatalogController $pluginCatalogController,
                 private readonly PluginCatalogService $pluginCatalogService,
                 private readonly MetricsController $metricsController,
+                private readonly AdminTranscodingController $adminTranscodingController,
+                private readonly AdminWebhooksController $adminWebhooksController,
             ) {
                 $tempDir = sys_get_temp_dir() . '/phlix_oidc_test_' . uniqid('', true);
                 mkdir($tempDir, 0775, true);
@@ -235,6 +255,8 @@ final class AdminRoutesTest extends TestCase
                     AdminMetadataSourceController::class => $this->adminMetadataSourceController,
                     WatchHistoryController::class => $this->watchHistoryController,
                     MetricsController::class => $this->metricsController,
+                    AdminTranscodingController::class => $this->adminTranscodingController,
+                    AdminWebhooksController::class => $this->adminWebhooksController,
                     default => throw new \RuntimeException("no binding for $id"),
                 };
             }
@@ -261,6 +283,8 @@ final class AdminRoutesTest extends TestCase
                     AdminMetadataSourceController::class,
                     WatchHistoryController::class,
                     MetricsController::class,
+                    AdminTranscodingController::class,
+                    AdminWebhooksController::class,
                 ], true);
             }
         };

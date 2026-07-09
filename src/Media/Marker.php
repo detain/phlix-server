@@ -14,6 +14,7 @@ final readonly class Marker
         public int $startTimeMs,
         public int $endTimeMs,
         public string $label,
+        public ?string $thumbnailPath,
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $updatedAt,
     ) {}
@@ -31,6 +32,9 @@ final readonly class Marker
         $startTimeMs = is_int($row['start_time_ms'] ?? null) ? $row['start_time_ms'] : 0;
         $endTimeMs = is_int($row['end_time_ms'] ?? null) ? $row['end_time_ms'] : 0;
         $label = is_string($row['label'] ?? null) ? $row['label'] : '';
+        $thumbnailPath = is_string($row['thumbnail_path'] ?? null) && $row['thumbnail_path'] !== ''
+            ? $row['thumbnail_path']
+            : null;
         $createdAtStr = is_string($row['created_at'] ?? null) ? $row['created_at'] : 'now';
         $updatedAtStr = is_string($row['updated_at'] ?? null) ? $row['updated_at'] : 'now';
 
@@ -41,6 +45,7 @@ final readonly class Marker
             startTimeMs: $startTimeMs,
             endTimeMs: $endTimeMs,
             label: $label,
+            thumbnailPath: $thumbnailPath,
             createdAt: new \DateTimeImmutable($createdAtStr),
             updatedAt: new \DateTimeImmutable($updatedAtStr),
         );
@@ -53,12 +58,18 @@ final readonly class Marker
      */
     public function toArray(): array
     {
-        return [
+        $result = [
             'id' => $this->id,
             'type' => $this->type->value,
             'startMs' => $this->startTimeMs,
             'endMs' => $this->endTimeMs,
             'label' => $this->label,
         ];
+
+        if ($this->thumbnailPath !== null) {
+            $result['thumbnailUrl'] = '/api/v1/markers/thumbnails/' . urlencode($this->thumbnailPath);
+        }
+
+        return $result;
     }
 }

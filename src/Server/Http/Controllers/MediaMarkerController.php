@@ -42,8 +42,12 @@ final readonly class MediaMarkerController
         if ($type === null) {
             return (new Response())->status(400)->json(['error' => 'Invalid or missing marker type']);
         }
-        $startMs = is_int($body['startMs'] ?? null) ? $body['startMs'] : (is_numeric($body['startMs'] ?? null) ? (int) ($body['startMs']) : 0);
-        $endMs = is_int($body['endMs'] ?? null) ? $body['endMs'] : (is_numeric($body['endMs'] ?? null) ? (int) ($body['endMs']) : 0);
+        $startMs = is_int($body['startMs'] ?? null)
+            ? $body['startMs']
+            : (is_numeric($body['startMs'] ?? null) ? (int) ($body['startMs']) : 0);
+        $endMs = is_int($body['endMs'] ?? null)
+            ? $body['endMs']
+            : (is_numeric($body['endMs'] ?? null) ? (int) ($body['endMs']) : 0);
         $label = is_string($body['label'] ?? null) ? $body['label'] : '';
         $marker = $this->markerService->upsert($id, $type, $startMs, $endMs, $label);
         return (new Response())->json($marker->toArray(), 201);

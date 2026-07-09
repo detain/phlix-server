@@ -56,9 +56,8 @@ final class AdminTranscodingController
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON:
-     *   - 200: `{ accelerators: array<array{name, encoders, isHardware}>, auto_detected: true, ffmpeg_version: string }`
-     *   - 500: `{ error: string, message: string }` on failure
+     * @return Response JSON: 200: `{accelerators: array<array{name,encoders,isHardware}>,
+     *   auto_detected: true, ffmpeg_version: string}` | 500: `{error: string, message: string}` on failure
      *
      * @since 0.36.0
      */

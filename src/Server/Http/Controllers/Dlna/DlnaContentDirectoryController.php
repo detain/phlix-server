@@ -403,7 +403,10 @@ class DlnaContentDirectoryController
 
         if ($upnpErrorCode !== null) {
             $faultContent .= sprintf(
-                '<detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>%d</errorCode><errorDescription>%s</errorDescription></UPnPError></detail>',
+                '<detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0">'
+                . '<errorCode>%d</errorCode>'
+                . '<errorDescription>%s</errorDescription>'
+                . '</UPnPError></detail>',
                 $upnpErrorCode,
                 htmlspecialchars($faultString, ENT_XML1 | ENT_QUOTES, 'UTF-8')
             );

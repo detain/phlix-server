@@ -1896,7 +1896,8 @@ class WebPortalRouter
      * playback and crossfade mixing. Persists to user_settings when
      * the settings service is wired; returns 503 when it is not.
      *
-     * Body: `{ "crossfadeDuration": <int 0-300>, "crossfadeFadeOut": <float 0.0-1.0>, "crossfadeFadeIn": <float 0.0-1.0> }`
+     * Body: `{"crossfadeDuration": <int 0-300>, "crossfadeFadeOut": <float 0.0-1.0>,
+     * "crossfadeFadeIn": <float 0.0-1.0> }`
      * All fields are optional; omitted fields retain their current value.
      *
      * @param Request $request The HTTP request (userId set from auth)

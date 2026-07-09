@@ -1262,6 +1262,15 @@ class ItemRepository
             $values[] = $chapters;
         }
 
+        if (isset($markerData['trickplay_sprite_path'])) {
+            $sets[] = "trickplay_sprite_path = ?";
+            $values[] = $markerData['trickplay_sprite_path'];
+        }
+        if (isset($markerData['trickplay_timeline_path'])) {
+            $sets[] = "trickplay_timeline_path = ?";
+            $values[] = $markerData['trickplay_timeline_path'];
+        }
+
         if (empty($sets)) {
             return;
         }

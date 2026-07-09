@@ -1248,6 +1248,24 @@ class MediaScanner
                     $markerService = new MarkerService($this->itemRepository, $candidateRepo);
                     $markerService->storeChapters((string) $itemId, $chapters);
                 }
+
+                // Generate trickplay sprite sheet (best-effort): a 60-thumb grid
+                // at 160x90 enables smooth scrubbing previews in compatible players.
+                // Requires ffmpeg to be wired and a valid file path. Failure is
+                // best-effort — a missing trickplay on one file must not abort
+                // the whole library scan.
+                $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay';
+                if (!is_dir($spriteDir)) {
+                    mkdir($spriteDir, 0755, true);
+                }
+                $result = $this->ffmpeg->generateTrickplaySprites($path, $spriteDir, 60);
+                if ($result !== null) {
+                    [$spritePath, $timelinePath] = $result;
+                    $this->itemRepository->updateMarkers((string) $itemId, [
+                        'trickplay_sprite_path' => $spritePath,
+                        'trickplay_timeline_path' => $timelinePath,
+                    ]);
+                }
             } catch (\Throwable) {
                 // Best-effort only — swallow and continue.
             }

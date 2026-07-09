@@ -26,6 +26,8 @@ use Phlix\Media\Metadata\Imdb\ImdbLookup;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
+use Phlix\Media\Metadata\Rating;
+use Phlix\Media\Metadata\RatingService;
 use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\Resolution\SourceRegistry;
@@ -364,8 +366,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // (named — PHP-DI skips defaulted optional ctor params) so getImages
             // results are filtered to the library's enabled `options.image_types`
             // (M5) before being stored in metadata_json.images.{provider}.
+            // RatingService is injected so TMDB vote data can be captured (P1-S1).
             MetadataManager::class => autowire()
-                ->constructorParameter('libraries', get(LibraryManager::class)),
+                ->constructorParameter('libraries', get(LibraryManager::class))
+                ->constructorParameter('ratingService', get(RatingService::class)),
+
+            // Rating persistence: stores TMDB/IMDb/user scores and aggregates them.
+            // The service takes only the Workerman MySQL Connection (autowirable).
+            RatingService::class => autowire(),
 
             // Process-scoped registry of PLUGIN metadata sources
             // (MetadataSourceInterface). Single container-scoped instance —

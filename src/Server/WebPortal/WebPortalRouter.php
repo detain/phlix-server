@@ -32,6 +32,7 @@ use Phlix\Media\UserItemDataRepository;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
+use Phlix\Server\Http\Controllers\MediaRatingsController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Media\Storage\AvatarStorage;
 
@@ -85,6 +86,9 @@ class WebPortalRouter
 
     /** @var MediaUserDataController|null Handles favorite/rating routes; null when not wired */
     private ?MediaUserDataController $mediaUserDataController;
+
+    /** @var MediaRatingsController|null Handles media-item ratings endpoints; null when not wired */
+    private ?MediaRatingsController $mediaRatingsController;
 
     /** @var AuditLogger|null Security-event logger for admin-gated operations; null when not wired */
     private ?AuditLogger $auditLogger;
@@ -150,7 +154,8 @@ class WebPortalRouter
         ?MediaUserDataController $mediaUserDataController = null,
         ?AuditLogger $auditLogger = null,
         ?AvatarStorage $avatarStorage = null,
-        ?UserAvatarController $userAvatarController = null
+        ?UserAvatarController $userAvatarController = null,
+        ?MediaRatingsController $mediaRatingsController = null
     ) {
         // SessionManager and AuthManager are accepted for future middleware wiring
         // but not stored — see WebPortalRouter routes for authenticated endpoints.
@@ -169,6 +174,7 @@ class WebPortalRouter
         $this->auditLogger = $auditLogger;
         $this->avatarStorage = $avatarStorage;
         $this->userAvatarController = $userAvatarController;
+        $this->mediaRatingsController = $mediaRatingsController;
         $this->router = new Router();
         $this->registerRoutes();
     }
@@ -198,6 +204,9 @@ class WebPortalRouter
         // `phlix_session` cookie) by BOTH entry points (public/index.php and
         // HttpHandler) before dispatch; AuthMiddleware just enforces its presence.
         $auth = new AuthMiddleware();
+
+        // Public media-item ratings endpoint (P1-S1): no auth required.
+        $this->router->get('/api/v1/media/{id}/ratings', [$this, 'getRatings']);
 
         $this->router->group('', function (Router $r): void {
             // Library routes
@@ -236,6 +245,9 @@ class WebPortalRouter
             $r->put('/api/v1/media/{id}/like', [$this, 'setLikeLevel']);
             $r->post('/api/v1/media/{id}/watched', [$this, 'markWatched']);
             $r->post('/api/v1/media/{id}/unwatched', [$this, 'markUnwatched']);
+
+            // User ratings for media items (P1-S1). Delegates to MediaRatingsController.
+            $r->post('/api/v1/media/{id}/ratings', [$this, 'createRating']);
 
             // Settings routes
             $r->get('/api/v1/users/me/settings', [$this, 'getUserSettings']);
@@ -1277,6 +1289,49 @@ class WebPortalRouter
             ]);
         }
         return $this->mediaUserDataController->listFavorites($request, $params);
+    }
+
+    /**
+     * Return all ratings for a media item (P1-S1).
+     *
+     * Thin delegate to {@see MediaRatingsController::getRatings()}; responds
+     * 503 when the ratings service is not wired.
+     *
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint GET /api/v1/media/{id}/ratings
+     */
+    public function getRatings(array $params): Response
+    {
+        if ($this->mediaRatingsController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Ratings are not configured on this server',
+            ]);
+        }
+        $ratings = $this->mediaRatingsController->getRatings($params);
+
+        return (new Response())->json($ratings);
+    }
+
+    /**
+     * Create or update the authenticated user's rating for a media item (P1-S1).
+     *
+     * Thin delegate to {@see MediaRatingsController::createRating()}; responds
+     * 503 when the ratings service is not wired.
+     *
+     * @param Request $request The HTTP request (userId set from auth).
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/ratings
+     */
+    public function createRating(Request $request, array $params): Response
+    {
+        if ($this->mediaRatingsController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Ratings are not configured on this server',
+            ]);
+        }
+        return $this->mediaRatingsController->createRating($request, $params);
     }
 
     /**

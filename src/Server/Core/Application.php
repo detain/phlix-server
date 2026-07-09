@@ -252,6 +252,24 @@ class Application
             ]);
         });
 
+        // P3B-S7: Network health monitoring endpoints
+        $configDirRaw = $this->config['_config_dir'] ?? 'config';
+        $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+        $healthController = new \Phlix\Server\Http\Controllers\Admin\HealthController(
+            $this->container,
+            $configDir,
+        );
+
+        // Relay health: returns tunnel status, hub heartbeat status, and active sessions
+        $this->router->get('/api/v1/health/relay', function (Request $request, array $params) use ($healthController): Response {
+            return $healthController->relayHealth($request, $params);
+        });
+
+        // Network health: measures hub heartbeat round-trip latency
+        $this->router->get('/api/v1/health/network', function (Request $request, array $params) use ($healthController): Response {
+            return $healthController->networkHealth($request, $params);
+        });
+
         // JWKS endpoint for hub-to-server JWT verification
         $this->router->get('/.well-known/jwks.json', function (Request $request, array $params): Response {
             $controller = $this->getHubJwksController();

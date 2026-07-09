@@ -554,10 +554,15 @@ class TranscodeManager
      * ignores `$variant`, reads the single `segment_params` column, and writes the
      * unprefixed `seg-NNNNN.ts` exactly as before.
      *
+     * P3B-S3 adds `$audioId` for audio-only segment production: when `$audioId`
+     * is set (e.g. `a0`) and `$variant` is null, produces `seg-a0-NNNNN.ts` —
+     * an audio-only segment for multi-language HLS playback.
+     *
      * @param string      $jobId   Transcode job id.
      * @param string|null $variant Rendition id for a multi-variant job (e.g. `720p`,
      *                             `original`); `null` for the legacy single-variant path.
      * @param int         $index   Zero-based segment index.
+     * @param string|null $audioId Audio group id (e.g. `a0`) for audio-only segments (P3B-S3).
      *
      * @return string|null Absolute path to the ready segment, or null when the job
      *                     is not on-demand, the variant is unknown/not advertised, the
@@ -568,13 +573,18 @@ class TranscodeManager
      *                     and this segment is not already encoding — a transient,
      *                     retryable state the caller surfaces as HTTP 503.
      */
-    public function ensureSegment(string $jobId, ?string $variant, int $index): ?string
+    public function ensureSegment(string $jobId, ?string $variant, int $index, ?string $audioId = null): ?string
     {
         $entry = $this->jobRowEntry($jobId);
         if ($entry === null || $index < 0) {
             return null;
         }
         $row = $entry['row'];
+
+        // P3B-S3: audio-only segment when $audioId is set and $variant is null.
+        if ($audioId !== null && $variant === null) {
+            return $this->produceAudioSegment($jobId, $row, $audioId, $index);
+        }
 
         $variantsRaw = $row['variants'] ?? null;
         if (is_string($variantsRaw) && $variantsRaw !== '') {
@@ -760,6 +770,100 @@ class TranscodeManager
             // it genuinely finishes. The reconcile self-heal remains only a safety
             // net for the dedup-only snapshot (the rare case this finally never runs,
             // e.g. a hard coroutine kill).
+            if ($launched) {
+                unset($this->segmentEncodesInFlight[$final]);
+            }
+        }
+
+        return is_file($final) ? $final : null;
+    }
+
+    /**
+     * Produce or serve one on-demand audio-only segment for multi-audio HLS (P3B-S3).
+     *
+     * Mirrors the tail of {@see produceSegment()} but for audio-only segments:
+     * the filename is `seg-a{audioId}-NNNNN.ts`, the FFmpeg command maps the
+     * specific audio stream index, and there is no video encode.
+     *
+     * @param string               $jobId    Transcode job id.
+     * @param array<string, mixed>  $row      The transcode_jobs row.
+     * @param string               $audioId  Audio group id (e.g. `a0`).
+     * @param int                  $index    Zero-based segment index.
+     *
+     * @return string|null Absolute path to the ready segment, or null on failure.
+     */
+    private function produceAudioSegment(
+        string $jobId,
+        array $row,
+        string $audioId,
+        int $index
+    ): ?string {
+        $segSeconds = is_numeric($row['segment_seconds'] ?? null)
+            ? (int) $row['segment_seconds']
+            : $this->segmentSeconds;
+        $segSeconds = $segSeconds > 0 ? $segSeconds : $this->segmentSeconds;
+        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
+        if ($duration <= 0.0) {
+            return null;
+        }
+
+        $total = (int) ceil($duration / $segSeconds);
+        if ($index >= $total) {
+            return null;
+        }
+
+        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : '';
+        if ($dir === '' || !is_dir($dir)) {
+            return null;
+        }
+        $inputPath = is_string($row['input_path'] ?? null) ? (string) $row['input_path'] : '';
+        if ($inputPath === '' || !is_file($inputPath)) {
+            return null;
+        }
+
+        $final = "{$dir}/" . self::segmentFileName(null, $index, $audioId);
+        $start = (float) $index * $segSeconds;
+        $segLen = min((float) $segSeconds, $duration - $start);
+        if ($segLen <= 0.0) {
+            return null;
+        }
+
+        // P3B-S3: derive audio-only encode params (no video, specific audio stream).
+        // The audio group id is 'a{N}' → extract N as the stream index.
+        $audioStreamIndex = (int) substr($audioId, 1);
+        $segParams = [
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'audio_stream_index' => $audioStreamIndex,
+        ];
+
+        // Refresh the dedup snapshot (same as produceSegment).
+        $this->reconcileInFlightSegments();
+
+        $launched = false;
+        try {
+            if (!$this->segmentEncodeInFlight($final)) {
+                if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+                    throw new SegmentBusyException(
+                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                    );
+                }
+                $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+                $launched = true;
+                $this->touchJobDir($dir);
+                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
+            }
+
+            $waited = 0;
+            while (!is_file($final) && $waited < $this->segmentMaxWaitMs) {
+                if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                    \Swoole\Coroutine::sleep(self::SEGMENT_POLL_INTERVAL_MS / 1000.0);
+                } else {
+                    usleep(self::SEGMENT_POLL_INTERVAL_MS * 1000);
+                }
+                $waited += self::SEGMENT_POLL_INTERVAL_MS;
+            }
+        } finally {
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
             }
@@ -1181,15 +1285,27 @@ class TranscodeManager
      * `v{id}/` subdirectory): the `/hls/{job_id}/{file}` route's `{file}` placeholder
      * is `[^/]+`, so a nested path would never match.
      *
+     * P3B-S3 audio-only segments: `seg-a{audioIndex}-NNNNN.ts` (e.g. `seg-a0-00042.ts`).
+     * When both `$variantId` and `$audioId` are set, produces video+audio muxed
+     * segment (the standard ABR case). When only `$audioId` is set, produces an
+     * audio-only segment for the multi-audio HLS path.
+     *
      * @param string|null $variantId Rendition id (e.g. `1080p`, `original`) or null (legacy).
      * @param int         $index     Zero-based segment index.
+     * @param string|null $audioId   Audio group id (e.g. `a0`) for audio-only segments (P3B-S3).
      */
-    private static function segmentFileName(?string $variantId, int $index): string
+    private static function segmentFileName(?string $variantId, int $index, ?string $audioId = null): string
     {
-        if ($variantId === null) {
+        if ($variantId === null && $audioId === null) {
             return sprintf('seg-%05d.ts', $index);
         }
 
+        // P3B-S3: audio-only segment when a variantId is not set but audioId is.
+        if ($variantId === null && $audioId !== null) {
+            return sprintf('seg-%s-%05d.ts', $audioId, $index);
+        }
+
+        // Standard video+audio variant segment.
         return sprintf('seg-v%s-%05d.ts', $variantId, $index);
     }
 
@@ -1256,13 +1372,22 @@ class TranscodeManager
      * (`$variants === null`): the single-variant `master.m3u8` + `media_0.m3u8`
      * write, byte-identical to pre-A5.
      *
-     * @param string              $dir        Job directory.
-     * @param float               $duration   Source duration in seconds.
-     * @param int                 $segSeconds Target segment (EXTINF) length in seconds.
-     * @param int|null            $width      Variant pixel width (master RESOLUTION), or null.
-     * @param int|null            $height     Variant pixel height, or null.
-     * @param int|null            $bandwidth  Variant nominal bandwidth (master BANDWIDTH), or null.
-     * @param list<Rendition>|null $variants  Multi-variant list (highest-first), or null for legacy.
+     * Multi-audio path (P3B-S3): when `$audioTracks` is non-empty, emits
+     * `#EXT-X-MEDIA:TYPE=AUDIO` groups in the master playlist (one per audio stream
+     * with LANGUAGE/NAME/DEFAULT/AUTOSELECT), writes audio-only playlists per
+     * stream (`media_a{audioId}.m3u8`), and ties each video variant to the
+     * default audio group via `AUDIO="..."` on each `#EXT-X-STREAM-INF`.
+     *
+     * @param string                           $dir         Job directory.
+     * @param float                            $duration    Source duration in seconds.
+     * @param int                              $segSeconds  Target segment (EXTINF) length in seconds.
+     * @param int|null                         $width       Variant pixel width (master RESOLUTION), or null.
+     * @param int|null                         $height      Variant pixel height, or null.
+     * @param int|null                         $bandwidth   Variant nominal bandwidth (master BANDWIDTH), or null.
+     * @param list<Rendition>|null             $variants    Multi-variant list (highest-first), or null for legacy.
+     * @param list<array{index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
+     *                                                     Audio streams from the source probe, or null when
+     *                                                     the source has only one audio track.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -1271,7 +1396,8 @@ class TranscodeManager
         ?int $width,
         ?int $height,
         ?int $bandwidth,
-        ?array $variants = null
+        ?array $variants = null,
+        ?array $audioTracks = null
     ): void {
         if ($variants === null) {
             // Legacy single-variant path (BC for pre-A5 jobs / callers).
@@ -1280,8 +1406,26 @@ class TranscodeManager
             return;
         }
 
-        // Multi-variant: one master listing every variant + one media playlist per variant.
-        file_put_contents("{$dir}/master.m3u8", $this->buildMultiVariantMaster($variants));
+        // P3B-S3 multi-audio: emit audio groups + audio-only playlists when available.
+        $hasMultiAudio = is_array($audioTracks) && count($audioTracks) > 1;
+        $masterPlaylist = $this->buildMultiVariantMaster(
+            $variants,
+            $hasMultiAudio ? $audioTracks : null
+        );
+        file_put_contents("{$dir}/master.m3u8", $masterPlaylist);
+
+        // Write audio-only playlists first (referenced by the video playlists).
+        if ($hasMultiAudio) {
+            foreach ($audioTracks as $track) {
+                $audioId = 'a' . $track['index'];
+                file_put_contents(
+                    "{$dir}/media_{$audioId}.m3u8",
+                    $this->buildAudioMediaPlaylist($duration, $segSeconds, $audioId)
+                );
+            }
+        }
+
+        // Write one media playlist per video variant.
         foreach ($variants as $variant) {
             file_put_contents(
                 "{$dir}/media_v{$variant->id}.m3u8",
@@ -1321,17 +1465,53 @@ class TranscodeManager
      * Rendition) + `media_v{id}.m3u8` per variant, preserving the caller's order
      * (highest-first per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}).
      *
-     * @param list<Rendition> $variants Variants in master order (not re-sorted).
+     * When `$audioTracks` is non-null (P3B-S3), emits a `#EXT-X-MEDIA:TYPE=AUDIO`
+     * group for each audio stream before the video variants, and ties every video
+     * variant to the DEFAULT audio group via `AUDIO="..."` so hls.js exposes
+     * selectable audio tracks without a full video reload.
+     *
+     * @param list<Rendition> $variants   Variants in master order (not re-sorted).
+     * @param list<array{index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
+     *                                    Audio streams from the source probe, or null for single-audio.
      *
      * @return string Master playlist text.
      */
-    private function buildMultiVariantMaster(array $variants): string
+    private function buildMultiVariantMaster(array $variants, ?array $audioTracks = null): string
     {
         $lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+
+        // P3B-S3: emit audio group(s) before the video stream infs.
+        if (is_array($audioTracks)) {
+            $defaultGroupId = null;
+            foreach ($audioTracks as $track) {
+                $groupId = 'a' . $track['index'];
+                $lang = $track['language'] ?? 'und';
+                $name = $track['label'] ?? ("Audio " . $track['index']);
+                $isDefault = ($track['default'] ?? false) === true;
+                $attrs = 'TYPE=AUDIO'
+                    . ',GROUP-ID="' . $groupId . '"'
+                    . ',LANGUAGE="' . $lang . '"'
+                    . ',NAME="' . $name . '"'
+                    . ($isDefault ? ',DEFAULT=YES,AUTOSELECT=YES' : ',DEFAULT=NO,AUTOSELECT=NO');
+                $lines[] = '#EXT-X-MEDIA:' . $attrs;
+                if ($isDefault || $defaultGroupId === null) {
+                    $defaultGroupId = $groupId;
+                }
+            }
+            // Fallback: first audio track is the default.
+            $defaultGroupId ??= 'a' . ($audioTracks[0]['index'] ?? 0);
+        }
+
         foreach ($variants as $variant) {
             $attrs = 'BANDWIDTH=' . $variant->bandwidth()
                 . ',RESOLUTION=' . $variant->resolution()
                 . ',CODECS="' . $variant->codecs . '"';
+            // P3B-S3: wire this variant to the default audio group.
+            // $defaultGroupId is guaranteed to be a string here when audioTracks is set
+            // (it is set inside the is_array(audioTracks) block above via ??= fallback).
+            if (is_array($audioTracks)) {
+                $attrs .= ',AUDIO="' . $defaultGroupId . '"';
+            }
             $lines[] = '#EXT-X-STREAM-INF:' . $attrs;
             $lines[] = 'media_v' . $variant->id . '.m3u8';
         }
@@ -1377,6 +1557,46 @@ class TranscodeManager
             }
             $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
             $lines[] = self::segmentFileName($variantId, $i);
+        }
+        $lines[] = '#EXT-X-ENDLIST';
+
+        return implode("\n", $lines) . "\n";
+    }
+
+    /**
+     * Builds an audio-only HLS VOD media playlist (no video).
+     *
+     * Used by P3B-S3 for per-language audio tracks. The playlist references
+     * audio segments via {@see self::segmentFileName()} with the audio group id.
+     *
+     * @param float  $duration   Source duration in seconds.
+     * @param int    $segSeconds Target segment length in seconds.
+     * @param string $audioId    Audio group identifier, e.g. `a0`, `a1`.
+     *
+     * @return string Audio media playlist text.
+     */
+    private function buildAudioMediaPlaylist(float $duration, int $segSeconds, string $audioId): string
+    {
+        $segSeconds = $segSeconds > 0 ? $segSeconds : 6;
+        $count = (int) ceil($duration / $segSeconds);
+
+        $lines = [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            '#EXT-X-PLAYLIST-TYPE:VOD',
+            '#EXT-X-TARGETDURATION:' . $segSeconds,
+            '#EXT-X-MEDIA-SEQUENCE:0',
+            '#EXT-X-INDEPENDENT-SEGMENTS',
+        ];
+        for ($i = 0; $i < $count; $i++) {
+            $start = $i * $segSeconds;
+            $len = min((float) $segSeconds, $duration - $start);
+            if ($len <= 0.0) {
+                break;
+            }
+            $lines[] = '#EXTINF:' . number_format($len, 6, '.', '') . ',';
+            // Audio-only segments: null variant + audio group id → seg-a{N}-NNNNN.ts
+            $lines[] = self::segmentFileName(null, $i, $audioId);
         }
         $lines[] = '#EXT-X-ENDLIST';
 

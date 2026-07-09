@@ -23,6 +23,7 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
+use Phlix\Media\Metadata\FuzzyMatcher;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\MovieMetadataResolver;
@@ -353,7 +354,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // Theme-music (M3) producer — populates metadata_json.theme_audio_url
                 // at match time (local theme file, else Plex archive by TVDB id).
                 // Named because PHP-DI skips defaulted optional ctor params.
-                ->constructorParameter('themeMusic', get(ThemeMusicResolver::class)),
+                ->constructorParameter('themeMusic', get(ThemeMusicResolver::class))
+                // Fuzzy matching + manual override registry (P1-S5). Named because
+                // PHP-DI skips defaulted optional ctor params.
+                ->constructorParameter('fuzzyMatcher', get(FuzzyMatcher::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`
@@ -374,6 +378,12 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // Rating persistence: stores TMDB/IMDb/user scores and aggregates them.
             // The service takes only the Workerman MySQL Connection (autowirable).
             RatingService::class => autowire(),
+
+            // Fuzzy matching (P1-S5): Levenshtein-distance similarity search across
+            // TMDB/IMDb results, plus manual match-override persistence. Autowires:
+            // Workerman MySQL Connection (global binding from CoreServicesProvider),
+            // TmdbProvider (admin-keyed factory above), and an optional logger.
+            FuzzyMatcher::class => autowire(),
 
             // Process-scoped registry of PLUGIN metadata sources
             // (MetadataSourceInterface). Single container-scoped instance —

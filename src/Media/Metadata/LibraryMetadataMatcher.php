@@ -131,6 +131,18 @@ class LibraryMetadataMatcher
     private ?ThemeMusicResolver $themeMusic;
 
     /**
+     * Fuzzy matching (P1-S5): Levenshtein-distance search + manual override
+     * registry. When present, resolved TMDB/IMDb ids are checked against the
+     * manual override table before persisting — a user-specified override short-
+     * circuits automatic matching so the user's explicit choice is preserved.
+     * Null in legacy construction / unit tests that do not exercise fuzzy
+     * matching; all other behaviour is then unchanged.
+     *
+     * @var FuzzyMatcher|null
+     */
+    private ?FuzzyMatcher $fuzzyMatcher;
+
+    /**
      * The image types (M5) enabled for the CURRENT match run/item, used to gate
      * the flat `poster_url` / `backdrop_url` metadata keys in
      * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
@@ -191,6 +203,12 @@ class LibraryMetadataMatcher
      *                                                   Nullable for back-compat; both
      *                                                   this and $libraries must be
      *                                                   present for an override to apply.
+     * @param ThemeMusicResolver|null      $themeMusic      Theme-music (M3) producer.
+     *                                                   Null in legacy construction.
+     * @param FuzzyMatcher|null            $fuzzyMatcher     Fuzzy matching + manual
+     *                                                   override registry (P1-S5).
+     *                                                   Null in legacy construction;
+     *                                                   all other behaviour unchanged.
      *
      * @since 0.21.0
      */
@@ -203,7 +221,8 @@ class LibraryMetadataMatcher
         ?array $noiseSuffixes = null,
         ?LibraryManager $libraries = null,
         ?LibraryPriorityResolver $priorityResolver = null,
-        ?ThemeMusicResolver $themeMusic = null
+        ?ThemeMusicResolver $themeMusic = null,
+        ?FuzzyMatcher $fuzzyMatcher = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -218,6 +237,7 @@ class LibraryMetadataMatcher
         $this->libraries = $libraries;
         $this->priorityResolver = $priorityResolver;
         $this->themeMusic = $themeMusic;
+        $this->fuzzyMatcher = $fuzzyMatcher;
     }
 
     /**
@@ -1052,6 +1072,28 @@ class LibraryMetadataMatcher
         $resolved = $this->resolver->resolve($name, $year, $externalIds, $priorityOverride);
         if ($resolved === null) {
             return false;
+        }
+
+        // P1-S5: If the resolved TMDB/IMDb id has a manual override, skip the
+        // automatic match — the user's explicit override takes precedence and
+        // prevents the automatic resolver from overwriting it.
+        if ($this->fuzzyMatcher !== null) {
+            $resolvedExternalIds = is_array($resolved['external_ids'] ?? null) ? $resolved['external_ids'] : [];
+            foreach ($resolvedExternalIds as $provider => $providerId) {
+                $override = $this->fuzzyMatcher->getManualOverride(
+                    is_string($provider) ? $provider : '',
+                    is_string($providerId) ? $providerId : ''
+                );
+                if ($override !== null) {
+                    $this->logger->debug('LibraryMetadataMatcher: skipping due to manual override', [
+                        'item_id' => $id,
+                        'provider' => $provider,
+                        'provider_id' => $providerId,
+                        'overridden_to' => $override['media_item_id'],
+                    ]);
+                    return false;
+                }
+            }
         }
 
         $merged = array_merge($existingMetadata, $resolved);

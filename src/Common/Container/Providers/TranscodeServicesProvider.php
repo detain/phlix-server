@@ -12,7 +12,6 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
-use Phlix\Media\Transcoding\EncodingHelper;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Psr\Container\ContainerInterface;
@@ -21,15 +20,8 @@ use Workerman\MySQL\Connection;
 use function DI\factory;
 
 /**
- * Registers the on-demand transcoding subsystem: the FFmpeg runner, the
- * encoding-parameter helper and the {@see TranscodeManager} that owns HLS job
- * lifecycle.
- *
- * NOTE: as of Stream Quality/ABR step S10, {@see EncodingHelper}'s registration
- * below is no longer consumed by TranscodeManager (its constructor param was
- * removed as dead code) — it is retained here only because deleting a public
- * DI-registered class wasn't in that step's scope; see the registration's own
- * comment.
+ * Registers the on-demand transcoding subsystem: the FFmpeg runner and the
+ * {@see TranscodeManager} that owns HLS job lifecycle.
  *
  * The crucial wiring here is the segment directory: the TranscodeManager WRITES
  * HLS variants to the very same `config['hls']['segment_dir']` that
@@ -93,13 +85,6 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     return new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
                 }
             ),
-
-            // NOTE (Stream Quality/ABR step S10): EncodingHelper's only consumer was
-            // TranscodeManager's constructor, via a $encodingHelper param that S10
-            // removed as dead (write-only once the legacy startTranscode() reader was
-            // deleted). This registration — and the EncodingHelper class itself — are
-            // now fully unconsumed and are a clean candidate for a future removal.
-            EncodingHelper::class => factory(static fn(): EncodingHelper => new EncodingHelper()),
 
             TranscodeManager::class => factory(
                 static function (

@@ -41,13 +41,6 @@ class HubClient
     /** @var int Enrollment JWT lifetime in seconds (7 days). */
     private const ENROLLMENT_TTL = 604800;
 
-    /**
-     * @var int Age (seconds) at which proactive renewal begins (6 days).
-     *          Renewing within the final ~1 day before expiry keeps the
-     *          current JWT valid for the authenticated renew call.
-     */
-    private const RENEWAL_THRESHOLD = 518400;
-
     /** @var Ed25519KeyManager Key manager instance. */
     private Ed25519KeyManager $keyManager;
 
@@ -84,6 +77,9 @@ class HubClient
     /** @var string Configured public base URL (scheme+host); '' when no domain is set. */
     private string $publicUrl = '';
 
+    /** @var int Renewal threshold in seconds (extracted from config in R5). */
+    private int $renewalThreshold;
+
     /**
      * @var (\Closure(): list<array{library_id: string, library_name: string}>)|null
      *      Lazily returns this server's libraries to advertise in each heartbeat
@@ -105,6 +101,8 @@ class HubClient
      *                                            to the hub as a hostname candidate; '' when unset.
      * @param (\Closure(): list<array{library_id: string, library_name: string}>)|null $librariesProvider
      *                                            Returns the libraries to advertise in heartbeats; null = none.
+     * @param int                   $renewalThreshold Seconds before expiry to trigger proactive
+     *                                            enrollment renewal (R5: extracted from config).
      */
     public function __construct(
         Ed25519KeyManager $keyManager,
@@ -115,6 +113,7 @@ class HubClient
         ?PortForwardService $portForwardService = null,
         string $publicUrl = '',
         ?\Closure $librariesProvider = null,
+        int $renewalThreshold = 518400,
     ) {
         $this->keyManager = $keyManager;
         $this->httpClient = $httpClient;
@@ -125,6 +124,7 @@ class HubClient
         $this->publicUrl = $publicUrl;
         $this->librariesProvider = $librariesProvider;
         $this->processStartTime = time();
+        $this->renewalThreshold = $renewalThreshold;
     }
 
     /**
@@ -600,7 +600,7 @@ class HubClient
         }
 
         // Not yet within the renewal window: nothing to do.
-        if ($age < self::RENEWAL_THRESHOLD) {
+        if ($age < $this->renewalThreshold) {
             return false;
         }
 

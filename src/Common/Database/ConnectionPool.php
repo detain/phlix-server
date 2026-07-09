@@ -102,6 +102,17 @@ class ConnectionPool
         return self::$connections[$name];
     }
 
+    /**
+     * Instance proxy for getConnection — enables DI injection while
+     * preserving the static pool semantics underneath.
+     *
+     * @return Connection
+     */
+    public function getPooledConnection(string $name = 'mysql'): Connection
+    {
+        return self::getConnection($name);
+    }
+
     public static function closeAll(): void
     {
         foreach (self::$connections as $connection) {

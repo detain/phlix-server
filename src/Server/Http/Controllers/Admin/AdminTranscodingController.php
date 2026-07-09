@@ -34,9 +34,17 @@ use Throwable;
  */
 final class AdminTranscodingController
 {
+    /** @var array<string, mixed> */
+    private array $config;
+
+    /**
+     * @param array<string, mixed> $config App config array (injected by container)
+     */
     public function __construct(
         private readonly FfmpegRunner $ffmpegRunner,
+        array $config,
     ) {
+        $this->config = is_array($config['ffmpeg'] ?? null) ? $config['ffmpeg'] : [];
     }
 
     /**
@@ -77,5 +85,65 @@ final class AdminTranscodingController
                 'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Returns the current HDR tone-mapping settings.
+     *
+     * `GET /api/v1/admin/transcoding/tone-mapping`
+     *
+     * @param Request              $request The HTTP request (unused).
+     * @param array<string, string> $params  Path parameters (unused).
+     *
+     * @return Response JSON:
+     *   - 200: `{ tone_mapping_mode: string, prefer_hdr_output: bool }`
+     *
+     * @since 0.36.0
+     */
+    public function toneMapping(Request $request, array $params): Response
+    {
+        return (new Response())->json([
+            'tone_mapping_mode' => $this->config['tone_mapping_mode'] ?? 'zscale',
+            'prefer_hdr_output' => $this->config['prefer_hdr_output'] ?? false,
+        ]);
+    }
+
+    /**
+     * Persists HDR tone-mapping settings.
+     *
+     * `PUT /api/v1/admin/transcoding/tone-mapping`
+     *
+     * @param Request              $request The HTTP request.
+     * @param array<string, string> $params  Path parameters (unused).
+     *
+     * @return Response JSON:
+     *   - 200: `{ tone_mapping_mode: string, prefer_hdr_output: bool }`
+     *   - 400: `{ error: string }` on invalid mode
+     *
+     * @since 0.36.0
+     */
+    public function setToneMapping(Request $request, array $params): Response
+    {
+        $body = is_array($request->body) ? $request->body : [];
+        $mode = $body['tone_mapping_mode'] ?? 'zscale';
+        $preferHdr = (bool) ($body['prefer_hdr_output'] ?? false);
+
+        // Validate mode
+        if (!in_array($mode, ['none', 'zscale', 'libplacebo'], true)) {
+            return (new Response())->status(400)->json([
+                'error' => 'Invalid tone_mapping_mode',
+            ]);
+        }
+
+        $this->config['tone_mapping_mode'] = $mode;
+        $this->config['prefer_hdr_output'] = $preferHdr;
+
+        // Sync config to FfmpegRunner so transcode commands pick up the new settings
+        $this->ffmpegRunner->setConfig($this->config);
+
+        return (new Response())->json([
+            'tone_mapping_mode' => $mode,
+            'prefer_hdr_output' => $preferHdr,
+        ]);
     }
 }

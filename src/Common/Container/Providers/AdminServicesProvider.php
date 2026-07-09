@@ -17,10 +17,12 @@ use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\DuplicateFinder;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesMerger;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
+use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
@@ -150,6 +152,17 @@ final class AdminServicesProvider implements ServiceProviderInterface
             // container-scoped SourceRegistry (bound in MediaServicesProvider),
             // so a plain autowire is sufficient.
             AdminMetadataSourceController::class => autowire(),
+
+            // HDR tone-mapping settings (P6-S3) — needs full app.config injected.
+            AdminTranscodingController::class => factory(
+                static function (ContainerInterface $c): AdminTranscodingController {
+                    /** @var array<string, mixed> $appConfig */
+                    $appConfig = $c->get('app.config');
+                    /** @var FfmpegRunner $ffmpegRunner */
+                    $ffmpegRunner = $c->get(FfmpegRunner::class);
+                    return new AdminTranscodingController($ffmpegRunner, $appConfig);
+                }
+            ),
 
             // Webhook event system (P9-S1) — async delivery with retry queue.
             WebhookHttpClient::class => autowire(),

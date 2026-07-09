@@ -1305,7 +1305,7 @@ class MediaScanner
                 // the whole library scan.
                 $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay';
                 if (!is_dir($spriteDir)) {
-                    mkdir($spriteDir, 0755, true);
+                    @mkdir($spriteDir, 0755, true);
                 }
                 $result = $this->ffmpeg->generateTrickplaySprites($path, $spriteDir, 60);
                 if ($result !== null) {

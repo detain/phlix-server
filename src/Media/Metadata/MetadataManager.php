@@ -294,8 +294,10 @@ class MetadataManager
         $match = $results[0];
         $externalId = MetadataValue::asString($match['id'] ?? null);
 
-        // Fetch full details
-        $details = $provider->getDetails($externalId);
+        // Fetch full details, passing preferred_locale for multi-language fallback (P1-S4)
+        $preferredLocale = MetadataValue::asNullableString($metadata['preferred_locale'] ?? null);
+        $detailOptions = $preferredLocale !== null ? ['preferred_locale' => $preferredLocale] : [];
+        $details = $provider->getDetails($externalId, $detailOptions);
         if (empty($details)) {
             $this->logger->debug('No details from provider', [
                 'external_id' => $externalId,

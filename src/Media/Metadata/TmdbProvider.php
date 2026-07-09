@@ -200,7 +200,7 @@ class TmdbProvider implements MetadataProviderInterface
      * Get detailed movie information from TMDB.
      *
      * @param string $externalId TMDB movie ID
-     * @param array<string, mixed> $options Options (language)
+     * @param array<string, mixed> $options Options (language, preferred_locale)
      * @return array<string, mixed> Movie details including name, overview, year, genres, actors, director
      */
     public function getDetails(string $externalId, array $options = []): array
@@ -216,7 +216,64 @@ class TmdbProvider implements MetadataProviderInterface
             return [];
         }
 
+        $preferredLocale = MetadataValue::asNullableString($options['preferred_locale'] ?? null);
+        if ($preferredLocale !== null) {
+            $this->applyLocalizedFieldFallback($response, $externalId, $preferredLocale);
+        }
+
         return $this->formatMovieDetails($response);
+    }
+
+    /**
+     * Normalize a 2-letter language code to a locale (e.g., en → en-US, de → de-DE).
+     *
+     * @param string $lang 2-letter language code
+     * @return string Locale-formatted string
+     */
+    private function normalizeToLocale(string $lang): string
+    {
+        return strlen($lang) === 2 ? $lang . '-US' : $lang;
+    }
+
+    /**
+     * Fill missing localizable fields (title, overview, tagline) by trying a fallback
+     * chain: preferred_locale → en-US → original_language.
+     *
+     * @param array<string, mixed> &$response   The response array to enrich (modified in place)
+     * @param string              $externalId  TMDB movie ID for fallback requests
+     * @param string              $preferredLocale The user's preferred locale
+     */
+    private function applyLocalizedFieldFallback(array &$response, string $externalId, string $preferredLocale): void
+    {
+        $originalLanguage = MetadataValue::asString($response['original_language'] ?? null);
+        $originalLocale = $originalLanguage !== '' ? $this->normalizeToLocale($originalLanguage) : null;
+
+        $chain = array_unique([$preferredLocale, 'en-US', $originalLocale]);
+        $localizableFields = ['title', 'overview', 'tagline'];
+        $needsFallback = [];
+        foreach ($localizableFields as $field) {
+            if (empty($response[$field])) {
+                $needsFallback[$field] = true;
+            }
+        }
+        if ($needsFallback === []) {
+            return;
+        }
+        foreach ($chain as $locale) {
+            if ($locale === null || $locale === '') {
+                continue;
+            }
+            $fallbackResponse = $this->http->get("/movie/{$externalId}", ['language' => $locale]);
+            foreach (array_keys($needsFallback) as $field) {
+                if (!empty($fallbackResponse[$field])) {
+                    $response[$field] = $fallbackResponse[$field];
+                    unset($needsFallback[$field]);
+                }
+            }
+            if ($needsFallback === []) {
+                break;
+            }
+        }
     }
 
     /**

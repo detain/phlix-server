@@ -52,7 +52,7 @@ $pluginAliases = [
 
 foreach ([$eventAliases, $pluginAliases] as $aliasGroup) {
     foreach ($aliasGroup as $oldFqcn => $newFqcn) {
-        if (!class_exists($oldFqcn, false) && !interface_exists($oldFqcn, false) && !enum_exists($oldFqcn, false)) {
+        if (!class_exists($oldFqcn, false) && !enum_exists($oldFqcn, false)) {
             class_alias($newFqcn, $oldFqcn);
         }
     }

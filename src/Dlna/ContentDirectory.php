@@ -368,55 +368,6 @@ class ContentDirectory
     }
 
     /**
-     * Get library containers for root.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function getLibraryContainers(): array
-    {
-        // Use LibraryBridge if available for real data
-        if ($this->libraryBridge !== null) {
-            return $this->libraryBridge->getRootContainers();
-        }
-
-        // Fallback to predefined library containers with spec-defined IDs
-        return [
-            [
-                'id' => self::OBJECT_ID_MUSIC,
-                'parent_id' => self::OBJECT_ID_ROOT,
-                'name' => 'Music',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => 0,
-            ],
-            [
-                'id' => self::OBJECT_ID_ARTISTS,
-                'parent_id' => self::OBJECT_ID_ROOT,
-                'name' => 'Artists',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => 0,
-            ],
-            [
-                'id' => self::OBJECT_ID_ALBUMS,
-                'parent_id' => self::OBJECT_ID_ROOT,
-                'name' => 'Albums',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => 0,
-            ],
-            [
-                'id' => self::OBJECT_ID_TRACKS,
-                'parent_id' => self::OBJECT_ID_ROOT,
-                'name' => 'Tracks',
-                'type' => 'container',
-                'class' => 'object.container',
-                'child_count' => 0,
-            ],
-        ];
-    }
-
-    /**
      * Get children of a container.
      *
      * @return array<int, array<string, mixed>>

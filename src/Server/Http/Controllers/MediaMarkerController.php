@@ -1,5 +1,11 @@
 <?php
 declare(strict_types=1);
+
+/**
+ * @copyright 2026 Joe Huss <detain@interserver.net>
+ * @license MIT
+ */
+
 namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Media\MarkerService;

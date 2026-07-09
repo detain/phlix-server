@@ -32,4 +32,27 @@ return [
      * Whether to include software encoding as a fallback option in accelerator lists.
      */
     'include_software_fallback' => true,
+
+    /**
+     * HDR tone mapping mode for transcoding HDR content.
+     *
+     * When set to 'none' (default), no tone mapping is applied.
+     * When set to 'zscale', uses the zscale filter for CPU-based HDR→SDR conversion.
+     * When set to 'libplacebo', uses libplacebo for high-quality tone mapping.
+     *
+     * Supported values: 'none', 'zscale', 'libplacebo'
+     *
+     * Example env: TONE_MAPPING_MODE=zscale
+     */
+    'tone_mapping_mode' => getenv('TONE_MAPPING_MODE') ?: 'none',
+
+    /**
+     * Whether to prefer HDR output over SDR tone mapping.
+     *
+     * When true, outputs HDR10 instead of tone-mapping to SDR.
+     * This is useful for displays that support HDR content directly.
+     *
+     * Example env: PREFER_HDR_OUTPUT=true
+     */
+    'prefer_hdr_output' => filter_var(getenv('PREFER_HDR_OUTPUT') ?: 'false', FILTER_VALIDATE_BOOLEAN),
 ];

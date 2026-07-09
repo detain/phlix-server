@@ -1441,4 +1441,105 @@ class FfmpegRunner
         $formatted = rtrim(rtrim(sprintf('%.3f', $value), '0'), '.');
         return $formatted === '' ? '0' : $formatted;
     }
+
+    /**
+     * Generates trickplay sprite sheets for chapter-based scrubbing preview.
+     *
+     * Produces a 6-column sprite sheet grid (default 60 thumbs = 6x10) at 160x90
+     * each, plus a JSON timeline mapping each thumbnail index to its (x, y)
+     * position within the sprite and the video timestamp it represents.
+     *
+     * @param string $videoPath  Source video file path.
+     * @param string $outputDir  Directory to write sprite.jpg and timeline.json.
+     * @param int    $count      Number of thumbnails to generate (default 60).
+     *
+     * @return array{0: string, 1: string}|null Absolute paths to [sprite, timeline]
+     *         on success, or null on failure (missing FFmpeg, probe error, encode error).
+     *
+     * @since 0.35.0
+     */
+    public function generateTrickplaySprites(string $videoPath, string $outputDir, int $count = 60): ?array
+    {
+        $probe = $this->probe($videoPath);
+        if (!is_array($probe)) {
+            return null;
+        }
+
+        $format = $probe['format'] ?? null;
+        if (!is_array($format)) {
+            return null;
+        }
+
+        $rawDuration = $format['duration'] ?? null;
+        if (!is_numeric($rawDuration)) {
+            return null;
+        }
+
+        $duration = (float) $rawDuration;
+        if ($duration <= 0) {
+            return null;
+        }
+
+        $interval = $duration / $count;
+        $cols = 6;
+        $rows = (int) ceil($count / $cols);
+        $thumbW = 160;
+        $thumbH = 90;
+        $margin = 2;
+        $padding = 1;
+
+        if (!is_dir($outputDir)) {
+            if (!mkdir($outputDir, 0755, true) && !is_dir($outputDir)) {
+                return null;
+            }
+        }
+
+        $spritePath = $outputDir . '/sprite.jpg';
+        $timelinePath = $outputDir . '/timeline.json';
+
+        // Use the midpoint timestamp so the first frame capture is not black
+        // (often an opening slate/blank) when seeking to time 0.
+        $captureTime = self::seconds($duration / 2.0);
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -ss %s -i %s -vf "fps=1/%s,scale=%d:%d,tile=%d:%d:margin=%d:padding=%d" -frames:v 1 %s 2>&1',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($captureTime),
+            escapeshellarg($videoPath),
+            escapeshellarg(self::seconds($interval)),
+            $thumbW,
+            $thumbH,
+            $cols,
+            $rows,
+            $margin,
+            $padding,
+            escapeshellarg($spritePath)
+        );
+
+        $output = shell_exec($cmd);
+        if (!is_file($spritePath)) {
+            $this->logger->warning('Trickplay sprite generation failed', [
+                'video' => $videoPath,
+                'output' => $output,
+            ]);
+            return null;
+        }
+
+        // Build timeline JSON: each entry maps thumbnail index to pixel offset
+        // within the sprite sheet and the corresponding video timestamp.
+        $timeline = [];
+        for ($i = 0; $i < $count; $i++) {
+            $row = (int) floor($i / $cols);
+            $col = $i % $cols;
+            $x = $col * ($thumbW + $margin + $padding);
+            $y = $row * ($thumbH + $margin + $padding);
+            $time = $i * $interval;
+            $timeline[] = ['time' => $time, 'x' => $x, 'y' => $y];
+        }
+
+        $json = json_encode($timeline, JSON_THROW_ON_ERROR);
+        file_put_contents($timelinePath, $json);
+
+        return [$spritePath, $timelinePath];
+    }
 }

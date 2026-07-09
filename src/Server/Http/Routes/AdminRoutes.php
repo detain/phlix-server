@@ -16,6 +16,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminProfileController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
+use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
@@ -254,6 +255,15 @@ final class AdminRoutes
                 $adminMetadataSourceController = $container->get(AdminMetadataSourceController::class);
 
                 $r->get('/metadata/sources', [$adminMetadataSourceController, 'index']);
+
+                // Webhook subscriptions and deliveries (P9-S1).
+                /** @var AdminWebhooksController $webhooksController */
+                $webhooksController = $container->get(AdminWebhooksController::class);
+
+                $r->get('/webhooks/subscriptions', [$webhooksController, 'listSubscriptions']);
+                $r->post('/webhooks/subscriptions', [$webhooksController, 'createSubscription']);
+                $r->delete('/webhooks/subscriptions/{id}', [$webhooksController, 'deleteSubscription']);
+                $r->get('/webhooks/deliveries', [$webhooksController, 'getDeliveries']);
             },
             [$adminMiddleware],
         );

@@ -22,6 +22,7 @@ use Phlix\Media\Library\SeriesMerger;
 use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
 use Phlix\Server\Http\Controllers\Admin\FsBrowseController;
@@ -30,6 +31,8 @@ use Phlix\Server\Http\Controllers\Admin\WatchHistoryController;
 use Phlix\Server\Http\Controllers\Stats\MetricsController;
 use Phlix\Server\Http\Controllers\Stats\StatsController;
 use Phlix\Stats\StatsCollector;
+use Phlix\Webhooks\WebhookHttpClient;
+use Phlix\Webhooks\WebhookService;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
 
@@ -147,6 +150,11 @@ final class AdminServicesProvider implements ServiceProviderInterface
             // container-scoped SourceRegistry (bound in MediaServicesProvider),
             // so a plain autowire is sufficient.
             AdminMetadataSourceController::class => autowire(),
+
+            // Webhook event system (P9-S1) — async delivery with retry queue.
+            WebhookHttpClient::class => autowire(),
+            WebhookService::class => autowire(),
+            AdminWebhooksController::class => autowire(),
         ]);
     }
 }

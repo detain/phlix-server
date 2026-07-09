@@ -65,7 +65,8 @@ final class AdminHubController
      * @param Request              $request The HTTP request (unused).
      * @param array<string, string> $params  Path parameters (unused).
      *
-     * @return Response JSON { paired, serverId, hubUrl, enrolledAt, lastHeartbeat, consecutiveFailures, enrollmentExpiresAt, isEnrolled }.
+     * @return Response JSON {paired, serverId, hubUrl, enrolledAt, lastHeartbeat,
+     *   consecutiveFailures, enrollmentExpiresAt, isEnrolled}.
      */
     public function hubStatus(Request $request, array $params): Response
     {

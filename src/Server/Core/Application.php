@@ -276,14 +276,16 @@ class Application
         );
 
         // Relay health: returns tunnel status, hub heartbeat status, and active sessions
-        $this->router->get('/api/v1/health/relay', function (Request $request, array $params) use ($healthController): Response {
-            return $healthController->relayHealth($request, $params);
-        });
+        $this->router->get(
+            '/api/v1/health/relay',
+            fn(Request $request, array $params): Response => $healthController->relayHealth($request, $params)
+        );
 
         // Network health: measures hub heartbeat round-trip latency
-        $this->router->get('/api/v1/health/network', function (Request $request, array $params) use ($healthController): Response {
-            return $healthController->networkHealth($request, $params);
-        });
+        $this->router->get(
+            '/api/v1/health/network',
+            fn(Request $request, array $params): Response => $healthController->networkHealth($request, $params)
+        );
 
         // JWKS endpoint for hub-to-server JWT verification
         $this->router->get('/.well-known/jwks.json', function (Request $request, array $params): Response {
@@ -1356,7 +1358,9 @@ class Application
         // playlist URL authorises every variant playlist and segment under it.
         // StreamLimitMiddleware enforces per-profile concurrent stream limits (P5-S3).
         $middleware = [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()];
-        if ($this->container !== null && $this->container->has(\Phlix\Server\Http\Middleware\StreamLimitMiddleware::class)) {
+        $hasStreamLimit = $this->container !== null
+            && $this->container->has(\Phlix\Server\Http\Middleware\StreamLimitMiddleware::class);
+        if ($hasStreamLimit) {
             /** @var \Phlix\Server\Http\Middleware\StreamLimitMiddleware */
             $streamLimitMiddleware = $this->container->get(\Phlix\Server\Http\Middleware\StreamLimitMiddleware::class);
             $middleware[] = $streamLimitMiddleware;
@@ -2321,7 +2325,9 @@ class Application
                 if ($this->container->has(\Phlix\Dlna\ContentDirectory::class)) {
                     $contentDirectory = $this->container->get(\Phlix\Dlna\ContentDirectory::class);
                     if ($contentDirectory instanceof \Phlix\Dlna\ContentDirectory) {
-                        $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController($contentDirectory);
+                        $cdsController = new \Phlix\Server\Http\Controllers\Dlna\DlnaContentDirectoryController(
+                            $contentDirectory
+                        );
                         $this->router->post('/dlna/content_directory', [$cdsController, 'handle']);
                     }
                 }

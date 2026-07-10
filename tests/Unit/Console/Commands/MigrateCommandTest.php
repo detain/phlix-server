@@ -86,7 +86,57 @@ class MigrateCommandTest extends TestCase
         $exitCode = $tester->execute([]);
 
         $this->assertSame(Command::SUCCESS, $exitCode);
-        $this->assertStringContainsString('note: Duplicate column name "n"', $tester->getDisplay());
+        $output = $tester->getDisplay();
+        // Already-applied duplicates are collapsed into ONE summary line
+        // instead of a per-statement note (which reads like a broken deploy).
+        $this->assertStringContainsString('1 statement(s) skipped (already applied)', $output);
+        $this->assertStringNotContainsString('note: Duplicate column name "n"', $output);
+    }
+
+    public function testAlreadyAppliedNotesAreSummarisedAsOneLine(): void
+    {
+        $this->writeMigration(
+            '001.sql',
+            "ALTER TABLE a ADD COLUMN n INT;\nALTER TABLE a ADD KEY idx_n (n);\nCREATE TABLE a (id INT);"
+        );
+
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(static function (string $sql): array {
+            if (str_contains($sql, 'ADD COLUMN')) {
+                throw new RuntimeException('Duplicate column name "n"');
+            }
+            if (str_contains($sql, 'ADD KEY')) {
+                throw new RuntimeException('Duplicate key name "idx_n"');
+            }
+            throw new RuntimeException('Table "a" already exists');
+        });
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $tester = $this->tester($runner);
+
+        $exitCode = $tester->execute([]);
+
+        $this->assertSame(Command::SUCCESS, $exitCode);
+        $output = $tester->getDisplay();
+        $this->assertStringContainsString('3 statement(s) skipped (already applied)', $output);
+        // No per-duplicate note lines — the summary replaces them all.
+        $this->assertStringNotContainsString('note:', $output);
+    }
+
+    public function testSuccessWithNoSkipsPrintsNoSkipSummary(): void
+    {
+        $this->writeMigration('001.sql', 'CREATE TABLE a (id INT);');
+
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturn([]);
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $tester = $this->tester($runner);
+
+        $exitCode = $tester->execute([]);
+
+        $this->assertSame(Command::SUCCESS, $exitCode);
+        $this->assertStringNotContainsString('skipped (already applied)', $tester->getDisplay());
     }
 
     public function testGenuineErrorExitsOneAndPrintsWarning(): void

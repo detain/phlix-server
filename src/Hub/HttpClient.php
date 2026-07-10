@@ -63,6 +63,13 @@ class HttpClient implements HttpClientInterface
         if ($this->asyncClient === null) {
             $this->asyncClient = new Client([
                 'timeout' => $this->timeout,
+                'context' => [
+                    'ssl' => [
+                        'verify_peer' => true,
+                        'verify_peer_name' => true,
+                        'cafile' => '/etc/ssl/certs/ca-certificates.crt',
+                    ],
+                ],
             ]);
         }
         return $this->asyncClient;

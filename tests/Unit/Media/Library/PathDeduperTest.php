@@ -51,8 +51,8 @@ class PathDeduperTest extends TestCase
             if (str_contains($sql, 'SUM(votes)')) {
                 return [['votes' => 5]];
             }
-            if (str_contains($sql, 'SELECT rating FROM metadata_ratings')) {
-                return [['rating' => 7.5]];
+            if (str_contains($sql, 'SELECT score FROM metadata_ratings')) {
+                return [['score' => 7.5]];
             }
             return [];
         });

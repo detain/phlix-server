@@ -404,7 +404,15 @@ class TranscodeManager
         // Publish the complete VOD master (every variant) + one media playlist per
         // variant now — no encode is needed to know the timeline, so this is
         // instantaneous. Segments themselves are produced on demand per variant.
-        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth, $streamVariants);
+
+        // P3B-S3: extract ALL audio streams from the probe for multi-audio HLS.
+        // The probe is guaranteed non-null here because we use it for subtitle
+        // detection below and the fresh-metadata + probe-failure path already
+        // showed $probe === [] (not null), which allStreamsOfType handles correctly.
+        $audioStreams = $this->allStreamsOfType($probe, 'audio');
+        $audioTracks = count($audioStreams) > 1 ? $this->buildAudioTrackDescriptors($audioStreams) : null;
+
+        $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth, $streamVariants, $audioTracks);
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
         // are skipped). Detection is a cheap parse of the in-memory probe; extraction
@@ -1488,10 +1496,15 @@ class TranscodeManager
                 $lang = $track['language'] ?? 'und';
                 $name = $track['label'] ?? ("Audio " . $track['index']);
                 $isDefault = ($track['default'] ?? false) === true;
+                // P3B-S3: URI is required for hls.js to locate the audio-only playlist.
+                // The server writes audio playlists as media_a{audioId}.m3u8 in the job dir,
+                // e.g. media_a0.m3u8, media_a1.m3u8. The relative URL resolves from the
+                // master manifest's directory, so the client requests /hls/{job}/media_a0.m3u8.
                 $attrs = 'TYPE=AUDIO'
                     . ',GROUP-ID="' . $groupId . '"'
                     . ',LANGUAGE="' . $lang . '"'
                     . ',NAME="' . $name . '"'
+                    . ',URI="media_' . $groupId . '.m3u8"'
                     . ($isDefault ? ',DEFAULT=YES,AUTOSELECT=YES' : ',DEFAULT=NO,AUTOSELECT=NO');
                 $lines[] = '#EXT-X-MEDIA:' . $attrs;
                 if ($isDefault || $defaultGroupId === null) {
@@ -2223,6 +2236,96 @@ class TranscodeManager
             }
         }
         return [];
+    }
+
+    /**
+     * Returns ALL streams of the given codec type from a raw probe.
+     *
+     * P3B-S3: needed for multi-audio HLS where we need every audio stream,
+     * not just the first one, to build the #EXT-X-MEDIA:TYPE=AUDIO groups.
+     *
+     * @param array<string, mixed> $probe Raw ffprobe result.
+     * @param string               $type  'video' or 'audio'.
+     *
+     * @return list<array<string, mixed>> All matching streams, in ffprobe order.
+     */
+    private function allStreamsOfType(array $probe, string $type): array
+    {
+        $streams = $probe['streams'] ?? [];
+        if (!is_array($streams)) {
+            return [];
+        }
+        $out = [];
+        foreach ($streams as $stream) {
+            if (is_array($stream) && ($stream['codec_type'] ?? null) === $type) {
+                /** @var array<string, mixed> $stream */
+                $out[] = $stream;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Builds an audio-track descriptor array from ffprobe audio streams for
+     * use in multi-audio HLS manifest generation (P3B-S3).
+     *
+     * Each descriptor carries the index (stream position in ffprobe, used to
+     * construct the audio group id `a{N}`), language (BCP 47 or 'und'), label
+     * (display name), default flag, and codec.
+     *
+     * @param list<array<string, mixed>> $audioStreams All audio streams from ffprobe.
+     *
+     * @return list<array{index: int, language: string, label: string, default: bool, codec: string}>
+     *         Audio track descriptors in stream order.
+     */
+    private function buildAudioTrackDescriptors(array $audioStreams): array
+    {
+        $tracks = [];
+        $hasDefault = false;
+        foreach ($audioStreams as $stream) {
+            $index = $this->intVal($stream['index'] ?? null);
+            if ($index < 0) {
+                continue;
+            }
+            // Determine language: use explicit language code, fall back to 'und'.
+            $tags = is_array($stream['tags'] ?? null) ? $stream['tags'] : [];
+            $rawLang = $this->probeString($tags['language'] ?? null)
+                ?? ($stream['language'] ?? null);
+            if (!is_string($rawLang) || $rawLang === '') {
+                $lang = 'und';
+            } else {
+                $lang = strtolower(trim($rawLang));
+                if ($lang === '') {
+                    $lang = 'und';
+                }
+            }
+            // Build label: try the stream's title tag, then language display name, then a generic label.
+            $label = $this->probeString($tags['title'] ?? null) ?? null;
+            if ($label === null || $label === '') {
+                // Use language code or "Audio N" as fallback.
+                $label = $lang !== 'und' ? $lang : ('Audio ' . $index);
+            }
+            // Default: first audio stream is the default unless a stream has disposition=default.
+            $disposition = is_array($stream['disposition'] ?? null) ? $stream['disposition'] : [];
+            $isDefault = ($disposition['default'] ?? 0) === 1
+                || ($disposition['forced'] ?? 0) === 1;
+            if ($isDefault && !$hasDefault) {
+                $hasDefault = true;
+            }
+            $codec = $this->probeString($stream['codec_name'] ?? null) ?? 'unknown';
+            $tracks[] = [
+                'index' => $index,
+                'language' => $lang,
+                'label' => $label,
+                'default' => $isDefault,
+                'codec' => $codec,
+            ];
+        }
+        // If no track was marked default, mark the first one as default.
+        if (!$hasDefault && count($tracks) > 0) {
+            $tracks[0] = ['default' => true] + $tracks[0];
+        }
+        return $tracks;
     }
 
     /**

@@ -121,4 +121,29 @@ class ConnectionPool
         }
         self::$connections = [];
     }
+
+    /**
+     * Chains a DB-connection cleanup onto the worker's onWorkerStop hook.
+     *
+     * Under the Swoole event loop, a coroutine-hooked PDO socket that is still
+     * open when the process reaches RSHUTDOWN is torn down outside any
+     * coroutine context and fatals the worker ("Uncaught Swoole\Error: API
+     * must be called in the coroutine" with the DB pool, "Couldn't execute
+     * method Error::__toString" without it). onWorkerStop still runs inside a
+     * coroutine, so closing every connection there lets the process exit
+     * cleanly. Any onWorkerStop already assigned at call time is preserved
+     * and invoked first.
+     *
+     * @param \Workerman\Worker $worker Worker declared before runAll().
+     */
+    public static function armWorkerStopCleanup(\Workerman\Worker $worker): void
+    {
+        $previous = $worker->onWorkerStop;
+        $worker->onWorkerStop = static function (\Workerman\Worker $w) use ($previous): void {
+            if (is_callable($previous)) {
+                $previous($w);
+            }
+            self::closeAll();
+        };
+    }
 }

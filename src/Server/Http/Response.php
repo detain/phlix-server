@@ -154,6 +154,15 @@ class Response
             $this->statusCode = $statusCode;
         }
         $this->headers['Content-Type'] = 'text/html; charset=utf-8';
+        // Dynamic HTML (the SPA shell in particular) must revalidate on every
+        // load: without a Cache-Control header browsers cache it heuristically
+        // and keep referencing old hashed asset chunks after a deploy (stale UI
+        // until a hard refresh). Hashed assets themselves stay immutable-cached
+        // (see HttpHandler). Callers that set their own Cache-Control after
+        // html() still win — this only seeds the default.
+        if (!isset($this->headers['Cache-Control'])) {
+            $this->headers['Cache-Control'] = 'no-cache';
+        }
         $this->body = $html;
         return $this;
     }

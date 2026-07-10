@@ -148,11 +148,11 @@ final class RequestContext
     /**
      * Store the active profile-id of the current request.
      *
-     * @param int|null $profileId Active profile-id, or null to clear.
+     * @param string|null $profileId Active profile-id (UUID), or null to clear.
      *
      * @return void
      */
-    public static function setProfileId(?int $profileId): void
+    public static function setProfileId(?string $profileId): void
     {
         Context::set(self::KEY_PROFILE_ID, $profileId);
     }
@@ -160,12 +160,12 @@ final class RequestContext
     /**
      * Read the active profile-id of the current request.
      *
-     * @return int|null Active profile-id, or null if unset.
+     * @return string|null Active profile-id (UUID), or null if unset.
      */
-    public static function getProfileId(): ?int
+    public static function getProfileId(): ?string
     {
         $value = Context::get(self::KEY_PROFILE_ID);
-        return is_int($value) ? $value : null;
+        return is_string($value) ? $value : null;
     }
 
     /**

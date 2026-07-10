@@ -41,11 +41,11 @@ final class AccessScheduleService
      * Returns the first active schedule that matches the current day and time,
      * or null if no schedule is currently active.
      *
-     * @param int $profileId The profile ID to check.
+     * @param string $profileId The profile ID (UUID) to check.
      *
      * @return AccessSchedule|null The active schedule, or null if none is active.
      */
-    public function getActiveScheduleForProfile(int $profileId): ?AccessSchedule
+    public function getActiveScheduleForProfile(string $profileId): ?AccessSchedule
     {
         $now = new DateTime();
 
@@ -84,11 +84,11 @@ final class AccessScheduleService
      * Access is DENIED when:
      * - An active schedule exists that matches the current day and time
      *
-     * @param int $profileId The profile ID to check.
+     * @param string $profileId The profile ID (UUID) to check.
      *
      * @return bool True if access is allowed, false if denied.
      */
-    public function isAccessAllowed(int $profileId): bool
+    public function isAccessAllowed(string $profileId): bool
     {
         return $this->getActiveScheduleForProfile($profileId) === null;
     }
@@ -96,11 +96,11 @@ final class AccessScheduleService
     /**
      * Get all schedules for a profile.
      *
-     * @param int $profileId The profile ID to get schedules for.
+     * @param string $profileId The profile ID (UUID) to get schedules for.
      *
      * @return list<AccessSchedule> List of all schedules for the profile.
      */
-    public function getSchedulesForProfile(int $profileId): array
+    public function getSchedulesForProfile(string $profileId): array
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -149,7 +149,7 @@ final class AccessScheduleService
     /**
      * Create a new access schedule.
      *
-     * @param int      $profileId  The profile ID this schedule belongs to.
+     * @param string   $profileId  The profile ID (UUID) this schedule belongs to.
      * @param string   $name       Human-readable name for the schedule.
      * @param string   $startTime  Start time in HH:MM:SS format.
      * @param string   $endTime    End time in HH:MM:SS format.
@@ -159,7 +159,7 @@ final class AccessScheduleService
      * @return int The ID of the newly created schedule.
      */
     public function createSchedule(
-        int $profileId,
+        string $profileId,
         string $name,
         string $startTime,
         string $endTime,

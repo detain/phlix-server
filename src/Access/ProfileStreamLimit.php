@@ -24,12 +24,12 @@ final class ProfileStreamLimit
     /**
      * Create a new ProfileStreamLimit instance.
      *
-     * @param int  $profileId            The profile this limit belongs to.
+     * @param string  $profileId            The profile ID (UUID) this limit belongs to.
      * @param int  $maxConcurrentStreams Maximum concurrent streams allowed.
      * @param int|null $maxTotalBandwidthKbps Maximum total bandwidth in kbps, or null for unlimited.
      */
     public function __construct(
-        public readonly int $profileId,
+        public readonly string $profileId,
         public readonly int $maxConcurrentStreams,
         public readonly ?int $maxTotalBandwidthKbps = null,
     ) {
@@ -46,7 +46,7 @@ final class ProfileStreamLimit
      */
     public static function fromRow(array $row): self
     {
-        $profileId = isset($row['profile_id']) && is_numeric($row['profile_id']) ? (int) $row['profile_id'] : 0;
+        $profileId = isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '';
         $maxConcurrentStreams = isset($row['max_concurrent_streams']) && is_numeric($row['max_concurrent_streams'])
             ? (int) $row['max_concurrent_streams']
             : 1;
@@ -66,7 +66,7 @@ final class ProfileStreamLimit
      * Convert the profile stream limit to an array representation.
      *
      * @return array{
-     *     profile_id: int,
+     *     profile_id: string,
      *     max_concurrent_streams: int,
      *     max_total_bandwidth_kbps: int|null
      * }

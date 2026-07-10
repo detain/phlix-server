@@ -94,7 +94,9 @@ final class StreamLimitMiddleware
         if (!$registered) {
             return (new Response())->status(429)->json([
                 'error' => 'StreamLimitExceeded',
+                'denial_type' => 'stream_limit_exceeded',
                 'message' => 'Maximum concurrent streams reached for this profile',
+                'profile_id' => $profileId,
             ]);
         }
 
@@ -132,23 +134,19 @@ final class StreamLimitMiddleware
     /**
      * Resolve the profile ID from a profile array.
      *
+     * Profile IDs are CHAR(36) UUID strings. Returns the ID as-is for use
+     * in database queries against the profile_stream_limits table.
+     *
      * @param array<string, mixed> $profile Profile array from UserProfileManager.
      *
-     * @return int|null Profile ID as int, or null if cannot resolve.
+     * @return string|null Profile ID as string, or null if cannot resolve.
      */
-    private function resolveProfileId(array $profile): ?int
+    private function resolveProfileId(array $profile): ?string
     {
         $id = $profile['id'] ?? null;
 
-        if (is_int($id)) {
-            return $id;
-        }
-
         if (is_string($id) && $id !== '') {
-            if (ctype_digit($id)) {
-                return (int) $id;
-            }
-            return null;
+            return $id;
         }
 
         return null;

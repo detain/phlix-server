@@ -140,18 +140,16 @@ final class ProfileTagController
     /**
      * Parse a profile ID from a string.
      *
+     * Profile IDs are CHAR(36) UUID strings.
+     *
      * @param mixed $value The value to parse.
      *
-     * @return int|null The parsed profile ID, or null if invalid.
+     * @return string|null The parsed profile ID, or null if invalid.
      */
-    private function parseProfileId(mixed $value): ?int
+    private function parseProfileId(mixed $value): ?string
     {
-        if (is_int($value)) {
+        if (is_string($value) && $value !== '') {
             return $value;
-        }
-
-        if (is_string($value) && ctype_digit($value)) {
-            return (int) $value;
         }
 
         return null;

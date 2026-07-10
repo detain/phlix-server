@@ -108,27 +108,19 @@ final class AccessScheduleMiddleware
     /**
      * Resolve the profile ID from a profile array.
      *
+     * Profile IDs are CHAR(36) UUID strings. Returns the ID as-is for use
+     * in database queries against the access_schedules table.
+     *
      * @param array<string, mixed> $profile Profile array from UserProfileManager.
      *
-     * @return int|null Profile ID as int, or null if cannot resolve.
+     * @return string|null Profile ID as string, or null if cannot resolve.
      */
-    private function resolveProfileId(array $profile): ?int
+    private function resolveProfileId(array $profile): ?string
     {
         $id = $profile['id'] ?? null;
 
-        if (is_int($id)) {
-            return $id;
-        }
-
         if (is_string($id) && $id !== '') {
-            // If it's a numeric string (e.g., "123"), convert to int
-            if (ctype_digit($id)) {
-                return (int) $id;
-            }
-            // For UUID strings, we cannot directly convert to int
-            // In a real implementation, you might have a mapping table
-            // or use a hash of the UUID. For now, return null.
-            return null;
+            return $id;
         }
 
         return null;

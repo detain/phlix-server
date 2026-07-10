@@ -109,7 +109,9 @@ class MetadataHttpClient
             }
         }
 
-        $response = $this->isWorkermanContext()
+        // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
+        // so those requests must take the blocking cURL path.
+        $response = $this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
             ? $this->requestAsync($url, $requestHeaders)
             : $this->requestCurl($url, $requestHeaders);
 

@@ -66,7 +66,9 @@ class WebhookHttpClient
             'X-Phlix-Delivery' => $deliveryId,
         ];
 
-        return $this->isWorkermanContext()
+        // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
+        // so those requests must take the blocking cURL path.
+        return $this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
             ? $this->postAsync($url, $headers, $jsonPayload)
             : $this->postCurl($url, $headers, $jsonPayload);
     }

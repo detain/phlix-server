@@ -151,14 +151,19 @@ class ItemRepository
             return null;
         }
 
-        return $this->hydrateItem($row);
+        $item = $this->hydrateItem($row);
+
+        // P5-S2: apply profile tag restrictions — if the item is blocked by
+        // the current profile's tags, treat it as not found (return null).
+        $filtered = $this->filterItemsByTags([$item]);
+        return $filtered[0] ?? null;
     }
 
     /**
      * Finds multiple media items by their unique identifiers.
      *
      * @param array<int, string> $ids Array of media item UUIDs
-     * @return array<int, array<string, mixed>> Hydrated media items (preserves order of input IDs)
+     * @return list<array<string, mixed>> Hydrated media items (preserves order of input IDs)
      */
     public function findByIds(array $ids): array
     {
@@ -191,7 +196,10 @@ class ItemRepository
             }
         }
 
-        return $ordered;
+        // P5-S2: apply profile tag restrictions — filter out any items blocked
+        // by the current profile's tags. Items that pass the filter keep their
+        // original relative order.
+        return $this->filterItemsByTags($ordered);
     }
 
     /**
@@ -1670,7 +1678,7 @@ class ItemRepository
         $items = $this->hydrateRows($results);
 
         // P5-S2: filter items by profile tag restrictions (blocked/allowed tags)
-        $items = $this->filterItemsByTags($items);
+        $items = $this->doFilterItemsByTags($items);
         $total = count($items);
 
         return [
@@ -2548,7 +2556,7 @@ class ItemRepository
      *
      * @return list<array<string, mixed>> Filtered items.
      */
-    private function filterItemsByTags(array $items): array
+    private function doFilterItemsByTags(array $items): array
     {
         $profileId = RequestContext::getProfileId();
         if ($profileId === null) {
@@ -2603,6 +2611,22 @@ class ItemRepository
 
         /** @var list<array<string, mixed>> */
         return $filtered;
+    }
+
+    /**
+     * Filter a list of items by the current profile's tag restrictions (P5-S2).
+     *
+     * Public wrapper around {@see self::filterItemsByTags()} so callers
+     * (controllers, other services) can apply tag filtering to arbitrary
+     * item sets without duplicating the restriction logic.
+     *
+     * @param list<array<string, mixed>> $items Hydrated media items to filter.
+     *
+     * @return list<array<string, mixed>> Filtered items.
+     */
+    public function filterItemsByTags(array $items): array
+    {
+        return $this->doFilterItemsByTags($items);
     }
 
     /**

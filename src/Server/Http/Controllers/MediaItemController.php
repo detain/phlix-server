@@ -17,6 +17,7 @@ use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
@@ -25,11 +26,16 @@ class MediaItemController
 {
     private ItemRepository $itemRepository;
     private MarkerService $markerService;
+    private GaplessPlaybackManager $gaplessManager;
 
-    public function __construct(ItemRepository $itemRepository, MarkerService $markerService)
-    {
+    public function __construct(
+        ItemRepository $itemRepository,
+        MarkerService $markerService,
+        GaplessPlaybackManager $gaplessManager
+    ) {
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
+        $this->gaplessManager = $gaplessManager;
     }
 
     /**
@@ -188,6 +194,10 @@ class MediaItemController
             }
         }
 
+        // P7: Include crossfade/gapless preferences for sequential playback
+        $userId = $request->userId ?? '';
+        $playbackPrefs = $this->gaplessManager->getPreferences($userId);
+
         return (new Response())->json([
             'item_id' => $itemId,
             'intro_marker' => $introMarker,
@@ -196,6 +206,12 @@ class MediaItemController
             'skip_button_spec' => $skipSpec->toArray(),
             'quality_ladder' => $this->buildQualityLadder($item, $request),
             'audio_tracks' => $audioTracks,
+            'crossfade' => [
+                'enabled' => $playbackPrefs->isCrossfadeEnabled(),
+                'duration' => $playbackPrefs->crossfadeDuration,
+                'fade_out' => $playbackPrefs->crossfadeFadeOut,
+                'fade_in' => $playbackPrefs->crossfadeFadeIn,
+            ],
         ]);
     }
 

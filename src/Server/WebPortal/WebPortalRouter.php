@@ -244,8 +244,13 @@ class WebPortalRouter
         $this->router->get('/api/v1/media/{id}/ratings', [$this, 'getRatings']);
 
         $this->router->group('', function (Router $r): void {
-            // P4-S1: similar items endpoint — requires auth to prevent data leakage
-            $r->get('/api/v1/media/{id}/similar', [$this, 'getSimilarItems']);
+            // P4-S1: similar items endpoint — wrapped in its own auth group
+            // to require auth middleware (data leakage prevention).
+            // Cannot pass middleware to Router::get() directly; use a nested group.
+            $r->group('', function (Router $r): void {
+                $r->get('/api/v1/media/{id}/similar', [$this, 'getSimilarItems']);
+            }, [new AuthMiddleware()]);
+
             // Library routes
             $r->get('/api/v1/libraries', [$this, 'getLibraries']);
             $r->get('/api/v1/libraries/{id}', [$this, 'getLibrary']);
@@ -1623,6 +1628,40 @@ class WebPortalRouter
 
         $limit = $request->queryInt('limit', 10);
         $items = $this->similarityService->getSimilar($itemId, $limit);
+
+        if ($items !== []) {
+            // P5-S2: filter by profile tag restrictions — fetch full items so we
+            // can inspect tags_json, then return only items the profile allows.
+            $ids = array_column($items, 'id');
+            $fullItems = $this->itemRepository->findByIds($ids);
+            $fullItems = $this->itemRepository->filterItemsByTags($fullItems);
+            // Build a map of id => filtered item for O(1) lookup.
+            $filteredMap = [];
+            foreach ($fullItems as $fi) {
+                $fid = is_string($fi['id'] ?? null) ? $fi['id'] : '';
+                if ($fid !== '') {
+                    $filteredMap[$fid] = $fi;
+                }
+            }
+            // Re-build response: keep similar-item metadata (score, reason) from
+            // $items but use filtered full items for title/posterUrl/year.
+            $filteredItems = [];
+            foreach ($items as $similarItem) {
+                $sid = is_string($similarItem['id'] ?? null) ? $similarItem['id'] : '';
+                if (isset($filteredMap[$sid])) {
+                    $full = $filteredMap[$sid];
+                    $filteredItems[] = [
+                        'id' => $sid,
+                        'title' => $full['name'] ?? $similarItem['title'] ?? '',
+                        'posterUrl' => $full['poster_url'] ?? $similarItem['posterUrl'] ?? null,
+                        'year' => $full['year'] ?? $similarItem['year'] ?? null,
+                        'score' => $similarItem['score'] ?? 0.0,
+                        'reason' => $similarItem['reason'] ?? 'genre',
+                    ];
+                }
+            }
+            $items = $filteredItems;
+        }
 
         return (new Response())->json(['items' => $items]);
     }

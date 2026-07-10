@@ -61,12 +61,18 @@ final class RecommendationService
         // Aggregate similar items from all watched items.
         // Map of media_item_id => ['score' => float, 'reasons' => list<string>]
         $candidateScores = [];
+
+        // P4-S2: Build a set of all watched item IDs so we can exclude ALL watched
+        // items from recommendations (not just the current seed item). This ensures
+        // we never recommend something the user has already seen.
+        $watchedItemsById = array_flip($watchedItems);
+
         foreach ($watchedItems as $watchedItemId) {
             $similarItems = $this->similarityService->getSimilar($watchedItemId, 20);
             foreach ($similarItems as $item) {
                 $id = is_string($item['id'] ?? null) ? $item['id'] : '';
-                if ($id === '' || $id === $watchedItemId) {
-                    continue; // Skip self or invalid.
+                if ($id === '' || isset($watchedItemsById[$id])) {
+                    continue; // Skip self, already-watched, or invalid.
                 }
                 $score = is_numeric($item['score'] ?? null) ? (float) $item['score'] : 0.0;
                 if ($score <= 0.0) {

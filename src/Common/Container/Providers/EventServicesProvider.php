@@ -19,10 +19,13 @@ use Phlix\Common\Events\ListenerRegistry;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Webhooks\WebhookEventSubscriber;
+use Phlix\Webhooks\WebhookService;
 use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Psr\EventDispatcher\ListenerProviderInterface;
 
+use function DI\autowire;
 use function DI\factory;
 use function DI\get;
 
@@ -118,6 +121,22 @@ final class EventServicesProvider implements ServiceProviderInterface
                     /** @var EventDispatcherFactory $factory */
                     $factory = $c->get(EventDispatcherFactory::class);
                     return $factory($c);
+                }
+            ),
+
+            // P9: Wire the webhook subscriber — subscribes PSR-14 domain events
+            // and queues them for async webhook delivery. Both dependencies
+            // (WebhookService from AdminServicesProvider, ListenerRegistry from
+            // above) are registered before this factory is invoked.
+            WebhookEventSubscriber::class => factory(
+                static function (ContainerInterface $c): WebhookEventSubscriber {
+                    /** @var WebhookService $webhookService */
+                    $webhookService = $c->get(WebhookService::class);
+                    /** @var ListenerRegistry $listenerRegistry */
+                    $listenerRegistry = $c->get(ListenerRegistry::class);
+                    $subscriber = new WebhookEventSubscriber($webhookService, $listenerRegistry);
+                    $subscriber->register();
+                    return $subscriber;
                 }
             ),
         ];

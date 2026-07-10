@@ -15,6 +15,8 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\MediaItemShaper;
+use Phlix\Media\Library\StreamProbeBackfill;
+use Phlix\Media\Library\StreamTrackShaper;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\SkipButtonSpec;
 use Phlix\Media\Playback\GaplessPlaybackManager;
@@ -33,18 +35,26 @@ class MediaItemController
     private TrickplayController $trickplayController;
     private ChapterMarkerService $chapterMarkerService;
 
+    /**
+     * Lazy one-shot stream backfill for pre-071 items (see getPlaybackInfo()).
+     * Built on first use when not injected (the optional ctor arg is a test seam).
+     */
+    private ?StreamProbeBackfill $streamBackfill;
+
     public function __construct(
         ItemRepository $itemRepository,
         MarkerService $markerService,
         GaplessPlaybackManager $gaplessManager,
         TrickplayController $trickplayController,
-        ChapterMarkerService $chapterMarkerService
+        ChapterMarkerService $chapterMarkerService,
+        ?StreamProbeBackfill $streamBackfill = null
     ) {
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
         $this->gaplessManager = $gaplessManager;
         $this->trickplayController = $trickplayController;
         $this->chapterMarkerService = $chapterMarkerService;
+        $this->streamBackfill = $streamBackfill;
     }
 
     /**
@@ -186,22 +196,18 @@ class MediaItemController
             ];
         }
 
-        // P3B-S2: Include audio_tracks from media_streams for multi-audio playback.
-        // Filter for stream_type='audio' and map to the StreamAudioTrack shape.
-        $audioTracks = [];
-        $streams = $this->itemRepository->getItemStreams($itemId);
-        foreach ($streams as $stream) {
-            if (($stream['stream_type'] ?? '') === 'audio') {
-                $audioTracks[] = [
-                    'id' => $stream['id'] ?? '',
-                    'codec' => $stream['codec'] ?? '',
-                    'language' => $stream['language'] ?? 'und',
-                    'channels' => is_scalar($stream['channels'] ?? null) ? (int) $stream['channels'] : 0,
-                    'bitrate' => isset($stream['bitrate']) && is_scalar($stream['bitrate']) ? (int) $stream['bitrate'] : null,
-                    'title' => $stream['title'] ?? null,
-                ];
-            }
-        }
+        // P3B: audio + subtitle track metadata from media_streams for the
+        // player's selection menus. Shaped by the shared StreamTrackShaper so
+        // this API path and WebPortalRouter::getPlaybackInfo() (the other
+        // dispatch path) emit byte-identical shapes. The lazy backfill runs a
+        // ONE-SHOT ffprobe for pre-071 items (≤1 audio row, no subtitle rows)
+        // so existing libraries expose their full track set without a rescan.
+        $streams = $this->streamBackfill()->ensureFor(
+            $item,
+            $this->itemRepository->getItemStreams($itemId)
+        );
+        $audioTracks = StreamTrackShaper::audioTracks($streams);
+        $subtitleTracks = StreamTrackShaper::subtitleTracks($streams, $itemId);
 
         // P7: Include crossfade/gapless preferences for sequential playback
         $userId = $request->userId ?? '';
@@ -215,6 +221,7 @@ class MediaItemController
             'skip_button_spec' => $skipSpec->toArray(),
             'quality_ladder' => $this->buildQualityLadder($item, $request),
             'audio_tracks' => $audioTracks,
+            'subtitle_tracks' => $subtitleTracks,
             'crossfade' => [
                 'enabled' => $playbackPrefs->isCrossfadeEnabled(),
                 'duration' => $playbackPrefs->crossfadeDuration,
@@ -222,6 +229,16 @@ class MediaItemController
                 'fade_in' => $playbackPrefs->crossfadeFadeIn,
             ],
         ]);
+    }
+
+    /**
+     * Returns the lazy stream backfill, building it on first use when none was
+     * injected (mirrors WebPortalRouter::streamBackfill() so both dispatch
+     * paths behave identically).
+     */
+    private function streamBackfill(): StreamProbeBackfill
+    {
+        return $this->streamBackfill ??= new StreamProbeBackfill($this->itemRepository);
     }
 
     /**

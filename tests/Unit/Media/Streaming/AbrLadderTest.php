@@ -373,9 +373,11 @@ final class AbrLadderTest extends TestCase
         self::assertNotContains(1440, $expectedHeights);
         self::assertNotContains(2160, $expectedHeights);
 
-        // Copy Original is suppressed when dimensions are unknown.
+        // Copy Original is suppressed when dimensions are unknown — the transcode
+        // Original falls back to the top rung's frame (still a distinct variant).
         self::assertFalse($result->original->isCopy);
-        self::assertSame('Original (best available)', $result->original->label);
+        self::assertSame(sprintf('Original (%dp)', $expectedHeights[0]), $result->original->label);
+        self::assertSame($expectedHeights[0], $result->original->height);
     }
 
     /**
@@ -451,19 +453,23 @@ final class AbrLadderTest extends TestCase
             'generic', true, 'Original (1080p)', 1920, 1080, 8_128_000, $codec1080,
         ];
 
-        yield 'hevc video -> best available (no copy)' => [
+        // Non-copy sources now yield a TRANSCODE Original at source resolution +
+        // source-ish bitrate (bandwidth = round(vb*1.07) + 128k, capped at profile).
+        yield 'hevc video -> transcode original at source res/bitrate' => [
             new SourceProfile(1920, 1080, 'hevc', 8_000_000, 'aac', 192_000),
-            'generic', false, 'Original (best available)', 1920, 1080, 5_478_000, $codec1080,
+            'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
         ];
 
-        yield 'non-aac audio (ac3) -> best available' => [
+        yield 'non-aac audio (ac3) -> transcode original' => [
             new SourceProfile(1920, 1080, 'h264', 8_000_000, 'ac3', 192_000),
-            'generic', false, 'Original (best available)', 1920, 1080, 5_478_000, $codec1080,
+            'generic', false, 'Original (1080p)', 1920, 1080, 8_688_000, $codec1080,
         ];
 
-        yield 'h264+aac over bitrate cap on web -> best available' => [
+        // 12 Mbps source over web's 10 Mbps cap: vb clamps to the profile video
+        // ceiling floor((10M-128k)/1.07) = 9,226,168 → bandwidth hits the 10M cap.
+        yield 'h264+aac over bitrate cap on web -> transcode original at cap' => [
             new SourceProfile(1920, 1080, 'h264', 12_000_000, 'aac', 192_000),
-            'web', false, 'Original (best available)', 1920, 1080, 5_478_000, $codec1080,
+            'web', false, 'Original (1080p)', 1920, 1080, 10_000_000, $codec1080,
         ];
 
         yield 'same 12Mbps source fits generic -> copy' => [
@@ -471,9 +477,11 @@ final class AbrLadderTest extends TestCase
             'generic', true, 'Original (1080p)', 1920, 1080, 12_192_000, $codec1080,
         ];
 
-        yield 'over resolution cap (4K on web) -> best available top rung' => [
+        // 4K source on web: the transcode Original clamps the SOURCE frame to the
+        // profile cap (aspect preserved) → 1920×1080, canonical 1080p bitrate.
+        yield 'over resolution cap (4K on web) -> transcode original clamped to cap' => [
             new SourceProfile(3840, 2160, 'h264', null, 'aac'),
-            'web', false, 'Original (best available)', 1920, 1080, 5_478_000, $codec1080,
+            'web', false, 'Original (1080p)', 1920, 1080, 5_478_000, $codec1080,
         ];
 
         yield 'DCI-2K h264+aac fits generic -> copy at L4.2' => [
@@ -481,14 +489,17 @@ final class AbrLadderTest extends TestCase
             'generic', true, 'Original (1080p)', 2048, 1080, 9_192_000, 'avc1.64002A,mp4a.40.2',
         ];
 
-        yield 'DCI-2K over width cap on web -> best available 720p' => [
+        // DCI-2K over web's 1920 width cap: the SOURCE frame is scaled to fit
+        // (2048×1080 → 1920×1012, aspect preserved, even-floored), keeping the
+        // source's 9 Mbps → bandwidth 9,630,000 + 128,000 = 9,758,000.
+        yield 'DCI-2K over width cap on web -> transcode original scaled to fit' => [
             new SourceProfile(2048, 1080, 'h264', 9_000_000, 'aac', 192_000),
-            'web', false, 'Original (best available)', 1366, 720, 3_124_000, 'avc1.640020,mp4a.40.2',
+            'web', false, 'Original (1012p)', 1920, 1012, 9_758_000, $codec1080,
         ];
 
-        yield 'null dims -> copy suppressed, best available 1080p' => [
+        yield 'null dims -> copy suppressed, transcode original at top rung frame' => [
             new SourceProfile(null, null, 'h264', null, 'aac'),
-            'generic', false, 'Original (best available)', 1920, 1080, 5_478_000, $codec1080,
+            'generic', false, 'Original (1080p)', 1920, 1080, 5_478_000, $codec1080,
         ];
     }
 
@@ -527,15 +538,22 @@ final class AbrLadderTest extends TestCase
         self::assertNotContains($result->original, $result->renditions);
     }
 
-    public function testStreamVariantsOmitsNonCopyOriginal(): void
+    public function testStreamVariantsPrependsNonCopyOriginalToo(): void
     {
+        // A transcoding (non-copy) source ALSO gets a distinct "original" master
+        // variant — a transcode at source resolution — so the client's Original
+        // choice is always playable, never silently dropped.
         $result = $this->ladder->build(
             new SourceProfile(1920, 1080, 'hevc', 8_000_000, 'aac', 192_000),
             'generic',
         );
 
         self::assertFalse($result->original->isCopy);
-        self::assertSame($result->renditions, $result->streamVariants(), 'no duplicate variant emitted');
+        $variants = $result->streamVariants();
+        self::assertCount(count($result->renditions) + 1, $variants);
+        self::assertSame($result->original, $variants[0]);
+        self::assertSame('original', $variants[0]->id);
+        self::assertNotContains($result->original, $result->renditions);
     }
 
     // -----------------------------------------------------------------

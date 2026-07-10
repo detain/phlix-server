@@ -203,6 +203,20 @@ class TranscodeManager
         'tv-4k' => [3840, 2160],
     ];
 
+    /**
+     * Format-version component of the job reuse key
+     * (`sha1(media|profile|JOB_KEY_VERSION)`, see {@see ensureHlsJob()}).
+     *
+     * Bump this whenever the persisted job artefacts change shape incompatibly so
+     * every job created before the change stops matching {@see findReusableJob()}
+     * and simply ages out via the cache sweep. `v3` = multi-audio HLS: shared
+     * AUDIO GROUP-ID master, audio-relative track indexes, real audio-only /
+     * video-only segments, and the always-present `original` variant — a pre-v3
+     * job's master playlist and variants JSON are all incompatible with the new
+     * segment producers.
+     */
+    private const JOB_KEY_VERSION = 'v3';
+
     // Job status constants
     public const STATUS_PENDING = 'pending';
     public const STATUS_RUNNING = 'running';
@@ -291,7 +305,7 @@ class TranscodeManager
      */
     public function ensureHlsJob(string $mediaItemId, string $profileName = 'web'): array
     {
-        $keyHash = sha1($mediaItemId . '|' . $profileName);
+        $keyHash = sha1($mediaItemId . '|' . $profileName . '|' . self::JOB_KEY_VERSION);
 
         // Self-heal first: drop any dead 'running' ghosts so a fresh play request
         // is not refused by the previous worker's leftovers (see reapStaleRunningJobs).
@@ -382,7 +396,19 @@ class TranscodeManager
             // AbrLadder always emits at least one rung; defensive only.
             throw new \RuntimeException('ABR ladder produced no variants');
         }
-        $variantsJson = json_encode($ladder->toArray());
+        // P3B-S3: extract ALL audio streams from the probe for multi-audio HLS.
+        // Descriptors carry BOTH the audio-relative `index` (drives `-map 0:a:N`
+        // and the media_a{N}.m3u8 filenames) and the global ffprobe `stream_index`.
+        // Persisted alongside the ladder (variants JSON `audio_tracks` key) so the
+        // per-segment producers know the job carries a shared audio group.
+        $audioStreams = $this->allStreamsOfType($probe, 'audio');
+        $audioTracks = count($audioStreams) > 1 ? $this->buildAudioTrackDescriptors($audioStreams) : null;
+
+        $ladderArray = $ladder->toArray();
+        if ($audioTracks !== null) {
+            $ladderArray['audio_tracks'] = $audioTracks;
+        }
+        $variantsJson = json_encode($ladderArray);
         if ($variantsJson === false) {
             throw new \RuntimeException('Failed to encode ABR ladder');
         }
@@ -404,14 +430,7 @@ class TranscodeManager
         // Publish the complete VOD master (every variant) + one media playlist per
         // variant now — no encode is needed to know the timeline, so this is
         // instantaneous. Segments themselves are produced on demand per variant.
-
-        // P3B-S3: extract ALL audio streams from the probe for multi-audio HLS.
-        // The probe is guaranteed non-null here because we use it for subtitle
-        // detection below and the fresh-metadata + probe-failure path already
-        // showed $probe === [] (not null), which allStreamsOfType handles correctly.
-        $audioStreams = $this->allStreamsOfType($probe, 'audio');
-        $audioTracks = count($audioStreams) > 1 ? $this->buildAudioTrackDescriptors($audioStreams) : null;
-
+        // $audioTracks was built above (before the ladder JSON was persisted).
         $this->writeVodPlaylists($hlsDir, $duration, $segSeconds, $width, $height, $bandwidth, $streamVariants, $audioTracks);
 
         // Detect embedded TEXT subtitle tracks (ASS/SRT/mov_text — bitmap PGS/VobSub
@@ -591,7 +610,7 @@ class TranscodeManager
 
         // P3B-S3: audio-only segment when $audioId is set and $variant is null.
         if ($audioId !== null && $variant === null) {
-            return $this->produceAudioSegment($jobId, $row, $audioId, $index);
+            return $this->produceAudioSegment($jobId, $row, $audioId, $index, $this->audioTracksOf($entry));
         }
 
         $variantsRaw = $row['variants'] ?? null;
@@ -607,6 +626,12 @@ class TranscodeManager
                 return null; // unknown / non-advertised variant → 404 (mirrors out-of-range)
             }
             $segParams = self::segmentParamsForRendition($rendition);
+            // P3B-S3: when the master carries a shared audio GROUP, video variant
+            // segments are VIDEO-ONLY (-an) — sound plays from the audio renditions,
+            // so muxing a track here would duplicate (and possibly desync) it.
+            if ($this->audioTracksOf($entry) !== null) {
+                $segParams['video_only'] = true;
+            }
             return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
         }
 
@@ -787,16 +812,53 @@ class TranscodeManager
     }
 
     /**
+     * The persisted audio-track descriptors of a job's cache entry, or null when
+     * the job carries no shared audio group (single-audio or pre-multi-audio job).
+     *
+     * @param array{row: array<string, mixed>, variants: array<mixed>|null} $entry
+     *
+     * @return non-empty-list<array<string, mixed>>|null
+     */
+    private function audioTracksOf(array $entry): ?array
+    {
+        $decoded = $entry['variants'];
+        if (!is_array($decoded)) {
+            return null;
+        }
+        $tracks = $decoded['audio_tracks'] ?? null;
+        if (!is_array($tracks) || $tracks === []) {
+            return null;
+        }
+        $out = [];
+        foreach ($tracks as $track) {
+            if (!is_array($track)) {
+                return null; // malformed persisted descriptors → treat as no group
+            }
+            $normalized = [];
+            foreach ($track as $key => $value) {
+                $normalized[(string) $key] = $value;
+            }
+            $out[] = $normalized;
+        }
+        return $out;
+    }
+
+    /**
      * Produce or serve one on-demand audio-only segment for multi-audio HLS (P3B-S3).
      *
      * Mirrors the tail of {@see produceSegment()} but for audio-only segments:
-     * the filename is `seg-a{audioId}-NNNNN.ts`, the FFmpeg command maps the
-     * specific audio stream index, and there is no video encode.
+     * the filename is `seg-a{N}-NNNNN.ts` where N is the AUDIO-RELATIVE stream
+     * index (0 = first audio stream — the same N ffmpeg's `-map 0:a:N` selects),
+     * and the encode is a genuine `-vn` audio-only AAC transcode
+     * ({@see FfmpegRunner::buildAudioSegmentCommand()}), never a video encode.
      *
-     * @param string               $jobId    Transcode job id.
-     * @param array<string, mixed>  $row      The transcode_jobs row.
-     * @param string               $audioId  Audio group id (e.g. `a0`).
-     * @param int                  $index    Zero-based segment index.
+     * @param string                                 $jobId       Transcode job id.
+     * @param array<string, mixed>                    $row         The transcode_jobs row.
+     * @param string                                 $audioId     Audio rendition id (e.g. `a0`).
+     * @param int                                    $index       Zero-based segment index.
+     * @param list<array<string, mixed>>|null         $audioTracks Persisted audio-track
+     *                                    descriptors, or null when the job has no audio group
+     *                                    (in which case no audio-only segment is advertised → null/404).
      *
      * @return string|null Absolute path to the ready segment, or null on failure.
      */
@@ -804,8 +866,25 @@ class TranscodeManager
         string $jobId,
         array $row,
         string $audioId,
-        int $index
+        int $index,
+        ?array $audioTracks
     ): ?string {
+        // Only a job that actually advertises a shared audio group serves audio-only
+        // segments, and only for an advertised audio-relative track index.
+        $suffix = substr($audioId, 1);
+        if (
+            $audioTracks === null
+            || !str_starts_with($audioId, 'a')
+            || $suffix === ''
+            || !ctype_digit($suffix)
+        ) {
+            return null;
+        }
+        $audioStreamIndex = (int) $suffix;
+        if ($audioStreamIndex >= count($audioTracks)) {
+            return null;
+        }
+
         $segSeconds = is_numeric($row['segment_seconds'] ?? null)
             ? (int) $row['segment_seconds']
             : $this->segmentSeconds;
@@ -820,13 +899,17 @@ class TranscodeManager
             return null;
         }
 
-        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : '';
-        if ($dir === '' || !is_dir($dir)) {
-            return null;
-        }
+        $dir = is_string($row['hls_dir'] ?? null) && $row['hls_dir'] !== ''
+            ? (string) $row['hls_dir']
+            : "{$this->segmentDir}/{$jobId}";
         $inputPath = is_string($row['input_path'] ?? null) ? (string) $row['input_path'] : '';
         if ($inputPath === '' || !is_file($inputPath)) {
             return null;
+        }
+        // Recreate an evicted/wiped job dir (mirrors produceSegment()) so an
+        // audio segment re-encode still lands somewhere after a restart/sweep.
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
         }
 
         $final = "{$dir}/" . self::segmentFileName(null, $index, $audioId);
@@ -836,10 +919,11 @@ class TranscodeManager
             return null;
         }
 
-        // P3B-S3: derive audio-only encode params (no video, specific audio stream).
-        // The audio group id is 'a{N}' → extract N as the stream index.
-        $audioStreamIndex = (int) substr($audioId, 1);
+        // P3B-S3: audio-only encode params. `audio_only` routes FfmpegRunner to the
+        // dedicated -vn command; `audio_stream_index` is the AUDIO-RELATIVE index N
+        // (already parsed from 'a{N}' above) that `-map 0:a:{N}` expects.
         $segParams = [
+            'audio_only' => true,
             'audio_codec' => 'aac',
             'audio_bitrate' => '128k',
             'audio_stream_index' => $audioStreamIndex,
@@ -883,12 +967,12 @@ class TranscodeManager
     /**
      * Resolve a variant id against a decoded `variants` ladder to its Rendition array.
      *
-     * Searches the clamped rungs (`renditions`) first, then the `original` descriptor —
-     * but `original` is only resolvable when it is a genuine stream-copy variant
-     * (`is_copy === true`), because that is the only case
-     * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} emits it into the
-     * master. When `original` merely mirrors the top transcode rung (`is_copy === false`)
-     * it is NOT advertised, so nothing ever requests it and this returns null (404).
+     * Searches the clamped rungs (`renditions`) first, then the `original`
+     * descriptor. `original` resolves regardless of `is_copy`:
+     * {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} now ALWAYS emits
+     * it into the master (stream-copy when the source is HLS-safe, else a genuine
+     * transcode at source resolution), so `seg-voriginal-*` requests must always
+     * be servable.
      *
      * @param array<mixed>  $decoded LadderResult::toArray() shape: `{renditions:[...], original:{...}}`.
      * @param string|null   $variant Requested Rendition id.
@@ -912,11 +996,7 @@ class TranscodeManager
         }
 
         $original = $decoded['original'] ?? null;
-        if (
-            is_array($original)
-            && ($original['id'] ?? null) === $variant
-            && ($original['is_copy'] ?? false) === true
-        ) {
+        if (is_array($original) && ($original['id'] ?? null) === $variant) {
             /** @var array<string, mixed> $original */
             return $original;
         }
@@ -1380,11 +1460,12 @@ class TranscodeManager
      * (`$variants === null`): the single-variant `master.m3u8` + `media_0.m3u8`
      * write, byte-identical to pre-A5.
      *
-     * Multi-audio path (P3B-S3): when `$audioTracks` is non-empty, emits
-     * `#EXT-X-MEDIA:TYPE=AUDIO` groups in the master playlist (one per audio stream
-     * with LANGUAGE/NAME/DEFAULT/AUTOSELECT), writes audio-only playlists per
-     * stream (`media_a{audioId}.m3u8`), and ties each video variant to the
-     * default audio group via `AUDIO="..."` on each `#EXT-X-STREAM-INF`.
+     * Multi-audio path (P3B-S3): when `$audioTracks` is non-empty, emits ALL
+     * `#EXT-X-MEDIA:TYPE=AUDIO` renditions under ONE shared `GROUP-ID="aud"` in
+     * the master (NAME/LANGUAGE/DEFAULT/AUTOSELECT per track), writes one
+     * audio-only playlist per track keyed on its AUDIO-RELATIVE index
+     * (`media_a0.m3u8` = first audio stream), and ties every video variant to
+     * the shared group via `AUDIO="aud"` on each `#EXT-X-STREAM-INF`.
      *
      * @param string                           $dir         Job directory.
      * @param float                            $duration    Source duration in seconds.
@@ -1393,9 +1474,9 @@ class TranscodeManager
      * @param int|null                         $height      Variant pixel height, or null.
      * @param int|null                         $bandwidth   Variant nominal bandwidth (master BANDWIDTH), or null.
      * @param list<Rendition>|null             $variants    Multi-variant list (highest-first), or null for legacy.
-     * @param list<array{index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
-     *                                                     Audio streams from the source probe, or null when
-     *                                                     the source has only one audio track.
+     * @param list<array{index:int,stream_index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
+     *                                                     Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
+     *                                                     or null when the source has only one audio track.
      */
     private function writeVodPlaylists(
         string $dir,
@@ -1473,14 +1554,21 @@ class TranscodeManager
      * Rendition) + `media_v{id}.m3u8` per variant, preserving the caller's order
      * (highest-first per {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}).
      *
-     * When `$audioTracks` is non-null (P3B-S3), emits a `#EXT-X-MEDIA:TYPE=AUDIO`
-     * group for each audio stream before the video variants, and ties every video
-     * variant to the DEFAULT audio group via `AUDIO="..."` so hls.js exposes
-     * selectable audio tracks without a full video reload.
+     * When `$audioTracks` is non-null (P3B-S3), emits ALL audio renditions as
+     * `#EXT-X-MEDIA:TYPE=AUDIO` entries under ONE shared `GROUP-ID="aud"` before
+     * the video variants, and ties every video variant to that group via
+     * `AUDIO="aud"`. A single shared group is what makes the tracks SELECTABLE:
+     * hls.js (and every HLS client) exposes exactly the renditions of the group
+     * the playing variant references — the pre-fix one-group-per-track layout
+     * (a0, a1, …) meant the variants referenced only one group, so clients ever
+     * saw a single audio track. Exactly one rendition carries `DEFAULT=YES` (the
+     * source's default-disposition track, else the first); all carry
+     * `AUTOSELECT=YES` so language-matching clients can auto-pick them.
      *
      * @param list<Rendition> $variants   Variants in master order (not re-sorted).
-     * @param list<array{index:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
-     *                                    Audio streams from the source probe, or null for single-audio.
+     * @param list<array{index:int,stream_index?:int,language:string,label:string,default:bool,codec:string}>|null $audioTracks
+     *                                    Audio-track descriptors ({@see buildAudioTrackDescriptors()}),
+     *                                    or null for single-audio.
      *
      * @return string Master playlist text.
      */
@@ -1488,48 +1576,67 @@ class TranscodeManager
     {
         $lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
 
-        // P3B-S3: emit audio group(s) before the video stream infs.
+        // P3B-S3: one shared audio group, one rendition per track, before the
+        // video stream infs.
         if (is_array($audioTracks)) {
-            $defaultGroupId = null;
-            foreach ($audioTracks as $track) {
-                $groupId = 'a' . $track['index'];
-                $lang = $track['language'] ?? 'und';
-                $name = $track['label'] ?? ("Audio " . $track['index']);
-                $isDefault = ($track['default'] ?? false) === true;
-                // P3B-S3: URI is required for hls.js to locate the audio-only playlist.
-                // The server writes audio playlists as media_a{audioId}.m3u8 in the job dir,
-                // e.g. media_a0.m3u8, media_a1.m3u8. The relative URL resolves from the
-                // master manifest's directory, so the client requests /hls/{job}/media_a0.m3u8.
-                $attrs = 'TYPE=AUDIO'
-                    . ',GROUP-ID="' . $groupId . '"'
-                    . ',LANGUAGE="' . $lang . '"'
-                    . ',NAME="' . $name . '"'
-                    . ',URI="media_' . $groupId . '.m3u8"'
-                    . ($isDefault ? ',DEFAULT=YES,AUTOSELECT=YES' : ',DEFAULT=NO,AUTOSELECT=NO');
-                $lines[] = '#EXT-X-MEDIA:' . $attrs;
-                if ($isDefault || $defaultGroupId === null) {
-                    $defaultGroupId = $groupId;
+            // Exactly one DEFAULT=YES: the first descriptor flagged default, else
+            // the first track (defensive — the builder already guarantees one).
+            $defaultPos = null;
+            foreach ($audioTracks as $position => $track) {
+                if (($track['default'] ?? false) === true) {
+                    $defaultPos = $position;
+                    break;
                 }
             }
-            // Fallback: first audio track is the default.
-            $defaultGroupId ??= 'a' . ($audioTracks[0]['index'] ?? 0);
+            $defaultPos ??= array_key_first($audioTracks);
+            foreach ($audioTracks as $position => $track) {
+                // The AUDIO-RELATIVE index keys the per-track playlist filename
+                // (media_a0.m3u8 = first audio stream). Fall back to the list
+                // position defensively.
+                $relIndex = is_int($track['index'] ?? null) ? $track['index'] : $position;
+                $lang = is_string($track['language'] ?? null) ? $track['language'] : 'und';
+                $name = is_string($track['label'] ?? null) && $track['label'] !== ''
+                    ? $track['label']
+                    : ('Track ' . ($relIndex + 1));
+                $isDefault = $position === $defaultPos;
+                $attrs = 'TYPE=AUDIO'
+                    . ',GROUP-ID="aud"'
+                    . ',NAME="' . self::m3u8Attr($name) . '"';
+                if ($lang !== '' && $lang !== 'und') {
+                    $attrs .= ',LANGUAGE="' . self::m3u8Attr($lang) . '"';
+                }
+                $attrs .= ',DEFAULT=' . ($isDefault ? 'YES' : 'NO')
+                    . ',AUTOSELECT=YES'
+                    // URI is required for hls.js to locate the audio-only playlist;
+                    // relative, so the client requests /hls/{job}/media_a{N}.m3u8.
+                    . ',URI="media_a' . $relIndex . '.m3u8"';
+                $lines[] = '#EXT-X-MEDIA:' . $attrs;
+            }
         }
 
         foreach ($variants as $variant) {
             $attrs = 'BANDWIDTH=' . $variant->bandwidth()
                 . ',RESOLUTION=' . $variant->resolution()
                 . ',CODECS="' . $variant->codecs . '"';
-            // P3B-S3: wire this variant to the default audio group.
-            // $defaultGroupId is guaranteed to be a string here when audioTracks is set
-            // (it is set inside the is_array(audioTracks) block above via ??= fallback).
+            // P3B-S3: every variant references the ONE shared audio group.
             if (is_array($audioTracks)) {
-                $attrs .= ',AUDIO="' . $defaultGroupId . '"';
+                $attrs .= ',AUDIO="aud"';
             }
             $lines[] = '#EXT-X-STREAM-INF:' . $attrs;
             $lines[] = 'media_v' . $variant->id . '.m3u8';
         }
 
         return implode("\n", $lines) . "\n";
+    }
+
+    /**
+     * Sanitise a string for use inside a double-quoted M3U8 attribute value:
+     * double quotes, CR and LF are stripped (they would terminate/corrupt the
+     * attribute list per RFC 8216 §4.2).
+     */
+    private static function m3u8Attr(string $value): string
+    {
+        return str_replace(['"', "\r", "\n"], '', $value);
     }
 
     /**
@@ -1808,11 +1915,11 @@ class TranscodeManager
      * (`variants IS NULL`) job.
      *
      * The single source of truth clients read to build a quality picker. It
-     * mirrors {@see \Phlix\Media\Streaming\LadderResult::streamVariants()}'s dedup
-     * rule exactly: a non-copy "original" merely duplicates the top transcode rung
-     * and is NOT listed separately (nothing can request it — see A5/A6's
-     * {@see findRenditionArray()}); a genuine stream-copy "original" is a real
-     * additional highest variant and is prepended. Each entry is a flat
+     * mirrors {@see \Phlix\Media\Streaming\LadderResult::streamVariants()} exactly:
+     * "original" is ALWAYS a distinct variant — stream-copy when the source is
+     * HLS-safe, else a transcode at source resolution — prepended as the highest
+     * entry, so the client contract is that the list contains
+     * `{id: 'original', height: <source height>, ...}`. Each entry is a flat
      * {@see \Phlix\Media\Streaming\Rendition::toArray()} shape with `url` filled to
      * that variant's own media-playlist path (relative + UNSIGNED — the caller,
      * {@see \Phlix\Server\Http\Controllers\TranscodeController}, signs it, the same
@@ -1859,11 +1966,13 @@ class TranscodeManager
             }
         }
 
-        // Mirror LadderResult::streamVariants(): a copy original is a genuine extra
-        // (highest) variant → prepend; a non-copy original just mirrors the top rung
-        // and is NOT separately playable → drop it.
+        // Mirror LadderResult::streamVariants(): `original` is ALWAYS its own
+        // playable variant (stream-copy or transcode-at-source-resolution) →
+        // prepend it whenever the persisted descriptor is well-formed. Old rows
+        // whose `original` lacks an id (or whose JSON predates this shape) simply
+        // don't get the extra entry.
         $original = $decoded['original'] ?? null;
-        if (is_array($original) && ($original['is_copy'] ?? false) === true) {
+        if (is_array($original) && is_string($original['id'] ?? null) && $original['id'] !== '') {
             array_unshift($playable, $original);
         }
 
@@ -1989,7 +2098,10 @@ class TranscodeManager
     /**
      * Finds a reusable (running or completed) job whose output still exists.
      *
-     * @param string $keyHash sha1(media_item_id|profile) reuse key.
+     * @param string $keyHash sha1(media_item_id|profile|JOB_KEY_VERSION) reuse key.
+     *                        The version component means a job persisted under an
+     *                        older format version can never match — it is simply
+     *                        never reused and ages out via the cache sweep.
      *
      * @return string|null Job id to reuse, or null when none is usable.
      */
@@ -2269,24 +2381,32 @@ class TranscodeManager
      * Builds an audio-track descriptor array from ffprobe audio streams for
      * use in multi-audio HLS manifest generation (P3B-S3).
      *
-     * Each descriptor carries the index (stream position in ffprobe, used to
-     * construct the audio group id `a{N}`), language (BCP 47 or 'und'), label
-     * (display name), default flag, and codec.
+     * Each descriptor carries BOTH indexes:
+     *  - `index` — the 0-based position among the AUDIO streams only. This is
+     *    what ffmpeg's `-map 0:a:{N}` selector expects and what keys the audio
+     *    rendition filenames (`media_a0.m3u8` / `seg-a0-*.ts` = first audio
+     *    stream). Using the global ffprobe index here (the pre-fix bug) made
+     *    `-map 0:a:{global}` select the WRONG stream — or fail outright — for
+     *    any file whose audio streams don't start at stream 0.
+     *  - `stream_index` — the global ffprobe stream index, kept for diagnostics
+     *    and any consumer that needs to correlate back to the probe.
+     *
+     * Plus language (ISO code or 'und'), label (title tag → language → "Track N"),
+     * default flag, and codec. EXACTLY ONE track is marked default: the first
+     * stream with `disposition.default`, else the first audio stream.
      *
      * @param list<array<string, mixed>> $audioStreams All audio streams from ffprobe.
      *
-     * @return list<array{index: int, language: string, label: string, default: bool, codec: string}>
-     *         Audio track descriptors in stream order.
+     * @return list<array{index: int, stream_index: int, language: string, label: string, default: bool, codec: string}>
+     *         Audio track descriptors in audio-stream order.
      */
     private function buildAudioTrackDescriptors(array $audioStreams): array
     {
         $tracks = [];
         $hasDefault = false;
+        $relativeIndex = 0;
         foreach ($audioStreams as $stream) {
-            $index = $this->intVal($stream['index'] ?? null);
-            if ($index < 0) {
-                continue;
-            }
+            $streamIndex = $this->intVal($stream['index'] ?? null);
             // Determine language: use explicit language code, fall back to 'und'.
             $tags = is_array($stream['tags'] ?? null) ? $stream['tags'] : [];
             $rawLang = $this->probeString($tags['language'] ?? null)
@@ -2299,31 +2419,31 @@ class TranscodeManager
                     $lang = 'und';
                 }
             }
-            // Build label: try the stream's title tag, then language display name, then a generic label.
-            $label = $this->probeString($tags['title'] ?? null) ?? null;
+            // Label: the stream's title tag, then the language code, then "Track N".
+            $label = $this->probeString($tags['title'] ?? null);
             if ($label === null || $label === '') {
-                // Use language code or "Audio N" as fallback.
-                $label = $lang !== 'und' ? $lang : ('Audio ' . $index);
+                $label = $lang !== 'und' ? $lang : ('Track ' . ($relativeIndex + 1));
             }
-            // Default: first audio stream is the default unless a stream has disposition=default.
+            // Exactly one default: the FIRST stream carrying disposition.default.
             $disposition = is_array($stream['disposition'] ?? null) ? $stream['disposition'] : [];
-            $isDefault = ($disposition['default'] ?? 0) === 1
-                || ($disposition['forced'] ?? 0) === 1;
-            if ($isDefault && !$hasDefault) {
+            $isDefault = !$hasDefault && ($disposition['default'] ?? 0) === 1;
+            if ($isDefault) {
                 $hasDefault = true;
             }
             $codec = $this->probeString($stream['codec_name'] ?? null) ?? 'unknown';
             $tracks[] = [
-                'index' => $index,
+                'index' => $relativeIndex,
+                'stream_index' => $streamIndex,
                 'language' => $lang,
                 'label' => $label,
                 'default' => $isDefault,
                 'codec' => $codec,
             ];
+            $relativeIndex++;
         }
-        // If no track was marked default, mark the first one as default.
+        // If no stream carried a default disposition, the first track is default.
         if (!$hasDefault && count($tracks) > 0) {
-            $tracks[0] = ['default' => true] + $tracks[0];
+            $tracks[0]['default'] = true;
         }
         return $tracks;
     }

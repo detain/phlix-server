@@ -1479,22 +1479,31 @@ class FfmpegRunner
         $startArg = self::seconds($start);
         $durArg = self::seconds($duration);
 
+        // P3B multi-audio: when the master carries a shared AUDIO group, every video
+        // variant segment is VIDEO-ONLY (`-an`) — sound travels in the audio-only
+        // renditions instead, so muxing a (possibly wrong) audio track here would
+        // duplicate and desync it.
+        $videoOnly = ($params['video_only'] ?? false) === true;
+
         // Accurate input seek BEFORE -i so the decode starts at the segment boundary.
         $cmd = sprintf('%s -nostdin -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
         $cmd .= ' -ss ' . $startArg;
         $cmd .= ' -i ' . escapeshellarg($inputPath);
         $cmd .= ' -t ' . $durArg;
 
-        // Video: first video track always. Audio: either a specific stream index
-        // (P3B-S3 multi-audio, via audio_stream_index param) or the first audio track.
+        // Video: first video track always. Audio: either a specific AUDIO-RELATIVE
+        // stream index (P3B-S3 multi-audio, via audio_stream_index param — the N of
+        // `-map 0:a:N`, NOT the global ffprobe index) or the first audio track.
         $audioStreamIndex = self::paramInt($params, 'audio_stream_index');
         $cmd .= ' -map 0:v:0';
-        if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
-            // P3B-S3: map the specific audio stream by index (e.g. -map 0:a:1 for the second audio track).
-            $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
-        } else {
-            // Default: first audio track (backward compatible).
-            $cmd .= ' -map 0:a:0?';
+        if (!$videoOnly) {
+            if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
+                // Map the Nth AUDIO stream (audio-relative, e.g. -map 0:a:1 = second audio track).
+                $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
+            } else {
+                // Default: first audio track (backward compatible).
+                $cmd .= ' -map 0:a:0?';
+            }
         }
         $cmd .= ' -dn -sn';
 
@@ -1553,23 +1562,94 @@ class FfmpegRunner
             $cmd .= self::browserSafeVideoFlags($videoCodec, $params);
         }
 
-        // Audio: re-encode to AAC by default, or a genuine stream copy when asked.
-        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-        if ($audioCodec === '') {
-            $audioCodec = 'aac';
-        }
-        if ($audioCodec === 'copy') {
-            $cmd .= ' -c:a copy';
+        // Audio: dropped entirely for a video-only (audio-group) variant segment,
+        // else re-encode to AAC by default, or a genuine stream copy when asked.
+        if ($videoOnly) {
+            $cmd .= ' -an';
         } else {
-            $cmd .= ' -c:a ' . $audioCodec;
-            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-            $audioChannels = self::paramInt($params, 'audio_channels');
-            if ($audioChannels !== null && $audioChannels > 0) {
-                $cmd .= ' -ac ' . $audioChannels;
+            $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+            if ($audioCodec === '') {
+                $audioCodec = 'aac';
+            }
+            if ($audioCodec === 'copy') {
+                $cmd .= ' -c:a copy';
+            } else {
+                $cmd .= ' -c:a ' . $audioCodec;
+                $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+                $audioChannels = self::paramInt($params, 'audio_channels');
+                if ($audioChannels !== null && $audioChannels > 0) {
+                    $cmd .= ' -ac ' . $audioChannels;
+                }
             }
         }
 
         // Anchor PTS to the absolute timeline position; no mux pre-roll.
+        $cmd .= ' -muxdelay 0 -muxpreload 0';
+        $cmd .= ' -output_ts_offset ' . $startArg;
+        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+
+        return $cmd;
+    }
+
+    /**
+     * Builds an FFmpeg command that produces ONE on-demand AUDIO-ONLY HLS segment
+     * (P3B multi-audio: the `seg-a{N}-NNNNN.ts` renditions behind each
+     * `#EXT-X-MEDIA:TYPE=AUDIO` entry).
+     *
+     * Contract: `-vn` (no video decode/encode at all — an audio segment must be
+     * near-free to produce), `-map 0:a:{n}` where `n` is the AUDIO-RELATIVE stream
+     * index (`audio_stream_index` param, default 0), AAC at `audio_bitrate`
+     * (default 128k), muxed as MPEG-TS with the same `-ss`/`-t`/`-output_ts_offset`
+     * segment framing as {@see buildSegmentCommand()} so audio and video segments
+     * stay aligned on the shared VOD timeline.
+     *
+     * @param string               $inputPath Source media file.
+     * @param string               $outFile   Absolute path to write the .ts segment to.
+     * @param float                $start     Segment start offset in seconds.
+     * @param float                $duration  Segment length in seconds.
+     * @param array<string, mixed> $params    `audio_stream_index` (audio-relative),
+     *                                        `audio_codec` (default aac),
+     *                                        `audio_bitrate` (default 128k),
+     *                                        `audio_channels` (optional).
+     *
+     * @return string The complete FFmpeg audio-only segment command.
+     */
+    public function buildAudioSegmentCommand(
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): string {
+        $startArg = self::seconds($start);
+        $durArg = self::seconds($duration);
+        $audioStreamIndex = self::paramInt($params, 'audio_stream_index') ?? 0;
+        if ($audioStreamIndex < 0) {
+            $audioStreamIndex = 0;
+        }
+
+        $cmd = sprintf('%s -nostdin -y -hide_banner -loglevel error', escapeshellarg($this->ffmpegPath));
+        $cmd .= ' -ss ' . $startArg;
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+        $cmd .= ' -t ' . $durArg;
+        // No video at all; map exactly the requested audio track (audio-relative N).
+        $cmd .= ' -vn -dn -sn';
+        $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
+
+        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === '' || $audioCodec === 'copy') {
+            // Audio renditions must stay AAC so every #EXT-X-MEDIA entry matches the
+            // advertised mp4a.40.2 — a copy could smuggle a non-HLS codec through.
+            $audioCodec = 'aac';
+        }
+        $cmd .= ' -c:a ' . $audioCodec;
+        $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+        $audioChannels = self::paramInt($params, 'audio_channels');
+        if ($audioChannels !== null && $audioChannels > 0) {
+            $cmd .= ' -ac ' . $audioChannels;
+        }
+
+        // Same timeline anchoring as the video segments.
         $cmd .= ' -muxdelay 0 -muxpreload 0';
         $cmd .= ' -output_ts_offset ' . $startArg;
         $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
@@ -1642,13 +1722,19 @@ class FfmpegRunner
         $cmd .= ' -i ' . escapeshellarg($inputPath);
         $cmd .= ' -t ' . $durArg;
 
-        // Map video (first video track) and audio (first audio track, optional)
+        // Map video (first video track) and audio (first audio track, optional).
+        // A video-only (audio-group) variant segment maps/encodes NO audio at all —
+        // sound travels in the separate audio-only renditions.
+        $videoOnly = ($params['video_only'] ?? false) === true;
         $audioStreamIndex = self::paramInt($params, 'audio_stream_index');
         $cmd .= ' -map 0:v:0';
-        if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
-            $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
-        } else {
-            $cmd .= ' -map 0:a:0?';
+        if (!$videoOnly) {
+            if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
+                // Audio-relative index: -map 0:a:N selects the Nth AUDIO stream.
+                $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
+            } else {
+                $cmd .= ' -map 0:a:0?';
+            }
         }
         $cmd .= ' -dn -sn';
 
@@ -1720,16 +1806,21 @@ class FfmpegRunner
         // IDR at the segment start for independently decodable segments
         $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
 
-        // Audio: re-encode to AAC by default, or stream copy when requested
-        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
-        if ($audioCodec === 'copy') {
-            $cmd .= ' -c:a copy';
+        // Audio: dropped for a video-only (audio-group) variant segment, else
+        // re-encode to AAC by default, or stream copy when requested
+        if ($videoOnly) {
+            $cmd .= ' -an';
         } else {
-            $cmd .= ' -c:a ' . $audioCodec;
-            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
-            $audioChannels = self::paramInt($params, 'audio_channels');
-            if ($audioChannels !== null && $audioChannels > 0) {
-                $cmd .= ' -ac ' . $audioChannels;
+            $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+            if ($audioCodec === 'copy') {
+                $cmd .= ' -c:a copy';
+            } else {
+                $cmd .= ' -c:a ' . $audioCodec;
+                $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+                $audioChannels = self::paramInt($params, 'audio_channels');
+                if ($audioChannels !== null && $audioChannels > 0) {
+                    $cmd .= ' -ac ' . $audioChannels;
+                }
             }
         }
 
@@ -1769,6 +1860,13 @@ class FfmpegRunner
     ): int {
         $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
 
+        // P3B multi-audio: an audio-only rendition segment never touches the video
+        // pipeline (no hwaccel, no -c:v) — it is a cheap -vn AAC extract/encode.
+        if (($params['audio_only'] ?? false) === true) {
+            $encode = $this->buildAudioSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+            return $this->launchDetachedSegment($encode, $tmp, $outFile);
+        }
+
         // Try hardware acceleration first if enabled in config
         $hwaccelConfig = $this->config['hwaccel'] ?? null;
         $hwaccelEnabled = is_array($hwaccelConfig) && ($hwaccelConfig['enabled'] ?? false) === true;
@@ -1783,6 +1881,21 @@ class FfmpegRunner
             $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
         }
 
+        return $this->launchDetachedSegment($encode, $tmp, $outFile);
+    }
+
+    /**
+     * Launches a built segment encode command detached, with the shared
+     * atomic-publish tail (mv temp → final on success, rm temp on failure).
+     *
+     * @param string $encode  The complete FFmpeg command writing to `$tmp`.
+     * @param string $tmp     The `.part-*` temp path the command writes.
+     * @param string $outFile The final segment path published on success.
+     *
+     * @return int OS process id of the launched job (0 if launch failed).
+     */
+    private function launchDetachedSegment(string $encode, string $tmp, string $outFile): int
+    {
         // Atomic publish: rename on success, clean the temp on failure.
         $inner = $encode
             . ' && mv -f ' . escapeshellarg($tmp) . ' ' . escapeshellarg($outFile)

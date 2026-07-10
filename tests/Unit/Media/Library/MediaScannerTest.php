@@ -1385,6 +1385,93 @@ class MediaScannerTest extends TestCase
     }
 
     /**
+     * Full stream set (migration 071): summarizeProbe() derives EVERY
+     * video/audio/subtitle stream — not just the primary video + audio — with
+     * channels, container title tag, and the ffprobe disposition.default flag,
+     * while data/attachment streams are still skipped.
+     */
+    public function testSummarizeProbeDerivesFullStreamSetWithTrackMetadata(): void
+    {
+        $summary = $this->summarize($this->multiTrackProbe());
+
+        $this->assertSame(
+            ['video', 'audio', 'audio', 'subtitle', 'subtitle'],
+            array_map(fn ($s) => $s['stream_type'], $summary['streams']),
+            'every playable stream is derived; the data stream is skipped'
+        );
+        $this->assertSame([0, 1, 2, 3, 4], array_map(fn ($s) => $s['stream_index'], $summary['streams']));
+
+        // Default 5.1 English audio: channels + title + disposition.default.
+        $this->assertSame('eng', $summary['streams'][1]['language']);
+        $this->assertSame(6, $summary['streams'][1]['channels']);
+        $this->assertSame('Surround 5.1', $summary['streams'][1]['title']);
+        $this->assertSame(1, $summary['streams'][1]['is_default']);
+
+        // Secondary stereo commentary track: not default.
+        $this->assertSame(2, $summary['streams'][2]['channels']);
+        $this->assertSame("Director's Commentary", $summary['streams'][2]['title']);
+        $this->assertSame(0, $summary['streams'][2]['is_default']);
+
+        // Subtitle rows: text srt (default) + bitmap pgs (persisted too — the
+        // shaper filters non-text codecs at render time, not the scanner).
+        $this->assertSame('subrip', $summary['streams'][3]['codec']);
+        $this->assertSame('eng', $summary['streams'][3]['language']);
+        $this->assertSame(1, $summary['streams'][3]['is_default']);
+        $this->assertSame('hdmv_pgs_subtitle', $summary['streams'][4]['codec']);
+        $this->assertSame('ger', $summary['streams'][4]['language']);
+        $this->assertNull($summary['streams'][4]['channels'], 'channels is audio-only');
+
+        // Video row: no channels, is_default honoured from the probe.
+        $this->assertNull($summary['streams'][0]['channels']);
+        $this->assertSame(1, $summary['streams'][0]['is_default']);
+
+        // The source blob still describes the PRIMARY video + audio only.
+        $this->assertSame('h264', $this->arrOf($summary, 'source')['video_codec']);
+        $this->assertSame('ac3', $this->arrOf($summary, 'source')['audio_codec']);
+    }
+
+    /**
+     * End-to-end scan wiring for the full set: an initial scan persists every
+     * audio + subtitle row (with disposition/channels/title) to media_streams
+     * and stamps the item's streams_probed_at marker so the lazy playback-info
+     * backfill never re-probes it.
+     */
+    public function testInitialScanPersistsSubtitleAndAllAudioStreamsAndMarksProbed(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $this->makeProbeStub($this->multiTrackProbe())
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['Inception (2010).mkv']);
+        $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+        $movies = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'movie'));
+        $this->assertCount(1, $movies);
+        $itemId = $movies[0]['id'];
+        $this->assertIsString($itemId);
+
+        $rows = $repo->streamTable[$itemId];
+        $this->assertSame(
+            ['video', 'audio', 'audio', 'subtitle', 'subtitle'],
+            array_map(fn ($r) => $r['stream_type'], $rows)
+        );
+        $this->assertSame(6, $rows[1]['channels']);
+        $this->assertSame('Surround 5.1', $rows[1]['title']);
+        $this->assertSame(1, $rows[1]['is_default']);
+        $this->assertSame(0, $rows[2]['is_default']);
+        $this->assertSame('subrip', $rows[3]['codec']);
+
+        // streams_probed_at stamped exactly once for the new item.
+        $this->assertSame([$itemId], $repo->streamsProbedMarks);
+    }
+
+    /**
      * Rescan (backfill path): the probed source is merged into the EXISTING
      * DB metadata — tmdb_id / genres are preserved and an already-present
      * positive duration is never overwritten by the probe.
@@ -1750,6 +1837,64 @@ class MediaScannerTest extends TestCase
                 ],
             ],
             'format' => ['duration' => '5433.2', 'bit_rate' => '5200000'],
+        ];
+    }
+
+    /**
+     * A realistic multi-track ffprobe result: 1080p h264, TWO audio tracks
+     * (default eng 5.1 + stereo commentary), a text srt subtitle (default), a
+     * bitmap PGS subtitle, and a data stream that must never persist.
+     *
+     * @return array<string, mixed>
+     */
+    private function multiTrackProbe(): array
+    {
+        return [
+            'streams' => [
+                [
+                    'index' => 0,
+                    'codec_type' => 'video',
+                    'codec_name' => 'h264',
+                    'width' => 1920,
+                    'height' => 1080,
+                    'bit_rate' => '5000000',
+                    'pix_fmt' => 'yuv420p',
+                    'disposition' => ['default' => 1],
+                ],
+                [
+                    'index' => 1,
+                    'codec_type' => 'audio',
+                    'codec_name' => 'ac3',
+                    'bit_rate' => '448000',
+                    'channels' => 6,
+                    'disposition' => ['default' => 1],
+                    'tags' => ['language' => 'eng', 'title' => 'Surround 5.1'],
+                ],
+                [
+                    'index' => 2,
+                    'codec_type' => 'audio',
+                    'codec_name' => 'aac',
+                    'bit_rate' => '128000',
+                    'channels' => 2,
+                    'disposition' => ['default' => 0],
+                    'tags' => ['language' => 'eng', 'title' => "Director's Commentary"],
+                ],
+                [
+                    'index' => 3,
+                    'codec_type' => 'subtitle',
+                    'codec_name' => 'subrip',
+                    'disposition' => ['default' => 1],
+                    'tags' => ['language' => 'eng'],
+                ],
+                [
+                    'index' => 4,
+                    'codec_type' => 'subtitle',
+                    'codec_name' => 'hdmv_pgs_subtitle',
+                    'tags' => ['language' => 'ger'],
+                ],
+                ['index' => 5, 'codec_type' => 'data'],
+            ],
+            'format' => ['duration' => '5433.2', 'bit_rate' => '5800000'],
         ];
     }
 
@@ -2677,12 +2822,12 @@ class MediaScannerTest extends TestCase
 class InMemoryScannerRepo extends ItemRepository
 {
             /** @var array<int, array<string, mixed>> */
-            private array $store = [];
-            private int $seq = 0;
+    private array $store = [];
+    private int $seq = 0;
             /** @var array<int, array{id: string, data: array<string, mixed>}> */
-            public array $updates = [];
+    public array $updates = [];
             /** Spy: counts how many times the canonical-key fallback was consulted. */
-            public int $canonicalLookupCount = 0;
+    public int $canonicalLookupCount = 0;
             /**
              * Faithful in-memory media_streams table (item_id => rows). A
              * deleteStreamsByItem() clears an item's rows; addStream() appends —
@@ -2691,40 +2836,40 @@ class InMemoryScannerRepo extends ItemRepository
              *
              * @var array<string, list<array<string, mixed>>>
              */
-            public array $streamTable = [];
+    public array $streamTable = [];
             /**
              * Ordered log of every media_streams mutation so a test can assert
              * the delete-BEFORE-insert ordering (the idempotency contract).
              *
              * @var list<array{op: string, item_id: string, data?: array<string, mixed>}>
              */
-            public array $streamOps = [];
+    public array $streamOps = [];
             /**
              * Each addStream() payload in call order (video row, then audio row).
              *
              * @var list<array{item_id: string, data: array<string, mixed>}>
              */
-            public array $addedStreams = [];
+    public array $addedStreams = [];
             /**
              * Item ids passed to deleteStreamsByItem(), in call order.
              *
              * @var list<string>
              */
-            public array $deletedStreamItems = [];
+    public array $deletedStreamItems = [];
             /**
              * When set to N (1-based), the Nth addStream() call throws — lets a
              * test simulate a mid-loop media_streams write failure (e.g. the
              * audio insert failing after the video insert) to exercise the
              * repairable 'failed' backfill path.
              */
-            public ?int $throwOnAddStreamCall = null;
-            private int $addStreamCalls = 0;
+    public ?int $throwOnAddStreamCall = null;
+    private int $addStreamCalls = 0;
             /**
              * When true, update() throws — lets a test drive an UNEXPECTED
              * throwable inside backfillItemSourceMetadata() (i.e. after streams
              * persist cleanly) into the guarded catch → 'failed' path.
              */
-            public bool $throwOnUpdate = false;
+    public bool $throwOnUpdate = false;
             /**
              * S8: size (path count) of every findPathsMap() call, in call
              * order — lets a test prove {@see MediaScanner::scanFlat()}'s
@@ -2734,7 +2879,7 @@ class InMemoryScannerRepo extends ItemRepository
              *
              * @var list<int>
              */
-            public array $findPathsMapCallSizes = [];
+    public array $findPathsMapCallSizes = [];
             /**
              * S8: every path passed to findByPath(), in call order — lets a
              * test prove {@see MediaScanner::processScanBatch()}'s routing
@@ -2746,24 +2891,24 @@ class InMemoryScannerRepo extends ItemRepository
              *
              * @var list<string>
              */
-            public array $findByPathCalls = [];
+    public array $findByPathCalls = [];
 
-            public function findByPath(string $path): ?array
-            {
-                $this->findByPathCalls[] = $path;
-                foreach ($this->store as $item) {
-                    if (($item['path'] ?? null) === $path) {
-                        // Mirror the real repo: expose decoded metadata under
-                        // both `metadata_json` (array) and `metadata`.
-                        $row = $item;
-                        $row['metadata'] = is_array($item['metadata_json'] ?? null)
-                            ? $item['metadata_json']
-                            : [];
-                        return $row;
-                    }
-                }
-                return null;
+    public function findByPath(string $path): ?array
+    {
+        $this->findByPathCalls[] = $path;
+        foreach ($this->store as $item) {
+            if (($item['path'] ?? null) === $path) {
+                // Mirror the real repo: expose decoded metadata under
+                // both `metadata_json` (array) and `metadata`.
+                $row = $item;
+                $row['metadata'] = is_array($item['metadata_json'] ?? null)
+                    ? $item['metadata_json']
+                    : [];
+                return $row;
             }
+        }
+        return null;
+    }
 
             /**
              * S8: batch counterpart to findByPath() — mirrors the real
@@ -2776,117 +2921,133 @@ class InMemoryScannerRepo extends ItemRepository
              * @param array<int, string> $paths
              * @return array<string, array<string, mixed>>
              */
-            public function findPathsMap(array $paths): array
-            {
-                $this->findPathsMapCallSizes[] = count($paths);
-                $wanted = array_flip($paths);
-                $map = [];
-                foreach ($this->store as $item) {
-                    $path = $item['path'] ?? null;
-                    if (!is_string($path) || !isset($wanted[$path])) {
-                        continue;
-                    }
-                    $row = $item;
-                    $row['metadata'] = is_array($item['metadata_json'] ?? null)
-                        ? $item['metadata_json']
-                        : [];
-                    $map[$path] = $row;
-                }
-                return $map;
+    public function findPathsMap(array $paths): array
+    {
+        $this->findPathsMapCallSizes[] = count($paths);
+        $wanted = array_flip($paths);
+        $map = [];
+        foreach ($this->store as $item) {
+            $path = $item['path'] ?? null;
+            if (!is_string($path) || !isset($wanted[$path])) {
+                continue;
             }
+            $row = $item;
+            $row['metadata'] = is_array($item['metadata_json'] ?? null)
+                ? $item['metadata_json']
+                : [];
+            $map[$path] = $row;
+        }
+        return $map;
+    }
 
-            public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array
-            {
-                $this->canonicalLookupCount++;
-                if ($canonicalKey === '') {
-                    return null;
-                }
-                foreach ($this->store as $item) {
-                    $meta = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
-                    $storedKey = is_string($meta['canonical_key'] ?? null) ? $meta['canonical_key'] : '';
-                    if (
-                        ($item['library_id'] ?? null) === $libraryId
-                        && ($item['type'] ?? null) === $type
-                        && ($item['parent_id'] ?? null) === null
-                        && $storedKey === $canonicalKey
-                    ) {
-                        $row = $item;
-                        $row['metadata'] = $meta;
-                        return $row;
-                    }
-                }
-                return null;
+    public function findTopLevelByCanonical(string $libraryId, string $type, string $canonicalKey): ?array
+    {
+        $this->canonicalLookupCount++;
+        if ($canonicalKey === '') {
+            return null;
+        }
+        foreach ($this->store as $item) {
+            $meta = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
+            $storedKey = is_string($meta['canonical_key'] ?? null) ? $meta['canonical_key'] : '';
+            if (
+                ($item['library_id'] ?? null) === $libraryId
+                && ($item['type'] ?? null) === $type
+                && ($item['parent_id'] ?? null) === null
+                && $storedKey === $canonicalKey
+            ) {
+                $row = $item;
+                $row['metadata'] = $meta;
+                return $row;
             }
+        }
+        return null;
+    }
 
-            public function create(array $data): string
-            {
-                $id = 'id-' . (++$this->seq);
-                $this->store[] = [
-                    'id' => $id,
-                    'library_id' => $data['library_id'] ?? null,
-                    'parent_id' => $data['parent_id'] ?? null,
-                    'name' => $data['name'] ?? null,
-                    'type' => $data['type'] ?? null,
-                    'path' => $data['path'] ?? null,
-                    'metadata_json' => $data['metadata_json'] ?? [],
-                ];
-                return $id;
-            }
+    public function create(array $data): string
+    {
+        $id = 'id-' . (++$this->seq);
+        $this->store[] = [
+            'id' => $id,
+            'library_id' => $data['library_id'] ?? null,
+            'parent_id' => $data['parent_id'] ?? null,
+            'name' => $data['name'] ?? null,
+            'type' => $data['type'] ?? null,
+            'path' => $data['path'] ?? null,
+            'metadata_json' => $data['metadata_json'] ?? [],
+        ];
+        return $id;
+    }
 
-            public function update(string $id, array $data): void
-            {
-                if ($this->throwOnUpdate) {
-                    throw new \RuntimeException('simulated metadata update failure');
+    public function update(string $id, array $data): void
+    {
+        if ($this->throwOnUpdate) {
+            throw new \RuntimeException('simulated metadata update failure');
+        }
+        $this->updates[] = ['id' => $id, 'data' => $data];
+        foreach ($this->store as &$item) {
+            if (($item['id'] ?? null) === $id) {
+                if (array_key_exists('metadata_json', $data)) {
+                    $item['metadata_json'] = $data['metadata_json'];
                 }
-                $this->updates[] = ['id' => $id, 'data' => $data];
-                foreach ($this->store as &$item) {
-                    if (($item['id'] ?? null) === $id) {
-                        if (array_key_exists('metadata_json', $data)) {
-                            $item['metadata_json'] = $data['metadata_json'];
-                        }
-                        return;
-                    }
-                }
+                return;
             }
+        }
+    }
 
-            public function deleteStreamsByItem(string $itemId): void
-            {
-                $this->deletedStreamItems[] = $itemId;
-                $this->streamOps[] = ['op' => 'delete', 'item_id' => $itemId];
-                unset($this->streamTable[$itemId]);
-            }
+            /**
+             * Spy: item ids stamped by markStreamsProbed(), in call order —
+             * the streams_probed_at marker that guards the lazy playback-info
+             * backfill (migration 071). Kept OUT of $streamOps so the
+             * delete-before-insert ordering assertions stay focused on the
+             * media_streams mutations themselves.
+             *
+             * @var list<string>
+             */
+    public array $streamsProbedMarks = [];
+
+    public function markStreamsProbed(string $itemId): void
+    {
+        $this->streamsProbedMarks[] = $itemId;
+    }
+
+    public function deleteStreamsByItem(string $itemId): void
+    {
+        $this->deletedStreamItems[] = $itemId;
+        $this->streamOps[] = ['op' => 'delete', 'item_id' => $itemId];
+        unset($this->streamTable[$itemId]);
+    }
 
             /**
              * @param array<string, mixed> $streamData
              */
-            public function addStream(string $itemId, array $streamData): string
-            {
-                $this->addStreamCalls++;
-                if ($this->throwOnAddStreamCall !== null && $this->addStreamCalls === $this->throwOnAddStreamCall) {
-                    throw new \RuntimeException('simulated media_streams insert failure');
-                }
-                $this->addedStreams[] = ['item_id' => $itemId, 'data' => $streamData];
-                $this->streamOps[] = ['op' => 'add', 'item_id' => $itemId, 'data' => $streamData];
-                $this->streamTable[$itemId][] = $streamData;
-                return 'stream-' . $this->addStreamCalls;
-            }
+    public function addStream(string $itemId, array $streamData): string
+    {
+        $this->addStreamCalls++;
+        if ($this->throwOnAddStreamCall !== null && $this->addStreamCalls === $this->throwOnAddStreamCall) {
+            throw new \RuntimeException('simulated media_streams insert failure');
+        }
+        $this->addedStreams[] = ['item_id' => $itemId, 'data' => $streamData];
+        $this->streamOps[] = ['op' => 'add', 'item_id' => $itemId, 'data' => $streamData];
+        $this->streamTable[$itemId][] = $streamData;
+        return 'stream-' . $this->addStreamCalls;
+    }
 
             /**
              * Seed a pre-existing row (simulating a prior scan), returning its id.
              *
              * @param array<string, mixed> $row
              */
-            public function seed(array $row): string
-            {
-                $id = $row['id'] ?? ('id-' . (++$this->seq));
-                $id = is_string($id) ? $id : 'id-' . $this->seq;
-                $this->store[] = array_merge(['id' => $id], $row);
-                return $id;
-            }
+    public function seed(array $row): string
+    {
+        $id = $row['id'] ?? ('id-' . (++$this->seq));
+        $id = is_string($id) ? $id : 'id-' . $this->seq;
+        $this->store[] = array_merge(['id' => $id], $row);
+        return $id;
+    }
 
             /** @return array<int, array<string, mixed>> */
-            public function items(): array
-            {
-                return $this->store;
-            }
+    public function items(): array
+    {
+        return $this->store;
+    }
 }

@@ -1409,6 +1409,8 @@ class MediaScanner
      * Derive the total duration, a compact source technical summary, and the
      * media_streams rows from a SINGLE {@see FfmpegRunner::probe()} result.
      * Pure and side-effect free so one probe feeds every downstream write.
+     * Public so the lazy playback-info backfill ({@see StreamProbeBackfill})
+     * derives rows from the EXACT same logic and the two paths never drift.
      *
      * The `source` summary is the fixed shape `{width, height, video_codec,
      * video_bitrate, pix_fmt, audio_codec, audio_bitrate}` (each value null when
@@ -1423,6 +1425,15 @@ class MediaScanner
      * transcode-time paths agree on the stored value. `source` is null and
      * `streams` empty when the file exposes neither a video nor an audio stream.
      *
+     * `streams` is the FULL stream set — EVERY video/audio/subtitle stream (not
+     * just the primary video + audio) with its global ffprobe `stream_index`,
+     * codec, language, bitrate, video dimensions, audio `channels`, container
+     * `title` tag, and `is_default` (ffprobe `disposition.default`) — so the
+     * playback-info track menus (see {@see StreamTrackShaper}) can offer every
+     * audio and subtitle track. Embedded cover-art "video" streams
+     * (`disposition.attached_pic`) are excluded unless they are the promoted
+     * fallback (a file whose ONLY video stream is the poster).
+     *
      * @param array<string, mixed> $probe Raw ffprobe result (streams + format).
      * @return array{
      *     duration_seconds: int|null,
@@ -1430,7 +1441,7 @@ class MediaScanner
      *     streams: list<array<string, mixed>>
      * }
      */
-    private static function summarizeProbe(array $probe): array
+    public static function summarizeProbe(array $probe): array
     {
         $rawStreams = is_array($probe['streams'] ?? null) ? $probe['streams'] : [];
         $format = is_array($probe['format'] ?? null) ? $probe['format'] : [];
@@ -1507,28 +1518,47 @@ class MediaScanner
             'audio_bitrate' => $audioBitrate,
         ];
 
+        // Persist the FULL stream set — every video/audio/subtitle stream —
+        // so the playback-info track menus can list all audio tracks and
+        // subtitles. The primary video row reuses $videoBitrate (with its
+        // format-level fallback) so the ABR ladder's source ceiling and the
+        // stored row agree; every other row carries its own bit_rate.
         $streams = [];
-        if ($video !== null) {
+        $nextIndex = 0;
+        foreach ($rawStreams as $stream) {
+            if (!is_array($stream)) {
+                continue;
+            }
+            $codecType = $stream['codec_type'] ?? null;
+            if (!in_array($codecType, ['video', 'audio', 'subtitle'], true)) {
+                continue; // data/attachment streams have no playable track
+            }
+            // Skip embedded cover art unless it was promoted as the only
+            // "video" the file has (the $video fallback above).
+            if ($codecType === 'video' && self::isAttachedPic($stream) && $stream !== $video) {
+                continue;
+            }
+
+            $isVideo = $codecType === 'video';
+            $isAudio = $codecType === 'audio';
+            $index = self::intOrNull($stream['index'] ?? null) ?? $nextIndex;
+            $bitrate = ($isVideo && $stream === $video)
+                ? $videoBitrate
+                : self::intOrNull($stream['bit_rate'] ?? null);
+
             $streams[] = [
-                'stream_index' => $videoIndex ?? 0,
-                'stream_type' => 'video',
-                'codec' => self::stringOrNull($video['codec_name'] ?? null),
-                'language' => self::streamLanguage($video),
-                'bitrate' => $videoBitrate,
-                'width' => self::intOrNull($video['width'] ?? null),
-                'height' => self::intOrNull($video['height'] ?? null),
+                'stream_index' => $index,
+                'stream_type' => $codecType,
+                'codec' => self::stringOrNull($stream['codec_name'] ?? null),
+                'language' => self::streamLanguage($stream),
+                'bitrate' => $bitrate,
+                'width' => $isVideo ? self::intOrNull($stream['width'] ?? null) : null,
+                'height' => $isVideo ? self::intOrNull($stream['height'] ?? null) : null,
+                'channels' => $isAudio ? self::intOrNull($stream['channels'] ?? null) : null,
+                'title' => self::streamTitle($stream),
+                'is_default' => self::isDefaultDisposition($stream) ? 1 : 0,
             ];
-        }
-        if ($audio !== null) {
-            $streams[] = [
-                'stream_index' => $audioIndex ?? ($video !== null ? 1 : 0),
-                'stream_type' => 'audio',
-                'codec' => self::stringOrNull($audio['codec_name'] ?? null),
-                'language' => self::streamLanguage($audio),
-                'bitrate' => $audioBitrate,
-                'width' => null,
-                'height' => null,
-            ];
+            $nextIndex = $index + 1;
         }
 
         return ['duration_seconds' => $duration, 'source' => $source, 'streams' => $streams];
@@ -1603,6 +1633,53 @@ class MediaScanner
     }
 
     /**
+     * Extract a stream's human-readable title (ffprobe `tags.title`, e.g.
+     * "Director's Commentary" / "English SDH"), truncated to the
+     * media_streams.title column width (255). Returns null when absent or
+     * empty. Accepts a mixed value so callers never need to pre-narrow the raw
+     * stream array.
+     *
+     * @param mixed $stream Raw ffprobe stream entry.
+     */
+    private static function streamTitle(mixed $stream): ?string
+    {
+        if (!is_array($stream)) {
+            return null;
+        }
+        $tags = $stream['tags'] ?? null;
+        if (!is_array($tags)) {
+            return null;
+        }
+        $title = $tags['title'] ?? null;
+        if (!is_string($title) || $title === '') {
+            return null;
+        }
+        return mb_substr($title, 0, 255);
+    }
+
+    /**
+     * Whether an ffprobe stream carries the default disposition flag
+     * (`disposition.default = 1`) — the container's preferred track of its
+     * type, surfaced as media_streams.is_default so the player can pre-select
+     * it. Accepts a mixed value so callers never need to pre-narrow the raw
+     * stream array.
+     *
+     * @param mixed $stream Raw ffprobe stream entry.
+     */
+    private static function isDefaultDisposition(mixed $stream): bool
+    {
+        if (!is_array($stream)) {
+            return false;
+        }
+        $disposition = $stream['disposition'] ?? null;
+        if (!is_array($disposition)) {
+            return false;
+        }
+        $flag = $disposition['default'] ?? null;
+        return is_numeric($flag) && (int) $flag === 1;
+    }
+
+    /**
      * Replace a media item's media_streams rows with the freshly-probed set,
      * reporting whether the replacement fully succeeded.
      *
@@ -1612,6 +1689,12 @@ class MediaScanner
      * return so callers can leave the row repairable (see
      * {@see backfillItemSourceMetadata()}). An empty stream set, or an empty
      * item id, is a no-op success.
+     *
+     * On full success the item is also stamped `streams_probed_at` (see
+     * {@see ItemRepository::markStreamsProbed()}) so the lazy playback-info
+     * backfill ({@see StreamProbeBackfill}) never re-probes an item whose full
+     * stream set was already persisted — including files that genuinely have
+     * one audio track and no subtitles.
      *
      * @param string                     $itemId  Media item UUID.
      * @param list<array<string, mixed>> $streams Stream rows for {@see ItemRepository::addStream()}.
@@ -1629,6 +1712,7 @@ class MediaScanner
             foreach ($streams as $stream) {
                 $this->itemRepository->addStream($itemId, $stream);
             }
+            $this->itemRepository->markStreamsProbed($itemId);
             return true;
         } catch (\Throwable $e) {
             $this->logger->debug('Persisting media streams failed; continuing scan', [

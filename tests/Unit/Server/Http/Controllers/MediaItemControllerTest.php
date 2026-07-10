@@ -658,6 +658,142 @@ class MediaItemControllerTest extends TestCase
     }
 
     /**
+     * audio_tracks entries carry the P3B selection-menu fields: per-type
+     * `index`, global `stream_index` and a `default` flag (first track promoted
+     * when no disposition is stored) — alongside the pre-existing fields.
+     */
+    public function testGetPlaybackInfoAudioTracksCarryIndexStreamIndexAndDefault(): void
+    {
+        $controller = $this->controllerForItemWithStreams(
+            $this->baseItemRow((string) json_encode([])),
+            $this->trackStreamRows(),
+        );
+
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        $this->assertSame(200, $response->statusCode);
+        /** @var array{audio_tracks: list<array<string, mixed>>} $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertCount(2, $body['audio_tracks']);
+
+        $first = $body['audio_tracks'][0];
+        $this->assertSame('s-a0', $first['id']);
+        $this->assertSame(0, $first['index']);
+        $this->assertSame(1, $first['stream_index']);
+        $this->assertSame('aac', $first['codec']);
+        $this->assertSame('eng', $first['language']);
+        $this->assertTrue($first['default']);
+
+        $second = $body['audio_tracks'][1];
+        $this->assertSame(1, $second['index']);
+        $this->assertSame(2, $second['stream_index']);
+        $this->assertFalse($second['default']);
+
+        // Pre-existing P3B-S2 fields must survive on every track.
+        foreach ($body['audio_tracks'] as $track) {
+            foreach (['id', 'codec', 'language', 'channels', 'bitrate', 'title'] as $key) {
+                $this->assertArrayHasKey($key, $track);
+            }
+        }
+    }
+
+    /**
+     * subtitle_tracks lists the item's TEXT subtitle streams with the ffmpeg
+     * `0:s:N` ordinal the extraction endpoint expects (bitmaps consume an
+     * ordinal but are not listed) and a SIGNED url a <track> element can fetch
+     * without a Bearer header.
+     */
+    public function testGetPlaybackInfoSubtitleTracksShapeAndSignedUrl(): void
+    {
+        $controller = $this->controllerForItemWithStreams(
+            $this->baseItemRow((string) json_encode([])),
+            $this->trackStreamRows(),
+        );
+
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        /** @var array{subtitle_tracks: list<array<string, mixed>>} $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertArrayHasKey('subtitle_tracks', $body);
+        // The PGS bitmap track is skipped, but its 0:s:N ordinal is preserved.
+        $this->assertCount(2, $body['subtitle_tracks']);
+        $this->assertSame([0, 2], array_column($body['subtitle_tracks'], 'index'));
+        $this->assertSame([3, 5], array_column($body['subtitle_tracks'], 'stream_index'));
+        $this->assertSame(['eng', 'Signs'], array_column($body['subtitle_tracks'], 'label'));
+        $this->assertSame(['subrip', 'ass'], array_column($body['subtitle_tracks'], 'codec'));
+
+        foreach ([0 => 0, 1 => 2] as $pos => $ordinal) {
+            $url = $body['subtitle_tracks'][$pos]['url'];
+            $this->assertIsString($url);
+            $path = "/api/v1/media/ep-1/subtitles/{$ordinal}";
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $q);
+            /** @var array<string, string> $q */
+            $this->assertTrue(
+                \Phlix\Auth\SignedUrl::fromEnv()->verify($path, (string) ($q['exp'] ?? ''), (string) ($q['sig'] ?? '')),
+                "subtitle_tracks[$pos].url must be a verifiable signed URL for {$path}",
+            );
+        }
+    }
+
+    /**
+     * An item with no media_streams rows degrades to empty track arrays (the
+     * keys are still present for the player).
+     */
+    public function testGetPlaybackInfoTrackArraysEmptyWhenNoStreams(): void
+    {
+        $controller = $this->controllerForItemWithStreams(
+            $this->baseItemRow((string) json_encode([])),
+            [],
+        );
+
+        $response = $controller->getPlaybackInfo(new Request(), ['id' => 'ep-1']);
+        /** @var array<string, mixed> $body */
+        $body = json_decode($response->body, true);
+
+        $this->assertSame([], $body['audio_tracks']);
+        $this->assertSame([], $body['subtitle_tracks']);
+    }
+
+    /**
+     * A representative media_streams row set (video + 2 audio + text/bitmap/text
+     * subtitles) shared by the track-shape tests. Matches the shape
+     * ItemRepository::getItemStreams() returns.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function trackStreamRows(): array
+    {
+        return [
+            ['id' => 's-v0', 'stream_index' => 0, 'stream_type' => 'video', 'codec' => 'h264', 'language' => null, 'bitrate' => 6000000],
+            ['id' => 's-a0', 'stream_index' => 1, 'stream_type' => 'audio', 'codec' => 'aac', 'language' => 'eng', 'bitrate' => 128000],
+            ['id' => 's-a1', 'stream_index' => 2, 'stream_type' => 'audio', 'codec' => 'ac3', 'language' => 'fre', 'bitrate' => 384000],
+            ['id' => 's-s0', 'stream_index' => 3, 'stream_type' => 'subtitle', 'codec' => 'subrip', 'language' => 'eng', 'bitrate' => null],
+            ['id' => 's-s1', 'stream_index' => 4, 'stream_type' => 'subtitle', 'codec' => 'hdmv_pgs_subtitle', 'language' => 'eng', 'bitrate' => null],
+            ['id' => 's-s2', 'stream_index' => 5, 'stream_type' => 'subtitle', 'codec' => 'ass', 'language' => 'jpn', 'title' => 'Signs', 'bitrate' => null],
+        ];
+    }
+
+    /**
+     * Builds a MediaItemController whose repository returns $itemRow for item
+     * queries and $streamRows for media_streams queries.
+     *
+     * @param array<string, mixed>             $itemRow
+     * @param list<array<string, mixed>>       $streamRows
+     */
+    private function controllerForItemWithStreams(array $itemRow, array $streamRows): MediaItemController
+    {
+        $db = $this->createMockConnection();
+        $db->method('query')->willReturnCallback(
+            static fn (string $sql): array => str_contains($sql, 'media_streams') ? $streamRows : [$itemRow]
+        );
+        $itemRepo = new ItemRepository($db);
+        $candidateRepo = new MarkerCandidateRepository($itemRepo);
+        $markerService = new MarkerService($itemRepo, $candidateRepo);
+
+        return new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager(), $this->createTrickplayController(), $this->createMockChapterMarkerService());
+    }
+
+    /**
      * Builds a MediaItemController whose repository returns exactly $itemRow.
      *
      * @param array<string, mixed> $itemRow

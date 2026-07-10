@@ -1713,9 +1713,14 @@ class ItemRepository
         /** @var list<array<string, mixed>> $items */
         $items = $this->hydrateRows($results);
 
-        // P5-S2: filter items by profile tag restrictions (blocked/allowed tags)
+        // P5-S2: filter items by profile tag restrictions (blocked/allowed tags).
+        // $total must stay the COUNT(*) of the whole result set, only reduced by
+        // what the tag filter removed from THIS page — overwriting it with
+        // count($items) (== the page size) made the sparse library grid size its
+        // virtual list at one page and truncate the library view.
+        $pageCount = count($items);
         $items = $this->doFilterItemsByTags($items);
-        $total = count($items);
+        $total = max(0, $total - ($pageCount - count($items)));
 
         return [
             'items' => $items,

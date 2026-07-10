@@ -46,21 +46,23 @@ final class MarkerService
      * @param int $startMs Start time in milliseconds
      * @param int $endMs End time in milliseconds
      * @param string $label Label/title for the marker
+     * @param string|null $userId Owning user ID (null for legacy system markers)
      * @param string|null $thumbnailPath Optional thumbnail file path
      * @return Marker The created/updated marker
      */
-    public function upsert(string $mediaItemId, MarkerType $type, int $startMs, int $endMs, string $label, ?string $thumbnailPath = null): Marker
+    public function upsert(string $mediaItemId, MarkerType $type, int $startMs, int $endMs, string $label, ?string $userId = null, ?string $thumbnailPath = null): Marker
     {
         $this->db->query(
-            'INSERT INTO media_markers (media_item_id, marker_type, start_time_ms, end_time_ms, label, thumbnail_path)
-             VALUES (?, ?, ?, ?, ?, ?)
+            'INSERT INTO media_markers (media_item_id, marker_type, start_time_ms, end_time_ms, label, user_id, thumbnail_path)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                marker_type = VALUES(marker_type),
                start_time_ms = VALUES(start_time_ms),
                end_time_ms = VALUES(end_time_ms),
                label = VALUES(label),
+               user_id = VALUES(user_id),
                thumbnail_path = VALUES(thumbnail_path)',
-            [$mediaItemId, $type->value, $startMs, $endMs, $label, $thumbnailPath]
+            [$mediaItemId, $type->value, $startMs, $endMs, $label, $userId, $thumbnailPath]
         );
         $id = (int) $this->db->lastInsertId();
         /** @var array<array<string, mixed>> $rows */

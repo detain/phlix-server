@@ -1631,52 +1631,40 @@ class ItemRepository
         $limit = $this->normalizeLimit($params['limit'] ?? 50);
         $offset = $this->normalizeOffset($params['offset'] ?? 0);
 
-        // When sort=rating or minRating is set, we need the metadata_ratings
-        // LEFT JOIN + GROUP BY + HAVING. The join is built in buildFilters()
-        // only when minRating is set; for sort=rating we add it here as well.
+        // P1-S2: When sort=rating, use the indexed rating_score column directly
+        // instead of the costly LEFT JOIN + AVG() + GROUP BY approach. The
+        // rating_score column on media_items is kept in sync by RatingService
+        // and indexed for efficient ORDER BY / WHERE queries.
         $sortIsRating = $sort === 'rating_sort';
-        $needsRatingJoin = $sortIsRating || $minRating !== null;
-
-        if ($needsRatingJoin && $ratingJoin === '') {
-            $ratingJoin = 'LEFT JOIN metadata_ratings r ON r.media_item_id = media_items.id';
-        }
 
         $baseWhere = implode(' AND ', $wheres);
         $orderClause = $this->buildOrderClause($sort, $order);
 
-        if ($needsRatingJoin) {
-            // Rating sort: ORDER BY average numeric score from metadata_ratings.
-            if ($sortIsRating) {
-                $orderClause = 'avg_rating DESC, ' . self::titleOrder('desc');
-            }
-            // HAVING clause: items with no rating row get COALESCE(avg_rating, 0) = 0.
-            $having = $minRating !== null
-                ? 'HAVING COALESCE(avg_rating, 0) >= ?'
-                : '';
-            if ($minRating !== null) {
-                $bindings[] = $minRating;
-            }
-
-            $countSql = "SELECT COUNT(DISTINCT media_items.id) as count"
-                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}";
-            $countResult = $this->db->query($countSql, $bindings);
-            $total = $this->extractCount($countResult);
-
-            $selectSql = "SELECT media_items.*, AVG(r.score) AS avg_rating"
-                . " FROM media_items {$ratingJoin} WHERE {$baseWhere}"
-                . " GROUP BY media_items.id {$having}"
-                . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
-            $fetchBindings = array_merge($bindings, [$limit, $offset]);
-            $results = $this->db->query($selectSql, $fetchBindings);
-        } else {
-            $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . $baseWhere;
-            $countResult = $this->db->query($countSql, $bindings);
-            $total = $this->extractCount($countResult);
-
-            $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
-            $fetchBindings = array_merge($bindings, [$limit, $offset]);
-            $results = $this->db->query($selectSql, $fetchBindings);
+        // P1-S2: Rating sort uses the denormalized rating_score column (indexed).
+        // Items with no rating (rating_score IS NULL) sort to the end.
+        if ($sortIsRating) {
+            $orderClause = 'rating_score DESC, ' . self::titleOrder('desc');
         }
+
+        // P1-S2: Rating filter uses the denormalized rating_score column (indexed).
+        // Items with no rating (rating_score IS NULL) are excluded by the WHERE clause.
+        if ($minRating !== null) {
+            $wheres[] = 'rating_score >= ?';
+            $bindings[] = $minRating;
+            $baseWhere = implode(' AND ', $wheres);
+        }
+
+        // Note: $ratingJoin from buildFilters() is no longer used for rating
+        // sort/filter; we use the indexed media_items.rating_score instead.
+        // The buildFilters() method no longer sets $ratingJoin for minRating.
+
+        $countSql = 'SELECT COUNT(*) as count FROM media_items WHERE ' . $baseWhere;
+        $countResult = $this->db->query($countSql, $bindings);
+        $total = $this->extractCount($countResult);
+
+        $selectSql = 'SELECT * FROM media_items WHERE ' . $baseWhere . " ORDER BY {$orderClause} LIMIT ? OFFSET ?";
+        $fetchBindings = array_merge($bindings, [$limit, $offset]);
+        $results = $this->db->query($selectSql, $fetchBindings);
 
         /** @var list<array<string, mixed>> $items */
         $items = $this->hydrateRows($results);

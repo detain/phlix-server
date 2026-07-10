@@ -1779,11 +1779,10 @@ class ItemRepositoryTest extends TestCase
 
     public function testQueryRatingSortOrdersByMaterializedContentRatingColumn(): void
     {
-        // Browse "sort by rating" (?sort=rating → rating_sort) must build its
-        // restriction-rank CASE off the materialized `content_rating` column
-        // (migration 050), NOT the old JSON_EXTRACT(metadata_json,'$.rating') blob
-        // read. This is a live query() ORDER-BY path S7 rewrote; without this case
-        // the branch is uncovered and a regression to the JSON read would pass.
+        // P1-S2: Browse "sort by rating" (?sort=rating → rating_sort) now uses the
+        // denormalized `rating_score` column directly instead of CASE/WHEN on
+        // `content_rating`. Items with no rating (rating_score IS NULL) sort to
+        // the end via 'rating_score DESC' — NULLS LAST is implicit in DESC ordering.
         $db = $this->createMock(Connection::class);
         $db->expects($this->exactly(2))
             ->method('query')
@@ -1791,11 +1790,13 @@ class ItemRepositoryTest extends TestCase
                 if (str_contains($sql, 'COUNT(*)') || str_contains($sql, 'metadata_ratings')) {
                     return true;
                 }
-                // Rank CASE reads the indexed column, article-insensitive tiebreak
-                // follows, and the old JSON extraction is gone from the ORDER BY.
-                return str_contains($sql, "WHEN content_rating = 'G' THEN")
-                    && str_contains($sql, 'ELSE 999 END')
-                    && str_contains($sql, ', sort_title ASC, name ASC')
+                // Rating sort uses the indexed rating_score column directly.
+                // The old JSON extraction and CASE/WHEN content_rating approach
+                // are both gone from the ORDER BY.
+                return str_contains($sql, 'rating_score DESC')
+                    && str_contains($sql, 'sort_title')
+                    && str_contains($sql, 'name')
+                    && !str_contains($sql, "WHEN content_rating = 'G' THEN")
                     && !str_contains($sql, "JSON_EXTRACT(metadata_json, '\$.rating')");
             }))
             ->willReturnOnConsecutiveCalls([['count' => 0]], []);

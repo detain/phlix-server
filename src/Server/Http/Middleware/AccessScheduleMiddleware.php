@@ -81,14 +81,15 @@ final class AccessScheduleMiddleware
             return null;
         }
 
-        // Get the profile ID as an integer
-        // Note: The access_schedules table uses INT UNSIGNED profile_id
-        // If the profile ID from UserProfileManager is a UUID string,
-        // this would need conversion. Assuming it's already an int for now.
+        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+        // a profile ID, fail closed (deny access) rather than silently allowing
+        // unauthenticated or unprofiled users through the schedule check.
         $profileId = $this->resolveProfileId($profile);
         if ($profileId === null) {
-            // Cannot determine profile ID for schedule check
-            return null;
+            return (new Response())->status(403)->json([
+                'error' => 'AccessScheduled',
+                'message' => 'Profile not found; access denied',
+            ]);
         }
 
         // Check if access is allowed

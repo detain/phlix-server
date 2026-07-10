@@ -217,9 +217,19 @@ class TmdbProvider implements MetadataProviderInterface
             return [];
         }
 
-        $preferredLocale = MetadataValue::asNullableString($options['preferred_locale'] ?? null);
-        if ($preferredLocale !== null) {
-            $this->applyLocalizedFieldFallback($response, $externalId, $preferredLocale);
+        // P1-S4: Accept a configurable fallback chain instead of the hardcoded
+        // [preferredLocale, 'en-US', originalLocale] chain. This allows the
+        // server operator to define which locales TMDB should try for missing
+        // titles/overviews/taglines via the metadata_language_preference config.
+        $fallbackChain = MetadataValue::asList($options['language_fallback_chain'] ?? null);
+        if ($fallbackChain !== []) {
+            $this->applyLanguageFallbackChain($response, $externalId, $fallbackChain);
+        } else {
+            // Fall back to legacy single-locale behavior for backwards compat.
+            $preferredLocale = MetadataValue::asNullableString($options['preferred_locale'] ?? null);
+            if ($preferredLocale !== null) {
+                $this->applyLocalizedFieldFallback($response, $externalId, $preferredLocale);
+            }
         }
 
         return $this->formatMovieDetails($response);
@@ -237,12 +247,58 @@ class TmdbProvider implements MetadataProviderInterface
     }
 
     /**
+     * Fill missing localizable fields (title, overview, tagline) by trying a
+     * configurable fallback chain of locale codes.
+     *
+     * P1-S4: Replaces the legacy hardcoded chain with an operator-configured
+     * list passed via the `language_fallback_chain` option. Each locale is tried
+      * in order until all three fields are populated or the chain is exhausted.
+      *
+      * @param array<string, mixed> &$response   The response array to enrich (modified in place)
+      * @param string              $externalId  TMDB movie ID for fallback requests
+      * @param list<mixed>         $chain       Ordered list of locale codes to try
+      */
+    private function applyLanguageFallbackChain(array &$response, string $externalId, array $chain): void
+    {
+        $localizableFields = ['title', 'overview', 'tagline'];
+        // Filter to only string locale codes at runtime (defense in depth)
+        $chain = array_values(array_filter($chain, fn($v) => is_string($v)));
+        $needsFallback = [];
+        foreach ($localizableFields as $field) {
+            if (empty($response[$field])) {
+                $needsFallback[$field] = true;
+            }
+        }
+        if ($needsFallback === []) {
+            return;
+        }
+        foreach ($chain as $locale) {
+            if ($locale === '' || $locale === 'en-US') {
+                // Skip redundant or pointless locales in the chain
+                continue;
+            }
+            $fallbackResponse = $this->http->get("/movie/{$externalId}", ['language' => $locale]);
+            foreach (array_keys($needsFallback) as $field) {
+                if (!empty($fallbackResponse[$field])) {
+                    $response[$field] = $fallbackResponse[$field];
+                    unset($needsFallback[$field]);
+                }
+            }
+            if ($needsFallback === []) {
+                break;
+            }
+        }
+    }
+
+    /**
      * Fill missing localizable fields (title, overview, tagline) by trying a fallback
      * chain: preferred_locale → en-US → original_language.
      *
      * @param array<string, mixed> &$response   The response array to enrich (modified in place)
      * @param string              $externalId  TMDB movie ID for fallback requests
      * @param string              $preferredLocale The user's preferred locale
+     *
+     * @deprecated P1-S4: Use applyLanguageFallbackChain() with a configurable chain instead.
      */
     private function applyLocalizedFieldFallback(array &$response, string $externalId, string $preferredLocale): void
     {

@@ -473,6 +473,8 @@ Administrative tasks are exposed through the `bin/phlix` command-line tool (buil
 ```bash
 php bin/phlix list       # list every available command
 php bin/phlix migrate    # apply migrations/*.sql against config/database.php
+php bin/phlix media:dedupe-paths           # preview duplicate-path merges (dry-run)
+php bin/phlix media:dedupe-paths --apply   # merge duplicate media items sharing a path
 ```
 
 `php bin/phlix migrate` is the supported equivalent of `php scripts/run-migrations.php` — both delegate to the same `Phlix\Common\Database\MigrationRunner` service, applying every `migrations/*.sql` file on each run (idempotent; no tracking table). More commands are added in later steps.

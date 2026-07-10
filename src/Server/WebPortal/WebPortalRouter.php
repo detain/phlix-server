@@ -984,6 +984,25 @@ class WebPortalRouter
         // Get marker data for skip buttons
         $skipSpec = $this->playbackMarkerService->getFullSpec($params['id']);
 
+        // P3B-S2: Include audio_tracks from media_streams for multi-audio playback.
+        $audioTracks = [];
+        $itemId = is_string($item['id'] ?? null) ? $item['id'] : '';
+        $streams = $this->itemRepository->getItemStreams($itemId);
+        foreach ($streams as $stream) {
+            if (($stream['stream_type'] ?? '') === 'audio') {
+                $audioTracks[] = [
+                    'id' => $stream['id'] ?? '',
+                    'codec' => $stream['codec'] ?? '',
+                    'language' => $stream['language'] ?? 'und',
+                    'channels' => is_scalar($stream['channels'] ?? null) ? (int) $stream['channels'] : 0,
+                    'bitrate' => isset($stream['bitrate']) && is_scalar($stream['bitrate'])
+                        ? (int) $stream['bitrate']
+                        : null,
+                    'title' => $stream['title'] ?? null,
+                ];
+            }
+        }
+
         // Build playback info
         $playbackInfo = [
             'id' => $item['id'],
@@ -998,6 +1017,7 @@ class WebPortalRouter
                 ],
             ],
             'markers' => $skipSpec->toArray(),
+            'audio_tracks' => $audioTracks,
         ];
 
         return (new Response())->json(['playback_info' => $playbackInfo]);

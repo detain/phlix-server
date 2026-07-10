@@ -962,10 +962,12 @@ final class RelayConsumer
      *
      * The hub sends this when the browser abandons a streaming request so the
      * server can stop transferring bytes for that request early. The request id
-     * is carried in the frame's seq field. In the current synchronous dispatch
-     * model the request has already completed by the time this arrives, so this
-     * is a no-op with a debug log. It exists for symmetry and to prevent the
-     * unexpected-frame close path.
+     * is carried in the frame's seq field.
+     *
+     * This closes the local connection for the associated channel, which
+     * interrupts any in-progress HTTP response streaming. Safe to call even
+     * if the request already completed — closeLocalConnection is a no-op for
+     * unknown or already-closed channels.
      *
      * @param RelayFrame $frame HTTP_CANCEL frame; request id in seq.
      *
@@ -975,9 +977,16 @@ final class RelayConsumer
      */
     private function onHttpCancel(RelayFrame $frame): void
     {
+        $channelId = $frame->channelId();
+
         $this->logger->debug('RelayConsumer: HTTP_CANCEL received from hub', [
-            'request_id' => $frame->channelId(),
+            'request_id' => $channelId,
         ]);
+
+        // Close the local connection to abort any in-progress streaming response.
+        // The requestId in the frame IS the channelId (set by the hub at
+        // CLIENT_CONNECT time and echoed in every client-scoped frame).
+        $this->closeLocalConnection($channelId);
     }
 
     /**

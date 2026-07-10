@@ -145,7 +145,8 @@ final class StreamLimitController
      */
     private function parseProfileId(mixed $value): ?string
     {
-        if (is_string($value) && preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value)) {
+        $uuidPattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
+        if (is_string($value) && preg_match($uuidPattern, $value)) {
             return $value;
         }
 

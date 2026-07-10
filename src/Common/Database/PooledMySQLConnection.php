@@ -192,6 +192,10 @@ final class PooledMySQLConnection extends Connection
     /**
      * Close every connection the pool owns (CLI, idle and leased). Best-effort;
      * called on graceful worker shutdown.
+     *
+     * Guards Swoole Channel operations with a coroutine context check because
+     * this may be called from signal handlers or destructors during worker
+     * shutdown when no coroutine context is active.
      */
     public function closeConnection(): void
     {
@@ -199,7 +203,10 @@ final class PooledMySQLConnection extends Connection
             $this->cliConn->closeConnection();
             $this->cliConn = null;
         }
-        if ($this->idle !== null) {
+        // Only access Swoole Channel APIs when inside a coroutine context.
+        // Calling Channel::isEmpty()/pop() outside a coroutine fatals with
+        // "API must be called in the coroutine" during SIGTERM shutdown.
+        if ($this->idle !== null && $this->currentCoroutineId() >= 0) {
             while (!$this->idle->isEmpty()) {
                 $conn = $this->idle->pop(0.001);
                 if ($conn instanceof Connection) {

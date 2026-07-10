@@ -1528,8 +1528,25 @@ class FfmpegRunner
             }
             $width = self::paramInt($params, 'width');
             $height = self::paramInt($params, 'height');
+
+            // P6: HDR tone-mapping — apply when hwaccel is enabled (passed in params) and
+            // the source is HDR. Software encoders (libx264/libx265) output 8-bit 4:2:0 and
+            // cannot encode HDR directly, so HDR sources always need tone-mapping to SDR.
+            // This mirrors the logic in buildHwaccelSegmentCommand for the fallback path
+            // when hwaccel is enabled but temporarily unavailable (returns null).
+            $require_hdr_tone_map = ($params['require_hdr_tone_map'] ?? false) === true;
+            $filters = [];
+            if ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
+                $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
+                if ($toneMapFilter !== null && $toneMapFilter !== '') {
+                    $filters[] = $toneMapFilter;
+                }
+            }
             if ($width !== null && $height !== null) {
-                $cmd .= ' -vf "scale=' . $width . ':' . $height . ':force_original_aspect_ratio=decrease"';
+                $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
+            }
+            if (!empty($filters)) {
+                $cmd .= ' -vf "' . implode(',', $filters) . '"';
             }
             // IDR at the segment start → independently decodable, frame-aligned segment.
             $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');

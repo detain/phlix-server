@@ -8,9 +8,9 @@ use Phlix\Media\Library\ItemRepository;
 use Workerman\MySQL\Connection;
 
 /**
- * Computes and retrieves item-similarity scores using a weighted combination
- * of genre overlap (Cosine), person overlap (Cosine), rating proximity,
- * and year proximity.
+ * Computes and retrieves item-similarity scores using cosine similarity
+ * over unified feature vectors containing genre weights, actor weights,
+ * director weights, decade, and rating.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
  * @license   MIT
@@ -23,13 +23,15 @@ final class SimilarityService
     private const REASON_RATING = 'rating';
     private const REASON_YEAR = 'year';
 
-
-    /** Weights for each similarity component (must sum to 1.0). */
+    /** Weights for each feature group (applied to vector dimensions). */
     private const WEIGHT_GENRE = 0.35;
     private const WEIGHT_ACTOR = 0.25;
     private const WEIGHT_DIRECTOR = 0.15;
     private const WEIGHT_RATING = 0.15;
     private const WEIGHT_YEAR = 0.10;
+
+    /** Rating scale maximum for normalization. */
+    private const RATING_SCALE = 10.0;
 
     /** @var Connection */
     private Connection $db;
@@ -266,13 +268,15 @@ final class SimilarityService
     }
 
     /**
-     * Computes the weighted similarity between two metadata sets.
+     * Computes vector-based cosine similarity between two metadata sets.
      *
-     * P4: Uses cosine similarity for genre/actor/director overlap instead of
-     * Jaccard. Cosine is better suited for sparse high-dimensional item vectors
-     * (genres, actors) where the magnitude of the vector matters — two users
-     * who both have 10 genres are more similar than two with 1 genre each, even
-     * if their intersection is the same.
+     * P4: Builds a unified feature vector for each item containing ALL features:
+     * genres, actors, directors (as weighted binary dimensions), rating (normalized),
+     * and year (normalized). Then computes a SINGLE cosine similarity score.
+     *
+     * This is true vector-based cosine similarity, not a weighted sum of
+     * per-feature similarities. It properly accounts for the relative
+     * magnitude of each feature group in the overall similarity score.
      *
      * @param array<string, mixed> $a
      * @param array<string, mixed> $b
@@ -280,44 +284,97 @@ final class SimilarityService
      */
     private function computeSimilarity(array $a, array $b): array
     {
-        $genreSim = $this->cosineSimilarity(
-            $this->normalizeStringArray($a['genres'] ?? []),
-            $this->normalizeStringArray($b['genres'] ?? [])
-        );
+        // Extract feature arrays
+        $genresA = $this->normalizeStringArray($a['genres'] ?? []);
+        $genresB = $this->normalizeStringArray($b['genres'] ?? []);
+        $actorsA = $this->extractNames($a['actors'] ?? []);
+        $actorsB = $this->extractNames($b['actors'] ?? []);
+        $directorsA = $this->extractNames($a['directors'] ?? []);
+        $directorsB = $this->extractNames($b['directors'] ?? []);
 
-        $actorSim = $this->cosineSimilarity(
-            $this->extractNames($a['actors'] ?? []),
-            $this->extractNames($b['actors'] ?? [])
-        );
+        // Categorical feature counts (for magnitude calculation)
+        $genreCountA = count($genresA);
+        $genreCountB = count($genresB);
+        $actorCountA = count($actorsA);
+        $actorCountB = count($actorsB);
+        $directorCountA = count($directorsA);
+        $directorCountB = count($directorsB);
 
-        $directorSim = $this->cosineSimilarity(
-            $this->extractNames($a['directors'] ?? []),
-            $this->extractNames($b['directors'] ?? [])
-        );
+        // Intersection counts for categorical features
+        $genreIntersection = $genreCountA > 0 && $genreCountB > 0
+            ? count(array_intersect($genresA, $genresB))
+            : 0;
+        $actorIntersection = $actorCountA > 0 && $actorCountB > 0
+            ? count(array_intersect($actorsA, $actorsB))
+            : 0;
+        $directorIntersection = $directorCountA > 0 && $directorCountB > 0
+            ? count(array_intersect($directorsA, $directorsB))
+            : 0;
 
-        $ratingSim = $this->ratingSimilarity(
-            $this->toFloat($a['rating'] ?? null),
-            $this->toFloat($b['rating'] ?? null)
-        );
+        // Continuous features
+        $ratingA = $this->toFloat($a['rating'] ?? null);
+        $ratingB = $this->toFloat($b['rating'] ?? null);
+        $yearA = $this->toInt($a['year'] ?? null);
+        $yearB = $this->toInt($b['year'] ?? null);
 
-        $yearSim = $this->yearSimilarity(
-            $this->toInt($a['year'] ?? null),
-            $this->toInt($b['year'] ?? null)
-        );
+        // Normalized continuous feature values (0-1 scale)
+        $normRatingA = $ratingA / self::RATING_SCALE;
+        $normRatingB = $ratingB / self::RATING_SCALE;
+        $normYearA = $this->normalizeYear($yearA);
+        $normYearB = $this->normalizeYear($yearB);
 
-        $score = ($genreSim * self::WEIGHT_GENRE)
-            + ($actorSim * self::WEIGHT_ACTOR)
-            + ($directorSim * self::WEIGHT_DIRECTOR)
-            + ($ratingSim * self::WEIGHT_RATING)
-            + ($yearSim * self::WEIGHT_YEAR);
+        // Build unified vectors with weighted components
+        // Vector structure: [genres (W_GENRE each), actors (W_ACTOR each), directors (W_DIRECTOR each), rating, year]
+        // The weighted dot product for categorical features:
+        //   dot = sum(W_group * W_group) for each shared feature = intersection * W_group^2
+        // For continuous: W_feature^2 * normalized_value
 
-        // Determine the dominant reason (the individual component with highest contribution).
+        $dotProduct = ($genreIntersection * self::WEIGHT_GENRE * self::WEIGHT_GENRE)
+            + ($actorIntersection * self::WEIGHT_ACTOR * self::WEIGHT_ACTOR)
+            + ($directorIntersection * self::WEIGHT_DIRECTOR * self::WEIGHT_DIRECTOR)
+            + ($normRatingA * $normRatingB * self::WEIGHT_RATING * self::WEIGHT_RATING)
+            + ($normYearA * $normYearB * self::WEIGHT_YEAR * self::WEIGHT_YEAR);
+
+        // Magnitude squared for each vector:
+        // ||v||^2 = sum(W_group^2 for each feature in item) + sum(W_feature^2 * normalized_value^2)
+        // For categorical: count * W_group^2
+        // For continuous: W_feature^2 * normalized_value^2
+
+        $magSqA = ($genreCountA * self::WEIGHT_GENRE * self::WEIGHT_GENRE)
+            + ($actorCountA * self::WEIGHT_ACTOR * self::WEIGHT_ACTOR)
+            + ($directorCountA * self::WEIGHT_DIRECTOR * self::WEIGHT_DIRECTOR)
+            + ($normRatingA * $normRatingA * self::WEIGHT_RATING * self::WEIGHT_RATING)
+            + ($normYearA * $normYearA * self::WEIGHT_YEAR * self::WEIGHT_YEAR);
+
+        $magSqB = ($genreCountB * self::WEIGHT_GENRE * self::WEIGHT_GENRE)
+            + ($actorCountB * self::WEIGHT_ACTOR * self::WEIGHT_ACTOR)
+            + ($directorCountB * self::WEIGHT_DIRECTOR * self::WEIGHT_DIRECTOR)
+            + ($normRatingB * $normRatingB * self::WEIGHT_RATING * self::WEIGHT_RATING)
+            + ($normYearB * $normYearB * self::WEIGHT_YEAR * self::WEIGHT_YEAR);
+
+        $magnitudeProduct = sqrt($magSqA) * sqrt($magSqB);
+
+        if ($magnitudeProduct === 0.0) {
+            return ['score' => 0.0, 'reason' => self::REASON_GENRE];
+        }
+
+        $score = $dotProduct / $magnitudeProduct;
+
+        // Determine dominant reason based on each group's contribution to the dot product.
+        // Each group's contribution = (intersection * W^2) for categorical, or
+        // (normA * normB * W^2) for continuous features.
+        $genreContribution = $genreIntersection * self::WEIGHT_GENRE * self::WEIGHT_GENRE;
+        $actorContribution = $actorIntersection * self::WEIGHT_ACTOR * self::WEIGHT_ACTOR;
+        $directorContribution = $directorIntersection * self::WEIGHT_DIRECTOR * self::WEIGHT_DIRECTOR;
+        $ratingContribution = $normRatingA * $normRatingB * self::WEIGHT_RATING * self::WEIGHT_RATING;
+        $yearContribution = $normYearA * $normYearB * self::WEIGHT_YEAR * self::WEIGHT_YEAR;
+
         $contributions = [
-            self::REASON_GENRE => $genreSim * self::WEIGHT_GENRE,
-            self::REASON_ACTOR => $actorSim * self::WEIGHT_ACTOR,
-            self::REASON_DIRECTOR => $directorSim * self::WEIGHT_DIRECTOR,
-            self::REASON_RATING => $ratingSim * self::WEIGHT_RATING,
-            self::REASON_YEAR => $yearSim * self::WEIGHT_YEAR,
+            self::REASON_GENRE => $genreContribution,
+            self::REASON_ACTOR => $actorContribution,
+            self::REASON_DIRECTOR => $directorContribution,
+            self::REASON_RATING => $ratingContribution,
+            self::REASON_YEAR => $yearContribution,
         ];
 
         arsort($contributions);
@@ -327,6 +384,24 @@ final class SimilarityService
             'score' => round($score, 3),
             'reason' => $reason,
         ];
+    }
+
+    /**
+     * Normalize year to a 0-1 scale based on a reasonable range.
+     *
+     * @param int $year
+     * @return float
+     */
+    private function normalizeYear(int $year): float
+    {
+        if ($year === 0) {
+            return 0.0;
+        }
+
+        // Assume year range of 1900-2100 (200 year span)
+        $normalized = ($year - 1900) / 200.0;
+
+        return max(0.0, min(1.0, $normalized));
     }
 
     /**
@@ -365,61 +440,7 @@ final class SimilarityService
         return $this->normalizeStringArray($raw);
     }
 
-    /**
-     * Cosine similarity coefficient: dot(A, B) / (|A| * |B|).
-     *
-     * Treats each set as a binary vector where each unique element is a
-     * dimension. Cosine measures the angle between vectors — better for sparse
-     * item vectors than Jaccard because it accounts for vector magnitude.
-     *
-     * @param list<string> $a
-     * @param list<string> $b
-     * @return float
-     */
-    private function cosineSimilarity(array $a, array $b): float
-    {
-        if ($a === [] || $b === []) {
-            return 0.0;
-        }
 
-        $intersection = count(array_intersect($a, $b));
-        $magnitudeA = sqrt(count($a));
-        $magnitudeB = sqrt(count($b));
-
-        return $intersection / ($magnitudeA * $magnitudeB);
-    }
-
-    /**
-     * Rating similarity: 1 - |r1-r2|/10 (rating scale 0-10).
-     *
-     * @param float $r1
-     * @param float $r2
-     * @return float
-     */
-    private function ratingSimilarity(float $r1, float $r2): float
-    {
-        $diff = abs($r1 - $r2) / 10.0;
-
-        return max(0.0, 1.0 - $diff);
-    }
-
-    /**
-     * Year proximity: 1 - |y1-y2|/100 (capped at 0).
-     *
-     * @param int $y1
-     * @param int $y2
-     * @return float
-     */
-    private function yearSimilarity(int $y1, int $y2): float
-    {
-        if ($y1 === 0 || $y2 === 0) {
-            return 0.0;
-        }
-
-        $diff = abs($y1 - $y2) / 100.0;
-
-        return max(0.0, 1.0 - $diff);
-    }
 
     /**
      * Extracts the poster URL from a metadata_json blob.

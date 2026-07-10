@@ -87,6 +87,17 @@ class CdsServer
     private function announceViaSsdp(): void
     {
         $device = $this->dlnaServer->getServerDevice();
+        $baseUrl = $this->dlnaServer->getBaseUrl();
+        $port = $this->dlnaServer->getPort();
+        $serverId = $device->getUdn();
+
+        $this->discoveryManager?->announcePhlixServer(
+            $serverId,
+            $device->getFriendlyName(),
+            $baseUrl,
+            $port
+        );
+
         $this->logger?->debug('CdsServer: Announcing via SSDP', [
             'udn' => $device->getUdn(),
             'location' => $device->getUrl('/description.xml'),
@@ -103,6 +114,19 @@ class CdsServer
     private function announceViaMdns(): void
     {
         $device = $this->dlnaServer->getServerDevice();
+        $baseUrl = $this->dlnaServer->getBaseUrl();
+        $port = $this->dlnaServer->getPort();
+        $serverId = $device->getUdn();
+
+        // P10: DiscoveryManager::announcePhlixServer announces via both SSDP and mDNS.
+        // For mDNS-only, we call MdnsDiscovery directly if available via discoveryManager.
+        $this->discoveryManager?->announcePhlixServer(
+            $serverId,
+            $device->getFriendlyName(),
+            $baseUrl,
+            $port
+        );
+
         $this->logger?->debug('CdsServer: Announcing via mDNS', [
             'name' => $device->getFriendlyName(),
         ]);

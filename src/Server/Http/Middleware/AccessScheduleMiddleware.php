@@ -77,8 +77,13 @@ final class AccessScheduleMiddleware
         // Get the active profile for this user
         $profile = $this->profileManager->getActiveProfile($userId);
         if ($profile === null) {
-            // No profile exists, allow access (or could deny - depends on policy)
-            return null;
+            // P5: No profile exists for an authenticated user — fail closed (deny
+            // access) rather than allowing an unprofiled user through. The user
+            // should set up a profile before access schedules apply.
+            return (new Response())->status(403)->json([
+                'error' => 'AccessScheduled',
+                'message' => 'No profile found; access denied',
+            ]);
         }
 
         // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve

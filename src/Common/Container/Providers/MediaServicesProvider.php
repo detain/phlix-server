@@ -42,6 +42,7 @@ use Phlix\Media\Metadata\ThemeMusic\ThemeMusicFetcherInterface;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
+use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -447,6 +448,11 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // P4-S2: because-you-watched recommendations engine
             \Phlix\Media\RecommendationService::class => autowire()
                 ->constructorParameter('similarityService', get(\Phlix\Media\SimilarityService::class)),
+
+            // P7: gapless playback and crossfade manager
+            GaplessPlaybackManager::class => autowire()
+                ->constructorParameter('userRepository', get(\Phlix\Auth\UserRepository::class))
+                ->constructorParameter('ffmpegRunner', get(FfmpegRunner::class)),
 
             // P4-S3: TMDB box-set collection sync
             CollectionService::class => autowire()

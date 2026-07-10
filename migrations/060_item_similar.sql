@@ -1,11 +1,14 @@
--- P4-S1: Similar-items engine — stores pre-computed cosine similarity scores.
+-- P4-S1: Similar-items engine — stores pre-computed similarity scores.
 --
--- Computed by SimilarityService::computeSimilarForItem() using:
---   - Genre overlap (Jaccard)
---   - Actor overlap (Jaccard)
---   - Director overlap (Jaccard)
---   - Rating proximity (1 - |r1-r2|/10)
---   - Year proximity (1 - |y1-y2|/100)
+-- Computed by SimilarityService::computeSimilarForItem() using
+-- vector-based cosine similarity over a unified feature space containing:
+--   - Genres: multi-hot binary vector with W_GENRE=0.35 weight per genre
+--   - Actors: multi-hot binary vector with W_ACTOR=0.25 weight per actor
+--   - Directors: multi-hot binary vector with W_DIRECTOR=0.15 weight per director
+--   - Rating: normalized to [0,1] with W_RATING=0.15
+--   - Year: normalized to [0,1] over 1900-2100 range with W_YEAR=0.10
+--
+-- Cosine = dot(A_weighted, B_weighted) / (||A|| * ||B||)
 --
 -- The `reason` column carries the dominant signal that contributed the most
 -- to the final score for display purposes.

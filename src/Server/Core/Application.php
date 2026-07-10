@@ -2705,14 +2705,22 @@ class Application
             $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
             $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
             $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+            $ffmpegConfig = $this->loadFfmpegConfig();
+            $ffmpegRunner = new \Phlix\Media\Transcoding\FfmpegRunner(
+                $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
+                $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
+            );
+            $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
+            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager);
         }
 
         /** @var \Phlix\Media\Library\ItemRepository */
         $itemRepository = $this->container->get(\Phlix\Media\Library\ItemRepository::class);
         $markerCandidateRepository = new \Phlix\Media\Markers\Detection\MarkerCandidateRepository($itemRepository);
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
-        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService);
+        /** @var \Phlix\Media\Playback\GaplessPlaybackManager */
+        $gaplessManager = $this->container->get(\Phlix\Media\Playback\GaplessPlaybackManager::class);
+        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager);
     }
 
     /**

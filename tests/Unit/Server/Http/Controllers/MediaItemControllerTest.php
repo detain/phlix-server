@@ -13,6 +13,9 @@ use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\MarkerSet;
 use Phlix\Media\Markers\OutroMarker;
 use Phlix\Media\Markers\SkipButtonSpec;
+use Phlix\Media\Playback\GaplessPlaybackManager;
+use Phlix\Media\Playback\PlaybackPreferences;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Http\Controllers\MediaItemController;
 use Phlix\Server\Http\Controllers\TranscodeController;
@@ -36,6 +39,16 @@ class MediaItemControllerTest extends TestCase
     }
 
     /**
+     * @return GaplessPlaybackManager&MockObject
+     */
+    private function createMockGaplessManager(): GaplessPlaybackManager
+    {
+        $manager = $this->createMock(GaplessPlaybackManager::class);
+        $manager->method('getPreferences')->willReturn(PlaybackPreferences::fromRaw(0, 0.3, 0.3));
+        return $manager;
+    }
+
+    /**
      * Test that getPlaybackInfo returns 404 when item is not found.
      * Verifies: Negative case - item not found returns 404 error.
      */
@@ -47,7 +60,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'non-existent-id']);
@@ -88,7 +101,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -127,7 +140,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $response = $controller->show(new Request(), ['id' => 'ep-1']);
         /** @var array{item: array{stream_url: string}} $body */
@@ -167,7 +180,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -210,7 +223,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -257,7 +270,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -313,7 +326,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -365,7 +378,7 @@ class MediaItemControllerTest extends TestCase
         $itemRepo = new ItemRepository($db);
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
-        $controller = new MediaItemController($itemRepo, $markerService);
+        $controller = new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
 
         $request = new Request();
         $response = $controller->getPlaybackInfo($request, ['id' => 'ep-1']);
@@ -638,7 +651,7 @@ class MediaItemControllerTest extends TestCase
         $candidateRepo = new MarkerCandidateRepository($itemRepo);
         $markerService = new MarkerService($itemRepo, $candidateRepo);
 
-        return new MediaItemController($itemRepo, $markerService);
+        return new MediaItemController($itemRepo, $markerService, $this->createMockGaplessManager());
     }
 
     /**

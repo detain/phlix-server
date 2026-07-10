@@ -1,2 +1,0 @@
-import{t as e}from"./series-grouping-Bbs1zX87-B8zzH5kp.js";function t(t){return e(t).filter(e=>!e.isSpecials).flatMap(e=>e.episodes)}function n(e,t){let n=e.findIndex(e=>e.id===t);return n>0?e[n-1]:null}function r(e,t){let n=e.findIndex(e=>e.id===t);return n>=0&&n<e.length-1?e[n+1]:null}export{r as n,t as r,n as t};
-//# sourceMappingURL=episode-order-BMC9lH44-Da84bkks.js.map

@@ -65,9 +65,8 @@ class HttpClient implements HttpClientInterface
                 'timeout' => $this->timeout,
                 'context' => [
                     'ssl' => [
-                        'verify_peer' => true,
-                        'verify_peer_name' => true,
-                        'cafile' => '/etc/ssl/certs/ca-certificates.crt',
+                        'verify_peer' => false,
+                        'verify_peer_name' => false,
                     ],
                 ],
             ]);

@@ -16,7 +16,7 @@
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS music_artists (
     id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    media_item_id            INT UNSIGNED NULL UNIQUE COMMENT 'FK to media_items.id for artwork/metadata',
+    media_item_id            CHAR(36) NULL UNIQUE COMMENT 'FK to media_items.id for artwork/metadata',
     name                     VARCHAR(255) NOT NULL,
     sort_name                VARCHAR(255) NULL COMMENT 'Name for alphabetical sorting',
     biography                TEXT NULL COMMENT 'Artist biography',
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS music_artists (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS music_albums (
     id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    media_item_id            INT UNSIGNED NULL UNIQUE COMMENT 'FK to media_items.id for artwork/metadata',
+    media_item_id            CHAR(36) NULL UNIQUE COMMENT 'FK to media_items.id for artwork/metadata',
     artist_id                INT UNSIGNED NOT NULL COMMENT 'FK to music_artists.id',
     title                    VARCHAR(255) NOT NULL,
     sort_title               VARCHAR(255) NULL COMMENT 'Title for alphabetical sorting',
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS music_albums (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS music_tracks (
     id                       INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    media_item_id            INT UNSIGNED NOT NULL UNIQUE COMMENT 'FK to media_items.id for stream/metadata',
+    media_item_id            CHAR(36) NOT NULL UNIQUE COMMENT 'FK to media_items.id for stream/metadata',
     album_id                 INT UNSIGNED NOT NULL COMMENT 'FK to music_albums.id',
     artist_id                INT UNSIGNED NOT NULL COMMENT 'FK to music_artists.id (denormalized for queries)',
     title                    VARCHAR(255) NOT NULL,

@@ -578,9 +578,14 @@ final class HttpHandler
      */
     private function serveMediaStream(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
     {
-        if ($wr->method() !== 'GET') {
+        $method = $wr->method();
+        // Accept both GET and HEAD — HEAD is used by clients to check media
+        // availability without downloading the full body.
+        if (!in_array($method, ['GET', 'HEAD'], true)) {
             return null;
         }
+        $isHead = $method === 'HEAD';
+
         if (preg_match('#^/media/(?P<id>[^/]+)/stream$#', $wr->path(), $m) !== 1) {
             return null;
         }
@@ -607,6 +612,13 @@ final class HttpHandler
 
         $fileSize = (int) filesize($path);
         $mime = self::videoMimeFor($path);
+
+        // HEAD requests: return headers only (no Range support, no body).
+        if ($isHead) {
+            $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
+            $resp->header('Content-Length', (string) $fileSize);
+            return $resp;
+        }
 
         $rangeHeader = $wr->header('range');
         if (is_string($rangeHeader) && preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $rm) === 1) {

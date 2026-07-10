@@ -21,21 +21,30 @@ use Phlix\Media\Playback\GaplessPlaybackManager;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
+use Phlix\Media\Streaming\Trickplay\TrickplayController;
+use Phlix\Media\MarkerService as ChapterMarkerService;
+use Phlix\Media\MarkerType;
 
 class MediaItemController
 {
     private ItemRepository $itemRepository;
     private MarkerService $markerService;
     private GaplessPlaybackManager $gaplessManager;
+    private TrickplayController $trickplayController;
+    private ChapterMarkerService $chapterMarkerService;
 
     public function __construct(
         ItemRepository $itemRepository,
         MarkerService $markerService,
-        GaplessPlaybackManager $gaplessManager
+        GaplessPlaybackManager $gaplessManager,
+        TrickplayController $trickplayController,
+        ChapterMarkerService $chapterMarkerService
     ) {
         $this->itemRepository = $itemRepository;
         $this->markerService = $markerService;
         $this->gaplessManager = $gaplessManager;
+        $this->trickplayController = $trickplayController;
+        $this->chapterMarkerService = $chapterMarkerService;
     }
 
     /**
@@ -307,5 +316,169 @@ class MediaItemController
             'windows' => 'generic',
             default => 'web',
         };
+    }
+
+    /**
+     * GET /api/v1/media/{id}/trickplay
+     *
+     * Returns the trickplay sprite and timeline URLs for a media item.
+     * These point to the existing /trickplay/{itemId}/ routes.
+     *
+     * @param Request $request HTTP request
+     * @param array<string, string> $params Route params with 'id' key
+     *
+     * @return Response 200 with {sprite_url, timeline_url}, 404 if not found
+     */
+    public function getTrickplay(Request $request, array $params): Response
+    {
+        $itemId = $params['id'] ?? '';
+
+        if ($itemId === '') {
+            return (new Response())->status(400)->json(['error' => 'Media item ID is required']);
+        }
+
+        $item = $this->itemRepository->findById($itemId);
+        if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Check if trickplay data exists for this item
+        $spritePath = is_string($item['trickplay_sprite_path'] ?? null) ? $item['trickplay_sprite_path'] : null;
+        $timelinePath = is_string($item['trickplay_timeline_path'] ?? null) ? $item['trickplay_timeline_path'] : null;
+
+        if ($spritePath === null || $timelinePath === null) {
+            return (new Response())->status(404)->json([
+                'error' => 'Not Found',
+                'message' => 'Trickplay data not available for this media item',
+            ]);
+        }
+
+        // Generate URLs using TrickplayController's URL-building methods
+        $spriteUrl = $this->trickplayController->getSpriteUrl($itemId);
+        $timelineUrl = $this->trickplayController->getTimelineUrl($itemId);
+
+        return (new Response())->json([
+            'sprite_url' => $spriteUrl,
+            'timeline_url' => $timelineUrl,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/media/{id}/chapters/{index}/thumbnail
+     *
+     * Returns the thumbnail image for a specific chapter of a media item.
+     *
+     * @param Request $request HTTP request
+     * @param array<string, string> $params Route params with 'id' and 'index' keys
+     *
+     * @return Response 200 with image content, 404 if not found
+     */
+    public function getChapterThumbnail(Request $request, array $params): Response
+    {
+        $itemId = $params['id'] ?? '';
+        $indexStr = $params['index'] ?? '';
+
+        if ($itemId === '' || $indexStr === '') {
+            return (new Response())->status(400)->json(['error' => 'Media item ID and chapter index are required']);
+        }
+
+        $index = (int) $indexStr;
+        if ($index < 0) {
+            return (new Response())->status(400)->json(['error' => 'Chapter index must be non-negative']);
+        }
+
+        // First verify the media item exists
+        $item = $this->itemRepository->findById($itemId);
+        if ($item === null) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        // Get chapters from the item's chapters_json
+        $chaptersJson = $item['chapters_json'] ?? null;
+        $chapters = [];
+        if (is_string($chaptersJson)) {
+            $decoded = json_decode($chaptersJson, true);
+            if (is_array($decoded)) {
+                $chapters = $decoded;
+            }
+        } elseif (is_array($chaptersJson)) {
+            $chapters = $chaptersJson;
+        }
+
+        // Validate chapter index
+        if (!isset($chapters[$index])) {
+            return (new Response())->status(404)->json([
+                'error' => 'Not Found',
+                'message' => 'Chapter at index ' . $index . ' does not exist',
+            ]);
+        }
+
+        // Get chapter start time to find the corresponding media_markers entry
+        // chapters_json stores start in seconds, but media_markers.start_time_ms is in milliseconds
+        /** @var array<string, mixed> $chapter */
+        $chapter = $chapters[$index];
+        $startSeconds = is_int($chapter['start'] ?? null) ? $chapter['start']
+            : (is_numeric($chapter['start'] ?? null) ? (int) ($chapter['start']) : null);
+
+        if ($startSeconds === null) {
+            return (new Response())->status(404)->json([
+                'error' => 'Not Found',
+                'message' => 'Chapter start time is invalid',
+            ]);
+        }
+        $startMs = $startSeconds * 1000;
+
+        // Look up the chapter marker via chapterMarkerService to get the thumbnail_path
+        $markers = $this->chapterMarkerService->findByMediaItem($itemId);
+        $chapterMarker = null;
+        foreach ($markers as $marker) {
+            if ($marker->type === MarkerType::Chapter && $marker->startTimeMs === $startMs) {
+                $chapterMarker = $marker;
+                break;
+            }
+        }
+
+        if ($chapterMarker === null || $chapterMarker->thumbnailPath === null || $chapterMarker->thumbnailPath === '') {
+            return (new Response())->status(404)->json([
+                'error' => 'Not Found',
+                'message' => 'Chapter thumbnail not found',
+            ]);
+        }
+
+        $thumbnailPath = $chapterMarker->thumbnailPath;
+
+        // Check if file exists
+        if (!file_exists($thumbnailPath)) {
+            return (new Response())->status(404)->json([
+                'error' => 'Not Found',
+                'message' => 'Chapter thumbnail file not found on disk',
+            ]);
+        }
+
+        // Serve the thumbnail file
+        $content = file_get_contents($thumbnailPath);
+        if ($content === false) {
+            return (new Response())->status(500)->json([
+                'error' => 'Internal Server Error',
+                'message' => 'Failed to read thumbnail file',
+            ]);
+        }
+
+        // Determine content type
+        $extension = strtolower(pathinfo($thumbnailPath, PATHINFO_EXTENSION));
+        $contentType = match ($extension) {
+            'jpg', 'jpeg' => 'image/jpeg',
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+            'webp' => 'image/webp',
+            default => 'application/octet-stream',
+        };
+
+        return (new Response())
+            ->status(200)
+            ->header('Content-Type', $contentType)
+            ->header('Content-Length', (string) strlen($content))
+            ->header('Cache-Control', 'public, max-age=86400')
+            ->body($content);
     }
 }

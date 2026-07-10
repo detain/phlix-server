@@ -427,6 +427,14 @@ class Application
         $mediaItemController = $this->getMediaItemController();
         $this->router->get('/api/v1/media/{id}/playback-info', [$mediaItemController, 'getPlaybackInfo']);
 
+        // Trickplay sprite and timeline URLs (public, no auth required).
+        // These point to the existing /trickplay/{itemId}/ routes.
+        $this->router->get('/api/v1/media/{id}/trickplay', [$mediaItemController, 'getTrickplay']);
+
+        // Chapter thumbnail endpoint (public, no auth required).
+        // Returns the thumbnail image for a specific chapter.
+        $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController, 'getChapterThumbnail']);
+
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).
         $mediaMatchController = $this->getMediaMatchController();
@@ -2711,7 +2719,9 @@ class Application
                 $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
             );
             $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
-            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager);
+            $trickplayController = $this->getTrickplayController();
+            $chapterMarkerService = new \Phlix\Media\MarkerService($db);
+            return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager, $trickplayController, $chapterMarkerService);
         }
 
         /** @var \Phlix\Media\Library\ItemRepository */
@@ -2720,7 +2730,10 @@ class Application
         $markerService = new \Phlix\Media\Markers\MarkerService($itemRepository, $markerCandidateRepository);
         /** @var \Phlix\Media\Playback\GaplessPlaybackManager */
         $gaplessManager = $this->container->get(\Phlix\Media\Playback\GaplessPlaybackManager::class);
-        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager);
+        $trickplayController = $this->getTrickplayController();
+        $db = $this->createDatabaseConnection();
+        $chapterMarkerService = new \Phlix\Media\MarkerService($db);
+        return new \Phlix\Server\Http\Controllers\MediaItemController($itemRepository, $markerService, $gaplessManager, $trickplayController, $chapterMarkerService);
     }
 
     /**

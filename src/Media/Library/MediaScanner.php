@@ -1303,7 +1303,9 @@ class MediaScanner
                 // Requires ffmpeg to be wired and a valid file path. Failure is
                 // best-effort — a missing trickplay on one file must not abort
                 // the whole library scan.
-                $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay';
+                // NOTE: each media item gets its own subdirectory to avoid collisions
+                // when multiple items are scanned concurrently.
+                $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
                 if (!is_dir($spriteDir)) {
                     @mkdir($spriteDir, 0755, true);
                 }

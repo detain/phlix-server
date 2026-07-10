@@ -33,6 +33,7 @@ use Phlix\Console\Commands\BackupListCommand;
 use Phlix\Console\Commands\HwaccelProbeCommand;
 use Phlix\Console\Commands\LibraryListCommand;
 use Phlix\Console\Commands\LibraryScanCommand;
+use Phlix\Console\Commands\MediaDedupePathsCommand;
 use Phlix\Console\Commands\MigrateCommand;
 use Phlix\Console\Commands\PluginDisableCommand;
 use Phlix\Console\Commands\PluginEnableCommand;
@@ -41,6 +42,7 @@ use Phlix\Console\Commands\PluginListCommand;
 use Phlix\Console\Commands\PluginUninstallCommand;
 use Phlix\Console\Commands\UserResetPasswordCommand;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\PathDeduper;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProbe;
 use Phlix\Auth\UserRepository;
 use Phlix\Plugins\Catalog\PluginCatalogService;
@@ -129,5 +131,8 @@ $cli->add(new HwaccelProbeCommand(static function (): HwaccelProbe {
     return new HwaccelProbe($ffmpegPath);
 }));
 $cli->add(new UserResetPasswordCommand(static fn(): UserRepository => $containerProvider()->get(UserRepository::class)));
+$cli->add(new MediaDedupePathsCommand(
+    static fn(): PathDeduper => new PathDeduper(ConnectionPool::getConnection('mysql'))
+));
 
 exit($cli->run());

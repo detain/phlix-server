@@ -1104,7 +1104,9 @@ class MediaScanner
     ): bool {
         $path = $file->getPathname();
 
-        // Check if already exists
+        // Pre-check for existing item to determine if we need backfill.
+        // Using upsertByPath below handles the race condition when multiple
+        // scanner workers encounter the same file concurrently.
         $existing = $this->itemRepository->findByPath($path);
         if ($existing) {
             // Re-scan: the row is already indexed, so no new item is added.
@@ -1226,18 +1228,22 @@ class MediaScanner
             }
         }
 
-        // Create media item. Guard the write so a single unrepresentable row
-        // (or any other per-file failure) is logged and skipped rather than
-        // killing the whole library scan.
+        // Create or reuse media item. Guard the write so a single unrepresentable
+        // row (or any other per-file failure) is logged and skipped rather than
+        // killing the whole library scan. upsertByPath handles the race condition
+        // where multiple scanner workers encounter the same file concurrently.
         try {
-            $itemId = $this->itemRepository->create([
+            // We already confirmed above (findByPath at the top of processFile)
+            // that no row exists for this path, so upsertByPath can skip its own
+            // pre-check and rely on the unique-index 1062 catch for race safety.
+            $itemId = $this->itemRepository->upsertByPath([
                 'library_id' => $libraryId,
                 'parent_id' => $parentId,
                 'name' => $name,
                 'type' => $mediaType,
                 'path' => $path,
                 'metadata_json' => $metadata,
-            ]);
+            ], true);
         } catch (\Throwable $e) {
             $this->logger->warning('Skipping media file that failed to persist', [
                 'library_id' => $libraryId,
@@ -2048,7 +2054,7 @@ class MediaScanner
             }
         }
 
-        $id = (string) $this->itemRepository->create([
+        $id = (string) $this->itemRepository->upsertByPath([
             'library_id' => $libraryId,
             'parent_id' => $parentId,
             'name' => $name,

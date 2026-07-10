@@ -67,7 +67,7 @@ final class CatalogSourceResolver
      * NOTE: kept as a release tag (not a moving branch). When phlix-plugins
      * cuts a new pinned catalog release, bump this constant in lockstep.
      */
-    public const OFFICIAL_PINNED_REF = 'v2.1.0';
+    public const OFFICIAL_PINNED_REF = 'v2.1.1';
 
     /**
      * Env var to override the official catalog pinned ref without a code change

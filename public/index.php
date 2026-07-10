@@ -34,10 +34,12 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Plugins\PluginLoader;
+use Phlix\Server\Http\Middleware\AccessScheduleMiddleware;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\Http\Router;
 use Phlix\Server\Http\Controllers\BookController;
@@ -106,6 +108,26 @@ if ($authenticator->isCookieAuthenticated($request)) {
         http_response_code(403);
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['error' => 'CSRF validation failed', 'code' => 'csrf.invalid_origin']);
+        exit;
+    }
+}
+
+// P5-S1: Populate RequestContext for downstream middleware/services.
+// This mirrors what AuthMiddleware does in the Workerman daemon entrypoint.
+// Must happen AFTER authentication but BEFORE any route dispatch.
+if ($request->userId !== null && $request->userId !== '') {
+    RequestContext::setUserId($request->userId);
+}
+
+// P5-S1: AccessScheduleMiddleware enforces time-based access restrictions.
+// Without this, parental controls configured via the web UI would only be
+// enforced on the daemon entrypoint (Workerman), not on FPM.
+if ($container->has(AccessScheduleMiddleware::class)) {
+    /** @var AccessScheduleMiddleware */
+    $accessScheduleMiddleware = $container->get(AccessScheduleMiddleware::class);
+    $scheduleResponse = $accessScheduleMiddleware($request);
+    if ($scheduleResponse !== null) {
+        $scheduleResponse->send();
         exit;
     }
 }

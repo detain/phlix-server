@@ -1261,12 +1261,18 @@ final class RelayConsumer
         ]);
 
         try {
+            // One-shot ($persistent = false): Workerman timers REPEAT by
+            // default, and this callback nulls $this->reconnectTimer so the
+            // repeating timer could never be deleted — every reconnect ever
+            // scheduled kept firing connect() forever at its original delay,
+            // silently replacing a healthy tunnel (~10s flap per orphaned
+            // timer, worse as they accumulated across disconnects).
             $this->reconnectTimer = Timer::add($delay, function (): void {
                 $this->reconnectTimer = null;
                 if ($this->running) {
                     $this->connect();
                 }
-            });
+            }, [], false);
         } catch (Throwable $e) {
             // Workerman Timer unavailable (e.g. outside the event loop). Without
             // a loop there is nothing to reconnect to; skip silently.

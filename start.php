@@ -35,25 +35,6 @@ use Workerman\Worker;
 require __DIR__ . '/vendor/autoload.php';
 
 // -----------------------------------------------------------------------------
-// 0. SIGTERM — immediate exit, bypass Workerman shutdown
-//
-// PHP 8.5 + Swoole 6.2.1 + Workerman 5.2.2 crashes on SIGTERM shutdown because
-// Worker::stopAll() → Swoole::stop() → Event::exit() throws an ExitException
-// that propagates to {main}, then during RSHUTDOWN Swoole's C-level cleanup
-// calls coroutine APIs outside any coroutine context causing
-// "API must be called in the coroutine at {main}:0".
-//
-// By catching SIGTERM here and exiting immediately (before Worker::runAll()
-// installs its own handler), we bypass Event::exit() entirely.  The Swoole
-// reactor is not told to exit; PHP's plain exit() drains the process without
-// triggering the problematic Swoole shutdown path.  Connections are dropped
-// immediately — acceptable for a media server.
-// -----------------------------------------------------------------------------
-pcntl_signal(SIGTERM, static function (): void {
-    exit(0);
-});
-
-// -----------------------------------------------------------------------------
 // 0. Pre-flight checks
 // -----------------------------------------------------------------------------
 
@@ -185,7 +166,9 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // hub/relay/discovery/newsletter/backup timers. The hub heartbeat
     // and relay tunnels still need their own one-shot startup; that's
     // wired below outside this closure so it runs once per worker too.
-    $application = new Application($container, $config, $container->get(ConnectionPool::class));
+    /** @var ConnectionPool $connectionPool */
+    $connectionPool = $container->get(ConnectionPool::class);
+    $application = new Application($container, $config, $connectionPool);
 
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);
@@ -445,7 +428,9 @@ try {
         // through the same local app routers the HTTP daemon uses. The
         // Application constructor only registers routes/middleware (no timers),
         // so building one here in the relay fork is safe and side-effect-free.
-        $relayApplication = new Application($container, $config, $container->get(ConnectionPool::class));
+        /** @var ConnectionPool $relayConnectionPool */
+        $relayConnectionPool = $container->get(ConnectionPool::class);
+        $relayApplication = new Application($container, $config, $relayConnectionPool);
         $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
 
         $consumer = new \Phlix\Hub\RelayConsumer(
@@ -529,6 +514,7 @@ try {
                     );
                 }
             };
+            ConnectionPool::armWorkerStopCleanup($managedWorker);
         }
     }
 } catch (\Throwable $e) {
@@ -557,6 +543,31 @@ try {
 } catch (\Throwable $e) {
     // The SSDP advertiser is best-effort; never block the HTTP server.
     trigger_error('Failed to set up DLNA SSDP advertiser worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
+// 4g. Worker-stop DB cleanup.
+//
+// Close every DB connection inside onWorkerStop — which still runs in a
+// coroutine — so coroutine-hooked PDO sockets aren't torn down at RSHUTDOWN
+// outside coroutine context. Leaving them open fatals every worker on SIGTERM
+// ("Uncaught Swoole\Error: API must be called in the coroutine" /
+// "Couldn't execute method Error::__toString").
+// {@see ConnectionPool::armWorkerStopCleanup()}
+// -----------------------------------------------------------------------------
+
+foreach (
+    [
+        $httpWorker,
+        $wsWorker ?? null,
+        $hubHeartbeatWorker ?? null,
+        $relayTunnelWorker ?? null,
+        $dlnaSsdpWorker ?? null,
+    ] as $stopCleanupWorker
+) {
+    if ($stopCleanupWorker instanceof Worker) {
+        ConnectionPool::armWorkerStopCleanup($stopCleanupWorker);
+    }
 }
 
 // -----------------------------------------------------------------------------

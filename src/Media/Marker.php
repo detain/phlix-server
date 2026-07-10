@@ -21,6 +21,7 @@ final readonly class Marker
         public int $startTimeMs,
         public int $endTimeMs,
         public string $label,
+        public ?string $userId,
         public ?string $thumbnailPath,
         public \DateTimeImmutable $createdAt,
         public \DateTimeImmutable $updatedAt,
@@ -40,6 +41,8 @@ final readonly class Marker
         $startTimeMs = is_int($row['start_time_ms'] ?? null) ? $row['start_time_ms'] : 0;
         $endTimeMs = is_int($row['end_time_ms'] ?? null) ? $row['end_time_ms'] : 0;
         $label = is_string($row['label'] ?? null) ? $row['label'] : '';
+        // P3-S1: user_id is nullable; NULL = legacy system marker
+        $userId = is_string($row['user_id'] ?? null) && $row['user_id'] !== '' ? $row['user_id'] : null;
         $thumbnailPath = is_string($row['thumbnail_path'] ?? null) && $row['thumbnail_path'] !== ''
             ? $row['thumbnail_path']
             : null;
@@ -53,6 +56,7 @@ final readonly class Marker
             startTimeMs: $startTimeMs,
             endTimeMs: $endTimeMs,
             label: $label,
+            userId: $userId,
             thumbnailPath: $thumbnailPath,
             createdAt: new \DateTimeImmutable($createdAtStr),
             updatedAt: new \DateTimeImmutable($updatedAtStr),

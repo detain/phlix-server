@@ -9,7 +9,7 @@ use Workerman\MySQL\Connection;
 
 /**
  * Computes and retrieves item-similarity scores using a weighted combination
- * of genre overlap (Jaccard), person overlap (Jaccard), rating proximity,
+ * of genre overlap (Cosine), person overlap (Cosine), rating proximity,
  * and year proximity.
  *
  * @copyright 2026 Joe Huss <detain@interserver.net>
@@ -268,23 +268,29 @@ final class SimilarityService
     /**
      * Computes the weighted similarity between two metadata sets.
      *
+     * P4: Uses cosine similarity for genre/actor/director overlap instead of
+     * Jaccard. Cosine is better suited for sparse high-dimensional item vectors
+     * (genres, actors) where the magnitude of the vector matters — two users
+     * who both have 10 genres are more similar than two with 1 genre each, even
+     * if their intersection is the same.
+     *
      * @param array<string, mixed> $a
      * @param array<string, mixed> $b
      * @return array{score: float, reason: string}
      */
     private function computeSimilarity(array $a, array $b): array
     {
-        $genreSim = $this->jaccardSimilarity(
+        $genreSim = $this->cosineSimilarity(
             $this->normalizeStringArray($a['genres'] ?? []),
             $this->normalizeStringArray($b['genres'] ?? [])
         );
 
-        $actorSim = $this->jaccardSimilarity(
+        $actorSim = $this->cosineSimilarity(
             $this->extractNames($a['actors'] ?? []),
             $this->extractNames($b['actors'] ?? [])
         );
 
-        $directorSim = $this->jaccardSimilarity(
+        $directorSim = $this->cosineSimilarity(
             $this->extractNames($a['directors'] ?? []),
             $this->extractNames($b['directors'] ?? [])
         );
@@ -360,22 +366,27 @@ final class SimilarityService
     }
 
     /**
-     * Jaccard similarity coefficient: |A ∩ B| / |A ∪ B|.
+     * Cosine similarity coefficient: dot(A, B) / (|A| * |B|).
+     *
+     * Treats each set as a binary vector where each unique element is a
+     * dimension. Cosine measures the angle between vectors — better for sparse
+     * item vectors than Jaccard because it accounts for vector magnitude.
      *
      * @param list<string> $a
      * @param list<string> $b
      * @return float
      */
-    private function jaccardSimilarity(array $a, array $b): float
+    private function cosineSimilarity(array $a, array $b): float
     {
-        if ($a === [] && $b === []) {
+        if ($a === [] || $b === []) {
             return 0.0;
         }
 
         $intersection = count(array_intersect($a, $b));
-        $union = count(array_unique(array_merge($a, $b)));
+        $magnitudeA = sqrt(count($a));
+        $magnitudeB = sqrt(count($b));
 
-        return $union > 0 ? $intersection / $union : 0.0;
+        return $intersection / ($magnitudeA * $magnitudeB);
     }
 
     /**

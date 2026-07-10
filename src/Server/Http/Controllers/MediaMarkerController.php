@@ -43,6 +43,12 @@ final readonly class MediaMarkerController
             return (new Response())->status(404)->json(['error' => 'Media item not found']);
         }
 
+        // P3-S1: Associate marker with the authenticated user
+        $userId = RequestContext::getUserId();
+        if ($userId === null) {
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+        }
+
         $rawBody = file_get_contents('php://input');
         if (!is_string($rawBody)) {
             return (new Response())->status(400)->json(['error' => 'Invalid request body']);
@@ -64,21 +70,19 @@ final readonly class MediaMarkerController
             ? $body['endMs']
             : (is_numeric($body['endMs'] ?? null) ? (int) ($body['endMs']) : 0);
         $label = is_string($body['label'] ?? null) ? $body['label'] : '';
-        $marker = $this->markerService->upsert($id, $type, $startMs, $endMs, $label);
+        // P3-S1: Pass userId so markers are associated with their creator
+        $marker = $this->markerService->upsert($id, $type, $startMs, $endMs, $label, $userId);
         return (new Response())->json($marker->toArray(), 201);
     }
 
     /**
      * Delete a marker by ID.
      *
-     * Ownership check: Verifies that:
-     * 1. The marker exists for the given media item (auth check)
-     * 2. The current user owns the marker (ownership check)
-     *
-     * Note: Full user ownership tracking requires the media_markers table to have
-     * a user_id column and MarkerService methods to support user filtering.
-     * TODO(ownership): Add user_id to media_markers schema and update MarkerService
-     * to filter by user_id in findByMediaItem() and delete().
+     * P3-S1 Ownership check: Verifies that:
+     * 1. The request is authenticated (userId in context)
+     * 2. The marker exists for the given media item
+     * 3. The current user owns the marker (user_id matches), OR the marker
+     *    has no user_id (NULL = legacy system marker, deletable by any authed user)
      */
     public function deleteMarker(string $id, string $markerId): Response
     {
@@ -88,16 +92,25 @@ final readonly class MediaMarkerController
             return (new Response())->status(401)->json(['error' => 'Authentication required']);
         }
 
-        // Verify the marker exists for this media item
+        // Verify the marker exists for this media item and check ownership
         $markers = $this->markerService->findByMediaItem($id);
-        $markerIds = array_map(fn($m) => $m->id, $markers);
-        if (!in_array((int) $markerId, $markerIds, true)) {
+        $found = null;
+        foreach ($markers as $m) {
+            if ($m->id === (int) $markerId) {
+                $found = $m;
+                break;
+            }
+        }
+        if ($found === null) {
             return (new Response())->status(404)->json(['error' => 'Marker not found']);
         }
 
-        // TODO(ownership): Verify marker.user_id === $userId once the data model supports it.
-        // Currently the media_markers table does not have a user_id column, so we cannot
-        // enforce true ownership. The above auth check is the minimum required.
+        // P3-S1: Enforce ownership — legacy markers (userId=null) are system-owned
+        // and can be deleted by any authenticated user; user-owned markers require
+        // the requesting user to be the owner.
+        if ($found->userId !== null && $found->userId !== $userId) {
+            return (new Response())->status(403)->json(['error' => 'Not authorized to delete this marker']);
+        }
 
         $this->markerService->delete((int) $markerId);
         return (new Response())->json(['message' => 'Marker deleted successfully']);

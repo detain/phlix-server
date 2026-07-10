@@ -76,9 +76,16 @@ final class StreamLimitMiddleware
             return null;
         }
 
+        // P5: Profile IDs are CHAR(36) UUID strings. If we cannot resolve
+        // a profile ID, fail closed (deny access) rather than silently allowing
+        // unauthenticated or unprofiled users through the stream limit check.
         $profileId = $this->resolveProfileId($profile);
         if ($profileId === null) {
-            return null;
+            return (new Response())->status(403)->json([
+                'error' => 'StreamLimitExceeded',
+                'denial_type' => 'profile_not_found',
+                'message' => 'Profile not found; access denied',
+            ]);
         }
 
         // Extract device and session from the request

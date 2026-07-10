@@ -879,6 +879,11 @@ final class RelayConsumer
         }
 
         $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeEnd());
+
+        // P8: After the complete response (HEAD + BODY + END) is sent to the hub,
+        // send an HTTP_CANCEL frame to notify the hub that the response is done and
+        // it can clean up its tracking state for this request.
+        $this->sendCancel($requestId);
     }
 
     /**

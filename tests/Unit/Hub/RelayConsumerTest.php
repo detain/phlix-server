@@ -616,6 +616,7 @@ class RelayConsumerTest extends TestCase
                 $body .= $chunk->body;
             } elseif ($chunk->kind === \Phlix\Shared\Relay\RelayHttpResponseChunk::KIND_END) {
                 $ended = true;
+                break; // P8: stop after END — CANCEL frame follows but is not part of the response stream
             }
         }
 

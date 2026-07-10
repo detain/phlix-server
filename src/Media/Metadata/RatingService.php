@@ -167,10 +167,18 @@ class RatingService
 
         $this->upsert(
             $mediaItemId,
-            RatingSource::User, // intent: the "system" aggregate uses the user source slot
+            RatingSource::Aggregate,
             RatingType::Average,
             $weightedAverage,
             $totalVotes,
+        );
+
+        // P1-S1: Also write the denormalized aggregate to media_items so that
+        // ItemRepository::query() can use the indexed rating_score column instead
+        // of a costly LEFT JOIN + AVG + GROUP BY on every rating sort/filter.
+        $this->db->query(
+            'UPDATE media_items SET rating_score = ?, rating_votes = ? WHERE id = ?',
+            [(string) $weightedAverage, $totalVotes, $mediaItemId]
         );
     }
 }

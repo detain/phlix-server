@@ -61,6 +61,7 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame(['001_first.sql', '002_second.sql'], $result['applied']);
         $this->assertSame([], $result['notes']);
         $this->assertSame([], $result['errors']);
+        $this->assertSame(0, $result['skipped_count']);
 
         // Statements ran in file-then-statement order, comments/blank-only fragments dropped.
         $this->assertSame([
@@ -157,6 +158,9 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame(['001.sql'], $result['applied']);
         $this->assertSame([$message], $result['notes']);
         $this->assertSame([], $result['errors']);
+        // Every downgraded note is of the "already applied" class, so the
+        // summary counter callers use for the one-line skip summary bumps.
+        $this->assertSame(1, $result['skipped_count']);
     }
 
     public function testGenuineErrorIsRecordedButDoesNotAbortTheRun(): void
@@ -181,6 +185,49 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame(['001.sql'], $result['applied']);
         $this->assertSame([], $result['notes']);
         $this->assertSame(['Syntax error near BAD STATEMENT'], $result['errors']);
+        // Genuine errors are NOT counted as already-applied skips.
+        $this->assertSame(0, $result['skipped_count']);
+    }
+
+    public function testSkippedCountAccumulatesAcrossStatementsAndFiles(): void
+    {
+        $this->writeMigration('001.sql', "ALTER TABLE x ADD COLUMN y INT;\nALTER TABLE x ADD KEY idx_y (y);");
+        $this->writeMigration('002.sql', 'CREATE TABLE x (id INT);');
+
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(function (string $sql): array {
+            if (str_contains($sql, 'ADD COLUMN')) {
+                throw new RuntimeException('Duplicate column name "y"');
+            }
+            if (str_contains($sql, 'ADD KEY')) {
+                throw new RuntimeException('Duplicate key name "idx_y"');
+            }
+            throw new RuntimeException('Table "x" already exists');
+        });
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        // All three idempotent replays are captured as notes AND counted, so
+        // callers can print a single "3 statements skipped" summary line.
+        $this->assertSame(['001.sql', '002.sql'], $result['applied']);
+        $this->assertCount(3, $result['notes']);
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(3, $result['skipped_count']);
+    }
+
+    /**
+     * @dataProvider idempotentMessageProvider
+     */
+    public function testIsAlreadyAppliedNoteRecognisesIdempotentClasses(string $message): void
+    {
+        $this->assertTrue(MigrationRunner::isAlreadyAppliedNote($message));
+    }
+
+    public function testIsAlreadyAppliedNoteRejectsOtherMessages(): void
+    {
+        $this->assertFalse(MigrationRunner::isAlreadyAppliedNote('Syntax error near BAD STATEMENT'));
+        $this->assertFalse(MigrationRunner::isAlreadyAppliedNote("Unknown column 'y' in 'field list'"));
     }
 
     public function testEmptyDirectoryYieldsNoWorkAndNoConnection(): void
@@ -197,6 +244,7 @@ class MigrationRunnerTest extends TestCase
         $this->assertSame([], $result['applied']);
         $this->assertSame([], $result['notes']);
         $this->assertSame([], $result['errors']);
+        $this->assertSame(0, $result['skipped_count']);
         // The provider IS invoked (mirrors the script obtaining $db up front),
         // but with no files no query is ever issued.
         $this->assertTrue($connectionResolved);

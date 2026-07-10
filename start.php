@@ -34,6 +34,25 @@ use Workerman\Worker;
 require __DIR__ . '/vendor/autoload.php';
 
 // -----------------------------------------------------------------------------
+// 0. SIGTERM — immediate exit, bypass Workerman shutdown
+//
+// PHP 8.5 + Swoole 6.2.1 + Workerman 5.2.2 crashes on SIGTERM shutdown because
+// Worker::stopAll() → Swoole::stop() → Event::exit() throws an ExitException
+// that propagates to {main}, then during RSHUTDOWN Swoole's C-level cleanup
+// calls coroutine APIs outside any coroutine context causing
+// "API must be called in the coroutine at {main}:0".
+//
+// By catching SIGTERM here and exiting immediately (before Worker::runAll()
+// installs its own handler), we bypass Event::exit() entirely.  The Swoole
+// reactor is not told to exit; PHP's plain exit() drains the process without
+// triggering the problematic Swoole shutdown path.  Connections are dropped
+// immediately — acceptable for a media server.
+// -----------------------------------------------------------------------------
+pcntl_signal(SIGTERM, static function (): void {
+    exit(0);
+});
+
+// -----------------------------------------------------------------------------
 // 0. Pre-flight checks
 // -----------------------------------------------------------------------------
 

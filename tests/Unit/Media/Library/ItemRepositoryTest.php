@@ -2858,4 +2858,114 @@ class ItemRepositoryTest extends TestCase
             'search' => 'batman',
         ], 'lib-multi');
     }
+
+    public function testUpsertByPathReturnsExistingIdWithoutInserting(): void
+    {
+        // When the path is already indexed, upsertByPath must return that row's
+        // id and issue NO INSERT (no duplicate, no side effects).
+        $insertSeen = false;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$insertSeen) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $insertSeen = true;
+            }
+            if (str_contains($sql, 'FROM media_items WHERE path')) {
+                return [['id' => 'existing-1', 'metadata_json' => '{}']];
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $id = $repo->upsertByPath([
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/ep.mkv',
+        ]);
+
+        $this->assertSame('existing-1', $id);
+        $this->assertFalse($insertSeen, 'no INSERT should be issued when the path already exists');
+    }
+
+    public function testUpsertByPathCreatesWhenAbsentAndReturnsNewId(): void
+    {
+        // Path not found → delegate to create(), which performs the INSERT and
+        // returns the id. We supply an explicit id so the return is deterministic.
+        $insertSeen = false;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$insertSeen) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                $insertSeen = true;
+            }
+            // Every SELECT (including the path pre-check) finds nothing.
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $id = $repo->upsertByPath([
+            'id'         => 'new-1',
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/new.mkv',
+        ]);
+
+        $this->assertSame('new-1', $id);
+        $this->assertTrue($insertSeen, 'a new path must be inserted via create()');
+    }
+
+    public function testUpsertByPathReusesRacedRowWhenInsertViolatesUnique(): void
+    {
+        // Pre-check finds nothing; a concurrent worker inserts the same path, so
+        // create()'s INSERT raises a unique violation; the re-fetch then finds
+        // the winner's row and upsertByPath returns its id (no exception).
+        $pathSelects = 0;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$pathSelects) {
+            if (str_contains($sql, 'FROM media_items WHERE path')) {
+                $pathSelects++;
+                // First call (pre-check) misses; second call (post-race) hits.
+                return $pathSelects === 1 ? [] : [['id' => 'winner-1', 'metadata_json' => '{}']];
+            }
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                throw new \RuntimeException("Duplicate entry for key 'idx_media_items_library_path_hash'");
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+        $id = $repo->upsertByPath([
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/race.mkv',
+        ]);
+
+        $this->assertSame('winner-1', $id);
+        $this->assertSame(2, $pathSelects, 'pre-check + one post-race re-fetch');
+    }
+
+    public function testUpsertByPathRethrowsWhenInsertFailsAndRowStillMissing(): void
+    {
+        // INSERT fails for a non-race reason and no row appears on re-fetch, so
+        // the original error must surface rather than be swallowed.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) {
+            if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
+                throw new \RuntimeException('Incorrect string value');
+            }
+            return [];
+        });
+
+        $repo = new ItemRepository($db);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Incorrect string value');
+        $repo->upsertByPath([
+            'library_id' => 'lib-1',
+            'name'       => 'Ep',
+            'type'       => 'episode',
+            'path'       => '/m/broken.mkv',
+        ]);
+    }
 }

@@ -224,6 +224,72 @@ class ItemRepository
     }
 
     /**
+     * Find an existing media item by path, or create it — race-safe.
+     *
+     * Resolves the duplicate-row race that exists when multiple scanner workers
+     * try to create the same media item concurrently: the naive find-then-create
+     * pattern inserts two rows when the second worker passes the existence check
+     * before the first worker's INSERT commits.
+     *
+     * Logic:
+     *  1. Look the item up by path. If it already exists, return its ID —
+     *     no write, no side effects.
+     *  2. Otherwise delegate to {@see create()}, which performs the INSERT *and*
+     *     all of its side effects (media_item_genres sync, stats change record,
+     *     genre-facet cache invalidation, UTF-8 path/name scrubbing, sort_title,
+     *     canonical_key). We deliberately reuse create() rather than duplicating
+     *     that logic so an upsert-created row is byte-for-byte identical to a
+     *     create()-created one.
+     *  3. If create()'s INSERT fails because a concurrent worker inserted the
+     *     same path first (MySQL 1062 against the `(library_id, path_hash)`
+     *     unique index from migration 072), swallow the error and return the
+     *     row that now exists. Any other failure is re-thrown unchanged.
+     *
+     * NB: the 1062 branch can only fire once migration 072's unique index is in
+     * place; before that there is no path constraint to violate, so step 1 is the
+     * only guard. That is intentional — the index is the durable guarantee and
+     * this method is forward-compatible with it.
+     *
+     * @param array<string, mixed> $data Media item data (same shape as {@see create()}).
+     *                                   Required keys: library_id, name, type, path.
+     * @param bool $callerConfirmedAbsent When the caller has ALREADY established
+     *        (via its own {@see findByPath()}) that no row exists for this path,
+     *        pass true to skip the redundant pre-check and go straight to the
+     *        race-safe create. The scanner's per-file path does exactly this.
+     *        Leave false (default) for callers that have not looked the path up —
+     *        e.g. container creation, whose rows are exempt from the
+     *        `(library_id, path_hash)` unique index and therefore cannot rely on
+     *        the 1062 catch below for de-duplication.
+     * @return string The ID of the existing or newly created media item.
+     * @throws Throwable When create() fails for any reason other than a losing
+     *                   concurrent insert on the same path.
+     */
+    public function upsertByPath(array $data, bool $callerConfirmedAbsent = false): string
+    {
+        $path = isset($data['path']) && is_string($data['path']) ? $data['path'] : '';
+
+        if (!$callerConfirmedAbsent) {
+            $existing = $this->findByPath($path);
+            if (is_array($existing) && isset($existing['id']) && is_string($existing['id'])) {
+                return $existing['id'];
+            }
+        }
+
+        try {
+            return $this->create($data);
+        } catch (Throwable $e) {
+            // A concurrent worker inserted the same path between our existence
+            // check and the INSERT (unique-index violation). Reuse their row.
+            $raced = $this->findByPath($path);
+            if (is_array($raced) && isset($raced['id']) && is_string($raced['id'])) {
+                return $raced['id'];
+            }
+            // The insert failed for some other reason — surface it.
+            throw $e;
+        }
+    }
+
+    /**
      * Batch lookup of media items by filesystem path — a single `WHERE path
      * IN (...)` query rather than one {@see findByPath()} call per candidate.
      *

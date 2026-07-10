@@ -1561,6 +1561,170 @@ class FfmpegRunner
     }
 
     /**
+     * Builds a hardware-accelerated segment encode command.
+     *
+     * Uses the hwaccel registry to select the best encoder for the codec,
+     * and builds the appropriate command with hardware-specific flags for
+     * segment production. Falls back to null if no hardware encoder is
+     * available.
+     *
+     * HDR tone-mapping is applied when:
+     * - The source content is HDR (HLG or HDR10)
+     * - AND either `require_hdr_tone_map` is set in params, OR the hardware
+     *   encoder does not natively support HDR output (all current hwaccel
+     *   encoders output 8-bit 4:2:0, so HDR content always needs tone-map)
+     *
+     * @param string $inputPath Source media file path
+     * @param string $outFile Absolute final segment path
+     * @param float $start Segment start offset in seconds
+     * @param float $duration Segment length in seconds
+     * @param array<string, mixed> $params Encode params (same as buildSegmentCommand)
+     *
+     * @return string|null The complete FFmpeg segment command, or null if hwaccel unavailable
+     *
+     * @since 0.36.0
+     */
+    public function buildHwaccelSegmentCommand(
+        string $inputPath,
+        string $outFile,
+        float $start,
+        float $duration,
+        array $params
+    ): ?string {
+        if (!$this->hwaccelProbed) {
+            $this->probeHardwareAcceleration();
+        }
+
+        $videoCodec = self::paramString($params, 'video_codec') ?? 'libx264';
+
+        // Map software codec name to generic codec name for registry lookup
+        $codecMap = [
+            'libx264' => 'h264',
+            'libx265' => 'hevc',
+        ];
+        $codec = $codecMap[$videoCodec] ?? 'h264';
+
+        $require_hdr_tone_map = ($params['require_hdr_tone_map'] ?? false) === true;
+
+        $capability = $this->hwaccelRegistry?->getEncoder($codec, $require_hdr_tone_map);
+        if ($capability === null) {
+            $this->logger->warning('No hardware encoder found', ['codec' => $codec]);
+            return null;
+        }
+
+        $startArg = self::seconds($start);
+        $durArg = self::seconds($duration);
+
+        // Base FFmpeg invocation with hardware input flags
+        $cmd = sprintf(
+            '%s -nostdin -y -hide_banner -loglevel error',
+            escapeshellarg($this->ffmpegPath)
+        );
+        $cmd .= $this->buildHwaccelInputFlags($capability);
+        $cmd .= ' -ss ' . $startArg;
+        $cmd .= ' -i ' . escapeshellarg($inputPath);
+        $cmd .= ' -t ' . $durArg;
+
+        // Map video (first video track) and audio (first audio track, optional)
+        $audioStreamIndex = self::paramInt($params, 'audio_stream_index');
+        $cmd .= ' -map 0:v:0';
+        if ($audioStreamIndex !== null && $audioStreamIndex >= 0) {
+            $cmd .= sprintf(' -map 0:a:%d', $audioStreamIndex);
+        } else {
+            $cmd .= ' -map 0:a:0?';
+        }
+        $cmd .= ' -dn -sn';
+
+        // Hardware video encoder
+        $cmd .= ' -c:v ' . $capability->encoder;
+
+        // Vendor-specific preset tuning
+        switch ($capability->vendor) {
+            case 'nvenc':
+                $cmd .= ' -preset:v p4';
+                break;
+            case 'vaapi':
+            case 'qsv':
+                $cmd .= ' -preset:v fast';
+                break;
+            default:
+                $cmd .= ' -preset:v medium';
+        }
+
+        // Rate control: CRF when supplied, and VBV ceiling when supplied
+        $crf = self::paramInt($params, 'crf');
+        if ($crf !== null) {
+            $cmd .= ' -crf ' . $crf;
+        }
+        $maxrate = self::paramInt($params, 'maxrate');
+        if ($maxrate !== null && $maxrate > 0) {
+            $cmd .= ' -maxrate ' . $maxrate;
+        }
+        $bufsize = self::paramInt($params, 'bufsize');
+        if ($bufsize !== null && $bufsize > 0) {
+            $cmd .= ' -bufsize ' . $bufsize;
+        }
+
+        // Determine if HDR tone-mapping is needed:
+        // All current hardware encoders (nvenc/vaapi/qsv/videotoolbox/amf/v4l2)
+        // output 8-bit 4:2:0, so HDR content always requires tone-mapping to SDR.
+        $hdrCapableEncoders = [
+            'hevc_nvenc',
+            'hevc_vaapi',
+            'hevc_qsv',
+            'hevc_videotoolbox',
+            'hevc_amf',
+        ];
+        $needsToneMap = $require_hdr_tone_map || (
+            $this->needsToneMapping($inputPath)
+            && !in_array($capability->encoder, $hdrCapableEncoders, true)
+        );
+
+        // Build filter chain: tone-mapping (if needed) + scale (if dimensions supplied)
+        $filters = [];
+
+        if ($needsToneMap) {
+            $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
+            if ($toneMapFilter !== null && $toneMapFilter !== '') {
+                $filters[] = $toneMapFilter;
+            }
+        }
+
+        $width = self::paramInt($params, 'width');
+        $height = self::paramInt($params, 'height');
+        if ($width !== null && $height !== null) {
+            $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
+        }
+
+        if (!empty($filters)) {
+            $cmd .= ' -vf "' . implode(',', $filters) . '"';
+        }
+
+        // IDR at the segment start for independently decodable segments
+        $cmd .= ' -force_key_frames ' . escapeshellarg('expr:gte(t,0)');
+
+        // Audio: re-encode to AAC by default, or stream copy when requested
+        $audioCodec = self::paramString($params, 'audio_codec') ?? 'aac';
+        if ($audioCodec === 'copy') {
+            $cmd .= ' -c:a copy';
+        } else {
+            $cmd .= ' -c:a ' . $audioCodec;
+            $cmd .= ' -b:a ' . (self::paramString($params, 'audio_bitrate') ?? '128k');
+            $audioChannels = self::paramInt($params, 'audio_channels');
+            if ($audioChannels !== null && $audioChannels > 0) {
+                $cmd .= ' -ac ' . $audioChannels;
+            }
+        }
+
+        // Anchor PTS to the absolute timeline position; no mux pre-roll.
+        $cmd .= ' -muxdelay 0 -muxpreload 0';
+        $cmd .= ' -output_ts_offset ' . $startArg;
+        $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
+
+        return $cmd;
+    }
+
+    /**
      * Launches an on-demand segment encode as a detached background process,
      * writing atomically so a reader never sees a half-written segment.
      *
@@ -1587,7 +1751,21 @@ class FfmpegRunner
         array $params
     ): int {
         $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
-        $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+
+        // Try hardware acceleration first if enabled in config
+        $hwaccelConfig = $this->config['hwaccel'] ?? null;
+        $hwaccelEnabled = is_array($hwaccelConfig) && ($hwaccelConfig['enabled'] ?? false) === true;
+        $encode = null;
+
+        if ($hwaccelEnabled) {
+            $encode = $this->buildHwaccelSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+        }
+
+        // Fall back to software encoding if hwaccel is disabled, unavailable, or returned null
+        if ($encode === null) {
+            $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
+        }
+
         // Atomic publish: rename on success, clean the temp on failure.
         $inner = $encode
             . ' && mv -f ' . escapeshellarg($tmp) . ' ' . escapeshellarg($outFile)

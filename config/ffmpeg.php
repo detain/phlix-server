@@ -12,7 +12,7 @@ return [
     // the max_concurrent_transcodes knob's style/placement.
     'max_concurrent_scan_probes' => 4,
     'hwaccel' => [
-        'enabled' => true,
+        'enabled' => false,
         'prefer_hardware' => true,
         'vendor_priority' => [
             'nvenc' => 0,

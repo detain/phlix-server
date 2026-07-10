@@ -221,7 +221,7 @@ class TmdbProvider implements MetadataProviderInterface
         // [preferredLocale, 'en-US', originalLocale] chain. This allows the
         // server operator to define which locales TMDB should try for missing
         // titles/overviews/taglines via the metadata_language_preference config.
-        $fallbackChain = MetadataValue::asAssocList($options['language_fallback_chain'] ?? null);
+        $fallbackChain = MetadataValue::asList($options['language_fallback_chain'] ?? null);
         if ($fallbackChain !== []) {
             $this->applyLanguageFallbackChain($response, $externalId, $fallbackChain);
         } else {
@@ -252,15 +252,17 @@ class TmdbProvider implements MetadataProviderInterface
      *
      * P1-S4: Replaces the legacy hardcoded chain with an operator-configured
      * list passed via the `language_fallback_chain` option. Each locale is tried
-     * in order until all three fields are populated or the chain is exhausted.
-     *
-     * @param array<string, mixed> &$response   The response array to enrich (modified in place)
-     * @param string              $externalId  TMDB movie ID for fallback requests
-     * @param list<string>        $chain       Ordered list of locale codes to try
-     */
+      * in order until all three fields are populated or the chain is exhausted.
+      *
+      * @param array<string, mixed> &$response   The response array to enrich (modified in place)
+      * @param string              $externalId  TMDB movie ID for fallback requests
+      * @param list<mixed>         $chain       Ordered list of locale codes to try
+      */
     private function applyLanguageFallbackChain(array &$response, string $externalId, array $chain): void
     {
         $localizableFields = ['title', 'overview', 'tagline'];
+        // Filter to only string locale codes at runtime (defense in depth)
+        $chain = array_values(array_filter($chain, fn($v) => is_string($v)));
         $needsFallback = [];
         foreach ($localizableFields as $field) {
             if (empty($response[$field])) {

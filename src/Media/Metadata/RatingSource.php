@@ -15,4 +15,5 @@ enum RatingSource: string
     case Tmdb = 'tmdb';
     case Rt = 'rt';
     case Aggregate = 'aggregate';
+    case User = 'user';
 }

@@ -602,6 +602,20 @@ final class HttpHandler
             );
         }
 
+        // P5-S3: Enforce per-profile concurrent stream limits (direct-play path).
+        // StreamLimitMiddleware can't be applied as router middleware here because
+        // this route bypasses the router to use Workerman's native withFile()
+        // streaming (essential for multi-GB videos). The check is inlined instead.
+        // Signed-URL access (userId=null) skips the stream limit — the signed URL
+        // itself is the access control; stream limits only apply to authenticated
+        // sessions where we have a profileId to enforce against.
+        if ($userId !== null) {
+            $streamLimitResponse = $this->checkStreamLimit($wr, $userId);
+            if ($streamLimitResponse !== null) {
+                return $streamLimitResponse;
+            }
+        }
+
         /** @var ItemRepository $repo */
         $repo = $this->container->get(ItemRepository::class);
         $item = $repo->findById($m['id']);
@@ -664,6 +678,147 @@ final class HttpHandler
             is_string($exp) ? $exp : null,
             is_string($sig) ? $sig : null,
         );
+    }
+
+    /**
+     * Enforce per-profile concurrent stream limits for direct-play requests.
+     *
+     * P5-S3: This is the direct-play analogue of StreamLimitMiddleware, inlined
+     * here because the /media/{id}/stream route bypasses the router (and its
+     * middleware chain) to use Workerman's native withFile() streaming.
+     *
+     * @param WorkermanRequest $wr    The Workerman request.
+     * @param string           $userId The authenticated user's ID.
+     *
+     * @return WorkermanResponse|null 429 with StreamLimitExceeded body on limit
+     *                                exceeded; null to continue serving.
+     */
+    private function checkStreamLimit(WorkermanRequest $wr, string $userId): ?WorkermanResponse
+    {
+        /** @var \Phlix\Auth\UserProfileManager $profileManager */
+        $profileManager = $this->container->get(\Phlix\Auth\UserProfileManager::class);
+        $profile = $profileManager->getActiveProfile($userId);
+        if ($profile === null) {
+            // No profile — fail closed (deny) rather than letting an unprofiled
+            // user through without stream tracking.
+            return new WorkermanResponse(
+                403,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode([
+                    'error' => 'StreamLimitExceeded',
+                    'denial_type' => 'profile_not_found',
+                    'message' => 'Profile not found; access denied',
+                ], JSON_THROW_ON_ERROR),
+            );
+        }
+
+        $profileId = $this->resolveStreamProfileId($profile);
+        if ($profileId === null) {
+            return new WorkermanResponse(
+                403,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode([
+                    'error' => 'StreamLimitExceeded',
+                    'denial_type' => 'profile_not_found',
+                    'message' => 'Profile not found; access denied',
+                ], JSON_THROW_ON_ERROR),
+            );
+        }
+
+        $deviceId = $this->getStreamDeviceId($wr);
+        $sessionId = $this->getStreamSessionId($wr);
+        if ($sessionId === null || $deviceId === null) {
+            // Missing session/device info — skip stream limit enforcement and let
+            // the request proceed (stream won't be tracked, but we don't block).
+            return null;
+        }
+
+        /** @var \Phlix\Access\StreamSessionService $streamSessionService */
+        $streamSessionService = $this->container->get(\Phlix\Access\StreamSessionService::class);
+        $registered = $streamSessionService->registerStream($profileId, $deviceId, $sessionId);
+        if (!$registered) {
+            return new WorkermanResponse(
+                429,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode([
+                    'error' => 'StreamLimitExceeded',
+                    'denial_type' => 'stream_limit_exceeded',
+                    'message' => 'Maximum concurrent streams reached for this profile',
+                    'profile_id' => $profileId,
+                ], JSON_THROW_ON_ERROR),
+            );
+        }
+
+        // Register heartbeat timer for this streaming session (one-shot, re-registered
+        // on each request).
+        $this->registerStreamHeartbeat($streamSessionService, $sessionId);
+
+        return null;
+    }
+
+    /**
+     * Resolve the profile ID from a profile array (inline helper for stream limiting).
+     *
+     * @param array<string, mixed> $profile Profile array from UserProfileManager.
+     *
+     * @return string|null Profile ID as string, or null if cannot resolve.
+     */
+    private function resolveStreamProfileId(array $profile): ?string
+    {
+        $id = $profile['id'] ?? null;
+        return is_string($id) && $id !== '' ? $id : null;
+    }
+
+    /**
+     * Extract the device ID from a Workerman request for stream tracking.
+     */
+    private function getStreamDeviceId(WorkermanRequest $wr): ?string
+    {
+        $deviceId = $wr->header('x-device-id');
+        if (is_string($deviceId) && $deviceId !== '') {
+            return $deviceId;
+        }
+
+        $userAgent = $wr->header('user-agent');
+        if (is_string($userAgent) && $userAgent !== '') {
+            return hash('sha256', $userAgent);
+        }
+
+        return null;
+    }
+
+    /**
+     * Extract the session ID from a Workerman request for stream tracking.
+     */
+    private function getStreamSessionId(WorkermanRequest $wr): ?string
+    {
+        // Query param first (used by HLS clients)
+        $sessionId = $wr->get('session_id');
+        if (is_string($sessionId) && $sessionId !== '') {
+            return $sessionId;
+        }
+
+        // X-Session-ID header
+        $sessionId = $wr->header('x-session-id');
+        if (is_string($sessionId) && $sessionId !== '') {
+            return $sessionId;
+        }
+
+        return null;
+    }
+
+    /**
+     * Register a periodic heartbeat timer for a stream session.
+     */
+    private function registerStreamHeartbeat(\Phlix\Access\StreamSessionService $service, string $sessionId): void
+    {
+        if (!function_exists('\Workerman\Timer')) {
+            return;
+        }
+
+        \Workerman\Timer::add(30, static function () use ($sessionId, $service): void {
+            $service->heartbeat($sessionId);
+        });
     }
 
     /**

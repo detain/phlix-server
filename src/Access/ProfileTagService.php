@@ -37,11 +37,11 @@ final class ProfileTagService
     /**
      * Get all blocked tags for a profile.
      *
-     * @param int $profileId The profile ID to get blocked tags for.
+     * @param string $profileId The profile ID (UUID) to get blocked tags for.
      *
      * @return list<string> List of blocked tag strings.
      */
-    public function getBlockedTags(int $profileId): array
+    public function getBlockedTags(string $profileId): array
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -66,11 +66,11 @@ final class ProfileTagService
     /**
      * Get all allowed tags for a profile.
      *
-     * @param int $profileId The profile ID to get allowed tags for.
+     * @param string $profileId The profile ID (UUID) to get allowed tags for.
      *
      * @return list<string> List of allowed tag strings.
      */
-    public function getAllowedTags(int $profileId): array
+    public function getAllowedTags(string $profileId): array
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -103,12 +103,12 @@ final class ProfileTagService
      * - No restrictions exist (no blocked and no allowed tags)
      * - The tag is in the allowed list (and no blocked tags override it)
      *
-     * @param int    $profileId The profile ID to check.
+     * @param string $profileId The profile ID (UUID) to check.
      * @param string $tag       The tag to check.
      *
      * @return bool True if the tag should be blocked, false otherwise.
      */
-    public function isTagBlocked(int $profileId, string $tag): bool
+    public function isTagBlocked(string $profileId, string $tag): bool
     {
         // First check if the tag is explicitly blocked
         /** @var array<array<string, mixed>> $blockedRows */
@@ -145,13 +145,13 @@ final class ProfileTagService
     /**
      * Set a tag for a profile (upsert - adds or updates).
      *
-     * @param int    $profileId The profile ID.
+     * @param string $profileId The profile ID (UUID).
      * @param string $tag       The tag string.
      * @param string $type      The tag type ('blocked' or 'allowed').
      *
      * @return int The ID of the created/updated profile tag.
      */
-    public function setTag(int $profileId, string $tag, string $type): int
+    public function setTag(string $profileId, string $tag, string $type): int
     {
         // Validate type
         if ($type !== ProfileTag::TYPE_BLOCKED && $type !== ProfileTag::TYPE_ALLOWED) {
@@ -172,13 +172,13 @@ final class ProfileTagService
     /**
      * Remove a specific tag for a profile.
      *
-     * @param int    $profileId The profile ID.
+     * @param string $profileId The profile ID (UUID).
      * @param string $tag       The tag string to remove.
      * @param string $type      The tag type ('blocked' or 'allowed').
      *
      * @return bool True if a tag was removed.
      */
-    public function removeTag(int $profileId, string $tag, string $type): bool
+    public function removeTag(string $profileId, string $tag, string $type): bool
     {
         $result = $this->db->query(
             'DELETE FROM profile_tags WHERE profile_id = ? AND tag = ? AND tag_type = ?',
@@ -191,12 +191,12 @@ final class ProfileTagService
     /**
      * Clear all tags of a specific type for a profile.
      *
-     * @param int    $profileId The profile ID.
+     * @param string $profileId The profile ID (UUID).
      * @param string $type      The tag type to clear ('blocked' or 'allowed').
      *
      * @return bool True if any tags were cleared.
      */
-    public function clearTags(int $profileId, string $type): bool
+    public function clearTags(string $profileId, string $type): bool
     {
         // Validate type
         if ($type !== ProfileTag::TYPE_BLOCKED && $type !== ProfileTag::TYPE_ALLOWED) {
@@ -214,11 +214,11 @@ final class ProfileTagService
     /**
      * Get all tags for a profile.
      *
-     * @param int $profileId The profile ID.
+     * @param string $profileId The profile ID (UUID).
      *
      * @return list<ProfileTag> List of all ProfileTag objects for the profile.
      */
-    public function getTagsForProfile(int $profileId): array
+    public function getTagsForProfile(string $profileId): array
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(

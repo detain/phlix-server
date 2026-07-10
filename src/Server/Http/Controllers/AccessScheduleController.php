@@ -257,16 +257,13 @@ final class AccessScheduleController
      *
      * @param mixed $value The value to parse.
      *
-     * @return int|null The parsed profile ID, or null if invalid.
+     * @return string|null The parsed profile ID, or null if invalid.
      */
-    private function parseProfileId(mixed $value): ?int
+    private function parseProfileId(mixed $value): ?string
     {
-        if (is_int($value)) {
+        $uuidPattern = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i';
+        if (is_string($value) && preg_match($uuidPattern, $value)) {
             return $value;
-        }
-
-        if (is_string($value) && ctype_digit($value)) {
-            return (int) $value;
         }
 
         return null;

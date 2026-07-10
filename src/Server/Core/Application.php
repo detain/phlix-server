@@ -1015,11 +1015,17 @@ class Application
 
         // AuthMiddleware gates these routes; AccessScheduleMiddleware
         // runs globally after auth to enforce schedule restrictions.
-        $this->router->get('/api/v1/profiles/{profileId}/schedules', [$controller, 'listForProfile']);
-        $this->router->post('/api/v1/profiles/{profileId}/schedules', [$controller, 'createForProfile']);
-        $this->router->get('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'getSchedule']);
-        $this->router->put('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'updateSchedule']);
-        $this->router->delete('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'deleteSchedule']);
+        $this->router->group(
+            '',
+            function (Router $r) use ($controller): void {
+                $r->get('/api/v1/profiles/{profileId}/schedules', [$controller, 'listForProfile']);
+                $r->post('/api/v1/profiles/{profileId}/schedules', [$controller, 'createForProfile']);
+                $r->get('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'getSchedule']);
+                $r->put('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'updateSchedule']);
+                $r->delete('/api/v1/profiles/{profileId}/schedules/{scheduleId}', [$controller, 'deleteSchedule']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
     }
 
     /**
@@ -1039,9 +1045,15 @@ class Application
 
         // AuthMiddleware gates these routes; tag filtering is applied
         // in ItemRepository::query() based on RequestContext profileId.
-        $this->router->get('/api/v1/profiles/{profileId}/tags', [$controller, 'listForProfile']);
-        $this->router->post('/api/v1/profiles/{profileId}/tags', [$controller, 'createForProfile']);
-        $this->router->delete('/api/v1/profiles/{profileId}/tags/{tagId}', [$controller, 'deleteTag']);
+        $this->router->group(
+            '',
+            function (Router $r) use ($controller): void {
+                $r->get('/api/v1/profiles/{profileId}/tags', [$controller, 'listForProfile']);
+                $r->post('/api/v1/profiles/{profileId}/tags', [$controller, 'createForProfile']);
+                $r->delete('/api/v1/profiles/{profileId}/tags/{tagId}', [$controller, 'deleteTag']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
     }
 
     /**
@@ -1100,9 +1112,15 @@ class Application
 
         // AuthMiddleware gates these routes; StreamLimitMiddleware
         // runs globally after auth to enforce stream limits.
-        $this->router->get('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'getStreamLimits']);
-        $this->router->put('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'updateStreamLimits']);
-        $this->router->get('/api/v1/profiles/{profileId}/active-streams', [$controller, 'getActiveStreams']);
+        $this->router->group(
+            '',
+            function (Router $r) use ($controller): void {
+                $r->get('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'getStreamLimits']);
+                $r->put('/api/v1/profiles/{profileId}/stream-limits', [$controller, 'updateStreamLimits']);
+                $r->get('/api/v1/profiles/{profileId}/active-streams', [$controller, 'getActiveStreams']);
+            },
+            [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
     }
 
     /**

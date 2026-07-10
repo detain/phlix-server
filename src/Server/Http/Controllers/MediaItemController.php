@@ -171,6 +171,23 @@ class MediaItemController
             ];
         }
 
+        // P3B-S2: Include audio_tracks from media_streams for multi-audio playback.
+        // Filter for stream_type='audio' and map to the StreamAudioTrack shape.
+        $audioTracks = [];
+        $streams = $this->itemRepository->getItemStreams($itemId);
+        foreach ($streams as $stream) {
+            if (($stream['stream_type'] ?? '') === 'audio') {
+                $audioTracks[] = [
+                    'id' => $stream['id'] ?? '',
+                    'codec' => $stream['codec'] ?? '',
+                    'language' => $stream['language'] ?? 'und',
+                    'channels' => is_scalar($stream['channels'] ?? null) ? (int) $stream['channels'] : 0,
+                    'bitrate' => isset($stream['bitrate']) && is_scalar($stream['bitrate']) ? (int) $stream['bitrate'] : null,
+                    'title' => $stream['title'] ?? null,
+                ];
+            }
+        }
+
         return (new Response())->json([
             'item_id' => $itemId,
             'intro_marker' => $introMarker,
@@ -178,6 +195,7 @@ class MediaItemController
             'chapters' => $chapters,
             'skip_button_spec' => $skipSpec->toArray(),
             'quality_ladder' => $this->buildQualityLadder($item, $request),
+            'audio_tracks' => $audioTracks,
         ]);
     }
 

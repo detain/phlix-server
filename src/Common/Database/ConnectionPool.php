@@ -143,6 +143,14 @@ class ConnectionPool
             if (is_callable($previous)) {
                 $previous($w);
             }
+            // Close client connections BEFORE draining the pool: their onClose
+            // handlers may write to the DB (e.g. relay-session teardown) and
+            // would otherwise re-create a hooked PDO connection after closeAll,
+            // which then fatals at RSHUTDOWN. Worker::stop() only closes
+            // connections AFTER onWorkerStop, so do it here first.
+            foreach ($w->connections as $connection) {
+                $connection->close();
+            }
             self::closeAll();
         };
     }

@@ -517,6 +517,29 @@ try {
 }
 
 // -----------------------------------------------------------------------------
+// 4f. DLNA/UPnP SSDP advertiser worker.
+//
+// The SsdpAdvertiser is a Workerman Worker that sends SSDP NOTIFY messages
+// to the multicast address 239.255.255.250:1900 every 30 seconds, allowing
+// DLNA/UPnP devices on the network to discover this media server.
+//
+// This worker must be instantiated BEFORE Worker::runAll() because Workerman
+// cannot fork a Worker post-runAll(). count=1 is sufficient since SSDP
+// announcements are broadcast network messages that don't need redundancy.
+// -----------------------------------------------------------------------------
+
+try {
+    $serverConfig = is_array($config['server'] ?? null) ? $config['server'] : [];
+    $dlnaPort = is_int($serverConfig['port'] ?? null) ? $serverConfig['port'] : 8096;
+    $dlnaSsdpWorker = new \Phlix\Dlna\SsdpAdvertiser(null, $dlnaPort);
+    $dlnaSsdpWorker->count = 1;
+    $dlnaSsdpWorker->name = 'phlix-dlna-ssdp';
+} catch (\Throwable $e) {
+    // The SSDP advertiser is best-effort; never block the HTTP server.
+    trigger_error('Failed to set up DLNA SSDP advertiser worker: ' . $e->getMessage(), E_USER_WARNING);
+}
+
+// -----------------------------------------------------------------------------
 // 5. Run
 // -----------------------------------------------------------------------------
 

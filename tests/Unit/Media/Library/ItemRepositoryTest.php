@@ -1360,11 +1360,15 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->stringContains('INSERT INTO media_streams'),
                 $this->callback(function ($params) {
-                    return count($params) === 9
+                    // 12 bindings since migration 071 added channels/title/is_default.
+                    return count($params) === 12
                         && $params[1] === 'movie-1'
                         && $params[2] === 0
                         && $params[3] === 'video'
-                        && $params[4] === 'h264';
+                        && $params[4] === 'h264'
+                        && $params[7] === null   // channels (video row)
+                        && $params[10] === null  // title
+                        && $params[11] === 0;    // is_default defaults to 0
                 })
             );
 
@@ -1376,6 +1380,84 @@ class ItemRepositoryTest extends TestCase
         ]);
 
         $this->assertNotEmpty($id);
+    }
+
+    public function testAddStreamPersistsTrackMetadataColumns(): void
+    {
+        // Migration 071: channels/title/is_default flow through to the INSERT
+        // so audio + subtitle track menus have real metadata to shape.
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO media_streams'),
+                    $this->stringContains('channels'),
+                    $this->stringContains('title'),
+                    $this->stringContains('is_default')
+                ),
+                $this->callback(function ($params) {
+                    return count($params) === 12
+                        && $params[3] === 'audio'
+                        && $params[5] === 'eng'      // language
+                        && $params[7] === 6          // channels
+                        && $params[10] === 'Surround 5.1' // title
+                        && $params[11] === 1;        // is_default
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $id = $repo->addStream('movie-1', [
+            'stream_index' => 1,
+            'stream_type' => 'audio',
+            'codec' => 'ac3',
+            'language' => 'eng',
+            'bitrate' => 448000,
+            'channels' => 6,
+            'title' => 'Surround 5.1',
+            'is_default' => 1,
+        ]);
+
+        $this->assertNotEmpty($id);
+    }
+
+    public function testGetItemStreamsAliasesIsDefaultAsDisposition(): void
+    {
+        // StreamTrackShaper reads the ffprobe-shaped `disposition` key; the
+        // repository surfaces the stored is_default column under that name.
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([
+            [
+                'id' => 'stream-2',
+                'media_item_id' => 'movie-1',
+                'stream_index' => 1,
+                'stream_type' => 'audio',
+                'codec' => 'ac3',
+                'is_default' => 1,
+            ],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $result = $repo->getItemStreams('movie-1');
+
+        $this->assertSame(1, $result[0]['disposition']);
+    }
+
+    public function testMarkStreamsProbedStampsMediaItem(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('UPDATE media_items'),
+                    $this->stringContains('streams_probed_at = NOW()')
+                ),
+                ['movie-1']
+            );
+
+        $repo = new ItemRepository($db);
+        $repo->markStreamsProbed('movie-1');
     }
 
     public function testDeleteStreamsByItemDeletesAllStreamsForItem(): void

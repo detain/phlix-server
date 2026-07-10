@@ -38,16 +38,18 @@ final class LadderResultTest extends TestCase
         self::assertSame($copy, $variants[0], 'copy Original is the highest master variant');
     }
 
-    public function testStreamVariantsOmitsNonCopyOriginalToAvoidDuplicate(): void
+    public function testStreamVariantsPrependsNonCopyOriginalToo(): void
     {
+        // The transcode (non-copy) Original is ALSO a distinct master variant now —
+        // it is never dropped, so the client's "Original" pick is always playable.
         $r1080 = $this->rung('1080p', 1920, 1080);
         $r720 = $this->rung('720p', 1280, 720);
         $best = $this->bestAvailableOriginal();
 
         $variants = (new LadderResult([$r1080, $r720], $best))->streamVariants();
 
-        self::assertSame([$r1080, $r720], $variants);
-        self::assertNotContains($best, $variants, 'a mirror-of-top-rung Original must not duplicate a variant');
+        self::assertSame([$best, $r1080, $r720], $variants);
+        self::assertSame($best, $variants[0], 'transcode Original is prepended as the highest master variant');
     }
 
     public function testToArrayNestsRenditionsAndOriginal(): void

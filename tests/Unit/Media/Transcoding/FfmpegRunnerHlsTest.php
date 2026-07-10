@@ -492,6 +492,83 @@ class FfmpegRunnerHlsTest extends TestCase
         $this->assertStringNotContainsString('-c:a copy', $cmd);
     }
 
+    public function testBuildAudioSegmentCommandIsGenuinelyAudioOnly(): void
+    {
+        // P3B multi-audio: an audio rendition segment is -vn (NO video decode/encode
+        // of any kind), maps the AUDIO-RELATIVE stream index, encodes AAC, and keeps
+        // the exact -ss/-t/-output_ts_offset framing of the video segments.
+        $cmd = $this->runner()->buildAudioSegmentCommand('/in.mkv', '/out/seg-a1-00130.ts', 780.0, 6.0, [
+            'audio_stream_index' => 1,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+        ]);
+
+        $this->assertStringContainsString(' -vn', $cmd);
+        $this->assertStringContainsString('-map 0:a:1', $cmd);
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-b:a 128k', $cmd);
+        // NO video codec / encoder / mapping flags at all.
+        $this->assertStringNotContainsString('-c:v', $cmd);
+        $this->assertStringNotContainsString('libx264', $cmd);
+        $this->assertStringNotContainsString('-map 0:v', $cmd);
+        $this->assertStringNotContainsString('-force_key_frames', $cmd);
+        $this->assertStringNotContainsString('scale=', $cmd);
+        // Same segment framing as the video segments (shared VOD timeline).
+        $this->assertStringContainsString('-ss 780 -i ', $cmd);
+        $this->assertStringContainsString('-t 6', $cmd);
+        $this->assertStringContainsString('-output_ts_offset 780', $cmd);
+        $this->assertStringContainsString('-muxdelay 0 -muxpreload 0', $cmd);
+        $this->assertStringContainsString('-f mpegts', $cmd);
+    }
+
+    public function testBuildAudioSegmentCommandDefaultsAndRefusesCopy(): void
+    {
+        // Defaults: first audio track, AAC 128k. A 'copy' request is upgraded to AAC
+        // so the rendition always matches the advertised mp4a.40.2.
+        $cmd = $this->runner()->buildAudioSegmentCommand('/in.mkv', '/out/seg-a0-00000.ts', 0.0, 6.0, [
+            'audio_codec' => 'copy',
+        ]);
+
+        $this->assertStringContainsString('-map 0:a:0', $cmd);
+        $this->assertStringContainsString('-c:a aac', $cmd);
+        $this->assertStringContainsString('-b:a 128k', $cmd);
+        $this->assertStringNotContainsString('-c:a copy', $cmd);
+    }
+
+    public function testBuildSegmentCommandVideoOnlyDropsAudio(): void
+    {
+        // With a shared audio group in the master, video variant segments carry NO
+        // audio (-an, no audio map/codec flags) — sound plays from the audio renditions.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-v480p-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'libx264',
+            'crf' => 23,
+            'audio_codec' => 'aac',
+            'audio_bitrate' => '128k',
+            'video_only' => true,
+        ]);
+
+        $this->assertStringContainsString(' -an', $cmd);
+        $this->assertStringContainsString('-c:v libx264', $cmd);
+        $this->assertStringNotContainsString('-map 0:a', $cmd);
+        $this->assertStringNotContainsString('-c:a', $cmd);
+        $this->assertStringNotContainsString('-b:a', $cmd);
+    }
+
+    public function testBuildSegmentCommandVideoOnlyAppliesToCopyToo(): void
+    {
+        // A stream-copy "Original" under an audio group is also video-only.
+        $cmd = $this->runner()->buildSegmentCommand('/in.mkv', '/out/seg-voriginal-00000.ts', 0.0, 6.0, [
+            'video_codec' => 'copy',
+            'audio_codec' => 'copy',
+            'video_only' => true,
+        ]);
+
+        $this->assertStringContainsString('-c:v copy', $cmd);
+        $this->assertStringContainsString(' -an', $cmd);
+        $this->assertStringNotContainsString('-map 0:a', $cmd);
+        $this->assertStringNotContainsString('-c:a', $cmd);
+    }
+
     public function testBuildSegmentCommandBoundaryFlagsIdenticalAcrossRungs(): void
     {
         // Seamless ABR switching demands that the segment framing (keyframe expr, PTS

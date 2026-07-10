@@ -1071,6 +1071,13 @@ class ItemRepository
         $rows = [];
         foreach ($result as $row) {
             if (is_array($row)) {
+                // StreamTrackShaper reads the ffprobe-shaped `disposition` key
+                // (a bare numeric default flag) — surface the stored is_default
+                // column (migration 071) under that name so the shaper honours
+                // the container's default track without a schema-coupled read.
+                if (!array_key_exists('disposition', $row) && array_key_exists('is_default', $row)) {
+                    $row['disposition'] = $row['is_default'];
+                }
                 $rows[] = $row;
             }
         }
@@ -1088,10 +1095,14 @@ class ItemRepository
     {
         $idCandidate = $streamData['id'] ?? null;
         $id = is_string($idCandidate) ? $idCandidate : $this->generateUuid();
+        $isDefaultRaw = $streamData['is_default'] ?? 0;
+        $isDefault = is_numeric($isDefaultRaw) ? (int) $isDefaultRaw : 0;
 
         $this->db->query(
-            "INSERT INTO media_streams (id, media_item_id, stream_index, stream_type, codec, language, bitrate, width, height)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO media_streams
+                (id, media_item_id, stream_index, stream_type, codec, language,
+                 bitrate, channels, width, height, title, is_default)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $itemId,
@@ -1100,8 +1111,11 @@ class ItemRepository
                 $streamData['codec'] ?? null,
                 $streamData['language'] ?? null,
                 $streamData['bitrate'] ?? null,
+                $streamData['channels'] ?? null,
                 $streamData['width'] ?? null,
                 $streamData['height'] ?? null,
+                $streamData['title'] ?? null,
+                $isDefault,
             ]
         );
 
@@ -1122,6 +1136,28 @@ class ItemRepository
     public function deleteStreamsByItem(string $itemId): void
     {
         $this->db->query("DELETE FROM media_streams WHERE media_item_id = ?", [$itemId]);
+    }
+
+    /**
+     * Stamps a media item's streams_probed_at marker (migration 071), recording
+     * that its FULL media_streams set was persisted from a real ffprobe.
+     *
+     * Guards the lazy playback-info backfill ({@see \Phlix\Media\Library\StreamProbeBackfill}):
+     * an item whose rows legitimately hold one audio track and zero subtitles
+     * would otherwise look "unprobed" and be re-probed on every playback-info
+     * request. Called by the scanner after every successful stream replacement
+     * and by the lazy backfill itself (including on probe failure, to prevent
+     * retry loops).
+     *
+     * @param string $itemId The media item's unique identifier
+     * @return void
+     */
+    public function markStreamsProbed(string $itemId): void
+    {
+        $this->db->query(
+            "UPDATE media_items SET streams_probed_at = NOW() WHERE id = ?",
+            [$itemId]
+        );
     }
 
     /**

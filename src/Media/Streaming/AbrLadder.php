@@ -60,14 +60,16 @@ namespace Phlix\Media\Streaming;
  *    metadata-less item is not upscaled, and no copy Original is offered.
  *  - Ordering: highest-first (the HLS master lists highest-first).
  *
- * "Original" descriptor (D4):
+ * "Original" descriptor (D4, revised): ALWAYS a distinct, playable variant.
  *  - Source is H.264 (h264/avc1/avc) + AAC (aac/mp4a), has known dimensions, and
  *    fits the profile cap → a stream-copy passthrough (`isCopy = true`) at source
  *    resolution/bitrate, labelled "Original (<h>p)". A5 emits it as an extra
  *    highest master variant; A4 serves it via `-c copy`.
- *  - Otherwise → the top clamped transcode rung, relabelled "Original (best
- *    available)" (`isCopy = false`); A5/UI map the "Original" choice onto that
- *    rung rather than emitting a duplicate variant.
+ *  - Otherwise → a TRANSCODE at source resolution (clamped to the profile cap,
+ *    aspect preserved; unknown dims fall back to the top rung's frame) with a
+ *    source-ish video bitrate capped at the profile's video ceiling
+ *    (`isCopy = false`), also labelled "Original (<h>p)". It is still emitted as
+ *    its own master variant (id `original`), never dropped.
  *
  * Codecs strategy: `codecs` advertises H.264 High profile at the LOWEST level
  * whose MaxFS covers the frame's macroblock count (`ceil(w/16)*ceil(h/16)`; see
@@ -268,21 +270,31 @@ final class AbrLadder
         }
 
         $renditions = array_reverse($rungsAsc);
-        $original = $this->buildOriginal($source, $highest, $maxWidth, $maxHeight, $maxBitrate);
+        $original = $this->buildOriginal($source, $highest, $maxWidth, $maxHeight, $maxBitrate, $profileVideoCeil);
 
         return new LadderResult($renditions, $original);
     }
 
     /**
-     * Decide the "Original" descriptor: a stream-copy passthrough when the source
-     * is HLS-safe and fits the cap, else the top transcode rung relabelled.
+     * Decide the "Original" descriptor — ALWAYS a genuine, playable variant.
+     *
+     * Stream-copy passthrough when the source is HLS-safe (H.264 + AAC, known
+     * dims, fits the profile cap); otherwise a TRANSCODE at the source resolution
+     * (clamped to the profile cap, aspect preserved) with a source-ish video
+     * bitrate (the source's own bitrate when known, else the canonical tier
+     * target, capped at the profile's video ceiling). Either way the descriptor
+     * keeps `id = 'original'` and is emitted as a distinct master variant by
+     * {@see LadderResult::streamVariants()}, so "Original" is always selectable —
+     * for a transcoding source it is the closest-to-source rendition rather than
+     * being silently dropped.
      */
     private function buildOriginal(
         SourceProfile $source,
         Rendition $topRung,
         int $maxWidth,
         int $maxHeight,
-        int $maxBitrate
+        int $maxBitrate,
+        int $profileVideoCeil
     ): Rendition {
         $sh = $source->height;
         $sw = $source->width;
@@ -316,14 +328,46 @@ final class AbrLadder
             );
         }
 
+        // Transcode "Original": source resolution (clamped to the profile cap,
+        // aspect preserved) + source-ish bitrate (capped sanely). Unknown source
+        // dims fall back to the top clamped rung's frame — the best stand-in for
+        // "source resolution" we can offer without inventing dimensions.
+        if ($sh !== null && $sh > 0 && $sw !== null && $sw > 0) {
+            $width = $sw;
+            $height = $sh;
+            if ($height > $maxHeight) {
+                $width = (int) round($width * $maxHeight / $height);
+                $height = $maxHeight;
+            }
+            if ($width > $maxWidth) {
+                $height = (int) round($height * $maxWidth / $width);
+                $width = $maxWidth;
+            }
+            $width = self::evenFloor((float) $width);
+            $height = self::evenFloor((float) $height);
+        } else {
+            $width = $topRung->width;
+            $height = $topRung->height;
+        }
+
+        $videoBitrate = ($source->videoBitrate !== null && $source->videoBitrate > 0)
+            ? $source->videoBitrate
+            : self::canonicalTargetKbps($height) * 1000;
+        $videoBitrate = min($videoBitrate, $profileVideoCeil);
+        $videoBitrate = max($videoBitrate, self::MIN_VIDEO_BITRATE);
+
+        $bandwidth = (int) round($videoBitrate * Rendition::MAXRATE_MULTIPLIER)
+            + Rendition::AUDIO_BANDWIDTH;
+        $bandwidth = min($bandwidth, $maxBitrate);
+
         return new Rendition(
             id: 'original',
-            label: 'Original (best available)',
-            width: $topRung->width,
-            height: $topRung->height,
-            bitrate: $topRung->bitrate,
-            videoBitrate: $topRung->videoBitrate,
-            codecs: $topRung->codecs,
+            label: sprintf('Original (%dp)', $height),
+            width: $width,
+            height: $height,
+            bitrate: $bandwidth,
+            videoBitrate: $videoBitrate,
+            codecs: self::h264Codecs($width, $height),
             isOriginal: true,
             isCopy: false,
         );

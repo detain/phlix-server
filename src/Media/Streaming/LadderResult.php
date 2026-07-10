@@ -34,21 +34,17 @@ final readonly class LadderResult
     /**
      * Distinct variants for the HLS master playlist, highest-first.
      *
-     * When `original` is a stream-copy passthrough it is a genuine additional
-     * (highest) variant and is prepended. When it merely mirrors the top
-     * transcode rung (`isCopy === false`) it is omitted here so A5 does not emit
-     * a duplicate `#EXT-X-STREAM-INF` — the UI's "Original" choice maps onto the
-     * existing top rung instead.
+     * `original` is ALWAYS prepended as a genuine additional (highest) variant —
+     * a stream-copy passthrough when the source is HLS-safe, else a transcode at
+     * source resolution (see {@see AbrLadder::build()}). It is never dropped, so
+     * the client's "Original" choice always has a real `media_voriginal.m3u8`
+     * behind it.
      *
      * @return list<Rendition>
      */
     public function streamVariants(): array
     {
-        if ($this->original->isCopy) {
-            return array_merge([$this->original], $this->renditions);
-        }
-
-        return $this->renditions;
+        return array_merge([$this->original], $this->renditions);
     }
 
     /**

@@ -258,6 +258,22 @@ final class PooledMySQLConnection extends Connection
     {
         $this->idle ??= new \Swoole\Coroutine\Channel($this->maxSize);
 
+        // Guard: Skip Channel access if not in a coroutine (SIGTERM shutdown)
+        if ($this->currentCoroutineId() < 0) {
+            if ($this->created < $this->maxSize) {
+                $this->created++;
+                try {
+                    return ($this->rawFactory)();
+                } catch (\Throwable $e) {
+                    $this->created--;
+                    throw $e;
+                }
+            }
+            // Block-wait by recursing (outside coroutine, no Channel access)
+            usleep(1000);
+            return $this->acquire();
+        }
+
         if (!$this->idle->isEmpty()) {
             /** @var Connection $conn */
             $conn = $this->idle->pop();

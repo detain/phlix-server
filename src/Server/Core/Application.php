@@ -470,12 +470,16 @@ class Application
             [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
         );
 
-        // Skip/intros marker CRUD (P3-S1) — user-editable markers stored in media_markers table
+        // Skip/intros marker CRUD (P3-S1) — user-editable markers stored in media_markers table.
+        // Note: GET /api/v1/media/{id}/markers is handled by MarkerController (skip marker set).
+        // MediaMarkerController handles user marker CREATE and DELETE only.
         $mediaMarkerController = $this->getMediaMarkerController();
         $this->router->group(
             '',
             function (Router $r) use ($mediaMarkerController): void {
-                $r->get('/api/v1/media/{id}/markers', [$mediaMarkerController, 'getMarkers']);
+                // Note: GET /api/v1/media/{id}/markers is NOT registered here to avoid
+                // conflicting with MarkerController's skip marker set endpoint.
+                // User marker creation and deletion:
                 $r->post('/api/v1/media/{id}/markers', [$mediaMarkerController, 'createMarker']);
                 $r->delete('/api/v1/media/{id}/markers/{markerId}', [$mediaMarkerController, 'deleteMarker']);
             },
@@ -562,6 +566,10 @@ class Application
 
         // Streaming routes for HLS and DASH (1.6e).
         $this->loadStreamingRoutes();
+
+        // Trickplay thumbnail seek routes (P2-S2) — must be registered before
+        // the media-type routes so the /trickplay/ prefix doesn't conflict.
+        $this->loadTrickplayRoutes();
 
         // Media-type routes: music, books, audiobooks, photos (1.6f).
         $this->loadMusicRoutes();
@@ -955,12 +963,16 @@ class Application
     private function loadSyncPlayRoutes(): void
     {
         $controller = $this->getSyncPlayController();
+        $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-        $this->router->get('/api/v1/syncplay/groups', [$controller, 'listGroups']);
-        $this->router->post('/api/v1/syncplay/groups', [$controller, 'createGroup']);
-        $this->router->get('/api/v1/syncplay/groups/{id}', [$controller, 'getGroup']);
-        $this->router->post('/api/v1/syncplay/groups/{id}/join', [$controller, 'joinGroup']);
-        $this->router->post('/api/v1/syncplay/groups/{id}/leave', [$controller, 'leaveGroup']);
+        // All SyncPlay group operations require authentication
+        $this->router->group('', function (Router $r) use ($controller): void {
+            $r->get('/api/v1/syncplay/groups', [$controller, 'listGroups']);
+            $r->post('/api/v1/syncplay/groups', [$controller, 'createGroup']);
+            $r->get('/api/v1/syncplay/groups/{id}', [$controller, 'getGroup']);
+            $r->post('/api/v1/syncplay/groups/{id}/join', [$controller, 'joinGroup']);
+            $r->post('/api/v1/syncplay/groups/{id}/leave', [$controller, 'leaveGroup']);
+        }, [$authMiddleware]);
     }
 
     /**
@@ -1325,29 +1337,36 @@ class Application
      * - CollectionController: index, create, show, update, delete,
      *   addItem, removeItem, bulkAdd, refresh, forLibrary (10 routes)
      *
+     * All collection routes require authentication as collections are
+     * per-user private data.
+     *
      * @since 0.14.0
      */
     private function loadCollectionRoutes(): void
     {
         $controller = $this->getCollectionController();
+        $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-        // Collection CRUD routes
-        $this->router->get('/api/v1/collections', [$controller, 'index']);
-        $this->router->post('/api/v1/collections', [$controller, 'create']);
-        $this->router->get('/api/v1/collections/{id}', [$controller, 'show']);
-        $this->router->put('/api/v1/collections/{id}', [$controller, 'update']);
-        $this->router->delete('/api/v1/collections/{id}', [$controller, 'delete']);
+        // All collection routes require authentication
+        $this->router->group('', function (Router $r) use ($controller): void {
+            // Collection CRUD routes
+            $r->get('/api/v1/collections', [$controller, 'index']);
+            $r->post('/api/v1/collections', [$controller, 'create']);
+            $r->get('/api/v1/collections/{id}', [$controller, 'show']);
+            $r->put('/api/v1/collections/{id}', [$controller, 'update']);
+            $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
 
-        // Collection item management
-        $this->router->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
-        $this->router->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
+            // Collection item management
+            $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);
+            $r->delete('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'removeItem']);
 
-        // Bulk operations and smart collection refresh
-        $this->router->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
-        $this->router->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
+            // Bulk operations and smart collection refresh
+            $r->post('/api/v1/collections/{id}/bulk-add', [$controller, 'bulkAdd']);
+            $r->post('/api/v1/collections/{id}/refresh', [$controller, 'refresh']);
 
-        // Library-scoped collections
-        $this->router->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
+            // Library-scoped collections
+            $r->get('/api/v1/libraries/{libraryId}/collections', [$controller, 'forLibrary']);
+        }, [$authMiddleware]);
     }
 
     /**
@@ -1393,6 +1412,63 @@ class Application
             $r->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
             $r->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
         }, $middleware);
+    }
+
+    /**
+     * Registers trickplay (thumbnail seek preview) HTTP routes.
+     *
+     * Serves pre-generated thumbnail grid images and BIF index XML files
+     * for the trickplay scrubber UI. These are public read-only routes
+     * (the signed URL middleware on streaming routes is intentionally NOT
+     * applied here because trickplay thumbnails are low-sensitivity assets
+     * and the job ID provides implicit scoping).
+     *
+     * Endpoints:
+     * - GET /trickplay/{jobId}/thumb-{index}.jpg — BIF thumbnail grid image
+     * - GET /trickplay/{jobId}/index.xml          — BIF index XML
+     * - GET /trickplay/{jobId}/sprite.jpg         — Sprite sheet image
+     * - GET /trickplay/{jobId}/timeline.json      — Timeline mapping JSON
+     *
+     * @since 0.11.0
+     */
+    private function loadTrickplayRoutes(): void
+    {
+        $controller = $this->getTrickplayController();
+
+        // Public read-only routes — no auth required, job ID provides scoping.
+        // These are low-sensitivity placeholder thumbnails, not media content.
+        $this->router->get('/trickplay/{jobId}/thumb-{index}.jpg', [$controller, 'getThumbnail']);
+        $this->router->get('/trickplay/{jobId}/index.xml', [$controller, 'getIndex']);
+        $this->router->get('/trickplay/{jobId}/sprite.jpg', [$controller, 'getSprite']);
+        $this->router->get('/trickplay/{jobId}/timeline.json', [$controller, 'getTimeline']);
+    }
+
+    /**
+     * Returns a TrickplayController instance.
+     *
+     * @return \Phlix\Media\Streaming\Trickplay\TrickplayController
+     *
+     * @since 0.11.0
+     */
+    private function getTrickplayController(): \Phlix\Media\Streaming\Trickplay\TrickplayController
+    {
+        // Load trickplay config (storage_dir and base_url).
+        /** @var array<string, mixed> $trickplayConfig */
+        $trickplayConfig = [];
+        $configFile = dirname(__DIR__, 2) . '/config/trickplay.php';
+        if (file_exists($configFile)) {
+            /** @var mixed $config */
+            $config = include $configFile;
+            if (is_array($config)) {
+                /** @var array<string, mixed> $trickplayConfig */
+                $trickplayConfig = $config;
+            }
+        }
+
+        $storageDir = is_string($trickplayConfig['storage_dir'] ?? null) ? $trickplayConfig['storage_dir'] : '/var/trickplay';
+        $baseUrl = is_string($trickplayConfig['base_url'] ?? null) ? $trickplayConfig['base_url'] : '';
+
+        return new \Phlix\Media\Streaming\Trickplay\TrickplayController($storageDir, $baseUrl);
     }
 
     /**
@@ -2388,24 +2464,28 @@ class Application
                 return;
             }
             $controller = new \Phlix\Server\Http\Controllers\Dlna\RendererListController($playToManager);
+            $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-            // List renderers
-            $this->router->get('/api/v1/dlna/renderers', [$controller, 'listRenderers']);
+            // All DLNA renderer routes require authentication
+            $this->router->group('', function (Router $r) use ($controller): void {
+                // List renderers
+                $r->get('/api/v1/dlna/renderers', [$controller, 'listRenderers']);
 
-            // Get renderer status
-            $this->router->get('/api/v1/dlna/renderers/{id}/status', [$controller, 'getStatus']);
+                // Get renderer status
+                $r->get('/api/v1/dlna/renderers/{id}/status', [$controller, 'getStatus']);
 
-            // Start play-to session
-            $this->router->post('/api/v1/dlna/renderers/{id}/play', [$controller, 'playTo']);
+                // Start play-to session
+                $r->post('/api/v1/dlna/renderers/{id}/play', [$controller, 'playTo']);
 
-            // Pause playback
-            $this->router->post('/api/v1/dlna/renderers/{id}/pause', [$controller, 'pause']);
+                // Pause playback
+                $r->post('/api/v1/dlna/renderers/{id}/pause', [$controller, 'pause']);
 
-            // Stop playback
-            $this->router->post('/api/v1/dlna/renderers/{id}/stop', [$controller, 'stop']);
+                // Stop playback
+                $r->post('/api/v1/dlna/renderers/{id}/stop', [$controller, 'stop']);
 
-            // Seek to position
-            $this->router->post('/api/v1/dlna/renderers/{id}/seek', [$controller, 'seek']);
+                // Seek to position
+                $r->post('/api/v1/dlna/renderers/{id}/seek', [$controller, 'seek']);
+            }, [$authMiddleware]);
         } catch (\Throwable $e) {
             // PlayToManager not configured - silent ignore
         }
@@ -2439,21 +2519,25 @@ class Application
                 return;
             }
             $controller = new \Phlix\Server\Http\Controllers\Chromecast\ChromecastController($castManager);
+            $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-            // List discovered devices
-            $this->router->get('/api/v1/cast/devices', [$controller, 'listDevices']);
+            // All Chromecast routes require authentication
+            $this->router->group('', function (Router $r) use ($controller): void {
+                // List discovered devices
+                $r->get('/api/v1/cast/devices', [$controller, 'listDevices']);
 
-            // Start casting
-            $this->router->post('/api/v1/cast/devices/{id}/cast', [$controller, 'cast']);
+                // Start casting
+                $r->post('/api/v1/cast/devices/{id}/cast', [$controller, 'cast']);
 
-            // Playback controls
-            $this->router->post('/api/v1/cast/devices/{id}/play', [$controller, 'play']);
-            $this->router->post('/api/v1/cast/devices/{id}/pause', [$controller, 'pause']);
-            $this->router->post('/api/v1/cast/devices/{id}/stop', [$controller, 'stop']);
-            $this->router->post('/api/v1/cast/devices/{id}/seek', [$controller, 'seek']);
+                // Playback controls
+                $r->post('/api/v1/cast/devices/{id}/play', [$controller, 'play']);
+                $r->post('/api/v1/cast/devices/{id}/pause', [$controller, 'pause']);
+                $r->post('/api/v1/cast/devices/{id}/stop', [$controller, 'stop']);
+                $r->post('/api/v1/cast/devices/{id}/seek', [$controller, 'seek']);
 
-            // Get session status
-            $this->router->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
+                // Get session status
+                $r->get('/api/v1/cast/devices/{id}/status', [$controller, 'getStatus']);
+            }, [$authMiddleware]);
         } catch (\Throwable $e) {
             // CastManager not configured - silent ignore
         }
@@ -2485,21 +2569,25 @@ class Application
                 return;
             }
             $controller = new \Phlix\Server\Http\Controllers\Roku\RokuController($rokuManager);
+            $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-            // List discovered devices
-            $this->router->get('/api/v1/roku/devices', [$controller, 'listDevices']);
+            // All Roku routes require authentication
+            $this->router->group('', function (Router $r) use ($controller): void {
+                // List discovered devices
+                $r->get('/api/v1/roku/devices', [$controller, 'listDevices']);
 
-            // Send media to device
-            $this->router->post('/api/v1/roku/devices/{id}/send', [$controller, 'sendMedia']);
+                // Send media to device
+                $r->post('/api/v1/roku/devices/{id}/send', [$controller, 'sendMedia']);
 
-            // Launch channel
-            $this->router->post('/api/v1/roku/devices/{id}/launch/{channelId}', [$controller, 'launchChannel']);
+                // Launch channel
+                $r->post('/api/v1/roku/devices/{id}/launch/{channelId}', [$controller, 'launchChannel']);
 
-            // Send keypress
-            $this->router->post('/api/v1/roku/devices/{id}/key/{keyName}', [$controller, 'sendKey']);
+                // Send keypress
+                $r->post('/api/v1/roku/devices/{id}/key/{keyName}', [$controller, 'sendKey']);
 
-            // Get session status
-            $this->router->get('/api/v1/roku/devices/{id}/status', [$controller, 'getStatus']);
+                // Get session status
+                $r->get('/api/v1/roku/devices/{id}/status', [$controller, 'getStatus']);
+            }, [$authMiddleware]);
         } catch (\Throwable $e) {
             // RokuManager not configured - silent ignore
         }
@@ -2532,20 +2620,24 @@ class Application
                 return;
             }
             $controller = new \Phlix\Server\Http\Controllers\AirPlay\AirPlayController($airPlayManager);
+            $authMiddleware = new \Phlix\Server\Http\Middleware\AuthMiddleware();
 
-            // List discovered devices
-            $this->router->get('/api/v1/airplay/devices', [$controller, 'listDevices']);
+            // All AirPlay routes require authentication
+            $this->router->group('', function (Router $r) use ($controller): void {
+                // List discovered devices
+                $r->get('/api/v1/airplay/devices', [$controller, 'listDevices']);
 
-            // Start streaming
-            $this->router->post('/api/v1/airplay/devices/{id}/stream', [$controller, 'stream']);
+                // Start streaming
+                $r->post('/api/v1/airplay/devices/{id}/stream', [$controller, 'stream']);
 
-            // Playback controls
-            $this->router->post('/api/v1/airplay/devices/{id}/pause', [$controller, 'pause']);
-            $this->router->post('/api/v1/airplay/devices/{id}/resume', [$controller, 'resume']);
-            $this->router->post('/api/v1/airplay/devices/{id}/stop', [$controller, 'stop']);
+                // Playback controls
+                $r->post('/api/v1/airplay/devices/{id}/pause', [$controller, 'pause']);
+                $r->post('/api/v1/airplay/devices/{id}/resume', [$controller, 'resume']);
+                $r->post('/api/v1/airplay/devices/{id}/stop', [$controller, 'stop']);
 
-            // Get session status
-            $this->router->get('/api/v1/airplay/devices/{id}/status', [$controller, 'getStatus']);
+                // Get session status
+                $r->get('/api/v1/airplay/devices/{id}/status', [$controller, 'getStatus']);
+            }, [$authMiddleware]);
         } catch (\Throwable $e) {
             // AirPlayManager not configured - silent ignore
         }
@@ -2798,7 +2890,8 @@ class Application
                 'password'
             );
             $markerService = new \Phlix\Media\MarkerService($db);
-            return new \Phlix\Server\Http\Controllers\MediaMarkerController($markerService);
+            $itemRepository = new \Phlix\Media\Library\ItemRepository($db);
+            return new \Phlix\Server\Http\Controllers\MediaMarkerController($markerService, $itemRepository);
         }
 
         /** @var \Phlix\Server\Http\Controllers\MediaMarkerController */

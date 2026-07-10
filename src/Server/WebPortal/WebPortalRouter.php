@@ -243,10 +243,9 @@ class WebPortalRouter
         // Public media-item ratings endpoint (P1-S1): no auth required.
         $this->router->get('/api/v1/media/{id}/ratings', [$this, 'getRatings']);
 
-        // P4-S1: similar items endpoint — no auth required.
-        $this->router->get('/api/v1/media/{id}/similar', [$this, 'getSimilarItems']);
-
         $this->router->group('', function (Router $r): void {
+            // P4-S1: similar items endpoint — requires auth to prevent data leakage
+            $r->get('/api/v1/media/{id}/similar', [$this, 'getSimilarItems']);
             // Library routes
             $r->get('/api/v1/libraries', [$this, 'getLibraries']);
             $r->get('/api/v1/libraries/{id}', [$this, 'getLibrary']);

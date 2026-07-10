@@ -2628,17 +2628,14 @@ class ItemRepository
      */
     private function itemMatchesTagRestrictions(array $item, array $blockedTags, array $allowedTags): bool
     {
-        // Get tags from the item's tags_json column
-        $tagsJson = $item['tags_json'] ?? null;
+        // Get tags from the item's metadata_json['tags']
+        $metadata = $item['metadata'] ?? null;
         $itemTags = [];
 
-        if (is_string($tagsJson) && $tagsJson !== '') {
-            $decoded = json_decode($tagsJson, true);
-            if (is_array($decoded)) {
-                foreach ($decoded as $tag) {
-                    if (is_string($tag) && $tag !== '') {
-                        $itemTags[] = $tag;
-                    }
+        if (is_array($metadata) && isset($metadata['tags']) && is_array($metadata['tags'])) {
+            foreach ($metadata['tags'] as $tag) {
+                if (is_string($tag) && $tag !== '') {
+                    $itemTags[] = $tag;
                 }
             }
         }

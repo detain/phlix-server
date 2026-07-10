@@ -39,14 +39,14 @@ final class StreamSessionService
      * Checks if the profile's concurrent stream limit would be exceeded.
      * If a stream record already exists for the same session_id, it returns true (idempotent).
      *
-     * @param int    $profileId  The profile ID to register the stream for.
+     * @param string $profileId  The profile ID (UUID) to register the stream for.
      * @param string $deviceId   The device identifier.
      * @param string $sessionId The streaming session identifier.
      *
      * @return bool True if registration succeeded (stream started or already exists),
      *             false if the concurrent stream limit has been reached.
      */
-    public function registerStream(int $profileId, string $deviceId, string $sessionId): bool
+    public function registerStream(string $profileId, string $deviceId, string $sessionId): bool
     {
         // Check if stream already exists for this session (idempotent)
         /** @var array<array<string, mixed>> $existingRows */
@@ -121,11 +121,11 @@ final class StreamSessionService
     /**
      * Get the number of currently active streams for a profile.
      *
-     * @param int $profileId The profile ID to check.
+     * @param string $profileId The profile ID (UUID) to check.
      *
      * @return int The count of active streams.
      */
-    public function getActiveStreamCount(int $profileId): int
+    public function getActiveStreamCount(string $profileId): int
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -161,11 +161,11 @@ final class StreamSessionService
      *
      * If no limit is configured, returns a default limit of 1 concurrent stream.
      *
-     * @param int $profileId The profile ID to get the limit for.
+     * @param string $profileId The profile ID (UUID) to get the limit for.
      *
      * @return ProfileStreamLimit The stream limit configuration.
      */
-    public function getStreamLimit(int $profileId): ProfileStreamLimit
+    public function getStreamLimit(string $profileId): ProfileStreamLimit
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -186,13 +186,13 @@ final class StreamSessionService
     /**
      * Update the stream limit for a profile.
      *
-     * @param int      $profileId            The profile ID to update.
+     * @param string   $profileId            The profile ID (UUID) to update.
      * @param int      $maxConcurrentStreams Maximum concurrent streams.
      * @param int|null $maxTotalBandwidthKbps Maximum total bandwidth in kbps, or null for unlimited.
      *
      * @return bool True if the limit was updated.
      */
-    public function updateStreamLimit(int $profileId, int $maxConcurrentStreams, ?int $maxTotalBandwidthKbps): bool
+    public function updateStreamLimit(string $profileId, int $maxConcurrentStreams, ?int $maxTotalBandwidthKbps): bool
     {
         $result = $this->db->query(
             'INSERT INTO profile_stream_limits (profile_id, max_concurrent_streams, max_total_bandwidth_kbps)'
@@ -208,11 +208,11 @@ final class StreamSessionService
     /**
      * Get all active streams for a profile.
      *
-     * @param int $profileId The profile ID to get streams for.
+     * @param string $profileId The profile ID (UUID) to get streams for.
      *
      * @return list<array{
      *     id: int,
-     *     profile_id: int,
+     *     profile_id: string,
      *     device_id: string,
      *     session_id: string,
      *     started_at: string,
@@ -220,7 +220,7 @@ final class StreamSessionService
      *     stream_type: string
      * }>
      */
-    public function getActiveStreamsForProfile(int $profileId): array
+    public function getActiveStreamsForProfile(string $profileId): array
     {
         /** @var array<array<string, mixed>> $rows */
         $rows = $this->db->query(
@@ -237,7 +237,7 @@ final class StreamSessionService
             if (is_array($row)) {
                 $streams[] = [
                     'id' => isset($row['id']) && is_numeric($row['id']) ? (int) $row['id'] : 0,
-                    'profile_id' => isset($row['profile_id']) && is_numeric($row['profile_id']) ? (int) $row['profile_id'] : 0,
+                    'profile_id' => isset($row['profile_id']) && is_string($row['profile_id']) ? $row['profile_id'] : '',
                     'device_id' => isset($row['device_id']) && is_string($row['device_id']) ? $row['device_id'] : '',
                     'session_id' => isset($row['session_id']) && is_string($row['session_id']) ? $row['session_id'] : '',
                     'started_at' => isset($row['started_at']) && is_string($row['started_at']) ? $row['started_at'] : '',

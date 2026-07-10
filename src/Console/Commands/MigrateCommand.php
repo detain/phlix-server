@@ -49,8 +49,22 @@ final class MigrateCommand extends Command
             $output->writeln('Running migration: ' . $file);
         }
 
+        // Idempotent "already applied" notes (duplicate column/key, table
+        // exists, …) are collapsed into ONE summary line — replaying every
+        // migration on every deploy legitimately raises dozens of them, and
+        // echoing each one reads like the deploy is broken. Any note outside
+        // that class is still printed in full.
         foreach ($result['notes'] as $note) {
-            $output->writeln('  note: ' . $note);
+            if (!MigrationRunner::isAlreadyAppliedNote($note)) {
+                $output->writeln('  note: ' . $note);
+            }
+        }
+
+        if ($result['skipped_count'] > 0) {
+            $output->writeln(sprintf(
+                '  %d statement(s) skipped (already applied)',
+                $result['skipped_count']
+            ));
         }
 
         foreach ($result['errors'] as $error) {

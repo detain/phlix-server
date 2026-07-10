@@ -87,18 +87,26 @@ final class MigrationRunner
      *     statement failures. A non-empty list signals a failure to the
      *     caller, but — exactly like the original script — does NOT abort the
      *     run: every remaining statement and file is still attempted.
+     *   - `skipped_count`: how many of the `notes` entries are of the
+     *     "already applied" class (duplicate column / duplicate key /
+     *     table-or-index already exists — see
+     *     {@see isAlreadyAppliedNote()}). Callers can render a single
+     *     "N statements skipped (already applied)" summary line instead of
+     *     echoing each duplicate note on every deploy, while still printing
+     *     any note that falls outside that class in full.
      *
      * A failure to obtain the connection (provider throwing) or to read the
      * filesystem propagates as an uncaught exception, mirroring the script's
      * fatal-error path.
      *
-     * @return array{applied: list<string>, notes: list<string>, errors: list<string>}
+     * @return array{applied: list<string>, notes: list<string>, errors: list<string>, skipped_count: int}
      */
     public function run(): array
     {
         $applied = [];
         $notes = [];
         $errors = [];
+        $skippedCount = 0;
 
         $files = $this->discoverMigrationFiles();
 
@@ -117,6 +125,9 @@ final class MigrationRunner
                 } catch (Throwable $e) {
                     if (self::isExpectedIdempotentError($e)) {
                         $notes[] = $e->getMessage();
+                        if (self::isAlreadyAppliedNote($e->getMessage())) {
+                            $skippedCount++;
+                        }
                         $this->logger?->info('Migration note', [
                             'file' => $name,
                             'message' => $e->getMessage(),
@@ -136,7 +147,24 @@ final class MigrationRunner
             'applied' => $applied,
             'notes' => $notes,
             'errors' => $errors,
+            'skipped_count' => $skippedCount,
         ];
+    }
+
+    /**
+     * Whether a note message belongs to the "already applied" class — the
+     * idempotent duplicate/exists errors a replayed migration legitimately
+     * raises (duplicate column 1060, duplicate key 1061, table exists 1050,
+     * can't-drop 1091, …). Callers use this to collapse such notes into a
+     * single "N statements skipped (already applied)" summary line while
+     * still printing any other note in full.
+     */
+    public static function isAlreadyAppliedNote(string $message): bool
+    {
+        return str_contains($message, 'Duplicate column name')
+            || str_contains($message, 'Duplicate key name')
+            || str_contains($message, 'check that column/key exists')
+            || str_contains($message, 'already exists');
     }
 
     /**
@@ -264,11 +292,6 @@ final class MigrationRunner
      */
     private static function isExpectedIdempotentError(Throwable $e): bool
     {
-        $msg = $e->getMessage();
-
-        return str_contains($msg, 'Duplicate column name')
-            || str_contains($msg, 'Duplicate key name')
-            || str_contains($msg, 'check that column/key exists')
-            || str_contains($msg, 'already exists');
+        return self::isAlreadyAppliedNote($e->getMessage());
     }
 }

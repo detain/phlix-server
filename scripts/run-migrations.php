@@ -29,8 +29,18 @@ foreach ($result['applied'] as $file) {
     echo "Running migration: " . $file . "\n";
 }
 
+// Idempotent "already applied" notes (duplicate column/key, table exists, …)
+// are collapsed into ONE summary line — replaying every migration on every
+// deploy legitimately raises dozens of them, and echoing each one reads like
+// the deploy is broken. Any note outside that class is still printed in full.
 foreach ($result['notes'] as $note) {
-    echo "  note: " . $note . "\n";
+    if (!MigrationRunner::isAlreadyAppliedNote($note)) {
+        echo "  note: " . $note . "\n";
+    }
+}
+
+if ($result['skipped_count'] > 0) {
+    echo "  " . $result['skipped_count'] . " statement(s) skipped (already applied)\n";
 }
 
 foreach ($result['errors'] as $error) {

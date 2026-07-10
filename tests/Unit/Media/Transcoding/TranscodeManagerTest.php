@@ -906,7 +906,7 @@ class TranscodeManagerTest extends TestCase
         $second = $manager->getJobVariants('job-v');
 
         $this->assertNotNull($first);
-        $this->assertCount(2, $first); // non-copy "original" mirrors the top rung → dropped
+        $this->assertCount(2, $first); // this row's "original" has no id → not listed
         $this->assertSame('/hls/job-v/media_v1080p.m3u8', $first[0]['url']);
         $this->assertSame($first, $second);
         $this->assertSame(1, $this->countJobRowSelects($captured), 'second read must hit the cache');
@@ -1646,11 +1646,11 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(['video_codec' => 'copy', 'audio_codec' => 'copy'], $captParams);
     }
 
-    public function testEnsureSegmentReturnsNullForNonCopyOriginal(): void
+    public function testEnsureSegmentResolvesNonCopyOriginalAsTranscode(): void
     {
-        // A NON-copy original (HEVC source → transcode) is NOT advertised in the
-        // master, so ensureSegment('original', …) must resolve to null — nothing
-        // ever requests it.
+        // A NON-copy original (HEVC source → transcode) is now ALWAYS advertised in
+        // the master, so ensureSegment('original', …) must resolve it to a genuine
+        // transcode contract at the source-resolution frame (clamped to the cap).
         $dir = $this->segmentDir . '/mv-orig-noncopy';
         mkdir($dir, 0755, true);
         $input = $dir . '/in.mkv';
@@ -1664,9 +1664,24 @@ class TranscodeManagerTest extends TestCase
         $captured = [];
         $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
         $ff = $this->createMock(FfmpegRunner::class);
-        $ff->expects($this->never())->method('startSegmentEncode');
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
 
-        $this->assertNull($this->manager($db, $ff)->ensureSegment('seg-job', 'original', 0));
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', 'original', 0);
+
+        $this->assertSame("{$dir}/seg-voriginal-00000.ts", $path);
+        $this->assertNotNull($captParams);
+        $this->assertSame('libx264', $captParams['video_codec']);
+        $this->assertSame('aac', $captParams['audio_codec']);
+        // Source frame clamped to web's 1920×1080 cap (4K source, aspect kept).
+        $this->assertSame(1920, $captParams['width']);
+        $this->assertSame(1080, $captParams['height']);
     }
 
     public function testEnsureSegmentReturnsNullForUnknownVariant(): void
@@ -1776,6 +1791,296 @@ class TranscodeManagerTest extends TestCase
         $this->assertNotNull($captParams);
         $this->assertSame('libx264', $captParams['video_codec']);
         $this->assertSame('aac', $captParams['audio_codec']);
+    }
+
+    // --- P3B multi-audio: shared audio group + relative-index mapping ---
+
+    /**
+     * A probe with a video stream at global index 0 and TWO audio streams at
+     * GLOBAL ffprobe indexes 1 and 2 — so the audio-RELATIVE indexes (0, 1)
+     * deliberately differ from the global ones.
+     *
+     * @return array<string, mixed>
+     */
+    private function twoAudioProbe(): array
+    {
+        return [
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2,
+                    'tags' => ['language' => 'eng', 'title' => 'English'],
+                    'disposition' => ['default' => 1]],
+                ['index' => 2, 'codec_type' => 'audio', 'codec_name' => 'ac3', 'channels' => 6,
+                    'tags' => ['language' => 'jpn', 'title' => 'Japanese']],
+            ],
+            'format' => ['duration' => '25.0'],
+        ];
+    }
+
+    /**
+     * Audio-track descriptors matching {@see twoAudioProbe()} as
+     * buildAudioTrackDescriptors() persists them (relative index + global stream_index).
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function twoAudioTracks(): array
+    {
+        return [
+            ['index' => 0, 'stream_index' => 1, 'language' => 'eng', 'label' => 'English',
+                'default' => true, 'codec' => 'aac'],
+            ['index' => 1, 'stream_index' => 2, 'language' => 'jpn', 'label' => 'Japanese',
+                'default' => false, 'codec' => 'ac3'],
+        ];
+    }
+
+    public function testEnsureHlsJobEmitsSingleSharedAudioGroupMaster(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn($this->twoAudioProbe());
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+
+        // ONE shared group: every EXT-X-MEDIA rendition sits under GROUP-ID="aud"
+        // (per-track groups a0/a1 were the bug — hls.js only ever exposes the
+        // renditions of the group the playing variant references).
+        $this->assertSame(2, substr_count($master, '#EXT-X-MEDIA:TYPE=AUDIO'));
+        $this->assertSame(2, substr_count($master, 'GROUP-ID="aud"'));
+        $this->assertStringNotContainsString('GROUP-ID="a0"', $master);
+        $this->assertStringNotContainsString('GROUP-ID="a1"', $master);
+        // Per-track NAME + LANGUAGE, exactly one DEFAULT=YES, AUTOSELECT on all.
+        $this->assertStringContainsString('NAME="English"', $master);
+        $this->assertStringContainsString('NAME="Japanese"', $master);
+        $this->assertStringContainsString('LANGUAGE="eng"', $master);
+        $this->assertStringContainsString('LANGUAGE="jpn"', $master);
+        $this->assertSame(1, substr_count($master, 'DEFAULT=YES'));
+        $this->assertSame(2, substr_count($master, 'AUTOSELECT=YES'));
+        // URIs are keyed on the AUDIO-RELATIVE index (0/1), not global (1/2).
+        $this->assertStringContainsString('URI="media_a0.m3u8"', $master);
+        $this->assertStringContainsString('URI="media_a1.m3u8"', $master);
+        $this->assertStringNotContainsString('media_a2.m3u8', $master);
+        // EVERY video variant references the shared group.
+        foreach (explode("\n", $master) as $line) {
+            if (str_starts_with($line, '#EXT-X-STREAM-INF:')) {
+                $this->assertStringContainsString('AUDIO="aud"', $line);
+            }
+        }
+        // The audio-only playlists exist and reference relative-index segments.
+        $this->assertFileExists("{$dir}/media_a0.m3u8");
+        $this->assertFileExists("{$dir}/media_a1.m3u8");
+        $audio1 = (string) file_get_contents("{$dir}/media_a1.m3u8");
+        $this->assertStringContainsString('seg-a1-00000.ts', $audio1);
+        $this->assertStringContainsString('#EXT-X-ENDLIST', $audio1);
+
+        // The persisted variants JSON carries the descriptors with BOTH indexes.
+        $decoded = json_decode($this->capturedVariantsJson($captured), true);
+        $this->assertIsArray($decoded);
+        $this->assertSame([0, 1], array_column($decoded['audio_tracks'], 'index'));
+        $this->assertSame([1, 2], array_column($decoded['audio_tracks'], 'stream_index'));
+        $this->assertSame([true, false], array_column($decoded['audio_tracks'], 'default'));
+    }
+
+    public function testSingleAudioSourceEmitsNoAudioGroup(): void
+    {
+        // One audio stream → no EXT-X-MEDIA, no AUDIO= attr, muxed segments as before.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['index' => 0, 'codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['index' => 1, 'codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $dir = $this->capturedJobInsert($captured)['hls_dir'];
+        $master = (string) file_get_contents("{$dir}/master.m3u8");
+
+        $this->assertStringNotContainsString('#EXT-X-MEDIA', $master);
+        $this->assertStringNotContainsString('AUDIO=', $master);
+        $decoded = json_decode($this->capturedVariantsJson($captured), true);
+        $this->assertIsArray($decoded);
+        $this->assertArrayNotHasKey('audio_tracks', $decoded);
+    }
+
+    /**
+     * A multi-variant job row whose ladder JSON carries the two-audio descriptors.
+     *
+     * @return array<string, mixed>
+     */
+    private function multiAudioJobRow(string $dir, string $input): array
+    {
+        $ladder = (new AbrLadder())->build(
+            new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+            'web'
+        )->toArray();
+        $ladder['audio_tracks'] = $this->twoAudioTracks();
+        return $this->multiVariantJobRow($dir, $input, (string) json_encode($ladder));
+    }
+
+    public function testEnsureSegmentAudioOnlyUsesRelativeIndexAndAudioOnlyParams(): void
+    {
+        // seg-a1-NNNNN.ts = the SECOND audio stream: the encode must receive the
+        // audio-RELATIVE index 1 (→ -map 0:a:1), NOT the global ffprobe index 2,
+        // and must be flagged audio_only so FfmpegRunner takes the -vn path.
+        $dir = $this->segmentDir . '/ma-audio';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $captOut = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams, &$captOut): int {
+                $captParams = $params;
+                $captOut = $out;
+                file_put_contents($out, 'audio');
+                return 1;
+            }
+        );
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertSame("{$dir}/seg-a1-00001.ts", $path);
+        $this->assertSame("{$dir}/seg-a1-00001.ts", $captOut);
+        $this->assertNotNull($captParams);
+        $this->assertTrue($captParams['audio_only']);
+        $this->assertSame(1, $captParams['audio_stream_index'], 'audio-relative index, not the global 2');
+        $this->assertSame('aac', $captParams['audio_codec']);
+        $this->assertArrayNotHasKey('video_codec', $captParams);
+    }
+
+    public function testEnsureSegmentAudioOnlyRejectsUnknownTrackAndGrouplessJob(): void
+    {
+        $dir = $this->segmentDir . '/ma-audio-reject';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->never())->method('startSegmentEncode');
+        $manager = $this->manager($db, $ff);
+
+        // Out-of-range track (only a0/a1 exist) and malformed ids → null (404).
+        $this->assertNull($manager->ensureSegment('seg-job', null, 0, 'a5'));
+        $this->assertNull($manager->ensureSegment('seg-job', null, 0, 'axx'));
+
+        // A job WITHOUT audio_tracks advertises no audio renditions → null too.
+        $dir2 = $this->segmentDir . '/ma-audio-nogroup';
+        mkdir($dir2, 0755, true);
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured2 = [];
+        $db2 = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir2, $input, $ladderJson), $captured2);
+        $ff2 = $this->createMock(FfmpegRunner::class);
+        $ff2->expects($this->never())->method('startSegmentEncode');
+
+        $this->assertNull($this->manager($db2, $ff2)->ensureSegment('seg-job', null, 0, 'a0'));
+    }
+
+    public function testVideoVariantSegmentsAreVideoOnlyWhenAudioGroupPresent(): void
+    {
+        // With a shared audio group in the master, sound travels in the audio
+        // renditions — a video variant segment must be encoded video-only.
+        $dir = $this->segmentDir . '/ma-videoonly';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'video');
+                return 1;
+            }
+        );
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 0);
+
+        $this->assertSame("{$dir}/seg-v480p-00000.ts", $path);
+        $this->assertNotNull($captParams);
+        $this->assertTrue($captParams['video_only']);
+        $this->assertSame('libx264', $captParams['video_codec']);
+    }
+
+    public function testVideoVariantSegmentsStayMuxedWithoutAudioGroup(): void
+    {
+        // Single-audio job (no audio_tracks): current muxed behaviour is preserved.
+        $dir = $this->segmentDir . '/ma-muxed';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1280, height: 720, videoCodec: 'h264', audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $s, float $l, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'video');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 0);
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayNotHasKey('video_only', $captParams);
+        $this->assertSame('aac', $captParams['audio_codec']);
+    }
+
+    public function testEnsureHlsJobReuseKeyCarriesFormatVersion(): void
+    {
+        // The reuse key embeds a format version so every job persisted before the
+        // multi-audio change (keyed sha1(media|profile)) can never be reused.
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '25.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $expectedKey = sha1('media-1|web|v3');
+        $reuseKey = null;
+        $insertKey = null;
+        foreach ($captured as [$sql, $params]) {
+            if (str_contains($sql, 'key_hash = ?')) {
+                $reuseKey = $params[0] ?? null;
+            }
+            if (str_contains($sql, 'INSERT INTO transcode_jobs')) {
+                $insertKey = $params[6] ?? null; // placeholder 6 = key_hash
+            }
+        }
+        $this->assertSame($expectedKey, $reuseKey, 'reuse lookup must use the versioned key');
+        $this->assertSame($expectedKey, $insertKey, 'job row must persist the versioned key');
+        $this->assertNotSame(sha1('media-1|web'), $expectedKey, 'pre-version jobs can never match');
     }
 
     // --- Audit tests: the FS-glob helpers must see variant-prefixed filenames ---
@@ -1911,11 +2216,12 @@ class TranscodeManagerTest extends TestCase
         }
     }
 
-    public function testGetJobVariantsOmitsNonCopyOriginal(): void
+    public function testGetJobVariantsIncludesNonCopyOriginal(): void
     {
-        // HEVC + AC3 source → the "original" is NOT a copy (it mirrors the top
-        // transcode rung), so it must NOT appear as a separate variant — the list
-        // is exactly the clamped rungs, highest-first.
+        // HEVC + AC3 source → the "original" is NOT a copy, but it is now still a
+        // DISTINCT playable variant (transcode at source resolution) and must be
+        // listed first, ahead of the clamped rungs — the client contract is that
+        // the variants list always contains {id: 'original', height: <source height>}.
         $ladder = (new AbrLadder())->build(
             new SourceProfile(width: 3840, height: 2160, videoCodec: 'hevc', videoBitrate: 20000000, audioCodec: 'ac3'),
             'web'
@@ -1930,12 +2236,14 @@ class TranscodeManagerTest extends TestCase
 
         $this->assertNotNull($variants);
         $ids = array_map($this->variantId(...), $variants);
-        $this->assertNotContains('original', $ids, 'non-copy original must not be listed');
-        // Membership + order equals the clamped rungs highest-first.
+        $this->assertContains('original', $ids, 'non-copy original must be listed too');
+        // Membership + order equals streamVariants(): original first, then rungs.
         $expectedIds = array_map(static fn ($r): string => $r->id, $ladder->streamVariants());
         $this->assertSame($expectedIds, $ids);
-        // Highest-first: first entry is the tallest rung.
-        $this->assertSame('1080p', $variants[0]['id']); // web profile caps at 1080p
+        $this->assertSame('original', $variants[0]['id']);
+        $this->assertFalse($variants[0]['is_copy']);
+        // Source height clamped to web's 1080 cap (4K source).
+        $this->assertSame(1080, $variants[0]['height']);
         foreach ($variants as $entry) {
             $entryId = $this->variantId($entry);
             $this->assertSame("/hls/seg-job/media_v{$entryId}.m3u8", $entry['url']);

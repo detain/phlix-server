@@ -471,11 +471,24 @@ class Application
                 $r->get('/api/v1/media/{id}/trailers', [$extrasController, 'getTrailers']);
                 $r->get('/api/v1/media/{id}/extras/other', [$extrasController, 'getOtherExtras']);
                 // On-demand subtitle tracks for a direct-play client (no HLS
-                // sidecars): list embedded text tracks, and extract one to WebVTT.
+                // sidecars): list the embedded text tracks. (The per-track
+                // extraction endpoint is registered below under the signed-URL
+                // gate — a <track> element can't attach a Bearer header.)
                 $r->get('/api/v1/media/{id}/subtitles', [$subtitleController, 'listTracks']);
-                $r->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
             },
             [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+        );
+
+        // Subtitle extraction is fetched by a <track> element, which cannot
+        // attach an Authorization header — so like /media/{id}/stream it
+        // accepts an existing session OR the signed `?exp&sig` token that
+        // playback-info's subtitle_tracks[].url carries (see StreamTrackShaper).
+        $this->router->group(
+            '',
+            function (Router $r) use ($subtitleController): void {
+                $r->get('/api/v1/media/{id}/subtitles/{index}', [$subtitleController, 'getTrack']);
+            },
+            [new \Phlix\Server\Http\Middleware\SignedUrlMiddleware()]
         );
 
         // Skip/intros marker CRUD (P3-S1) — user-editable markers stored in media_markers table.

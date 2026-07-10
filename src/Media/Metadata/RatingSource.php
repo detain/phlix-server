@@ -11,7 +11,8 @@ namespace Phlix\Media\Metadata;
 
 enum RatingSource: string
 {
-    case Tmdb = 'tmdb';
     case Imdb = 'imdb';
-    case User = 'user';
+    case Tmdb = 'tmdb';
+    case Rt = 'rt';
+    case Aggregate = 'aggregate';
 }

@@ -188,9 +188,11 @@ class MetadataManager
      *
      * @param string $itemId The media item's unique identifier
      * @param bool $force Force refresh even if recent metadata exists
+     * @param list<string>|null $languageFallbackChain P1-S4: configurable fallback
+     *     locale chain for missing titles/overviews/taglines; null = use provider default
      * @return bool True if metadata was successfully refreshed from any provider
      */
-    public function refreshItemMetadata(string $itemId, bool $force = false): bool
+    public function refreshItemMetadata(string $itemId, bool $force = false, ?array $languageFallbackChain = null): bool
     {
         $item = $this->itemRepository->findById($itemId);
         if (!$item) {
@@ -228,7 +230,8 @@ class MetadataManager
                 $item,
                 $searchQuery,
                 $year,
-                $force
+                $force,
+                $languageFallbackChain,
             );
 
             if ($result) {
@@ -259,6 +262,8 @@ class MetadataManager
      * @param string $searchQuery The search query string
      * @param string|null $year Optional year to filter search
      * @param bool $force Force refresh even if recent metadata exists
+     * @param list<string>|null $languageFallbackChain P1-S4: configurable fallback
+     *     locale chain for missing titles/overviews/taglines; null = use provider default
      * @return bool True if metadata was successfully fetched and saved
      */
     private function tryProvider(
@@ -268,7 +273,8 @@ class MetadataManager
         array $item,
         string $searchQuery,
         ?string $year,
-        bool $force
+        bool $force,
+        ?array $languageFallbackChain = null,
     ): bool {
         $metadata = $this->parseMetadataJson(MetadataValue::asNullableString($item['metadata_json'] ?? null));
 
@@ -295,9 +301,18 @@ class MetadataManager
         $match = $results[0];
         $externalId = MetadataValue::asString($match['id'] ?? null);
 
-        // Fetch full details, passing preferred_locale for multi-language fallback (P1-S4)
-        $preferredLocale = MetadataValue::asNullableString($metadata['preferred_locale'] ?? null);
-        $detailOptions = $preferredLocale !== null ? ['preferred_locale' => $preferredLocale] : [];
+        // P1-S4: Build provider options including the configurable fallback chain.
+        // language_fallback_chain overrides the provider's hardcoded chain when set.
+        $detailOptions = [];
+        if ($languageFallbackChain !== null) {
+            $detailOptions['language_fallback_chain'] = $languageFallbackChain;
+        } else {
+            // Legacy: pass preferred_locale for the provider's built-in fallback
+            $preferredLocale = MetadataValue::asNullableString($metadata['preferred_locale'] ?? null);
+            if ($preferredLocale !== null) {
+                $detailOptions['preferred_locale'] = $preferredLocale;
+            }
+        }
         $details = $provider->getDetails($externalId, $detailOptions);
         if (empty($details)) {
             $this->logger->debug('No details from provider', [

@@ -291,8 +291,12 @@ class HttpClient implements HttpClientInterface
             $options['data'] = $body;
         }
 
-        /** @var ResponseInterface $response */
+        /** @var ResponseInterface|null $response */
         $response = $client->request($url, $options);
+
+        if ($response === null) {
+            throw new RuntimeException('Server did not respond to heartbeat');
+        }
 
         return $this->psr7ResponseToHttpResponse($response);
     }

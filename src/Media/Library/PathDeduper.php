@@ -207,12 +207,13 @@ class PathDeduper
             $score += 2;
         }
 
-        // Rating score (0-10)
+        // Rating score (0-10) — metadata_ratings stores it in `score` (decimal),
+        // there is no `rating` column.
         $scoreResult = $this->db->query(
-            "SELECT rating FROM metadata_ratings WHERE media_item_id = ? ORDER BY updated_at DESC LIMIT 1",
+            "SELECT score FROM metadata_ratings WHERE media_item_id = ? ORDER BY updated_at DESC LIMIT 1",
             [$id]
         );
-        $score += (int) self::asFloat(self::cell($scoreResult, 'rating'));
+        $score += (int) self::asFloat(self::cell($scoreResult, 'score'));
 
         return $score;
     }

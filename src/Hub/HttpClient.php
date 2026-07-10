@@ -167,6 +167,12 @@ class HttpClient implements HttpClientInterface
             $body = $encodedBody;
         }
 
+        // https + Swoole event loop: the async client's TLS reads stall
+        // (see EventLoopTls), so use blocking cURL for correctness.
+        if (\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)) {
+            return $this->requestCurl($method, $url, $body, $requestHeaders);
+        }
+
         // Use coroutine if available for true async behavior
         if (Coroutine::isCoroutine()) {
             return $this->requestCoroutine($method, $url, $body, $requestHeaders);

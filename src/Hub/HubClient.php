@@ -481,20 +481,7 @@ class HubClient
         // token renewed by reEnrollIfNeeded()). Only when the client is a real
         // HttpClient — a test-injected HttpClientInterface mock is left as-is.
         if ($this->httpClient instanceof HttpClient) {
-            // Co-location detection: when the hub hostname resolves to our own
-            // public IP, connect via 127.0.0.1:443 and pass the original hostname
-            // as an explicit Host header so HAProxy can route the request correctly.
-            // Without this, connecting to 153.75.226.242 would set Host: 153.75.226.242:443
-            // which HAProxy cannot use to select the hub.phlix.interserver.net backend.
-            $hubHost = parse_url($enrollment->hubBaseUrl, PHP_URL_HOST);
-            $hubResolvedIp = (is_string($hubHost) && $hubHost !== '') ? gethostbyname($hubHost) : '';
-            if ($hubResolvedIp === '153.75.226.242' && is_string($hubHost)) {
-                // Hub is co-located — connect via 127.0.0.1 with explicit Host header
-                $this->httpClient = new HttpClient('https://127.0.0.1', $enrollment->enrollmentJwt);
-                $this->httpClient->setHostOverride($hubHost);
-            } else {
-                $this->httpClient = new HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
-            }
+            $this->httpClient = new HttpClient($enrollment->hubBaseUrl, $enrollment->enrollmentJwt);
         }
 
         // Build from the shared HeartbeatDto so the wire payload uses the

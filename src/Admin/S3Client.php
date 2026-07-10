@@ -275,7 +275,9 @@ class S3Client
      */
     private function doRequest(string $method, string $url, ?string $body, array $headers): ?ResponseInterface
     {
-        if ($this->isWorkermanContext()) {
+        // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
+        // so those requests must take the blocking cURL path.
+        if ($this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)) {
             return $this->requestAsync($method, $url, $body, $headers);
         }
 

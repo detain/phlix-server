@@ -23,6 +23,7 @@ declare(strict_types=1);
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
+use Phlix\Common\Database\ConnectionPool;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
@@ -184,7 +185,7 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     // hub/relay/discovery/newsletter/backup timers. The hub heartbeat
     // and relay tunnels still need their own one-shot startup; that's
     // wired below outside this closure so it runs once per worker too.
-    $application = new Application($container, $config);
+    $application = new Application($container, $config, $container->get(ConnectionPool::class));
 
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);
@@ -444,7 +445,7 @@ try {
         // through the same local app routers the HTTP daemon uses. The
         // Application constructor only registers routes/middleware (no timers),
         // so building one here in the relay fork is safe and side-effect-free.
-        $relayApplication = new Application($container, $config);
+        $relayApplication = new Application($container, $config, $container->get(ConnectionPool::class));
         $relayDispatcher = new \Phlix\Hub\RelayRequestDispatcher($relayApplication, $container);
 
         $consumer = new \Phlix\Hub\RelayConsumer(

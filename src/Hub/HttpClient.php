@@ -37,6 +37,9 @@ class HttpClient implements HttpClientInterface
     /** @var int Request timeout in seconds. */
     private int $timeout;
 
+    /** @var string Optional explicit Host header value for co-located hub routing. */
+    private string $hostOverride = '';
+
     /** @var Client|null Async HTTP client instance (lazy initialized). */
     private ?Client $asyncClient = null;
 
@@ -53,6 +56,22 @@ class HttpClient implements HttpClientInterface
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->bearerToken = $bearerToken;
         $this->timeout = $timeout;
+    }
+
+    /**
+     * Sets an explicit Host header value for co-located hub routing.
+     *
+     * When the hub hostname resolves to the local machine's public IP,
+     * connecting via 127.0.0.1 would set the Host header to "127.0.0.1"
+     * which HAProxy cannot use for routing. This method allows forcing
+     * the original hub hostname in the Host header while connecting
+     * to 127.0.0.1.
+     *
+     * @param string $host The host name to use in the Host header (e.g. "hub.phlix.interserver.net").
+     */
+    public function setHostOverride(string $host): void
+    {
+        $this->hostOverride = $host;
     }
 
     /**
@@ -266,6 +285,10 @@ class HttpClient implements HttpClientInterface
 
         if ($this->bearerToken !== null) {
             $requestHeaders['Authorization'] = 'Bearer ' . $this->bearerToken;
+        }
+
+        if ($this->hostOverride !== '') {
+            $requestHeaders['Host'] = $this->hostOverride;
         }
 
         foreach ($headers as $key => $value) {

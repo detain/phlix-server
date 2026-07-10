@@ -55,10 +55,11 @@ $transcodeDir = is_string($ffmpegConfig['transcode_dir'] ?? null)
 
 $ffmpeg = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir);
 
-// Create the trickplay output directory within the transcode dir.
-$spriteDir = $transcodeDir . '/trickplay';
-if (!is_dir($spriteDir)) {
-    mkdir($spriteDir, 0755, true);
+// Create the base trickplay output directory within the transcode dir.
+// Individual item subdirectories are created per-item below.
+$spriteBaseDir = $transcodeDir . '/trickplay';
+if (!is_dir($spriteBaseDir)) {
+    mkdir($spriteBaseDir, 0755, true);
 }
 
 // Candidate rows: time-based items with chapters but no trickplay paths.
@@ -127,7 +128,7 @@ foreach ($rows as $row) {
         continue;
     }
 
-    $result = $ffmpeg->generateTrickplaySprites($path, $spriteDir, 60);
+    $result = $ffmpeg->generateTrickplaySprites($path, $spriteBaseDir . '/' . $itemId, 60);
     if ($result === null) {
         echo "  FAIL: {$path} (sprite generation failed)\n";
         $failed++;

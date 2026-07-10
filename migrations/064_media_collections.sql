@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS media_collections (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS media_collection_members (
     collection_id    INT UNSIGNED NOT NULL COMMENT 'FK to media_collections.id',
-    media_item_id    INT UNSIGNED NOT NULL COMMENT 'FK to media_items.id',
+    media_item_id    CHAR(36) NOT NULL COMMENT 'FK to media_items.id',
     tmdb_part_order  INT UNSIGNED NOT NULL COMMENT 'Part number from TMDB collection',
     added_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

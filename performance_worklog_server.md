@@ -61,7 +61,7 @@
 - [x] SV-0.5  fix WS reaper + heartbeat timer guards ✅ (commit b95a9c22)
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
-- [ ] SV-0.8  fix path_hash reads + stop re-probing
+- [x] SV-0.8  fix path_hash reads + stop re-probing ✅ (commit 510c8761)
 - [ ] SV-0.9  fix generateThumbnailBatch timestamp escaping
 - [ ] SV-1.1  memoize/precompute HDR tone-map decision
 - [ ] SV-1.2  make non-probe ffmpeg calls coroutine-friendly

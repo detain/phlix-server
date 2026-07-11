@@ -87,7 +87,7 @@ class Application
         $this->container = $container;
         $this->config = $config;
         $this->connectionPool = $connectionPool;
-        $this->router = new Router();
+        $this->router = new Router($container);
         $this->loadRoutes();
 
         // Register ThemeMiddleware from container if available

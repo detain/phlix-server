@@ -18,7 +18,7 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
  *
  * Wraps the existing libx264/libx265 logic with consistent preset/bitrate/CRF
  * mapping. This is the reference implementation - its behavior for libx264/libx265
- * must exactly match the existing FfmpegRunner::buildTranscodeCommand() output.
+ * must exactly match the existing FfmpegRunner::buildCmafCommand() output.
  *
  * @since 0.11.0
  */

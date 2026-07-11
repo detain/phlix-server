@@ -2852,10 +2852,15 @@ class TranscodeManager
             $tooOld = $startedAt !== false && $startedAt < $cutoff;
 
             // No segment produced within the timeout window → wedged at startup.
+            // SV-4.12: check both CMAF chunk-*.m4s (legacy linear jobs) and
+            // on-demand seg-*.ts files (current production path).
             $noSegmentWithinTimeout = false;
             if (!$dirGone && $startedAt !== false && $startedAt < $segmentTimeoutCutoff) {
-                $segmentFiles = glob("{$dir}/chunk-*.m4s");
-                $noSegmentWithinTimeout = ($segmentFiles === false || count($segmentFiles) === 0);
+                $segmentFiles = array_merge(
+                    glob("{$dir}/chunk-*.m4s") ?: [],
+                    glob("{$dir}/seg-*.ts") ?: [],
+                );
+                $noSegmentWithinTimeout = count($segmentFiles) === 0;
             }
 
             if (!$dirGone && !$tooOld && !$noSegmentWithinTimeout) {

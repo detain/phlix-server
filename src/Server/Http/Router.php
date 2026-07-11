@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http;
 
+use Psr\Container\ContainerInterface;
+
 /**
  * HTTP Router for the Phlix Media Server.
  *
@@ -44,11 +46,33 @@ class Router
      */
     private array $routes = [];
 
+    /**
+     * Static-path routes (no {param} placeholders) for O(1) lookup.
+     * Key: "$method" => "$path" => RouteEntry.
+     *
+     * @var array<string, array<string, RouteEntry>>
+     */
+    private array $staticRoutes = [];
+
     /** @var list<callable> Middleware for the current route group */
     private array $groupMiddleware = [];
 
     /** @var string|null Current route group prefix */
     private ?string $groupPrefix = null;
+
+    /** @var ContainerInterface|null Optional DI container for resolving string handlers */
+    private ?ContainerInterface $container = null;
+
+    /**
+     * @param ContainerInterface|null $container Optional DI container for resolving
+     *        controller string handlers (e.g. `[Controller::class, 'method']`).
+     *        When provided, string class names are resolved via `$container->get()`
+     *        instead of direct instantiation, enabling constructor injection.
+     */
+    public function __construct(?ContainerInterface $container = null)
+    {
+        $this->container = $container;
+    }
 
     /**
      * Registers a GET route.
@@ -175,15 +199,23 @@ class Router
     {
         $fullPath = $this->groupPrefix ? $this->groupPrefix . $path : $path;
 
-        // Convert path parameters like {id} to named regex capture groups
-        $pattern = preg_replace('/\{([a-zA-Z_]+)\}/', '(?P<$1>[^/]+)', $fullPath);
-        $pattern = '#^' . $pattern . '$#';
-
-        $this->routes[$method][$pattern] = [
+        // SV-4.8: detect static paths (no {param} placeholders) for O(1) lookup.
+        $isStatic = strpos($fullPath, '{') === false;
+        $routeEntry = [
             'handler' => $handler,
             'middleware' => $this->groupMiddleware,
             'path' => $fullPath,
         ];
+
+        if ($isStatic) {
+            // O(1) map: $staticRoutes[$method][$path]
+            $this->staticRoutes[strtoupper($method)][$fullPath] = $routeEntry;
+        } else {
+            // Parametric path: convert to named regex capture groups
+            $pattern = preg_replace('/\{([a-zA-Z_]+)\}/', '(?P<$1>[^/]+)', $fullPath);
+            $pattern = '#^' . $pattern . '$#';
+            $this->routes[$method][$pattern] = $routeEntry;
+        }
 
         return $this;
     }
@@ -249,6 +281,19 @@ class Router
         $method = $request->method;
         $path = $request->path;
 
+        // SV-4.8: O(1) static-path lookup first (exact match, no regex).
+        if (isset($this->staticRoutes[$method][$path])) {
+            $route = $this->staticRoutes[$method][$path];
+            $request->pathParams = [];
+
+            $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
+            if ($middlewareResponse instanceof Response) {
+                return $middlewareResponse;
+            }
+
+            return $this->callHandler($route['handler'], $request, []);
+        }
+
         if (!isset($this->routes[$method])) {
             // HEAD fallback: if no explicit HEAD route registered, fall back to
             // matching GET handler to get headers (Content-Type, Content-Length,
@@ -290,6 +335,22 @@ class Router
      */
     private function dispatchAsHead(Request $request, string $path): Response
     {
+        // SV-4.8: O(1) static-path lookup for HEAD → GET fallback.
+        if (isset($this->staticRoutes['GET'][$path])) {
+            $route = $this->staticRoutes['GET'][$path];
+            $request->pathParams = [];
+
+            $middlewareResponse = $this->runMiddleware($route['middleware'], $request);
+            if ($middlewareResponse instanceof Response) {
+                $middlewareResponse->headOnly = true;
+                return $middlewareResponse;
+            }
+
+            $response = $this->callHandler($route['handler'], $request, []);
+            $response->headOnly = true;
+            return $response;
+        }
+
         foreach ($this->routes['GET'] as $pattern => $route) {
             if (preg_match($pattern, $path, $matches)) {
                 $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
@@ -342,7 +403,15 @@ class Router
     {
         if (is_array($handler)) {
             [$class, $method] = $handler;
-            $instance = is_string($class) ? new $class() : $class;
+            // SV-4.8: resolve string class names via DI container when available,
+            // enabling constructor injection (db, logger, config, etc.).
+            if (is_string($class)) {
+                $instance = $this->container !== null
+                    ? $this->container->get($class)
+                    : new $class();
+            } else {
+                $instance = $class;
+            }
             $result = $instance->$method($request, $params);
         } else {
             $result = $handler($request, $params);
@@ -765,6 +834,15 @@ class Router
      */
     public function getRoutes(): array
     {
-        return $this->routes;
+        // SV-4.8: include both static (O(1) map) and regex (parametric) routes
+        // so inspection/testing sees a complete picture. Static routes are keyed
+        // by their literal path; regex routes by their compiled pattern.
+        $merged = $this->routes;
+        foreach ($this->staticRoutes as $method => $paths) {
+            foreach ($paths as $path => $entry) {
+                $merged[$method][$path] = $entry;
+            }
+        }
+        return $merged;
     }
 }

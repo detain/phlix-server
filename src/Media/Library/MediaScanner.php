@@ -417,7 +417,7 @@ class MediaScanner
             return;
         }
 
-        $startMs = (int)(microtime(true) * 1000);
+        $startNs = hrtime(true);
         $this->containerCache = [];
         $this->dispatchScanStarted($libraryId, $path);
 
@@ -429,8 +429,8 @@ class MediaScanner
             $added = $this->scanFlat($libraryId, $path, $type, $extensions, null, $onFile);
         }
 
-        $endMs = (int)(microtime(true) * 1000);
-        $this->dispatchScanCompleted($libraryId, $added, $endMs - $startMs);
+        $endNs = hrtime(true);
+        $this->dispatchScanCompleted($libraryId, $added, (int)(($endNs - $startNs) / 1_000_000));
     }
 
     /**

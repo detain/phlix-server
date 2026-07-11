@@ -402,9 +402,19 @@ final class PluginCatalogService
      * `Swoole\RemoteObject` bridge and throws `Swoole\RemoteObject\Exception`
      * (`@swoole/library/core/RemoteObject/Client.php`), which crashes the
      * catalog fetch — including the always-present default catalog, blanking
-     * the Plugins listings. cURL is coroutine-safe under
-     * `SWOOLE_HOOK_NATIVE_CURL` (in the runtime allowlist) and remains correct
-     * in plain CLI, so it is the primary path.
+     * the Plugins listings.
+     *
+     * **Async routing (SV-4.11):** When a Swoole event loop is running and the
+     * URL does not require blocking curl (per {@see EventLoopTls}), the fetch
+     * is routed through `Workerman\Http\Client` via a Channel-based cooperative
+     * wait, keeping the worker responsive. When no event loop is active or
+     * blocking curl is required (e.g. HTTPS + Swoole TLS read stall), native
+     * cURL is used as a synchronous fallback.
+     *
+     * Note: `SWOOLE_HOOK_NATIVE_CURL` is deliberately excluded from the
+     * runtime hook mask (see AGENTS.md "Coroutine/Swoole hooks"); native cURL
+     * is therefore NOT hook-safe in this environment and is used only as a
+     * synchronous fallback when the async path is unavailable.
      *
      * Sends a Phlix User-Agent + `Accept: application/json`, follows up to 3
      * redirects (restricted to http/https so a redirect cannot downgrade to
@@ -416,19 +426,36 @@ final class PluginCatalogService
      */
     public static function defaultFetcher(): callable
     {
-        return static function (string $url, int $timeout): string {
-            if (function_exists('curl_init')) {
-                return self::curlFetch($url, $timeout);
+        static $asyncClient = null;
+        return static function (string $url, int $timeout) use (&$asyncClient): string {
+            if (!function_exists('curl_init')) {
+                return self::streamFetch($url, $timeout);
             }
-            return self::streamFetch($url, $timeout);
+
+            // SV-4.11: async routing when event loop is active and no TLS stall.
+            $isEventLoop = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning();
+            $needsBlocking = !$isEventLoop
+                || \Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
+
+            if ($isEventLoop && !$needsBlocking) {
+                // Lazy-init shared async client (same timeout as cURL path).
+                if ($asyncClient === null) {
+                    $asyncClient = new \Workerman\Http\Client(['timeout' => $timeout]);
+                }
+                return self::asyncFetch($asyncClient, $url, $timeout);
+            }
+
+            return self::curlFetch($url, $timeout);
         };
     }
 
     /**
      * Synchronous HTTP GET using native cURL. Follows ≤3 http/https redirects, verifies TLS.
      *
-     * Uses native PHP cURL for synchronous catalog fetching. Under Swoole's
-     * coroutine runtime, native curl is safe via `SWOOLE_HOOK_NATIVE_CURL`.
+     * Uses native PHP cURL for synchronous catalog fetching. This is the fallback
+     * path when no Swoole event loop is running or when the URL requires blocking
+     * curl. Note: `SWOOLE_HOOK_NATIVE_CURL` is deliberately excluded from the
+     * runtime hook mask, so native cURL is NOT hook-safe in this environment.
      *
      * @throws \RuntimeException On transport failure or an HTTP status ≥ 400.
      */
@@ -470,6 +497,55 @@ final class PluginCatalogService
         }
 
         return is_string($body) ? $body : '';
+    }
+
+    /**
+     * Async HTTP GET using Workerman\Http\Client with cooperative Channel wait.
+     *
+     * Routes through the Swoole event loop so the worker is not blocked during
+     * the network I/O wait. Falls back to a RuntimeException on timeout or
+     * connection failure.
+     *
+     * @param \Workerman\Http\Client $client Async HTTP client (lazy-initd by caller).
+     * @param string                 $url    Full URL to fetch.
+     * @param int                    $timeout Seconds to wait before timing out.
+     *
+     * @return string Response body.
+     *
+     * @throws \RuntimeException On timeout or connection error.
+     */
+    private static function asyncFetch(\Workerman\Http\Client $client, string $url, int $timeout): string
+    {
+        $channel = new \Swoole\Coroutine\Channel(1);
+        $state = ['body' => null, 'error' => null];
+
+        $client->request($url, [
+            'method'  => 'GET',
+            'headers' => [
+                'User-Agent' => 'Phlix-PluginCatalog',
+                'Accept'     => 'application/json',
+            ],
+            'success' => static function (\Psr\Http\Message\ResponseInterface $response) use ($channel, &$state): void {
+                $state['body'] = (string) $response->getBody();
+                $channel->push(true);
+            },
+            'error' => static function (\Throwable $e) use ($channel, &$state): void {
+                $state['error'] = $e->getMessage();
+                $channel->push(true);
+            },
+        ]);
+
+        $channel->pop((float) $timeout);
+
+        if ($state['error'] !== null) {
+            throw new \RuntimeException('async fetch failed: ' . $state['error']);
+        }
+
+        if ($state['body'] === null) {
+            throw new \RuntimeException('async fetch timed out after ' . $timeout . 's');
+        }
+
+        return $state['body'];
     }
 
     /**

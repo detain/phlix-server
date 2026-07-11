@@ -395,41 +395,19 @@ class PhotoController
             }
         }
 
-        // Open file and seek to start position
-        $handle = fopen($path, 'rb');
-        if ($handle === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to open file']);
-        }
-
-        if (fseek($handle, $start) === -1) {
-            fclose($handle);
-            return (new Response())->status(500)->json(['error' => 'Failed to seek file']);
-        }
-
         $length = $end - $start + 1;
         if ($length < 1) {
-            fclose($handle);
             return (new Response())->status(416)->json(['error' => 'Invalid range length']);
         }
-        /** @var positive-int $length */
-        $content = fread($handle, $length);
-        fclose($handle);
 
-        if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to read file']);
-        }
-
-        $response = (new Response())
+        // withFile() streams the file via the Workerman event loop without
+        // buffering the whole file in memory. finalizeFileHeaders() derives
+        // Content-Length / Content-Range / Accept-Ranges and forces 206.
+        return (new Response())
             ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
-            ->header('Content-Length', (string)strlen($content))
-            ->header('Accept-Ranges', 'bytes');
-
-        if ($rangeHeader !== null) {
-            $response->header('Content-Range', "bytes {$start}-{$end}/{$fileSize}");
-        }
-
-        return $response->body($content);
+            ->header('Accept-Ranges', 'bytes')
+            ->withFile($path, $start, $length);
     }
 
     /**

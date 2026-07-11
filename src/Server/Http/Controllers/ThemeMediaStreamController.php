@@ -155,20 +155,14 @@ class ThemeMediaStreamController
             return $this->handleRangeRequest($filePath, $fileSize, $contentType, $rangeHeader);
         }
 
-        // Full file response
-        $content = file_get_contents($filePath);
-        if ($content === false) {
-            return (new Response())->status(500)->json([
-                'error' => 'Could not read file',
-            ]);
-        }
-
+        // withFile() streams the file via the Workerman event loop without
+        // buffering the whole file in memory. finalizeFileHeaders() derives
+        // Content-Length / Accept-Ranges automatically.
         return (new Response())
             ->status(200)
             ->header('Content-Type', $contentType)
-            ->header('Content-Length', (string) $fileSize)
             ->header('Accept-Ranges', 'bytes')
-            ->body($content);
+            ->withFile($filePath, 0, $fileSize);
     }
 
     /**
@@ -232,27 +226,14 @@ class ThemeMediaStreamController
         /** @var int<1, max> $length */
         $length = $end - $start + 1;
 
-        // Read only the requested range
-        $handle = fopen($filePath, 'rb');
-        if ($handle === false) {
-            return (new Response())->status(500)->json(['error' => 'Could not open file']);
-        }
-
-        fseek($handle, $start);
-        $content = fread($handle, $length);
-        fclose($handle);
-
-        if ($content === false) {
-            return (new Response())->status(500)->json(['error' => 'Could not read file range']);
-        }
-
+        // withFile() streams the file via the Workerman event loop without
+        // buffering the whole file in memory. finalizeFileHeaders() derives
+        // Content-Length / Content-Range / Accept-Ranges and forces 206.
         return (new Response())
             ->status(206)
             ->header('Content-Type', $contentType)
-            ->header('Content-Length', (string) $length)
-            ->header('Content-Range', "bytes {$start}-{$end}/{$fileSize}")
             ->header('Accept-Ranges', 'bytes')
-            ->body($content);
+            ->withFile($filePath, $start, $length);
     }
 
     /**

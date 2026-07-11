@@ -229,59 +229,6 @@ class Response
     }
 
     /**
-     * Creates a file download response.
-     *
-     * Sets Content-Type based on file extension or provided MIME type,
-     * and optionally sets Content-Disposition for download.
-     *
-     * @param string $path Absolute path to the file to send
-     * @param string|null $contentType Optional MIME type override
-     * @param string|null $downloadName Optional download filename
-     * @return self For method chaining, or 404 response if file not found
-     *
-     * @throws \RuntimeException If file cannot be read
-     *
-     * @example
-     * ```php
-     * (new Response())->file('/var/www/uploads/document.pdf', null, 'report.pdf');
-     * ```
-     */
-    public function file(string $path, ?string $contentType = null, ?string $downloadName = null): self
-    {
-        if (!file_exists($path) || !is_readable($path)) {
-            return $this->status(404)->json(['error' => 'File not found']);
-        }
-
-        $contents = file_get_contents($path);
-        if ($contents === false) {
-            return $this->status(500)->json(['error' => 'Failed to read file']);
-        }
-
-        $this->statusCode = 200;
-        $this->body = $contents;
-
-        if ($contentType) {
-            $this->headers['Content-Type'] = $contentType;
-        } else {
-            $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            $mime = false;
-            if ($finfo !== false) {
-                $mime = finfo_file($finfo, $path);
-                finfo_close($finfo);
-            }
-            $this->headers['Content-Type'] = is_string($mime) ? $mime : 'application/octet-stream';
-        }
-
-        $this->headers['Content-Length'] = (string)strlen($this->body);
-
-        if ($downloadName) {
-            $this->headers['Content-Disposition'] = 'attachment; filename="' . $downloadName . '"';
-        }
-
-        return $this;
-    }
-
-    /**
      * Stream a file from disk instead of buffering its bytes into {@see $body}.
      *
      * When a file is set, {@see toWorkermanResponse()} hands the path to

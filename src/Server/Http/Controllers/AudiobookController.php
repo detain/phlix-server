@@ -38,25 +38,7 @@ use Phlix\Server\Http\Response;
  */
 class AudiobookController
 {
-    /**
-     * Size of each bounded read while assembling the response body.
-     *
-     * The framework {@see Response} only supports a fully-materialised string
-     * body and {@see Response::send()} emits it with a single `echo`, so there
-     * is no streamed/chunked-write primitive to hand off a file handle to. We
-     * therefore still buffer the served bytes, but we read them in bounded
-     * chunks (rather than one huge `fread()`) and we serve EXACTLY what the
-     * client asked for: the whole file for a plain GET and the full requested
-     * range for a Range request. We must never silently truncate, because a
-     * short body with a full-size Content-Length makes clients hang, and a
-     * short Content-Length silently corrupts the download.
-     *
-     * TODO: stream without buffering once Response supports a file/callable
-     * body (e.g. a Workerman chunked-write response or readfile/fpassthru in
-     * the emit path). Until then correctness (complete bytes) takes priority
-     * over the memory cost of buffering a large body.
-     */
-    private const STREAM_CHUNK_BYTES = 256 * 1024; // 256 KiB
+
 
     /** @var ItemRepository Repository for media item access */
     private ItemRepository $itemRepo;
@@ -494,65 +476,21 @@ class AudiobookController
             }
         }
 
-        // Open file and seek to start position
-        $handle = fopen($path, 'rb');
-        if ($handle === false) {
-            return (new Response())->status(500)->json(['error' => 'Failed to open file']);
-        }
-
-        if (fseek($handle, $start) === -1) {
-            fclose($handle);
-            return (new Response())->status(500)->json(['error' => 'Failed to seek file']);
-        }
-
         $length = $end - $start + 1;
         if ($length < 1) {
-            fclose($handle);
             return (new Response())->status(416)->json(['error' => 'Invalid range length']);
         }
 
-        // Read the full requested length in bounded chunks rather than a single
-        // large fread(). This keeps per-iteration memory at STREAM_CHUNK_BYTES
-        // while still serving EXACTLY what was asked for: the whole file for a
-        // plain GET, or the complete requested range for a Range request. We
-        // never cap/shrink the served bytes here — a truncated body either
-        // hangs the client (Content-Length too large) or corrupts the download
-        // (Content-Length too small).
-        $content = '';
-        $remaining = $length;
-        while ($remaining > 0) {
-            $chunkSize = (int) min(self::STREAM_CHUNK_BYTES, $remaining);
-            /** @var positive-int $chunkSize */
-            $chunk = fread($handle, $chunkSize);
-            if ($chunk === false) {
-                fclose($handle);
-                return (new Response())->status(500)->json(['error' => 'Failed to read file']);
-            }
-            if ($chunk === '') {
-                // Reached EOF earlier than expected; stop and serve what we have.
-                break;
-            }
-            $content .= $chunk;
-            $remaining -= strlen($chunk);
-        }
-        fclose($handle);
-
-        // The actual number of bytes read may be shorter than $length if EOF was
-        // hit; reflect the true served range in the headers.
-        $served = strlen($content);
-        $end = $start + max(0, $served - 1);
-
-        $response = (new Response())
+        // withFile() streams the file via the Workerman event loop (chunked
+        // for large bodies) without buffering the whole file in memory.
+        // finalizeFileHeaders() computes Content-Length / Content-Range /
+        // Accept-Ranges and forces status 206 when offset/length is set,
+        // giving identical Range semantics to the old buffered approach.
+        return (new Response())
             ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
-            ->header('Content-Length', (string) $served)
-            ->header('Accept-Ranges', 'bytes');
-
-        if ($rangeHeader !== null) {
-            $response->header('Content-Range', "bytes {$start}-{$end}/{$fileSize}");
-        }
-
-        return $response->body($content);
+            ->header('Accept-Ranges', 'bytes')
+            ->withFile($path, $start, $length);
     }
 
     /**

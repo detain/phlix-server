@@ -45,7 +45,23 @@ class AuthManager
     private const RATE_LIMIT_MAX_ATTEMPTS = 5;
     private const RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
 
-    /** @var array<string, array{attempts: int, reset_at: int}> Static rate limit storage per IP */
+    /**
+     * Central login rate limit store.
+     *
+     * When a DbLoginRateLimitStore is injected, the rate limit is shared
+     * across all workers (×1 budget, not ×N workers). When null (unit tests /
+     * legacy callers), falls back to the in-memory store below.
+     *
+     * @var DbLoginRateLimitStore|null
+     */
+    private ?DbLoginRateLimitStore $loginRateLimitStore;
+
+    /**
+     * In-memory fallback rate limit store used when no DbLoginRateLimitStore
+     * is injected (tests / legacy callers).
+     *
+     * @var array<string, array{attempts: int, reset_at: int}>
+     */
     private static array $rateLimitStore = [];
 
     /** @var UserRepository User data access repository */
@@ -117,6 +133,12 @@ class AuthManager
      *                                       store; when supplied, register() honours
      *                                       the `auth.signup_mode` setting
      *                                       (open|approval|disabled).
+     * @param DbLoginRateLimitStore|null $loginRateLimitStore Optional central DB-backed
+     *                                       rate limit store; when supplied, the login
+     *                                       throttle is shared across all workers (not
+     *                                       multiplied by worker count) and bounded by
+     *                                       TTL cleanup. When null (tests / legacy),
+     *                                       falls back to an in-memory per-worker store.
      *
      * @example
      * ```php
@@ -136,7 +158,8 @@ class AuthManager
         ?Connection $db = null,
         ?ProviderManager $providerManager = null,
         ?StatsCollector $statsCollector = null,
-        ?SettingsRepository $settingsRepository = null
+        ?SettingsRepository $settingsRepository = null,
+        ?DbLoginRateLimitStore $loginRateLimitStore = null
     ) {
         $this->userRepository = $userRepository;
         $this->jwtHandler = $jwtHandler;
@@ -147,6 +170,7 @@ class AuthManager
         $this->providerManager = $providerManager;
         $this->statsCollector = $statsCollector;
         $this->settingsRepository = $settingsRepository;
+        $this->loginRateLimitStore = $loginRateLimitStore;
     }
 
     /**
@@ -250,10 +274,20 @@ class AuthManager
     /**
      * Check if the client IP has exceeded the rate limit.
      *
+     * Uses the injected DbLoginRateLimitStore when available (production, shared
+     * across all workers). Falls back to the static in-memory store for tests /
+     * legacy callers that did not inject a store.
+     *
      * @throws RateLimitException When rate limit is exceeded
      */
     private function checkRateLimit(string $ip): void
     {
+        if ($this->loginRateLimitStore !== null) {
+            $this->loginRateLimitStore->check($ip, self::RATE_LIMIT_MAX_ATTEMPTS);
+            return;
+        }
+
+        // Fallback to in-memory store (tests / legacy)
         $now = time();
 
         if (!isset(self::$rateLimitStore[$ip])) {
@@ -278,9 +312,19 @@ class AuthManager
 
     /**
      * Record a failed authentication attempt for rate limiting.
+     *
+     * Uses the injected DbLoginRateLimitStore when available (production, shared
+     * across all workers). Falls back to the static in-memory store for tests /
+     * legacy callers that did not inject a store.
      */
     private function recordFailedAttempt(string $ip): void
     {
+        if ($this->loginRateLimitStore !== null) {
+            $this->loginRateLimitStore->recordFailedAttempt($ip);
+            return;
+        }
+
+        // Fallback to in-memory store (tests / legacy)
         $now = time();
 
         if (!isset(self::$rateLimitStore[$ip])) {
@@ -305,22 +349,34 @@ class AuthManager
 
     /**
      * Clear rate limit data for a client IP after successful auth.
+     *
+     * Uses the injected DbLoginRateLimitStore when available (production, shared
+     * across all workers). Falls back to the static in-memory store for tests /
+     * legacy callers that did not inject a store.
      */
     private function clearRateLimit(string $ip): void
     {
+        if ($this->loginRateLimitStore !== null) {
+            $this->loginRateLimitStore->clear($ip);
+            return;
+        }
+
+        // Fallback to in-memory store (tests / legacy)
         unset(self::$rateLimitStore[$ip]);
     }
 
     /**
      * Clears the process-wide login rate-limit store.
      *
-     * The store is `static` so the throttle survives across the many AuthManager
-     * instances a single Workerman worker creates. In the test runner that same
-     * persistence leaks failed-login counts between unrelated test cases (they
-     * all key on the default 127.0.0.1 IP), so with `executionOrder="random"` a
-     * later auth test can inherit a tripped limiter and fail intermittently. Tests
-     * call this in setUp() to start from a clean slate; it is a no-op for the
-     * limiter's production behaviour.
+     * The static in-memory store is only used when no DbLoginRateLimitStore is
+     * injected (tests / legacy callers). When a DbLoginRateLimitStore is in use
+     * (production), individual IPs are cleared via clearRateLimit() after a
+     * successful login, and expired entries are swept by the store's TTL cleanup.
+     *
+     * In the test runner, the static store persists across unrelated test cases
+     * (they all key on the default 127.0.0.1 IP), so with executionOrder="random"
+     * a later auth test can inherit a tripped limiter and fail intermittently. Tests
+     * call this in setUp() to start from a clean slate.
      */
     public static function resetRateLimitStore(): void
     {

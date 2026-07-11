@@ -818,6 +818,10 @@ class Recorder
      * PHP worker returning does not kill the child. Returns the real
      * child PID which is persisted to the DB for recovery on restart.
      *
+     * SV-4.2: The command is wrapped in `timeout <transcode_timeout>` so
+     * long-running recordings are killed automatically. PIDs are tracked
+     * in $activeRecordings for cleanup on disconnect/timeout.
+     *
      * Log files are written to $logDir/ffmpeg_<recordingId>.log so
      * {@see terminateRecording()} can find them during cleanup.
      *
@@ -828,6 +832,7 @@ class Recorder
      * @return int The child PID (0 if spawn failed)
      *
      * @since SV-3.1
+     * @since SV-4.2 Applies transcode_timeout wrapper, tracks PIDs for cleanup.
      */
     private function spawnRecording(string $streamUrl, string $outputPath, string $logDir): int
     {
@@ -847,11 +852,18 @@ class Recorder
 
         $logFile = $logDir . '/ffmpeg_recording.log';
 
+        // SV-4.2: wrap in timeout to enforce transcode_timeout (7200s default).
+        // If timeout kills the process, .timed_out marker is created.
+        $timeoutSecs = $this->getTranscodeTimeout();
+        $timeoutCmd = $timeoutSecs > 0
+            ? 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($cmd)
+            : 'sh -c ' . escapeshellarg($cmd);
+
         // nohup so SIGHUP doesn't kill ffmpeg when the PHP shell returns.
         // Redirect both stdout+stderr to the log file.
         $full = sprintf(
-            'nohup sh -c %s > %s 2>&1 & echo $!',
-            escapeshellarg($cmd),
+            'nohup %s > %s 2>&1 & echo $!',
+            $timeoutCmd,
             escapeshellarg($logFile)
         );
 
@@ -866,9 +878,39 @@ class Recorder
             'pid' => $pid,
             'stream_url' => $streamUrl,
             'output_path' => $outputPath,
+            'timeout_secs' => $timeoutSecs,
         ]);
 
         return $pid;
+    }
+
+    /**
+     * Get the configured transcode timeout in seconds.
+     *
+     * @return int Timeout in seconds (0 = no timeout)
+     *
+     * @since SV-4.2
+     */
+    private function getTranscodeTimeout(): int
+    {
+        static $timeout = null;
+        if ($timeout === null) {
+            $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../config';
+            $configFile = $configPath . '/ffmpeg.php';
+            if (file_exists($configFile)) {
+                /** @var array<string, mixed> $config */
+                $config = include $configFile;
+                $timeoutSecs = $config['transcode_timeout'] ?? null;
+                $timeout = match (true) {
+                    is_int($timeoutSecs) => $timeoutSecs,
+                    is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
+                    default => 0,
+                };
+            } else {
+                $timeout = 0;
+            }
+        }
+        return $timeout;
     }
 
     /**

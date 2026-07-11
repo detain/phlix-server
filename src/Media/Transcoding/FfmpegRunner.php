@@ -887,12 +887,17 @@ class FfmpegRunner
      * @return int OS process id of the background job (0 if launch failed).
      *
      * @since 0.23.0
+     * @since SV-4.2 Applies transcode_timeout wrapper via buildDetachedCommand.
      */
     public function startDetached(string $command, string $outDir, array $trailingCmds = []): int
     {
-        $full = $this->buildDetachedCommand($command, $outDir, $trailingCmds);
+        $timeoutSecs = $this->getTranscodeTimeout();
+        $full = $this->buildDetachedCommand($command, $outDir, $trailingCmds, $timeoutSecs);
 
-        $this->logger->debug('Starting detached HLS transcode', ['command' => $command]);
+        $this->logger->debug('Starting detached HLS transcode', [
+            'command' => $command,
+            'timeout_secs' => $timeoutSecs,
+        ]);
 
         $pid = shell_exec($full);
         if (!is_string($pid)) {
@@ -901,6 +906,37 @@ class FfmpegRunner
         }
 
         return (int) trim($pid);
+    }
+
+    /**
+     * Get the configured transcode timeout in seconds.
+     *
+     * Loads from ffmpeg.php config on first call, then caches.
+     *
+     * @return int Timeout in seconds (0 = no timeout)
+     *
+     * @since SV-4.2
+     */
+    private function getTranscodeTimeout(): int
+    {
+        static $timeout = null;
+        if ($timeout === null) {
+            $configPath = defined('PHLIX_CONFIG_PATH') ? PHLIX_CONFIG_PATH : __DIR__ . '/../../../config';
+            $configFile = $configPath . '/ffmpeg.php';
+            if (file_exists($configFile)) {
+                /** @var array<string, mixed> $config */
+                $config = include $configFile;
+                $timeoutSecs = $config['transcode_timeout'] ?? null;
+                $timeout = match (true) {
+                    is_int($timeoutSecs) => $timeoutSecs,
+                    is_string($timeoutSecs) && is_numeric($timeoutSecs) => (int) $timeoutSecs,
+                    default => 0,
+                };
+            } else {
+                $timeout = 0;
+            }
+        }
+        return $timeout;
     }
 
     /**
@@ -914,15 +950,21 @@ class FfmpegRunner
      * so neither a `|| true` extract wrapper nor a failing extract can ever bridge
      * a FAILED primary command to `.complete`, nor flip a success to `.failed`.
      *
+     * The entire command chain is wrapped in `timeout <seconds>` so the
+     * transcode is killed if it exceeds the configured timeout
+     * (SV-4.2: detached-ffmpeg cancellation + apply transcode_timeout).
+     *
      * @param string             $command      The primary command.
      * @param string             $outDir       Marker / log directory.
      * @param array<int, string> $trailingCmds Post-success commands (each internally `|| true`).
+     * @param int                $timeoutSecs Timeout in seconds (0 = no timeout).
      *
      * @return string The full `nohup sh -c ... & echo $!` launch string.
      *
      * @since 0.25.0
+     * @since SV-4.2 Applies transcode_timeout wrapper.
      */
-    public function buildDetachedCommand(string $command, string $outDir, array $trailingCmds = []): string
+    public function buildDetachedCommand(string $command, string $outDir, array $trailingCmds = [], int $timeoutSecs = 0): string
     {
         $then = 'touch ' . escapeshellarg($outDir . '/.complete');
         foreach ($trailingCmds as $trailing) {
@@ -933,9 +975,16 @@ class FfmpegRunner
         $inner = 'if ' . $command . '; then ' . $then
             . '; else touch ' . escapeshellarg($outDir . '/.failed') . '; fi';
 
+        // SV-4.2: wrap in timeout to enforce transcode_timeout
+        if ($timeoutSecs > 0) {
+            $inner = 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($inner);
+        } else {
+            $inner = 'sh -c ' . escapeshellarg($inner);
+        }
+
         return sprintf(
-            'nohup sh -c %s > %s 2>&1 & echo $!',
-            escapeshellarg($inner),
+            'nohup %s > %s 2>&1 & echo $!',
+            $inner,
             escapeshellarg($outDir . '/ffmpeg.log')
         );
     }

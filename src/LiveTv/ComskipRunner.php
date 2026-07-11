@@ -126,50 +126,105 @@ class ComskipRunner
             throw new \RuntimeException('Failed to start comskip process');
         }
 
-        // Set timeout on the process
-        $startTime = time();
+        // SV-4.3: Set pipes to non-blocking mode for bounded reads in poll loop.
+        // stream_set_timeout alone does NOT enforce timeout on stream_get_contents
+        // (it only affects select-based operations). We must use non-blocking I/O.
+        $startTime = hrtime(true);
+        $timeoutNanos = self::TIMEOUT_SECONDS * 1_000_000_000;
 
         foreach ($pipes as $pipe) {
             if (is_resource($pipe)) {
-                stream_set_timeout($pipe, self::TIMEOUT_SECONDS);
+                stream_set_blocking($pipe, false);
             }
         }
 
-        // Read output to prevent blocking
+        // Read output buffers — bounded reads in poll loop.
+        // Using non-blocking reads with bounded chunk size so timeout is reachable.
         $stdout = '';
         $stderr = '';
+        $readChunks = 0;
+        $maxChunksPerPipe = 200; // ~200 * 8KB = 1.6MB per pipe max
+        $chunkSize = 8192;
 
+        $pipesByIdx = [];
         if (is_resource($pipes[1])) {
-            $stdout = stream_get_contents($pipes[1]);
-            fclose($pipes[1]);
+            $pipesByIdx[1] = $pipes[1];
         }
-
         if (is_resource($pipes[2])) {
-            $stderr = stream_get_contents($pipes[2]);
-            fclose($pipes[2]);
+            $pipesByIdx[2] = $pipes[2];
         }
 
-        // Wait for process with timeout using non-blocking sleep when available
-        while (true) {
-            $status = proc_get_status($process);
-
-            if (!$status['running']) {
-                $returnCode = $status['exitcode'];
-                break;
-            }
-
-            if ((time() - $startTime) >= self::TIMEOUT_SECONDS) {
+        // Poll loop: interleave bounded reads from stdout and stderr.
+        // Uses stream_select() to efficiently wait for data with timeout.
+        while (!empty($pipesByIdx)) {
+            // Check timeout using monotonic clock
+            $elapsedNanos = hrtime(true) - $startTime;
+            if ($elapsedNanos >= $timeoutNanos) {
+                foreach ($pipesByIdx as $p) {
+                    if (is_resource($p)) {
+                        fclose($p);
+                    }
+                }
                 proc_terminate($process, SIGKILL);
                 throw new \RuntimeException(
                     "Comskip timed out after " . self::TIMEOUT_SECONDS . " seconds"
                 );
             }
 
-            // Non-blocking sleep when in Swoole coroutine context
-            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
-                \Swoole\Coroutine::sleep(0.1);
-            } else {
-                usleep(100000);
+            $readable = $pipesByIdx;
+            $write = null;
+            $except = null;
+            $sec = 0;
+            $usec = 100_000; // 100ms per select call
+            if (@stream_select($readable, $write, $except, $sec, $usec) === false) {
+                // Interrupted or error — treat as still running, retry
+                $this->nonBlockingSleep(0.05);
+                continue;
+            }
+
+            foreach ($readable as $idx => $pipe) {
+                $readChunks++;
+                if ($readChunks > $maxChunksPerPipe) {
+                    // Safety limit: something is flooding us
+                    if (is_resource($pipe)) {
+                        fclose($pipe);
+                    }
+                    unset($pipesByIdx[$idx]);
+                    continue;
+                }
+
+                $chunk = fread($pipe, $chunkSize);
+                if ($chunk === false || $chunk === '') {
+                    // EOF or error — close pipe
+                    if (is_resource($pipe)) {
+                        fclose($pipe);
+                    }
+                    unset($pipesByIdx[$idx]);
+                    continue;
+                }
+
+                // Accumulate into correct buffer
+                if ($idx === 1) {
+                    $stdout .= $chunk;
+                } elseif ($idx === 2) {
+                    $stderr .= $chunk;
+                }
+            }
+
+            // Check if process exited
+            $status = proc_get_status($process);
+            if (!$status['running']) {
+                // Process finished — drain any remaining buffered data
+                $this->drainRemainingPipes($pipesByIdx, $stdout, $stderr);
+                $returnCode = $status['exitcode'];
+                break;
+            }
+        }
+
+        // Close any remaining pipes
+        foreach ($pipesByIdx as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
             }
         }
 
@@ -212,6 +267,67 @@ class ComskipRunner
         ]);
 
         return $edlPath;
+    }
+
+    /**
+     * Drain any remaining data from pipes before closing.
+     *
+     * @param array<int, resource> $pipesByIdx Pipes to drain (modified in-place)
+     * @param string &$stdout Accumulated stdout
+     * @param string &$stderr Accumulated stderr
+     *
+     * @since SV-4.3
+     */
+    private function drainRemainingPipes(array &$pipesByIdx, string &$stdout, string &$stderr): void
+    {
+        $chunkSize = 8192;
+
+        // Quick drain with non-blocking reads - don't loop forever
+        foreach ($pipesByIdx as $idx => $pipe) {
+            if (!is_resource($pipe)) {
+                unset($pipesByIdx[$idx]);
+                continue;
+            }
+
+            // Use stream_set_blocking just for this drain
+            stream_set_blocking($pipe, false);
+            $drained = false;
+
+            while (!$drained) {
+                $chunk = @fread($pipe, $chunkSize);
+                if ($chunk === false || $chunk === '') {
+                    fclose($pipe);
+                    unset($pipesByIdx[$idx]);
+                    $drained = true;
+                    continue;
+                }
+
+                if ($idx === 1) {
+                    $stdout .= $chunk;
+                } elseif ($idx === 2) {
+                    $stderr .= $chunk;
+                }
+
+                // Safety: limit drain iterations
+                break;
+            }
+        }
+    }
+
+    /**
+     * Yield to event loop with non-blocking sleep.
+     *
+     * @param float $seconds Sleep duration in seconds
+     *
+     * @since SV-4.3
+     */
+    private function nonBlockingSleep(float $seconds): void
+    {
+        if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+            \Swoole\Coroutine::sleep($seconds);
+        } else {
+            usleep((int) ($seconds * 1_000_000));
+        }
     }
 
     /**

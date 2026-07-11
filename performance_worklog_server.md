@@ -58,7 +58,7 @@
 - [x] SV-0.2  reconcile hwaccel config ✅ (commit 85aec93c)
 - [x] SV-0.3  isWorkermanContext fix ✅ (commit e48e4aba)
 - [x] SV-0.4  replace usleep spin-wait with Channel ✅ (commit e48e4aba)
-- [ ] SV-0.5  fix WS reaper + heartbeat timer guards
+- [x] SV-0.5  fix WS reaper + heartbeat timer guards ✅ (commit b95a9c22)
 - [ ] SV-0.6  fix TMDB collections UUID-as-int bug
 - [ ] SV-0.7  supervise marker/intro-detection worker
 - [ ] SV-0.8  fix path_hash reads + stop re-probing

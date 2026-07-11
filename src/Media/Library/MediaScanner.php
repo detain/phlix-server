@@ -1561,7 +1561,7 @@ class MediaScanner
                 ? $videoBitrate
                 : self::intOrNull($stream['bit_rate'] ?? null);
 
-            $streams[] = [
+            $streamData = [
                 'stream_index' => $index,
                 'stream_type' => $codecType,
                 'codec' => self::stringOrNull($stream['codec_name'] ?? null),
@@ -1573,6 +1573,39 @@ class MediaScanner
                 'title' => self::streamTitle($stream),
                 'is_default' => self::isDefaultDisposition($stream) ? 1 : 0,
             ];
+
+            // Persist color metadata on video streams so tone-mapping decisions
+            // can be made at scan time without re-probing on every segment encode.
+            if ($isVideo) {
+                $streamData['color_space'] = self::stringOrNull($stream['color_space'] ?? null);
+                $streamData['color_transfer'] = self::stringOrNull($stream['color_transfer'] ?? null);
+                $streamData['color_primaries'] = self::stringOrNull($stream['color_primaries'] ?? null);
+                // Luminance from side data tags (mastering display)
+                $tags = is_array($stream['tags'] ?? null) ? $stream['tags'] : null;
+                $maxLum = null;
+                $avgLum = null;
+                if ($tags !== null) {
+                    $masteringLum = $tags['mastering_display_luminance'] ?? null;
+                    if (is_string($masteringLum) && preg_match('/max:(\d+(\.\d+)?)/', $masteringLum, $lm)) {
+                        $maxLum = (float) $lm[1];
+                    }
+                    $ambientLum = $tags['ambient_luminance'] ?? null;
+                    if (is_string($ambientLum) && preg_match('/avg:(\d+(\.\d+)?)/', $ambientLum, $la)) {
+                        $avgLum = (float) $la[1];
+                    }
+                }
+                // Also check direct fields (some FFmpeg versions)
+                if ($maxLum === null && isset($stream['max_luminance']) && is_numeric($stream['max_luminance'])) {
+                    $maxLum = (float) $stream['max_luminance'];
+                }
+                if ($avgLum === null && isset($stream['avg_luminance']) && is_numeric($stream['avg_luminance'])) {
+                    $avgLum = (float) $stream['avg_luminance'];
+                }
+                $streamData['max_luminance'] = $maxLum;
+                $streamData['avg_luminance'] = $avgLum;
+            }
+
+            $streams[] = $streamData;
             $nextIndex = $index + 1;
         }
 

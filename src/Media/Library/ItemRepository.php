@@ -1198,8 +1198,10 @@ class ItemRepository
         $this->db->query(
             "INSERT INTO media_streams
                 (id, media_item_id, stream_index, stream_type, codec, language,
-                 bitrate, channels, width, height, title, is_default)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 bitrate, channels, width, height, title, is_default,
+                 color_space, color_transfer, color_primaries,
+                 max_luminance, avg_luminance)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 $id,
                 $itemId,
@@ -1213,6 +1215,11 @@ class ItemRepository
                 $streamData['height'] ?? null,
                 $streamData['title'] ?? null,
                 $isDefault,
+                $streamData['color_space'] ?? null,
+                $streamData['color_transfer'] ?? null,
+                $streamData['color_primaries'] ?? null,
+                isset($streamData['max_luminance']) ? (float) $streamData['max_luminance'] : null,
+                isset($streamData['avg_luminance']) ? (float) $streamData['avg_luminance'] : null,
             ]
         );
 

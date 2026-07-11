@@ -61,6 +61,16 @@ class FfmpegRunner
     private array $config = [];
 
     /**
+     * Per-worker probe memoization cache: keyed by "path:mtime", value is the
+     * cached probe result. Caps ffprobe invocations to at most one per file per
+     * worker lifetime — critical for the tone-map decision path where multiple
+     * segment encodes can ask about the same file in quick succession.
+     *
+     * @var array<string, array{streams: array<int, array<string, mixed>>, format: array<string, mixed>}|null>
+     */
+    private array $probeMemo = [];
+
+    /**
      * Creates a new FFmpegRunner instance.
      *
      * @param string $ffmpegPath Path to FFmpeg binary (default: /usr/bin/ffmpeg)
@@ -120,6 +130,15 @@ class FfmpegRunner
      */
     public function probe(string $inputPath): ?array
     {
+        // Memoize by path + mtime so at most one probe per file per worker
+        // lifetime. The mtime guard handles the case where the file changes
+        // on disk (e.g. after a re-encode).
+        $mtime = is_file($inputPath) ? (string) @filemtime($inputPath) : '';
+        $cacheKey = $inputPath . ':' . $mtime;
+        if (isset($this->probeMemo[$cacheKey])) {
+            return $this->probeMemo[$cacheKey];
+        }
+
         $cmd = sprintf(
             '%s -v quiet -print_format json -show_format -show_streams %s 2>/dev/null',
             escapeshellarg($this->ffprobePath),
@@ -128,17 +147,20 @@ class FfmpegRunner
 
         $output = $this->runProbeCommand($cmd);
         if ($output === null || $output === '') {
+            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $data = json_decode($output, true);
         if (!is_array($data)) {
+            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
         $rawStreams = $data['streams'] ?? [];
         $rawFormat = $data['format'] ?? [];
         if (!is_array($rawStreams) || !is_array($rawFormat)) {
+            $this->probeMemo[$cacheKey] = null;
             return null;
         }
 
@@ -163,10 +185,12 @@ class FfmpegRunner
             }
         }
 
-        return [
+        $result = [
             'streams' => $streams,
             'format' => $format,
         ];
+        $this->probeMemo[$cacheKey] = $result;
+        return $result;
     }
 
     /**

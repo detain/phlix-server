@@ -2036,6 +2036,23 @@ class TranscodeManager
             'playlist_type' => 'vod',
         ];
 
+        // P6: Pre-determine HDR tone-mapping need from probe color metadata.
+        // When the scan (migration 073+) stored bt2020c/eotf/color_primaries,
+        // the probe carries them and this fires: buildSegmentCommand then skips
+        // the needsToneMapping() call entirely (saves one probe per segment).
+        // For pre-073 items the probe is live but lacks color columns, so
+        // buildSegmentCommand falls back to needsToneMapping() — which is O(1)
+        // due to FfmpegRunner::probe() memoisation by path+mtime, so at most
+        // ONE ffprobe per file per worker lifetime even in that case.
+        $colorMeta = $this->ffmpeg->extractColorMetadata($probe);
+        $isHdr = in_array($colorMeta['color_transfer'], ['smpte2084', 'arib-std-b67'], true);
+        $isBt2020 = $colorMeta['color_primaries'] === 'bt2020'
+            || $colorMeta['color_space'] === 'bt2020nc'
+            || $colorMeta['color_space'] === 'bt2020_ncl';
+        if ($isHdr && $isBt2020) {
+            $params['require_hdr_tone_map'] = true;
+        }
+
         // Remux (copy) only a stream the browser can actually decode: 8-bit 4:2:0
         // H.264. A 10-bit (High 10) or 4:2:2/4:4:4 H.264 source copied as-is would
         // load but fail to decode in MSE/hls.js, so it must be re-encoded.

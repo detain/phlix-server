@@ -7,6 +7,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-07-10
+
+### Fixed
+- **Plugin manifests may now declare per-setting `link`/`link_text` field-help keys.** Bumped `detain/phlix-shared` to `^0.19.0`, whose manifest schema adds those optional keys. Without this, a plugin that shipped a "where to get this value" link in its own `plugin.json` failed install-time validation as "manifest is invalid" (the settings-entry schema is `additionalProperties:false`). The configure form already rendered such links via the server-side overlay; now they can travel in the manifest too.
+
+### Changed
+- **Official plugin catalog pin advanced `v2.1.2` → `v2.1.3`** (`CatalogSourceResolver::OFFICIAL_PINNED_REF`): all 8 first-party plugins are repinned to their releases that pair with the 1.2.0 plugin-enable fix (lastfm 1.1.0, opensubtitles 0.2.0, anidb 0.3.0, myanimelist 0.2.0, omdb 0.2.0, trakt 1.2.0, anilist 0.2.0, musicbrainz 0.2.0), so the admin Plugins section installs/updates the enableable versions.
+- Version bumped `1.2.0`→`1.2.1` (PATCH).
+
 ## [1.2.0] — 2026-07-10
 
 **Plugin enable + configure fixes.** Fixes the long-standing bug where installed plugins could not be enabled and never received their saved settings.

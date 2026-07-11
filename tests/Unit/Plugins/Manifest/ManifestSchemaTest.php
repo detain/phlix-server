@@ -125,6 +125,49 @@ final class ManifestSchemaTest extends TestCase
         $this->assertSame([], $this->schema->validate($manifest));
     }
 
+    public function test_validate_accepts_settings_with_link_field_help(): void
+    {
+        // A setting may carry a `link` (uri) + `link_text` for the configure
+        // form's "where to get this value" help (phlix-shared >= 0.19.0).
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-with-link',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '1.2.0',
+            'type' => 'metadata-provider',
+            'entry' => 'Phlix\\Plugins\\Linked\\Plugin',
+            'settings' => [
+                'api_key' => [
+                    'type' => 'string',
+                    'required' => true,
+                    'secret' => true,
+                    'label' => 'API Key',
+                    'description' => 'Your key.',
+                    'link' => 'https://example.test/apikey',
+                    'link_text' => 'Get a key',
+                ],
+            ],
+        ]);
+
+        $this->assertSame([], $this->schema->validate($manifest));
+    }
+
+    public function test_validate_rejects_unknown_setting_key(): void
+    {
+        // Unknown per-setting keys are still a hard error (additionalProperties:false).
+        $manifest = Manifest::fromArray([
+            'name' => 'phlix-plugin-bad-setting',
+            'version' => '1.0.0',
+            'phlix_min_server_version' => '1.2.0',
+            'type' => 'notifier',
+            'entry' => 'Phlix\\Plugins\\Bad\\Plugin',
+            'settings' => [
+                'api_key' => ['type' => 'string', 'managed' => true],
+            ],
+        ]);
+
+        $this->assertNotSame([], $this->schema->validate($manifest));
+    }
+
     private function loadFixture(string $name): string
     {
         $path = self::FIXTURE_DIR . '/' . $name;

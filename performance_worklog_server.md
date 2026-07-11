@@ -75,8 +75,9 @@
 - [x] SV-1.10 login rate limiter bound ✅ (commit a3a6b35a) — S-W1 complete 🎉
 - [ ] SV-2.1  stream file-backed responses over relay tunnel
 - [x] SV-2.2  pool hygiene: rollback dirty connections ✅ (commit 6bd400ee)
-- [ ] SV-2.4  stream large binary via withFile()
-- [ ] SV-2.5  image/photo caching validators + security headers
+- [x] SV-2.3  relay byte-pipe backpressure ✅ (commit cfcbeb50)
+- [x] SV-2.4  stream large binary via withFile() ✅ (commit 320efdbc)
+- [x] SV-2.5  image/photo caching validators + security headers ✅ (commit 3cf0ac4c)
 - [ ] SV-2.6  WS routing indexes + broadcast backpressure
 - [ ] SV-2.7  per-request auth status cache
 - [ ] SV-2.8  list-query projection + materialized filter columns

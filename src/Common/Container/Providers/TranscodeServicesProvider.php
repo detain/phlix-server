@@ -13,7 +13,9 @@ namespace Phlix\Common\Container\Providers;
 
 use DI\ContainerBuilder;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
@@ -83,7 +85,23 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c) use ($ffmpegPath, $ffprobePath, $transcodeDir): FfmpegRunner {
                     /** @var \Psr\Log\LoggerInterface $logger */
                     $logger = $c->get('logger.media');
-                    return new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
+
+                    // Get the merged hwaccel config (single source of truth).
+                    // This combines hwaccel_base.php settings (enabled, prefer_hardware,
+                    // vendor_priority, etc.) with transcoding.php settings
+                    // (tone_mapping_mode, preferred_accelerator, etc.).
+                    $mergedConfig = \Phlix\Config\HwAccelConfig::get();
+
+                    $runner = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
+                    $runner->setConfig($mergedConfig);
+
+                    // Probe hardware acceleration once at container build time and cache
+                    // the result on the runner. This avoids per-request probing (which
+                    // uses shell_exec/Coroutine\System::exec).
+                    // The probe respects vendor_priority from the merged config.
+                    $runner->probeHardwareAcceleration();
+
+                    return $runner;
                 }
             ),
 

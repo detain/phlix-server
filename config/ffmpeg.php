@@ -1,5 +1,31 @@
 <?php
 
+/**
+ * FFmpeg configuration.
+ *
+ * This file contains ffmpeg-specific settings (paths, timeouts, concurrent limits)
+ * as well as a deprecated hwaccel bridge.
+ *
+ * @deprecated The 'hwaccel' key below is deprecated. It now delegates to
+ *             config/hwaccel.php which provides the SINGLE SOURCE OF TRUTH for
+ *             hardware acceleration settings. The HwAccelConfig::get() method
+ *             returns a merged config that combines hwaccel base settings
+ *             with transcoding.php tone-map and preferred accelerator settings.
+ *
+ *             For runtime config, always use:
+ *               $config = \Phlix\Config\HwAccelConfig::get();
+ *
+ *             Or in DI/container contexts that read from ffmpeg.php config array:
+ *               $config['hwaccel'] = \Phlix\Config\HwAccelConfig::get();
+ *
+ * @since 0.1.0
+ */
+
+declare(strict_types=1);
+
+// Load the HwAccelConfig class from hwaccel.php
+require_once __DIR__ . '/hwaccel.php';
+
 return [
     'ffmpeg_path' => '/usr/bin/ffmpeg',
     'ffprobe_path' => '/usr/bin/ffprobe',
@@ -7,22 +33,22 @@ return [
     'segment_dir' => '/var/segments',
     'max_concurrent_transcodes' => 4,
     'transcode_timeout' => 7200,
+
     // S8: bounded fan-out cap for MediaScanner::scanFlat()'s concurrent ffprobe
     // pool (only active inside a Swoole coroutine — see MediaScanner). Mirrors
     // the max_concurrent_transcodes knob's style/placement.
     'max_concurrent_scan_probes' => 4,
-    'hwaccel' => [
-        'enabled' => false,
-        'prefer_hardware' => true,
-        'vendor_priority' => [
-            'nvenc' => 0,
-            'vaapi' => 1,
-            'qsv' => 2,
-            'videotoolbox' => 3,
-            'amf' => 4,
-            'v4l2' => 5,
-        ],
-    ],
+
+    /**
+     * Hardware acceleration settings.
+     *
+     * @deprecated Use \Phlix\Config\HwAccelConfig::get() instead.
+     *             This key now delegates to hwaccel.php for the authoritative config.
+     *             The merged config combines hwaccel base settings with
+     *             transcoding.php tone-map mode and preferred accelerator settings.
+     */
+    'hwaccel' => \Phlix\Config\HwAccelConfig::get(),
+
     'hwaccel_profiles' => require __DIR__ . '/hwaccel_profiles.php',
     'subtitles' => require __DIR__ . '/subtitles.php',
     'dash' => [

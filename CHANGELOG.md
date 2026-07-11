@@ -7,6 +7,17 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [SV-0.2] — 2026-07-10
+
+**Reconciled hardware acceleration config sources.** Consolidates conflicting hwaccel settings from multiple config files into a single source of truth.
+
+### Changed
+
+- **`config/hwaccel.php`** is now the single source of truth for hardware acceleration settings, providing the `HwAccelConfig` class with a `get()` method that merges base hwaccel settings with transcoding-specific settings
+- **`HwAccelConfig::get()`** merges `config/hwaccel_base.php` (enabled, prefer_hardware, vendor_priority, probe_timeout, test_clip_path, fallback_to_software) with `config/transcoding.php` settings (tone_mapping_mode, preferred_accelerator, prefer_hdr_output, probe_timeout, test_clip_path, include_software_fallback)
+- **`config/ffmpeg.php['hwaccel']`** is deprecated and now delegates to `HwAccelConfig::get()` for backward compatibility — runtime code should use `\Phlix\Config\HwAccelConfig::get()` directly
+- No more contradictory `enabled` flags between config sources at runtime
+
 ## [1.2.2] — 2026-07-10
 
 ### Changed

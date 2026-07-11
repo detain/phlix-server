@@ -62,6 +62,9 @@ class TranscodeManager
     /** @var int Max time (ms) to wait for an on-demand segment encode before giving up */
     private int $segmentMaxWaitMs;
 
+    /** @var int Minimum free bytes required on the segment cache filesystem */
+    private int $minDiskSpaceBytes;
+
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
 
@@ -250,7 +253,8 @@ class TranscodeManager
         ?int $maxConcurrentSegments = null,
         ?int $cacheMaxBytes = null,
         ?int $cacheMaxAgeSeconds = null,
-        ?int $segmentMaxWaitMs = null
+        ?int $segmentMaxWaitMs = null,
+        ?int $minDiskSpaceBytes = null
     ) {
         $this->db = $db;
         $this->ffmpeg = $ffmpeg;
@@ -271,6 +275,9 @@ class TranscodeManager
         $this->segmentMaxWaitMs = ($segmentMaxWaitMs !== null && $segmentMaxWaitMs > 0)
             ? $segmentMaxWaitMs
             : self::SEGMENT_MAX_WAIT_MS;
+        $this->minDiskSpaceBytes = ($minDiskSpaceBytes !== null && $minDiskSpaceBytes > 0)
+            ? $minDiskSpaceBytes
+            : self::SEGMENT_CACHE_MIN_FREE_BYTES;
         $this->subtitleExtractor = $subtitleExtractor ?? new SubtitleExtractor();
         // PHP_BINARY is the absolute path to the running interpreter, used by the
         // detached job to invoke the VTT-cleaner CLI.
@@ -564,6 +571,15 @@ class TranscodeManager
     private const SEGMENT_CACHE_ACTIVE_WINDOW = 1800; // 30 minutes
 
     /**
+     * Minimum free bytes required on the segment cache filesystem before an
+     * on-demand encode is attempted. When disk_free_space() falls below this
+     * threshold, {@see SegmentCacheFullException} is thrown proactively rather
+     * than letting FFmpeg hit ENOSPC and cascade into silent 404s at the player.
+     * Overridable via constructor.
+     */
+    private const SEGMENT_CACHE_MIN_FREE_BYTES = 500 * 1024 * 1024; // 500 MiB
+
+    /**
      * Ensures the Nth MPEG-TS segment of an on-demand HLS job exists on disk,
      * transcoding it if necessary, and returns its absolute path (or null).
      *
@@ -599,6 +615,8 @@ class TranscodeManager
      * @throws SegmentBusyException When the global segment-encode ceiling is reached
      *                     and this segment is not already encoding — a transient,
      *                     retryable state the caller surfaces as HTTP 503.
+     * @throws SegmentCacheFullException When the segment cache filesystem is low on
+     *                     disk space (SV-1.9). The caller should sweep and retry.
      */
     public function ensureSegment(string $jobId, ?string $variant, int $index, ?string $audioId = null): ?string
     {
@@ -775,6 +793,10 @@ class TranscodeManager
                 $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
                 $launched = true;
                 $this->touchJobDir($dir);
+                // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
+                // Throws SegmentCacheFullException if below threshold; the HLS
+                // controller catches it, sweeps the cache, and returns 503.
+                $this->ensureDiskSpace();
                 $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
             }
 
@@ -943,6 +965,10 @@ class TranscodeManager
                 $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
                 $launched = true;
                 $this->touchJobDir($dir);
+                // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
+                // Throws SegmentCacheFullException if below threshold; the HLS
+                // controller catches it, sweeps the cache, and returns 503.
+                $this->ensureDiskSpace();
                 $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
             }
 
@@ -1339,6 +1365,42 @@ class TranscodeManager
             }
         }
         return $bytes;
+    }
+
+    /**
+     * Ensure sufficient disk space exists before launching a segment encode.
+     *
+     * SV-1.9: When disk_free_space() on the segment cache filesystem falls below
+     * {@see $minDiskSpaceBytes}, throws {@see SegmentCacheFullException} rather
+     * than letting FFmpeg hit ENOSPC and cascade into silent 404s at the player.
+     * The HLS controller catches this and triggers an opportunistic sweep so a
+     * subsequent retry after the sweep may succeed.
+     *
+     * @throws SegmentCacheFullException When free space is below the threshold.
+     */
+    private function ensureDiskSpace(): void
+    {
+        $free = @disk_free_space($this->segmentDir);
+        if ($free === false) {
+            // Cannot determine free space — assume it's fine rather than
+            // blocking the encode. The actual ENOSPC will surface in FFmpeg.
+            $this->logger->warning('Unable to determine disk free space for segment cache', [
+                'segment_dir' => $this->segmentDir,
+            ]);
+            return;
+        }
+
+        if ($free < $this->minDiskSpaceBytes) {
+            $this->logger->warning('Segment cache filesystem low on space', [
+                'segment_dir' => $this->segmentDir,
+                'free_bytes' => $free,
+                'threshold_bytes' => $this->minDiskSpaceBytes,
+            ]);
+            throw new SegmentCacheFullException(
+                'Segment cache filesystem has insufficient free space: '
+                . $free . ' bytes free, ' . $this->minDiskSpaceBytes . ' bytes required'
+            );
+        }
     }
 
     /**

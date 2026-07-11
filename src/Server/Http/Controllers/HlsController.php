@@ -15,6 +15,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Transcoding\SegmentBusyException;
+use Phlix\Media\Transcoding\SegmentCacheFullException;
 use Phlix\Media\Transcoding\TranscodeManager;
 
 /**
@@ -143,6 +144,16 @@ class HlsController
                     ->status(503)
                     ->header('Retry-After', '1')
                     ->json(['error' => 'segment busy']);
+            } catch (SegmentCacheFullException $e) {
+                // SV-1.9: ENOSPC guard — the segment cache filesystem is low on space.
+                // Trigger an opportunistic sweep to reclaim what we can, then tell
+                // the player to retry shortly. hls.js treats 503 as a retryable load
+                // error, so a subsequent retry after the sweep may succeed.
+                $this->transcodeManager->sweepSegmentCache();
+                return (new Response())
+                    ->status(503)
+                    ->header('Retry-After', '3')
+                    ->json(['error' => 'segment cache full']);
             }
             if ($ready === null) {
                 return (new Response())->status(404)->json(['error' => 'segment unavailable']);

@@ -88,7 +88,7 @@
 - [ ] SV-3.4  local artwork cache with sized variants
 - [x] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache ✅ (commit fa4d400f)
 - [x] SV-3.6  build out Trakt history sync ✅ (commit cd3be89f) — S-W3 complete 🎉
-- [ ] SV-4.1  segment-cap reservation before glob()
+- [x] SV-4.1  segment-cap reservation before glob() ✅ (commit 9f06522b) — S-W4 starts
 - [ ] SV-4.2  detached-ffmpeg cancellation + apply transcode_timeout
 - [ ] SV-4.3  ComskipRunner non-blocking pipe + reachable timeout
 - [ ] SV-4.4  WebhookDispatcher backoff + connect-timeout

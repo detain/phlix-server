@@ -74,8 +74,7 @@
 - [x] SV-1.9  ENOSPC guard on segment cache ✅ (commit 70d99f4e)
 - [x] SV-1.10 login rate limiter bound ✅ (commit a3a6b35a) — S-W1 complete 🎉
 - [ ] SV-2.1  stream file-backed responses over relay tunnel
-- [ ] SV-2.2  pool hygiene: rollback dirty connections
-- [ ] SV-2.3  relay byte-pipe backpressure
+- [x] SV-2.2  pool hygiene: rollback dirty connections ✅ (commit 6bd400ee)
 - [ ] SV-2.4  stream large binary via withFile()
 - [ ] SV-2.5  image/photo caching validators + security headers
 - [ ] SV-2.6  WS routing indexes + broadcast backpressure

@@ -18,6 +18,7 @@ use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
+use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
@@ -635,10 +636,9 @@ final class HttpHandler
         }
 
         $rangeHeader = $wr->header('range');
-        if (is_string($rangeHeader) && preg_match('/bytes=(\d+)-(\d*)/', $rangeHeader, $rm) === 1) {
-            $start = (int) $rm[1];
-            $end = ($rm[2] !== '' ? (int) $rm[2] : $fileSize - 1);
-            if ($fileSize === 0 || $start >= $fileSize || $end >= $fileSize || $start > $end) {
+        $range = TranscodeFileServer::parseRange(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
+        if ($range !== null) {
+            if (!$range['satisfiable']) {
                 return new WorkermanResponse(416, [
                     'Content-Type' => $mime,
                     'Content-Range' => "bytes */{$fileSize}",
@@ -647,7 +647,7 @@ final class HttpHandler
             $resp = new WorkermanResponse(206, ['Content-Type' => $mime]);
             // withFile() with a non-zero offset/length makes Workerman emit
             // 206 + Content-Range automatically.
-            $resp->withFile($path, $start, $end - $start + 1);
+            $resp->withFile($path, $range['start'], $range['end'] - $range['start'] + 1);
             return $resp;
         }
 

@@ -135,7 +135,7 @@ trait TranscodeFileServer
      *         header isn't a supported single-range form (whole-file 200 fallback);
      *         otherwise the resolved window, or `satisfiable: false` for a 416.
      */
-    private static function parseRange(?string $rangeHeader, int $fileSize): ?array
+    public static function parseRange(?string $rangeHeader, int $fileSize): ?array
     {
         if (!is_string($rangeHeader)) {
             return null;

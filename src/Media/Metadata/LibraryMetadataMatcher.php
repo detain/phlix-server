@@ -21,6 +21,7 @@ use Phlix\Media\Metadata\Exception\TmdbUnconfiguredException;
 use Phlix\Media\Metadata\Resolution\LibraryPriorityResolver;
 use Phlix\Media\Metadata\Resolution\PriorityConfig;
 use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
+use Phlix\Media\Storage\ArtworkStorage;
 use Throwable;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 
@@ -144,6 +145,16 @@ class LibraryMetadataMatcher
     private ?FuzzyMatcher $fuzzyMatcher;
 
     /**
+     * Local artwork cache (SV-3.4): downloads TMDB posters and generates
+     * sized variants for offline/LAN installs. Null when not wired (legacy
+     * construction / unit tests) — artwork is then served directly from
+     * TMDB with no local caching.
+     *
+     * @var ArtworkStorage|null
+     */
+    private ?ArtworkStorage $artworkStorage;
+
+    /**
      * The image types (M5) enabled for the CURRENT match run/item, used to gate
      * the flat `poster_url` / `backdrop_url` metadata keys in
      * {@see persistMetadata()}. `null` means "do not filter" (back-compat: no
@@ -210,6 +221,9 @@ class LibraryMetadataMatcher
      *                                                   override registry (P1-S5).
      *                                                   Null in legacy construction;
      *                                                   all other behaviour unchanged.
+     * @param ArtworkStorage|null          $artworkStorage  Local artwork cache for
+     *                                                   offline/LAN installs (SV-3.4).
+     *                                                   Null in legacy construction.
      *
      * @since 0.21.0
      */
@@ -223,7 +237,8 @@ class LibraryMetadataMatcher
         ?LibraryManager $libraries = null,
         ?LibraryPriorityResolver $priorityResolver = null,
         ?ThemeMusicResolver $themeMusic = null,
-        ?FuzzyMatcher $fuzzyMatcher = null
+        ?FuzzyMatcher $fuzzyMatcher = null,
+        ?ArtworkStorage $artworkStorage = null
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -239,6 +254,7 @@ class LibraryMetadataMatcher
         $this->priorityResolver = $priorityResolver;
         $this->themeMusic = $themeMusic;
         $this->fuzzyMatcher = $fuzzyMatcher;
+        $this->artworkStorage = $artworkStorage;
     }
 
     /**
@@ -1551,14 +1567,113 @@ class LibraryMetadataMatcher
      * is active ({@see $activeImageTypes} is null — legacy construction /
      * unloadable library), nothing is filtered — behaviour is exactly as before.
      *
+     * When ArtworkStorage is wired (SV-3.4), this method also downloads the
+     * TMDB poster and generates sized variants locally, then updates the
+     * item with local URLs so offline/LAN installs can serve artwork.
+     *
      * @param array<string, mixed> $merged
      */
     private function persistMetadata(string $id, array $merged): void
     {
+        $merged = $this->filterDisabledImageKeys($merged);
+
+        // SV-3.4: Download and cache TMDB poster locally for offline/LAN installs
+        $merged = $this->cacheArtworkLocally($id, $merged);
+
         $this->items->update($id, [
-            'metadata_json' => $this->filterDisabledImageKeys($merged),
+            'metadata_json' => $merged,
             'metadata_refreshed_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    /**
+     * Download and cache TMDB artwork locally, updating metadata with local URLs.
+     *
+     * When ArtworkStorage is wired and the item has a TMDB poster URL, this
+     * method downloads the poster and generates sized variants. The metadata
+     * is updated to use local URLs so the UI can serve artwork without TMDB.
+     *
+     * @param string              $id     Media item UUID
+     * @param array<string, mixed> $merged Current merged metadata
+     *
+     * @return array<string, mixed> Updated metadata with local URLs (or unchanged if no artwork)
+     */
+    private function cacheArtworkLocally(string $id, array $merged): array
+    {
+        // Skip if ArtworkStorage is not wired
+        if ($this->artworkStorage === null) {
+            return $merged;
+        }
+
+        // Extract poster_path from poster_url if it's a TMDB URL
+        $posterUrl = $merged['poster_url'] ?? null;
+        if (!is_string($posterUrl) || $posterUrl === '') {
+            return $merged;
+        }
+
+        // Check if this is a TMDB URL we can download
+        $posterPath = $this->extractTmdbPosterPath($posterUrl);
+        if ($posterPath === null) {
+            return $merged;
+        }
+
+        // Store the raw TMDB path for future reference (reconstruct URL if needed)
+        $merged['poster_path'] = $posterPath;
+
+        // Download and cache the artwork (idempotent - skips if already cached)
+        try {
+            $variants = $this->artworkStorage->downloadAndStore($id, $posterPath);
+            if ($variants === []) {
+                // Download failed or returned no variants
+                return $merged;
+            }
+
+            // Build local srcset from the cached variants
+            $localSrcset = $this->artworkStorage->srcset($id);
+            if ($localSrcset !== null) {
+                $merged['poster_srcset'] = $localSrcset;
+            }
+
+            // Update poster_url to point to local server (use w500 size as default)
+            $localPath = $this->artworkStorage->relativePath($id, 'w500');
+            if ($localPath !== null) {
+                // Sign the URL for access
+                $signedUrl = $this->artworkStorage->url($id, 'w500', $localPath);
+                if ($signedUrl !== null) {
+                    $merged['poster_url'] = $signedUrl;
+                }
+            }
+        } catch (\Throwable $e) {
+            // Artwork caching is best-effort - log and continue
+            $this->logger->warning('Failed to cache artwork locally', [
+                'item_id'   => $id,
+                'poster_path' => $posterPath,
+                'error'    => $e->getMessage(),
+            ]);
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Extract the TMDB poster path from a full poster URL.
+     *
+     * TMDB poster URLs look like: https://image.tmdb.org/t/p/w500/abc.jpg
+     * We want to extract just the path part: /abc.jpg
+     *
+     * @param string $posterUrl Full TMDB poster URL
+     *
+     * @return string|null The poster path or null if not a TMDB URL
+     */
+    private function extractTmdbPosterPath(string $posterUrl): ?string
+    {
+        // TMDB URL pattern: https://image.tmdb.org/t/p/{size}/{filename}
+        // We want to extract just the filename portion (e.g., "/abc.jpg")
+        if (preg_match('#^https?://image\.tmdb\.org/t/p/[^/]+(/[^/]+)$#', $posterUrl, $matches) !== 1) {
+            return null;
+        }
+
+        return $matches[1];
     }
 
     /**

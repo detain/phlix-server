@@ -65,6 +65,15 @@ final class MediaItemShaper
 
         $posterUrl = $metadata['poster_url'] ?? null;
 
+        // Use stored poster_srcset if available (from ArtworkStorage cache, SV-3.4),
+        // otherwise generate from poster_url (TMDB srcset or null for non-TMDB posters).
+        $posterSrcset = $metadata['poster_srcset'] ?? null;
+        if ($posterSrcset === null) {
+            $posterSrcset = PosterSrcset::forPosterUrl(
+                is_string($posterUrl) ? $posterUrl : null,
+            );
+        }
+
         return [
             'id' => $id,
             'name' => $name,
@@ -77,9 +86,9 @@ final class MediaItemShaper
             'poster_url' => $posterUrl,
             // Responsive poster variants (TMDB width swap) for the client's
             // `srcset`; null for non-TMDB posters → the card uses `poster_url`.
-            'poster_srcset' => PosterSrcset::forPosterUrl(
-                is_string($posterUrl) ? $posterUrl : null,
-            ),
+            // When ArtworkStorage has cached the poster (SV-3.4), this carries
+            // the local srcset pointing to /api/v1/artwork/{id}?size=...
+            'poster_srcset' => $posterSrcset,
             'genres' => $metadata['genres'] ?? [],
             'year' => isset($metadata['year']) && is_numeric($metadata['year']) ? (int) $metadata['year'] : null,
             'rating' => $rating,

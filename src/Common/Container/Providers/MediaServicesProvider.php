@@ -50,6 +50,7 @@ use Phlix\Media\Metadata\ThemeMusic\ThemeMusicResolver;
 use Phlix\Media\Metadata\TitleSuffixStripper;
 use Phlix\Media\Metadata\TmdbProvider;
 use Phlix\Media\Playback\GaplessPlaybackManager;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Theming\ThemeMediaFinder;
 use Phlix\Media\Streaming\HlsStreamer;
 use Phlix\Media\Streaming\QualitySelector;
@@ -575,6 +576,9 @@ final class MediaServicesProvider implements ServiceProviderInterface
             CollectionService::class => autowire()
                 ->constructorParameter('itemRepository', get(ItemRepository::class))
                 ->constructorParameter('tmdbProvider', get(TmdbProvider::class)),
+
+            // SV-3.4: Local artwork cache with sized variants for offline/LAN installs
+            ArtworkStorage::class => autowire(),
         ]);
     }
 

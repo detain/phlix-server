@@ -20,6 +20,7 @@ use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
@@ -156,6 +157,14 @@ final class HttpHandler
             if ($avatarResp !== null) {
                 $responseStatus = $avatarResp->getStatusCode();
                 $connection->send($avatarResp);
+                return;
+            }
+
+            // Try artwork (poster) serving (signed URL or authed session)
+            $artworkResp = $this->serveArtwork($wr, $request->userId);
+            if ($artworkResp !== null) {
+                $responseStatus = $artworkResp->getStatusCode();
+                $connection->send($artworkResp);
                 return;
             }
 
@@ -566,6 +575,106 @@ final class HttpHandler
         $resp = new WorkermanResponse(200, ['Content-Type' => $mime]);
         $resp->withFile($avatarPath);
         return $resp;
+    }
+
+    /**
+     * Byte-serve a media item's artwork (poster) image.
+     *
+     * GET /api/v1/artwork/{itemId}?size={size}
+     *
+     * Authorised by: resolved session (Bearer/cookie) OR valid signed-URL token
+     * (so <img src="..."> works without a Bearer header).
+     *
+     * Uses Workerman's native {@see WorkermanResponse::withFile()} so the image
+     * streams through the event loop without being read into worker memory.
+     *
+     * @param WorkermanRequest $wr     The Workerman request
+     * @param string|null      $userId The authenticated user ID (null if not authenticated)
+     * @return WorkermanResponse|null Response or null if not an artwork request
+     */
+    private function serveArtwork(WorkermanRequest $wr, ?string $userId = null): ?WorkermanResponse
+    {
+        if ($wr->method() !== 'GET') {
+            return null;
+        }
+
+        // Match /api/v1/artwork/{itemId} — captures the itemId
+        if (preg_match('#^/api/v1/artwork/([^/]+)$#', $wr->path(), $m) !== 1) {
+            return null;
+        }
+
+        $itemId = $m[1];
+
+        // Get size parameter (default to 'original')
+        $size = is_string($wr->get('size')) ? $wr->get('size') : 'original';
+
+        // Validate size parameter
+        if (!$this->isValidArtworkSize($size)) {
+            return new WorkermanResponse(
+                400,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode(['error' => 'Invalid size parameter']) ?: '{"error":"Invalid size parameter"}',
+            );
+        }
+
+        // Authorise: resolved session OR valid signed-URL token.
+        if ($userId === null || $userId === '') {
+            $signer = \Phlix\Auth\SignedUrl::fromEnv();
+            $exp = $wr->get('exp');
+            $sig = $wr->get('sig');
+            $resourcePath = '/api/v1/artwork/' . $itemId . '?size=' . $size;
+            if (!$signer->verify($resourcePath, is_string($exp) ? $exp : null, is_string($sig) ? $sig : null)) {
+                return new WorkermanResponse(
+                    401,
+                    ['Content-Type' => 'text/plain; charset=utf-8'],
+                    'Unauthorized',
+                );
+            }
+        }
+
+        // Get artwork path from ArtworkStorage
+        /** @var ArtworkStorage $artworkStorage */
+        $artworkStorage = $this->container->get(ArtworkStorage::class);
+        $artworkPath = $artworkStorage->variantPath($itemId, $size);
+
+        if ($artworkPath === null || !is_file($artworkPath) || !is_readable($artworkPath)) {
+            return new WorkermanResponse(
+                404,
+                ['Content-Type' => 'application/json; charset=utf-8'],
+                json_encode(['error' => 'Artwork not found']) ?: '{"error":"Artwork not found"}',
+            );
+        }
+
+        // Compute ETag for caching
+        $stat = stat($artworkPath);
+        $etag = $stat !== false ? sprintf('"%x-%x"', $stat['size'], $stat['mtime']) : '';
+
+        $resp = new WorkermanResponse(200, [
+            'Content-Type'  => 'image/jpeg',
+            'Cache-Control' => 'public, max-age=31536000, immutable',
+            'ETag'          => $etag,
+        ]);
+        $resp->withFile($artworkPath);
+        return $resp;
+    }
+
+    /**
+     * Validate artwork size parameter against known variants.
+     */
+    private function isValidArtworkSize(string $size): bool
+    {
+        if ($size === 'original') {
+            return true;
+        }
+
+        if (preg_match('/^w\d+$/', $size) !== 1) {
+            return false;
+        }
+
+        // Validate against known widths
+        $widths = ArtworkStorage::WIDTHS;
+        $width = (int) substr($size, 1);
+        return in_array($width, $widths, true);
     }
 
     /**

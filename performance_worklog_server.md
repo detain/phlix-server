@@ -86,7 +86,7 @@
 - [x] SV-3.2  book reader + audiobook player backends ✅ (commit 4f51206f)
 - [ ] SV-3.3  client capability negotiation + loudness normalization
 - [ ] SV-3.4  local artwork cache with sized variants
-- [ ] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache
+- [x] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache ✅ (commit fa4d400f)
 - [ ] SV-3.6  build out Trakt history sync
 - [ ] SV-4.1  segment-cap reservation before glob()
 - [ ] SV-4.2  detached-ffmpeg cancellation + apply transcode_timeout

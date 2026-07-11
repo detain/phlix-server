@@ -69,7 +69,7 @@
 - [x] SV-1.4  correct zscale tone-map graph ✅ (commit 7c7156dc)
 - [x] SV-1.5  implement real libplacebo tone-map mode ✅ (commit abad4b46)
 - [x] SV-1.6  fix subtitle burn-in escaping + VAAPI overlay ✅ (commit 7a248f40)
-- [ ] SV-1.7  range parser reuse on direct-play
+- [x] SV-1.7  range parser reuse on direct-play ✅ (commit 1862fafb)
 - [ ] SV-1.8  CSRF Origin exact-match
 - [ ] SV-1.9  ENOSPC guard on segment cache
 - [ ] SV-1.10 login rate limiter bound

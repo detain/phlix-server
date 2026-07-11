@@ -139,6 +139,8 @@ class ConnectionPool
      * Removes connections that have been idle too long.
      *
      * Sends a timeout message to stale connections before closing them.
+     * Uses a two-pass approach to avoid race conditions: first identifies
+     * stale connections, then closes and removes them after iteration completes.
      *
      * @param int $maxIdleTime Maximum idle time in seconds (default: 300 = 5 minutes)
      * @return void
@@ -146,12 +148,25 @@ class ConnectionPool
     public function cleanupStaleConnections(int $maxIdleTime = 300): void
     {
         $now = time();
+
+        // First pass: identify stale connection IDs (avoids modifying array during iteration)
+        $staleIds = [];
         foreach ($this->connections as $id => $connection) {
             if ($now - $connection->getLastActivity() > $maxIdleTime) {
-                $connection->sendMessage('timeout', ['message' => 'Connection timed out']);
-                $connection->close();
-                $this->remove($id);
+                $staleIds[] = $id;
             }
+        }
+
+        // Second pass: close and remove stale connections
+        foreach ($staleIds as $id) {
+            $connection = $this->connections[$id] ?? null;
+            if ($connection === null) {
+                // Connection was already removed (e.g., client disconnected during cleanup)
+                continue;
+            }
+            $connection->sendMessage('timeout', ['message' => 'Connection timed out']);
+            $connection->close();
+            $this->remove($id);
         }
     }
 

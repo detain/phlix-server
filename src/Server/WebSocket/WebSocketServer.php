@@ -110,7 +110,7 @@ class WebSocketServer
         $staleGroupTimeout = is_numeric($staleGroupTimeoutRaw) ? (int) $staleGroupTimeoutRaw : 3600;
 
         // Start cleanup timer for stale connections (every 60 seconds)
-        if (function_exists('Workerman\Timer')) {
+        if (class_exists(\Workerman\Timer::class)) {
             \Workerman\Timer::add(60, function () use ($staleConnectionTimeout): void {
                 $this->connections->cleanupStaleConnections($staleConnectionTimeout);
             });

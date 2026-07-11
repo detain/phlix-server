@@ -808,17 +808,21 @@ final class HttpHandler
     }
 
     /**
-     * Register a periodic heartbeat timer for a stream session.
+     * Register a one-shot heartbeat timer for a stream session.
+     *
+     * Uses a one-shot timer (4th param = false) to avoid accumulating
+     * timers across many concurrent stream sessions. Each stream request
+     * re-registers its own timer.
      */
     private function registerStreamHeartbeat(\Phlix\Access\StreamSessionService $service, string $sessionId): void
     {
-        if (!function_exists('\Workerman\Timer')) {
+        if (!class_exists(\Workerman\Timer::class)) {
             return;
         }
 
         \Workerman\Timer::add(30, static function () use ($sessionId, $service): void {
             $service->heartbeat($sessionId);
-        });
+        }, [], false);
     }
 
     /**

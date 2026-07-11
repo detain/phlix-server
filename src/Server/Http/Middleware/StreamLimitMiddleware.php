@@ -114,10 +114,11 @@ final class StreamLimitMiddleware
     }
 
     /**
-     * Register a periodic heartbeat timer for the session.
+     * Register a one-shot heartbeat timer for the session.
      *
-     * Uses Workerman's timer to call heartbeat() every 30 seconds.
-     * The timer is one-shot and will be re-registered on each request.
+     * Uses a one-shot timer (4th param = false) to call heartbeat() once after
+     * 30 seconds. Each stream request re-registers its own timer, preventing
+     * timer accumulation when many concurrent streams are active.
      *
      * @param string $sessionId The session ID to send heartbeats for.
      *
@@ -125,8 +126,8 @@ final class StreamLimitMiddleware
      */
     private function registerHeartbeat(string $sessionId): void
     {
-        // Only register timer if we're in a Workerman context
-        if (!function_exists('\Workerman\Timer')) {
+        // Only register timer if Timer class is available (Workerman context)
+        if (!class_exists(\Workerman\Timer::class)) {
             return;
         }
 
@@ -135,7 +136,7 @@ final class StreamLimitMiddleware
 
         \Workerman\Timer::add(30, static function () use ($sessionId, $service): void {
             $service->heartbeat($sessionId);
-        });
+        }, [], false);
     }
 
     /**

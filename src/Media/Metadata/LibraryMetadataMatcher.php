@@ -68,6 +68,20 @@ class LibraryMetadataMatcher
     /** @var int Page size used to drain the library without loading it all at once. */
     private const PAGE_SIZE = 100;
 
+    /**
+     * SV-3.5: Maximum concurrent metadata-match operations when inside a Swoole
+     * coroutine. Bounded fan-out prevents overwhelming the TMDB/TVDB API with
+     * hundreds of simultaneous requests during a large-library match pass.
+     * Coroutine-based I/O (HTTP calls) overlaps the per-item wait time so this
+     * does not slow down individual matches — it just prevents thundering-herd
+     * on the provider's rate-limiter. Outside a coroutine (PHPUnit CLI, plain
+     * CLI scan scripts) this degrades to exact sequential behaviour so nothing
+     * regresses for non-coroutine callers.
+     *
+     * @var int
+     */
+    private const MAX_CONCURRENT_MATCHES = 8;
+
     /** @var ItemRepository Media-item data access (paging + persistence). */
     private ItemRepository $items;
 
@@ -318,53 +332,13 @@ class LibraryMetadataMatcher
                 break;
             }
 
-            foreach ($batch as $item) {
-                $type = $item['type'] ?? null;
-                $isMovie = is_string($type) && in_array($type, self::MOVIE_TYPES, true);
-                $isSeries = $type === 'series' && $this->seriesResolver !== null;
-                // Seasons/episodes are enriched under their series (matchSeries),
-                // so the flat pass only acts on movies and series roots.
-                if (!$isMovie && !$isSeries) {
-                    continue;
-                }
-
-                $processed++;
-                $id = is_string($item['id'] ?? null) ? $item['id'] : '';
-                $name = is_string($item['name'] ?? null) ? $item['name'] : '';
-
-                try {
-                    $hit = $isSeries
-                        ? $this->matchSeries($item, $effective)
-                        : $this->matchItem($item, $effective);
-                    if ($hit) {
-                        $matched++;
-                        // Per-item line (DEBUG) so progress is visible as items
-                        // are processed, written immediately rather than buffered
-                        // until the run finishes.
-                        $this->logger->debug('LibraryMetadataMatcher: item matched', [
-                            'library_id' => $libraryId,
-                            'item_id' => $id,
-                            'name' => $name,
-                            'processed' => $processed,
-                            'matched' => $matched,
-                        ]);
-                    } else {
-                        $this->logger->debug('LibraryMetadataMatcher: item not matched', [
-                            'library_id' => $libraryId,
-                            'item_id' => $id,
-                            'name' => $name,
-                            'processed' => $processed,
-                        ]);
-                    }
-                } catch (Throwable $e) {
-                    $this->logger->warning('LibraryMetadataMatcher: item match failed; skipping', [
-                        'library_id' => $libraryId,
-                        'item_id' => $id,
-                        'name' => $name,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            }
+            // SV-3.5: bounded-concurrency per-batch fan-out using the
+            // Channel-as-semaphore idiom. Handles both serial (non-coroutine)
+            // and concurrent (coroutine) paths internally, preserving exact
+            // sequential behaviour outside a Swoole context.
+            $batchResult = $this->matchBatchConcurrently($batch, $effective, $libraryId);
+            $matched += $batchResult['matched'];
+            $processed += $batchResult['processed'];
 
             // Per-batch summary at INFO so the run is visibly advancing even when
             // the per-item DEBUG lines are filtered out.
@@ -1842,5 +1816,159 @@ class LibraryMetadataMatcher
             }
         }
         return $out;
+    }
+
+    /**
+     * SV-3.5: Detect whether we are executing inside a Swoole coroutine context.
+     *
+     * Mirrors the guard in {@see MediaScanner::coroutineFanOutAvailable()}: both
+     * must activate/deactivate together so the bounded fan-out and the HTTP
+     * client's own non-blocking async branch ({@see MetadataHttpClient::get()})
+     * are in sync.
+     *
+     * @return bool True when Swoole is loaded, the Coroutine class exists,
+     *              and getCid() > 0 (we are inside a coroutine, not the main
+     *              thread/process).
+     */
+    private function coroutineFanOutAvailable(): bool
+    {
+        return extension_loaded('swoole')
+            && class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0;
+    }
+
+    /**
+     * SV-3.5: Process a batch of items for metadata matching with bounded
+     * concurrency using the Channel-as-semaphore idiom from
+     * {@see MediaScanner::probeManyConcurrently()}.
+     *
+     * When not inside a coroutine, falls back to sequential per-item processing
+     * so behaviour is identical to the pre-SV-3.5 path in all non-coroutine
+     * contexts (PHPUnit CLI, plain CLI scan scripts).
+     *
+     * @param array<int, array<string, mixed>> $batch Page of items from getByLibrary().
+     * @param PriorityConfig|null $effective Effective per-library priority config.
+     * @param string $libraryId For logging.
+     *
+     * @return array{matched: int, processed: int} Counts from this batch.
+     */
+    private function matchBatchConcurrently(
+        array $batch,
+        ?PriorityConfig $effective,
+        string $libraryId,
+    ): array {
+        if ($batch === []) {
+            return ['matched' => 0, 'processed' => 0];
+        }
+
+        // Filter to matchable items and compute their names once.
+        $matchable = [];
+        foreach ($batch as $item) {
+            $type = $item['type'] ?? null;
+            $isMovie = is_string($type) && in_array($type, self::MOVIE_TYPES, true);
+            $isSeries = $type === 'series' && $this->seriesResolver !== null;
+            if (!$isMovie && !$isSeries) {
+                continue;
+            }
+            $id = is_string($item['id'] ?? null) ? $item['id'] : '';
+            $name = is_string($item['name'] ?? null) ? $item['name'] : '';
+            $matchable[] = [
+                'item' => $item,
+                'is_series' => $isSeries,
+                'id' => $id,
+                'name' => $name,
+            ];
+        }
+
+        if ($matchable === []) {
+            return ['matched' => 0, 'processed' => 0];
+        }
+
+        // Outside a coroutine: sequential processing (exact same behaviour as pre-SV-3.5).
+        if (!$this->coroutineFanOutAvailable()) {
+            $matched = 0;
+            $processed = 0;
+            foreach ($matchable as $entry) {
+                $processed++;
+                $hit = $this->executeMatchForItem($entry['item'], $entry['is_series'], $effective);
+                if ($hit) {
+                    $matched++;
+                    $this->logger->debug('LibraryMetadataMatcher: item matched', [
+                        'library_id' => $libraryId,
+                        'item_id' => $entry['id'],
+                        'name' => $entry['name'],
+                        'processed' => $processed,
+                        'matched' => $matched,
+                    ]);
+                }
+            }
+            return ['matched' => $matched, 'processed' => $processed];
+        }
+
+        // Inside a coroutine: bounded-concurrency fan-out.
+        $matched = 0;
+        $processed = 0;
+        $semaphore = new \Swoole\Coroutine\Channel(max(1, self::MAX_CONCURRENT_MATCHES));
+        $done = new \Swoole\Coroutine\Channel(count($matchable));
+
+        foreach ($matchable as $entry) {
+            // Blocking push when semaphore is full — bounds concurrency.
+            $semaphore->push(true);
+            \Swoole\Coroutine::create(function () use (
+                $entry,
+                $effective,
+                $libraryId,
+                &$matched,
+                &$processed,
+                $semaphore,
+                $done
+            ): void {
+                try {
+                    $hit = $this->executeMatchForItem($entry['item'], $entry['is_series'], $effective);
+                    if ($hit) {
+                        $matched++;
+                        $this->logger->debug('LibraryMetadataMatcher: item matched', [
+                            'library_id' => $libraryId,
+                            'item_id' => $entry['id'],
+                            'name' => $entry['name'],
+                        ]);
+                    }
+                } catch (Throwable $e) {
+                    $this->logger->warning('LibraryMetadataMatcher: item match failed; skipping', [
+                        'library_id' => $libraryId,
+                        'item_id' => $entry['id'],
+                        'name' => $entry['name'],
+                        'error' => $e->getMessage(),
+                    ]);
+                } finally {
+                    $processed++;
+                    $semaphore->pop();
+                    $done->push(true);
+                }
+            });
+        }
+
+        // Wait for all items in this batch to complete before moving to next batch.
+        for ($i = 0; $i < count($matchable); $i++) {
+            $done->pop();
+        }
+
+        return ['matched' => $matched, 'processed' => $processed];
+    }
+
+    /**
+     * Execute the actual per-item match and return whether it succeeded.
+     *
+     * @param array<string, mixed> $item The media item.
+     * @param bool $isSeries Whether this is a series (calls matchSeries) or movie (calls matchItem).
+     * @param PriorityConfig|null $effective Effective per-library priority config.
+     *
+     * @return bool True when a match was found and persisted.
+     */
+    private function executeMatchForItem(array $item, bool $isSeries, ?PriorityConfig $effective): bool
+    {
+        return $isSeries
+            ? $this->matchSeries($item, $effective)
+            : $this->matchItem($item, $effective);
     }
 }

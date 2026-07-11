@@ -700,6 +700,60 @@ class LiveTvManager
     }
 
     /**
+     * Build a stream URL for a given channel.
+     *
+     * Looks up the channel to find its channel number, finds an idle tuner
+     * that can receive it, and returns the driver-specific stream URL.
+     * Used by Recorder::startRecording() to resolve the tuner stream URL
+     * for a scheduled recording.
+     *
+     * @param string $channelId The channel identifier (livetv_channels.channel_id)
+     *
+     * @return string The stream URL, or '' if no tuner is available
+     *
+     * @since SV-3.1
+     */
+    public function buildStreamUrlForChannel(string $channelId): string
+    {
+        // Look up the channel to get its channel number.
+        $result = $this->db->query(
+            "SELECT channel_number, type FROM livetv_channels WHERE channel_id = ?",
+            [$channelId]
+        );
+
+        if (!is_array($result) || empty($result)) {
+            $this->logger->warning('Channel not found for stream URL resolution', [
+                'channel_id' => $channelId,
+            ]);
+            return '';
+        }
+
+        /** @var array<string, mixed> $row */
+        $row = $result[0];
+        $channelNum = $row['channel_number'] ?? null;
+        $channelNumber = is_int($channelNum) ? $channelNum : (is_string($channelNum) && is_numeric($channelNum) ? (int) $channelNum : 0);
+
+        if ($channelNumber <= 0) {
+            $this->logger->warning('Channel has no channel number', [
+                'channel_id' => $channelId,
+            ]);
+            return '';
+        }
+
+        // Find an idle tuner.
+        $tuner = $this->findAvailableTuner(null);
+        if ($tuner === null) {
+            $this->logger->warning('No idle tuner available for stream URL', [
+                'channel_id' => $channelId,
+                'channel_number' => $channelNumber,
+            ]);
+            return '';
+        }
+
+        return $this->buildStreamUrl($tuner, $channelNumber);
+    }
+
+    /**
      * Find an available tuner for tuning.
      *
      * First checks for the preferred tuner if specified,

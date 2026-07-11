@@ -67,7 +67,7 @@ class Recorder
     /** @var int Maximum storage in bytes (0 = unlimited) */
     private int $maxStorageBytes;
 
-    /** @var array<string, array{id:string, started_at:int, channel_id:string, stream_url:string, effective_start?:int, pid?:int|null}> Currently active recordings */
+    /** @var array<string, array{id:string, started_at:int, channel_id:string, stream_url:string, effective_start?:int, pid?:int|null, log_dir?:string}> Currently active recordings */
     private array $activeRecordings = [];
 
     /** @var array<string, array{id:string, session_id:string, channel_id:string, started_at:int, buffer_start:int, buffer_end:int, current_position?:int}> Active time-shift sessions */
@@ -75,6 +75,12 @@ class Recorder
 
     /** @var callable[] Post-complete callbacks (media_item_id, recording_path) => void */
     private array $onCompleteCallbacks = [];
+
+    /** @var string Path to ffmpeg binary for recording spawns */
+    private string $ffmpegPath;
+
+    /** @var \Phlix\LiveTv\LiveTvManager|null LiveTV manager for tuner stream URL resolution */
+    private ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null;
 
     /**
      * Recording is scheduled but not yet started.
@@ -160,18 +166,25 @@ class Recorder
      * @param string $storagePath Base path for recording files (default: /var/recordings)
      * @param int $maxStorageBytes Maximum storage limit in bytes (0 = unlimited)
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
+     * @param ComskipLifecycleManager|null $comskipManager Optional comskip lifecycle manager
+     * @param string $ffmpegPath Path to FFmpeg binary for recording spawns
+     * @param LiveTvManager|null $liveTvManager Optional LiveTV manager for tuner stream URL resolution
      */
     public function __construct(
         Connection $db,
         string $storagePath = '/var/recordings',
         int $maxStorageBytes = 0,
         ?StructuredLogger $logger = null,
-        ?ComskipLifecycleManager $comskipManager = null
+        ?ComskipLifecycleManager $comskipManager = null,
+        string $ffmpegPath = '/usr/bin/ffmpeg',
+        ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null
     ) {
         $this->db = $db;
         $this->storagePath = $storagePath;
         $this->maxStorageBytes = $maxStorageBytes;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
+        $this->ffmpegPath = $ffmpegPath;
+        $this->liveTvManager = $liveTvManager;
 
         // Register ComskipLifecycleManager::enqueue as an onComplete callback
         if ($comskipManager !== null) {
@@ -179,6 +192,23 @@ class Recorder
                 $comskipManager->enqueue($recordingId, $filePath);
             };
         }
+    }
+
+    /**
+     * Set the LiveTV manager after construction.
+     *
+     * Allows resolving circular dependencies when Recorder and LiveTvManager
+     * hold references to each other.
+     *
+     * @param LiveTvManager $liveTvManager The LiveTV manager
+     *
+     * @return void
+     *
+     * @since SV-3.1
+     */
+    public function setLiveTvManager(\Phlix\LiveTv\LiveTvManager $liveTvManager): void
+    {
+        $this->liveTvManager = $liveTvManager;
     }
 
     /**
@@ -430,7 +460,22 @@ class Recorder
      * @since 0.12.0 Pre-padding is now applied - recording starts pre_padding_seconds early
      * @since Wave 2 Persists pid for process-restart recovery.
      */
-    public function startRecording(string $recordingId, ?int $pid = null): bool
+    /**
+     * Start a recording, spawning a detached ffmpeg process.
+     *
+     * Resolves the tuner stream URL via LiveTvManager, spawns a detached
+     * `ffmpeg -i <url> -c copy -f mpegts <storage_path>/<id>.ts`, persists
+     * the real child PID, and registers the recording in the in-memory
+     * active-recordings map so {@see stopRecording()} can terminate it.
+     *
+     * @param string $recordingId The recording to start
+     * @param string|null $streamUrl Optional stream URL (resolved from tuner if null)
+     * @return bool True if started successfully, false otherwise
+     *
+     * @since 0.12.0 Pre-padding is now applied - recording starts pre_padding_seconds early
+     * @since SV-3.1 Real ffmpeg process spawning via TunerDriver::getStreamUrl()
+     */
+    public function startRecording(string $recordingId, ?string $streamUrl = null): bool
     {
         $recording = $this->getRecording($recordingId);
         if (!$recording || $recording['status'] !== self::STATUS_SCHEDULED) {
@@ -447,22 +492,61 @@ class Recorder
 
         $effectiveStart = $startTime - $prePadding;
 
-        // Check available storage
+        // Check available storage (real disk check)
         if (!$this->hasStorageSpace($effectiveStart, $endTime + $prePadding)) {
             $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Insufficient storage space');
             return false;
         }
 
-        $effectivePid = $pid ?? getmypid();
-        if ($effectivePid === false) {
-            $effectivePid = null;
+        // Resolve stream URL — caller may pass it directly, otherwise we need
+        // a LiveTvManager to look up the tuner. When $streamUrl is provided
+        // (e.g. by RecordingScheduler which already resolved it), use it directly.
+        // When LiveTvManager is unavailable (e.g. during recovery without a full
+        // boot), fall back to marking the recording as recording without spawning
+        // ffmpeg so that the recording is not stuck in 'scheduled' forever.
+        if ($streamUrl === null || $streamUrl === '') {
+            $streamUrl = $this->resolveTunerStreamUrl($channelId);
         }
 
+        $spawned = false;
+        $pid = null;
+        $logDir = $this->storagePath;
+
+        if ($streamUrl !== null && $streamUrl !== '') {
+            // Spawn the detached ffmpeg recording process.
+            // Uses the same nohup...& pattern as FfmpegRunner::startDetached() so
+            // that PHP returning does not kill the child.
+            $outputPath = $this->getRecordingPath($recordingId);
+            $logDir = $this->storagePath;
+
+            $pid = $this->spawnRecording($streamUrl, $outputPath, $logDir);
+
+            if ($pid <= 0) {
+                $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Failed to spawn ffmpeg recording process');
+                return false;
+            }
+            $spawned = true;
+        } else {
+            // No tuner available — fall back to the old recovery path.
+            // Recording is marked as recording but no ffmpeg is spawned.
+            // The next process restart or scheduler tick will retry.
+            $this->logger->warning('No tuner stream URL available, marking recording as recording without ffmpeg', [
+                'recording_id' => $recordingId,
+                'channel_id' => $channelId,
+            ]);
+            $pid = getmypid();
+            if ($pid === false) {
+                $pid = null;
+            }
+        }
+
+        // Persist the real child PID so resumeActiveRecordings() can distinguish
+        // "process died after restart" from "ffmpeg still running".
         $this->db->query(
             "UPDATE livetv_recordings
              SET status = ?, pid = ?, error_message = NULL, updated_at = NOW()
              WHERE recording_id = ?",
-            [self::STATUS_RECORDING, $effectivePid, $recordingId]
+            [self::STATUS_RECORDING, $pid, $recordingId]
         );
 
         $this->activeRecordings[$recordingId] = [
@@ -471,14 +555,16 @@ class Recorder
             'effective_start' => $effectiveStart,
             'channel_id' => $channelId,
             'stream_url' => "/livetv/recording/$recordingId/stream",
-            'pid' => $effectivePid,
+            'pid' => $pid,
+            'log_dir' => $logDir,
         ];
 
         $this->logger->info('Recording started', [
             'recording_id' => $recordingId,
             'pre_padding' => $prePadding,
             'effective_start' => date('Y-m-d H:i:s', $effectiveStart),
-            'pid' => $effectivePid,
+            'pid' => $pid,
+            'stream_url' => $streamUrl,
         ]);
 
         return true;
@@ -638,11 +724,16 @@ class Recorder
     /**
      * Stop a recording in progress.
      *
-     * Updates the recording status to COMPLETED and records
-     * the actual duration and file size.
+     * Sends SIGTERM to the ffmpeg process (via {@see terminateRecording()}),
+     * waits up to 5 seconds for graceful exit, then SIGKILLs if needed.
+     * Updates recording status to COMPLETED and records the actual
+     * duration and file size. Fires post-complete callbacks (comskip,
+     * media-item registration).
      *
      * @param string $recordingId The recording to stop
      * @return bool True if stopped successfully, false if not active
+     *
+     * @since SV-3.1 Now kills the real ffmpeg process
      */
     public function stopRecording(string $recordingId): bool
     {
@@ -656,6 +747,13 @@ class Recorder
         }
 
         $duration = time() - $this->activeRecordings[$recordingId]['started_at'];
+        $pid = $this->activeRecordings[$recordingId]['pid'] ?? null;
+        $logDir = $this->activeRecordings[$recordingId]['log_dir'] ?? $this->storagePath;
+
+        // Terminate the ffmpeg process (SIGTERM → SIGKILL fallback).
+        if ($pid !== null && $pid > 0) {
+            $this->terminateRecording($pid);
+        }
 
         unset($this->activeRecordings[$recordingId]);
 
@@ -675,10 +773,198 @@ class Recorder
             'size' => $fileSize,
         ]);
 
-        // Fire post-complete callbacks
+        // Fire post-complete callbacks (comskip, media-item registration).
         $this->fireOnCompleteCallbacks($recordingId, $filePath);
 
         return true;
+    }
+
+    /**
+     * End a scheduled recording at end_time + post_padding.
+     *
+     * Called by the recording scheduler when the effective end time is
+     * reached (scheduled end time plus configured post-padding). This is
+     * the timed stop path — unlike {@see stopRecording()} (manual stop),
+     * this one also triggers the post-padding gap closure and marks the
+     * recording as completed with the actual end time.
+     *
+     * @param string $recordingId The recording to end
+     * @return bool True if ended successfully, false if not active
+     *
+     * @since SV-3.1
+     */
+    public function endRecording(string $recordingId): bool
+    {
+        if (!isset($this->activeRecordings[$recordingId])) {
+            return false;
+        }
+
+        $recording = $this->getRecording($recordingId);
+        if (!$recording) {
+            return false;
+        }
+
+        // The post-padding gap is already accounted for in the scheduled
+        // end_time stored in the DB (it was written as end_time + post_padding
+        // when the recording was scheduled). Just stop now.
+        return $this->stopRecording($recordingId);
+    }
+
+    /**
+     * Spawn a detached ffmpeg recording process.
+     *
+     * Builds the recording command (nohup ffmpeg -i <stream_url> -c copy
+     * -f mpegts <output_path>) and runs it via `nohup ... &` so the
+     * PHP worker returning does not kill the child. Returns the real
+     * child PID which is persisted to the DB for recovery on restart.
+     *
+     * Log files are written to $logDir/ffmpeg_<recordingId>.log so
+     * {@see terminateRecording()} can find them during cleanup.
+     *
+     * @param string $streamUrl Source URL to capture (http, udp, etc.)
+     * @param string $outputPath Absolute path to the output .ts file
+     * @param string $logDir Directory for the ffmpeg log file
+     *
+     * @return int The child PID (0 if spawn failed)
+     *
+     * @since SV-3.1
+     */
+    private function spawnRecording(string $streamUrl, string $outputPath, string $logDir): int
+    {
+        $ffmpegPath = $this->ffmpegPath;
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -c copy -f mpegts %s',
+            escapeshellarg($ffmpegPath),
+            escapeshellarg($streamUrl),
+            escapeshellarg($outputPath)
+        );
+
+        // Ensure log directory exists.
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0755, true);
+        }
+
+        $logFile = $logDir . '/ffmpeg_recording.log';
+
+        // nohup so SIGHUP doesn't kill ffmpeg when the PHP shell returns.
+        // Redirect both stdout+stderr to the log file.
+        $full = sprintf(
+            'nohup sh -c %s > %s 2>&1 & echo $!',
+            escapeshellarg($cmd),
+            escapeshellarg($logFile)
+        );
+
+        $pidStr = shell_exec($full);
+        if (!is_string($pidStr) || trim($pidStr) === '') {
+            $this->logger->error('Failed to spawn ffmpeg recording process');
+            return 0;
+        }
+
+        $pid = (int) trim($pidStr);
+        $this->logger->debug('Recording process spawned', [
+            'pid' => $pid,
+            'stream_url' => $streamUrl,
+            'output_path' => $outputPath,
+        ]);
+
+        return $pid;
+    }
+
+    /**
+     * Terminate a running recording process.
+     *
+     * First sends SIGTERM (graceful) and waits up to 5 seconds for the
+     * process to exit. If it is still running, escalates to SIGKILL.
+     * This matches the graceful-then-forced pattern used by
+     * FfmpegRunner's transcode jobs.
+     *
+     * @param int $pid The OS PID of the recording process to kill
+     *
+     * @return void
+     *
+     * @since SV-3.1
+     */
+    private function terminateRecording(int $pid): void
+    {
+        if ($pid <= 0) {
+            return;
+        }
+
+        $this->logger->debug('Terminating recording process', ['pid' => $pid]);
+
+        // Step 1: graceful SIGTERM
+        if (function_exists('posix_kill')) {
+            @posix_kill($pid, SIGTERM);
+        } else {
+            shell_exec(sprintf('kill -TERM %d 2>/dev/null', $pid));
+        }
+
+        // Wait up to 5 seconds for graceful exit
+        $deadline = time() + 5;
+        while (time() < $deadline) {
+            if (!$this->isPidAlive($pid)) {
+                $this->logger->debug('Recording process exited gracefully', ['pid' => $pid]);
+                return;
+            }
+            // Cooperative sleep when in Swoole coroutine context
+            if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+                \Swoole\Coroutine::sleep(0.1);
+            } else {
+                usleep(100000); // 100ms
+            }
+        }
+
+        // Step 2: forced SIGKILL
+        $this->logger->warning('Recording process did not exit gracefully, sending SIGKILL', ['pid' => $pid]);
+        if (function_exists('posix_kill')) {
+            @posix_kill($pid, SIGKILL);
+        } else {
+            shell_exec(sprintf('kill -KILL %d 2>/dev/null', $pid));
+        }
+
+        // Brief wait to confirm death
+        $waited = 0;
+        while ($waited < 2 && $this->isPidAlive($pid)) {
+            usleep(100000);
+            $waited++;
+        }
+    }
+
+    /**
+     * Resolve a tuner stream URL for a given channel.
+     *
+     * Finds an idle tuner for the channel and returns its stream URL
+     * by delegating to the appropriate tuner driver. Returns null if
+     * no idle tuner is available.
+     *
+     * @param string $channelId The channel identifier
+     *
+     * @return string|null The stream URL, or null if no tuner is available
+     *
+     * @since SV-3.1
+     */
+    private function resolveTunerStreamUrl(string $channelId): ?string
+    {
+        // Delegate to LiveTvManager which holds all tuner state.
+        // LiveTvManager::buildStreamUrlForChannel() handles driver dispatch internally.
+        if ($this->liveTvManager === null) {
+            $this->logger->warning('LiveTvManager not available, cannot resolve tuner stream URL', [
+                'channel_id' => $channelId,
+            ]);
+            return null;
+        }
+
+        try {
+            $url = $this->liveTvManager->buildStreamUrlForChannel($channelId);
+            return $url !== '' ? $url : null;
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to resolve tuner stream URL', [
+                'channel_id' => $channelId,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
     }
 
     /**
@@ -822,20 +1108,66 @@ class Recorder
     /**
      * Check if there's available storage space for a recording.
      *
-     * @param int $startTime Recording start time
-     * @param int $endTime Recording end time
+     * Performs a real disk-space check via disk_free_space() on the
+     * storage path. If the recording would fit in the free space and
+     * stay within the configured max, returns true.
+     *
+     * @param int $startTime Recording start time (for size estimation)
+     * @param int $endTime Recording end time (for size estimation)
+     *
      * @return bool True if space is available
+     *
+     * @since SV-3.1 Now uses real disk_free_space() instead of estimation
      */
     private function hasStorageSpace(int $startTime, int $endTime): bool
     {
+        // If no limit is set, only check real disk space.
         if ($this->maxStorageBytes <= 0) {
-            return true;
+            return $this->hasRealDiskSpace($startTime, $endTime);
         }
 
         $usedStorage = $this->getUsedStorageBytes();
         $estimatedSize = $this->estimateRecordingSize($startTime, $endTime);
 
+        // Also verify real disk has enough room.
+        if (!$this->hasRealDiskSpace($startTime, $endTime)) {
+            return false;
+        }
+
         return ($usedStorage + $estimatedSize) <= $this->maxStorageBytes;
+    }
+
+    /**
+     * Check if the real filesystem has enough free space for the recording.
+     *
+     * Uses disk_free_space() to get the actual available bytes on the
+     * storage volume and compares against the estimated size.
+     *
+     * @param int $startTime Recording start time
+     * @param int $endTime Recording end time
+     *
+     * @return bool True if the filesystem has enough space
+     *
+     * @since SV-3.1
+     */
+    private function hasRealDiskSpace(int $startTime, int $endTime): bool
+    {
+        $freeSpace = @disk_free_space($this->storagePath);
+        if ($freeSpace === false) {
+            // Cannot determine free space — assume OK (fail open for safety
+            // so a misconfigured mount doesn't prevent all recordings).
+            $this->logger->warning('Could not determine free disk space, allowing recording', [
+                'storage_path' => $this->storagePath,
+            ]);
+            return true;
+        }
+
+        $estimatedSize = $this->estimateRecordingSize($startTime, $endTime);
+
+        // Reserve a 5 % safety margin so we never fill the disk completely.
+        $usableSpace = (int) ($freeSpace * 0.95);
+
+        return $usableSpace >= $estimatedSize;
     }
 
     /**

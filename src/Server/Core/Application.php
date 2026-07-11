@@ -1432,6 +1432,12 @@ class Application
             // DASH: JSON info, then the generic file server (manifest.mpd + .m4s).
             $r->get('/dash/{job_id}/manifest', [$dashController, 'getManifest']);
             $r->get('/dash/{job_id}/{file}', [$dashController, 'serveFile']);
+
+            // DVR recording stream: serves the .ts file via withFile().
+            // Same auth middleware (SignedUrl + optional StreamLimit) as HLS/DASH.
+            $liveTvStreamController = $this->getLiveTvStreamController();
+            $r->get('/livetv/recording/{id}/stream', [$liveTvStreamController, 'streamRecording']);
+            $r->get('/livetv/timeshift/{sessionId}/stream', [$liveTvStreamController, 'streamTimeShift']);
         }, $middleware);
     }
 
@@ -3294,6 +3300,37 @@ class Application
         $segmentDir = is_string($segmentDirRaw) ? $segmentDirRaw : sys_get_temp_dir() . '/phlix_hls';
 
         return new \Phlix\Server\Http\Controllers\DashController($segmentDir);
+    }
+
+    /**
+     * Returns a LiveTvStreamController instance.
+     *
+     * @return \Phlix\Server\Http\Controllers\LiveTvStreamController The controller instance.
+     *
+     * @since SV-3.1
+     */
+    private function getLiveTvStreamController(): \Phlix\Server\Http\Controllers\LiveTvStreamController
+    {
+        $db = $this->createDatabaseConnection();
+
+        // Get the storage path from livetv config or fall back to default.
+        $livetvConfigRaw = $this->config['livetv'] ?? null;
+        /** @var array<string, mixed> $livetvConfig */
+        $livetvConfig = is_array($livetvConfigRaw) ? $livetvConfigRaw : [];
+        $dvrConfigRaw = $livetvConfig['dvr'] ?? null;
+        /** @var array<string, mixed> $dvrConfig */
+        $dvrConfig = is_array($dvrConfigRaw) ? $dvrConfigRaw : [];
+        $dvrStoragePath = $dvrConfig['storage_path'] ?? null;
+        $livetvStoragePath = $livetvConfig['storage_path'] ?? null;
+        $storagePath = is_string($dvrStoragePath)
+            ? $dvrStoragePath
+            : (is_string($livetvStoragePath) ? $livetvStoragePath : '/var/recordings');
+
+        // Build the Recorder (without comskip/ffmpeg runner for the streaming controller
+        // — we only need it for path lookups here).
+        $recorder = new \Phlix\LiveTv\Recorder($db, $storagePath);
+
+        return new \Phlix\Server\Http\Controllers\LiveTvStreamController($recorder, $storagePath);
     }
 
     /**

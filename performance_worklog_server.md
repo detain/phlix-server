@@ -78,10 +78,10 @@
 - [x] SV-2.3  relay byte-pipe backpressure ✅ (commit cfcbeb50)
 - [x] SV-2.4  stream large binary via withFile() ✅ (commit 320efdbc)
 - [x] SV-2.5  image/photo caching validators + security headers ✅ (commit 3cf0ac4c)
-- [ ] SV-2.6  WS routing indexes + broadcast backpressure
-- [ ] SV-2.7  per-request auth status cache
-- [ ] SV-2.8  list-query projection + materialized filter columns
-- [ ] SV-2.9  defer similarity computation to background job
+- [x] SV-2.6  WS routing indexes + broadcast backpressure ✅ (commit e4270321)
+- [x] SV-2.7  per-request auth status cache ✅ (commit 786b80fd)
+- [x] SV-2.8  list-query projection + materialized filter columns ✅ (commit ef156b1e)
+- [x] SV-2.9  defer similarity computation to background job ✅ (commit c9ea405d)
 - [ ] SV-3.1  DVR recording data plane
 - [ ] SV-3.2  book reader + audiobook player backends
 - [ ] SV-3.3  client capability negotiation + loudness normalization

@@ -12,6 +12,8 @@ use Phlix\Common\Events\ListenerRegistry;
 use Phlix\Shared\Events\Playback\PlaybackStarted;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Common\Logger\StructuredLogger;
+use DI\FactoryInterface;
+use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\LifecycleInterface;
 use Phlix\Plugins\Exception\PluginEnableException;
 use Phlix\Plugins\Exception\PluginInstallException;
@@ -622,6 +624,161 @@ final class PluginLoaderTest extends TestCase
         $this->makeLoader()->enable('phlix-plugin-fixture');
     }
 
+    /**
+     * A test installed plugin carrying a specific entry class and settings map.
+     */
+    private function installedWith(string $name, string $entry, array $settings): InstalledPlugin
+    {
+        return new InstalledPlugin(
+            id: 'id',
+            manifest: Manifest::fromArray([
+                'name' => $name,
+                'version' => '1.0.0',
+                'phlix_min_server_version' => '0.10.0',
+                'type' => 'metadata-provider',
+                'entry' => $entry,
+                'events' => [],
+            ]),
+            enabled: false,
+            installedAt: new DateTimeImmutable(),
+            settings: $settings,
+            directory: $this->stagedDir,
+        );
+    }
+
+    public function test_enable_delivers_settings_via_configurable_interface_before_onEnable(): void
+    {
+        $plugin = new ConfigurableFakePlugin();
+        $settings = ['api_key' => 'secret123', 'enabled' => true];
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-cfg', ConfigurableFakePlugin::class, $settings));
+        $this->expect($this->container, 'get')->with(ConfigurableFakePlugin::class)->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-cfg', true);
+
+        $this->makeLoader()->enable('phlix-plugin-cfg');
+
+        $this->assertSame($settings, $plugin->configuredWith, 'configure() must receive the persisted settings');
+        $this->assertTrue($plugin->configuredBeforeOnEnable, 'configure() must run BEFORE onEnable()');
+        $this->assertTrue($plugin->onEnableCalled);
+    }
+
+    public function test_enable_delivers_settings_via_duck_typed_configure_method(): void
+    {
+        $plugin = new DuckConfigureFakePlugin();
+        $settings = ['token' => 'abc'];
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-duck', DuckConfigureFakePlugin::class, $settings));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once();
+
+        $this->makeLoader()->enable('phlix-plugin-duck');
+
+        $this->assertSame($settings, $plugin->configuredWith);
+        $this->assertTrue($plugin->onEnableCalled);
+    }
+
+    public function test_enable_does_not_call_no_arg_configure_method(): void
+    {
+        $plugin = new NoArgConfigureFakePlugin();
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-noarg', NoArgConfigureFakePlugin::class, ['x' => 1]));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->expect($this->repository, 'setEnabled')->once();
+
+        $this->makeLoader()->enable('phlix-plugin-noarg');
+
+        $this->assertFalse($plugin->configureCalled, 'a no-arg configure() is not the settings hook and must not be called');
+        $this->assertTrue($plugin->onEnableCalled);
+    }
+
+    public function test_enable_throws_when_configure_throws(): void
+    {
+        $plugin = new ThrowingConfigureFakePlugin();
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-badcfg', ThrowingConfigureFakePlugin::class, ['k' => 'v']));
+        $this->expect($this->container, 'get')->andReturn($plugin);
+        $this->repository->shouldNotReceive('setEnabled');
+
+        $this->expectException(PluginEnableException::class);
+        $this->expectExceptionMessage('configure() threw');
+
+        $this->makeLoader()->enable('phlix-plugin-badcfg');
+    }
+
+    public function test_enable_builds_legacy_settings_constructor_plugin_via_factory_fallback(): void
+    {
+        $settings = ['api_key' => 'k', 'username' => 'u'];
+        $built = null;
+
+        /** @var ContainerInterface&FactoryInterface&MockInterface $container */
+        $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
+        // Autowiring the array-settings constructor fails, exactly as PHP-DI does.
+        $container->shouldReceive('get')
+            ->with(SettingsCtorFakePlugin::class)
+            ->andThrow(new \RuntimeException('Parameter $settings has no value defined or guessable'));
+        // The fallback binds the persisted settings to the `settings` parameter.
+        $container->shouldReceive('make')
+            ->with(SettingsCtorFakePlugin::class, ['settings' => $settings])
+            ->andReturnUsing(function (string $cls, array $params) use (&$built): object {
+                $built = new SettingsCtorFakePlugin($params['settings']);
+                return $built;
+            });
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-legacy', SettingsCtorFakePlugin::class, $settings));
+        $this->expect($this->repository, 'setEnabled')->once()->with('phlix-plugin-legacy', true);
+
+        $loader = new PluginLoader(
+            $this->installer,
+            $this->composer,
+            $this->verifier,
+            $this->repository,
+            $this->listenerRegistry,
+            $container,
+            $this->auditLogger,
+            $this->logger,
+        );
+        $loader->enable('phlix-plugin-legacy');
+
+        $this->assertInstanceOf(SettingsCtorFakePlugin::class, $built);
+        $this->assertSame($settings, $built->ctorSettings, 'settings must be injected via the constructor fallback');
+        $this->assertTrue($built->onEnableCalled);
+    }
+
+    public function test_enable_surfaces_resolution_error_when_fallback_does_not_apply(): void
+    {
+        // A scalar-first constructor (like opensubtitles' `string $apiKey`) cannot
+        // be filled by the array fallback → the clean resolution error is surfaced.
+        /** @var ContainerInterface&FactoryInterface&MockInterface $container */
+        $container = Mockery::mock(ContainerInterface::class, FactoryInterface::class);
+        $container->shouldReceive('get')
+            ->andThrow(new \RuntimeException('Parameter $apiKey has no value defined or guessable'));
+        $container->shouldNotReceive('make');
+
+        $this->expect($this->repository, 'findByName')
+            ->andReturn($this->installedWith('phlix-plugin-scalar', ScalarCtorFakePlugin::class, ['api_key' => 'k']));
+
+        $loader = new PluginLoader(
+            $this->installer,
+            $this->composer,
+            $this->verifier,
+            $this->repository,
+            $this->listenerRegistry,
+            $container,
+            $this->auditLogger,
+            $this->logger,
+        );
+
+        $this->expectException(PluginEnableException::class);
+        $this->expectExceptionMessage('could not be resolved');
+
+        $loader->enable('phlix-plugin-scalar');
+    }
+
     public function test_enable_throws_when_manifest_alias_unknown(): void
     {
         $manifest = Manifest::fromArray([
@@ -827,6 +984,179 @@ final class FakeLifecyclePlugin implements LifecycleInterface
     public function handle(PlaybackStarted $event): void
     {
         $this->fired++;
+    }
+}
+
+/**
+ * @internal Entry class implementing ConfigurableInterface; records the
+ * settings it was configured with and whether configure() ran before onEnable().
+ */
+final class ConfigurableFakePlugin implements LifecycleInterface, ConfigurableInterface
+{
+    /** @var array<string, mixed> */
+    public array $configuredWith = [];
+    public bool $configured = false;
+    public bool $configuredBeforeOnEnable = false;
+    public bool $onEnableCalled = false;
+
+    public function configure(array $settings): void
+    {
+        $this->configured = true;
+        $this->configuredWith = $settings;
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        $this->onEnableCalled = true;
+        $this->configuredBeforeOnEnable = $this->configured;
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+
+/**
+ * @internal Entry class that predates ConfigurableInterface but exposes a
+ * public `configure(array)` settings hook (duck-typed).
+ */
+final class DuckConfigureFakePlugin implements LifecycleInterface
+{
+    /** @var array<string, mixed> */
+    public array $configuredWith = [];
+    public bool $onEnableCalled = false;
+
+    public function configure(array $settings): void
+    {
+        $this->configuredWith = $settings;
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        $this->onEnableCalled = true;
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+
+/**
+ * @internal Entry class with an unrelated no-arg `configure()` that must NOT
+ * be treated as the settings hook.
+ */
+final class NoArgConfigureFakePlugin implements LifecycleInterface
+{
+    public bool $configureCalled = false;
+    public bool $onEnableCalled = false;
+
+    public function configure(): void
+    {
+        $this->configureCalled = true;
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        $this->onEnableCalled = true;
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+
+/**
+ * @internal Entry class whose configure() throws — the loader must surface it
+ * as a PluginEnableException and not enable the plugin.
+ */
+final class ThrowingConfigureFakePlugin implements LifecycleInterface, ConfigurableInterface
+{
+    public function configure(array $settings): void
+    {
+        throw new \RuntimeException('bad config');
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+
+/**
+ * @internal Legacy entry class whose constructor REQUIRES the settings array
+ * (the anidb/myanimelist shape) — exercises the settings-constructor fallback.
+ */
+final class SettingsCtorFakePlugin implements LifecycleInterface
+{
+    /** @var array<string, mixed> */
+    public array $ctorSettings;
+    public bool $onEnableCalled = false;
+
+    /** @param array<string, mixed> $settings */
+    public function __construct(array $settings)
+    {
+        $this->ctorSettings = $settings;
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+        $this->onEnableCalled = true;
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
+    }
+}
+
+/**
+ * @internal Legacy entry class whose first required constructor parameter is a
+ * scalar (the opensubtitles shape) — the array fallback cannot fill it.
+ */
+final class ScalarCtorFakePlugin implements LifecycleInterface
+{
+    public function __construct(string $apiKey)
+    {
+    }
+
+    public function onEnable(ContainerInterface $container): void
+    {
+    }
+
+    public function onDisable(): void
+    {
+    }
+
+    public function subscribedEvents(): array
+    {
+        return [];
     }
 }
 

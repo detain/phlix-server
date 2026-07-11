@@ -18,6 +18,7 @@ use Phlix\Plugins\Exception\PluginInstallException;
 use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginFieldHelp;
 use Phlix\Shared\Plugin\ManifestValidationError;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Http\Controllers\PluginAdminController;
@@ -67,6 +68,11 @@ final class PluginAdminControllerTest extends TestCase
         // install() runs SourceUrlResolver::normalize(), which now applies the
         // SSRF guard to http(s) outputs. Inject a deterministic public resolver.
         SsrfGuard::setResolver(static fn (string $host): array => ['93.184.216.34']);
+
+        // Isolate these unit tests from the production field-help overlay in
+        // config/plugin_field_help.php so schema-projection assertions test the
+        // manifest only. The dedicated overlay test injects its own map.
+        PluginFieldHelp::setMapForTesting([]);
     }
 
     /**
@@ -111,6 +117,7 @@ final class PluginAdminControllerTest extends TestCase
     protected function tearDown(): void
     {
         SsrfGuard::reset();
+        PluginFieldHelp::setMapForTesting(null);
         parent::tearDown();
     }
 
@@ -557,6 +564,73 @@ final class PluginAdminControllerTest extends TestCase
         $this->assertSame('joe', $plugin['settings']['username']);
         $this->assertSame('***', $plugin['settings']['api_key']);
         $this->assertTrue($plugin['settings']['use_title_dump']);
+        // secret_status distinguishes a set secret from an unset one, carrying
+        // the length (not the value) so the UI can render length-appropriate dots.
+        /** @var array{secret_status: array<string, array{set: bool, length: int}>} $plugin2 */
+        $plugin2 = $this->decode($response->body)['plugin'];
+        $this->assertTrue($plugin2['secret_status']['api_key']['set']);
+        $this->assertSame(mb_strlen('topsecret'), $plugin2['secret_status']['api_key']['length']);
+        $this->assertArrayNotHasKey('username', $plugin2['secret_status'], 'only secret keys appear');
+    }
+
+    public function test_show_reports_unset_secret_status(): void
+    {
+        $this->expectCall($this->loader, 'getInstalled')->once()->with('phlix-plugin-anidb')->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-anidb',
+                enabled: false,
+                settings: ['api_key' => ''],
+                manifestSettings: [
+                    'api_key' => ['type' => 'string', 'required' => true, 'secret' => true],
+                ],
+            ),
+        );
+
+        $response = $this->controller->show($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-anidb']);
+
+        /** @var array{secret_status: array<string, array{set: bool, length: int}>} $plugin */
+        $plugin = $this->decode($response->body)['plugin'];
+        $this->assertFalse($plugin['secret_status']['api_key']['set']);
+        $this->assertSame(0, $plugin['secret_status']['api_key']['length']);
+    }
+
+    public function test_show_applies_field_help_overlay(): void
+    {
+        PluginFieldHelp::setMapForTesting([
+            'phlix-plugin-anidb' => [
+                'api_key' => [
+                    'label'       => 'AniDB UDP API Key',
+                    'description' => 'Set one in your AniDB profile.',
+                    'link'        => 'https://anidb.net/software/api',
+                    'link_text'   => 'AniDB API docs',
+                ],
+            ],
+        ]);
+
+        $this->expectCall($this->loader, 'getInstalled')->once()->with('phlix-plugin-anidb')->andReturn(
+            $this->fixturePlugin(
+                'phlix-plugin-anidb',
+                enabled: false,
+                settings: ['api_key' => 'x'],
+                manifestSettings: [
+                    // Terse manifest — the overlay upgrades the human-facing text.
+                    'api_key' => ['type' => 'string', 'required' => true, 'secret' => true],
+                ],
+            ),
+        );
+
+        $response = $this->controller->show($this->makeRequest('admin-1'), ['name' => 'phlix-plugin-anidb']);
+
+        /** @var array{settings_schema: array<string, array<string, mixed>>} $plugin */
+        $plugin = $this->decode($response->body)['plugin'];
+        $field = $plugin['settings_schema']['api_key'];
+        $this->assertSame('AniDB UDP API Key', $field['label']);
+        $this->assertSame('Set one in your AniDB profile.', $field['description']);
+        $this->assertSame('https://anidb.net/software/api', $field['link']);
+        $this->assertSame('AniDB API docs', $field['link_text']);
+        // Non-overlay keys still come from the manifest.
+        $this->assertTrue($field['required']);
+        $this->assertTrue($field['secret']);
     }
 
     public function test_update_settings_returns_404_when_not_found(): void

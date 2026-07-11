@@ -95,6 +95,15 @@ final class RelayConsumer
      */
     private const RELAY_REMOTE_IP = '127.0.0.1';
 
+    /**
+     * Per-request deadline for HTTP dispatch over the relay tunnel.
+     *
+     * Prevents one slow relayed request (e.g. a blocking metadata call) from
+     * stalling the single relay worker indefinitely. If the deadline expires
+     * a 504 Gateway Timeout is sent and the request is abandoned.
+     */
+    private const DISPATCH_DEADLINE_SECONDS = 30;
+
     /** @var RelayConfig */
     private RelayConfig $config;
 
@@ -697,8 +706,8 @@ final class RelayConsumer
      *
      * @return void
      *
-     * @since 0.10.0
-     */
+      * @since 0.10.0
+      */
     private function onHttpRequest(RelayFrame $frame): void
     {
         $requestId = $frame->channelId();
@@ -722,8 +731,106 @@ final class RelayConsumer
             return;
         }
 
+        $response = $this->dispatchWithDeadline($requestId, $envelope);
+
+        if ($response === null) {
+            // Deadline expired — error was already sent by dispatchWithDeadline.
+            return;
+        }
+
+        $this->sendHttpResponse($requestId, $response);
+
+        $fileLen = $response->filePath !== null
+            ? $this->computeBodyLength($response)
+            : strlen($response->body);
+
+        $this->logger->info('RelayConsumer: served proxied HTTP request', [
+            'request_id' => $requestId,
+            'method' => $envelope->method,
+            'path' => $envelope->path,
+            'status' => $response->statusCode,
+            'body_len' => $fileLen,
+        ]);
+    }
+
+    /**
+     * Dispatch a relayed HTTP request with a per-request deadline.
+     *
+     * Wraps the dispatcher call in a Swoole coroutine with a deadline timer.
+     * If the deadline expires before the dispatch completes, a 504 error is
+     * sent and null is returned — preventing one slow request from stalling the
+     * relay worker.
+     *
+     * Falls back to synchronous dispatch when Swoole coroutines are unavailable
+     * (e.g. in PHPUnit CLI without the swoole extension), though in that case
+     * no deadline enforcement occurs.
+     *
+     * @param int             $requestId Hub-allocated request id (for error logging).
+     * @param RelayHttpRequest $envelope  Decoded request envelope.
+     *
+     * @return ServerResponse|null The response on success, or null on timeout.
+     *
+     * @since 0.10.0
+     */
+    private function dispatchWithDeadline(int $requestId, RelayHttpRequest $envelope): ?ServerResponse
+    {
+        $deadline = self::DISPATCH_DEADLINE_SECONDS;
+        $request = $this->buildRequest($envelope);
+
+        // Fast path: when coroutines are available, enforce the deadline.
+        if (class_exists(\Swoole\Coroutine::class) && \Swoole\Coroutine::getCid() > 0) {
+            /** @var ServerResponse|null $result */
+            $result = null;
+            $dispatched = false;
+
+            // Timer fires if dispatch takes longer than the deadline.
+            // The callback sets a sentinel 504 response if the timer fires before
+            // the dispatch completes (detected via $dispatched being still false).
+            $timer = Timer::add($deadline, static function () use (&$result, &$dispatched): void {
+                // @phpstan-ignore-next-line booleanNot.alwaysTrue
+                if (!$dispatched) {
+                    $result = (new ServerResponse())
+                        ->status(504)
+                        ->header('Content-Type', 'text/plain; charset=utf-8')
+                        ->text('relay request timed out');
+                }
+            }, [], false);
+
+            try {
+                // $this->httpDispatcher is guaranteed non-null here because
+                // onHttpRequest returns early when it is null.
+                /** @var callable(ServerRequest): ServerResponse $dispatcher */
+                $dispatcher = $this->httpDispatcher;
+                $result = $dispatcher($request);
+                $dispatched = true;
+            } catch (Throwable $e) {
+                $dispatched = true;
+                $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch failed', [
+                    'request_id' => $requestId,
+                    'path' => $envelope->path,
+                    'error' => $e->getMessage(),
+                ]);
+                $result = (new ServerResponse())
+                    ->status(500)
+                    ->header('Content-Type', 'text/plain; charset=utf-8')
+                    ->text('relay dispatch error');
+            } finally {
+                Timer::del($timer);
+            }
+
+            if ($result !== null && $result->statusCode === 504) {
+                $this->sendHttpError($requestId, 504, 'relay request timed out');
+                return null;
+            }
+
+            return $result;
+        }
+
+        // Synchronous fallback (no Swoole coroutines available).
         try {
-            $response = ($this->httpDispatcher)($this->buildRequest($envelope));
+            /** @var callable(ServerRequest): ServerResponse $dispatcher */
+            $dispatcher = $this->httpDispatcher;
+            return $dispatcher($request);
         } catch (Throwable $e) {
             $this->logger->error('RelayConsumer: HTTP_REQUEST dispatch failed', [
                 'request_id' => $requestId,
@@ -731,18 +838,8 @@ final class RelayConsumer
                 'error' => $e->getMessage(),
             ]);
             $this->sendHttpError($requestId, 500, 'relay dispatch error');
-            return;
+            return null;
         }
-
-        $this->sendHttpResponse($requestId, $response->statusCode, $response->headers, $response->body);
-
-        $this->logger->info('RelayConsumer: served proxied HTTP request', [
-            'request_id' => $requestId,
-            'method' => $envelope->method,
-            'path' => $envelope->path,
-            'status' => $response->statusCode,
-            'body_len' => strlen($response->body),
-        ]);
     }
 
     /**
@@ -860,22 +957,32 @@ final class RelayConsumer
      * more BODY chunks (each <= {@see RelayHttpResponseCodec::MAX_BODY_CHUNK}),
      * then a terminating END chunk — all tagged with the request id.
      *
-     * @param int                   $requestId Hub-allocated request id (frame seq).
-     * @param int                   $status    HTTP status code.
-     * @param array<string, string> $headers   Response headers.
-     * @param string                $body      Full response body.
+     * For file-backed responses ({@see ServerResponse::$filePath} !== null) the
+     * file is streamed directly from disk in {@see ServerResponse::$fileOffset} +
+     * {@see ServerResponse::$fileLength} bounds, chunked to respect the tunnel
+     * frame cap, without buffering the whole file in memory.
+     *
+     * @param int            $requestId Hub-allocated request id (frame seq).
+     * @param ServerResponse $response  Full response object.
      *
      * @return void
      *
      * @since 0.10.0
      */
-    private function sendHttpResponse(int $requestId, int $status, array $headers, string $body): void
+    private function sendHttpResponse(int $requestId, ServerResponse $response): void
     {
-        $head = new RelayHttpResponseHead($status, $headers, strlen($body));
+        $headers = $response->headers;
+        $bodyLength = $this->computeBodyLength($response);
+
+        $head = new RelayHttpResponseHead($response->statusCode, $headers, $bodyLength);
         $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeHead($head));
 
-        foreach (RelayHttpResponseCodec::chunkBody($body) as $chunkPayload) {
-            $this->sendHttpResponseFrame($requestId, $chunkPayload);
+        if ($response->filePath !== null && !$response->headOnly) {
+            $this->streamFileChunks($requestId, $response);
+        } else {
+            foreach (RelayHttpResponseCodec::chunkBody($response->body) as $chunkPayload) {
+                $this->sendHttpResponseFrame($requestId, $chunkPayload);
+            }
         }
 
         $this->sendHttpResponseFrame($requestId, RelayHttpResponseCodec::encodeEnd());
@@ -884,6 +991,84 @@ final class RelayConsumer
         // send an HTTP_CANCEL frame to notify the hub that the response is done and
         // it can clean up its tracking state for this request.
         $this->sendCancel($requestId);
+    }
+
+    /**
+     * Compute the total body length for a response.
+     *
+     * For file-backed responses this is the file slice size; for buffered
+     * responses it is the byte length of the body string.
+     *
+     * @param ServerResponse $response The response to compute length for.
+     *
+     * @return int|null Body length in bytes, or null if unknown (streaming).
+     *
+     * @since 0.10.0
+     */
+    private function computeBodyLength(ServerResponse $response): ?int
+    {
+        if ($response->filePath !== null) {
+            $fileSize = (int) @filesize($response->filePath);
+            if ($fileSize <= 0) {
+                return null;
+            }
+            return $response->fileLength > 0
+                ? $response->fileLength
+                : $fileSize - $response->fileOffset;
+        }
+
+        return strlen($response->body);
+    }
+
+    /**
+     * Stream a file-backed response in chunks over the tunnel.
+     *
+     * Opens the file, seeks to {@see ServerResponse::$fileOffset}, then reads
+     * and transmits chunks of at most {@see RelayHttpResponseCodec::MAX_BODY_CHUNK}
+     * bytes until {@see ServerResponse::$fileLength} bytes have been sent (or EOF
+     * if length is 0 / unbounded).
+     *
+     * @param int            $requestId Hub-allocated request id (frame seq).
+     * @param ServerResponse $response  File-backed response to stream.
+     *
+     * @return void
+     *
+     * @since 0.10.0
+     */
+    private function streamFileChunks(int $requestId, ServerResponse $response): void
+    {
+        $path = $response->filePath;
+        if ($path === null) {
+            return;
+        }
+
+        $handle = @fopen($path, 'rb');
+        if ($handle === false) {
+            return;
+        }
+
+        if ($response->fileOffset > 0) {
+            fseek($handle, $response->fileOffset);
+        }
+
+        $remaining = $response->fileLength > 0 ? $response->fileLength : PHP_INT_MAX;
+        $maxChunk = RelayHttpResponseCodec::MAX_BODY_CHUNK;
+
+        while ($remaining > 0 && !feof($handle)) {
+            $readLen = (int) min($maxChunk, $remaining);
+            $chunk = fread($handle, $readLen);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+
+            $this->sendHttpResponseFrame(
+                $requestId,
+                RelayHttpResponseCodec::encodeBody($chunk),
+            );
+            $remaining -= strlen($chunk);
+        }
+
+        fclose($handle);
     }
 
     /**
@@ -899,12 +1084,12 @@ final class RelayConsumer
      */
     private function sendHttpError(int $requestId, int $status, string $message): void
     {
-        $this->sendHttpResponse(
-            $requestId,
-            $status,
-            ['Content-Type' => 'text/plain; charset=utf-8'],
-            $message,
-        );
+        $errorResponse = (new ServerResponse())
+            ->status($status)
+            ->header('Content-Type', 'text/plain; charset=utf-8')
+            ->text($message);
+
+        $this->sendHttpResponse($requestId, $errorResponse);
     }
 
     /**

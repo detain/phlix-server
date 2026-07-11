@@ -241,6 +241,64 @@ class FfmpegRunner
     }
 
     /**
+     * Runs an FFmpeg command in a coroutine-aware manner.
+     *
+     * When inside a Swoole coroutine (getCid() > 0), uses
+     * {@see \Swoole\Coroutine\System::exec()} to avoid blocking the worker
+     * event loop. In CLI/testing contexts (getCid() <= 0), falls back to
+     * blocking {@see exec()}.
+     *
+     * @param string       $cmd      Fully built, shell-escaped ffmpeg command line.
+     * @param list<string> &$output  Captured stdout lines (passthrough for exec compat).
+     * @param int          &$exitCode Process exit code (passthrough for exec compat).
+     *
+     * @return bool True when the process exited with code 0.
+     */
+    private function runCoroutineAwareCommand(string $cmd, array &$output, int &$exitCode): bool
+    {
+        if (
+            extension_loaded('swoole')
+            && class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0
+        ) {
+            /** @var array{code?: int, signal?: int, output?: string} $result */
+            $result = \Swoole\Coroutine\System::exec($cmd);
+            $exitCode = (int) ($result['code'] ?? 1);
+            $output = (isset($result['output']) && $result['output'] !== '') ? explode("\n", $result['output']) : [];
+            return $exitCode === 0;
+        }
+
+        exec($cmd, $output, $exitCode);
+        return $exitCode === 0;
+    }
+
+    /**
+     * Runs an FFmpeg command returning output as a string, in a coroutine-aware manner.
+     *
+     * Same as {@see runCoroutineAwareCommand()} but returns the full stdout string
+     * instead of exit code, for commands where only the output matters.
+     *
+     * @param string $cmd Fully built, shell-escaped ffmpeg command line.
+     *
+     * @return string|null Captured stdout string, or null when execution failed.
+     */
+    private function runCoroutineAwareShellExec(string $cmd): ?string
+    {
+        if (
+            extension_loaded('swoole')
+            && class_exists(\Swoole\Coroutine::class)
+            && \Swoole\Coroutine::getCid() > 0
+        ) {
+            /** @var array{code?: int, signal?: int, output?: string} $result */
+            $result = \Swoole\Coroutine\System::exec($cmd);
+            return $result['output'] ?? null;
+        }
+
+        $output = shell_exec($cmd);
+        return is_string($output) ? $output : null;
+    }
+
+    /**
      * Builds a FFmpeg transcode command from parameters.
      *
      * Constructs a complete FFmpeg command with input, output, video codec,
@@ -468,7 +526,9 @@ class FfmpegRunner
     {
         // libplacebo tonemap with hable curve for natural-looking tone mapping
         // Uses BT.2020 to BT.709 conversion with proper gamut mapping
-        $filter = 'scale_vaapi=format=nv12,hwupload,tonemap_vaapi=transfer=bt2020:primaries=bt2020:tonemap=hable:desat=0.5';
+        $filter = 'scale_vaapi=format=nv12,hwupload,'
+            . 'tonemap_vaapi=transfer=bt2020:primaries=bt2020:'
+            . 'tonemap=hable:desat=0.5';
 
         return $filter;
     }
@@ -878,7 +938,9 @@ class FfmpegRunner
             escapeshellarg($outputPath)
         );
 
-        exec($cmd, $output, $exitCode);
+        $output = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
         return $exitCode === 0;
     }
 
@@ -920,7 +982,9 @@ class FfmpegRunner
             escapeshellarg($inputPath)
         );
 
-        exec($cmd, $output, $exitCode);
+        $output = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
         return $exitCode === 0;
     }
 
@@ -960,7 +1024,9 @@ class FfmpegRunner
             escapeshellarg($outputPath)
         );
 
-        exec($cmd, $output, $exitCode);
+        $output = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
         return $exitCode === 0;
     }
 
@@ -988,7 +1054,9 @@ class FfmpegRunner
             escapeshellarg($outputPath)
         );
 
-        exec($cmd, $output, $exitCode);
+        $output = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
         return $exitCode === 0;
     }
 
@@ -2020,23 +2088,31 @@ class FfmpegRunner
         // (often an opening slate/blank) when seeking to time 0.
         $captureTime = self::seconds($duration / 2.0);
 
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -ss %s -i %s -vf "fps=1/%s,scale=%d:%d,tile=%d:%d:margin=%d:padding=%d" -frames:v 1 %s 2>&1',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($captureTime),
-            escapeshellarg($videoPath),
+        $vfFilter = sprintf(
+            'fps=1/%s,scale=%d:%d,tile=%d:%d:margin=%d:padding=%d',
             escapeshellarg(self::seconds($interval)),
             $thumbW,
             $thumbH,
             $cols,
             $rows,
             $margin,
-            $padding,
+            $padding
+        );
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -ss %s -i %s '
+            . '-vf "%s" -frames:v 1 %s 2>&1',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($captureTime),
+            escapeshellarg($videoPath),
+            $vfFilter,
             escapeshellarg($spritePath)
         );
 
-        $output = shell_exec($cmd);
-        if (!is_file($spritePath)) {
+        $outputLines = [];
+        $exitCode = 0;
+        $this->runCoroutineAwareCommand($cmd, $outputLines, $exitCode);
+        if ($exitCode !== 0 || !is_file($spritePath)) {
+            $output = implode("\n", $outputLines);
             $this->logger->warning('Trickplay sprite generation failed', [
                 'video' => $videoPath,
                 'output' => $output,
@@ -2162,7 +2238,7 @@ class FfmpegRunner
             escapeshellarg($this->ffmpegPath)
         );
 
-        $output = shell_exec($cmd);
+        $output = $this->runCoroutineAwareShellExec($cmd);
         if (!is_string($output)) {
             $this->hardwareAccelerators = [];
             return [];
@@ -2184,7 +2260,7 @@ class FfmpegRunner
             '%s -hide_banner -encoders 2>/dev/null',
             escapeshellarg($this->ffmpegPath)
         );
-        $encodersOutput = shell_exec($encodersCmd);
+        $encodersOutput = $this->runCoroutineAwareShellExec($encodersCmd);
         $allEncoders = is_string($encodersOutput) ? $encodersOutput : '';
 
         // Map hwaccel name → encoder suffixes to check

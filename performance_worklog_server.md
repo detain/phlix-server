@@ -73,7 +73,7 @@
 - [x] SV-1.8  CSRF Origin exact-match ✅ (commit ba3096ba)
 - [x] SV-1.9  ENOSPC guard on segment cache ✅ (commit 70d99f4e)
 - [x] SV-1.10 login rate limiter bound ✅ (commit a3a6b35a) — S-W1 complete 🎉
-- [ ] SV-2.1  stream file-backed responses over relay tunnel
+- [x] SV-2.1  stream file-backed responses over relay tunnel ✅ (commit b3e45682)
 - [x] SV-2.2  pool hygiene: rollback dirty connections ✅ (commit 6bd400ee)
 - [x] SV-2.3  relay byte-pipe backpressure ✅ (commit cfcbeb50)
 - [x] SV-2.4  stream large binary via withFile() ✅ (commit 320efdbc)
@@ -84,13 +84,25 @@
 - [x] SV-2.9  defer similarity computation to background job ✅ (commit c9ea405d)
 - [x] SV-3.1  DVR recording data plane ✅ (commit 0579ef07)
 - [x] SV-3.2  book reader + audiobook player backends ✅ (commit 4f51206f)
-- [ ] SV-3.3  client capability negotiation + loudness normalization
-- [ ] SV-3.4  local artwork cache with sized variants
+- [x] SV-3.3  client capability negotiation + loudness normalization ✅ (commit c9e5e599)
+- [x] SV-3.4  local artwork cache with sized variants ✅ (commit 1b09f897)
 - [x] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache ✅ (commit fa4d400f)
 - [x] SV-3.6  build out Trakt history sync ✅ (commit cd3be89f) — S-W3 complete 🎉
-- [x] SV-4.1  segment-cap reservation before glob() ✅ (commit 9f06522b) — S-W4 starts
-- [ ] SV-4.2  detached-ffmpeg cancellation + apply transcode_timeout
-- [ ] SV-4.3  ComskipRunner non-blocking pipe + reachable timeout
-- [ ] SV-4.4  WebhookDispatcher backoff + connect-timeout
+- [x] SV-4.1  segment-cap reservation before glob() ✅ (commit 9f06522b)
+- [x] SV-4.2  detached-ffmpeg cancellation + apply transcode_timeout ✅ (commit 410ffce0)
+- [x] SV-4.3  ComskipRunner non-blocking pipe + reachable timeout ✅ (commit 410ffce0)
+- [x] SV-4.4  WebhookDispatcher backoff + connect-timeout ✅ (commit 410ffce0)
+- [x] SV-4.5  Roku/MusicBrainz blocking-I/O → coroutine/async ✅ (commit 410ffce0)
+- [ ] SV-4.6  original copy variant handling
+- [ ] SV-4.7  WS auth enforcement
+- [ ] SV-4.8  Router static-path fast map + DI for string handlers
+- [ ] SV-4.9  Migration ledger + document rewrite-class migrations
+- [ ] SV-4.10 Provider-priority config single source of truth
+- [ ] SV-4.11 Fix PluginCatalogService blocking curl + wrong docblock
+- [ ] SV-4.12 Extend stale-job reaper glob to {chunk-*.m4s,seg-*.ts}
+- [ ] SV-4.13 Remove superseded whole-file command builders
+- [ ] SV-4.14 Fix phantom self::transcode() docref
 
 ## Notes / cross-repo blockers
+
+(End of file - total 104 lines)

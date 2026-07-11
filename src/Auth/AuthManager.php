@@ -112,6 +112,22 @@ class AuthManager
     private ?SettingsRepository $settingsRepository;
 
     /**
+     * In-worker TTL cache for user status lookups.
+     *
+     * Avoids a PK lookup on user_repository.getStatus() for every authenticated
+     * request when the same user makes multiple concurrent requests. The short
+     * TTL (5 seconds) means status revocation takes effect within a few seconds
+     * rather than immediately, which is acceptable for the "disable account"
+     * use-case while significantly reducing DB load.
+     *
+     * @var array<string, array{status: string, cachedAt: int}> keyed by userId
+     */
+    private array $userStatusCache = [];
+
+    /** User status cache TTL in nanoseconds (5 seconds). */
+    private const USER_STATUS_CACHE_TTL_NS = 5_000_000_000;
+
+    /**
      * Create a new AuthManager instance.
      *
      * @param UserRepository $userRepository User data access repository
@@ -171,6 +187,50 @@ class AuthManager
         $this->statsCollector = $statsCollector;
         $this->settingsRepository = $settingsRepository;
         $this->loginRateLimitStore = $loginRateLimitStore;
+    }
+
+    /**
+     * Gets the cached user status or fetches from repository if cache miss/expired.
+     *
+     * Uses a short TTL (5 seconds) to reduce DB lookups for every authenticated
+     * request while still allowing near-instant account revocation to take effect.
+     *
+     * @param string $userId The user ID to look up
+     * @return string The user status ('active', 'disabled', 'pending', etc.)
+     */
+    private function getCachedUserStatus(string $userId): string
+    {
+        $now = hrtime(true);
+
+        // Check cache for valid (non-expired) entry
+        if (isset($this->userStatusCache[$userId])) {
+            $entry = $this->userStatusCache[$userId];
+            if (($now - $entry['cachedAt']) < self::USER_STATUS_CACHE_TTL_NS) {
+                return $entry['status'];
+            }
+        }
+
+        // Cache miss or expired - fetch from DB
+        $status = $this->userRepository->getStatus($userId) ?? 'active';
+
+        // Store in cache
+        $this->userStatusCache[$userId] = [
+            'status' => $status,
+            'cachedAt' => (int) $now,
+        ];
+
+        return $status;
+    }
+
+    /**
+     * Clears the cached user status for a user (call when status changes).
+     *
+     * @param string $userId The user ID to invalidate
+     * @return void
+     */
+    public function invalidateUserStatusCache(string $userId): void
+    {
+        unset($this->userStatusCache[$userId]);
     }
 
     /**
@@ -774,7 +834,7 @@ class AuthManager
         // active. Mirror this method's existing invalid/expired-token failure
         // contract exactly (throw \InvalidArgumentException, which the caller
         // already maps to a 401) so callers need no change.
-        $status = $this->userRepository->getStatus($userId) ?? 'active';
+        $status = $this->getCachedUserStatus($userId);
         if ($status !== 'active') {
             $this->auditLogger->logFailedAuth('account_' . $status, [
                 'user_id' => $userId,
@@ -835,7 +895,7 @@ class AuthManager
         if ($userId === '') {
             return null;
         }
-        $status = $this->userRepository->getStatus($userId) ?? 'active';
+        $status = $this->getCachedUserStatus($userId);
         if ($status !== 'active') {
             return null;
         }

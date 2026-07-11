@@ -506,11 +506,16 @@ class FfmpegRunner
      */
     private function buildZscaleToneMapFilter(array $colorMeta): string
     {
-        // zscale transfer=bt709:matrix=bt709:primaries=bt709 converts HDR to SDR
-        // Format=yuv420p ensures 8-bit 4:2:0 output for browser compatibility
-        $filter = 'zscale=transfer=bt709:matrix=bt709:primaries=bt709,format=yuv420p';
-
-        return $filter;
+        // Full HDR→SDR tone-map graph using zscale + hable tonemap:
+        // 1. zscale=t=linear:npl=100   — convert to linear with npl (normalized peak light)
+        // 2. format=gbrpf32le         — 32-bit float planar RGB for precision
+        // 3. zscale=p=bt709           — set output primaries to BT.709
+        // 4. tonemap=hable:desat=0    — hable tonemap curve, no desaturation
+        // 5. zscale=t=bt709:m=bt709:r=tv — convert transfer & matrix to BT.709 TV range
+        // 6. format=yuv420p          — 8-bit 4:2:0 for browser compatibility
+        return 'zscale=t=linear:npl=100,format=gbrpf32le,'
+            . 'zscale=p=bt709,tonemap=hable:desat=0,'
+            . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
     }
 
     /**

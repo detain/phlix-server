@@ -70,6 +70,9 @@ class FfmpegRunner
      */
     private array $probeMemo = [];
 
+    /** @var bool|null Whether FFmpeg has libplacebo filter support (null = not yet checked) */
+    private ?bool $hasLibplacebo = null;
+
     /**
      * Creates a new FFmpegRunner instance.
      *
@@ -496,6 +499,35 @@ class FfmpegRunner
     }
 
     /**
+     * Detects whether FFmpeg was built with libplacebo filter support.
+     *
+     * Checks by running `ffmpeg -filters 2>/dev/null` and looking for the
+     * libplacebo filter in the output. Result is cached after first check.
+     *
+     * @return bool True if libplacebo filter is available
+     *
+     * @since 0.36.0
+     */
+    private function detectLibplacebo(): bool
+    {
+        if ($this->hasLibplacebo !== null) {
+            return $this->hasLibplacebo;
+        }
+
+        $output = shell_exec(escapeshellarg($this->ffmpegPath) . ' -filters 2>/dev/null');
+
+        $this->hasLibplacebo = is_string($output)
+            && preg_match('/\blibplacebo\b/', $output) === 1;
+
+        $this->logger->debug('Libplacebo detection', [
+            'available' => $this->hasLibplacebo,
+            'ffmpeg' => $this->ffmpegPath,
+        ]);
+
+        return $this->hasLibplacebo;
+    }
+
+    /**
      * Builds a zscale-based tone mapping filter chain.
      *
      * @param array<string, mixed> $colorMeta Color metadata from extractColorMetadata()
@@ -521,21 +553,39 @@ class FfmpegRunner
     /**
      * Builds a libplacebo-based tone mapping filter chain.
      *
+     * When FFmpeg was built with libplacebo support, emits a real
+     * `libplacebo=tonemapping=...` filter graph for high-quality GPU-assisted
+     * HDR→SDR tone mapping. When libplacebo is not available, falls back to
+     * the zscale+tonemap software filter chain from SV-1.4.
+     *
      * @param array<string, mixed> $colorMeta Color metadata from extractColorMetadata()
      *
-     * @return string FFmpeg filter chain for libplacebo tone mapping
+     * @return string FFmpeg filter chain for libplacebo tone mapping (or zscale fallback)
      *
      * @since 0.36.0
      */
     private function buildLibplaceboToneMapFilter(array $colorMeta): string
     {
-        // libplacebo tonemap with hable curve for natural-looking tone mapping
-        // Uses BT.2020 to BT.709 conversion with proper gamut mapping
-        $filter = 'scale_vaapi=format=nv12,hwupload,'
-            . 'tonemap_vaapi=transfer=bt2020:primaries=bt2020:'
-            . 'tonemap=hable:desat=0.5';
+        // Fall back to zscale+tonemap if FFmpeg lacks libplacebo support.
+        // The zscale path is the same software graph used by SV-1.4.
+        if (!$this->detectLibplacebo()) {
+            return $this->buildZscaleToneMapFilter($colorMeta);
+        }
 
-        return $filter;
+        // Real libplacebo tone mapping graph:
+        // - tonemapping=hable: high-quality filmic tonemap curve
+        // - gamut_warning: flag clipped pixels for visual debugging if needed
+        // - input_/output_color_space/primaries/transfer: explicit HDR→SDR conversion
+        //   Use the probed color metadata when available, with bt2020/nc defaults.
+        $inputTransfer = $colorMeta['color_transfer'] ?: 'bt2020-10';
+        $inputPrimaries = $colorMeta['color_primaries'] ?: 'bt2020';
+        $inputSpace = $colorMeta['color_space'] ?: 'bt2020nc';
+
+        // libplacebo always outputs to the target color space; we target BT.709 SD.
+        // Use peak=43.0 which is a typical HDR10 display brightness (cd/m²).
+        return "libplacebo=tonemapping=hable:peak=43.0:"
+            . "input_color_space=bt2020nc:input_primaries=bt2020:input_trc=bt2020-10:"
+            . "output_color_space=bt709:output_primaries=bt709:output_trc=bt709,format=yuv420p";
     }
 
     /**

@@ -60,7 +60,7 @@
 - [x] SV-0.4  replace usleep spin-wait with Channel ✅ (commit e48e4aba)
 - [x] SV-0.5  fix WS reaper + heartbeat timer guards ✅ (commit b95a9c22)
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
-- [ ] SV-0.7  supervise marker/intro-detection worker
+- [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
 - [ ] SV-0.8  fix path_hash reads + stop re-probing
 - [ ] SV-0.9  fix generateThumbnailBatch timestamp escaping
 - [ ] SV-1.1  memoize/precompute HDR tone-map decision

@@ -54,7 +54,7 @@
   - **Migration runner:** runs every boot (apply-all-every-time); idempotent via `IF NOT EXISTS` and error-substring allowlist
 
 ## Progress
-- [ ] SV-0.1  wire hardware acceleration + tone-mapping config
+- [x] SV-0.1  wire hardware acceleration + tone-mapping config ✅ (commit 5d3a3cdf)
 - [x] SV-0.2  reconcile hwaccel config ✅ (commit 85aec93c)
 - [ ] SV-0.3  isWorkermanContext fix
 - [ ] SV-0.4  replace usleep spin-wait with Channel

@@ -1587,8 +1587,26 @@ class TranscodeManager
 
         // P3B-S3 multi-audio: emit audio groups + audio-only playlists when available.
         $hasMultiAudio = is_array($audioTracks) && count($audioTracks) > 1;
-        $masterPlaylist = $this->buildMultiVariantMaster(
+
+        // SV-4.6: Filter copy variants from the switchable ABR set because their
+        // segment boundaries may drift from the uniform timeline (input-side -ss
+        // seeking without -force_key_frames means copy segments start at source
+        // GOP boundaries, not the nominal segment boundaries). Copy variants still
+        // get their own media playlist so the player can manually select "Original"
+        // quality, but they are NOT presented as ABR-switchable rungs in the master.
+        $switchableVariants = array_values(array_filter(
             $variants,
+            static fn (\Phlix\Media\Streaming\Rendition $v): bool => !$v->isCopy
+        ));
+
+        // Degenerate case: if ALL variants are copy variants, fall back to all
+        // variants (shouldn't happen in practice since ladder always has transcoded).
+        if ($switchableVariants === []) {
+            $switchableVariants = $variants;
+        }
+
+        $masterPlaylist = $this->buildMultiVariantMaster(
+            $switchableVariants,
             $hasMultiAudio ? $audioTracks : null
         );
         file_put_contents("{$dir}/master.m3u8", $masterPlaylist);

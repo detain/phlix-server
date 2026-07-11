@@ -277,11 +277,17 @@ class TranscodeManagerTest extends TestCase
         $this->assertStringContainsString('seg-v720p-00000.ts', $media);
         $this->assertStringContainsString('seg-v720p-00004.ts', $media);
         $this->assertStringNotContainsString('seg-v720p-00005.ts', $media);
-        // The master lists every variant and references the per-variant playlists.
+        // The master lists non-copy variants only (SV-4.6: copy variants like
+        // "original" are excluded from the switchable ABR set because their
+        // segment boundaries may drift from the uniform timeline due to input-side
+        // -ss seeking without -force_key_frames). All variants (including copy)
+        // still get their own media playlist written for manual quality selection.
         $master = (string) file_get_contents("{$dir}/master.m3u8");
         $this->assertGreaterThanOrEqual(2, substr_count($master, '#EXT-X-STREAM-INF:'));
         $this->assertStringContainsString('media_v720p.m3u8', $master);
-        $this->assertStringContainsString('media_voriginal.m3u8', $master);
+        $this->assertStringNotContainsString('media_voriginal.m3u8', $master);
+        // But the original's media playlist file still exists for manual selection.
+        $this->assertFileExists("{$dir}/media_voriginal.m3u8");
         $this->assertStringContainsString('/hls/', $result['master_url']);
         // No legacy single-variant artefacts written for a multi-variant job.
         $this->assertFileDoesNotExist("{$dir}/media_0.m3u8");
@@ -1517,7 +1523,16 @@ class TranscodeManagerTest extends TestCase
             'web'
         )->streamVariants();
 
-        // One STREAM-INF + media_v{id}.m3u8 per variant, in the SAME (highest-first) order.
+        // SV-4.6: Copy variants (e.g. "original") are excluded from the switchable
+        // ABR set in the master playlist because their segment boundaries may drift
+        // from the uniform timeline (input-side -ss seeking without -force_key_frames).
+        // Use array_values to re-index since array_filter preserves original keys.
+        $switchableVariants = array_values(array_filter(
+            $variants,
+            static fn (\Phlix\Media\Streaming\Rendition $v): bool => !$v->isCopy
+        ));
+
+        // One STREAM-INF + media_v{id}.m3u8 per NON-COPY variant, in the SAME (highest-first) order.
         $lines = array_values(array_filter(explode("\n", $master), static fn (string $l): bool => $l !== ''));
         $streamLines = [];
         foreach ($lines as $i => $line) {
@@ -1525,8 +1540,8 @@ class TranscodeManagerTest extends TestCase
                 $streamLines[] = [$line, $lines[$i + 1] ?? ''];
             }
         }
-        $this->assertCount(count($variants), $streamLines);
-        foreach ($variants as $pos => $variant) {
+        $this->assertCount(count($switchableVariants), $streamLines);
+        foreach ($switchableVariants as $pos => $variant) {
             [$inf, $uri] = $streamLines[$pos];
             $this->assertStringContainsString('BANDWIDTH=' . $variant->bandwidth(), $inf);
             $this->assertStringContainsString('RESOLUTION=' . $variant->resolution(), $inf);
@@ -1534,7 +1549,7 @@ class TranscodeManagerTest extends TestCase
             $this->assertSame("media_v{$variant->id}.m3u8", $uri);
         }
         // Highest-first: the first STREAM-INF's resolution height ≥ the last's.
-        $this->assertSame("media_v{$variants[0]->id}.m3u8", $streamLines[0][1]);
+        $this->assertSame("media_v{$switchableVariants[array_key_first($switchableVariants)]->id}.m3u8", $streamLines[0][1]);
     }
 
     public function testMediaPlaylistTimingIdenticalAcrossVariants(): void

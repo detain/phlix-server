@@ -56,8 +56,8 @@
 ## Progress
 - [x] SV-0.1  wire hardware acceleration + tone-mapping config ✅ (commits 5d3a3cdf, 809b34b3)
 - [x] SV-0.2  reconcile hwaccel config ✅ (commit 85aec93c)
-- [ ] SV-0.3  isWorkermanContext fix
-- [ ] SV-0.4  replace usleep spin-wait with Channel
+- [x] SV-0.3  isWorkermanContext fix ✅ (commit e48e4aba)
+- [x] SV-0.4  replace usleep spin-wait with Channel ✅ (commit e48e4aba)
 - [ ] SV-0.5  fix WS reaper + heartbeat timer guards
 - [ ] SV-0.6  fix TMDB collections UUID-as-int bug
 - [ ] SV-0.7  supervise marker/intro-detection worker

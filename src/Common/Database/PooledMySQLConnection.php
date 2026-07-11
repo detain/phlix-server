@@ -73,6 +73,15 @@ final class PooledMySQLConnection extends Connection
     private ?Connection $cliConn = null;
 
     /**
+     * Tracks whether the current leased connection has an uncommitted transaction.
+     * This is needed because the parent Workerman\MySQL\Connection does not expose
+     * inTransaction() publicly, so we track it ourselves.
+     *
+     * @var array<int, bool> coroutine id → tx-pending flag
+     */
+    private array $txPending = [];
+
+    /**
      * @param string                              $host
      * @param int                                 $port
      * @param string                              $user
@@ -168,17 +177,35 @@ final class PooledMySQLConnection extends Connection
 
     public function beginTrans(): bool
     {
-        return $this->lease()->beginTrans();
+        $conn = $this->lease();
+        $cid = $this->currentCoroutineId();
+        $result = $conn->beginTrans();
+        if ($result && $cid >= 0) {
+            $this->txPending[$cid] = true;
+        }
+        return $result;
     }
 
     public function commitTrans(): bool
     {
-        return $this->lease()->commitTrans();
+        $conn = $this->lease();
+        $cid = $this->currentCoroutineId();
+        $result = $conn->commitTrans();
+        if ($cid >= 0) {
+            unset($this->txPending[$cid]);
+        }
+        return $result;
     }
 
     public function rollBackTrans(): bool
     {
-        return $this->lease()->rollBackTrans();
+        $conn = $this->lease();
+        $cid = $this->currentCoroutineId();
+        $result = $conn->rollBackTrans();
+        if ($cid >= 0) {
+            unset($this->txPending[$cid]);
+        }
+        return $result;
     }
 
     /**
@@ -241,10 +268,18 @@ final class PooledMySQLConnection extends Connection
         $this->leases[$cid] = $conn;
         \Swoole\Coroutine::defer(function () use ($cid): void {
             $released = $this->leases[$cid] ?? null;
-            unset($this->leases[$cid]);
-            if ($released !== null && $this->idle !== null) {
-                $this->idle->push($released);
+            $hadPendingTx = isset($this->txPending[$cid]) && $this->txPending[$cid];
+            unset($this->leases[$cid], $this->txPending[$cid]);
+            if ($released === null || $this->idle === null) {
+                return;
             }
+            // Never return a dirty (open-transaction) connection to the pool.
+            // Rollback any uncommitted transaction before reuse — an interrupted
+            // coroutine must not poison the next lessee.
+            if ($hadPendingTx) {
+                $released->rollBackTrans();
+            }
+            $this->idle->push($released);
         });
 
         return $conn;
@@ -260,23 +295,32 @@ final class PooledMySQLConnection extends Connection
 
         // Guard: Skip Channel access if not in a coroutine (SIGTERM shutdown)
         if ($this->currentCoroutineId() < 0) {
-            if ($this->created < $this->maxSize) {
-                $this->created++;
-                try {
-                    return ($this->rawFactory)();
-                } catch (\Throwable $e) {
-                    $this->created--;
-                    throw $e;
+            // Non-coroutine path: bounded poll loop (no recursion, no stack growth).
+            // CLI/cron never has true parallelism, so polling is acceptable.
+            $deadline = hrtime(true) + 10_000_000_000; // 10 s ns
+            while (hrtime(true) < $deadline) {
+                if ($this->created < $this->maxSize) {
+                    $this->created++;
+                    try {
+                        return ($this->rawFactory)();
+                    } catch (\Throwable $e) {
+                        $this->created--;
+                        throw $e;
+                    }
                 }
+                usleep(100_000); // 100 ms between polls
             }
-            // Block-wait by recursing (outside coroutine, no Channel access)
-            usleep(1000);
-            return $this->acquire();
+            throw new \RuntimeException('pool exhausted: could not acquire a connection within 10 s');
         }
 
         if (!$this->idle->isEmpty()) {
             /** @var Connection $conn */
             $conn = $this->idle->pop();
+            if (!$this->isConnectionAlive($conn)) {
+                // Dead connection removed from pool — not added back.
+                $this->created--;
+                return $this->acquire();
+            }
             return $conn;
         }
 
@@ -292,9 +336,34 @@ final class PooledMySQLConnection extends Connection
             }
         }
 
-        /** @var Connection $conn */
-        $conn = $this->idle->pop();
+        // Pool exhausted — block-wait with timeout. Swoole yields to the
+        // scheduler while waiting, so other coroutines remain runnable.
+        // pop() returns false on timeout (Swoole 4.x) or throws (Swoole 5+).
+        /** @var Connection|false $conn */
+        $conn = $this->idle->pop(10.0);
+        if ($conn === false) {
+            throw new \RuntimeException('pool exhausted: no idle connection available after 10 s');
+        }
         return $conn;
+    }
+
+    /**
+     * Quick sanity-check that a pooled connection is still usable.
+     *
+     * A connection can go dead if the DB server closed it (idle timeout, OOM,
+     * failover) while it sat in the idle pool. Returning a dead connection to
+     * the next lessee would cause a cryptic "server has gone away" on the first
+     * query. Running a cheap SELECT 1 round-trip detects this without requiring
+     * a full reconnect.
+     */
+    private function isConnectionAlive(Connection $conn): bool
+    {
+        try {
+            $conn->query('SELECT 1');
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**

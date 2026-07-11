@@ -22,6 +22,7 @@ use Phlix\Shared\Relay\RelayHttpResponseHead;
 use Throwable;
 use Workerman\Connection\AsyncTcpConnection;
 use Workerman\Connection\ConnectionInterface;
+use Workerman\Connection\TcpConnection;
 use Workerman\Timer;
 
 use function is_array;
@@ -685,7 +686,28 @@ final class RelayConsumer
             return;
         }
 
-        $local->send($frame->payload, true);
+        if ($local->send($frame->payload, true) === false) {
+            // Local connection send buffer is full — apply back-pressure to the
+            // hub so it stops pipelining DATA frames for this channel until the
+            // local connection drains.  This mirrors the ConnectionResponseSink
+            // discipline used on the hub side.
+            if ($this->connection !== null && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
+                $this->connection->pauseRecv();
+                $local->onBufferDrain = function () use ($channelId): void {
+                    // Clean up the drain handler first to avoid double-resume.
+                    $conn = $this->localConnections[$channelId] ?? null;
+                    if ($conn !== null) {
+                        $conn->onBufferDrain = null;
+                    }
+                    if (
+                        $this->connection !== null
+                        && $this->connection->getStatus() === TcpConnection::STATUS_ESTABLISHED
+                    ) {
+                        $this->connection->resumeRecv();
+                    }
+                };
+            }
+        }
     }
 
     /**
@@ -1053,6 +1075,7 @@ final class RelayConsumer
 
         $remaining = $response->fileLength > 0 ? $response->fileLength : PHP_INT_MAX;
         $maxChunk = RelayHttpResponseCodec::MAX_BODY_CHUNK;
+        $local = $this->localConnections[$requestId] ?? null;
 
         while ($remaining > 0 && !feof($handle)) {
             $readLen = (int) min($maxChunk, $remaining);
@@ -1061,10 +1084,25 @@ final class RelayConsumer
                 break;
             }
 
-            $this->sendHttpResponseFrame(
-                $requestId,
-                RelayHttpResponseCodec::encodeBody($chunk),
-            );
+            if (
+                $this->sendHttpResponseFrame(
+                    $requestId,
+                    RelayHttpResponseCodec::encodeBody($chunk),
+                ) === false
+            ) {
+                // Hub connection send buffer is full — stop reading from the file
+                // and apply back-pressure to the local HTTP client until the hub
+                // drain event fires so a slow hub does not make us buffer the
+                // entire file in memory.
+                if ($local !== null) {
+                    $local->pauseRecv();
+                    $local->onBufferDrain = static function () use ($local): void {
+                        $local->onBufferDrain = null;
+                        $local->resumeRecv();
+                    };
+                }
+                break;
+            }
             $remaining -= strlen($chunk);
         }
 
@@ -1098,18 +1136,19 @@ final class RelayConsumer
      * @param int    $requestId Hub-allocated request id (carried in the seq field).
      * @param string $payload   Chunk payload (HEAD/BODY/END) from RelayHttpResponseCodec.
      *
-     * @return void
+     * @return bool True if the frame was sent, false if the hub connection could
+     *              not accept it (e.g. send buffer full).
      *
      * @since 0.10.0
      */
-    private function sendHttpResponseFrame(int $requestId, string $payload): void
+    private function sendHttpResponseFrame(int $requestId, string $payload): bool
     {
         if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return;
+            return false;
         }
 
         $encoded = $this->codec->encode(RelayFrameType::HTTP_RESPONSE, $requestId, $payload);
-        $this->connection->send($encoded);
+        return $this->connection->send($encoded) !== false;
     }
 
     /**

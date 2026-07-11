@@ -7,6 +7,11 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-07-10
+
+### Changed
+- **Admin SPA bundle rebuilt against `@phlix/ui` v0.79.0** (`web-ui/` pin bumped `v0.78.0`→`v0.79.0`; committed `public/assets/app/` regenerated). Ships the plugin configure/lifecycle UX: persistent enable-failure banner with the server's real reason, secret fields that show set/unset + length (never the value), and rendered field-help links/defaults/"optional" markers. Version `1.2.1`→`1.2.2` (PATCH — bundled asset refresh, no server API change).
+
 ## [1.2.1] — 2026-07-10
 
 ### Fixed

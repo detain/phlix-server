@@ -755,49 +755,54 @@ class TranscodeManager
         // the two hot-path checks (every retry of a slow segment hits it).
         $this->reconcileInFlightSegments();
 
+        // SV-4.1: Reserve the slot BEFORE the yieldable glob to close the double-encode
+        // race. The old order was: dedup-check → glob → reserve, which meant a second
+        // request could glob between the old request's glob and its reservation, see
+        // nothing in-flight, and both would proceed to encode the same segment. Now the
+        // reservation is placed first; if the glob then finds we're over cap, the
+        // finally block rolls it back via $overCap (below).
+        $reserved = false;
+        $overCap = false;
+        if (!$this->segmentEncodeInFlight($final)) {
+            // Record the launch in-worker BEFORE the yieldable glob. The add and the
+            // dedup check above run with no coroutine yield between them, so this
+            // worker's own view is atomic. A sibling worker's view is eventually-
+            // consistent (bounded by reconcileInFlightSegments's 1s window), which is
+            // acceptable: a missed dedup merely costs one redundant duplicate encode.
+            $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            $reserved = true;
+
+            // Global ceiling: bound total concurrent encodes so a burst of cold seeks
+            // (many viewers, or one frantic scrub) can't saturate the CPU. Over the
+            // ceiling we fast-fail (503 + Retry-After) rather than pile on — the
+            // client backs off briefly and the in-flight encodes finish fast. This
+            // check reads the shared tree LIVE (not the throttled snapshot): a
+            // memory-only cap sums to a ≤1s-stale view PER WORKER across all 14 HTTP
+            // worker processes, which the S2 review found could let the fleet
+            // collectively overshoot the ceiling by up to ~14x during exactly the
+            // seek-storm scenario this cap exists to prevent. Real-time accuracy is
+            // preserved because this glob only runs on an actual launch decision
+            // (after the dedup check found no in-flight encode for this segment).
+            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+                $overCap = true;
+                // Roll back the reservation immediately — the finally below would do it
+                // anyway, but being explicit here makes the intent clear and keeps the
+                // finally handling simple.
+                unset($this->segmentEncodesInFlight[$final]);
+                throw new SegmentBusyException(
+                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                );
+            }
+        }
+
         $launched = false;
         try {
-            // Only launch an encode if one for THIS exact segment is not already
-            // running. Without this, every client retry of a slow segment (hls.js
-            // re-requests the same fragment on a first-byte timeout) spawns a
-            // duplicate ffmpeg, and the redundant load is exactly what pushes
-            // encodes past the client timeout — a self-amplifying cascade. A retry
-            // now piggybacks on the in-flight encode instead. `$final` already
-            // carries the per-variant name, so dedup + the global cap are naturally
-            // scoped per (job, variant).
-            if (!$this->segmentEncodeInFlight($final)) {
-                // Global ceiling: bound total concurrent encodes so a burst of cold
-                // seeks (many viewers, or one frantic scrub) can't saturate the CPU.
-                // Over the ceiling we fast-fail (503 + Retry-After) rather than pile
-                // on — the client backs off briefly and the in-flight encodes finish
-                // fast. This check reads the shared tree LIVE (not the throttled
-                // snapshot): a memory-only cap sums to a ≤1s-stale view PER WORKER
-                // across all 14 HTTP worker processes, which the S2 review found
-                // could let the fleet collectively overshoot the ceiling by up to
-                // ~14x during exactly the seek-storm scenario this cap exists to
-                // prevent — a materially larger window than the pre-existing
-                // ~100ms `.part-*`-visibility latency the original glob-based cap
-                // tolerated. Real-time accuracy here is preserved by only ever
-                // reaching this glob on an actual launch decision (i.e. after the
-                // memory-based dedup check above already found no in-flight encode
-                // for this exact segment) — not on every cache-miss/dedup hit — so
-                // the higher-frequency check still gets the hot-path relief.
-                if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                    throw new SegmentBusyException(
-                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                    );
-                }
-                // Record the launch in-worker BEFORE spawning ffmpeg so a concurrent
-                // request for this exact segment dedups against it immediately. The
-                // add and the two checks above run with no coroutine yield between
-                // them, so the gate decision is atomic within this worker's event
-                // loop. This, touchJobDir(), and startSegmentEncode() all run inside
-                // this try so that ANY throwable after the increment — not just a
-                // poll-loop failure — reaches the finally below and releases the
-                // slot; an increment that were left outside the try could leak
-                // permanently (a worker that leaks and then goes idle never revisits
-                // this code path to self-heal).
-                $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            if (!$reserved) {
+                // segmentEncodeInFlight was true — an encode for this exact segment
+                // is already running; piggyback on it rather than spawning a duplicate.
+                $this->touchJobDir($dir);
+            } else {
+                // We hold the reservation. Launch the encode.
                 $launched = true;
                 $this->touchJobDir($dir);
                 // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.
@@ -961,15 +966,29 @@ class TranscodeManager
         // Refresh the dedup snapshot (same as produceSegment).
         $this->reconcileInFlightSegments();
 
+        // SV-4.1: Reserve the slot BEFORE the yieldable glob to close the double-encode
+        // race. See produceSegment() for the full explanation.
+        $reserved = false;
+        $overCap = false;
+        if (!$this->segmentEncodeInFlight($final)) {
+            $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            $reserved = true;
+
+            if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
+                $overCap = true;
+                unset($this->segmentEncodesInFlight[$final]);
+                throw new SegmentBusyException(
+                    'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
+                );
+            }
+        }
+
         $launched = false;
         try {
-            if (!$this->segmentEncodeInFlight($final)) {
-                if ($this->countInFlightSegmentEncodes() >= $this->maxConcurrentSegments) {
-                    throw new SegmentBusyException(
-                        'Segment encode capacity reached (' . $this->maxConcurrentSegments . ' in flight)'
-                    );
-                }
-                $this->segmentEncodesInFlight[$final] = $this->monotonicMs();
+            if (!$reserved) {
+                // Dedup hit — an encode for this exact segment is already running.
+                $this->touchJobDir($dir);
+            } else {
                 $launched = true;
                 $this->touchJobDir($dir);
                 // SV-1.9: ENOSPC guard — check disk space before spawning FFmpeg.

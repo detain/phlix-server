@@ -878,20 +878,23 @@ class FfmpegRunner
             return true;
         }
 
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error -i %s',
-            escapeshellarg($this->ffmpegPath),
-            escapeshellarg($inputPath)
-        );
-
+        // Build input-side seek args first (fast seeking - before -i)
+        $seekArgs = '';
         foreach ($timestamps as $index => $timestamp) {
             $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
-            $cmd .= sprintf(
+            $seekArgs .= sprintf(
                 ' -ss %d -vframes 1 %s',
-                escapeshellarg((string) $timestamp),
+                (int) $timestamp,
                 escapeshellarg($framePath)
             );
         }
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error%s -i %s',
+            escapeshellarg($this->ffmpegPath),
+            $seekArgs,
+            escapeshellarg($inputPath)
+        );
 
         exec($cmd, $output, $exitCode);
         return $exitCode === 0;

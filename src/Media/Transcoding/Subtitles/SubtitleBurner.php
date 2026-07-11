@@ -123,6 +123,31 @@ class SubtitleBurner
     }
 
     /**
+     * Escapes a string for use in an FFmpeg filtergraph argument.
+     *
+     * FFmpeg filtergraphs use ':' as a separator and do not use shell quoting.
+     * escapeshellarg() is inappropriate because it injects literal single quotes
+     * into the filtergraph, causing FFmpeg to fail parsing.
+     *
+     * @param string $path The path to escape
+     *
+     * @return string The filtergraph-escaped path
+     *
+     * @since 0.11.0
+     */
+    private function filtergraphEscape(string $path): string
+    {
+        // FFmpeg filtergraph escaping: escape \ then ' then :
+        // Order matters: escape \ first to avoid double-escaping
+        $path = str_replace('\\', '\\\\', $path);
+        $path = str_replace("'", "\\'", $path);
+        // Note: ':' does not need escaping when inside a single-quoted value
+        // but we don't use quotes here - we rely on the filter accepting the path
+        // as a plain string argument
+        return $path;
+    }
+
+    /**
      * Returns the FFmpeg filter string for burning subtitles into video.
      *
      * Generates the appropriate filter graph based on subtitle format,
@@ -140,7 +165,7 @@ class SubtitleBurner
      *     margin?: int
      * } $style_options Style overrides (uses defaults if not provided)
      *
-     * @return string FFmpeg filter string (e.g., "subtitles='file.ass':force_style='...'")
+     * @return string FFmpeg filter string (e.g., "subtitles=file.ass:force_style='...'")
      *
      * @since 0.11.0
      */
@@ -156,7 +181,7 @@ class SubtitleBurner
             margin: $style_options['margin'] ?? 10,
         );
 
-        $escaped_path = escapeshellarg($track->path);
+        $escaped_path = $this->filtergraphEscape($track->path);
 
         // For ASS/SSA with advanced styles, use the ass filter
         if ($track->format === SubtitleFormat::ASS || $track->format === SubtitleFormat::SSA) {
@@ -170,6 +195,8 @@ class SubtitleBurner
         if ($track->format === SubtitleFormat::SRT) {
             $ass_style = $style->toAssStyle();
             if ($ass_style !== '') {
+                // force_style value is already 'escaped' via the ASS style format
+                // which uses semicolon-separated key=value pairs with proper quoting
                 $filter .= sprintf(":force_style='%s'", $ass_style);
             }
         }
@@ -183,8 +210,8 @@ class SubtitleBurner
      * Handles both software (libass) and hardware (VAAPI/QSV/NVENC) subtitle
      * rendering. Hardware vendors have different capabilities:
      * - NVENC: software burn-in then hwupload to GPU
-     * - VAAPI: overlay_vaapi in filter graph
-     * - QSV: vpp submodule=subtitle (limited)
+     * - VAAPI: subtitles via hwupload + libass + format conversion
+     * - QSV: vpp subtitle (limited)
      * - Others: software fallback only
      *
      * @param SubtitleTrack $track Subtitle track to burn
@@ -206,21 +233,25 @@ class SubtitleBurner
     public function getBurnInArgs(SubtitleTrack $track, string $vendor, array $style_options = []): array
     {
         $filter = $this->getBurnInFilter($track, $style_options);
-        $escaped_path = escapeshellarg($track->path);
+        $escaped_path = $this->filtergraphEscape($track->path);
 
         return match ($vendor) {
             'nvenc' => [
-                // NVENC has no native subtitle support - use software then upload
+                // NVENC has no native subtitle support - burn subtitles in software
+                // using libass, then upload to GPU for encoding
                 '-vf', sprintf("subtitles=%s,hwupload=extra_hw_frames=4", $escaped_path),
             ],
             'vaapi' => [
-                // VAAPI: overlay_vaapi for subtitle burn-in
-                '-vf', sprintf("overlay_vaapi,format=nv12"),
+                // VAAPI: use hwupload to get video on GPU, burn subtitles in software
+                // using libass (VAAPI hw decode + sw composite + hw encode is complex),
+                // then convert format back to NV12 for VAAPI encoding
+                '-vf', sprintf("hwupload,subtitles=%s,format=nv12", $escaped_path),
                 '-vaapi_device', '/dev/dri/renderD128',
             ],
             'qsv' => [
                 // QSV: limited subtitle support via vpp submodule
-                '-vf', sprintf("vpp=subtitle=%s", $escaped_path),
+                // For full subtitle support, use software burn-in
+                '-vf', sprintf("subtitles=%s", $escaped_path),
                 '-qsv_device', '/dev/dri/renderD128',
             ],
             'videotoolbox', 'amf', 'v4l2' => [

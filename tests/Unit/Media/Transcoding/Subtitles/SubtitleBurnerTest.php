@@ -162,7 +162,12 @@ class SubtitleBurnerTest extends TestCase
         $args = $burner->getBurnInArgs($track, 'vaapi');
 
         $this->assertContains('-vf', $args);
-        $this->assertStringContainsString('overlay_vaapi', implode(' ', $args));
+        $args_str = implode(' ', $args);
+        // VAAPI uses hwupload to get video on GPU, then software subtitles burn-in
+        // then format conversion back to NV12
+        $this->assertStringContainsString('hwupload', $args_str);
+        $this->assertStringContainsString('subtitles=', $args_str);
+        $this->assertStringContainsString('format=nv12', $args_str);
         $this->assertContains('-vaapi_device', $args);
     }
 
@@ -202,7 +207,8 @@ class SubtitleBurnerTest extends TestCase
         $args = $burner->getBurnInArgs($track, 'qsv');
 
         $this->assertContains('-vf', $args);
-        $this->assertStringContainsString('vpp=', implode(' ', $args));
+        // QSV uses software subtitles filter (vpp subtitle support is limited)
+        $this->assertStringContainsString('subtitles=', implode(' ', $args));
         $this->assertContains('-qsv_device', $args);
     }
 
@@ -272,6 +278,49 @@ class SubtitleBurnerTest extends TestCase
         $result = $burner->extractSubtitle('/input.mkv', 0, '/output.srt');
 
         $this->assertFalse($result);
+    }
+
+    public function test_filtergraph_escaping_no_single_quotes(): void
+    {
+        $ffmpeg = $this->createMockFfmpegRunner();
+        $burner = new SubtitleBurner($ffmpeg);
+
+        // Path with spaces and special chars that would break shell quoting
+        $track = new SubtitleTrack(
+            index: '2',
+            language: 'eng',
+            label: 'English',
+            format: SubtitleFormat::SRT,
+            path: "/var/subtitles/movie's file.srt"
+        );
+
+        $filter = $burner->getBurnInFilter($track);
+
+        // The filtergraph-escaped output should NOT contain literal single quotes
+        // that would break FFmpeg's filtergraph parser
+        $this->assertStringNotContainsString("'movie's file.srt'", $filter);
+        // The apostrophe should be escaped as \' in the filtergraph
+        $this->assertStringContainsString("\\'", $filter);
+    }
+
+    public function test_filtergraph_escaping_backslashes(): void
+    {
+        $ffmpeg = $this->createMockFfmpegRunner();
+        $burner = new SubtitleBurner($ffmpeg);
+
+        // Windows-style path with backslashes
+        $track = new SubtitleTrack(
+            index: '2',
+            language: 'eng',
+            label: 'English',
+            format: SubtitleFormat::SRT,
+            path: 'C:\Users\Test\ subtitles\movie.srt'
+        );
+
+        $filter = $burner->getBurnInFilter($track);
+
+        // Backslashes should be escaped
+        $this->assertStringContainsString('\\\\', $filter);
     }
 
     public function test_factory_creates_correct_burner(): void

@@ -64,7 +64,7 @@
 - [x] SV-0.8  fix path_hash reads + stop re-probing ✅ (commit 510c8761)
 - [x] SV-0.9  fix generateThumbnailBatch timestamp escaping ✅ (commit 1dbdf97c)
 - [x] SV-1.1  memoize/precompute HDR tone-map decision ✅ (commit bbef742c)
-- [ ] SV-1.2  make non-probe ffmpeg calls coroutine-friendly
+- [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
 - [ ] SV-1.3  move chapter-thumbnail + trickplay to background job
 - [ ] SV-1.4  correct zscale tone-map graph
 - [ ] SV-1.5  implement real libplacebo tone-map mode

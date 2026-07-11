@@ -151,33 +151,93 @@ final class RequestAuthenticator
             return false;
         }
 
-        // Check origin against the server's known origins.
-        // We accept requests where Origin/Referer matches our server's host.
-        // In production this would be configured; for now we check against
-        // the Host/Referer header as a best-effort.
+        // Parse the server's host header into host and port components.
         $serverHost = $request->getHeader('Host') ?? '';
+        $serverHostParts = self::parseHostHeader($serverHost);
 
-        // Normalize the referer to extract its origin.
+        // Validate the Referer header if present.
         if ($referer !== null) {
             $refererParts = parse_url($referer);
-            if (is_array($refererParts)) {
-                $refererOrigin = ($refererParts['scheme'] ?? 'https') . '://'
-                    . ($refererParts['host'] ?? '')
-                    . (isset($refererParts['port']) ? ':' . $refererParts['port'] : '');
-                // If referer is present and doesn't match our server, reject.
-                if (!str_ends_with($refererOrigin, $serverHost)) {
-                    return false;
-                }
+            if (!is_array($refererParts)) {
+                return false;
+            }
+            $refererHost = $refererParts['host'] ?? '';
+            $refererPort = isset($refererParts['port']) ? (int) $refererParts['port'] : null;
+
+            // Exact host match required (prevents evil-example.com matching example.com).
+            if (!$this->hostsMatch($refererHost, $refererPort, $serverHostParts)) {
+                return false;
             }
         }
 
-        // If origin is present, it must match our server.
+        // Validate the Origin header if present.
         if ($origin !== null && $origin !== '' && $origin !== 'null') {
-            // Origin should be our server's origin (e.g., https://example.com).
-            // Reject if it doesn't match the Host header.
-            if (!str_ends_with($origin, $serverHost)) {
+            $originParts = parse_url($origin);
+            if (!is_array($originParts)) {
                 return false;
             }
+            $originHost = $originParts['host'] ?? '';
+            $originPort = isset($originParts['port']) ? (int) $originParts['port'] : null;
+
+            // Exact host match required (prevents evil-example.com matching example.com).
+            if (!$this->hostsMatch($originHost, $originPort, $serverHostParts)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Parse a Host header value into its host and port components.
+     *
+     * @param string $hostHeader The Host header value (e.g., "example.com" or "example.com:8080").
+     *
+     * @return array{host: string, port: int|null} The parsed host and port.
+     */
+    private static function parseHostHeader(string $hostHeader): array
+    {
+        $parts = parse_url('http://' . $hostHeader);
+        if (!is_array($parts)) {
+            return ['host' => $hostHeader, 'port' => null];
+        }
+        return [
+            'host' => $parts['host'] ?? $hostHeader,
+            'port' => isset($parts['port']) ? (int) $parts['port'] : null,
+        ];
+    }
+
+    /**
+     * Check if an origin host matches the server host exactly.
+     *
+     * The host comparison is exact — "example.com.evil.com" does NOT match
+     * "example.com" — preventing suffix-bypass attacks. Port handling allows
+     * either both to have no port, or both to have the same port.
+     *
+     * @param string $originHost The origin/referer host.
+     * @param int|null $originPort The origin/referer port, or null if not specified.
+     * @param array{host: string, port: int|null} $serverHostParts Parsed server host parts.
+     *
+     * @return bool True if hosts match exactly.
+     */
+    private function hostsMatch(string $originHost, ?int $originPort, array $serverHostParts): bool
+    {
+        // Exact host comparison — no suffix matching.
+        if ($originHost !== $serverHostParts['host']) {
+            return false;
+        }
+
+        // Port must either both be specified and match, or both be absent.
+        $originHasPort = $originPort !== null;
+        $serverHasPort = $serverHostParts['port'] !== null;
+
+        if ($originHasPort !== $serverHasPort) {
+            // One has a port, the other doesn't — reject.
+            return false;
+        }
+
+        if ($originHasPort && $originPort !== $serverHostParts['port']) {
+            return false;
         }
 
         return true;

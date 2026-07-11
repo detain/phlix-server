@@ -26,6 +26,8 @@ use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
 use Phlix\Media\MediaAsset\MediaAssetJob;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
+use Phlix\Media\SimilarityJob;
+use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityService;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Psr\EventDispatcher\EventDispatcherInterface;
@@ -93,6 +95,17 @@ class MediaScanner
      * @var \Phlix\Media\MediaAsset\MediaAssetJobStore|null
      */
     private \Phlix\Media\MediaAsset\MediaAssetJobStore|null $mediaAssetJobStore = null;
+
+    /**
+     * SV-2.9: Optional job store for deferred similarity computation.
+     * When set, similarity computation is enqueued as a background job
+     * instead of running inline. The actual similarity scoring runs in a
+     * bounded-concurrency background worker, preventing O(N²) scan-path
+     * behavior for large libraries. Null = inline computation (legacy mode).
+     *
+     * @var SimilarityJobStore|null
+     */
+    private ?SimilarityJobStore $similarityJobStore = null;
 
     /**
      * Effective trailing-edition noise-suffix list applied to parsed titles
@@ -215,11 +228,17 @@ class MediaScanner
      *                           a lightweight enqueue and the actual generation
      *                           runs later in a bounded-concurrency background
      *                           worker. Null = inline generation (legacy mode).
+     * @param SimilarityJobStore|null $similarityJobStore SV-2.9: optional job store
+     *                           for deferred similarity computation. When supplied,
+     *                           similarity computation is enqueued as a background
+     *                           job instead of running inline. Null = inline
+     *                           computation (legacy mode).
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
      * @since 0.36.0 CollectionService parameter added for P4-S3
      * @since 0.36.0 MediaAssetJobStore parameter added for SV-1.3
+     * @since 0.38.0 SimilarityJobStore parameter added for SV-2.9
      */
     public function __construct(
         Connection $db,
@@ -232,7 +251,8 @@ class MediaScanner
         ?int $maxConcurrentScanProbes = null,
         ?SimilarityService $similarityService = null,
         ?CollectionService $collectionService = null,
-        ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null
+        ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null,
+        ?SimilarityJobStore $similarityJobStore = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -252,6 +272,7 @@ class MediaScanner
         $this->similarityService = $similarityService;
         $this->collectionService = $collectionService;
         $this->mediaAssetJobStore = $mediaAssetJobStore;
+        $this->similarityJobStore = $similarityJobStore;
     }
 
     /**
@@ -1324,9 +1345,15 @@ class MediaScanner
 
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);
 
-        // P4-S1: best-effort similarity computation after a new item is indexed.
-        // This runs in the scan path so failures must never abort the scan.
-        if ($this->similarityService !== null) {
+        // SV-2.9: best-effort similarity computation after a new item is indexed.
+        // When $similarityJobStore is wired, the computation is deferred to a
+        // background job to avoid O(N²) scan-path behavior. When only
+        // $similarityService is wired (legacy), the inline call is retained for
+        // backward compatibility. Failures must never abort the scan.
+        if ($this->similarityJobStore !== null) {
+            $job = new SimilarityJob((string) $itemId, (string) $libraryId);
+            $this->similarityJobStore->enqueue($job);
+        } elseif ($this->similarityService !== null) {
             try {
                 $this->similarityService->computeSimilarForItem((string) $itemId);
             } catch (\Throwable $e) {

@@ -321,16 +321,9 @@ class WebSocketServer
      */
     private function findConnection(TcpConnection $connection): ?Connection
     {
-        $objectId = spl_object_id($connection);
-        foreach ($this->connections->all() as $wsConnection) {
-            if (!$wsConnection instanceof Connection) {
-                continue;
-            }
-            if (spl_object_id($wsConnection->getConnection()) === $objectId) {
-                return $wsConnection;
-            }
-        }
-        return null;
+        $wsConnection = $this->connections->getByObjectId($connection);
+
+        return $wsConnection instanceof Connection ? $wsConnection : null;
     }
 
     /**

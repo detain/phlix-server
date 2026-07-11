@@ -192,6 +192,9 @@ class MessageHandler
     /**
      * Broadcasts a message to all connected clients.
      *
+     * Respects backpressure by skipping connections with full send buffers,
+     * preventing a slow client from blocking the broadcast loop.
+     *
      * @param string $event The event type to broadcast
      * @param array<string, mixed> $data The event data
      * @param array<string> $excludeIds Connection IDs to exclude from broadcast
@@ -212,7 +215,10 @@ class MessageHandler
 
         foreach ($this->connections->all() as $connection) {
             if (!in_array($connection->getId(), $excludeIds, true)) {
-                $connection->send($message);
+                // Skip connections with full send buffers (backpressure)
+                if (!$this->isConnectionBufferFull($connection)) {
+                    $connection->send($message);
+                }
             }
         }
     }
@@ -221,6 +227,7 @@ class MessageHandler
      * Sends a message to all connections for a specific user.
      *
      * A user may have multiple connections across devices.
+     * Uses indexed lookup for O(1) user connection retrieval.
      *
      * @param string $userId The user ID to send to
      * @param string $event The event type
@@ -235,8 +242,9 @@ class MessageHandler
             'timestamp' => time(),
         ], JSON_THROW_ON_ERROR);
 
-        foreach ($this->connections->all() as $connection) {
-            if ($connection->getUserId() === $userId) {
+        foreach ($this->connections->findByUserId($userId) as $connection) {
+            // Skip connections with full send buffers (backpressure)
+            if (!$this->isConnectionBufferFull($connection)) {
                 $connection->send($message);
             }
         }
@@ -244,6 +252,7 @@ class MessageHandler
 
     /**
      * Sends a message to all connections in a specific session.
+     * Uses indexed lookup for O(1) session connection retrieval.
      *
      * @param string $sessionId The session ID to send to
      * @param string $event The event type
@@ -258,8 +267,9 @@ class MessageHandler
             'timestamp' => time(),
         ], JSON_THROW_ON_ERROR);
 
-        foreach ($this->connections->all() as $connection) {
-            if ($connection->getSessionId() === $sessionId) {
+        foreach ($this->connections->findBySessionId($sessionId) as $connection) {
+            // Skip connections with full send buffers (backpressure)
+            if (!$this->isConnectionBufferFull($connection)) {
                 $connection->send($message);
             }
         }
@@ -289,6 +299,25 @@ class MessageHandler
             }
         }
         return $count;
+    }
+
+    /**
+     * Checks if a connection's send buffer is full (backpressure condition).
+     *
+     * When a connection's send buffer reaches maxSendBufferSize, Workerman
+     * triggers the onBufferFull callback which sets the bufferFull flag.
+     * We check this flag to skip sending to slow clients during broadcast.
+     *
+     * @param ConnectionInterface $connection The connection to check
+     * @return bool True if the connection's buffer is full
+     */
+    private function isConnectionBufferFull(ConnectionInterface $connection): bool
+    {
+        if ($connection instanceof Connection) {
+            return $connection->isBufferFull();
+        }
+
+        return false;
     }
 
     /**

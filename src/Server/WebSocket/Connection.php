@@ -48,6 +48,9 @@ class Connection implements ConnectionInterface
     /** @var int Unix timestamp of last activity */
     private int $lastActivity;
 
+    /** @var bool Whether the connection's send buffer is full (backpressure) */
+    private bool $bufferFull = false;
+
     /**
      * Creates a new Connection wrapper.
      *
@@ -58,6 +61,14 @@ class Connection implements ConnectionInterface
         $this->connection = $connection;
         $this->id = spl_object_id($connection) . '-' . uniqid();
         $this->lastActivity = time();
+
+        // Register backpressure callbacks to track buffer full state
+        $connection->onBufferFull = function (TcpConnection $conn): void {
+            $this->bufferFull = true;
+        };
+        $connection->onBufferDrain = function (TcpConnection $conn): void {
+            $this->bufferFull = false;
+        };
     }
 
     /**
@@ -74,17 +85,21 @@ class Connection implements ConnectionInterface
      * Sends data to the connected client.
      *
      * @param string|array<string, mixed> $data Data to send (arrays are JSON encoded)
-     * @return void
+     * @return bool True if the data was sent successfully, false if the send buffer is full
      *
      * @throws \JsonException If array data cannot be encoded
      */
-    public function send(string|array $data): void
+    public function send(string|array $data): bool
     {
         if (is_array($data)) {
             $data = json_encode($data, JSON_THROW_ON_ERROR);
         }
-        $this->connection->send($data);
+
+        $result = $this->connection->send($data);
         $this->updateActivity();
+
+        // send() returns false when the send buffer is full (backpressure)
+        return $result !== false;
     }
 
     /**
@@ -153,6 +168,19 @@ class Connection implements ConnectionInterface
     }
 
     /**
+     * Checks if this connection's send buffer is full (backpressure condition).
+     *
+     * When true, the connection cannot accept more data without blocking.
+     * This is set via Workerman's onBufferFull callback.
+     *
+     * @return bool True if the send buffer is full
+     */
+    public function isBufferFull(): bool
+    {
+        return $this->bufferFull;
+    }
+
+    /**
      * Checks if this connection is authenticated.
      *
      * @return bool True if authenticated
@@ -171,8 +199,14 @@ class Connection implements ConnectionInterface
      */
     public function setAuthenticated(bool $authenticated, ?string $userId = null): void
     {
+        $oldUserId = $this->userId;
         $this->authenticated = $authenticated;
         $this->userId = $userId;
+
+        // Update the connection pool indexes if userId changed
+        if ($oldUserId !== $userId) {
+            ConnectionPool::getInstance()->updateIndexes($this, $oldUserId, null);
+        }
     }
 
     /**
@@ -193,7 +227,13 @@ class Connection implements ConnectionInterface
      */
     public function setSessionId(?string $sessionId): void
     {
+        $oldSessionId = $this->sessionId;
         $this->sessionId = $sessionId;
+
+        // Update the connection pool indexes if sessionId changed
+        if ($oldSessionId !== $sessionId) {
+            ConnectionPool::getInstance()->updateIndexes($this, null, $oldSessionId);
+        }
     }
 
     /**

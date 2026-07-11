@@ -35,9 +35,9 @@ interface ConnectionInterface
      * Sends data to the connected client.
      *
      * @param string|array<string, mixed> $data Data to send
-     * @return void
+     * @return bool True if sent successfully, false if send buffer is full
      */
-    public function send(string|array $data): void;
+    public function send(string|array $data): bool;
 
     /**
      * Sends a typed message event to the client.

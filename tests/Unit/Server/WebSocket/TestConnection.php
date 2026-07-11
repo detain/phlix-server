@@ -43,10 +43,11 @@ class TestConnection implements ConnectionInterface
         return $this->id;
     }
 
-    public function send(string|array $data): void
+    public function send(string|array $data): bool
     {
         $this->sentMessages[] = is_array($data) ? $data : ['raw' => $data];
         $this->lastActivity = time();
+        return true;
     }
 
     public function sendMessage(string $type, array $data = []): void

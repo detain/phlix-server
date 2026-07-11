@@ -45,13 +45,14 @@ class MockConnection implements ConnectionInterface
         return $this->id;
     }
 
-    public function send(string|array $data): void
+    public function send(string|array $data): bool
     {
         if (is_string($data)) {
             /** @var array<array-key, mixed> $data */
             $data = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
         }
         $this->sentMessages[] = $data;
+        return true;
     }
 
     public function sendMessage(string $type, array $data = []): void

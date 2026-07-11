@@ -113,7 +113,7 @@ class ConnectionPoolTestConnection implements ConnectionInterface
     public function isAuthenticated(): bool { return $this->authenticated; }
     public function setAuthenticated(bool $a, ?string $u = null): void { $this->authenticated = $a; $this->userId = $u; }
     public function getLastActivity(): int { return $this->lastActivity; }
-    public function send(string|array $data): void {}
+    public function send(string|array $data): bool { return true; }
     public function close(): void {}
     public function sendMessage(string $type, array $data = []): void {}
     public function sendFlat(string $type, array $payload): void {}

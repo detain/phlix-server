@@ -31,6 +31,15 @@ class ConnectionPool
     /** @var array<string, ConnectionInterface> Active connections indexed by ID */
     private array $connections = [];
 
+    /** @var array<int, ConnectionInterface> Connections indexed by TcpConnection object ID for O(1) lookup */
+    private array $connectionsByObjectId = [];
+
+    /** @var array<string, array<string, ConnectionInterface>> Connections indexed by userId */
+    private array $connectionsByUserId = [];
+
+    /** @var array<string, array<string, ConnectionInterface>> Connections indexed by sessionId */
+    private array $connectionsBySessionId = [];
+
     /**
      * Gets the singleton ConnectionPool instance.
      *
@@ -55,6 +64,27 @@ class ConnectionPool
     public function add(ConnectionInterface $connection): void
     {
         $this->connections[$connection->getId()] = $connection;
+
+        // Index by TcpConnection object ID for O(1) findConnection lookup
+        if ($connection instanceof Connection) {
+            $tcpConnection = $connection->getConnection();
+            $objectId = spl_object_id($tcpConnection);
+            $this->connectionsByObjectId[$objectId] = $connection;
+
+            // Index by userId for O(1) sendToUser lookup
+            $userId = $connection->getUserId();
+            if ($userId !== null) {
+                $this->connectionsByUserId[$userId] ??= [];
+                $this->connectionsByUserId[$userId][$connection->getId()] = $connection;
+            }
+
+            // Index by sessionId for O(1) sendToSession lookup
+            $sessionId = $connection->getSessionId();
+            if ($sessionId !== null) {
+                $this->connectionsBySessionId[$sessionId] ??= [];
+                $this->connectionsBySessionId[$sessionId][$connection->getId()] = $connection;
+            }
+        }
     }
 
     /**
@@ -65,7 +95,37 @@ class ConnectionPool
      */
     public function remove(string $id): void
     {
+        $connection = $this->connections[$id] ?? null;
+        if ($connection === null) {
+            return;
+        }
+
         unset($this->connections[$id]);
+
+        // Remove from TcpConnection object ID index
+        if ($connection instanceof Connection) {
+            $tcpConnection = $connection->getConnection();
+            $objectId = spl_object_id($tcpConnection);
+            unset($this->connectionsByObjectId[$objectId]);
+
+            // Remove from userId index
+            $userId = $connection->getUserId();
+            if ($userId !== null) {
+                unset($this->connectionsByUserId[$userId][$id]);
+                if ($this->connectionsByUserId[$userId] === []) {
+                    unset($this->connectionsByUserId[$userId]);
+                }
+            }
+
+            // Remove from sessionId index
+            $sessionId = $connection->getSessionId();
+            if ($sessionId !== null) {
+                unset($this->connectionsBySessionId[$sessionId][$id]);
+                if ($this->connectionsBySessionId[$sessionId] === []) {
+                    unset($this->connectionsBySessionId[$sessionId]);
+                }
+            }
+        }
     }
 
     /**
@@ -77,6 +137,19 @@ class ConnectionPool
     public function get(string $id): ?ConnectionInterface
     {
         return $this->connections[$id] ?? null;
+    }
+
+    /**
+     * Gets a connection by TcpConnection object ID (O(1) lookup).
+     *
+     * @param \Workerman\Connection\TcpConnection $tcpConnection The Workerman TCP connection
+     * @return ConnectionInterface|null The connection or null if not found
+     */
+    public function getByObjectId(\Workerman\Connection\TcpConnection $tcpConnection): ?ConnectionInterface
+    {
+        $objectId = spl_object_id($tcpConnection);
+
+        return $this->connectionsByObjectId[$objectId] ?? null;
     }
 
     /**
@@ -103,12 +176,21 @@ class ConnectionPool
      * Finds all connections for a specific user.
      *
      * A user may have multiple connections (e.g., multiple devices).
+     * Uses indexed lookup for O(1) retrieval when the connection is a
+     * {@see Connection} instance (which updates indexes on userId change).
+     * Falls back to linear scan for non-Connection test doubles.
      *
      * @param string $userId The user ID to search for
      * @return array<ConnectionInterface> Array of matching connections
      */
     public function findByUserId(string $userId): array
     {
+        // Fast path: indexed lookup for real Connection instances
+        if (isset($this->connectionsByUserId[$userId])) {
+            return array_values($this->connectionsByUserId[$userId]);
+        }
+
+        // Fallback: linear scan for test doubles that don't extend Connection
         $found = [];
         foreach ($this->connections as $connection) {
             if ($connection->getUserId() === $userId) {
@@ -120,12 +202,21 @@ class ConnectionPool
 
     /**
      * Finds all connections in a specific session.
+     * Uses indexed lookup for O(1) retrieval when the connection is a
+     * {@see Connection} instance (which updates indexes on sessionId change).
+     * Falls back to linear scan for non-Connection test doubles.
      *
      * @param string $sessionId The session ID to search for
      * @return array<ConnectionInterface> Array of matching connections
      */
     public function findBySessionId(string $sessionId): array
     {
+        // Fast path: indexed lookup for real Connection instances
+        if (isset($this->connectionsBySessionId[$sessionId])) {
+            return array_values($this->connectionsBySessionId[$sessionId]);
+        }
+
+        // Fallback: linear scan for test doubles that don't extend Connection
         $found = [];
         foreach ($this->connections as $connection) {
             if ($connection->getSessionId() === $sessionId) {
@@ -133,6 +224,47 @@ class ConnectionPool
             }
         }
         return $found;
+    }
+
+    /**
+     * Updates the indexes for a connection after its userId or sessionId changes.
+     *
+     * Called by the connection itself when setAuthenticated() or setSessionId() is invoked.
+     *
+     * @param Connection $connection The connection to re-index
+     * @param string|null $oldUserId The previous userId (null if not previously set)
+     * @param string|null $oldSessionId The previous sessionId (null if not previously set)
+     * @return void
+     */
+    public function updateIndexes(Connection $connection, ?string $oldUserId, ?string $oldSessionId): void
+    {
+        $connectionId = $connection->getId();
+        $newUserId = $connection->getUserId();
+        $newSessionId = $connection->getSessionId();
+
+        // Update userId index: remove from old, add to new
+        if ($oldUserId !== null && $oldUserId !== $newUserId) {
+            unset($this->connectionsByUserId[$oldUserId][$connectionId]);
+            if ($this->connectionsByUserId[$oldUserId] === []) {
+                unset($this->connectionsByUserId[$oldUserId]);
+            }
+        }
+        if ($newUserId !== null && $newUserId !== $oldUserId) {
+            $this->connectionsByUserId[$newUserId] ??= [];
+            $this->connectionsByUserId[$newUserId][$connectionId] = $connection;
+        }
+
+        // Update sessionId index: remove from old, add to new
+        if ($oldSessionId !== null && $oldSessionId !== $newSessionId) {
+            unset($this->connectionsBySessionId[$oldSessionId][$connectionId]);
+            if ($this->connectionsBySessionId[$oldSessionId] === []) {
+                unset($this->connectionsBySessionId[$oldSessionId]);
+            }
+        }
+        if ($newSessionId !== null && $newSessionId !== $oldSessionId) {
+            $this->connectionsBySessionId[$newSessionId] ??= [];
+            $this->connectionsBySessionId[$newSessionId][$connectionId] = $connection;
+        }
     }
 
     /**

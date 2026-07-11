@@ -371,6 +371,28 @@ class PhotoController
         $imageInfo = @getimagesize($path);
         $mimeType = $imageInfo !== false ? $imageInfo['mime'] : 'image/jpeg';
 
+        // ETag + Last-Modified for browser caching (SV-2.5).
+        $mtime = (int) @filemtime($path);
+        $etag = '"' . md5((string) $mtime . (string) $fileSize) . '"';
+        $lastModified = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+
+        // Honor conditional GET: If-None-Match (ETag) or If-Modified-Since.
+        // A 304 takes priority over Range — the client retries the Range on
+        // the stale copy it already has, which is the correct HTTP semantics.
+        $ifNoneMatch = $request->getHeader('If-None-Match');
+        $ifModifiedSince = $request->getHeader('If-Modified-Since');
+
+        if (
+            ($ifNoneMatch !== null && $ifNoneMatch === $etag)
+            || ($ifNoneMatch === null && $ifModifiedSince !== null && $mtime > 0 && $ifModifiedSince !== '' && strtotime($ifModifiedSince) >= $mtime)
+        ) {
+            return (new Response())
+                ->status(304)
+                ->header('ETag', $etag)
+                ->header('Last-Modified', $lastModified)
+                ->header('Cache-Control', 'private, max-age=86400');
+        }
+
         // Handle Range requests for seeking.
         // Read via getHeader() (case-insensitive) rather than the raw
         // $request->headers['Range'] array access: parseHeaders() stores
@@ -407,6 +429,8 @@ class PhotoController
             ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
             ->header('Accept-Ranges', 'bytes')
+            ->header('ETag', $etag)
+            ->header('Last-Modified', $lastModified)
             ->withFile($path, $start, $length);
     }
 

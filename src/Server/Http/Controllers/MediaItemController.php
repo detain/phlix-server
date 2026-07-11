@@ -472,13 +472,25 @@ class MediaItemController
             ]);
         }
 
-        // Serve the thumbnail file
-        $content = file_get_contents($thumbnailPath);
-        if ($content === false) {
-            return (new Response())->status(500)->json([
-                'error' => 'Internal Server Error',
-                'message' => 'Failed to read thumbnail file',
-            ]);
+        // ETag + Last-Modified for browser caching (SV-2.5).
+        $fileSize = (int) @filesize($thumbnailPath);
+        $mtime = (int) @filemtime($thumbnailPath);
+        $etag = '"' . md5((string) $mtime . (string) $fileSize) . '"';
+        $lastModified = gmdate('D, d M Y H:i:s', $mtime) . ' GMT';
+
+        // Honor conditional GET: If-None-Match (ETag) or If-Modified-Since.
+        $ifNoneMatch = $request->getHeader('If-None-Match');
+        $ifModifiedSince = $request->getHeader('If-Modified-Since');
+
+        if (
+            ($ifNoneMatch !== null && $ifNoneMatch === $etag)
+            || ($ifNoneMatch === null && $ifModifiedSince !== null && $mtime > 0 && $ifModifiedSince !== '' && strtotime($ifModifiedSince) >= $mtime)
+        ) {
+            return (new Response())
+                ->status(304)
+                ->header('ETag', $etag)
+                ->header('Last-Modified', $lastModified)
+                ->header('Cache-Control', 'private, max-age=86400');
         }
 
         // Determine content type
@@ -491,11 +503,17 @@ class MediaItemController
             default => 'application/octet-stream',
         };
 
+        // withFile() streams the file via the Workerman event loop without
+        // buffering the whole file in memory. ETag and Last-Modified are set
+        // explicitly to ensure identical values on both the event-loop and
+        // CGI fallback paths.
         return (new Response())
             ->status(200)
             ->header('Content-Type', $contentType)
-            ->header('Content-Length', (string) strlen($content))
+            ->header('Accept-Ranges', 'bytes')
+            ->header('ETag', $etag)
+            ->header('Last-Modified', $lastModified)
             ->header('Cache-Control', 'public, max-age=86400')
-            ->body($content);
+            ->withFile($thumbnailPath, 0, $fileSize);
     }
 }

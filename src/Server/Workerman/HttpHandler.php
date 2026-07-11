@@ -22,6 +22,7 @@ use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
+use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\Response;
@@ -98,6 +99,7 @@ final class HttpHandler
             // before any dispatch (shared seam with public/index.php). With an
             // empty allowlist this is always null and behavior is unchanged.
             $cors = CorsManager::fromEnv();
+            $securityHeaders = new SecurityHeaders();
             $preflight = $cors->preflightResponse($request);
             if ($preflight !== null) {
                 $responseStatus = $preflight->statusCode;
@@ -168,6 +170,7 @@ final class HttpHandler
             if ($appResponse->statusCode !== 404) {
                 $responseStatus = $appResponse->statusCode;
                 $decorated = $cors->decorate($request, $appResponse);
+                $decorated = $securityHeaders->decorate($decorated);
                 $this->compressResponse($wr, $decorated);
                 $connection->send($decorated->toWorkermanResponse());
                 return;
@@ -189,6 +192,7 @@ final class HttpHandler
                 $apiResponse = $webPortalRouter->dispatch($request);
                 $responseStatus = $apiResponse->statusCode;
                 $decorated = $cors->decorate($request, $apiResponse);
+                $decorated = $securityHeaders->decorate($decorated);
                 $this->compressResponse($wr, $decorated);
                 $connection->send($decorated->toWorkermanResponse());
                 return;
@@ -204,6 +208,7 @@ final class HttpHandler
             $response = $theme->onHttpRequest($request, fn (Request $req): Response => $this->dispatch($req));
             $responseStatus = $response->statusCode;
             $decorated = $cors->decorate($request, $response);
+            $decorated = $securityHeaders->decorate($decorated);
             $this->compressResponse($wr, $decorated);
             $connection->send($decorated->toWorkermanResponse());
         } catch (Throwable $e) {

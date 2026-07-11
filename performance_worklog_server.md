@@ -55,7 +55,7 @@
 
 ## Progress
 - [ ] SV-0.1  wire hardware acceleration + tone-mapping config
-- [ ] SV-0.2  reconcile hwaccel config
+- [x] SV-0.2  reconcile hwaccel config ✅ (commit 85aec93c)
 - [ ] SV-0.3  isWorkermanContext fix
 - [ ] SV-0.4  replace usleep spin-wait with Channel
 - [ ] SV-0.5  fix WS reaper + heartbeat timer guards

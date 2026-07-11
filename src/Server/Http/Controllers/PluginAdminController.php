@@ -20,6 +20,7 @@ use Phlix\Plugins\Exception\PluginNotFoundException;
 use Phlix\Plugins\InstalledPlugin;
 use Phlix\Plugins\Installer\SourceUrlResolver;
 use Phlix\Plugins\Manifest;
+use Phlix\Plugins\PluginFieldHelp;
 use Phlix\Plugins\PluginLoader;
 use Phlix\Plugins\SettingsMasker;
 use Phlix\Server\Http\Request;
@@ -491,8 +492,18 @@ final class PluginAdminController
             'type'            => $plugin->manifest->type,
             'enabled'         => $plugin->enabled,
             'installed_at'    => $plugin->installedAt->format(\DateTimeInterface::ATOM),
-            'settings_schema' => SettingsMasker::schema($plugin),
+            // Manifest schema, enriched by the server-side field-help overlay so
+            // installed plugins show improved labels/descriptions/"where to get
+            // it" links even before they are updated to carry that text.
+            'settings_schema' => PluginFieldHelp::decorate(
+                $plugin->manifest->name,
+                SettingsMasker::schema($plugin),
+            ),
             'settings'        => SettingsMasker::mask($plugin),
+            // Per-secret set/length so the UI can distinguish a set secret from
+            // an unset one (both mask identically in `settings`). Never carries
+            // the secret value itself.
+            'secret_status'   => SettingsMasker::secretStatus($plugin),
         ];
     }
 

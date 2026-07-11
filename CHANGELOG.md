@@ -7,6 +7,25 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-10
+
+**Plugin enable + configure fixes.** Fixes the long-standing bug where installed plugins could not be enabled and never received their saved settings.
+
+### Fixed
+
+- **Plugins now receive their persisted settings when enabled.** The loader instantiates each plugin entry class through the PSR-11 container (autowiring), then — this is the new part — calls the plugin's settings hook with the persisted `settings_json` map **before** `onEnable()`. A plugin opts in by implementing the new `Phlix\Shared\Plugin\ConfigurableInterface` (`configure(array $settings): void`, phlix-shared v0.18.0) or, transitionally, by exposing a public `configure(array $settings)` method. Previously nothing delivered settings to a plugin instance, so an enabled plugin ran with empty configuration (e.g. OMDb threw "API key not configured" even when a key was saved).
+- **Plugins whose constructor requires the settings array can be enabled again.** A plugin whose entry constructor takes the settings array as a required parameter (e.g. `__construct(array $settings)`, as `phlix-plugin-anidb`/`-myanimelist` did) cannot be autowired — PHP-DI cannot guess an `array` value, so `container->get()` threw and enable failed with `plugin.enable.failed`. `PluginLoader` now catches that and retries via the PHP-DI factory, binding the persisted settings to the first `array`-typed required constructor parameter, so such plugins enable without a re-release. When the fallback does not apply (e.g. a scalar-first constructor) the real PHP-DI resolution message is surfaced verbatim in the `PluginEnableException` so the operator sees the actual reason.
+
+### Added
+
+- **Secret settings now report set/unset + length to the configure UI.** `GET /api/v1/admin/plugins/{name}` gains a `secret_status` map (`{ key: { set: bool, length: int } }`) alongside the masked `settings`. Every secret still masks to `***` in `settings` (the value is never sent), but `secret_status` lets the admin UI show whether a secret is actually stored and render a length-appropriate cue — so a saved key is distinguishable from an empty one, and a save is visibly confirmed. `SettingsMasker::secretStatus()`.
+- **Server-side plugin field-help overlay.** New `config/plugin_field_help.php` + `Phlix\Plugins\PluginFieldHelp` merge curated labels, richer descriptions, and "where to get this value" links (`link`/`link_text`) over each plugin's manifest settings schema in the configure endpoint, so already-installed plugins show the improved help immediately without waiting for a plugin update. `SettingsMasker::schema()` also passes through `link`/`link_text` when a manifest declares them, so enriched manifests carry the same help natively.
+
+### Changed
+
+- Bumped `detain/phlix-shared` to `^0.18.0` (adds `ConfigurableInterface`).
+- Version bumped `1.1.0`→`1.2.0` (MINOR — new backward-compatible functionality; no server↔hub wire-compatibility impact).
+
 ## [1.1.0] — 2026-07-08
 
 **Stream Quality + Adaptive Bitrate (ABR) release.** Ships the full server-side pipeline built across this program's Tracks A, S, and D: a source-clamped multi-variant HLS ladder with on-demand per-variant segment encoding and genuine stream-copy passthrough for compatible sources (A1-A7), a client-facing `variants[]`/`quality_ladder` API surface, a batch of performance work spanning job-row/facet caching, streamed segment serving, non-blocking/parallel scan probing, materialized sort/genre indexes, and a validated coroutine DB connection pool (S1-S10), a genre-index risk redesign after a real InnoDB issue surfaced under stress (S7b), and hub proxy improvements for streaming paths (D1-D4). See the sections below for the full accumulated detail. Version bumped `1.0.0`→`1.1.0` (MINOR — entirely new, backward-compatible functionality; no server↔hub wire-compatibility impact). Also fixes a real drift bug found while preparing this release: the `/health` and `/system/info` endpoints hardcoded a stale `'1.0.0'` literal independently of `Phlix\Common\Version::STRING` (the documented single source of truth) — both now reference the constant directly, so a future version bump can no longer silently miss these two endpoints.

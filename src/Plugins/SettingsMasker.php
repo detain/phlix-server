@@ -91,10 +91,50 @@ final class SettingsMasker
                 'label'       => is_string($schema['label'] ?? null) ? (string) $schema['label'] : '',
                 'description' => is_string($schema['description'] ?? null) ? (string) $schema['description'] : '',
             ];
+            // Optional "where to get this value" link a manifest may declare
+            // (`link` = URL, `link_text` = anchor label). Passed through so the
+            // configure form can render a helper link next to the field.
+            if (is_string($schema['link'] ?? null) && $schema['link'] !== '') {
+                $entry['link'] = (string) $schema['link'];
+            }
+            if (is_string($schema['link_text'] ?? null) && $schema['link_text'] !== '') {
+                $entry['link_text'] = (string) $schema['link_text'];
+            }
             if (array_key_exists('default', $schema)) {
                 $entry['default'] = $schema['default'];
             }
             $out[$key] = $entry;
+        }
+        return $out;
+    }
+
+    /**
+     * Per-secret "is it set?" status for the configure form, so the admin can
+     * tell a set secret from an unset one (both mask to {@see self::MASK} in
+     * {@see self::mask()}, which is exactly why they are indistinguishable in
+     * the value map). The raw secret is NEVER included — only whether a
+     * non-empty value is stored and its character length (so the UI can render
+     * a length-appropriate row of dots as a "yes, it's really set" cue).
+     *
+     * @param InstalledPlugin $plugin Installed plugin whose secrets to summarise.
+     *
+     * @return array<string, array{set: bool, length: int}> Keyed by secret setting key.
+     *
+     * @since 1.2.0
+     */
+    public static function secretStatus(InstalledPlugin $plugin): array
+    {
+        $out = [];
+        foreach ($plugin->manifest->settings as $key => $schema) {
+            if (!(isset($schema['secret']) && $schema['secret'] === true)) {
+                continue;
+            }
+            $value = $plugin->settings[$key] ?? null;
+            $set = is_scalar($value) && (string) $value !== '';
+            $out[$key] = [
+                'set'    => $set,
+                'length' => $set ? mb_strlen((string) $value) : 0,
+            ];
         }
         return $out;
     }

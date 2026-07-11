@@ -26,10 +26,15 @@ use Phlix\Plugins\Installer\HttpInstaller;
 use Phlix\Plugins\Repository\PluginRepository;
 use Phlix\Plugins\Signature\SignatureVerifier;
 use Phlix\Plugins\Util\RecursiveDelete;
+use DI\FactoryInterface;
 use Phlix\Shared\Metadata\MetadataSourceInterface;
+use Phlix\Shared\Plugin\ConfigurableInterface;
 use Phlix\Shared\Plugin\EventNameMap;
 use Phlix\Shared\Plugin\LifecycleInterface;
 use Psr\Container\ContainerInterface;
+use ReflectionClass;
+use ReflectionException;
+use ReflectionNamedType;
 use Throwable;
 
 /**
@@ -244,16 +249,7 @@ class PluginLoader
             ));
         }
 
-        try {
-            $instance = $this->container->get($entryFqcn);
-        } catch (Throwable $e) {
-            throw new PluginEnableException(sprintf(
-                'Plugin %s entry class %s could not be resolved: %s',
-                $name,
-                $entryFqcn,
-                $e->getMessage(),
-            ), 0, $e);
-        }
+        $instance = $this->instantiateEntry($installed, $entryFqcn);
 
         if (!$instance instanceof LifecycleInterface) {
             throw new PluginEnableException(sprintf(
@@ -263,6 +259,18 @@ class PluginLoader
                 LifecycleInterface::class,
             ));
         }
+
+        // Deliver the persisted settings to the plugin BEFORE onEnable() so
+        // onEnable() can rely on them being present. The entry class opts into
+        // this by implementing the shared ConfigurableInterface (preferred) or,
+        // for plugins that expose a settings hook but have not yet migrated to
+        // the interface, by declaring a public `configure(array $settings)`
+        // method. This is the ONLY channel by which a plugin receives its
+        // configured API keys/options — without it, an enabled plugin would run
+        // with empty settings. (Legacy plugins whose constructor REQUIRES the
+        // settings array get them injected at construction instead — see
+        // {@see self::instantiateEntry()}.)
+        $this->applyPersistedSettings($instance, $installed, $name);
 
         try {
             $instance->onEnable($this->container);
@@ -333,6 +341,199 @@ class PluginLoader
             'subscriptions' => count($subscriptions),
             'metadata_source' => $registeredSource,
         ]);
+    }
+
+    /**
+     * Instantiate a plugin entry class.
+     *
+     * Preferred path: resolve via the host container (PHP-DI autowiring).
+     * Plugins SHOULD keep an autowirable (all-optional) constructor and
+     * receive their persisted settings through
+     * {@see ConfigurableInterface::configure()} instead of the constructor.
+     *
+     * Compatibility fallback: an older plugin whose constructor REQUIRES the
+     * settings array (e.g. `__construct(array $settings)`) cannot be
+     * autowired — PHP-DI throws because it cannot guess an `array` value.
+     * Rather than fail the enable outright, if the host container is a PHP-DI
+     * factory we retry with the persisted settings bound to the first
+     * `array`-typed (or untyped) required constructor parameter. This keeps
+     * such plugins working until they migrate to {@see ConfigurableInterface}.
+     * If the fallback is unavailable or does not apply, the original
+     * resolution error is surfaced verbatim as a {@see PluginEnableException}
+     * so the operator sees the real reason (e.g. "Parameter $apiKey has no
+     * value guessable" → the plugin needs an autowirable constructor).
+     *
+     * @param InstalledPlugin $installed The installed plugin (source of settings).
+     * @param string          $entryFqcn The manifest entry class FQCN.
+     *
+     * @return object The constructed entry instance.
+     *
+     * @throws PluginEnableException When neither path can build the entry class.
+     */
+    private function instantiateEntry(InstalledPlugin $installed, string $entryFqcn): object
+    {
+        try {
+            $resolved = $this->container->get($entryFqcn);
+        } catch (Throwable $getError) {
+            return $this->fallbackOrThrow($installed, $entryFqcn, $getError);
+        }
+        if (is_object($resolved)) {
+            return $resolved;
+        }
+        return $this->fallbackOrThrow(
+            $installed,
+            $entryFqcn,
+            new \UnexpectedValueException(sprintf(
+                'container resolved a non-object (%s)',
+                get_debug_type($resolved),
+            )),
+        );
+    }
+
+    /**
+     * Try the settings-constructor fallback, or throw a
+     * {@see PluginEnableException} carrying the original resolution cause.
+     */
+    private function fallbackOrThrow(InstalledPlugin $installed, string $entryFqcn, Throwable $cause): object
+    {
+        $made = $this->makeWithSettings($entryFqcn, $installed->settings);
+        if ($made !== null) {
+            $this->logger()->info('plugin entry built via settings-constructor fallback', [
+                'plugin' => $installed->name(),
+                'entry'  => $entryFqcn,
+            ]);
+            return $made;
+        }
+        throw new PluginEnableException(sprintf(
+            'Plugin %s entry class %s could not be resolved: %s',
+            $installed->name(),
+            $entryFqcn,
+            $cause->getMessage(),
+        ), 0, $cause);
+    }
+
+    /**
+     * Best-effort construction of a legacy entry class whose constructor
+     * requires the settings array, binding the persisted settings to that
+     * parameter and letting the container autowire the rest.
+     *
+     * Returns null (so the caller falls back to the clean resolution error)
+     * when the container is not a PHP-DI factory, the class is missing, the
+     * constructor has no `array`-bindable required parameter, or `make()`
+     * still cannot satisfy the remaining parameters.
+     *
+     * @param array<string, mixed> $settings Persisted settings map.
+     */
+    private function makeWithSettings(string $entryFqcn, array $settings): ?object
+    {
+        if (!$this->container instanceof FactoryInterface || !class_exists($entryFqcn)) {
+            return null;
+        }
+        $paramName = self::settingsConstructorParam($entryFqcn);
+        if ($paramName === null) {
+            return null;
+        }
+        try {
+            $made = $this->container->make($entryFqcn, [$paramName => $settings]);
+        } catch (Throwable) {
+            return null;
+        }
+        return is_object($made) ? $made : null;
+    }
+
+    /**
+     * Name of the first REQUIRED constructor parameter that can accept the
+     * settings array (typed `array`, or untyped). Returns null when the
+     * constructor is absent, has no required parameters, or its required
+     * parameters are all typed as something the settings array cannot fill
+     * (a scalar/object) — in which case the settings-constructor fallback
+     * does not apply.
+     *
+     * @param class-string $fqcn
+     */
+    private static function settingsConstructorParam(string $fqcn): ?string
+    {
+        try {
+            $ctor = (new ReflectionClass($fqcn))->getConstructor();
+        } catch (ReflectionException) {
+            return null;
+        }
+        if ($ctor === null) {
+            return null;
+        }
+        foreach ($ctor->getParameters() as $param) {
+            if ($param->isOptional()) {
+                continue;
+            }
+            $type = $param->getType();
+            if ($type === null || ($type instanceof ReflectionNamedType && $type->getName() === 'array')) {
+                return $param->getName();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Deliver the plugin's persisted settings to the entry instance via its
+     * settings hook, if it exposes one.
+     *
+     * Prefers the typed {@see ConfigurableInterface}; also accepts a plugin
+     * that declares a public `configure(array $settings)` method but has not
+     * yet migrated to the interface (duck-typed, guarded so an unrelated
+     * `configure()` — e.g. a no-arg one — is never called). A plugin that
+     * received its settings through the constructor fallback and exposes no
+     * hook is simply skipped.
+     *
+     * @param string $name Manifest name (for the error message).
+     *
+     * @throws PluginEnableException When the hook throws.
+     */
+    private function applyPersistedSettings(object $instance, InstalledPlugin $installed, string $name): void
+    {
+        if (!($instance instanceof ConfigurableInterface) && !self::hasConfigureHook($instance)) {
+            return;
+        }
+        try {
+            /** @var ConfigurableInterface $instance */
+            $instance->configure($installed->settings);
+        } catch (Throwable $e) {
+            throw new PluginEnableException(sprintf(
+                'Plugin %s configure() threw: %s',
+                $name,
+                $e->getMessage(),
+            ), 0, $e);
+        }
+    }
+
+    /**
+     * Whether an entry instance exposes a public `configure()` method whose
+     * first parameter can receive the settings array (typed `array`, untyped,
+     * or variadic). Used to bridge plugins that predate
+     * {@see ConfigurableInterface}. A `configure()` with no parameters (or a
+     * non-array-compatible first parameter) is rejected so we never call the
+     * wrong method.
+     */
+    private static function hasConfigureHook(object $instance): bool
+    {
+        if (!method_exists($instance, 'configure')) {
+            return false;
+        }
+        try {
+            $method = new \ReflectionMethod($instance, 'configure');
+        } catch (ReflectionException) {
+            return false;
+        }
+        if (!$method->isPublic() || $method->isStatic()) {
+            return false;
+        }
+        $params = $method->getParameters();
+        if ($params === []) {
+            return false;
+        }
+        $type = $params[0]->getType();
+        return $type === null
+            || $params[0]->isVariadic()
+            || ($type instanceof ReflectionNamedType && $type->getName() === 'array');
     }
 
     /**

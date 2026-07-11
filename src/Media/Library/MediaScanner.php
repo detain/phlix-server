@@ -615,7 +615,10 @@ class MediaScanner
                 $precomputedProbe = array_key_exists($path, $probeResults)
                     ? $probeResults[$path]
                     : false;
-                if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason, $precomputedProbe)) {
+                // processScanBatch already confirmed this path is absent via
+                // findPathsMap, so pass callerConfirmedAbsent=true to skip
+                // the redundant findByPath check inside processFile.
+                if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason, $precomputedProbe, true)) {
                     $added++;
                 }
             }
@@ -1100,24 +1103,31 @@ class MediaScanner
         string $type,
         ?array $forcedSeries = null,
         ?int $forcedSeason = null,
-        array|null|false $precomputedProbe = false
+        array|null|false $precomputedProbe = false,
+        bool $callerConfirmedAbsent = false
     ): bool {
         $path = $file->getPathname();
 
         // Pre-check for existing item to determine if we need backfill.
-        // Using upsertByPath below handles the race condition when multiple
-        // scanner workers encounter the same file concurrently.
-        $existing = $this->itemRepository->findByPath($path);
-        if ($existing) {
-            // Re-scan: the row is already indexed, so no new item is added.
-            // Backfill any missing source technical metadata for time-based
-            // media — the total duration, the compact metadata_json['source']
-            // summary, and the media_streams rows — so files indexed before the
-            // source probe existed (or before they were ever transcoded) still
-            // gain it on a plain rescan. Fully guarded; a single ffprobe call
-            // yields all three.
-            $this->backfillItemSourceMetadata($existing);
-            return false; // Already scanned
+        // When processScanBatch calls processFile for a batch-proven-absent
+        // path (callerConfirmedAbsent=true), this check is redundant because
+        // processScanBatch already confirmed the item doesn't exist via
+        // findPathsMap. In that case upsertByPath relies on the unique-index
+        // 1062 catch for race safety. For other callers (scanSeriesDir) that
+        // pass callerConfirmedAbsent=false, this check is still needed.
+        if (!$callerConfirmedAbsent) {
+            $existing = $this->itemRepository->findByPath($path, $libraryId);
+            if ($existing) {
+                // Re-scan: the row is already indexed, so no new item is added.
+                // Backfill any missing source technical metadata for time-based
+                // media — the total duration, the compact metadata_json['source']
+                // summary, and the media_streams rows — so files indexed before the
+                // source probe existed (or before they were ever transcoded) still
+                // gain it on a plain rescan. Fully guarded; a single ffprobe call
+                // yields all three.
+                $this->backfillItemSourceMetadata($existing);
+                return false; // Already scanned
+            }
         }
 
         // Parse naming for series/movies (extracts season/episode/episode_title).
@@ -1232,10 +1242,9 @@ class MediaScanner
         // row (or any other per-file failure) is logged and skipped rather than
         // killing the whole library scan. upsertByPath handles the race condition
         // where multiple scanner workers encounter the same file concurrently.
+        // When callerConfirmedAbsent=true, processScanBatch already confirmed
+        // absence via findPathsMap, so upsertByPath skips its pre-check.
         try {
-            // We already confirmed above (findByPath at the top of processFile)
-            // that no row exists for this path, so upsertByPath can skip its own
-            // pre-check and rely on the unique-index 1062 catch for race safety.
             $itemId = $this->itemRepository->upsertByPath([
                 'library_id' => $libraryId,
                 'parent_id' => $parentId,

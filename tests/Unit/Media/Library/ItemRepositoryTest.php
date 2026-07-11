@@ -243,8 +243,8 @@ class ItemRepositoryTest extends TestCase
         $repo->findPathsMap(['/a.mkv', '/b.mkv', '/c.mkv']);
 
         $this->assertSame(1, $callCount, 'exactly one query for N paths, not N queries');
-        $this->assertStringContainsString('WHERE path IN (?,?,?)', $capturedSql);
-        $this->assertSame(['/a.mkv', '/b.mkv', '/c.mkv'], $capturedParams);
+        $this->assertStringContainsString('WHERE path_hash IN (?,?,?)', $capturedSql);
+        $this->assertSame([sha1('/a.mkv'), sha1('/b.mkv'), sha1('/c.mkv')], $capturedParams);
     }
 
     /**
@@ -2869,7 +2869,8 @@ class ItemRepositoryTest extends TestCase
             if (str_starts_with(trim($sql), 'INSERT INTO media_items')) {
                 $insertSeen = true;
             }
-            if (str_contains($sql, 'FROM media_items WHERE path')) {
+            // The query now uses path_hash = SHA1(?) AND path = ? for index optimization
+            if (str_contains($sql, 'path_hash') && str_contains($sql, 'FROM media_items')) {
                 return [['id' => 'existing-1', 'metadata_json' => '{}']];
             }
             return [];
@@ -2919,10 +2920,14 @@ class ItemRepositoryTest extends TestCase
         // Pre-check finds nothing; a concurrent worker inserts the same path, so
         // create()'s INSERT raises a unique violation; the re-fetch then finds
         // the winner's row and upsertByPath returns its id (no exception).
+        //
+        // Note: with the path_hash optimization, the findByPath query now uses
+        // "WHERE path_hash = ? AND path = ?" which the mock matches via path_hash.
         $pathSelects = 0;
         $db = $this->createMock(Connection::class);
         $db->method('query')->willReturnCallback(function (string $sql) use (&$pathSelects) {
-            if (str_contains($sql, 'FROM media_items WHERE path')) {
+            // The new query uses path_hash in the WHERE clause
+            if (str_contains($sql, 'path_hash')) {
                 $pathSelects++;
                 // First call (pre-check) misses; second call (post-race) hits.
                 return $pathSelects === 1 ? [] : [['id' => 'winner-1', 'metadata_json' => '{}']];

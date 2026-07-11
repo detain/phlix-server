@@ -2461,15 +2461,19 @@ class MediaScannerTest extends TestCase
         // lookups on a rescan) is defeated if the already-indexed branch
         // falls through to processFile() and lets ITS redundant per-file
         // findByPath() call re-derive the same answer findPathsMap() already
-        // gave. The new path's own single findByPath() call inside
-        // processFile() (its pre-existing, S8-unrelated defensive check) is
-        // expected and not what this assertion targets.
+        // gave.
+        //
+        // With the S8-1 optimization (callerConfirmedAbsent=true passed for
+        // batch-proven-absent paths), neither the existing path NOR the new
+        // path calls findByPath in processFile — the batch already confirmed
+        // absence, so the defensive check is redundant. For the new path,
+        // upsertByPath with callerConfirmedAbsent=true relies on the
+        // unique-index 1062 catch for race safety instead.
         $this->assertSame(
-            [$newPath],
+            [],
             $repo->findByPathCalls,
-            'the already-indexed path must be routed directly to backfillItemSourceMetadata() by '
-                . "processScanBatch()'s own findPathsMap()-derived routing, never falling through to "
-                . "processFile()'s internal per-file findByPath() re-check"
+            'neither existing nor new paths should call findByPath in processFile '
+                . 'when processScanBatch already confirmed absence via findPathsMap'
         );
     }
 
@@ -2893,7 +2897,7 @@ class InMemoryScannerRepo extends ItemRepository
              */
     public array $findByPathCalls = [];
 
-    public function findByPath(string $path): ?array
+    public function findByPath(string $path, ?string $libraryId = null): ?array
     {
         $this->findByPathCalls[] = $path;
         foreach ($this->store as $item) {

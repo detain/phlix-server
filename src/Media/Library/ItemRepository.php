@@ -205,15 +205,32 @@ class ItemRepository
     /**
      * Finds a media item by its filesystem path.
      *
-     * @param string $path The absolute filesystem path to the media file
+     * Uses the `(library_id, path_hash)` unique index when libraryId is
+     * provided, falling back to a path-only scan for non-deduped types
+     * (where path_hash is NULL and the index cannot be used). The SHA1
+     * collision risk is mitigated by verifying the raw path as a tiebreak.
+     *
+     * @param string      $path     The absolute filesystem path to the media file
+     * @param string|null $libraryId Optional library scope for index optimization.
+     *                               When provided, enables use of the path_hash index.
      * @return array<string, mixed>|null The hydrated media item array or null if not found
      */
-    public function findByPath(string $path): ?array
+    public function findByPath(string $path, ?string $libraryId = null): ?array
     {
-        $result = $this->db->query(
-            "SELECT * FROM media_items WHERE path = ?",
-            [$path]
-        );
+        $hash = sha1($path);
+        if ($libraryId !== null) {
+            // Use the indexed (library_id, path_hash) lookup with path tiebreak
+            $result = $this->db->query(
+                "SELECT * FROM media_items WHERE library_id = ? AND path_hash = ? AND path = ?",
+                [$libraryId, $hash, $path]
+            );
+        } else {
+            // Fall back to path-only lookup for callers without library context
+            $result = $this->db->query(
+                "SELECT * FROM media_items WHERE path_hash = ? AND path = ?",
+                [$hash, $path]
+            );
+        }
 
         $row = $this->firstRow($result);
         if ($row === null) {
@@ -267,9 +284,10 @@ class ItemRepository
     public function upsertByPath(array $data, bool $callerConfirmedAbsent = false): string
     {
         $path = isset($data['path']) && is_string($data['path']) ? $data['path'] : '';
+        $libraryId = isset($data['library_id']) && is_string($data['library_id']) ? $data['library_id'] : null;
 
         if (!$callerConfirmedAbsent) {
-            $existing = $this->findByPath($path);
+            $existing = $this->findByPath($path, $libraryId);
             if (is_array($existing) && isset($existing['id']) && is_string($existing['id'])) {
                 return $existing['id'];
             }
@@ -280,7 +298,7 @@ class ItemRepository
         } catch (Throwable $e) {
             // A concurrent worker inserted the same path between our existence
             // check and the INSERT (unique-index violation). Reuse their row.
-            $raced = $this->findByPath($path);
+            $raced = $this->findByPath($path, $libraryId);
             if (is_array($raced) && isset($raced['id']) && is_string($raced['id'])) {
                 return $raced['id'];
             }
@@ -290,8 +308,13 @@ class ItemRepository
     }
 
     /**
-     * Batch lookup of media items by filesystem path — a single `WHERE path
-     * IN (...)` query rather than one {@see findByPath()} call per candidate.
+     * Batch lookup of media items by filesystem path — a single
+     * `WHERE path_hash IN (SHA1(?), ...)` query rather than one
+     * {@see findByPath()} call per candidate.
+     *
+     * Uses the indexed `path_hash` column (SHA1 of path) for fast lookups.
+     * Each result's actual path is verified against the input list to guard
+     * against the astronomically rare SHA1 collision.
      *
      * Used by {@see MediaScanner::scanFlat()} (S8) to determine, for a whole
      * batch of scan candidates at once, which ones are already indexed
@@ -313,17 +336,25 @@ class ItemRepository
             return [];
         }
 
-        $placeholders = implode(',', array_fill(0, count($paths), '?'));
+        // Compute SHA1 hashes in PHP for use with the indexed path_hash column
+        $hashes = array_map('sha1', $paths);
+        $placeholders = implode(',', array_fill(0, count($hashes), '?'));
         $results = $this->db->query(
-            "SELECT * FROM media_items WHERE path IN ({$placeholders})",
-            $paths
+            "SELECT * FROM media_items WHERE path_hash IN ({$placeholders})",
+            $hashes
         );
+
+        // Build a set of expected hashes for O(1) lookup during row verification
+        $hashSet = array_flip($hashes);
 
         $map = [];
         foreach ($this->hydrateRows($results) as $row) {
             $path = $row['path'] ?? null;
             if (is_string($path) && $path !== '') {
-                $map[$path] = $row;
+                // Verify the SHA1 tiebreak guards against path_hash collision
+                if (isset($hashSet[sha1($path)])) {
+                    $map[$path] = $row;
+                }
             }
         }
 

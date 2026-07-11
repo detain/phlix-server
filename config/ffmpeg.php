@@ -58,4 +58,22 @@ return [
             'audio' => 'mp4a.40.2',
         ],
     ],
+
+    /**
+     * SV-3.3: Loudness normalization settings (ebur128/loudnorm filter).
+     *
+     * When enabled, audio transcode jobs will apply loudness normalization.
+     * Target values follow EBU R128 standard:
+     *   - Podcast/Online: I=-16, LRA=11, TP=-1.5
+     *   - Broadcast: I=-23, LRA=7, TP=-2.0
+     *   - Streaming (Netflix-style): I=-27, LRA=2.0, TP=-2.0
+     *
+     * Set to null to disable, or an array with 'I', 'LRA', 'TP' keys to enable.
+     */
+    'loudness' => [
+        'enabled' => false,
+        'I' => -16,
+        'LRA' => 11,
+        'TP' => -1.5,
+    ],
 ];

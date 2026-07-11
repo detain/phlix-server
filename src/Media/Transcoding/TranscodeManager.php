@@ -298,6 +298,11 @@ class TranscodeManager
      *
      * @param string $mediaItemId Media item to transcode.
      * @param string $profileName Device profile name (e.g. 'web', 'mobile-high').
+     * @param array<string, mixed> $options Optional settings:
+     *                                        - 'client_capabilities' (ClientCapabilities): SV-3.3
+     *                                          Client decoder capabilities. When provided and the source
+     *                                          audio codec is not supported by the client, the audio
+     *                                          will be transcoded to AAC instead of copied.
      *
      * @return array{
      *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool,
@@ -310,7 +315,7 @@ class TranscodeManager
      *
      * @since 0.23.0
      */
-    public function ensureHlsJob(string $mediaItemId, string $profileName = 'web'): array
+    public function ensureHlsJob(string $mediaItemId, string $profileName = 'web', array $options = []): array
     {
         $keyHash = sha1($mediaItemId . '|' . $profileName . '|' . self::JOB_KEY_VERSION);
 
@@ -389,7 +394,9 @@ class TranscodeManager
         // Legacy single-variant params are still persisted in `segment_params` for
         // BC (older readers + the reuse filter). A5 additionally builds the true
         // multi-variant ABR ladder below and persists it in `variants`.
-        $segParams = $this->computeSegmentParams($probe, $profileName);
+        $rawClientCapabilities = $options['client_capabilities'] ?? null;
+        $clientCapabilities = $rawClientCapabilities instanceof \Phlix\Media\Streaming\ClientCapabilities ? $rawClientCapabilities : null;
+        $segParams = $this->computeSegmentParams($probe, $profileName, $clientCapabilities);
         $segSeconds = $this->segmentSeconds;
 
         // A5: resolve the ABR ladder. Prefer A1's persisted source metadata blob
@@ -1482,14 +1489,16 @@ class TranscodeManager
      * encode. The variant_width/height/bandwidth descriptors are preserved for the
      * master playlist.
      *
-     * @param array<string, mixed> $probe       Raw ffprobe result.
-     * @param string               $profileName Device profile name.
+     * @param array<string, mixed>                 $probe             Raw ffprobe result.
+     * @param string                                $profileName       Device profile name.
+     * @param \Phlix\Media\Streaming\ClientCapabilities|null $clientCapabilities SV-3.3
+     *                                                                           Client decoder capabilities.
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildSegmentCommand()}.
      */
-    private function computeSegmentParams(array $probe, string $profileName): array
+    private function computeSegmentParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null): array
     {
-        $params = $this->computeHlsParams($probe, $profileName);
+        $params = $this->computeHlsParams($probe, $profileName, $clientCapabilities);
 
         if (($params['video_codec'] ?? null) === 'copy') {
             $params['video_codec'] = 'libx264';
@@ -2062,13 +2071,18 @@ class TranscodeManager
      * Copies a browser-compatible stream when possible (h264 video without a
      * downscale, AAC audio) for a fast remux, otherwise encodes to H.264 / AAC.
      *
-     * @param array<string, mixed> $probe       Raw ffprobe result.
-     * @param string               $profileName Device profile name.
+     * @param array<string, mixed>                                 $probe             Raw ffprobe result.
+     * @param string                                                $profileName       Device profile name.
+     * @param \Phlix\Media\Streaming\ClientCapabilities|null        $clientCapabilities SV-3.3
+     *                                                                                  Client decoder capabilities.
+     *                                                                                  When provided and the source audio codec
+     *                                                                                  is not supported by the client, audio
+     *                                                                                  will be transcoded to AAC.
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildHlsCommand()}
      *                              plus variant_width/height/bandwidth descriptors.
      */
-    private function computeHlsParams(array $probe, string $profileName): array
+    private function computeHlsParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null): array
     {
         $video = $this->firstStreamOfType($probe, 'video');
         $audio = $this->firstStreamOfType($probe, 'audio');
@@ -2136,7 +2150,13 @@ class TranscodeManager
             }
         }
 
-        if ($srcA === 'aac') {
+        // SV-3.3: Check if client can decode the source audio codec.
+        // If client capabilities indicate the source codec is unsupported, force
+        // transcode to AAC to avoid silent audio on the client side.
+        $clientCanDecodeAudio = $clientCapabilities === null
+            || $clientCapabilities->supportsCodec($srcA);
+
+        if ($srcA === 'aac' && $clientCanDecodeAudio) {
             $params['audio_codec'] = 'copy';
         } else {
             $params['audio_codec'] = 'aac';

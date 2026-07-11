@@ -1738,6 +1738,12 @@ class FfmpegRunner
                 if ($audioChannels !== null && $audioChannels > 0) {
                     $cmd .= ' -ac ' . $audioChannels;
                 }
+
+                // SV-3.3: loudness normalization (ebur128/loudnorm filter)
+                $loudnormFilter = $this->buildLoudnormFilter($params);
+                if ($loudnormFilter !== null) {
+                    $cmd .= ' -af "' . $loudnormFilter . '"';
+                }
             }
         }
 
@@ -1807,12 +1813,82 @@ class FfmpegRunner
             $cmd .= ' -ac ' . $audioChannels;
         }
 
+        // SV-3.3: loudness normalization (ebur128/loudnorm filter)
+        $loudnormFilter = $this->buildLoudnormFilter($params);
+        if ($loudnormFilter !== null) {
+            $cmd .= ' -af "' . $loudnormFilter . '"';
+        }
+
         // Same timeline anchoring as the video segments.
         $cmd .= ' -muxdelay 0 -muxpreload 0';
         $cmd .= ' -output_ts_offset ' . $startArg;
         $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
 
         return $cmd;
+    }
+
+    /**
+     * Builds an FFmpeg loudnorm filter string for audio loudness normalization.
+     *
+     * The loudnorm filter performs EBU R128 loudness normalization. It can be
+     * used in single-pass mode (with target values only) or two-pass mode
+     * (first pass measures, second pass applies with measured values).
+     *
+     * Common target values:
+     *   - Podcast/Online: I=-16, LRA=11, TP=-1.5
+     *   - Broadcast: I=-23, LRA=7, TP=-2.0
+     *   - Streaming (Netflix-style): I=-27, LRA=2.0, TP=-2.0
+     *
+     * @param array<string, mixed> $params Params with 'loudnorm' key:
+     *                                      - I (float): Integrated loudness target (dB LUFS)
+     *                                      - LRA (float): Loudness range target (dB LU)
+     *                                      - TP (float): True peak maximum (dBTP)
+     *                                      - measured_I (float): Measured integrated (2nd pass)
+     *                                      - measured_LRA (float): Measured LRA (2nd pass)
+     *                                      - measured_TP (float): Measured true peak (2nd pass)
+     *                                      - measured_thresh (float): Measured threshold (2nd pass)
+     *
+     * @return string|null FFmpeg audio filter string, or null when not configured
+     *
+     * @since 0.74.0
+     */
+    public function buildLoudnormFilter(array $params): ?string
+    {
+        $loudnorm = $params['loudnorm'] ?? null;
+        if (!is_array($loudnorm)) {
+            return null;
+        }
+
+        $integrated = $loudnorm['I'] ?? null;
+        if (!is_numeric($integrated)) {
+            return null;
+        }
+
+        $parts = [];
+        $parts[] = 'I=' . (float) $integrated;
+
+        if (isset($loudnorm['LRA']) && is_numeric($loudnorm['LRA'])) {
+            $parts[] = 'LRA=' . (float) $loudnorm['LRA'];
+        }
+        if (isset($loudnorm['TP']) && is_numeric($loudnorm['TP'])) {
+            $parts[] = 'TP=' . (float) $loudnorm['TP'];
+        }
+
+        // Second-pass measured values (from first pass analysis)
+        if (isset($loudnorm['measured_I']) && is_numeric($loudnorm['measured_I'])) {
+            $parts[] = 'measured_I=' . (float) $loudnorm['measured_I'];
+        }
+        if (isset($loudnorm['measured_LRA']) && is_numeric($loudnorm['measured_LRA'])) {
+            $parts[] = 'measured_LRA=' . (float) $loudnorm['measured_LRA'];
+        }
+        if (isset($loudnorm['measured_TP']) && is_numeric($loudnorm['measured_TP'])) {
+            $parts[] = 'measured_TP=' . (float) $loudnorm['measured_TP'];
+        }
+        if (isset($loudnorm['measured_thresh']) && is_numeric($loudnorm['measured_thresh'])) {
+            $parts[] = 'measured_thresh=' . (float) $loudnorm['measured_thresh'];
+        }
+
+        return 'loudnorm=' . implode(':', $parts);
     }
 
     /**

@@ -168,6 +168,9 @@ class QualitySelector
      *     - 'vendor' (string): Optional hardware vendor hint (e.g., 'nvenc', 'vaapi')
      *         When set, returns vendor-specific codec name (e.g., 'h264_nvenc') instead of 'libx264'
      *     - 'allow_hwaccel' (bool): Whether to use hardware acceleration if available
+     *     - 'client_capabilities' (ClientCapabilities): Client decoder capabilities for
+     *         play decisioning (SV-3.3). When provided, codecs the client cannot decode
+     *         will force transcode instead of direct play.
      *
      * @return array{
      *     method: string,
@@ -196,11 +199,13 @@ class QualitySelector
         $profile = $this->deviceProfiles[$profileName] ?? $this->deviceProfiles['generic'];
         $vendor = is_string($options['vendor'] ?? null) ? $options['vendor'] : null;
         $allowHwaccel = (bool)($options['allow_hwaccel'] ?? false);
+        $rawCapabilities = $options['client_capabilities'] ?? null;
+        $clientCapabilities = $rawCapabilities instanceof ClientCapabilities ? $rawCapabilities : null;
 
         $videoStream = $this->getVideoStream($sourceInfo);
         $audioStream = $this->getAudioStream($sourceInfo);
 
-        $canDirectPlay = $this->canDirectPlay($videoStream, $audioStream, $profile);
+        $canDirectPlay = $this->canDirectPlay($videoStream, $audioStream, $profile, $clientCapabilities);
 
         if ($canDirectPlay) {
             return [
@@ -258,16 +263,22 @@ class QualitySelector
      * Determines if direct play is possible with the given streams and profile.
      *
      * Checks video codec, audio codec, resolution, and bitrate against profile
-     * constraints to determine compatibility.
+     * constraints to determine compatibility. When clientCapabilities are
+     * provided, also verifies the client can decode the audio codec.
      *
      * @param array{codec_type?: string, codec?: string, width?: int, height?: int, bitrate?: int}|null $videoStream Video stream info
      * @param array{codec_type?: string, codec?: string, channels?: int}|null $audioStream Audio stream info
      * @param array{max_bitrate: int, max_resolution: array<int, int>, direct_play: array<string>, transcode: array<string>, container: array<string>} $profile Device profile constraints
+     * @param ClientCapabilities|null $clientCapabilities Client decoder capabilities (SV-3.3)
      *
      * @return bool True if all constraints are satisfied for direct play
      */
-    private function canDirectPlay(?array $videoStream, ?array $audioStream, array $profile): bool
-    {
+    private function canDirectPlay(
+        ?array $videoStream,
+        ?array $audioStream,
+        array $profile,
+        ?ClientCapabilities $clientCapabilities = null
+    ): bool {
         if (!$videoStream || !$audioStream) {
             return false;
         }
@@ -281,6 +292,12 @@ class QualitySelector
 
         $supportedAudio = ['aac', 'ac3', 'eac3', 'mp3', 'flac', 'opus'];
         if (!in_array($audioCodec, $supportedAudio, true)) {
+            return false;
+        }
+
+        // SV-3.3: If client capabilities are provided and the client cannot decode
+        // this audio codec, we must transcode to avoid silent audio.
+        if ($clientCapabilities !== null && !$clientCapabilities->supportsCodec($audioCodec)) {
             return false;
         }
 

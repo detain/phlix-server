@@ -45,6 +45,10 @@ class TranscodeController
      * the job id, the HLS master playlist URL, the current status and whether an
      * existing job was reused.
      *
+     * SV-3.3: Also accepts `X-Phlix-Client-Capabilities` header (JSON-encoded
+     * client decoder capabilities) to force audio transcode when the client
+     * cannot decode certain codecs (e.g., no E-AC-3 support).
+     *
      * @param array<string, string> $params
      */
     public function start(Request $request, array $params): Response
@@ -61,8 +65,16 @@ class TranscodeController
             $profile = $this->mapDeviceTypeToProfile($request->getHeader('X-Phlix-Device-Type') ?? '');
         }
 
+        // SV-3.3: Parse client capabilities for audio codec decisioning.
+        $clientCapsHeader = $request->getHeader('X-Phlix-Client-Capabilities');
+        $clientCapabilities = \Phlix\Media\Streaming\ClientCapabilities::fromJson($clientCapsHeader);
+        $options = [];
+        if ($clientCapabilities->hasExplicitCapabilities()) {
+            $options['client_capabilities'] = $clientCapabilities;
+        }
+
         try {
-            $job = $this->transcodeManager->ensureHlsJob($mediaId, $profile);
+            $job = $this->transcodeManager->ensureHlsJob($mediaId, $profile, $options);
         } catch (\InvalidArgumentException $e) {
             return (new Response())->status(404)->json(['error' => $e->getMessage()]);
         } catch (\RuntimeException $e) {

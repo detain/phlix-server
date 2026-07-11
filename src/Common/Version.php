@@ -37,7 +37,7 @@ final class Version
      *
      * @since 0.10.0
      */
-    public const STRING = '1.2.1';
+    public const STRING = '1.2.2';
 
     /**
      * Prevent instantiation — this class is a static constant holder only.

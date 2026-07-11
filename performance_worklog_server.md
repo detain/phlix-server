@@ -93,7 +93,7 @@
 - [x] SV-4.3  ComskipRunner non-blocking pipe + reachable timeout ✅ (commit 410ffce0)
 - [x] SV-4.4  WebhookDispatcher backoff + connect-timeout ✅ (commit 410ffce0)
 - [x] SV-4.5  Roku/MusicBrainz blocking-I/O → coroutine/async ✅ (commit 410ffce0)
-- [ ] SV-4.6  original copy variant handling
+- [x] SV-4.6  original copy variant handling ✅ (commit 088bb99c)
 - [ ] SV-4.7  WS auth enforcement
 - [ ] SV-4.8  Router static-path fast map + DI for string handlers
 - [ ] SV-4.9  Migration ledger + document rewrite-class migrations

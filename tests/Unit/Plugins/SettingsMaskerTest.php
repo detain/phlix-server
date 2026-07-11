@@ -159,6 +159,66 @@ final class SettingsMaskerTest extends TestCase
      * @param array<string, mixed> $values
      * @param array<string, array<string, mixed>> $manifestSettings
      */
+    public function test_secret_status_reports_set_and_length_without_leaking_value(): void
+    {
+        $plugin = $this->plugin(
+            ['api_key' => 'topsecret', 'empty_secret' => '', 'username' => 'joe'],
+            [
+                'api_key'      => ['type' => 'string', 'secret' => true],
+                'empty_secret' => ['type' => 'string', 'secret' => true],
+                'username'     => ['type' => 'string'],
+            ],
+        );
+
+        $status = SettingsMasker::secretStatus($plugin);
+
+        // Only secret keys appear.
+        $this->assertSame(['api_key', 'empty_secret'], array_keys($status));
+        // A set secret reports its length (never the value).
+        $this->assertTrue($status['api_key']['set']);
+        $this->assertSame(9, $status['api_key']['length']);
+        // An empty-string secret is "not set".
+        $this->assertFalse($status['empty_secret']['set']);
+        $this->assertSame(0, $status['empty_secret']['length']);
+    }
+
+    public function test_secret_status_treats_missing_value_as_unset(): void
+    {
+        $plugin = $this->plugin(
+            [],
+            ['api_key' => ['type' => 'string', 'secret' => true]],
+        );
+
+        $status = SettingsMasker::secretStatus($plugin);
+
+        $this->assertFalse($status['api_key']['set']);
+        $this->assertSame(0, $status['api_key']['length']);
+    }
+
+    public function test_schema_passes_through_link_and_link_text(): void
+    {
+        $plugin = $this->plugin(
+            [],
+            [
+                'api_key' => [
+                    'type'      => 'string',
+                    'secret'    => true,
+                    'link'      => 'https://example.test/key',
+                    'link_text' => 'Get a key',
+                ],
+                'plain' => ['type' => 'string'],
+            ],
+        );
+
+        $schema = SettingsMasker::schema($plugin);
+
+        $this->assertSame('https://example.test/key', $schema['api_key']['link']);
+        $this->assertSame('Get a key', $schema['api_key']['link_text']);
+        // A field without a link carries neither key.
+        $this->assertArrayNotHasKey('link', $schema['plain']);
+        $this->assertArrayNotHasKey('link_text', $schema['plain']);
+    }
+
     private function plugin(array $values, array $manifestSettings): InstalledPlugin
     {
         return new InstalledPlugin(

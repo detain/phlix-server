@@ -111,7 +111,7 @@ class MetadataHttpClient
 
         // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
         // so those requests must take the blocking cURL path.
-        $response = $this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
+        $response = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
             ? $this->requestAsync($url, $requestHeaders)
             : $this->requestCurl($url, $requestHeaders);
 
@@ -152,7 +152,7 @@ class MetadataHttpClient
     }
 
     /**
-     * Perform an async HTTP request with cooperative wait.
+     * Perform an async HTTP request with cooperative wait via Channel.
      *
      * @param string $url Full URL to request
      * @param array<string, string> $headers Request headers
@@ -167,61 +167,37 @@ class MetadataHttpClient
             'headers' => $headers,
         ];
 
-        // State shared between callback and waiting loop
+        // Channel-based wait: push is called by success/error callbacks,
+        // and pop() yields to the coroutine scheduler until done or timeout.
+        $channel = new \Swoole\Coroutine\Channel(1);
+
+        // State shared between callback and channel
         $state = [
             'response' => null,
             'error' => null,
-            'done' => false,
         ];
 
-        $options['success'] = function (ResponseInterface $response) use (&$state) {
+        $options['success'] = function (ResponseInterface $response) use (&$state, $channel): void {
             $state['response'] = $response;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
-        $options['error'] = function (\Throwable $error) use (&$state) {
+        $options['error'] = function (\Throwable $error) use (&$state, $channel): void {
             $state['error'] = $error;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
         // Initiate async request (non-blocking)
         $client->request($url, $options);
 
-        // Cooperative wait: run event loop until done or timeout
-        $maxWait = $this->timeout;
-        $waited = 0;
-        $interval = 0.001; // 1ms interval for event loop processing
-
-        while (!$state['done'] && $waited < $maxWait) {
-            usleep((int) ($interval * 1000000));
-            $waited += $interval;
-        }
+        // Yield to event loop via Channel pop with timeout
+        $channel->pop((float) $this->timeout);
 
         if ($state['error'] !== null) {
             return null;
         }
 
         return $state['response'];
-    }
-
-    /**
-     * Check if we're running inside a workerman worker context.
-     *
-     * `Workerman\Http\Client` (and the `Timer` it uses internally for request
-     * timeouts) requires an active Workerman event loop. Under PHPUnit (or any
-     * plain CLI invocation) there is no running worker, so the async client
-     * throws `RuntimeException: Timer can only be used in workerman running
-     * environment`. Detect that case and fall back to synchronous cURL.
-     *
-     * @return bool True if in workerman context, false otherwise
-     */
-    private function isWorkermanContext(): bool
-    {
-        if (!class_exists('Workerman\Worker')) {
-            return false;
-        }
-        // Worker::$_instance is set when running in worker context
-        return defined('\Workerman\Worker::$_instance');
     }
 
     /**

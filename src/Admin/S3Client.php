@@ -277,25 +277,11 @@ class S3Client
     {
         // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
         // so those requests must take the blocking cURL path.
-        if ($this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)) {
+        if (\Phlix\Common\Runtime\WorkerContext::isEventLoopRunning() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)) {
             return $this->requestAsync($method, $url, $body, $headers);
         }
 
         return $this->requestCurl($method, $url, $body, $headers);
-    }
-
-    /**
-     * Check if we're running inside a workerman worker context.
-     *
-     * @return bool True if in workerman context, false otherwise
-     */
-    private function isWorkermanContext(): bool
-    {
-        if (!class_exists('Workerman\Worker')) {
-            return false;
-        }
-        // Worker::$_instance is set when running in worker context
-        return defined('\Workerman\Worker::$_instance');
     }
 
     /**
@@ -369,35 +355,31 @@ class S3Client
             $options['data'] = $body;
         }
 
-        // State shared between callback and waiting loop
+        // Channel-based wait: push is called by success/error callbacks,
+        // and pop() yields to the coroutine scheduler until done or timeout.
+        $channel = new \Swoole\Coroutine\Channel(1);
+
+        // State shared between callback and channel
         $state = [
             'response' => null,
             'error' => null,
-            'done' => false,
         ];
 
-        $options['success'] = function (ResponseInterface $response) use (&$state) {
+        $options['success'] = function (ResponseInterface $response) use (&$state, $channel): void {
             $state['response'] = $response;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
-        $options['error'] = function (\Throwable $error) use (&$state) {
+        $options['error'] = function (\Throwable $error) use (&$state, $channel): void {
             $state['error'] = $error;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
         // Initiate async request (non-blocking)
         $client->request($url, $options);
 
-        // Cooperative wait: run event loop until done or timeout
-        $maxWait = 60;
-        $waited = 0;
-        $interval = 0.001; // 1ms interval for event loop processing
-
-        while (!$state['done'] && $waited < $maxWait) {
-            usleep((int) ($interval * 1000000));
-            $waited += $interval;
-        }
+        // Yield to event loop via Channel pop with timeout (60 seconds)
+        $channel->pop(60.0);
 
         if ($state['error'] !== null) {
             return null;

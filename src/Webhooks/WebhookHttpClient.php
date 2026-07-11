@@ -68,13 +68,13 @@ class WebhookHttpClient
 
         // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
         // so those requests must take the blocking cURL path.
-        return $this->isWorkermanContext() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
+        return \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
             ? $this->postAsync($url, $headers, $jsonPayload)
             : $this->postCurl($url, $headers, $jsonPayload);
     }
 
     /**
-     * Performs an async HTTP POST request with cooperative wait.
+     * Performs an async HTTP POST request with Channel-based cooperative wait.
      *
      * @param string $url Target URL
      * @param array<string, string> $headers Request headers
@@ -86,38 +86,35 @@ class WebhookHttpClient
     {
         $client = $this->getAsyncClient();
 
-        $state = [
-            'response' => null,
-            'error' => null,
-            'done' => false,
-        ];
-
         $options = [
             'method' => 'POST',
             'headers' => $headers,
             'body' => $body,
         ];
 
-        $options['success'] = function (ResponseInterface $response) use (&$state): void {
+        // Channel-based wait: push is called by success/error callbacks,
+        // and pop() yields to the coroutine scheduler until done or timeout.
+        $channel = new \Swoole\Coroutine\Channel(1);
+
+        $state = [
+            'response' => null,
+            'error' => null,
+        ];
+
+        $options['success'] = function (ResponseInterface $response) use (&$state, $channel): void {
             $state['response'] = $response;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
-        $options['error'] = function (Throwable $error) use (&$state): void {
+        $options['error'] = function (Throwable $error) use (&$state, $channel): void {
             $state['error'] = $error;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
         $client->request($url, $options);
 
-        $maxWait = $this->timeout;
-        $waited = 0;
-        $interval = 0.001;
-
-        while (!$state['done'] && $waited < $maxWait) {
-            usleep((int) ($interval * 1000000));
-            $waited += $interval;
-        }
+        // Yield to event loop via Channel pop with timeout
+        $channel->pop((float) $this->timeout);
 
         if ($state['error'] !== null) {
             return [
@@ -223,19 +220,6 @@ class WebhookHttpClient
             ]);
         }
         return $this->asyncClient;
-    }
-
-    /**
-     * Check if we're running inside a Workerman worker context.
-     *
-     * @return bool True if in workerman context, false otherwise
-     */
-    private function isWorkermanContext(): bool
-    {
-        if (!class_exists('Workerman\Worker')) {
-            return false;
-        }
-        return defined('\Workerman\Worker::$_instance');
     }
 
     /**

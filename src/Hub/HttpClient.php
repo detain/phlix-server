@@ -180,25 +180,11 @@ class HttpClient implements HttpClientInterface
 
         // When in workerman context, use async client with cooperative wait
         // Otherwise fall back to synchronous curl (for unit tests etc.)
-        if ($this->isWorkermanContext()) {
+        if (\Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()) {
             return $this->requestAsync($method, $url, $body, $requestHeaders);
         }
 
         return $this->requestCurl($method, $url, $body, $requestHeaders);
-    }
-
-    /**
-     * Check if we're running inside a workerman worker context.
-     *
-     * @return bool True if in workerman context, false otherwise
-     */
-    private function isWorkermanContext(): bool
-    {
-        if (!class_exists('Workerman\Worker')) {
-            return false;
-        }
-        // Worker::$_instance is set when running in worker context
-        return defined('\Workerman\Worker::$_instance');
     }
 
     /**
@@ -339,8 +325,8 @@ class HttpClient implements HttpClientInterface
     /**
      * Perform request using async client with cooperative wait.
      *
-     * This uses callbacks but blocks the worker cooperatively, allowing
-     * the event loop to process other tasks while waiting for the response.
+     * This uses a Channel to yield to the event loop while waiting for the
+     * async HTTP response, avoiding CPU spin from usleep-based polling.
      *
      * @param string $method HTTP method.
      * @param string $url Full URL.
@@ -361,36 +347,31 @@ class HttpClient implements HttpClientInterface
             $options['data'] = $body;
         }
 
-        // State shared between callback and waiting loop
+        // Channel-based wait: push is called by success/error callbacks,
+        // and pop() yields to the coroutine scheduler until done or timeout.
+        $channel = new \Swoole\Coroutine\Channel(1);
+
+        // State shared between callback and channel
         $state = [
             'response' => null,
             'error' => null,
-            'done' => false,
         ];
 
-        $options['success'] = function (ResponseInterface $response) use (&$state) {
+        $options['success'] = function (ResponseInterface $response) use (&$state, $channel): void {
             $state['response'] = $response;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
-        $options['error'] = function (\Throwable $error) use (&$state) {
+        $options['error'] = function (\Throwable $error) use (&$state, $channel): void {
             $state['error'] = $error;
-            $state['done'] = true;
+            $channel->push(true);
         };
 
         // Initiate async request (non-blocking)
         $client->request($url, $options);
 
-        // Cooperative wait: run event loop until done or timeout
-        $maxWait = $this->timeout;
-        $waited = 0;
-        $interval = 0.001; // 1ms interval for event loop processing
-
-        while (!$state['done'] && $waited < $maxWait) {
-            // This yields to the event loop, allowing it to process callbacks
-            usleep((int) ($interval * 1000000));
-            $waited += $interval;
-        }
+        // Yield to event loop via Channel pop with timeout
+        $channel->pop((float) $this->timeout);
 
         if ($state['error'] !== null) {
             throw new RuntimeException('Async HTTP error: ' . $state['error']->getMessage(), 0, $state['error']);

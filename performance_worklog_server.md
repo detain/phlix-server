@@ -70,9 +70,9 @@
 - [x] SV-1.5  implement real libplacebo tone-map mode ✅ (commit abad4b46)
 - [x] SV-1.6  fix subtitle burn-in escaping + VAAPI overlay ✅ (commit 7a248f40)
 - [x] SV-1.7  range parser reuse on direct-play ✅ (commit 1862fafb)
-- [ ] SV-1.8  CSRF Origin exact-match
-- [ ] SV-1.9  ENOSPC guard on segment cache
-- [ ] SV-1.10 login rate limiter bound
+- [x] SV-1.8  CSRF Origin exact-match ✅ (commit ba3096ba)
+- [x] SV-1.9  ENOSPC guard on segment cache ✅ (commit 70d99f4e)
+- [x] SV-1.10 login rate limiter bound ✅ (commit a3a6b35a) — S-W1 complete 🎉
 - [ ] SV-2.1  stream file-backed responses over relay tunnel
 - [ ] SV-2.2  pool hygiene: rollback dirty connections
 - [ ] SV-2.3  relay byte-pipe backpressure

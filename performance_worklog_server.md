@@ -95,13 +95,13 @@
 - [x] SV-4.5  Roku/MusicBrainz blocking-I/O → coroutine/async ✅ (commit 410ffce0)
 - [x] SV-4.6  original copy variant handling ✅ (commit 088bb99c)
 - [ ] SV-4.7  WS auth enforcement
-- [ ] SV-4.8  Router static-path fast map + DI for string handlers
-- [ ] SV-4.9  Migration ledger + document rewrite-class migrations
-- [ ] SV-4.10 Provider-priority config single source of truth
-- [ ] SV-4.11 Fix PluginCatalogService blocking curl + wrong docblock
-- [ ] SV-4.12 Extend stale-job reaper glob to {chunk-*.m4s,seg-*.ts}
-- [ ] SV-4.13 Remove superseded whole-file command builders
-- [ ] SV-4.14 Fix phantom self::transcode() docref
+- [x] SV-4.8  Router static-path fast map + DI for string handlers ✅ (commit c8f94c04)
+- [x] SV-4.9  Migration ledger + document rewrite-class migrations ✅ (commit c8f94c04)
+- [x] SV-4.10 Provider-priority config single source of truth ✅ (commit c8f94c04)
+- [x] SV-4.11 Fix PluginCatalogService blocking curl + wrong docblock ✅ (commit c8f94c04)
+- [x] SV-4.12 Extend stale-job reaper glob to {chunk-*.m4s,seg-*.ts} ✅ (commit c8f94c04)
+- [x] SV-4.13 Remove superseded whole-file command builders ✅ (commit c8f94c04)
+- [x] SV-4.14 Fix phantom self::transcode() docref ✅ (commit c8f94c04)
 
 ## Notes / cross-repo blockers
 

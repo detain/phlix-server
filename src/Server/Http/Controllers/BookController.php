@@ -13,6 +13,8 @@ namespace Phlix\Server\Http\Controllers;
 
 use Phlix\Auth\SignedUrl;
 use Phlix\Common\Fs\LibraryRootGuard;
+use Phlix\Media\Library\BookProgress;
+use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
@@ -42,6 +44,34 @@ class BookController
 
     /** @var OpdsFeedBuilder OPDS feed builder */
     private OpdsFeedBuilder $opdsBuilder;
+
+    /** @var string|null Current user ID (from auth context) */
+    private ?string $userId = null;
+
+    /** @var BookProgressStore|null Progress store for reading progress */
+    private ?BookProgressStore $progressStore = null;
+
+    /**
+     * Sets the progress store for reading progress tracking.
+     *
+     * @param BookProgressStore $progressStore Progress store
+     * @return void
+     */
+    public function setProgressStore(BookProgressStore $progressStore): void
+    {
+        $this->progressStore = $progressStore;
+    }
+
+    /**
+     * Sets the current user ID from the request context.
+     *
+     * @param string $userId The authenticated user's ID
+     * @return void
+     */
+    public function setUserId(string $userId): void
+    {
+        $this->userId = $userId;
+    }
 
     /**
      * Constructor for BookController.
@@ -263,12 +293,12 @@ class BookController
      *
      * GET /books/{id}/read?page=1
      *
-     * This is a stub reader that provides paginated content.
-     * Full EPUB rendering via browser is a future enhancement.
+     * Returns JSON with book info, signed URLs, and reading progress for
+     * client-side EPUB rendering.
      *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Route parameters including 'id'
-     * @return Response HTML response with reader stub
+     * @return Response JSON response with book reader data
      *
      * @since 0.17.0
      */
@@ -286,17 +316,199 @@ class BookController
             return (new Response())->status(404)->json(['error' => 'Book not found']);
         }
 
+        /** @var array<string, mixed> $metadata */
+        $metadata = is_array($book['metadata'] ?? null) ? $book['metadata'] : [];
         $pageParam = $request->query['page'] ?? null;
         $page = max(1, is_numeric($pageParam) ? (int) $pageParam : 1);
-        $metadata = is_array($book['metadata'] ?? null) ? $book['metadata'] : [];
 
-        // Return JSON with book info for client-side EPUB rendering
+        // Build chapters/spine from metadata for client-side rendering
+        $chapters = $this->buildChapterList($metadata);
+        $totalPages = is_int($metadata['pages'] ?? null) ? (int) $metadata['pages'] : count($chapters);
+
+        // Get reading progress if user is authenticated and progress store is available
+        $progress = null;
+        if ($this->userId !== null && $this->progressStore !== null) {
+            $progress = $this->progressStore->getProgress($this->userId, $bookId);
+        }
+
+        // Return book data with signed URLs and progress info for client reader
         return (new Response())->json([
             'book' => $this->withSignedUrls($book, $bookId),
             'metadata' => $metadata,
-            'current_page' => $page,
-            'message' => 'EPUB reader rendering not yet implemented',
+            'current_page' => $progress !== null ? $progress->current_page : $page,
+            'total_pages' => $totalPages,
+            'chapters' => $chapters,
+            'progress' => $progress?->toArray(),
+            'message' => 'Reader ready',
         ]);
+    }
+
+    /**
+     * Gets the user's reading progress for a book.
+     *
+     * GET /books/{id}/progress
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters including 'id'
+     * @return Response JSON response with user's reading progress
+     *
+     * @since 0.17.0
+     */
+    public function getBookProgress(Request $request, array $params): Response
+    {
+        $bookId = $params['id'] ?? null;
+
+        if ($bookId === null) {
+            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+        }
+
+        if ($this->userId === null) {
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+        }
+
+        if ($this->progressStore === null) {
+            return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
+        }
+
+        $progress = $this->progressStore->getProgress($this->userId, $bookId);
+
+        return (new Response())->json([
+            'progress' => $progress?->toArray() ?? BookProgress::fresh($bookId, $this->userId)->toArray(),
+        ]);
+    }
+
+    /**
+     * Saves the user's reading progress for a book.
+     *
+     * POST /books/{id}/progress
+     *
+     * Request body (JSON):
+     *   - position_ms: int (current position within book in milliseconds)
+     *   - current_page: int (current page number, 1-based)
+     *   - total_pages: int (total pages in the book)
+     *   - percent_complete: float (0.0-100.0)
+     *
+     * @param Request $request The HTTP request
+     * @param array<string, string> $params Route parameters including 'id'
+     * @return Response JSON response confirming save
+     *
+     * @since 0.17.0
+     */
+    public function saveBookProgress(Request $request, array $params): Response
+    {
+        $bookId = $params['id'] ?? null;
+
+        if ($bookId === null) {
+            return (new Response())->status(400)->json(['error' => 'Book ID is required']);
+        }
+
+        if ($this->userId === null) {
+            return (new Response())->status(401)->json(['error' => 'Authentication required']);
+        }
+
+        if ($this->progressStore === null) {
+            return (new Response())->status(503)->json(['error' => 'Progress tracking not available']);
+        }
+
+        $body = $request->query['body'] ?? '{}';
+        $rawData = is_string($body) ? json_decode($body, true) : null;
+        $data = is_array($rawData) ? $rawData : [];
+
+        $positionMsRaw = $data['position_ms'] ?? 0;
+        $positionMs = is_int($positionMsRaw) || is_float($positionMsRaw)
+            ? (int) $positionMsRaw
+            : (is_numeric($positionMsRaw) ? (int) $positionMsRaw : 0);
+        $positionMs = max(0, $positionMs);
+
+        $currentPageRaw = $data['current_page'] ?? 1;
+        $currentPage = is_int($currentPageRaw)
+            ? $currentPageRaw
+            : (is_numeric($currentPageRaw) ? (int) $currentPageRaw : 1);
+        $currentPage = max(1, $currentPage);
+
+        $totalPagesRaw = $data['total_pages'] ?? 0;
+        $totalPages = is_int($totalPagesRaw)
+            ? $totalPagesRaw
+            : (is_numeric($totalPagesRaw) ? (int) $totalPagesRaw : 0);
+        $totalPages = max(0, $totalPages);
+
+        $percentCompleteRaw = $data['percent_complete'] ?? 0.0;
+        $percentComplete = is_int($percentCompleteRaw) || is_float($percentCompleteRaw)
+            ? (float) $percentCompleteRaw
+            : (is_numeric($percentCompleteRaw) ? (float) $percentCompleteRaw : 0.0);
+        $percentComplete = min(100.0, max(0.0, $percentComplete));
+
+        $progress = new BookProgress(
+            $bookId,
+            $this->userId,
+            $positionMs,
+            $currentPage,
+            $totalPages,
+            $percentComplete,
+            time()
+        );
+
+        $this->progressStore->saveProgress($progress);
+
+        return (new Response())->json([
+            'message' => 'Progress saved',
+            'progress' => $progress->toArray(),
+        ]);
+    }
+
+    /**
+     * Builds a chapter/spine list from book metadata for client-side rendering.
+     *
+     * @param array<string, mixed> $metadata Book metadata
+     * @return list<array{index:int, title:string, start_ms:int, end_ms:int, href:string}>
+     */
+    private function buildChapterList(array $metadata): array
+    {
+        $chapters = [];
+        $spine = $metadata['spine'] ?? $metadata['chapters'] ?? [];
+
+        if (!is_array($spine)) {
+            // Fallback: single chapter representing the whole book
+            return [[
+                'index' => 0,
+                'title' => is_string($metadata['title'] ?? null) ? $metadata['title'] : 'Start',
+                'start_ms' => 0,
+                'end_ms' => 0,
+                'href' => 'chapter0.xhtml',
+            ]];
+        }
+
+        foreach ($spine as $index => $chapter) {
+            if (!is_array($chapter)) {
+                continue;
+            }
+
+            $title = is_string($chapter['title'] ?? null)
+                ? $chapter['title']
+                : (is_string($chapter['name'] ?? null) ? $chapter['name'] : "Chapter " . ($index + 1));
+            $href = is_string($chapter['href'] ?? null) ? $chapter['href'] : "chapter{$index}.xhtml";
+
+            $chapters[] = [
+                'index' => (int) $index,
+                'title' => $title,
+                'start_ms' => is_int($chapter['start_ms'] ?? null) ? $chapter['start_ms'] : 0,
+                'end_ms' => is_int($chapter['end_ms'] ?? null) ? $chapter['end_ms'] : 0,
+                'href' => $href,
+            ];
+        }
+
+        // If no chapters found, add a placeholder
+        if ($chapters === []) {
+            $chapters[] = [
+                'index' => 0,
+                'title' => 'Start Reading',
+                'start_ms' => 0,
+                'end_ms' => 0,
+                'href' => 'chapter0.xhtml',
+            ];
+        }
+
+        return $chapters;
     }
 
     /**

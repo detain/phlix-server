@@ -35,8 +35,24 @@ class BookLibraryManager
     /** @var ItemRepository Repository for media item persistence */
     private ItemRepository $itemRepo;
 
+    /** @var BookProgressStore|null Progress store for per-user tracking */
+    private ?BookProgressStore $progressStore = null;
+
     /** @var StructuredLogger|null Logger instance */
     private ?StructuredLogger $logger;
+
+    /**
+     * Sets the progress store for per-user reading progress tracking.
+     *
+     * @param BookProgressStore $progressStore Progress store for per-user tracking
+     * @return void
+     *
+     * @since 0.17.0
+     */
+    public function setProgressStore(BookProgressStore $progressStore): void
+    {
+        $this->progressStore = $progressStore;
+    }
 
     /**
      * Constructor for BookLibraryManager.
@@ -44,17 +60,20 @@ class BookLibraryManager
      * @param BookScanner $scanner Book scanner for file discovery and metadata extraction
      * @param ItemRepository $itemRepo Repository for media item persistence
      * @param LoggerInterface|null $logger Optional logger
+     * @param BookProgressStore|null $progressStore Optional progress store for per-user tracking
      *
      * @since 0.17.0
      */
     public function __construct(
         BookScanner $scanner,
         ItemRepository $itemRepo,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?BookProgressStore $progressStore = null
     ) {
         $this->scanner = $scanner;
         $this->itemRepo = $itemRepo;
         $this->logger = $logger instanceof StructuredLogger ? $logger : null;
+        $this->progressStore = $progressStore;
     }
 
     /**
@@ -68,11 +87,12 @@ class BookLibraryManager
      *
      * @param string $libraryId The library's unique identifier
      * @param array<string> $paths Array of filesystem paths to scan
+     * @param callable|null $onProgress Optional progress callback
      * @return ScanResult Result containing scan statistics
      *
      * @since 0.17.0
      */
-    public function rescanLibrary(string $libraryId, array $paths): ScanResult
+    public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
         $startTime = microtime(true);
 
@@ -174,5 +194,48 @@ class BookLibraryManager
         }
 
         return $this->itemRepo->findById($itemId);
+    }
+
+    /**
+     * Gets user's progress for a book.
+     *
+     * @param string $userId The user's unique identifier
+     * @param string $bookId The book's unique identifier
+     * @return BookProgress The user's progress (fresh progress if none exists)
+     *
+     * @since 0.17.0
+     */
+    public function getProgress(string $userId, string $bookId): BookProgress
+    {
+        if ($this->progressStore === null) {
+            return BookProgress::fresh($bookId, $userId);
+        }
+
+        $progress = $this->progressStore->getProgress($userId, $bookId);
+
+        if ($progress === null) {
+            return BookProgress::fresh($bookId, $userId);
+        }
+
+        return $progress;
+    }
+
+    /**
+     * Saves user's progress for a book.
+     *
+     * @param string $userId The user's unique identifier
+     * @param string $bookId The book's unique identifier
+     * @param BookProgress $progress The progress to save
+     * @return void
+     *
+     * @since 0.17.0
+     */
+    public function saveProgress(string $userId, string $bookId, BookProgress $progress): void
+    {
+        if ($this->progressStore === null) {
+            return;
+        }
+
+        $this->progressStore->saveProgress($progress);
     }
 }

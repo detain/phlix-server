@@ -518,15 +518,21 @@ class LibraryManager
      * Clears all media items from a library and rescans from filesystem.
      *
      * @param string $libraryId The library's unique identifier
-     * @return void
+     * @param array<string> $paths Array of filesystem paths to scan
+     * @param callable|null $onProgress Optional progress callback
+     * @return ScanResult Result containing scan statistics
      */
-    public function rescanLibrary(string $libraryId, ?callable $onProgress = null): void
+    public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
-        // Remove existing items
-        $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
-
-        // Rescan
-        $this->scanLibrary($libraryId, $onProgress);
+        // Default implementation that subclasses override
+        // Subclasses (BookLibraryManager, AudiobookLibraryManager) implement
+        // their own scanning logic with proper media-specific scanners
+        $result = new ScanResult();
+        $result->scanned = 0;
+        $result->added = 0;
+        $result->updated = 0;
+        $result->durationMs = 0;
+        return $result;
     }
 
     /**

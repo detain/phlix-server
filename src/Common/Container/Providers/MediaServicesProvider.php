@@ -14,6 +14,7 @@ namespace Phlix\Common\Container\Providers;
 use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Common\Container\ServiceProviderInterface;
+use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\FolderWatcher;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -250,6 +251,10 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // (the single dispatch point for /api/v1/media/* on both entry points).
             \Phlix\Media\UserItemDataRepository::class => autowire(),
             \Phlix\Server\Http\Controllers\MediaUserDataController::class => autowire(),
+
+            // Book reading progress tracking (SV-3.2). Autowires with
+            // Workerman MySQL Connection (globally registered in CoreServicesProvider).
+            BookProgressStore::class => autowire(),
 
             TmdbProvider::class => factory(static function (ContainerInterface $c) use ($tmdbApiKey): TmdbProvider {
                 // Prefer the admin-managed server setting (set via the admin

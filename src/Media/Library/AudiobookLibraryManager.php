@@ -28,7 +28,7 @@ use Psr\Log\LoggerInterface;
  * @see AudiobookScanner For M4B chapter extraction
  * @see AudiobookProgressStore For per-user progress tracking
  */
-class AudiobookLibraryManager extends BookLibraryManager
+class AudiobookLibraryManager extends LibraryManager
 {
     /** @var AudiobookScanner Scanner for discovering audiobook files */
     private AudiobookScanner $scanner;
@@ -58,8 +58,6 @@ class AudiobookLibraryManager extends BookLibraryManager
         AudiobookProgressStore $progressStore,
         ?LoggerInterface $logger = null
     ) {
-        parent::__construct($scanner, $itemRepo, $logger);
-
         $this->scanner = $scanner;
         $this->itemRepo = $itemRepo;
         $this->progressStore = $progressStore;
@@ -77,11 +75,12 @@ class AudiobookLibraryManager extends BookLibraryManager
      *
      * @param string $libraryId The library's unique identifier
      * @param array<string> $paths Array of filesystem paths to scan
+     * @param callable|null $onProgress Optional progress callback
      * @return ScanResult Result containing scan statistics
      *
      * @since 0.18.0
      */
-    public function rescanLibrary(string $libraryId, array $paths): ScanResult
+    public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
         $startTime = microtime(true);
 

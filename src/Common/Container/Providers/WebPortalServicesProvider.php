@@ -20,6 +20,8 @@ use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\AudioScanner;
+use Phlix\Media\Library\BookLibraryManager;
+use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\MusicLibraryManager;
@@ -283,14 +285,21 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c): BookController {
                     /** @var ItemRepository $itemRepository */
                     $itemRepository = $c->get(ItemRepository::class);
-                    /** @var LibraryManager $libraryManager */
-                    $libraryManager = $c->get(LibraryManager::class);
+                    /** @var BookLibraryManager $libraryManager */
+                    $libraryManager = $c->get(BookLibraryManager::class);
+                    /** @var BookProgressStore|null $progressStore */
+                    $progressStore = $c->get(BookProgressStore::class);
 
-                    return new BookController(
+                    $controller = new BookController(
                         $itemRepository,
                         $libraryManager,
                         new OpdsFeedBuilder($itemRepository, 'http://localhost:8080'),
                     );
+                    if ($progressStore !== null) {
+                        $controller->setProgressStore($progressStore);
+                    }
+
+                    return $controller;
                 }
             ),
 

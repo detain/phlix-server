@@ -39,7 +39,6 @@ use Phlix\Server\Http\Response;
 class AudiobookController
 {
 
-
     /** @var ItemRepository Repository for media item access */
     private ItemRepository $itemRepo;
 
@@ -322,13 +321,17 @@ class AudiobookController
     }
 
     /**
-     * Returns the HTML audiobook player page.
+     * Returns the audiobook player data for the client-side player.
      *
      * GET /audiobooks/{id}/read
      *
+     * Returns full audiobook data with chapters and progress for the
+     * client-side audiobook player. The stream URL is signed because
+     * the <audio> element can't attach a Bearer header.
+     *
      * @param Request $request The HTTP request
      * @param array<string, string> $params Route parameters including 'id'
-     * @return Response HTML response with audiobook player stub
+     * @return Response JSON response with audiobook player data
      *
      * @since 0.18.0
      */
@@ -348,15 +351,52 @@ class AudiobookController
 
         /** @var array<string, mixed> $metadata */
         $metadata = is_array($audiobook['metadata'] ?? null) ? $audiobook['metadata'] : [];
+        $chaptersRaw = $metadata['chapters'] ?? null;
+        $chapters = is_array($chaptersRaw) ? $chaptersRaw : [];
 
-        // Return JSON with audiobook info for client-side player. The stream URL
-        // is signed because the <audio> element can't attach a Bearer header.
-        $audiobook['stream_url'] = SignedUrl::fromEnv()->mint('/api/v1/audiobooks/' . $audiobookId . '/stream');
+        // Format chapters for the player
+        $formattedChapters = [];
+        foreach ($chapters as $index => $chapter) {
+            if (!is_array($chapter)) {
+                continue;
+            }
+            $formattedChapters[] = [
+                'index' => (int) $index,
+                'title' => is_string($chapter['title'] ?? null) ? $chapter['title'] : "Chapter " . ((int) $index + 1),
+                'start_ms' => is_int($chapter['start_ms'] ?? null) ? $chapter['start_ms'] : 0,
+                'end_ms' => is_int($chapter['end_ms'] ?? null) ? $chapter['end_ms'] : 0,
+                'duration_ms' => is_int($chapter['duration_ms'] ?? null) ? $chapter['duration_ms'] : 0,
+            ];
+        }
+
+        $signer = SignedUrl::fromEnv();
+        $base = '/api/v1/audiobooks/' . $audiobookId;
+
+        // Get progress if authenticated
+        $progress = null;
+        if ($this->userId !== null) {
+            $progress = $this->libraryManager->getProgress($this->userId, $audiobookId);
+        }
 
         return (new Response())->json([
-            'audiobook' => $audiobook,
+            'audiobook' => [
+                'id' => $audiobook['id'],
+                'title' => $audiobook['name'],
+                'author' => $metadata['author'] ?? null,
+                'narrator' => $metadata['narrator'] ?? null,
+                'series' => $metadata['series'] ?? null,
+                'series_position' => $metadata['series_position'] ?? null,
+                'description' => $metadata['description'] ?? null,
+                'duration_ms' => $metadata['duration_ms'] ?? null,
+                'language' => $metadata['language'] ?? null,
+                'cover_url' => $metadata['cover_path'] ?? null,
+                'stream_url' => $signer->mint($base . '/stream'),
+                'read_url' => $signer->mint($base . '/read'),
+                'chapters' => $formattedChapters,
+            ],
             'metadata' => $metadata,
-            'message' => 'Audiobook player ready',
+            'progress' => $progress?->toArray(),
+            'message' => 'Player ready',
         ]);
     }
 

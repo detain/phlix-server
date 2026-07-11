@@ -151,7 +151,10 @@ class LibraryScanWorker
                     },
                 );
             } elseif ($type === 'rescan') {
-                $this->libraries->rescanLibrary($libraryId, $this->scanProgressSink($jobId));
+                $library = $this->libraries->getLibrary($libraryId);
+                $rawPaths = $library['paths'] ?? null;
+                $paths = is_array($rawPaths) ? array_filter($rawPaths, 'is_string') : [];
+                $this->libraries->rescanLibrary($libraryId, $paths, $this->scanProgressSink($jobId));
             } else {
                 $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
             }

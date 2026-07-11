@@ -534,11 +534,13 @@ class Router
     /**
      * Registers the book library API routes.
      *
-     * GET /api/v1/books                  — list all books
-     * GET /api/v1/books/{id}            — get single book
-     * GET /api/v1/books/{id}/cover      — cover image
-     * GET /api/v1/books/{id}/read        — reader stub
-     * GET /api/v1/books/{id}/download   — download book file
+     * GET /api/v1/books                    — list all books
+     * GET /api/v1/books/{id}              — get single book
+     * GET /api/v1/books/{id}/cover        — cover image
+     * GET /api/v1/books/{id}/read         — book reader with progress
+     * GET /api/v1/books/{id}/download     — download book file
+     * GET /api/v1/books/{id}/progress     — user's reading progress
+     * POST /api/v1/books/{id}/progress    — save reading progress
      *
      * @param string $controllerClass The BookController class name
      * @return self
@@ -552,6 +554,8 @@ class Router
         $this->get('/api/v1/books/{id}/cover', [$controllerClass, 'getCover']);
         $this->get('/api/v1/books/{id}/read', [$controllerClass, 'readBook']);
         $this->get('/api/v1/books/{id}/download', [$controllerClass, 'downloadBook']);
+        $this->get('/api/v1/books/{id}/progress', [$controllerClass, 'getBookProgress']);
+        $this->post('/api/v1/books/{id}/progress', [$controllerClass, 'saveBookProgress']);
 
         return $this;
     }

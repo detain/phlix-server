@@ -67,7 +67,7 @@
 - [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
 - [x] SV-1.3  move chapter-thumbnail + trickplay to background job ✅ (commit 4317214b)
 - [x] SV-1.4  correct zscale tone-map graph ✅ (commit 7c7156dc)
-- [ ] SV-1.5  implement real libplacebo tone-map mode
+- [x] SV-1.5  implement real libplacebo tone-map mode ✅ (commit abad4b46)
 - [ ] SV-1.6  fix subtitle burn-in escaping + VAAPI overlay
 - [ ] SV-1.7  range parser reuse on direct-play
 - [ ] SV-1.8  CSRF Origin exact-match

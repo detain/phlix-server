@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Managed worker-process settings (Step 1.1b).
  *
@@ -32,6 +30,8 @@ declare(strict_types=1);
  * @return array<string, array{enabled: bool, count: int, poll_seconds: int}>
  */
 
+declare(strict_types=1);
+
 return [
     'library-scan' => [
         'enabled'      => true,
@@ -55,5 +55,15 @@ return [
         'enabled'      => true,
         'count'        => 1,
         'poll_seconds' => 30,   // matches config/marker_detection.php worker_interval
+    ],
+
+    // SV-1.3: chapter-thumbnail + trickplay generation worker. Drains the
+    // file-based job queue (media_asset_jobs.job_queue_dir) of media items
+    // awaiting per-chapter thumbnail and trickplay sprite generation.
+    // Bounded concurrency (max_concurrent) limits parallel ffmpeg runs.
+    'media-asset' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 30,   // matches config/media_asset_jobs.php worker_interval
     ],
 ];

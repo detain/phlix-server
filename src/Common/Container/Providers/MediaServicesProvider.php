@@ -499,6 +499,56 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // MarkerCandidateRepository + optional LoggerInterface (defaults to NullLogger).
             BackgroundDetectorWorker::class => autowire(),
 
+            // SV-1.3: media-asset (chapter-thumbnail + trickplay) job store and worker.
+            // Reads job_queue_dir and max_concurrent from media_asset_jobs config.
+
+            // Job store: file-based queue keyed by media item ID.
+            \Phlix\Media\MediaAsset\MediaAssetJobStore::class => factory(static function (ContainerInterface $c): \Phlix\Media\MediaAsset\MediaAssetJobStore {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $assetCfg = $appConfig['media_asset_jobs'] ?? null;
+                if (!is_array($assetCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../../config/media_asset_jobs.php';
+                    $assetCfg = is_array($inc) ? $inc : [];
+                }
+                $queueDir = is_string(($assetCfg['job_queue_dir'] ?? null))
+                    ? $assetCfg['job_queue_dir']
+                    : '/tmp/phlix_media_asset_jobs';
+                return new \Phlix\Media\MediaAsset\MediaAssetJobStore($queueDir);
+            }),
+
+            // Generation job processor: wires FfmpegRunner, ItemRepository, and Connection.
+            \Phlix\Media\MediaAsset\MediaAssetGenerationJob::class => autowire()
+                ->constructorParameter('ffmpeg', get(FfmpegRunner::class))
+                ->constructorParameter('itemRepo', get(ItemRepository::class))
+                ->constructorParameter('db', get(Connection::class)),
+
+            // Media asset worker: autowires with MediaAssetJobStore, MediaAssetGenerationJob,
+            // optional LoggerInterface (defaults to NullLogger), and max_concurrent config.
+            \Phlix\Media\MediaAsset\MediaAssetWorker::class => factory(static function (ContainerInterface $c): \Phlix\Media\MediaAsset\MediaAssetWorker {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $assetCfg = $appConfig['media_asset_jobs'] ?? null;
+                if (!is_array($assetCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../../config/media_asset_jobs.php';
+                    $assetCfg = is_array($inc) ? $inc : [];
+                }
+                $maxConcurrent = is_int(($assetCfg['max_concurrent'] ?? null))
+                    ? $assetCfg['max_concurrent']
+                    : 2;
+                /** @var \Phlix\Media\MediaAsset\MediaAssetJobStore */
+                $store = $c->get(\Phlix\Media\MediaAsset\MediaAssetJobStore::class);
+                /** @var \Phlix\Media\MediaAsset\MediaAssetGenerationJob */
+                $processor = $c->get(\Phlix\Media\MediaAsset\MediaAssetGenerationJob::class);
+                return new \Phlix\Media\MediaAsset\MediaAssetWorker($store, $processor, null, $maxConcurrent);
+            }),
+
             // P3B-S8: marker-based media search
             ChapterSearchService::class => autowire()
                 ->constructorParameter('itemRepository', get(ItemRepository::class)),

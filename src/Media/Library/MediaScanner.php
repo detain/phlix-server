@@ -23,6 +23,8 @@ use Phlix\Media\MarkerType;
 use Phlix\Media\Markers\ChapterMarkerService;
 use Phlix\Media\Markers\MarkerService as MarkersMarkerService;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\MediaAsset\MediaAssetJob;
+use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Metadata\SceneFilenameNormalizer;
 use Phlix\Media\SimilarityService;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -80,6 +82,17 @@ class MediaScanner
      * @var FfmpegRunner|null
      */
     private ?FfmpegRunner $ffmpeg = null;
+
+    /**
+     * SV-1.3: Optional job store for async chapter-thumbnail + trickplay
+     * generation. When set, the inline generation code in processFile()
+     * is replaced by a lightweight enqueue; the actual ffmpeg work runs
+     * later in a bounded-concurrency background worker.
+     * Null in tests/legacy callers that do not wire it up.
+     *
+     * @var \Phlix\Media\MediaAsset\MediaAssetJobStore|null
+     */
+    private \Phlix\Media\MediaAsset\MediaAssetJobStore|null $mediaAssetJobStore = null;
 
     /**
      * Effective trailing-edition noise-suffix list applied to parsed titles
@@ -195,10 +208,18 @@ class MediaScanner
      *                           is called (best-effort) after each newly scanned
      *                           movie is indexed so its TMDB box-set membership
      *                           is synced without an explicit backfill run.
+     * @param \Phlix\Media\MediaAsset\MediaAssetJobStore|null $mediaAssetJobStore SV-1.3:
+     *                           optional job store for async chapter-thumbnail +
+     *                           trickplay generation. When supplied, the inline
+     *                           ffmpeg generation in processFile() is replaced by
+     *                           a lightweight enqueue and the actual generation
+     *                           runs later in a bounded-concurrency background
+     *                           worker. Null = inline generation (legacy mode).
      *
      * @since 0.14.0 TrailerFinder parameter added for extras detection
      * @since 0.35.0 SimilarityService parameter added for P4-S1
      * @since 0.36.0 CollectionService parameter added for P4-S3
+     * @since 0.36.0 MediaAssetJobStore parameter added for SV-1.3
      */
     public function __construct(
         Connection $db,
@@ -210,7 +231,8 @@ class MediaScanner
         ?array $noiseSuffixes = null,
         ?int $maxConcurrentScanProbes = null,
         ?SimilarityService $similarityService = null,
-        ?CollectionService $collectionService = null
+        ?CollectionService $collectionService = null,
+        ?\Phlix\Media\MediaAsset\MediaAssetJobStore $mediaAssetJobStore = null
     ) {
         $this->db = $db;
         $this->itemRepository = $itemRepository;
@@ -229,6 +251,7 @@ class MediaScanner
             : self::DEFAULT_MAX_CONCURRENT_SCAN_PROBES;
         $this->similarityService = $similarityService;
         $this->collectionService = $collectionService;
+        $this->mediaAssetJobStore = $mediaAssetJobStore;
     }
 
     /**
@@ -618,7 +641,17 @@ class MediaScanner
                 // processScanBatch already confirmed this path is absent via
                 // findPathsMap, so pass callerConfirmedAbsent=true to skip
                 // the redundant findByPath check inside processFile.
-                if ($this->processFile($libraryId, $file, $type, $forcedSeries, $forcedSeason, $precomputedProbe, true)) {
+                if (
+                    $this->processFile(
+                        $libraryId,
+                        $file,
+                        $type,
+                        $forcedSeries,
+                        $forcedSeason,
+                        $precomputedProbe,
+                        true
+                    )
+                ) {
                     $added++;
                 }
             }
@@ -1275,66 +1308,18 @@ class MediaScanner
             $this->persistStreams((string) $itemId, $probeSummary['streams']);
         }
 
-        // Extract and persist chapter markers from the container file (MKV/MP4/WebM).
-        // Guard: only when ffmpeg is wired and the container format carries chapters.
-        // Extraction is a read-only ffprobe call so it never modifies the source
-        // file. Failure is best-effort — a bad chapter on one file must not abort
-        // the whole library scan.
+        // SV-1.3: Enqueue chapter-thumbnail + trickplay generation as a background
+        // job instead of running it inline. When $mediaAssetJobStore is wired,
+        // the job is serialised to the queue file and a bounded-concurrency worker
+        // processes it asynchronously after the scan completes. When not wired
+        // (tests / legacy callers), generation is skipped — callers that need the
+        // old inline behaviour should wire up the store.
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
-        if (in_array($ext, ['mkv', 'mp4', 'webm'], true) && $this->ffmpeg !== null) {
-            try {
-                $chapterService = new ChapterMarkerService($this->ffmpeg);
-                $chapters = $chapterService->extractFromFile($path);
-                if (!empty($chapters)) {
-                    $candidateRepo = new MarkerCandidateRepository($this->itemRepository);
-                    $markerService = new MarkersMarkerService($this->itemRepository, $candidateRepo);
-                    $markerService->storeChapters((string) $itemId, $chapters);
-
-                    // Generate per-chapter thumbnails and store chapter markers in media_markers
-                    $chapterDir = $this->ffmpeg->getTranscodeDir() . '/chapters/' . $itemId;
-                    if (!is_dir($chapterDir)) {
-                        mkdir($chapterDir, 0755, true);
-                    }
-                    $mediaMarkerService = new MarkerService($this->db);
-                    foreach ($chapters as $index => $chapter) {
-                        $thumbPath = $chapterDir . '/' . $index . '.jpg';
-                        $startSeconds = $chapter->start_seconds;
-                        $success = $this->ffmpeg->generateThumbnail($path, $thumbPath, $startSeconds);
-                        if ($success) {
-                            $mediaMarkerService->upsert(
-                                (string) $itemId,
-                                MarkerType::Chapter,
-                                $startSeconds * 1000,
-                                $chapter->end_seconds * 1000,
-                                $chapter->title ?? ('Chapter ' . ($index + 1)),
-                                $thumbPath
-                            );
-                        }
-                    }
-                }
-
-                // Generate trickplay sprite sheet (best-effort): a 60-thumb grid
-                // at 160x90 enables smooth scrubbing previews in compatible players.
-                // Requires ffmpeg to be wired and a valid file path. Failure is
-                // best-effort — a missing trickplay on one file must not abort
-                // the whole library scan.
-                // NOTE: each media item gets its own subdirectory to avoid collisions
-                // when multiple items are scanned concurrently.
-                $spriteDir = $this->ffmpeg->getTranscodeDir() . '/trickplay/' . $itemId;
-                if (!is_dir($spriteDir)) {
-                    @mkdir($spriteDir, 0755, true);
-                }
-                $result = $this->ffmpeg->generateTrickplaySprites($path, $spriteDir, 60);
-                if ($result !== null) {
-                    [$spritePath, $timelinePath] = $result;
-                    $this->itemRepository->updateMarkers((string) $itemId, [
-                        'trickplay_sprite_path' => $spritePath,
-                        'trickplay_timeline_path' => $timelinePath,
-                    ]);
-                }
-            } catch (\Throwable) {
-                // Best-effort only — swallow and continue.
-            }
+        $supportsChapters = in_array($ext, ['mkv', 'mp4', 'webm'], true);
+        if ($this->mediaAssetJobStore !== null && $this->ffmpeg !== null && $supportsChapters) {
+            $duration = is_numeric($metadata['duration_seconds'] ?? null) ? (int) $metadata['duration_seconds'] : 0;
+            $job = new MediaAssetJob((string) $itemId, $path, $duration);
+            $this->mediaAssetJobStore->enqueue($job);
         }
 
         $this->dispatchMediaItemAdded((string)$itemId, $libraryId, $path, $mediaType);

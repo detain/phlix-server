@@ -1030,8 +1030,16 @@ class FfmpegRunner
         $this->hwaccelRegistry = $registry ?? HwaccelRegistry::getInstance();
         $capabilities = $this->hwaccelRegistry->getAll();
 
+        // Set preferred accelerator from merged config if specified.
+        // This affects getBestAcceleratorForCodec() selection order.
+        $preferredAccelerator = $this->config['preferred_accelerator'] ?? null;
+        if (is_string($preferredAccelerator) && $preferredAccelerator !== '') {
+            $this->setPreferredAccelerator($preferredAccelerator);
+        }
+
         $this->logger->info('Hardware acceleration probed', [
             'vendors' => array_keys($capabilities),
+            'preferred' => $preferredAccelerator,
         ]);
 
         $this->hwaccelProbed = true;
@@ -1867,12 +1875,14 @@ class FfmpegRunner
             return $this->launchDetachedSegment($encode, $tmp, $outFile);
         }
 
-        // Try hardware acceleration first if enabled in config
-        $hwaccelConfig = $this->config['hwaccel'] ?? null;
-        $hwaccelEnabled = is_array($hwaccelConfig) && ($hwaccelConfig['enabled'] ?? false) === true;
+        // Try hardware acceleration first if enabled AND preferred in config.
+        // prefer_hardware=false means prefer software even if hwaccel is available.
+        // The merged HwAccelConfig is flat (enabled, prefer_hardware at root level).
+        $hwaccelEnabled = ($this->config['enabled'] ?? false) === true;
+        $preferHardware = ($this->config['prefer_hardware'] ?? true) === true;
         $encode = null;
 
-        if ($hwaccelEnabled) {
+        if ($hwaccelEnabled && $preferHardware) {
             $encode = $this->buildHwaccelSegmentCommand($inputPath, $tmp, $start, $duration, $params);
         }
 

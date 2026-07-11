@@ -7,10 +7,10 @@
  * as well as a deprecated hwaccel bridge.
  *
  * @deprecated The 'hwaccel' key below is deprecated. It now delegates to
- *             config/hwaccel.php which provides the SINGLE SOURCE OF TRUTH for
- *             hardware acceleration settings. The HwAccelConfig::get() method
- *             returns a merged config that combines hwaccel base settings
- *             with transcoding.php tone-map and preferred accelerator settings.
+ *             \Phlix\Config\HwAccelConfig::get() which provides the SINGLE SOURCE
+ *             OF TRUTH for hardware acceleration settings. The method returns a
+ *             merged config that combines hwaccel base settings with transcoding.php
+ *             tone-map and preferred accelerator settings.
  *
  *             For runtime config, always use:
  *               $config = \Phlix\Config\HwAccelConfig::get();
@@ -23,8 +23,7 @@
 
 declare(strict_types=1);
 
-// Load the HwAccelConfig class from hwaccel.php
-require_once __DIR__ . '/hwaccel.php';
+// HwAccelConfig is now autoloaded from src/Config/HwAccelConfig.php via PSR-4.
 
 return [
     'ffmpeg_path' => '/usr/bin/ffmpeg',

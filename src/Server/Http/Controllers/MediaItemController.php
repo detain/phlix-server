@@ -482,10 +482,12 @@ class MediaItemController
         $ifNoneMatch = $request->getHeader('If-None-Match');
         $ifModifiedSince = $request->getHeader('If-Modified-Since');
 
-        if (
-            ($ifNoneMatch !== null && $ifNoneMatch === $etag)
-            || ($ifNoneMatch === null && $ifModifiedSince !== null && $mtime > 0 && $ifModifiedSince !== '' && strtotime($ifModifiedSince) >= $mtime)
-        ) {
+        $etagMatch = $ifNoneMatch !== null && $ifNoneMatch === $etag;
+        $notModified = $ifNoneMatch === null && $ifModifiedSince !== null
+            && $mtime > 0 && $ifModifiedSince !== ''
+            && strtotime($ifModifiedSince) >= $mtime;
+
+        if ($etagMatch || $notModified) {
             return (new Response())
                 ->status(304)
                 ->header('ETag', $etag)
@@ -515,5 +517,192 @@ class MediaItemController
             ->header('Last-Modified', $lastModified)
             ->header('Cache-Control', 'public, max-age=86400')
             ->withFile($thumbnailPath, 0, $fileSize);
+    }
+
+    /**
+     * Get download URL or info for a media item.
+     *
+     * @param Request $request Current request
+     * @param array<string, string> $params Path parameters with 'id'
+     * @return Response JSON response with download URL/info
+     */
+    public function getDownload(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $path = $item['path'] ?? null;
+        if (!is_string($path) || $path === '' || !file_exists($path)) {
+            return (new Response())->status(404)->json(['error' => 'File not found on disk']);
+        }
+
+        $fileSize = (int) filesize($path);
+        $filename = basename($path);
+
+        return (new Response())->json([
+            'url' => \Phlix\Auth\SignedUrl::fromEnv()->mint('/media/' . $params['id'] . '/stream'),
+            'filename' => $filename,
+            'size' => $fileSize,
+            'content_type' => 'application/octet-stream',
+        ]);
+    }
+
+    /**
+     * Get missing episodes for a series (episodes that don't exist locally).
+     *
+     * @param Request $request Current request
+     * @param array<string, string> $params Path parameters with 'id'
+     * @return Response JSON response with list of missing episode numbers/info
+     */
+    public function getMissingEpisodes(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $type = $item['type'] ?? '';
+        if ($type !== 'series' && $type !== 'show') {
+            return (new Response())->status(400)->json(['error' => 'Item is not a series']);
+        }
+
+        $metadataJson = $item['metadata_json'] ?? null;
+        if (!is_array($metadataJson)) {
+            return (new Response())->json(['missing_episodes' => []]);
+        }
+
+        $expectedEpisodes = $metadataJson['episode_count'] ?? null;
+        if (!is_int($expectedEpisodes) || $expectedEpisodes <= 0) {
+            return (new Response())->json(['missing_episodes' => []]);
+        }
+
+        $children = $this->itemRepository->findByParent($params['id']);
+        $existingEpisodeNumbers = [];
+        foreach ($children as $child) {
+            $episodeNumber = $child['episode_number'] ?? null;
+            if (is_int($episodeNumber) || is_numeric($episodeNumber)) {
+                $existingEpisodeNumbers[(int) $episodeNumber] = true;
+            }
+        }
+
+        $missingEpisodes = [];
+        for ($i = 1; $i <= $expectedEpisodes; $i++) {
+            if (!isset($existingEpisodeNumbers[$i])) {
+                $missingEpisodes[] = ['episode_number' => $i];
+            }
+        }
+
+        return (new Response())->json([
+            'total_expected' => $expectedEpisodes,
+            'total_existing' => count($existingEpisodeNumbers),
+            'missing_episodes' => $missingEpisodes,
+        ]);
+    }
+
+    /**
+     * Initiate shuffle-play for a media item.
+     *
+     * @param Request $request Current request with JSON body containing 'media_id'
+     * @param array<string, string> $params Path parameters
+     * @return Response JSON response with shuffled episode list
+     */
+    public function shufflePlay(Request $request, array $params): Response
+    {
+        $body = $request->body;
+        $mediaId = is_string($body['media_id'] ?? null) ? $body['media_id'] : null;
+
+        if ($mediaId === null) {
+            return (new Response())->status(400)->json(['error' => 'media_id is required']);
+        }
+
+        $item = $this->itemRepository->findById($mediaId);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $children = $this->itemRepository->findByParent($mediaId);
+
+        if (empty($children)) {
+            $type = $item['type'] ?? '';
+            if ($type === 'movie' || $type === 'audio') {
+                return (new Response())->json([
+                    'shuffled_ids' => [$mediaId],
+                    'mode' => 'single',
+                ]);
+            }
+            return (new Response())->status(404)->json(['error' => 'No playable items found']);
+        }
+
+        $ids = array_column($children, 'id');
+        shuffle($ids);
+
+        return (new Response())->json([
+            'shuffled_ids' => $ids,
+            'mode' => 'shuffle',
+        ]);
+    }
+
+    /**
+     * Update media item metadata (title, summary, etc.).
+     *
+     * @param Request $request Current request with JSON body
+     * @param array<string, string> $params Path parameters with 'id'
+     * @return Response JSON response with updated item
+     */
+    public function updateMetadata(Request $request, array $params): Response
+    {
+        $item = $this->itemRepository->findById($params['id']);
+
+        if (!$item) {
+            return (new Response())->status(404)->json(['error' => 'Item not found']);
+        }
+
+        $body = $request->body;
+        if (!is_array($body)) {
+            return (new Response())->status(400)->json(['error' => 'Request body must be JSON object']);
+        }
+
+        $updateData = [];
+
+        if (isset($body['title']) && is_string($body['title'])) {
+            $updateData['title'] = trim($body['title']);
+        }
+
+        if (isset($body['summary']) && is_string($body['summary'])) {
+            $summary = trim($body['summary']);
+            $metadataJson = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
+            $metadataJson['summary'] = $summary;
+            $updateData['metadata_json'] = $metadataJson;
+        }
+
+        if (isset($body['overview']) && is_string($body['overview'])) {
+            $overview = trim($body['overview']);
+            $existingMeta = $updateData['metadata_json'] ?? null;
+            $itemMeta = $item['metadata_json'] ?? null;
+            $metadataJson = is_array($existingMeta) ? $existingMeta
+                : (is_array($itemMeta) ? $itemMeta : []);
+            $metadataJson['overview'] = $overview;
+            $updateData['metadata_json'] = $metadataJson;
+        }
+
+        if (isset($body['metadata_json']) && is_array($body['metadata_json'])) {
+            $existingMetadata = is_array($item['metadata_json'] ?? null) ? $item['metadata_json'] : [];
+            $updateData['metadata_json'] = array_merge($existingMetadata, $body['metadata_json']);
+        }
+
+        if (empty($updateData)) {
+            return (new Response())->status(400)->json(['error' => 'No valid fields to update']);
+        }
+
+        $this->itemRepository->update($params['id'], $updateData);
+
+        $updatedItem = $this->itemRepository->findById($params['id']);
+
+        return (new Response())->json(['item' => $updatedItem]);
     }
 }

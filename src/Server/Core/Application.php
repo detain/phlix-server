@@ -435,6 +435,9 @@ class Application
         // Returns the thumbnail image for a specific chapter.
         $this->router->get('/api/v1/media/{id}/chapters/{index}/thumbnail', [$mediaItemController, 'getChapterThumbnail']);
 
+        // Download URL/info endpoint (public, returns a signed URL).
+        $this->router->get('/api/v1/media/{id}/download', [$mediaItemController, 'getDownload']);
+
         // Interactive per-item metadata match (S5). Admin-gated inside the
         // controller (same protection as the whole-library match endpoint).
         $mediaMatchController = $this->getMediaMatchController();
@@ -531,6 +534,24 @@ class Application
                 );
             } catch (\Throwable) {
                 // MediaUserDataController not available — routes not registered
+            }
+        }
+
+        // Media item action endpoints — auth-gated.
+        if ($this->container !== null) {
+            try {
+                $mediaItemController = $this->getMediaItemController();
+                $this->router->group(
+                    '',
+                    function (Router $r) use ($mediaItemController): void {
+                        $r->get('/api/v1/media/{id}/missing-episodes', [$mediaItemController, 'getMissingEpisodes']);
+                        $r->patch('/api/v1/media/{id}/metadata', [$mediaItemController, 'updateMetadata']);
+                        $r->post('/api/v1/shuffle', [$mediaItemController, 'shufflePlay']);
+                    },
+                    [new \Phlix\Server\Http\Middleware\AuthMiddleware()]
+                );
+            } catch (\Throwable) {
+                // Controller unavailable — routes not registered
             }
         }
 
@@ -1376,6 +1397,9 @@ class Application
             $r->get('/api/v1/collections/{id}', [$controller, 'show']);
             $r->put('/api/v1/collections/{id}', [$controller, 'update']);
             $r->delete('/api/v1/collections/{id}', [$controller, 'delete']);
+
+            // Playlist alias (UI-3.8) — creates a collection
+            $r->post('/api/v1/playlists', [$controller, 'create']);
 
             // Collection item management
             $r->post('/api/v1/collections/{id}/items/{mediaItemId}', [$controller, 'addItem']);

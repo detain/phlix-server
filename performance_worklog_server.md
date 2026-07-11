@@ -82,8 +82,8 @@
 - [x] SV-2.7  per-request auth status cache ✅ (commit 786b80fd)
 - [x] SV-2.8  list-query projection + materialized filter columns ✅ (commit ef156b1e)
 - [x] SV-2.9  defer similarity computation to background job ✅ (commit c9ea405d)
-- [ ] SV-3.1  DVR recording data plane
-- [ ] SV-3.2  book reader + audiobook player backends
+- [x] SV-3.1  DVR recording data plane ✅ (commit 0579ef07)
+- [x] SV-3.2  book reader + audiobook player backends ✅ (commit 4f51206f)
 - [ ] SV-3.3  client capability negotiation + loudness normalization
 - [ ] SV-3.4  local artwork cache with sized variants
 - [ ] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache

@@ -32,6 +32,11 @@ class TraktApi
 {
     private const BASE_URL = 'https://api.trakt.tv';
 
+    // Retry constants for rate-limit backoff (SV-3.5 pattern)
+    private const RETRY_MAX_ATTEMPTS = 5;
+    private const RETRY_BASE_DELAY_MS = 1_000;
+    private const RETRY_MAX_DELAY_MS = 32_000;
+
     private readonly LoggerInterface $logger;
 
     /**
@@ -378,6 +383,9 @@ class TraktApi
     /**
      * Get watched history for a user (for Trakt → Phlix sync).
      *
+     * Implements retry with jittered exponential backoff for rate-limited
+     * (429) and server (5xx) responses, following the SV-3.5 pattern.
+     *
      * @param string $username Trakt username
      * @param int $page Page number (1-indexed)
      * @param int $limit Items per page (default 100, max 1000)
@@ -400,19 +408,47 @@ class TraktApi
             'limit' => min($limit, 1000),
         ];
 
-        $response = $this->http->get(
-            self::BASE_URL . '/users/' . urlencode($username) . '/watched',
-            $params,
-            $headers
-        );
+        $url = self::BASE_URL . '/users/' . urlencode($username) . '/watched';
 
-        $this->logger->debug('Trakt watched history response', [
-            'username' => $username,
-            'page' => $page,
-            'count' => count($response),
-        ]);
+        // Retry loop with jittered exponential backoff for rate-limit/server errors (SV-3.5 pattern)
+        $lastException = null;
+        for ($attempt = 0; $attempt <= self::RETRY_MAX_ATTEMPTS; $attempt++) {
+            try {
+                $response = $this->http->get($url, $params, $headers);
 
-        return $response;
+                $this->logger->debug('Trakt watched history response', [
+                    'username' => $username,
+                    'page' => $page,
+                    'count' => count($response),
+                ]);
+
+                return $response;
+            } catch (TraktRateLimitException $e) {
+                $lastException = $e;
+                if ($attempt < self::RETRY_MAX_ATTEMPTS) {
+                    $delayMs = $this->computeBackoffDelayMs($attempt);
+                    $this->logger->info('Trakt rate-limited, backing off before retry', [
+                        'username' => $username,
+                        'attempt' => $attempt + 1,
+                        'delay_ms' => $delayMs,
+                        'error' => $e->getMessage(),
+                    ]);
+                    usleep((int) ($delayMs * 1_000));
+                    continue;
+                }
+                throw $e;
+            } catch (TraktApiException $e) {
+                // Non-rate-limit API exception: re-throw immediately
+                throw $e;
+            }
+        }
+
+        // Should not reach here, but if it does, throw the last exception
+        if ($lastException !== null) {
+            throw $lastException;
+        }
+
+        return [];
     }
 
     /**
@@ -474,6 +510,25 @@ class TraktApi
 
         /** @var array<string, mixed> */
         return $response;
+    }
+
+    /**
+     * Compute jittered exponential backoff delay for retry attempt $attempt.
+     *
+     * Delay = min(RETRY_BASE_DELAY_MS * 2^attempt, RETRY_MAX_DELAY_MS) + jitter.
+     * Jitter is a random value in [0, delay] to prevent thundering-herd when
+     * multiple clients recover from a shared outage simultaneously.
+     *
+     * @param int $attempt Zero-based attempt index (0 = first retry).
+     *
+     * @return float Delay in milliseconds (float for usleep compatibility).
+     */
+    private function computeBackoffDelayMs(int $attempt): float
+    {
+        $delay = min(self::RETRY_BASE_DELAY_MS * (2 ** $attempt), self::RETRY_MAX_DELAY_MS);
+        // Uniform jitter in [0, delay].
+        $jitter = mt_rand(0, (int) $delay);
+        return (float) ($delay + $jitter);
     }
 
     /**

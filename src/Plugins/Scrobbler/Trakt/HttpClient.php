@@ -61,6 +61,7 @@ class HttpClient implements HttpClientInterface
      *
      * @throws TraktApiException
      * @throws TraktAuthenticationException
+     * @throws TraktRateLimitException
      */
     private function request(string $method, string $url, array $data, array $headers): array
     {
@@ -100,6 +101,13 @@ class HttpClient implements HttpClientInterface
             }
         }
 
+        // Capture response headers to extract Retry-After on 429
+        $responseHeaders = '';
+        curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $header) use (&$responseHeaders): int {
+            $responseHeaders .= $header;
+            return strlen($header);
+        });
+
         $raw = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
@@ -115,6 +123,22 @@ class HttpClient implements HttpClientInterface
 
         if ($httpCode === 401) {
             throw new TraktAuthenticationException('Unauthorized - token invalid or expired');
+        }
+
+        // Handle rate limiting with Retry-After header support
+        if ($httpCode === 429) {
+            $retryAfter = 0;
+            // Parse Retry-After from response headers (case-insensitive)
+            foreach (explode("\r\n", $responseHeaders) as $header) {
+                if (str_starts_with(strtolower($header), 'retry-after:')) {
+                    $retryAfter = (int) trim(substr($header, 11));
+                    break;
+                }
+            }
+            throw new TraktRateLimitException(
+                'Rate limit exceeded' . ($retryAfter > 0 ? ' - retry after ' . $retryAfter . 's' : ''),
+                $retryAfter
+            );
         }
 
         if ($httpCode >= 400) {

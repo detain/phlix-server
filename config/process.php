@@ -47,4 +47,13 @@ return [
         'count'        => 1,
         'poll_seconds' => 86400,
     ],
+
+    // SV-0.7: marker/intro-detection worker. Drains the file-based job queue
+    // (marker_detection.job_queue_dir) of shows needing intro/outro detection.
+    // Each tick runs one show's detection; a backlog of N drains in ≤ N ticks.
+    'marker-detection' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 30,   // matches config/marker_detection.php worker_interval
+    ],
 ];

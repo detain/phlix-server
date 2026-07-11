@@ -22,7 +22,13 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ScanJobRepository;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\CollectionService;
+use Phlix\Media\Markers\Detection\BackgroundDetectorWorker;
+use Phlix\Media\Markers\Detection\IntroDetectionJob;
 use Phlix\Media\Markers\Detection\MarkerCandidateRepository;
+use Phlix\Media\Markers\Detection\MarkerCandidateStore;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintFactory;
+use Phlix\Media\Markers\Fingerprinting\ChromaPrintInterface;
+use Phlix\Media\Markers\Fingerprinting\FingerprintRepository;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\Metadata\Imdb\ImdbLookup;
@@ -436,6 +442,62 @@ final class MediaServicesProvider implements ServiceProviderInterface
 
             PlaybackMarkerService::class => autowire()
                 ->constructorParameter('marker_service', get(MarkerService::class)),
+
+            // SV-0.7: marker/intro-detection worker (BackgroundDetectorWorker)
+            // ChromaPrint: try FFI first, fall back to fpcalc shelled binary.
+            // The fpcalc path ('fpcalc') matches scripts/run-marker-detection-worker.php.
+            ChromaPrintInterface::class => factory(
+                static fn (): ChromaPrintInterface => ChromaPrintFactory::build('fpcalc')
+            ),
+
+            // Fingerprint repository: autowires with ItemRepository (already registered).
+            FingerprintRepository::class => autowire(),
+
+            // Marker candidate store: reads job_queue_dir from marker_detection config.
+            MarkerCandidateStore::class => factory(static function (ContainerInterface $c): MarkerCandidateStore {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $markerCfg = $appConfig['marker_detection'] ?? null;
+                if (!is_array($markerCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../../config/marker_detection.php';
+                    $markerCfg = is_array($inc) ? $inc : [];
+                }
+                $queueDir = is_string(($markerCfg['job_queue_dir'] ?? null))
+                    ? $markerCfg['job_queue_dir']
+                    : '/tmp/phlix_marker_jobs';
+                return new MarkerCandidateStore($queueDir);
+            }),
+
+            // Intro detection job: reads min_episodes_for_detection from marker_detection config.
+            IntroDetectionJob::class => factory(static function (ContainerInterface $c): IntroDetectionJob {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $markerCfg = $appConfig['marker_detection'] ?? null;
+                if (!is_array($markerCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../../config/marker_detection.php';
+                    $markerCfg = is_array($inc) ? $inc : [];
+                }
+                $minEpisodes = is_int(($markerCfg['min_episodes_for_detection'] ?? null))
+                    ? $markerCfg['min_episodes_for_detection']
+                    : 3;
+                /** @var FingerprintRepository */
+                $fpRepo = $c->get(FingerprintRepository::class);
+                /** @var ItemRepository */
+                $itemRepo = $c->get(ItemRepository::class);
+                /** @var ChromaPrintInterface */
+                $chromaPrint = $c->get(ChromaPrintInterface::class);
+                return new IntroDetectionJob($fpRepo, $itemRepo, $chromaPrint, null, $minEpisodes);
+            }),
+
+            // Background detector worker: autowires with IntroDetectionJob, MarkerCandidateStore,
+            // MarkerCandidateRepository + optional LoggerInterface (defaults to NullLogger).
+            BackgroundDetectorWorker::class => autowire(),
 
             // P3B-S8: marker-based media search
             ChapterSearchService::class => autowire()

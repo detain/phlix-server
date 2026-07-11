@@ -474,6 +474,7 @@ try {
 $managedWorkerClasses = [
     'library-scan'       => \Phlix\Media\Library\LibraryScanWorker::class,
     'plugin-auto-update' => \Phlix\Plugins\Catalog\PluginAutoUpdateWorker::class,
+    'marker-detection'   => \Phlix\Media\Markers\Detection\BackgroundDetectorWorker::class,
 ];
 
 try {

@@ -160,4 +160,33 @@ class BackgroundDetectorWorker
     {
         return $this->store->queueSize();
     }
+
+    /**
+     * Start the polling loop on the Workerman event loop.
+     *
+     * Installs a {@see Timer} that calls {@see self::runOnce()} once per tick
+     * (one job per tick — a backlog of N drains in ≤ N ticks). Must be called
+     * from inside a worker's `onWorkerStart` because {@see Timer} requires a
+     * running event loop.
+     *
+     * Uses the same non-blocking {@see Timer::add()} pattern as
+     * {@see \Phlix\Media\Library\LibraryScanWorker::start()} and
+     * {@see \Phlix\Plugins\Catalog\PluginAutoUpdateWorker::start()}, replacing
+     * the legacy blocking {@see self::runLoop()} which used {@see Timer::sleep()}
+     * in a tight while-loop (unsuitable for Workerman's event loop context).
+     *
+     * @param int $pollSeconds Poll interval in seconds.
+     *
+     * @return void
+     *
+     * @since 0.12.0
+     */
+    public function start(int $pollSeconds): void
+    {
+        $this->logger->info('BackgroundDetectorWorker: starting supervised loop', [
+            'poll_interval' => $pollSeconds,
+        ]);
+
+        Timer::add($pollSeconds, fn (): bool => $this->runOnce());
+    }
 }

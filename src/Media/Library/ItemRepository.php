@@ -625,14 +625,68 @@ class ItemRepository
     }
 
     /**
+     * Sanitizes a user search query for MySQL FULLTEXT boolean mode.
+     *
+     * FULLTEXT boolean mode treats `+ - > < ( ) ~ * " @` as special operators.
+     * Queries like "C++" cause syntax errors because "++" is interpreted as
+     * increment operator. Similarly, email addresses or random strings with
+     * many operators cause errors.
+     *
+     * This method strips problematic operators that are unlikely to be
+     * intentional search modifiers when they appear in user queries, while
+     * preserving legitimate +word (must contain) syntax.
+     *
+     * @param string $query Raw user search input
+     * @return string Sanitized query safe for FULLTEXT AGAINST(? IN BOOLEAN MODE)
+     */
+    private function sanitizeFulltextQuery(string $query): string
+    {
+        if ($query === '') {
+            return '';
+        }
+
+        // Use a separate variable to avoid PHPStan type inference issues
+        // with preg_replace return type tracking through reassignment
+        $sanitized = $query;
+
+        // Strip consecutive + signs that are unlikely to be intentional "must contain"
+        // operators (e.g., "C++" → "C+", "C+++" → "C++")
+        // But keep single + at start of words (word+ means "must contain word")
+        $result = preg_replace('/\+\++/', '+', $sanitized);
+        $sanitized = is_string($result) ? $result : $sanitized;
+
+        // Remove leading + signs that aren't followed by a word character
+        // (these are almost certainly accidental, like "++foobar" or just "++")
+        $result = preg_replace('/^\+\s*/', '', $sanitized);
+        $sanitized = is_string($result) ? $result : $sanitized;
+
+        // Remove standalone + or - operators that aren't preceded by a word
+        // (e.g., "+ +" → "+" keeps one, " - " at start → removed)
+        $result = preg_replace('/(?<!\w)[+\-]+(?!\w)/', ' ', $sanitized);
+        $sanitized = is_string($result) ? $result : $sanitized;
+
+        // Remove other problematic operators: < > ( ) ~ * " @
+        // These are rarely used intentionally in simple search queries
+        $sanitized = str_replace(['<', '>', '(', ')', '~', '*', '"', '@'], ' ', $sanitized);
+
+        // Collapse multiple spaces
+        $result = preg_replace('/\s+/', ' ', $sanitized);
+        $sanitized = is_string($result) ? $result : $sanitized;
+
+        return trim($sanitized);
+    }
+
+    /**
      * Performs full-text search on media item names.
      *
      * Raw user input is passed to a FULLTEXT … AGAINST(… IN BOOLEAN MODE)
-     * match. Boolean mode treats `+ - > < ( ) ~ * " @` as operators, so an
-     * unbalanced or operator-only query (e.g. an email address or `C++`)
-     * makes MySQL raise a "syntax error in fulltext search expression" and
-     * the whole request would otherwise blow up. Fall back to a plain LIKE
-     * scan so search degrades gracefully instead of erroring out.
+     * match after sanitization to handle problematic characters like `C++`
+     * which would otherwise cause a syntax error. Boolean mode treats
+     * `+ - > < ( ) ~ * " @` as operators, so an unbalanced or operator-only
+     * query (e.g. an email address) makes MySQL raise a "syntax error in
+     * fulltext search expression". The query is sanitized to remove/replace
+     * these operators before the query, falling back to LIKE only when
+     * the sanitized query is empty.
      *
      * @param string $query The search query for full-text matching
      * @param int $limit Maximum number of results to return
@@ -640,10 +694,18 @@ class ItemRepository
      */
     public function search(string $query, int $limit = 50): array
     {
+        // Sanitize the query to handle C++, email addresses, etc.
+        $sanitizedQuery = $this->sanitizeFulltextQuery($query);
+
+        // If sanitization removed everything, fall back to LIKE immediately
+        if ($sanitizedQuery === '') {
+            return $this->searchFuzzy($query, $limit);
+        }
+
         try {
             $results = $this->db->query(
                 "SELECT * FROM media_items WHERE MATCH(name) AGAINST(? IN BOOLEAN MODE) LIMIT ?",
-                [$query, $limit]
+                [$sanitizedQuery, $limit]
             );
 
             return $this->hydrateRows($results);

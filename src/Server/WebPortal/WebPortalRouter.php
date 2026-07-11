@@ -1733,7 +1733,7 @@ class WebPortalRouter
             return (new Response())->status(404)->json(['error' => 'Item not found']);
         }
 
-        $collection = $this->collectionService->getCollectionForItem((int) $itemId);
+        $collection = $this->collectionService->getCollectionForItem($itemId);
 
         if ($collection === null) {
             return (new Response())->status(404)->json(['error' => 'Item is not part of any collection']);

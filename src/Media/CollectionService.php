@@ -127,16 +127,16 @@ final class CollectionService
      * correct part order from TMDB. If the movie has no collection, any existing
      * collection membership is removed.
      *
-     * @param int $movieItemId The local media_item ID of the movie
+     * @param string $movieItemId The local media_item UUID of the movie
      * @param string $tmdbApiKey TMDB API key for the request
      * @return bool True if sync succeeded (even if movie has no collection), false on failure
      *
      * @since 0.36.0
      */
-    public function syncCollectionForMovie(int $movieItemId, string $tmdbApiKey): bool
+    public function syncCollectionForMovie(string $movieItemId, string $tmdbApiKey): bool
     {
         // Find the movie item and extract its TMDB ID from metadata_json
-        $movie = $this->itemRepository->findById((string) $movieItemId);
+        $movie = $this->itemRepository->findById($movieItemId);
         if ($movie === null) {
             return false;
         }
@@ -205,10 +205,10 @@ final class CollectionService
     /**
      * Removes a movie's collection membership if any exists.
      *
-     * @param int $movieItemId The local media_item ID
+     * @param string $movieItemId The local media_item UUID
      * @return void
      */
-    private function removeCollectionMembership(int $movieItemId): void
+    private function removeCollectionMembership(string $movieItemId): void
     {
         $this->db->query(
             'DELETE FROM media_collection_members WHERE media_item_id = ?',
@@ -263,13 +263,13 @@ final class CollectionService
     /**
      * Returns the collection that a media item belongs to, if any.
      *
-     * @param int $mediaItemId The local media_item ID
+     * @param string $mediaItemId The local media_item UUID
      * @return array{id: int, tmdb_collection_id: int, name: string, overview: string|null,
      *     poster_url: string|null, backdrop_url: string|null}|null Collection info or null
      *
      * @since 0.36.0
      */
-    public function getCollectionForItem(int $mediaItemId): ?array
+    public function getCollectionForItem(string $mediaItemId): ?array
     {
         $rows = $this->db->query(
             'SELECT mc.id, mc.tmdb_collection_id, mc.name, mc.overview,

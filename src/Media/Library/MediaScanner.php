@@ -1359,7 +1359,7 @@ class MediaScanner
                         $meta = is_array($metaRaw) ? $metaRaw : null;
                     }
                     if ($meta !== null && isset($meta['tmdb_id']) && is_numeric($meta['tmdb_id'])) {
-                        $this->collectionService->syncCollectionForMovie((int) $itemId, '');
+                        $this->collectionService->syncCollectionForMovie($itemId, '');
                     }
                 }
             } catch (\Throwable $e) {

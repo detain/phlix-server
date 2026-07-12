@@ -1286,3 +1286,137 @@ and can drive SyncPlay; (c) an unauthenticated client's `subscribe_dashboard`/Sy
 a NOT_AUTHENTICATED error and is not dispatched.
 
 NO FINDINGS (pending review)
+
+## Reviewer (per-step) — SV-4.7 — 2026-07-12
+
+Reviewed commit `fecd0ab5` (parent `62e7e1d5`) adversarially against the SV-4.7
+Acceptance Criteria + S-F34 + §0 ground rules. Traced every enumerated review focus.
+
+Verified:
+- **SV-0.5 landmine cleared.** `onWebSocketConnect` is bound in `bindConnectionCallbacks()`
+  onto `$this->worker`, which in the resident path is the INJECTED listening `$wsWorker`
+  (`start.php:288` passes `$w`; ctor takes the `$worker !== null` branch, no re-create).
+  Workerman resolves the hook via `$connection->worker->onWebSocketConnect`, so auth runs on
+  the real :8097 listener. `WebSocketServerTest` now asserts this binding explicitly.
+- **No bypass.** Single inbound dispatch path (`onMessage` → `MessageHandler::handle`), gate at
+  the very top of `handle()` before both the `subscribe_dashboard` branch and the generic
+  `callbacks[$event]` dispatch. All SyncPlay handlers register `syncplay_*` types (verified in
+  `SyncPlayManager::initialize` lines 200-213) → all caught by the `SYNCPLAY_PREFIX` privileged
+  check. No `auth_request` handler exists → no post-handshake alt-auth path; `setAuthenticated`
+  is called ONLY from `authenticateConnection` (handshake). Legacy `SyncPlayAuthMiddleware::onConnect`
+  is `@deprecated` and wired NOWHERE (grep confirms). `SyncPlayWorker` (port 8098) is not
+  instantiated in any prod boot path (start.php/index.php/bin) — and even if run it fails CLOSED
+  (never authenticates → gate blocks privileged events), no bypass.
+- **Defense-in-depth intact.** `SyncPlayManager::handle*` still gate on `$connection->getUserId()===null`
+  → NOT_AUTHENTICATED. `authenticateConnection` hands the validated `sub` to
+  `Connection::setAuthenticated(true,$sub)`; `getUserId()` returns it. No `$_GET['syncplay_user_id']`
+  stash remains.
+- **Classification complete.** `isPrivileged` = `syncplay_*` prefix ∪ {subscribe_dashboard,
+  dashboard_now_playing, PLAYBACK_*, SESSION_*}; PUBLIC = {ping,pong,auth_request,connected}.
+  All 19 `Messages::TYPE_*` wire constants are `syncplay_`-prefixed → fully covered. Unknown types
+  are non-privileged but have no inbound handler (safe no-op). Liveness ping/pong stay public.
+- **jwt_secret plumbing consistent.** WS reads `getenv('JWT_SECRET')` (config/server.php +
+  start.php fallback) — same source as `AuthServicesProvider`/`JwtHandler`; middleware builds
+  `new JwtHandler($secret)` identically, so a login token validates on the WS. `assertSecretConfigured()`
+  (start.php:54) refuses to boot without a real JWT_SECRET, so `authMiddleware` is always non-null
+  in prod (the dev-anonymous branch is unreachable on a booted prod server). `public/index.php`
+  has no WS worker (confirmed) → no FPM mirror needed.
+- **Flipped test genuine.** `testMissingTokenRejectedWhenSecretConfigured` asserts close + empty
+  pool (opposite of the old `testMissingTokenAllowsUnauthenticatedConnection`); `onWebSocketConnect`
+  didn't exist pre-fix, so the semantic flip is real. `testMissingTokenAllowedWhenNoSecretConfigured`
+  covers the dev branch.
+- **No TOCTOU.** WS protocol delivers no app messages before handshake; `onWebSocketConnect`
+  (auth) runs during the handshake, before any `onMessage`, in the single event loop. Rejection
+  removes from pool + `close()`. The null-`findConnection` early-return fails closed (`onMessage`
+  also requires the wrapper in-pool).
+
+Gates re-run: phpstan L9 `[OK] No errors` (645 files); `phpunit --testsuite Unit --filter
+'WebSocket|WsAuthentication|MessageHandler|SyncPlay'` → OK (183 tests, 536 assertions); phpcs
+PSR12 on all touched src/config/start.php → clean. Confirmed `SyncPlayE2ETest` red (9 errors,
+mock `send()` returns null) is PRE-EXISTING on clean master and unrelated to this step.
+
+NO FINDINGS
+
+---
+
+## Implementer — SV-3.1 FOUNDATION (a + b0 + e) — 2026-07-12
+
+Owns the "wire the DVR into production boot" concern. Sub-steps SV-3.1c (scheduler
+Timers), SV-3.1d (comskip/media_items registration), SV-3.1f (timeshift) remain for
+follow-up sub-steps and are intentionally NOT touched here.
+
+### SV-3.1a — kill the fake getmypid() recording (Recorder.php)
+`startRecording()` no-tuner branch (was `Recorder.php:507-541`): previously, when no
+tuner stream URL resolved, it marked the row `recording` with `pid=getmypid()` — a
+phantom capture with no ffmpeg behind it (violated §0.1). Now it logs a warning, calls
+`updateRecordingStatus(FAILED, 'No tuner available')` and returns false: pid stays NULL,
+no `activeRecordings` entry, no fake process. The spawn-success path is unchanged.
+Consequence in recovery: a due `scheduled` row with no wired tuner is counted
+`scheduled_skipped` (not `rearmed`) and left `failed`.
+
+### SV-3.1b0 — DI factory: fully-wired Recorder + LiveTvManager + RecordingScheduler
+- NEW `src/Common/Container/Providers/LiveTvServicesProvider.php` — registered in
+  `ContainerFactory::defaultProviders()` (index 9, before WebPortal) so BOTH entrypoints
+  (`public/index.php` CGI + `start.php` daemon) resolve the same stack. Every binding is a
+  PHP-DI singleton = one instance per worker. Defines:
+  - `ChannelManager`, `GuideManager` (DB + livetv log channel).
+  - `TunerDriverInterface` → HDHomeRun primary driver (the default-enabled driver
+    LiveTvManager treats as primary), built from `livetv.hdhomerun`.
+  - `ComskipLifecycleManager` → built from `livetv.comskip` (ComskipRunner + EdlParser +
+    Integration); passed to the Recorder ctor which registers its enqueue as an onComplete
+    hook. (No media_items INSERT / RecordingHooks — that is SV-3.1d.)
+  - `Recorder` → FULLY wired ($db, storage_path, max_storage_bytes, livetv logger, comskip
+    lifecycle manager, ffmpeg path). Built with `liveTvManager=null` to break the
+    Recorder↔LiveTvManager cycle.
+  - `LiveTvManager` → resolves the shared Recorder singleton, constructs itself, then calls
+    `$recorder->setLiveTvManager($this)` — closing the cycle so `resolveTunerStreamUrl()` is
+    reachable. Every real usage path (getLiveTvStreamController, RecordingScheduler, boot
+    recovery, AdminLiveTvController) resolves LiveTvManager, so the link is always established.
+  - `RecordingScheduler` → resolves LiveTvManager first (links the recorder), then the shared
+    Recorder + manager. (Object only; its Timers are SV-3.1c.)
+- `config/server.php` now `require`s `config/livetv.php` as `$config['livetv']` (mirrors the
+  ffmpeg/hub/relay pattern) → reaches BOTH entrypoints via `app.config['livetv']`.
+- `Application::getLiveTvStreamController()` now resolves `LiveTvManager` from the container and
+  uses `$liveTvManager->getRecorder()` — the ONE wired Recorder — instead of
+  `new Recorder($db, $storagePath)` (which had no ffmpeg/comskip/manager). Existing recording-
+  stream route (`Application.php:1462-1464` → LiveTvStreamController :63-89) unchanged.
+
+### SV-3.1e — boot recovery in start.php (daemon only)
+`start.php` HTTP worker `onWorkerStart`, gated on `$w->id === 0` so it runs EXACTLY ONCE per
+boot (not 14×): resolve `LiveTvManager` (links the recorder) and call `bootstrap()` →
+`Recorder::resumeActiveRecordings()` (re-attach live children, fail orphans, re-arm due). Wrapped
+in try/catch so a DVR-recovery failure never stops the worker serving. Runs OUTSIDE any coroutine
+(mirrors the SV-0.1 hwaccel probe precedent); `resumeActiveRecordings()`'s process checks +
+detached spawns are ordinary blocking calls valid at boot — no coroutine-only work to guard. NOT
+wired in `public/index.php` (single-shot CGI must not spawn recovery/timers per §0.3).
+
+### Tests
+- `tests/Unit/LiveTv/RecorderRecoveryTest.php`: repurposed the old
+  `testScheduledRecordingWithPastStartTimeIsRearmed` (asserted the fake-PID re-arm) →
+  `testScheduledDueRecordingWithNoTunerIsSkippedNotRearmed` (rearmed=0, scheduled_skipped=1);
+  added `testStartRecordingWithNoTunerMarksFailedWithNoFakePid` (SV-3.1a: returns false, 0 active
+  recordings, exactly one UPDATE to status=failed, never status=recording, never a getmypid() PID).
+- NEW `tests/Unit/Common/Container/Providers/LiveTvServicesProviderTest.php`:
+  `testContainerYieldsFullyWiredRecorder` (reflection — liveTvManager linked, ffmpegPath from
+  config, storage/maxBytes from dvr config, comskip onComplete hook present) +
+  `testStackIsSharedSingletons` (Recorder/LiveTvManager/RecordingScheduler share one instance).
+- `tests/Unit/Common/Container/ContainerFactoryTest.php`: provider count 13→14, LiveTv asserted at
+  index 9, later providers reindexed.
+
+### Verification (actual)
+- `phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (646 files).
+- `phpunit --testsuite Unit --no-coverage` → **4923 tests, 0 failures** (4 warnings / 5 skipped,
+  pre-existing). `--filter 'Recorder|LiveTv|RecordingScheduler|LiveTvServicesProvider'` → 283 OK.
+- `phpcs --standard=PSR12` on touched src (Recorder, LiveTvServicesProvider, ContainerFactory,
+  Application) → **0 errors** (6 pre-existing >120-char warnings on untouched lines).
+- `php -l start.php` + `php -l public/index.php` → no syntax errors.
+
+### On-box verification OWED (start.php is outside CI)
+Deploy, restart phlix-server with active/scheduled recordings, confirm: (1) recovery re-attaches
+live ffmpeg children and marks orphans failed; (2) the boot log line "DVR boot recovery complete"
+fires exactly once (worker id 0); (3) a schedule with no available tuner is marked failed (no
+phantom getmypid recording).
+
+### Follow-up sub-steps (NOT done here)
+SV-3.1c scheduler Timers · SV-3.1d comskip EDL→chapters + media_items registration · SV-3.1f
+timeshift stream. LiveTvStreamController timeshift is still a 501 stub (SV-3.1f).

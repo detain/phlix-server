@@ -3339,8 +3339,6 @@ class Application
      */
     private function getLiveTvStreamController(): \Phlix\Server\Http\Controllers\LiveTvStreamController
     {
-        $db = $this->createDatabaseConnection();
-
         // Get the storage path from livetv config or fall back to default.
         $livetvConfigRaw = $this->config['livetv'] ?? null;
         /** @var array<string, mixed> $livetvConfig */
@@ -3354,9 +3352,18 @@ class Application
             ? $dvrStoragePath
             : (is_string($livetvStoragePath) ? $livetvStoragePath : '/var/recordings');
 
-        // Build the Recorder (without comskip/ffmpeg runner for the streaming controller
-        // — we only need it for path lookups here).
-        $recorder = new \Phlix\LiveTv\Recorder($db, $storagePath);
+        // SV-3.1b0: use the fully-wired Recorder from the shared container
+        // instead of a bare path-lookup-only instance. Resolving LiveTvManager
+        // links the shared Recorder singleton to its manager (so
+        // resolveTunerStreamUrl() is reachable) and hands back that same wired
+        // Recorder — the one the DVR capture pipeline uses. This keeps path
+        // lookups here and future stream work on one instance per worker.
+        if ($this->container === null) {
+            throw new \RuntimeException('Container not available for LiveTv stream controller');
+        }
+        /** @var \Phlix\LiveTv\LiveTvManager $liveTvManager */
+        $liveTvManager = $this->container->get(\Phlix\LiveTv\LiveTvManager::class);
+        $recorder = $liveTvManager->getRecorder();
 
         return new \Phlix\Server\Http\Controllers\LiveTvStreamController($recorder, $storagePath);
     }

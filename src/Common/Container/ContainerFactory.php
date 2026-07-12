@@ -17,6 +17,7 @@ use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Container\Providers\CoreServicesProvider;
 use Phlix\Common\Container\Providers\EventServicesProvider;
 use Phlix\Common\Container\Providers\HubServicesProvider;
+use Phlix\Common\Container\Providers\LiveTvServicesProvider;
 use Phlix\Common\Container\Providers\MediaServicesProvider;
 use Phlix\Common\Container\Providers\MetricsServicesProvider;
 use Phlix\Common\Container\Providers\NetworkServicesProvider;
@@ -127,6 +128,7 @@ final class ContainerFactory
             new TranscodeServicesProvider(),
             new NetworkServicesProvider(),
             new SessionServicesProvider(),
+            new LiveTvServicesProvider(),
             new WebPortalServicesProvider(),
             new AdminServicesProvider(),
             new PluginsProvider(),

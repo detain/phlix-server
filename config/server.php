@@ -51,6 +51,16 @@ return [
     'hub' => require __DIR__ . '/hub.php',
     'relay' => require __DIR__ . '/relay.php',
 
+    // Live TV / DVR settings (tuners, storage_path, comskip, dvr padding).
+    // Loaded here so the DI layer (LiveTvServicesProvider reads
+    // $appConfig['livetv']) wires the fully-assembled DVR stack — Recorder +
+    // LiveTvManager + RecordingScheduler — with the real storage_path,
+    // max_storage_bytes and comskip settings in BOTH entry points
+    // (public/index.php CGI path and the Workerman daemon in start.php),
+    // instead of the bare per-class constructor defaults. Without this the
+    // capture pipeline had no wired producer at all. (SV-3.1b0)
+    'livetv' => require __DIR__ . '/livetv.php',
+
     // Theme-music (M3) producer config. Sourced here so MediaServicesProvider
     // (which reads $config['theme_music']) builds the ThemeMusicConfig with the
     // real enabled/source/cache_dir instead of bare defaults.

@@ -501,43 +501,38 @@ class Recorder
         // Resolve stream URL — caller may pass it directly, otherwise we need
         // a LiveTvManager to look up the tuner. When $streamUrl is provided
         // (e.g. by RecordingScheduler which already resolved it), use it directly.
-        // When LiveTvManager is unavailable (e.g. during recovery without a full
-        // boot), fall back to marking the recording as recording without spawning
-        // ffmpeg so that the recording is not stuck in 'scheduled' forever.
+        // When it is not provided we ask the LiveTvManager (if wired) for the
+        // tuner stream URL.
         if ($streamUrl === null || $streamUrl === '') {
             $streamUrl = $this->resolveTunerStreamUrl($channelId);
         }
 
-        $spawned = false;
-        $pid = null;
-        $logDir = $this->storagePath;
-
-        if ($streamUrl !== null && $streamUrl !== '') {
-            // Spawn the detached ffmpeg recording process.
-            // Uses the same nohup...& pattern as FfmpegRunner::startDetached() so
-            // that PHP returning does not kill the child.
-            $outputPath = $this->getRecordingPath($recordingId);
-            $logDir = $this->storagePath;
-
-            $pid = $this->spawnRecording($streamUrl, $outputPath, $logDir);
-
-            if ($pid <= 0) {
-                $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Failed to spawn ffmpeg recording process');
-                return false;
-            }
-            $spawned = true;
-        } else {
-            // No tuner available — fall back to the old recovery path.
-            // Recording is marked as recording but no ffmpeg is spawned.
-            // The next process restart or scheduler tick will retry.
-            $this->logger->warning('No tuner stream URL available, marking recording as recording without ffmpeg', [
+        // SV-3.1a: When no tuner stream URL can be resolved there is no source to
+        // capture. Do NOT fabricate an "active" recording with a fake PID
+        // (previously `getmypid()`) — that reported a phantom recording with no
+        // ffmpeg process behind it. Instead mark the recording FAILED, leaving
+        // `pid` NULL and adding no in-memory active entry, so the DVR reflects
+        // reality and the scheduler can surface / retry the failure.
+        if ($streamUrl === null || $streamUrl === '') {
+            $this->logger->warning('No tuner stream URL available; marking recording failed', [
                 'recording_id' => $recordingId,
                 'channel_id' => $channelId,
             ]);
-            $pid = getmypid();
-            if ($pid === false) {
-                $pid = null;
-            }
+            $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'No tuner available');
+            return false;
+        }
+
+        // Spawn the detached ffmpeg recording process.
+        // Uses the same nohup...& pattern as FfmpegRunner::startDetached() so
+        // that PHP returning does not kill the child.
+        $logDir = $this->storagePath;
+        $outputPath = $this->getRecordingPath($recordingId);
+
+        $pid = $this->spawnRecording($streamUrl, $outputPath, $logDir);
+
+        if ($pid <= 0) {
+            $this->updateRecordingStatus($recordingId, self::STATUS_FAILED, 'Failed to spawn ffmpeg recording process');
+            return false;
         }
 
         // Persist the real child PID so resumeActiveRecordings() can distinguish

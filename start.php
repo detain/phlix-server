@@ -185,6 +185,37 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         $ffmpegRunner->getHardwareAccelerationSummary(),
     );
 
+    // SV-3.1e: DVR boot recovery. resumeActiveRecordings() reconciles
+    // `livetv_recordings` after a restart — re-attaches live ffmpeg children,
+    // marks orphaned rows failed, and re-arms overdue schedules. It must run
+    // exactly ONCE per boot, not once per HTTP worker, so it is gated on the
+    // first worker in the group ($w->id === 0). Resolving LiveTvManager links
+    // the shared Recorder singleton (so tuner resolution works) and the call
+    // runs OUTSIDE any coroutine here — resumeActiveRecordings()'s process
+    // checks + detached spawns are ordinary blocking calls, valid at boot just
+    // like the hwaccel probe above (no coroutine-only work to guard). It is
+    // NOT wired in public/index.php: recovery/timers belong only to the
+    // long-running Workerman master, never the single-shot CGI request path.
+    // (Scheduler Timers are SV-3.1c; this is only the recovery bootstrap.)
+    if ((int) $w->id === 0) {
+        try {
+            /** @var \Phlix\LiveTv\LiveTvManager $liveTvManager */
+            $liveTvManager = $container->get(\Phlix\LiveTv\LiveTvManager::class);
+            $recoveryStats = $liveTvManager->bootstrap();
+            LoggerFactory::get(LogChannels::LIVETV)->info(
+                'DVR boot recovery complete',
+                $recoveryStats,
+            );
+        } catch (\Throwable $e) {
+            // A DVR recovery failure must never stop the HTTP worker from
+            // serving. Log and continue.
+            LoggerFactory::get(LogChannels::LIVETV)->error(
+                'DVR boot recovery failed',
+                ['error' => $e->getMessage()],
+            );
+        }
+    }
+
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);
 

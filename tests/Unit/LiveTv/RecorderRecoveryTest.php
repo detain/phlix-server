@@ -125,10 +125,18 @@ final class RecorderRecoveryTest extends TestCase
         $this->assertSame('rec-1', $fired[0][0]);
     }
 
-    public function testScheduledRecordingWithPastStartTimeIsRearmed(): void
+    /**
+     * SV-3.1a: a due scheduled recording that cannot resolve a tuner stream URL
+     * (no LiveTvManager wired) must NOT be fabricated as an active recording.
+     * startRecording() returns false, so recovery counts it as skipped (not
+     * re-armed) and the row is marked failed rather than "recording" with a fake
+     * getmypid() PID.
+     */
+    public function testScheduledDueRecordingWithNoTunerIsSkippedNotRearmed(): void
     {
         $db     = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
+        // No LiveTvManager => resolveTunerStreamUrl() returns null.
         $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
 
         $row = $this->recordingRow([
@@ -142,7 +150,7 @@ final class RecorderRecoveryTest extends TestCase
         //   1. SELECT status='recording'   (empty)
         //   2. SELECT status='scheduled' AND start_time <= NOW()  (one row)
         //   3. startRecording -> getRecording -> SELECT WHERE recording_id=?  (one row, sched)
-        //   4. startRecording -> UPDATE livetv_recordings SET status=recording, pid=?…
+        //   4. startRecording -> UPDATE livetv_recordings SET status='failed' (no tuner)
         $db->method('query')->willReturnOnConsecutiveCalls(
             $this->fakeResult([]),
             $this->fakeResult([$row]),
@@ -152,8 +160,8 @@ final class RecorderRecoveryTest extends TestCase
 
         $stats = $recorder->resumeActiveRecordings();
 
-        $this->assertSame(1, $stats['rearmed']);
-        $this->assertSame(0, $stats['failed']);
+        $this->assertSame(0, $stats['rearmed'], 'no tuner => not re-armed');
+        $this->assertSame(1, $stats['scheduled_skipped'], 'no tuner => skipped');
         $this->assertSame(0, $stats['resumed']);
     }
 
@@ -189,5 +197,71 @@ final class RecorderRecoveryTest extends TestCase
         $this->assertSame(0, $stats['failed']);
         $this->assertSame(1, $recorder->getActiveRecordingCount());
         $this->assertEmpty($fired, 'onComplete must not fire for a live recording');
+    }
+
+    /**
+     * SV-3.1a: startRecording() with no resolvable tuner stream URL must mark
+     * the recording FAILED with a NULL pid and create NO active recording —
+     * never fabricate a phantom "recording" row with a fake getmypid() PID.
+     */
+    public function testStartRecordingWithNoTunerMarksFailedWithNoFakePid(): void
+    {
+        $db     = $this->createMock(Connection::class);
+        $logger = $this->createMock(StructuredLogger::class);
+        // No LiveTvManager => resolveTunerStreamUrl() returns null.
+        // maxStorageBytes=0 => hasStorageSpace() uses disk_free_space only (no DB,
+        // fail-open when the dir is absent), so the only DB writes are the ones we
+        // assert on.
+        $recorder = new Recorder($db, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+
+        $scheduledRow = $this->recordingRow([
+            'recording_id' => 'rec-no-tuner',
+            'status'       => Recorder::STATUS_SCHEDULED,
+            'start_time'   => time() - 10,
+            'end_time'     => time() + 1800,
+            'pid'          => null,
+        ]);
+
+        /** @var list<array{sql:string,params:array<int,mixed>}> $calls */
+        $calls = [];
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$calls, $scheduledRow) {
+                $calls[] = ['sql' => $sql, 'params' => $params];
+                // The first call is getRecording()'s SELECT.
+                if (stripos($sql, 'SELECT') === 0) {
+                    return $this->fakeResult([$scheduledRow]);
+                }
+                return null;
+            }
+        );
+
+        $result = $recorder->startRecording('rec-no-tuner');
+
+        $this->assertFalse($result, 'no tuner => startRecording returns false');
+        $this->assertSame(0, $recorder->getActiveRecordingCount(), 'no phantom active recording');
+
+        // Exactly one UPDATE must run and it must set status=failed. No UPDATE may
+        // set status=recording (the old fake-PID path), and no query may carry a
+        // getmypid()-style live PID as a bound param.
+        $updates = array_values(array_filter(
+            $calls,
+            static fn (array $c): bool => stripos($c['sql'], 'UPDATE') === 0
+        ));
+        $this->assertCount(1, $updates, 'exactly one UPDATE (the FAILED status write)');
+        $this->assertContains(
+            Recorder::STATUS_FAILED,
+            $updates[0]['params'],
+            'the recording is marked failed'
+        );
+        $this->assertNotContains(
+            Recorder::STATUS_RECORDING,
+            $updates[0]['params'],
+            'must never mark a tuner-less recording as recording'
+        );
+        $this->assertNotContains(
+            getmypid(),
+            $updates[0]['params'],
+            'must never persist a fake getmypid() PID'
+        );
     }
 }

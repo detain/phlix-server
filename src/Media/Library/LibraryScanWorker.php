@@ -151,10 +151,11 @@ class LibraryScanWorker
                     },
                 );
             } elseif ($type === 'rescan') {
-                $library = $this->libraries->getLibrary($libraryId);
-                $rawPaths = $library['paths'] ?? null;
-                $paths = is_array($rawPaths) ? array_filter($rawPaths, 'is_string') : [];
-                $this->libraries->rescanLibrary($libraryId, $paths, $this->scanProgressSink($jobId));
+                // The base LibraryManager derives the library's configured paths
+                // (and routes each media type to its scanner) internally, so the
+                // worker only forwards the progress sink; the empty $paths arg is
+                // for signature parity with the media-specific subclass managers.
+                $this->libraries->rescanLibrary($libraryId, [], $this->scanProgressSink($jobId));
             } else {
                 $this->libraries->scanLibrary($libraryId, $this->scanProgressSink($jobId));
             }

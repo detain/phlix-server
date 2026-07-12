@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\Console\Commands;
 use InvalidArgumentException;
 use Phlix\Console\Commands\LibraryScanCommand;
 use Phlix\Media\Library\LibraryManager;
+use Phlix\Media\Library\ScanResult;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
@@ -41,7 +42,8 @@ class LibraryScanCommandTest extends TestCase
     public function testRescanFlagCallsRescanLibrary(): void
     {
         $manager = $this->createMock(LibraryManager::class);
-        $manager->expects($this->once())->method('rescanLibrary')->with('lib-2');
+        $manager->expects($this->once())->method('rescanLibrary')->with('lib-2')
+            ->willReturn(new ScanResult());
         $manager->expects($this->never())->method('scanLibrary');
 
         $tester = $this->tester($manager);

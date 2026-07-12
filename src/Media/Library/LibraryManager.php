@@ -515,24 +515,67 @@ class LibraryManager
     }
 
     /**
-     * Clears all media items from a library and rescans from filesystem.
+     * Clears a library's existing items and rescans it from the filesystem.
      *
-     * @param string $libraryId The library's unique identifier
-     * @param array<string> $paths Array of filesystem paths to scan
-     * @param callable|null $onProgress Optional progress callback
+     * Deletes every `media_items` row for the library, then delegates to
+     * {@see self::scanLibrary()} to re-import from disk. `scanLibrary()` derives
+     * the configured paths from the library row and routes music / photo / book /
+     * audiobook libraries to their specialised scanners, so a single base rescan
+     * correctly refreshes every library type (including a streamed per-file
+     * progress percentage when `$onProgress` is supplied).
+     *
+     * The `$paths` argument is accepted only for signature compatibility with the
+     * media-specific subclass managers ({@see AudiobookLibraryManager},
+     * {@see BookLibraryManager}) that scan an explicit path list; the base
+     * implementation resolves paths from the library row itself.
+     *
+     * @param string        $libraryId  The library's unique identifier
+     * @param array<string> $paths      Ignored by the base manager (see above)
+     * @param callable|null $onProgress Optional `(processed, total, path)` sink
      * @return ScanResult Result containing scan statistics
+     *
+     * @throws \InvalidArgumentException If the library does not exist
      */
     public function rescanLibrary(string $libraryId, array $paths = [], ?callable $onProgress = null): ScanResult
     {
-        // Default implementation that subclasses override
-        // Subclasses (BookLibraryManager, AudiobookLibraryManager) implement
-        // their own scanning logic with proper media-specific scanners
+        // Base manager derives paths from the library row inside scanLibrary().
+        unset($paths);
+        $startTime = microtime(true);
+
+        // Clear the library's existing items, then rescan from the filesystem.
+        $this->db->query("DELETE FROM media_items WHERE library_id = ?", [$libraryId]);
+        $this->scanLibrary($libraryId, $onProgress);
+
+        $imported = $this->countLibraryItems($libraryId);
+
         $result = new ScanResult();
-        $result->scanned = 0;
-        $result->added = 0;
+        $result->scanned = $imported;
+        $result->added = $imported;
         $result->updated = 0;
-        $result->durationMs = 0;
+        $result->durationMs = (int) ((microtime(true) - $startTime) * 1000);
+
         return $result;
+    }
+
+    /**
+     * Counts the `media_items` rows currently persisted for a library.
+     *
+     * @param string $libraryId The library's unique identifier
+     * @return int Number of items, or 0 when the count row is unavailable
+     */
+    private function countLibraryItems(string $libraryId): int
+    {
+        $rows = $this->db->query(
+            "SELECT COUNT(*) AS item_count FROM media_items WHERE library_id = ?",
+            [$libraryId],
+        );
+        if (!is_array($rows) || !isset($rows[0]) || !is_array($rows[0])) {
+            return 0;
+        }
+
+        $count = $rows[0]['item_count'] ?? 0;
+
+        return is_numeric($count) ? (int) $count : 0;
     }
 
     /**

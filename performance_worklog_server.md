@@ -1060,3 +1060,49 @@ Cleared the 2 genuine SV-3.5 reds (`LibraryMetadataMatcherTest::testPerItemExcep
 - `phpcs --standard=PSR12 src/Media/Metadata/LibraryMetadataMatcher.php` → 0 errors (5 PRE-EXISTING >120-char warnings at lines 604/609/1227/1429/1436, all outside my ~1888-1955 diff region).
 
 SV-3.5 red cleared — step done-note stands; the 2 shipped-red tests are now green because the behaviour is correct.
+
+## Fixer — SV-2.9 — 2026-07-12
+
+**Verdict: REAL IMPL BUG (rescan silently did nothing) + two stale tests exposed by the same refactor.**
+
+Root cause traced to commit `19ca9b62` (SV-3.2 book/audiobook backends). It **gutted the base
+`LibraryManager::rescanLibrary()` into a no-op stub** — the pre-existing body (commit `266f957b`)
+did `DELETE FROM media_items WHERE library_id=? ` then delegated to `scanLibrary()` (which derives
+the library's configured paths AND routes music/photo/book/audiobook to their scanners). SV-3.2
+replaced that with `return new ScanResult()` and *moved the logic nowhere*, so for the base manager
+(the one DI-injected into both the worker and the `library:scan` command, via
+`container->get(LibraryManager::class)`) **`library:scan --rescan` and every rescan job did nothing
+for movie/TV/generic libraries** — no delete, no rescan. It also changed the signature to
+`(libraryId, array $paths = [], ?callable $onProgress): ScanResult` and adapted the worker (added a
+`getLibrary()`+paths fetch) but never updated the two unit tests → the 2 reds:
+- `LibraryScanWorkerTest::testRunOnceProcessesRescanJob` red because the test asserted the old
+  2-arg `(libraryId, callable)` contract while the worker now calls 3-arg `(libraryId, paths, sink)`;
+  the `with()` mismatch was swallowed into `markFailed()` at `LibraryScanWorker.php:170`.
+- `LibraryScanCommandTest::testRescanFlagCallsRescanLibrary` red (exit 1) because the mock cannot
+  auto-generate a return value for the **`final` `ScanResult`** and threw
+  (`Return value ... cannot be generated: Class "...ScanResult" is declared "final"`), which the
+  command's catch turned into `Command::FAILURE`. (Reproduced both in isolation.)
+
+**Fix (logic RESTORED, not removed — per user steer):**
+- `src/Media/Library/LibraryManager.php` — rebuilt `rescanLibrary()` to actually work again: DELETE
+  the library's items, then `scanLibrary()` (routes every type + streams progress), and return a
+  real `ScanResult` (duration + a post-scan item count via new private `countLibraryItems()`).
+  Kept the SV-3.2 signature/return so the Audiobook/Book subclass overrides stay compatible; the
+  `$paths` arg is documented as base-ignored (base resolves paths from the library row).
+- `src/Media/Library/LibraryScanWorker.php` — dropped the now-unnecessary `getLibrary()`+paths
+  adaptation; the rescan branch just forwards the progress sink:
+  `rescanLibrary($libraryId, [], $this->scanProgressSink($jobId))` (base routes internally).
+- Tests updated to the correct current contract (NOT weakened — both still prove the rescan runs to
+  completion and is never marked-failed): worker test asserts `(libraryId, array, callable)` +
+  `willReturn(new ScanResult())`; command test adds `willReturn(new ScanResult())`.
+
+**Verification (actual output):**
+- `phpunit --filter 'LibraryScanWorker|LibraryScanCommand'` → `OK (14 tests, 53 assertions)`.
+- `phpunit --filter LibraryManager` → `OK (39 tests, 86 assertions)`.
+- `phpunit --testsuite Unit` → `Tests: 4907, Assertions: 38455, Errors: 10, Failures: 3, Skipped: 5,
+  Risky: 3`. Failures 5→3 — exactly the 2 SV-2.9 reds cleared; no NEW reds. Remaining are ONLY the
+  known buckets: SV-4.13 FfmpegRunner*/Hls* (8 err), SV-2.6 SyncPlayManager (2 err), SV-3.2
+  BookProgressStore (1), SV-2.8 ItemRepository::testAddStream* (2).
+- `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
+- `phpcs --standard=PSR12` on all touched files → 0 errors (one PRE-EXISTING >120-char warning at
+  `LibraryManager.php:170`, an unrelated `getLibrary()` docblock example, outside my diff).

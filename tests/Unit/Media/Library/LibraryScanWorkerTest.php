@@ -9,6 +9,7 @@ use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Media\Library\LibraryScanWorker;
 use Phlix\Media\Library\ScanJobRepository;
+use Phlix\Media\Library\ScanResult;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use RuntimeException;
 
@@ -82,7 +83,8 @@ class LibraryScanWorkerTest extends TestCase
 
         $libraries = $this->createMock(LibraryManager::class);
         $libraries->expects($this->once())->method('rescanLibrary')
-            ->with('lib-2', $this->isType('callable'));
+            ->with('lib-2', $this->isType('array'), $this->isType('callable'))
+            ->willReturn(new ScanResult());
         $libraries->expects($this->never())->method('scanLibrary');
 
         $worker = new LibraryScanWorker($jobs, $libraries, $this->makeUnusedMatcher(), $this->makeLogger());

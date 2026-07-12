@@ -815,3 +815,91 @@ Finding-by-finding confirmation:
 resolved; suite green, phpstan 0, no new phpcs) — modulo the on-box confirmation
 of the resident :8097 ping/pong + SyncPlay routing (start.php is outside CI) and
 the pending Docs cycle.
+
+## Implementer — X2/HB-2.1 server side — 2026-07-12
+
+Built the phlix-server half of cross-repo sync point X2 (HB-2.1 "bodied relay >64KB").
+Before this, a >64KB relayed request failed 400-malformed: the hub chunks large
+request bodies (RelayHttpRequestCodec HEAD/BODY/END tag-byte frames sharing one
+requestId, `RelayProxyManager.php:288-319`), but the server did
+`RelayHttpRequest::fromJson()` UNCONDITIONALLY on the first frame and threw on the
+tag-byte HEAD. The server was also not repinned to the shared request codec.
+
+### 1. Repin phlix-shared (old → new)
+- `composer.json`: added a `path` repository `/home/sites/phlix/phlix-shared`
+  (`symlink:false`) BEFORE the existing vcs repo, and lowered the constraint
+  `detain/phlix-shared` `^0.19.0` → `^0.18.0` — MIRRORING the hub's convention
+  exactly (hub `composer.json` uses the same path repo + `^0.18.0`).
+- `composer update detain/phlix-shared` → **v0.19.0 (ref 0fa2709c) → 0.18.0
+  (ref 216ea5dfa7faf2a422dbf0a1a4116442994e7c74)**. NOTE the version NUMBER drops
+  but the CODE is a strict SUPERSET: the v0.19.0 tag commit (0fa2709) is an
+  ANCESTOR of master HEAD 216ea5d, and the request-codec commits (008fcc1 subdomain,
+  216ea5d codec) sit ABOVE the v0.19.0 tag but were never tagged (the shared repo's
+  composer.json `version` field was left at 0.18.0). So 216ea5d = everything in
+  v0.19.0 PLUS `RelayHttpRequestCodec` / `RelayHttpRequestHead` / `RelayHttpRequestChunk`.
+  This is the identical situation the hub already resolved. Lock diff is scoped to
+  the single `detain/phlix-shared` package (verified by diffing the package list —
+  only that one line changed). Codec vendored:
+  `vendor/detain/phlix-shared/src/Relay/RelayHttpRequestCodec.php` (+ Head + Chunk)
+  all present after `composer install`.
+
+### 2. Reassembly in RelayConsumer::onHttpRequest (`src/Hub/RelayConsumer.php`)
+- Single-vs-chunked branch: `onHttpRequest` now peeks the first payload byte.
+  The legacy single-frame JSON envelope always begins with `{` (0x7B); the chunked
+  codec tags are HEAD 0x01 / BODY 0x02 / END 0x03 — disjoint sets, so the first
+  byte unambiguously selects the path. `isChunkedRequestFrame()` matches the three
+  tag bytes; anything else (incl. an empty payload) falls through to the UNCHANGED
+  `RelayHttpRequest::fromJson()` legacy path (full back-compat, incl. the prior
+  400-on-garbage behaviour).
+- `onHttpRequestChunk()` mirrors the hub's response-side reassembly with a
+  per-requestId accumulator map `requestAccumulators`
+  (`array{head: RelayHttpRequestHead, body: string, size: int}`):
+  HEAD opens an accumulator carrying method/path/headers; BODY appends raw bytes;
+  END finalizes → builds the full `RelayHttpRequest(method,path,query,headers,body)`,
+  calls `assertSafe()` (inheriting fromJson's method/path gate), then dispatches
+  via the shared `dispatchEnvelope()` tail (extracted from the old onHttpRequest so
+  both paths reuse dispatch+stream+log).
+- Abuse guards: body capped at `MAX_REASSEMBLED_REQUEST_BODY` (25 MiB) — overflow →
+  413 + accumulator dropped; concurrent assemblies capped at
+  `MAX_CONCURRENT_REQUEST_ASSEMBLIES` (128) — excess HEAD → 503; duplicate HEAD →
+  400 + drop; BODY/END without HEAD → 400; malformed chunk/head-JSON → 400.
+- Accumulator lifecycle (no resident-worker leak): finalized+removed on END BEFORE
+  dispatch; dropped on HTTP_CANCEL (`onHttpCancel` now calls
+  `discardRequestAccumulator`); cleared wholesale in `handleDisconnect()` and
+  `stop()` (tunnel teardown).
+
+### 3. Dual entrypoints
+No bootstrap/DI change — the reassembly is entirely internal to RelayConsumer
+(only new private fields/methods/constants; constructor signature unchanged), so
+neither `start.php` nor `public/index.php` needed mirroring.
+
+### Tests (`tests/Unit/Hub/RelayConsumerTest.php`, +8)
+- `test_http_request_chunked_reassembles_binary_body_and_dispatches` — feeds a real
+  HEAD + N·BODY (>2 frames) + END for a 140,000-byte body covering the FULL byte
+  range (chr(i%256) incl NUL/0xFF) via the real `RelayHttpRequestCodec::encode*`;
+  asserts the dispatcher saw byte-identical `rawBody`, correct method/path/query/
+  headers + forwarded relay user, that nothing dispatched before END, a 200 streamed
+  back on the same requestId, and the accumulator cleared to 0.
+- `test_http_request_legacy_single_frame_with_body_still_dispatches` — the `{`-prefixed
+  JSON envelope path (PUT + small body) still dispatches, opens NO accumulator.
+- Guards: body-without-HEAD → 400; END-without-HEAD → 400; duplicate HEAD →
+  400+cleared; malformed HEAD JSON → 400; body overflow → 413+cleared (size seeded
+  near the cap via reflection so no 25 MiB is shovelled through the framer);
+  HTTP_CANCEL drops a partial assembly. All assert `pendingAccumulatorCount()==0`
+  (reflection) so no throw escapes and nothing leaks.
+
+### Verification (actual)
+- `composer update detain/phlix-shared`: `Downgrading detain/phlix-shared
+  (v0.19.0 => 0.18.0)` … `Mirroring from /home/sites/phlix/phlix-shared`; lock diff
+  scoped to that one package.
+- `ls vendor/detain/phlix-shared/src/Relay/RelayHttpRequestCodec.php` → exists (+ Head + Chunk).
+- `./vendor/bin/phpunit --filter 'RelayConsumer|RelayHttpRequest'` → **OK (45 tests,
+  227 assertions)** (8 new).
+- `./vendor/bin/phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (645/645).
+- `./vendor/bin/phpcs --standard=PSR12 src/Hub/RelayConsumer.php` → 0 errors. (The
+  test file's snake_case method-name errors are the file's pre-existing convention
+  across ALL methods and `tests/` is outside the `src/`-only phpcs gate.)
+
+FOLLOW-UPS (owned by the phase coordinator, not this task): hub emission unit test
+(RelayProxyManager >64KB → HEAD+N·BODY+END on one requestId) + the full end-to-end
+hub-emit → server-reassemble round-trip integration test.

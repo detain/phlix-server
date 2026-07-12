@@ -810,6 +810,277 @@ class RelayConsumerTest extends TestCase
         $this->assertSame(400, $result['status']);
     }
 
+    // -- HB-2.1: chunked request-body reassembly (HEAD + BODY* + END) ----------
+
+    /**
+     * A >64KB binary body (NUL/0xFF bytes) split across HEAD + N·BODY + END
+     * frames is reassembled byte-identically and dispatched as one request.
+     */
+    public function test_http_request_chunked_reassembles_binary_body_and_dispatches(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        // Binary body > 64KB (spans >2 BODY frames at 65534 bytes) with the
+        // full byte range incl NUL and 0xFF so a text/base64 path would corrupt it.
+        $body = '';
+        for ($i = 0; $i < 140000; $i++) {
+            $body .= chr($i % 256);
+        }
+        $this->assertGreaterThan(65534 * 2, strlen($body));
+
+        $requestId = 0x90000007;
+        $head = (new \Phlix\Shared\Relay\RelayHttpRequestHead(
+            'POST',
+            '/api/v1/media/abc/poster',
+            'replace=1',
+            ['Content-Type' => 'application/octet-stream', 'X-Phlix-Relay-User' => 'owner-9'],
+        ))->withBodySize(strlen($body));
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeHead($head),
+        ));
+        $bodyFrameCount = 0;
+        foreach (\Phlix\Shared\Relay\RelayHttpRequestCodec::chunkBody($body) as $bodyChunk) {
+            $bodyFrameCount++;
+            $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, $requestId, $bodyChunk));
+        }
+        $this->assertGreaterThan(2, $bodyFrameCount, 'body must fragment across multiple BODY frames');
+        // Nothing dispatched until END arrives.
+        $this->assertNull($captured, 'request must not dispatch before the END chunk');
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeEnd(),
+        ));
+
+        // The dispatcher saw a faithfully-reassembled request.
+        $this->assertNotNull($captured);
+        $this->assertSame('POST', $captured->method);
+        $this->assertSame('/api/v1/media/abc/poster', $captured->path);
+        $this->assertSame('replace=1', $captured->queryString);
+        $this->assertSame($body, $captured->rawBody, 'reassembled body must be byte-identical');
+        $this->assertSame(strlen($body), strlen($captured->rawBody));
+        $this->assertSame('application/octet-stream', $captured->headers['Content-Type'] ?? null);
+        // The forwarded relay user still authenticates the request.
+        $this->assertSame('owner-9', $captured->userId);
+
+        // The response streamed back on the same request id.
+        $result = $this->collectHttpResponse();
+        $this->assertSame($requestId, $result['request_id']);
+        $this->assertSame(200, $result['status']);
+
+        // The accumulator was finalized/cleared — no memory left behind.
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer));
+    }
+
+    /**
+     * The legacy single-frame JSON envelope path (small body) is untouched.
+     */
+    public function test_http_request_legacy_single_frame_with_body_still_dispatches(): void
+    {
+        /** @var \Phlix\Server\Http\Request|null $captured */
+        $captured = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (&$captured): \Phlix\Server\Http\Response {
+            $captured = $req;
+            return (new \Phlix\Server\Http\Response())->json(['ok' => true]);
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $smallBody = json_encode(['rating' => 8], JSON_THROW_ON_ERROR);
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'PUT',
+            '/api/v1/media/abc/rating',
+            '',
+            ['Content-Type' => 'application/json', 'X-Phlix-Relay-User' => 'owner-3'],
+            $smallBody,
+        );
+        // toJson() begins with '{', selecting the legacy path.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 33, $envelope->toJson()));
+
+        $this->assertNotNull($captured);
+        $this->assertSame('PUT', $captured->method);
+        $this->assertSame($smallBody, $captured->rawBody);
+        $this->assertSame('owner-3', $captured->userId);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer), 'legacy path opens no accumulator');
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(200, $result['status']);
+    }
+
+    public function test_http_request_body_chunk_without_head_replies_400(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            51,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeBody('orphan bytes'),
+        ));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(400, $result['status']);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer));
+    }
+
+    public function test_http_request_end_chunk_without_head_replies_400(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            52,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeEnd(),
+        ));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(400, $result['status']);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer));
+    }
+
+    public function test_http_request_duplicate_head_replies_400_and_clears(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $head = new \Phlix\Shared\Relay\RelayHttpRequestHead('POST', '/api/v1/media/abc/watched', '', []);
+        $frame = $this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            53,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeHead($head),
+        );
+
+        $this->hub->fireMessage($frame); // first HEAD — accumulates, no output
+        $this->assertSame(1, $this->pendingAccumulatorCount($consumer));
+
+        $this->hub->fireMessage($frame); // duplicate HEAD — 400 + drop
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(400, $result['status']);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer), 'duplicate HEAD must clear the accumulator');
+    }
+
+    public function test_http_request_malformed_head_chunk_replies_400(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        // Tag byte HEAD (0x01) but the JSON that follows is garbage.
+        $badHead = chr(\Phlix\Shared\Relay\RelayHttpRequestCodec::TAG_HEAD) . 'not json at all';
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_REQUEST, 54, $badHead));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(400, $result['status']);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer));
+    }
+
+    /**
+     * A body that grows past the reassembly cap is dropped with 413 and its
+     * accumulator cleared (no throw escapes, no unbounded growth). The size is
+     * seeded via reflection so the test stays fast and deterministic rather than
+     * shovelling 25 MiB through the framer.
+     */
+    public function test_http_request_body_overflow_replies_413_and_clears(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $requestId = 55;
+
+        // Open a real accumulator with a HEAD frame.
+        $head = new \Phlix\Shared\Relay\RelayHttpRequestHead('POST', '/api/v1/upload', '', []);
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeHead($head),
+        ));
+
+        // Seed its accumulated size to just under the cap via reflection.
+        $capRef = new \ReflectionClassConstant(RelayConsumer::class, 'MAX_REASSEMBLED_REQUEST_BODY');
+        $cap = (int) $capRef->getValue();
+        $accProp = new \ReflectionProperty(RelayConsumer::class, 'requestAccumulators');
+        $accProp->setAccessible(true);
+        /** @var array<int, array{head: mixed, body: string, size: int}> $acc */
+        $acc = $accProp->getValue($consumer);
+        $acc[$requestId]['size'] = $cap - 10;
+        $accProp->setValue($consumer, $acc);
+
+        // One more BODY frame (65534 bytes) tips it over the cap.
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeBody(str_repeat("\xff", 65534)),
+        ));
+
+        $result = $this->collectHttpResponse();
+        $this->assertSame(413, $result['status']);
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer), 'overflow must clear the accumulator');
+    }
+
+    public function test_http_cancel_clears_pending_chunk_accumulator(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $this->activate($consumer);
+
+        $requestId = 56;
+        $head = new \Phlix\Shared\Relay\RelayHttpRequestHead('POST', '/api/v1/upload', '', []);
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeHead($head),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            \Phlix\Shared\Relay\RelayHttpRequestCodec::encodeBody('partial'),
+        ));
+        $this->assertSame(1, $this->pendingAccumulatorCount($consumer));
+
+        // The hub cancels the in-flight request before END.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, ''));
+
+        $this->assertSame(0, $this->pendingAccumulatorCount($consumer), 'cancel must drop the partial assembly');
+    }
+
+    /**
+     * Read the number of in-flight chunked-request accumulators via reflection.
+     */
+    private function pendingAccumulatorCount(RelayConsumer $consumer): int
+    {
+        $prop = new \ReflectionProperty(RelayConsumer::class, 'requestAccumulators');
+        $prop->setAccessible(true);
+        /** @var array<int, mixed> $acc */
+        $acc = $prop->getValue($consumer);
+
+        return count($acc);
+    }
+
     public function test_relay_config_with_auto_enable_derives_ws_url(): void
     {
         $config = new RelayConfig(enabled: false);

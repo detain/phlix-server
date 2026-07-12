@@ -1591,3 +1591,80 @@ a per-recording stop timer is armed; (3) an in-progress recording stops at `end_
   real `media_item_id` (RecordingHooks still has no caller; onComplete fires but no INSERT).
 - **f** — timeshift endpoint (still the 501 stub at `LiveTvStreamController.php:~129`).
 - **g** — storage accounting on real files. **h** — `LiveTvStreamController` tests.
+
+## Reviewer (per-step) — SV-3.1c — 2026-07-12
+
+Reviewed `git diff 1cc85d3f..89f3f35f` (impl `50d3e992` + tests `89f3f35f`): Recorder padding
+authority + `getRecordingsDueToStop`/`endRecording` rewrite, RecordingScheduler `tick()`/
+`processCompletedRecordings()` + per-recording one-shot stop timers, worker-0 periodic Timer in
+start.php, `dvr.scheduler_interval_seconds`. Gates run here: phpstan L9 `-c phpstan.neon.dist` on
+Recorder.php + RecordingScheduler.php = **[OK] 0 errors**; phpunit `--filter
+'RecorderTimedStop|RecordingScheduler'` = **OK (14 tests, 37 assertions)**.
+
+**Check #1 (padding-default consistency) — PASS (no divergence).** All paths default post_padding to
+**60** when NULL/absent: scan SQL `COALESCE(post_padding_seconds, 60)` (Recorder.php:907); timer path
+`RowAccess::int($row,'post_padding_seconds',60)` (RecordingScheduler.php:269); `endRecording` reads
+`mapRecording()` which coerces via `RowAccess::int(...,60)` (Recorder.php:1587) so its `is_int(...)?:60`
+branch always sees an int (and is used only for logging, not gating); config
+`default_post_padding_seconds`=60 (livetv.php:362); column `INT NOT NULL DEFAULT 60` (mig 012a:42,
+013:13/28). Timer path and scan path compute the same effective stop for the NULL/default row. Not a
+finding.
+
+**Checks #5, #6, #7, #8, #9 — PASS.** #5 worker-0 gate `(int)$w->id===0` at start.php:232 mirrors the
+SV-3.1e recovery gate at :200; Timer is repeating (2-arg `Timer::add`, persistent default). #6 verified
+Workerman `Events\Swoole::add()` routes one-shot (`Timer::after`) AND repeating (`Timer::tick`)
+callbacks through `safeCall`→`Coroutine::create` (vendor Swoole.php:69/105/286) → `getCid()>0`, so
+`terminateRecording` uses `Coroutine::sleep` (non-blocking) and hooked PDO can yield; stop reuses
+`posix_kill` (no hooked exec; `shell_exec` fallback is pre-existing and unreached when posix_kill
+present); no exit/die/blocking-sleep introduced. #7 no ctor/DI signature changed (only a private field +
+methods added; resolved via existing singleton) → no index.php mirror required; timer daemon-only. #8
+nothing stubbed/deleted; d/f/g/h left as seams. #9 padding assertions genuine on BOTH paths
+(timer: `effectiveEndTime($endTime,90)`; scan: `end_time + COALESCE(post_padding_seconds, 60)` SQL) and
+the reconcile test asserts exactly one onComplete + one COMPLETED UPDATE — all would fail pre-fix
+(orphan returned false / no timer armed).
+
+### Findings (3), most-severe first
+
+1. **[MEDIUM] Double-completion race — the safety-net scan does not exclude in-flight recordings and
+   there is no atomic status compare-and-swap.** `Recorder::getRecordingsDueToStop`
+   (src/LiveTv/Recorder.php:900-918) selects rows purely by DB `status='recording' AND effectiveEnd<=now`,
+   with no exclusion of recordings still live in `$this->activeRecordings` on this worker or holding a
+   pending one-shot stop timer. Neither `stopRecording` (Recorder.php:733-775) nor `endRecording`'s
+   reconcile UPDATE (Recorder.php:~838) guards the completion with a conditional
+   `WHERE ... status='recording'` + affected-rows check. Because `terminateRecording`
+   (Recorder.php:1055-1068) parks in a `Coroutine::sleep(0.1)` loop for up to ~5s (SIGTERM grace) BEFORE
+   `stopRecording` unsets `activeRecordings` (:753) and writes the completion UPDATE (:758), the row stays
+   `status='recording'` + in `activeRecordings` for that whole window. Under the Swoole runtime the
+   one-shot stop-timer coroutine and each 30s scan-tick coroutine interleave at those yields.
+   *Failure scenario:* a recording whose effectiveEnd falls within ~5s of a scan tick is processed by
+   BOTH the one-shot timer and the concurrent scan (or two scan re-entries) → `fireOnCompleteCallbacks`
+   fires twice and the completion UPDATE runs twice. Harm today is bounded (onComplete is a no-op until
+   SV-3.1d, double UPDATE is near-idempotent), but once SV-3.1d wires comskip / media_item registration
+   into onComplete this becomes a double comskip / double media-item insert / double storage accounting.
+   *Fix direction:* make the completion UPDATE a compare-and-swap (`UPDATE ... SET status='completed' ...
+   WHERE recording_id=? AND status='recording'`) and only `fireOnCompleteCallbacks` when affected-rows==1;
+   and/or have the scan skip recording_ids currently present in `activeRecordings`.
+
+2. **[LOW-MEDIUM] One-shot stop timer is not cancelled on the manual-stop path (check #3 gap).**
+   `RecordingScheduler` cancels the per-recording timer on normal fire (`fireStopTimer` self-clears) and
+   on the scan (`processCompletedRecordings`→`cancelStopTimer`), but the Recorder manual paths
+   `stopRecording`/`cancelRecording` (Recorder.php:1185)/`deleteRecording` (Recorder.php:1209) have NO
+   coupling to `RecordingScheduler::cancelStopTimer`. A recording stopped/cancelled/deleted before its
+   effective end therefore leaves its one-shot timer armed for the full remaining duration, so
+   `activeStopTimerCount()` does not return to baseline on manual stop (violates the check-#3 requirement).
+   The late fire is itself harmless (`endRecording` status-guards the reconcile → returns false, no double
+   onComplete), and this path is untested. *Fix direction:* register a Recorder `onComplete` callback (or
+   an explicit stop hook) from the scheduler that calls `cancelStopTimer`, or route manual stops through
+   the scheduler; add a test asserting the count returns to baseline after a manual stop.
+
+3. **[LOW] Scan SQL does not clamp negative padding, diverging from `effectiveEndTime`'s `max(0,...)`.**
+   `getRecordingsDueToStop` computes `end_time + COALESCE(post_padding_seconds, 60)` (Recorder.php:907)
+   with no `GREATEST(0, …)`, whereas the timer path clamps via `effectiveEndTime` (`end_time + max(0,
+   padding)`). For a NEGATIVE `post_padding_seconds` (not clamped at write time in `scheduleRecording`/
+   `SeriesRuleManager`) the scan would fire earlier than the timer. Not reachable with the default (60) or
+   any non-negative value, so exposure is minimal. *Fix direction:* `end_time + GREATEST(0,
+   COALESCE(post_padding_seconds, 60))` to mirror `effectiveEndTime`, or validate non-negative padding at
+   write time.
+
+**Verdict: 3 FINDINGS** (1 MEDIUM, 1 LOW-MEDIUM, 1 LOW). Padding-default consistency (check #1) PASSED —
+not a finding. Loop to the Fixer for findings 1 & 2 (finding 3 is a low-risk hardening nit).

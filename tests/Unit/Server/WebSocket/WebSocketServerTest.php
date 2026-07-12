@@ -204,9 +204,16 @@ class WebSocketServerTest extends TestCase
     }
 
     /**
+     * The stale-connection reaper, stale-group reaper, and the S-F28
+     * application-level ping timer must all register when the Workerman Timer
+     * class is available. (Previously a `function_exists('Workerman\Timer')`
+     * guard — always false because Timer is a class — meant none of them ever
+     * armed; the WebSocketServer constructor creates a Worker so Timer::add is
+     * usable here.)
+     *
      * @covers \Phlix\Server\WebSocket\WebSocketServer::onStart
      */
-    public function testOnStartDoesNotThrow(): void
+    public function testOnStartRegistersReaperAndPingTimers(): void
     {
         $config = [
             'host' => '0.0.0.0',
@@ -216,13 +223,87 @@ class WebSocketServerTest extends TestCase
         ];
 
         $server = new WebSocketServer($config);
-        $syncPlayManager = new SyncPlayManager();
-        $server->setSyncPlayManager($syncPlayManager);
+        $server->setSyncPlayManager(new SyncPlayManager());
 
-        // onStart should not throw even without Workerman\Timer
-        // (the function_exists check will cause early return)
-        $this->expectNotToPerformAssertions();
+        $before = $this->workermanTimerCount();
         $server->onStart();
+        $after = $this->workermanTimerCount();
+
+        // Exactly three timers are armed: stale-connection reaper, stale-group
+        // reaper, and the application-level ping timer.
+        $this->assertSame(
+            3,
+            $after - $before,
+            'onStart must arm the stale-connection reaper, stale-group reaper, and ping timers',
+        );
+    }
+
+    /**
+     * A half-open socket (peer silently gone) does not answer server pings, so
+     * after the non-response limit is reached the ping sweep must close and
+     * reap the connection within the ping window (S-F28).
+     *
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::pingConnections
+     */
+    public function testPingSweepReapsNonRespondingConnection(): void
+    {
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);
+
+        $tcp = $this->createMock(TcpConnection::class);
+        $wsConnection = new Connection($tcp);
+        $pool = ConnectionPool::getInstance();
+        $pool->add($wsConnection);
+
+        // Non-response limit 2: the peer never pongs, so the third sweep reaps it.
+        $server->pingConnections(2);
+        $this->assertSame(1, $pool->count());
+        $this->assertSame(1, $wsConnection->getPendingPings());
+
+        $server->pingConnections(2);
+        $this->assertSame(1, $pool->count());
+        $this->assertSame(2, $wsConnection->getPendingPings());
+
+        $server->pingConnections(2);
+        $this->assertSame(0, $pool->count(), 'a peer that misses the ping limit must be reaped');
+    }
+
+    /**
+     * A connection that answers pings (pong received) has its outstanding-ping
+     * count reset each sweep and must never be reaped.
+     *
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::pingConnections
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketPong
+     */
+    public function testRespondingConnectionIsNeverReaped(): void
+    {
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097]);
+
+        $tcp = $this->createMock(TcpConnection::class);
+        $wsConnection = new Connection($tcp);
+        $pool = ConnectionPool::getInstance();
+        $pool->add($wsConnection);
+
+        for ($i = 0; $i < 5; $i++) {
+            $server->pingConnections(2);
+            $server->onWebSocketPong($tcp, '');
+        }
+
+        $this->assertSame(1, $pool->count(), 'a connection answering pings must survive');
+        $this->assertSame(0, $wsConnection->getPendingPings());
+    }
+
+    /**
+     * Counts the currently registered Workerman timers via the protected static
+     * status registry (SIGALRM-scheduler path used under PHPUnit).
+     */
+    private function workermanTimerCount(): int
+    {
+        $prop = new \ReflectionProperty(\Workerman\Timer::class, 'status');
+        $prop->setAccessible(true);
+        /** @var array<int, bool> $status */
+        $status = $prop->getValue();
+
+        return count($status);
     }
 
     /**

@@ -56,9 +56,9 @@
 ## Progress
 - [~] SV-0.1  wire hardware acceleration + tone-mapping config  FIX-1 LANDED 2026-07-12 → RE-REVIEW spawned. Review-1 defect (HW-surface/software-filter collision) FIXED: buildHwaccelInputFlags() now delegates to profiles' getInputDeviceArgs() (no divergence); new hwaccelUploadFilter() appends format=nv12,hwupload AFTER software filters for VAAPI/QSV only (NVENC/VT/AMF take system memory); added HwaccelProfileFactory::getProfileForVendor(). #3 vaapi test corrected + 4 coherence tests (downscale NVENC/VAAPI hwupload-ordering, HDR NVENC, QSV device); --filter Hwaccel 139 green. QSV device-key fixed. #4 confirmed (FPM lazy-probe, no boot log — OK). Commits 02606550,e54cf142,f37fc0f9. ⚠️ SCOPE-CREEP (beneficial): commit 4d49d9bc ALSO cleared the other pre-existing errors → phpstan L9 now [OK] 0 errors + phpcs 0 errors. That touched SV-2.8 (ItemRepository is_numeric-guarded casts) and SV-3.2 (WebPortalServicesProvider:295 BookController factory: BookLibraryManager→LibraryManager — was a LATENT RUNTIME FATAL). Those steps' audits MUST account for this. testAddStream* reds remain = pre-existing SV-2.8 test-drift (unchanged). REVIEW-2 2026-07-12: essentially CLEAN — VAAPI+NVENC+libx264-fallback correct (high confidence), collision defect genuinely fixed, tests guard the seam, scope-creep edits all verified correct. 1 finding LOWER-CONFIDENCE/Intel-QSV-only/unverifiable-here (QSV hwupload needs -init_hw_device qsv=hw -filter_hw_device hw + hwupload=...,format=qsv; NOT a regression) → DEFERRED to task #6 (verify on Intel HW; won't write untestable ffmpeg blind). SV-0.1 code+tests DONE for verifiable scope; docs batched w/ wave. SV-0.1/0.2 effectively DONE ✅ (docs pending).
 - [x] SV-0.2  reconcile hwaccel config  RE-AUDIT 2026-07-12: DONE — single source HwAccelConfig::get(); ffmpeg.php+hwaccel.php delegate; no contradictory flags. Regression test added: HwAccelConfigTest(7) green (commit 0a35848a). Pending confirming review alongside SV-0.1.
-- [~] SV-0.3  isWorkermanContext fix  RE-AUDIT 2026-07-12: PARTIAL — impl CORRECT (shared Common\Runtime\WorkerContext::isEventLoopRunning() via Worker::isRunning(); all 4 clients + PluginCatalogService use it; old defined() guard gone). GAP: mandated regression test MISSING (no WorkerContextTest, no branch-selection test). → COMBINED SV-0.3+0.4 fix spawned. (e48e4aba)
-- [~] SV-0.4  replace usleep spin-wait with Channel  RE-AUDIT 2026-07-12: PARTIAL + REAL BUG — spin-wait gone, but coroutine gating WRONG: Metadata/Webhook/S3 route to Channel path on isEventLoopRunning()&&!requiresBlockingCurl() with NO getCid()>0 gate → Channel::pop() outside a coroutine returns false immediately = FALSE TIMEOUT while callback pending. HttpClient INVERTED (Channel used only in non-coroutine case where it's invalid). AC requires: getCid()>0 → Channel; else blocking client explicitly. No tests. → COMBINED SV-0.3+0.4 fix spawned. (e48e4aba)
-- [~] SV-0.5  fix WS reaper + heartbeat timer guards  RE-AUDIT 2026-07-12: PARTIAL — function_exists→class_exists fixed (3 sites); WS reaper arms (per-worker repeating); stream heartbeats one-shot (Timer::add(30,...,[],false), storm CAPPED). GAPS: (1) S-F28 WS app-level ping ABSENT (no pingInterval/pingNotResponseLimit, no ping timer → half-open sockets undetectable); (2) heartbeat NOT keyed-per-session/deduped/torn-down on stream end (each request re-registers → bounded accumulation, not the keyed+cancelled AC); (3) tests shallow (smoke test w/ stale comment; no leak test). → completion queued.
+- [~] SV-0.3  isWorkermanContext fix  RE-AUDIT 2026-07-12: PARTIAL — impl CORRECT (shared Common\Runtime\WorkerContext::isEventLoopRunning() via Worker::isRunning(); all 4 clients + PluginCatalogService use it; old defined() guard gone). GAP: mandated regression test MISSING. FIX LANDED (ce2d2e04, 2a243857): WorkerContextTest added; branch-selection guard via Webhook seam. REVIEW NO FINDINGS 2026-07-12 → DONE ✅ (docs batched w/ wave).
+- [~] SV-0.4  replace usleep spin-wait with Channel  RE-AUDIT 2026-07-12: PARTIAL + REAL BUG — spin-wait gone, but coroutine gating WRONG: Metadata/Webhook/S3 route to Channel path on isEventLoopRunning()&&!requiresBlockingCurl() with NO getCid()>0 gate → Channel::pop() outside a coroutine returns false immediately = FALSE TIMEOUT while callback pending. HttpClient INVERTED (Channel used only in non-coroutine case where it's invalid). AC requires: getCid()>0 → Channel; else blocking. FIX LANDED (ce2d2e04): all 4 clients gate Channel::pop on inCoroutine(); HttpClient inversion corrected (dead requestAsync removed); TLS blocking fallback preserved. Real coroutine test (wake+clean-timeout). REVIEW NO FINDINGS 2026-07-12 → DONE ✅. (PluginCatalogService SV-4.11 has same latent gap — its step.)
+- [x] SV-0.5  fix WS reaper + heartbeat timer guards  RE-AUDIT 2026-07-12: PARTIAL — function_exists→class_exists fixed (3 sites); WS reaper arms (per-worker repeating); stream heartbeats one-shot (Timer::add(30,...,[],false), storm CAPPED). GAPS: (1) S-F28 WS app-level ping ABSENT (no pingInterval/pingNotResponseLimit, no ping timer → half-open sockets undetectable); (2) heartbeat NOT keyed-per-session/deduped/torn-down on stream end (each request re-registers → bounded accumulation, not the keyed+cancelled AC); (3) tests shallow (smoke test w/ stale comment; no leak test). COMPLETED 2026-07-12: (1) server-side ping timer + onWebSocketPong (Workerman 5.x has no pingInterval); (2) StreamSessionService keyed+deduped one-shot heartbeat timers torn down in releaseStream(), callers delegate; (3) reaper-registration + ping-reap + heartbeat one-shot/keyed/leak tests. phpstan 0, phpunit 85 green, phpcs no new. See Implementer note below. Pending review.
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
 - [x] SV-0.8  fix path_hash reads + stop re-probing ✅ (commit 510c8761)
@@ -421,3 +421,129 @@ EventLoopTls `requiresBlockingCurl()` fallback preserved (blocking-by-design) an
 **Verify:** phpstan (level 9, `-c phpstan.neon.dist`) 0 errors. phpunit `--filter 'WorkerContext|CoroutineChannelWait|HttpClient|MetadataHttpClient|Webhook|S3Client'` = OK (91 tests, 244 assertions). phpcs PSR12 on all 5 src files + 2 tests = 0 errors (only pre-existing >120-char warnings in S3Client lines 212/238/256, not on changed lines).
 
 **Adjacent (out of scope, noted):** `src/Plugins/Catalog/PluginCatalogService.php::defaultFetcher()` (SV-4.11) has the same latent no-getCid-gate on its `asyncFetch` Channel path — separate step, not touched here.
+
+## Reviewer (per-step, SV-0.3 + SV-0.4 combined fix) — 2026-07-12
+
+Reviewed diff `ce2d2e04` (fix) + `2a243857` (tests). Verified locally: phpstan L9
+`-c phpstan.neon.dist` = [OK] 0 errors; phpunit `--filter
+'WorkerContext|CoroutineChannelWait|Webhook|MetadataHttpClient|S3Client|HttpClient'` =
+OK (91 tests, 244 assertions); CoroutineChannelWaitTest ran (not skipped — swoole loaded).
+
+CONFIRMED CORRECT (no action):
+- Invariant holds in ALL 4 clients — every `Swoole\Coroutine\Channel::pop()` is now
+  reachable only with `getCid()>0`:
+  - MetadataHttpClient:357 (requestAsync) gated by `!needsBlocking` where
+    needsBlocking = `!isEventLoop || !inCoroutine || requiresBlockingCurl`.
+  - WebhookHttpClient:126 (postAsync) gated by `useAsync = isEventLoopRunning &&
+    inCoroutine && !requiresBlockingCurl`.
+  - S3Client:390 (requestAsync) gated by the same useAsync.
+  - Hub/HttpClient: no Channel at all after the fix — requestCoroutine() uses the
+    hooked Workerman\Http\Client synchronously (suspends the coroutine), gated on
+    `isEventLoopRunning && inCoroutine`; else blocking cURL. The false-timeout bug
+    path (Channel::pop out of a coroutine) is eliminated.
+- HttpClient inversion fix: dead `requestAsync()` (Channel) method removed; no
+  residual caller/reference; `use Workerman\Coroutine;` import removed and no
+  remaining `Coroutine::`/`Workerman\Coroutine` usage in the file. requestCoroutine
+  is genuinely coroutine-safe (hooked client, no Channel).
+- EventLoopTls `requiresBlockingCurl()` fallback stays reachable in all 4 (https-
+  under-Swoole → blocking cURL); the new inCoroutine gate is ANDed alongside it, so
+  TLS is never routed through the coroutine/Channel path.
+- Timeout behavior: clean error/null preserved (requestCoroutine throws on null;
+  Channel paths translate pop-timeout to null/error). CoroutineChannelWaitTest proves
+  a real timeout waits the window (>=40ms), not the immediate-false of an invalid pop.
+- `WorkerContext::inCoroutine()` = `extension_loaded('swoole') && Coroutine::getCid()>0`
+  — safe when swoole absent (returns false in CLI/PHPUnit → forces blocking path).
+- Tests are real, not shallow: CoroutineChannelWaitTest exercises a live
+  `Swoole\Coroutine\run` — inCoroutine() flip false→true, wake-on-push before timeout,
+  and clean-timeout-after-waiting; it deliberately never pops outside a coroutine.
+  WorkerContextTest proves both guards false out-of-worker/out-of-coroutine AND the
+  branch selection via a real client seam (WebhookHttpClient::post('') → blocking-only
+  'Empty URL' sentinel).
+
+Out of scope (correctly NOT reported as an SV-0.4 finding): PluginCatalogService.php:538
+has the same ungated Channel::pop latent gap — belongs to SV-4.11.
+
+NO FINDINGS
+
+---
+
+## Implementer — 2026-07-12 — SV-0.5 completion (3 audit gaps)
+
+The `function_exists`→`class_exists` fix (3 sites), the per-worker repeating WS
+reapers, and the one-shot stream heartbeats were already in place. This pass
+closes the three RE-AUDIT gaps.
+
+### Gap 1 — S-F28: application-level WS ping (was ABSENT)
+- Mechanism chosen: **server-side ping timer + pong callback** (NOT
+  `pingInterval`/`pingNotResponseLimit`). Reason: Workerman 5.x's `Worker` does
+  NOT expose those properties (they lived in GatewayWorker); the WS protocol
+  layer only offers the dynamic `onWebSocketPong` worker callback. Verified in
+  `vendor/workerman/workerman/src/Worker.php` (no pingInterval) and
+  `Protocols/Websocket.php` (reads `$connection->worker->onWebSocketPong`).
+- `Connection.php`: added `pendingPings` counter + `ping()` (sends a WS PING
+  control frame `"\x89"`, restores the prior frame type, increments the counter),
+  `recordPong()` (reset + refresh activity), `getPendingPings()`.
+- `WebSocketServer.php`: bind `onWebSocketPong` in the constructor
+  (`@phpstan-ignore property.notFound` — dynamic Workerman callback); arm a ping
+  `Timer::add($pingInterval, …)` in `onStart()` (config `ping_interval` default
+  30s, `ping_not_response_limit` default 2). `pingConnections(int $limit)` reaps
+  any connection whose `getPendingPings() >= $limit` (close + pool remove), else
+  pings it. `onWebSocketPong()` clears the counter for the ponging connection.
+- Net: a killed/half-open client stops ponging → after `$limit` unanswered pings
+  (~2× ping window) it is closed and removed. A live client's pong resets the
+  counter each sweep so it is never reaped.
+
+### Gap 2 — key stream heartbeat per-session + teardown on stream end
+- `StreamSessionService.php`: added `heartbeatTimerIds` map (session id → timer
+  id), `registerHeartbeatTimer($sessionId)` (dedup: no-op if a timer is already
+  pending for the session; one-shot `Timer::add(30, …, [], false)`),
+  `onHeartbeatTimerFired($sessionId)` (clears its own slot so the next request
+  re-arms it, then refreshes the heartbeat), `cancelHeartbeatTimer($sessionId)`
+  (`Timer::del` + unset), and `activeHeartbeatTimerCount()`. `releaseStream()`
+  now calls `cancelHeartbeatTimer()` before the DELETE — the canonical
+  stream-teardown path.
+- Callers now delegate: `HttpHandler::checkStreamLimit()` and
+  `StreamLimitMiddleware::__invoke()` call `$service->registerHeartbeatTimer()`;
+  their private `registerStreamHeartbeat`/`registerHeartbeat` helpers were
+  removed. StreamSessionService is a PHP-DI shared singleton within the worker,
+  so both paths share one registry (dedup + teardown are consistent).
+- Result: at most ONE heartbeat timer per active session (was: one one-shot per
+  request — bounded but re-created each HLS segment). Timers self-clear on fire
+  and are cancelled on release. `cleanupStaleStreams()` (bulk SQL DELETE) does
+  not carry session ids, but the one-shot + self-clear design means a stale
+  session's last timer already fired and cleared ~30s after its final request,
+  so no accumulation results from that path.
+
+### Gap 3 — tests
+- `WebSocketServerTest`: replaced the shallow `testOnStartDoesNotThrow` (stale
+  comment referencing the old `function_exists` early-return) with
+  `testOnStartRegistersReaperAndPingTimers` — asserts `onStart()` arms exactly 3
+  Workerman timers (conn reaper + group reaper + ping) via reflection on
+  `Timer::$status`. Added `testPingSweepReapsNonRespondingConnection` (peer never
+  pongs → reaped on the sweep that hits the limit) and
+  `testRespondingConnectionIsNeverReaped` (pong each sweep → survives).
+- New `tests/Unit/Access/StreamSessionServiceTest`:
+  `testHeartbeatTimerIsKeyedDedupedAndSelfClearing` (keyed, dedup no-op,
+  one-shot self-clear, re-arm, teardown), `testTimerFiringRefreshesHeartbeat`
+  (fire → one UPDATE + slot cleared), and the **leak test**
+  `testNoTimerLeakAcrossManyStreamStartStopCycles` — 100 sessions × 3 registers
+  each yields exactly 100 timers (dedup), and after 100 `releaseStream()` calls
+  the active-timer count returns to baseline (0). Deterministic: drives the
+  callbacks directly, no real sleeps.
+
+### Dual-entrypoint
+No mirroring needed. The WS worker runs only in `start.php` (resident path);
+`public/index.php` has no WS worker. All ping/reaper wiring lives inside
+`WebSocketServer` (constructor + `onStart`), which `start.php` already
+instantiates and calls — so both the constructor binding and the timer arming
+are captured automatically.
+
+### Verification
+- `phpstan analyze -c phpstan.neon.dist`: **0 errors**.
+- `phpunit --filter 'WebSocketServer|StreamLimit|HttpHandler|StreamSession'`:
+  **85 tests, 175 assertions, OK** (incl. the new tests).
+- `phpcs --standard=PSR12` on touched files: no new errors/warnings (the 5
+  long-line warnings in StreamSessionService are pre-existing in
+  `getActiveStreamsForProfile`).
+
+NO FINDINGS (pending review)

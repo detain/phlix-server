@@ -109,7 +109,12 @@ class BookProgressStore
                 $progress->position_ms,
                 $progress->current_page,
                 $progress->total_pages,
-                $progress->percent_complete,
+                // percent_complete is a DECIMAL(5,2) column; bind a fixed
+                // 2-decimal string ("25.50") so the persisted value is
+                // deterministic and matches the column scale (locale-safe via
+                // number_format's explicit '.' separator). Read back as float
+                // in getProgress().
+                number_format($progress->percent_complete, 2, '.', ''),
                 $progress->last_read_at ?? time(),
             ]
         );

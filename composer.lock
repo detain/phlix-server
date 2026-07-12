@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "ac91bbf49ac98d4de9b40e42213bc0f7",
+    "content-hash": "084fe0be3de3a9e6f3a572e6c6c3b6c0",
     "packages": [
         {
             "name": "brick/math",
@@ -412,17 +412,11 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "v0.19.0",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/detain/phlix-shared.git",
-                "reference": "0fa2709c4042794cea14ff52e1fdee2ecef00924"
-            },
+            "version": "0.18.0",
             "dist": {
-                "type": "zip",
-                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/0fa2709c4042794cea14ff52e1fdee2ecef00924",
-                "reference": "0fa2709c4042794cea14ff52e1fdee2ecef00924",
-                "shasum": ""
+                "type": "path",
+                "url": "/home/sites/phlix/phlix-shared",
+                "reference": "216ea5dfa7faf2a422dbf0a1a4116442994e7c74"
             },
             "require": {
                 "php": "^8.3",
@@ -471,11 +465,10 @@
                 "MIT"
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
-            "support": {
-                "source": "https://github.com/detain/phlix-shared/tree/v0.19.0",
-                "issues": "https://github.com/detain/phlix-shared/issues"
-            },
-            "time": "2026-07-11T01:08:41+00:00"
+            "transport-options": {
+                "symlink": false,
+                "relative": false
+            }
         },
         {
             "name": "directorytree/ldaprecord",

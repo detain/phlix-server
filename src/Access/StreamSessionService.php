@@ -24,6 +24,27 @@ use Workerman\MySQL\Connection;
 final class StreamSessionService
 {
     /**
+     * Interval, in seconds, after which a pending heartbeat timer fires and
+     * refreshes the session's last_heartbeat_at timestamp.
+     */
+    private const HEARTBEAT_INTERVAL_SECONDS = 30;
+
+    /**
+     * Pending heartbeat timer ids keyed by stream session id.
+     *
+     * At most ONE entry exists per active session: registration is deduped so a
+     * burst of stream requests for the same session (e.g. every HLS segment)
+     * does not create a timer per request. Each timer is one-shot — when it
+     * fires it clears its own slot so the next request re-arms it (refresh) —
+     * and {@see releaseStream()} cancels it on stream teardown. This bounds the
+     * live timer count to the number of sessions with activity in the last
+     * {@see HEARTBEAT_INTERVAL_SECONDS} seconds rather than growing per request.
+     *
+     * @var array<string, int>
+     */
+    private array $heartbeatTimerIds = [];
+
+    /**
      * Create a new StreamSessionService instance.
      *
      * @param Connection $db Database connection for accessing stream session data.
@@ -106,16 +127,111 @@ final class StreamSessionService
     /**
      * Release (remove) a stream session.
      *
+     * Also tears down any pending heartbeat timer for the session so no timer
+     * outlives the stream it serves.
+     *
      * @param string $sessionId The streaming session identifier.
      *
      * @return void
      */
     public function releaseStream(string $sessionId): void
     {
+        $this->cancelHeartbeatTimer($sessionId);
+
         $this->db->query(
             'DELETE FROM active_streams WHERE session_id = ?',
             [$sessionId],
         );
+    }
+
+    /**
+     * Register (or refresh) the one-shot heartbeat timer for a stream session.
+     *
+     * Callers invoke this on every stream request. Registration is deduped by
+     * session id: if a heartbeat timer is already pending for the session this
+     * is a no-op, so a burst of requests (e.g. HLS segment fetches) yields at
+     * most ONE timer per session instead of one per request. The timer is
+     * one-shot; when it fires it clears its own slot so the next request re-arms
+     * it. {@see releaseStream()} cancels it on stream teardown.
+     *
+     * No-op outside a Workerman runtime (the Timer class is unavailable).
+     *
+     * @param string $sessionId The streaming session identifier.
+     *
+     * @return void
+     */
+    public function registerHeartbeatTimer(string $sessionId): void
+    {
+        if (!class_exists(\Workerman\Timer::class)) {
+            return;
+        }
+
+        // Dedup: at most one pending heartbeat timer per active session.
+        if (isset($this->heartbeatTimerIds[$sessionId])) {
+            return;
+        }
+
+        $timerId = \Workerman\Timer::add(
+            self::HEARTBEAT_INTERVAL_SECONDS,
+            function () use ($sessionId): void {
+                $this->onHeartbeatTimerFired($sessionId);
+            },
+            [],
+            false, // one-shot
+        );
+
+        if ($timerId > 0) {
+            $this->heartbeatTimerIds[$sessionId] = $timerId;
+        }
+    }
+
+    /**
+     * Handle a one-shot heartbeat timer firing for a session.
+     *
+     * Clears the session's timer slot (so the next stream request re-arms a
+     * fresh one-shot timer) and refreshes the session heartbeat. Exposed for the
+     * timer callback and for deterministic testing of the one-shot self-clear.
+     *
+     * @param string $sessionId The streaming session identifier.
+     *
+     * @return void
+     */
+    public function onHeartbeatTimerFired(string $sessionId): void
+    {
+        unset($this->heartbeatTimerIds[$sessionId]);
+        $this->heartbeat($sessionId);
+    }
+
+    /**
+     * Cancel and remove any pending heartbeat timer for a session.
+     *
+     * @param string $sessionId The streaming session identifier.
+     *
+     * @return void
+     */
+    public function cancelHeartbeatTimer(string $sessionId): void
+    {
+        $timerId = $this->heartbeatTimerIds[$sessionId] ?? null;
+        if ($timerId === null) {
+            return;
+        }
+
+        unset($this->heartbeatTimerIds[$sessionId]);
+
+        if (class_exists(\Workerman\Timer::class)) {
+            \Workerman\Timer::del($timerId);
+        }
+    }
+
+    /**
+     * Number of pending (registered, not-yet-fired, not-cancelled) heartbeat
+     * timers. Used to assert the per-session timer accounting stays bounded.
+     *
+     * @return int Count of active heartbeat timers.
+     */
+    public function activeHeartbeatTimerCount(): int
+    {
+        return count($this->heartbeatTimerIds);
     }
 
     /**

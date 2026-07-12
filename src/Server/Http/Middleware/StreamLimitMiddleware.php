@@ -107,36 +107,12 @@ final class StreamLimitMiddleware
             ]);
         }
 
-        // Register heartbeat timer for this streaming session
-        $this->registerHeartbeat($sessionId);
+        // Register (or refresh) the heartbeat timer for this streaming session.
+        // Keyed + deduped per session inside the service, so repeated requests
+        // never accumulate timers; torn down on stream release.
+        $this->streamSessionService->registerHeartbeatTimer($sessionId);
 
         return null;
-    }
-
-    /**
-     * Register a one-shot heartbeat timer for the session.
-     *
-     * Uses a one-shot timer (4th param = false) to call heartbeat() once after
-     * 30 seconds. Each stream request re-registers its own timer, preventing
-     * timer accumulation when many concurrent streams are active.
-     *
-     * @param string $sessionId The session ID to send heartbeats for.
-     *
-     * @return void
-     */
-    private function registerHeartbeat(string $sessionId): void
-    {
-        // Only register timer if Timer class is available (Workerman context)
-        if (!class_exists(\Workerman\Timer::class)) {
-            return;
-        }
-
-        /** @var StreamSessionService $service */
-        $service = $this->streamSessionService;
-
-        \Workerman\Timer::add(30, static function () use ($sessionId, $service): void {
-            $service->heartbeat($sessionId);
-        }, [], false);
     }
 
     /**

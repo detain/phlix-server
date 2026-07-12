@@ -863,9 +863,11 @@ final class HttpHandler
             );
         }
 
-        // Register heartbeat timer for this streaming session (one-shot, re-registered
-        // on each request).
-        $this->registerStreamHeartbeat($streamSessionService, $sessionId);
+        // Register (or refresh) the heartbeat timer for this streaming session.
+        // Keyed + deduped per session inside the service, so repeated requests
+        // (incl. every HLS segment) never accumulate timers; the timer is torn
+        // down on stream release.
+        $streamSessionService->registerHeartbeatTimer($sessionId);
 
         return null;
     }
@@ -919,24 +921,6 @@ final class HttpHandler
         }
 
         return null;
-    }
-
-    /**
-     * Register a one-shot heartbeat timer for a stream session.
-     *
-     * Uses a one-shot timer (4th param = false) to avoid accumulating
-     * timers across many concurrent stream sessions. Each stream request
-     * re-registers its own timer.
-     */
-    private function registerStreamHeartbeat(\Phlix\Access\StreamSessionService $service, string $sessionId): void
-    {
-        if (!class_exists(\Workerman\Timer::class)) {
-            return;
-        }
-
-        \Workerman\Timer::add(30, static function () use ($sessionId, $service): void {
-            $service->heartbeat($sessionId);
-        }, [], false);
     }
 
     /**

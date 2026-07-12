@@ -64,7 +64,7 @@ class QsvProbe implements VendorProbeInterface
             max_resolution_w: 3840,
             max_resolution_h: 2160,
             max_bitrate: 30000000,
-            extra_args: ['-device' => '/dev/dri/renderD128'],
+            extra_args: ['device' => '/dev/dri/renderD128'],
         );
     }
 

@@ -20,7 +20,6 @@ use Phlix\Auth\WatchHistory;
 use Phlix\Common\Logger\AuditLogger;
 use Phlix\Media\ChapterSearchService;
 use Phlix\Media\Library\AudioScanner;
-use Phlix\Media\Library\BookLibraryManager;
 use Phlix\Media\Library\BookProgressStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\LibraryManager;
@@ -285,8 +284,11 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                 static function (ContainerInterface $c): BookController {
                     /** @var ItemRepository $itemRepository */
                     $itemRepository = $c->get(ItemRepository::class);
-                    /** @var BookLibraryManager $libraryManager */
-                    $libraryManager = $c->get(BookLibraryManager::class);
+                    // BookController needs the generic LibraryManager (getAllLibraries()/
+                    // getLibrary()); BookLibraryManager does not expose those, so resolving
+                    // it here was both a type error and a runtime fatal on those calls.
+                    /** @var LibraryManager $libraryManager */
+                    $libraryManager = $c->get(LibraryManager::class);
                     /** @var BookProgressStore|null $progressStore */
                     $progressStore = $c->get(BookProgressStore::class);
 

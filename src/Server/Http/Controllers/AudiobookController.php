@@ -38,7 +38,6 @@ use Phlix\Server\Http\Response;
  */
 class AudiobookController
 {
-
     /** @var ItemRepository Repository for media item access */
     private ItemRepository $itemRepo;
 

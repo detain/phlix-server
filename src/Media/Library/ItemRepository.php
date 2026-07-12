@@ -1280,8 +1280,10 @@ class ItemRepository
                 $streamData['color_space'] ?? null,
                 $streamData['color_transfer'] ?? null,
                 $streamData['color_primaries'] ?? null,
-                isset($streamData['max_luminance']) ? (float) $streamData['max_luminance'] : null,
-                isset($streamData['avg_luminance']) ? (float) $streamData['avg_luminance'] : null,
+                is_numeric($streamData['max_luminance'] ?? null)
+                    ? (float) $streamData['max_luminance'] : null,
+                is_numeric($streamData['avg_luminance'] ?? null)
+                    ? (float) $streamData['avg_luminance'] : null,
             ]
         );
 

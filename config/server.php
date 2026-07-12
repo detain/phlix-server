@@ -103,5 +103,14 @@ return [
         'stale_connection_timeout' => 300,
         // Interval for cleaning up stale SyncPlay groups (seconds).
         'stale_group_timeout' => 3600,
+        // SV-4.7: HMAC secret used to validate the JWT presented in the WS
+        // handshake query string (?token=). Sourced from the SAME JWT_SECRET the
+        // HTTP auth layer (AuthServicesProvider / JwtHandler) uses, so a token
+        // minted at login validates here too. When set, WS auth is ENFORCED:
+        // token-less/invalid handshakes are rejected. When empty (JWT_SECRET
+        // unset — a bare dev box), connections are allowed anonymously. In
+        // production JWT_SECRET is always present (the boot guard refuses to
+        // start otherwise), so WS auth is enforced there.
+        'jwt_secret' => getenv('JWT_SECRET') ?: '',
     ],
 ];

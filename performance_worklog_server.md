@@ -1199,3 +1199,90 @@ TEST, impl VERIFIED CORRECT (no impl change).**
 - `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
 - `phpcs --standard=PSR12` on the 3 touched test files → 0 errors (only pre-existing >120-char
   warnings, all outside my edit regions).
+
+---
+
+## Implementer — 2026-07-12 — SV-4.7 WS auth enforcement (SECURITY) — audit gap list closed
+
+Closed all 6 gaps from the read-only audit (verdict PARTIAL). Auth is now enforced at the
+correct WS-handshake lifecycle stage, privileged events are gated, the SyncPlayAuthMiddleware is
+genuinely WIRED (not consolidated/queued), and the jwt_secret is plumbed through the resident path.
+
+**GAP 1 — moved auth from TCP-accept to the WS handshake.** `WebSocketServer::onConnect()` no longer
+reads `$_GET['token']` (empty/stale at TCP-accept under Workerman). It now just creates the Connection
+wrapper, pools it, sends the `connected` welcome. New `onWebSocketConnect(TcpConnection, Request)` runs
+at the handshake stage (bound via `bindConnectionCallbacks()` onto the SAME injected listening worker
+SV-0.5 wired — `$this->worker->onWebSocketConnect`), where the upgrade request's query string
+(`?token=`) is populated. It reads the token from the parsed `Workerman\Protocols\Http\Request::get('token')`
+and delegates validation. Workerman resolves the hook via `$connection->worker->onWebSocketConnect`
+(vendor Websocket.php:437), so binding it onto the real listener is load-bearing — same dual-entrypoint
+trap as SV-0.5.
+
+**GAP 2 — token-less connections now rejected when a secret is set.** `onWebSocketConnect` rejects
+(removes from pool + `close()`) when a JWT secret is configured and the token is missing/invalid/expired.
+Anonymous connections are allowed ONLY when no secret is configured (dev). Enforced via the middleware's
+`requireAuth=true` when a secret is present.
+
+**GAP 3 — jwt_secret plumbed into the WS server (resident path).** `config/server.php` websocket block
+gains `'jwt_secret' => getenv('JWT_SECRET') ?: ''` (SAME source AuthServicesProvider/JwtHandler use, so a
+login token validates on the WS too). `start.php` threads `$wsConfig['jwt_secret']` (falls back to the env
+directly). `WebSocketServer::__construct` builds a `SyncPlayAuthMiddleware($secret, requireAuth=true)` when
+the secret is non-empty, else leaves `$authMiddleware = null` (dev anonymous). `public/index.php` has NO
+WS worker (re-confirmed via grep) → no mirror needed. Production always has JWT_SECRET (boot guard refuses
+empty/default), so WS auth is enforced there.
+
+**GAP 4 — MessageHandler::handle() now has an auth gate.** Right after extracting `$event`, before the
+subscribe_dashboard branch and the generic dispatch, privileged events from an unauthenticated connection
+are rejected with a `Messages::TYPE_ERROR` / `error_code=NOT_AUTHENTICATED` (same shape SyncPlayManager
+uses) and NOT dispatched. `subscribe_dashboard` (now `WebSocketEvents::SUBSCRIBE_DASHBOARD`) is privileged,
+so unauthenticated dashboard now-playing streaming is blocked. Per-event SyncPlay gates in SyncPlayManager
+are unchanged (finer-grained; kept).
+
+**GAP 5 — SyncPlayAuthMiddleware WIRED (not deleted/consolidated).** Added
+`SyncPlayAuthMiddleware::authenticateConnection(Connection, ?string $token): bool` — the real,
+correct-lifecycle auth path. `WebSocketServer::onWebSocketConnect` delegates connect-time JWT validation to
+it; on a valid token it hands the derived `sub` straight to `Connection::setAuthenticated(true, $sub)`
+(fixing the old `$_GET['syncplay_user_id']` stash that didn't cooperate with sub-derivation). The legacy
+`onConnect(TcpConnection)` (TCP-accept `$_GET` path) is KEPT and marked `@deprecated` per §0.1 (no deletion),
+pointing to the new method. **Decision: WIRED, not consolidated → no Removal-Confirmation-Queue entry needed.**
+
+**GAP 6 — privileged-vs-public classification in WebSocketEvents.** Added `SYNCPLAY_PREFIX`,
+`SUBSCRIBE_DASHBOARD`, private `PUBLIC_EVENTS`/`PRIVILEGED_EVENTS` sets, and `isPublic()` / `isPrivileged()`.
+Privileged = every `syncplay_*` type + subscribe_dashboard/dashboard_now_playing + PLAYBACK_* + SESSION_*.
+Public = ping/pong/auth_request/connected. Unknown/server-only types are not privileged (no inbound handler
+dispatches them → safe no-op). Gap-4's gate consumes `isPrivileged()`.
+
+**Files changed (absolute):**
+- `/home/sites/phlix/phlix-server/src/Server/WebSocket/WebSocketServer.php` — remove $_GET auth from
+  onConnect; add onWebSocketConnect handshake hook + authMiddleware field/ctor build; bind onWebSocketConnect.
+- `/home/sites/phlix/phlix-server/src/Server/WebSocket/SyncPlayAuthMiddleware.php` — new
+  `authenticateConnection()`; deprecate legacy onConnect.
+- `/home/sites/phlix/phlix-server/src/Server/WebSocket/MessageHandler.php` — auth gate in handle().
+- `/home/sites/phlix/phlix-server/src/Server/WebSocket/WebSocketEvents.php` — isPrivileged/isPublic + sets.
+- `/home/sites/phlix/phlix-server/config/server.php` — websocket.jwt_secret from JWT_SECRET.
+- `/home/sites/phlix/phlix-server/start.php` — thread $wsConfig['jwt_secret']; (also moved the file docblock
+  above `declare` to clear a pre-existing phpcs file-header error).
+- Tests: `WsAuthenticationTest.php` (drive onWebSocketConnect via a real Request; **flipped** the Gap-2
+  test `testMissingTokenAllowsUnauthenticatedConnection` → `testMissingTokenRejectedWhenSecretConfigured`
+  + added `testMissingTokenAllowedWhenNoSecretConfigured`); extracted `TestableSyncPlayManager` to its own
+  file (`TestableSyncPlayManager.php`) to clear the pre-existing "one class per file" phpcs error;
+  `MessageHandlerTest.php` (+4 gate tests); new `WebSocketEventsTest.php` (classification); WebSocketServerTest
+  (+onWebSocketConnect binding assertion); `MessageHandlerFrameShapeTest.php` (authenticate the frame-shape
+  connections so privileged events pass the gate).
+
+**Verification (actual):**
+- `./vendor/bin/phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
+- `./vendor/bin/phpunit --testsuite Unit --filter 'WebSocket|WsAuthentication|MessageHandler|SyncPlay'`
+  → `OK (183 tests, 536 assertions)`.
+- `./vendor/bin/phpcs --standard=PSR12` on all touched src + config + start.php → **0 errors**; touched
+  test files → 0 errors (5 pre-existing >120-char WARNINGS in WsAuthenticationTest, non-blocking §0.2).
+- Pre-existing note: `tests/E2E/Session/SyncPlay/SyncPlayE2ETest` is RED on clean master (10 errors:
+  mock `ConnectionInterface::send()` returns null — unrelated to this step; E2E suite not maintained green
+  per the re-baseline). My change did not add E2E failures (9 after, ≤10 before).
+
+**OWED on-box verification (start.php outside CI, like SV-0.5):** deploy, then on :8097 confirm (a) a WS
+handshake WITHOUT `?token=` is rejected when JWT_SECRET is set; (b) a valid-token handshake authenticates
+and can drive SyncPlay; (c) an unauthenticated client's `subscribe_dashboard`/SyncPlay control message gets
+a NOT_AUTHENTICATED error and is not dispatched.
+
+NO FINDINGS (pending review)

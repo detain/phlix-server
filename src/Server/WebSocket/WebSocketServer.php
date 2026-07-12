@@ -13,7 +13,7 @@ namespace Phlix\Server\WebSocket;
 
 use Workerman\Worker;
 use Workerman\Connection\TcpConnection;
-use Phlix\Auth\JwtHandler;
+use Workerman\Protocols\Http\Request;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Session\SyncPlay\SyncPlayManager;
@@ -53,6 +53,18 @@ class WebSocketServer
     private ?MetricsCollector $metrics = null;
 
     /**
+     * Handshake-stage authenticator, or null when no JWT secret is configured.
+     *
+     * When a `jwt_secret` is present in the config this is a
+     * {@see SyncPlayAuthMiddleware} with auth REQUIRED — token-less/invalid
+     * handshakes are rejected. When null (no secret — dev) connections are
+     * allowed anonymously (SV-4.7 Gap 2/3).
+     *
+     * @var SyncPlayAuthMiddleware|null
+     */
+    private ?SyncPlayAuthMiddleware $authMiddleware = null;
+
+    /**
      * Creates a new WebSocket server instance.
      *
      * @param array<string, mixed> $config Server configuration with 'host' and 'port' keys
@@ -81,6 +93,15 @@ class WebSocketServer
         $this->config = $config;
         $this->connections = ConnectionPool::getInstance();
         $this->handler = $handler ?? new MessageHandler($this->connections);
+
+        // SV-4.7: build the handshake-stage authenticator when a JWT secret is
+        // configured. With a secret, auth is REQUIRED (token-less/invalid
+        // handshakes are rejected); with no secret the middleware stays null and
+        // connections are allowed anonymously (dev).
+        $jwtSecret = $this->config['jwt_secret'] ?? null;
+        if (is_string($jwtSecret) && $jwtSecret !== '') {
+            $this->authMiddleware = new SyncPlayAuthMiddleware($jwtSecret, true);
+        }
 
         if ($worker !== null) {
             // Resident path (start.php): attach to the ACTUAL listening worker.
@@ -127,6 +148,12 @@ class WebSocketServer
         $this->worker->onMessage = [$this, 'onMessage'];
         $this->worker->onClose = [$this, 'onClose'];
         $this->worker->onError = [$this, 'onError'];
+        // SV-4.7: authenticate at the WS-HANDSHAKE stage (not TCP-accept). The
+        // Websocket protocol resolves this off the accepting worker
+        // (`$connection->worker->onWebSocketConnect`) and passes the parsed
+        // upgrade Request whose query string (`?token=`) is populated — unlike
+        // onConnect's $_GET at TCP-accept.
+        $this->worker->onWebSocketConnect = [$this, 'onWebSocketConnect'];
         // @phpstan-ignore-next-line property.notFound
         $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
     }
@@ -266,40 +293,20 @@ class WebSocketServer
     }
 
     /**
-     * Called when a new client connects.
+     * Called when a new client connects (TCP-accept stage).
      *
-     * Validates JWT token from query string if present, then creates
-     * a Connection wrapper, adds it to the pool, and sends a welcome
-     * message with the connection ID.
+     * Creates the {@see Connection} wrapper, registers it in the pool and sends
+     * the welcome message. Authentication is NOT performed here: at TCP-accept
+     * the WS handshake has not run yet, so the `?token=` query string is not
+     * available (reading `$_GET` here returns empty/stale data). Authentication
+     * happens at the handshake stage in {@see onWebSocketConnect()} (SV-4.7).
      *
      * @param TcpConnection $connection The Workerman TCP connection
      * @return void
      */
     public function onConnect(TcpConnection $connection): void
     {
-        $token = $_GET['token'] ?? null;
-        $userId = null;
-
-        if (is_string($token) && $token !== '') {
-            $jwtSecret = $this->config['jwt_secret'] ?? null;
-            if (is_string($jwtSecret) && $jwtSecret !== '') {
-                $jwtHandler = new JwtHandler($jwtSecret);
-                $payload = $jwtHandler->validateToken($token);
-                if ($payload === null) {
-                    $connection->close();
-                    return;
-                }
-                $sub = $payload['sub'] ?? null;
-                $userId = is_string($sub) ? $sub : null;
-            }
-        }
-
         $wsConnection = new Connection($connection);
-
-        if (is_string($userId)) {
-            $wsConnection->setAuthenticated(true, $userId);
-        }
-
         $this->connections->add($wsConnection);
 
         $logger = LoggerFactory::get(LogChannels::WEBSOCKET);
@@ -324,6 +331,52 @@ class WebSocketServer
                 null,
                 null,
             );
+        }
+    }
+
+    /**
+     * Called at the WebSocket HANDSHAKE stage, after the upgrade request is
+     * parsed (SV-4.7).
+     *
+     * This is the correct lifecycle stage for connect-time authentication: the
+     * Websocket protocol resolves this callback off the accepting worker and
+     * passes the parsed upgrade {@see Request}, whose query string carries the
+     * `?token=<jwt>` the client supplied — unlike {@see onConnect()}'s $_GET at
+     * TCP-accept, which is empty/stale under Workerman.
+     *
+     * Enforcement (Gap 2/3):
+     * - No JWT secret configured ($authMiddleware === null) → allow anonymous
+     *   connections (dev).
+     * - Secret configured → delegate to {@see SyncPlayAuthMiddleware::authenticateConnection()}
+     *   (auth REQUIRED): a valid token marks the connection authenticated with
+     *   its derived user id; a missing/invalid/expired token causes the handshake
+     *   to be REJECTED — the connection is removed from the pool and closed.
+     *
+     * @param TcpConnection $connection The Workerman TCP connection.
+     * @param Request       $request    The parsed WebSocket upgrade request.
+     * @return void
+     */
+    public function onWebSocketConnect(TcpConnection $connection, Request $request): void
+    {
+        $wsConnection = $this->findConnection($connection);
+        if ($wsConnection === null) {
+            // onConnect populates the pool before the handshake; if the wrapper
+            // is somehow absent there is nothing to authenticate.
+            return;
+        }
+
+        // No secret configured (dev): allow the connection anonymously.
+        if ($this->authMiddleware === null) {
+            return;
+        }
+
+        $tokenRaw = $request->get('token');
+        $token = is_string($tokenRaw) ? $tokenRaw : null;
+
+        if (!$this->authMiddleware->authenticateConnection($wsConnection, $token)) {
+            // Secret configured + missing/invalid token: reject the handshake.
+            $this->connections->remove($wsConnection->getId());
+            $connection->close();
         }
     }
 

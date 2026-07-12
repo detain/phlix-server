@@ -55,6 +55,26 @@ class WsAuthenticationTest extends TestCase
     }
 
     /**
+     * Builds a REAL parsed WS upgrade Request whose `token` query param carries
+     * the supplied value (null = no token). SV-4.7 auth runs at the handshake
+     * stage off this Request, not off $_GET at TCP-accept.
+     *
+     * A real Request is used rather than a mock because Workerman's Request has
+     * its own `method()` accessor that collides with PHPUnit's mock configurator.
+     *
+     * @param string|null $token The token to place in the query string.
+     * @return \Workerman\Protocols\Http\Request
+     */
+    private function makeRequest(?string $token): \Workerman\Protocols\Http\Request
+    {
+        $line = $token === null
+            ? "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            : "GET /?token=" . $token . " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
+        return new \Workerman\Protocols\Http\Request($line);
+    }
+
+    /**
      * Creates a SyncPlayManager with handleMessage exposed for testing.
      */
     private function createTestableSyncPlayManager(): TestableSyncPlayManager
@@ -66,7 +86,14 @@ class WsAuthenticationTest extends TestCase
     }
 
     /**
+     * A valid token presented in the WS handshake authenticates the connection.
+     *
+     * SV-4.7: auth runs at the handshake stage (onWebSocketConnect), where the
+     * upgrade request's query string is populated — not at TCP-accept (onConnect,
+     * where $_GET is empty/stale under Workerman).
+     *
      * @covers \Phlix\Server\WebSocket\WebSocketServer::onConnect
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testValidTokenAuthenticatesConnection(): void
     {
@@ -80,12 +107,12 @@ class WsAuthenticationTest extends TestCase
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
 
-        // Set the token in $_GET
         $token = $this->jwtHandler->createAccessToken('user-123');
-        $_GET['token'] = $token;
 
-        // Call onConnect
+        // TCP-accept: wrapper created + welcome sent (still unauthenticated).
         $server->onConnect($mockConnection);
+        // Handshake: token in the upgrade request authenticates the connection.
+        $server->onWebSocketConnect($mockConnection, $this->makeRequest($token));
 
         // Verify the connection was added to pool and authenticated
         $pool = ConnectionPool::getInstance();
@@ -97,13 +124,10 @@ class WsAuthenticationTest extends TestCase
         $this->assertTrue($wsConnection->isAuthenticated());
         $this->assertEquals('user-123', $wsConnection->getUserId());
         $this->assertTrue($callTracker['send'], 'Welcome message should be sent');
-
-        // Clean up
-        unset($_GET['token']);
     }
 
     /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onConnect
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testInvalidTokenClosesConnection(): void
     {
@@ -117,27 +141,26 @@ class WsAuthenticationTest extends TestCase
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
 
-        // Set an invalid token in $_GET
-        $_GET['token'] = 'invalid.token.here';
-
-        // Call onConnect
         $server->onConnect($mockConnection);
+        // Handshake with a malformed token must reject the connection.
+        $server->onWebSocketConnect($mockConnection, $this->makeRequest('invalid.token.here'));
 
         // Verify close was called
         $this->assertTrue($callTracker['close'], 'Connection should be closed for invalid token');
 
-        // Verify no connection was added to pool
+        // Verify the connection was removed from the pool
         $pool = ConnectionPool::getInstance();
         $this->assertCount(0, $pool->all());
-
-        // Clean up
-        unset($_GET['token']);
     }
 
     /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onConnect
+     * SV-4.7 Gap 2 (FLIPPED from the old insecure assertion): when a JWT secret
+     * is configured, a token-less handshake MUST be rejected — the previous test
+     * asserted the opposite (allowed unauthenticated), which is the vulnerability.
+     *
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
-    public function testMissingTokenAllowsUnauthenticatedConnection(): void
+    public function testMissingTokenRejectedWhenSecretConfigured(): void
     {
         $config = [
             'host' => '0.0.0.0',
@@ -149,13 +172,38 @@ class WsAuthenticationTest extends TestCase
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
 
-        // Don't set any token
-        unset($_GET['token']);
-
-        // Call onConnect
         $server->onConnect($mockConnection);
+        // Handshake with NO token, secret configured → must be rejected.
+        $server->onWebSocketConnect($mockConnection, $this->makeRequest(null));
 
-        // Verify connection was added but not authenticated
+        $this->assertTrue(
+            $callTracker['close'],
+            'Token-less connection must be rejected when a JWT secret is configured'
+        );
+        $this->assertCount(0, ConnectionPool::getInstance()->all());
+    }
+
+    /**
+     * SV-4.7 Gap 2: with NO JWT secret configured (dev), a token-less handshake
+     * is allowed as an anonymous, unauthenticated connection.
+     *
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
+     */
+    public function testMissingTokenAllowedWhenNoSecretConfigured(): void
+    {
+        // No jwt_secret key at all → anonymous connections allowed.
+        $config = [
+            'host' => '0.0.0.0',
+            'port' => 8097,
+        ];
+
+        $server = new WebSocketServer($config);
+        $callTracker = [];
+        $mockConnection = $this->createMockTcpConnection($callTracker);
+
+        $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeRequest(null));
+
         $pool = ConnectionPool::getInstance();
         $connections = $pool->all();
         $this->assertCount(1, $connections);
@@ -163,11 +211,12 @@ class WsAuthenticationTest extends TestCase
         $wsConnection = $connections[0];
         $this->assertFalse($wsConnection->isAuthenticated());
         $this->assertNull($wsConnection->getUserId());
+        $this->assertFalse($callTracker['close'], 'Anonymous connection must be allowed when no secret is set');
         $this->assertTrue($callTracker['send'], 'Welcome message should be sent');
     }
 
     /**
-     * @covers \Phlix\Server\WebSocket\WebSocketServer::onConnect
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::onWebSocketConnect
      */
     public function testExpiredTokenRejectsConnection(): void
     {
@@ -185,21 +234,15 @@ class WsAuthenticationTest extends TestCase
         $callTracker = [];
         $mockConnection = $this->createMockTcpConnection($callTracker);
 
-        // Set the expired token
-        $_GET['token'] = $token;
-
-        // Call onConnect
         $server->onConnect($mockConnection);
+        $server->onWebSocketConnect($mockConnection, $this->makeRequest($token));
 
         // Verify close was called
         $this->assertTrue($callTracker['close'], 'Connection should be closed for expired token');
 
-        // Verify no connection was added to pool
+        // Verify the connection was removed from the pool
         $pool = ConnectionPool::getInstance();
         $this->assertCount(0, $pool->all());
-
-        // Clean up
-        unset($_GET['token']);
     }
 
     /**
@@ -433,28 +476,5 @@ class WsAuthenticationTest extends TestCase
         $members = $groupState['members'] ?? [];
         $this->assertArrayHasKey('member-user', $members, 'Should use server-derived userId as member');
         $this->assertArrayNotHasKey('spoofed-member-id', $members, 'Should NOT use client-supplied member_id');
-    }
-}
-
-/**
- * {@see SyncPlayManager} double that exposes the protected `handleMessage()`
- * as public so the authentication paths can be driven directly in tests.
- *
- * @internal For testing only
- */
-class TestableSyncPlayManager extends SyncPlayManager
-{
-    public function __construct(MessageHandler $handler)
-    {
-        parent::__construct();
-        $this->initialize($handler);
-    }
-
-    /**
-     * @param array<string, mixed> $payload
-     */
-    public function publicHandleMessage(ConnectionInterface $connection, array $payload): void
-    {
-        $this->handleMessage($connection, $payload);
     }
 }

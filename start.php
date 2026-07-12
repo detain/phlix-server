@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 /**
  * Phlix Media Server — Worker startup entry point.
  *
@@ -19,6 +17,8 @@ declare(strict_types=1);
  *
  * @package Phlix\Server
  */
+
+declare(strict_types=1);
 
 use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
@@ -269,6 +269,12 @@ try {
         $wsConfig['port'] = $wsConfig['port'] ?? 8097;
         $wsConfig['stale_connection_timeout'] = $wsConfig['stale_connection_timeout'] ?? 300;
         $wsConfig['stale_group_timeout'] = $wsConfig['stale_group_timeout'] ?? 3600;
+        // SV-4.7: thread the JWT secret so the WS server enforces handshake auth
+        // for privileged SyncPlay/dashboard/playback events. Sourced from the SAME
+        // JWT_SECRET the HTTP auth layer uses (config/server.php already resolves
+        // it); fall back to the env directly so a bare $wsConfig still gets it.
+        // Empty (JWT_SECRET unset — dev) → anonymous connections allowed.
+        $wsConfig['jwt_secret'] = $wsConfig['jwt_secret'] ?? (getenv('JWT_SECRET') ?: '');
 
         /** @var array<string, mixed> $wsConfig */
         // Inject THIS worker ($wsWorker) — the one that actually listens on :8097

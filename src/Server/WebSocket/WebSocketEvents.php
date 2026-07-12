@@ -146,6 +146,96 @@ final class WebSocketEvents
     /** @var string Dashboard now playing update broadcast */
     public const DASHBOARD_NOW_PLAYING = 'dashboard_now_playing';
 
+    /** @var string Client subscribes to dashboard now-playing updates */
+    public const SUBSCRIBE_DASHBOARD = 'subscribe_dashboard';
+
+    /*
+    |--------------------------------------------------------------------------
+    | Privileged-vs-public event classification (SV-4.7)
+    |--------------------------------------------------------------------------
+    |
+    | The authoritative split the WebSocket auth gate ({@see MessageHandler::handle})
+    | keys off. PUBLIC events may be sent by any (even unauthenticated) client;
+    | PRIVILEGED events require an authenticated connection and are rejected with a
+    | NOT_AUTHENTICATED error otherwise. Every SyncPlay control message (wire types
+    | prefixed with {@see SYNCPLAY_PREFIX}) is privileged.
+    */
+
+    /**
+     * Wire-type prefix shared by every SyncPlay control message
+     * ({@see \Phlix\Session\SyncPlay\Messages}). All such messages are privileged.
+     *
+     * @var string
+     */
+    public const SYNCPLAY_PREFIX = 'syncplay_';
+
+    /**
+     * Events any client may send without authenticating.
+     *
+     * @var list<string>
+     */
+    private const PUBLIC_EVENTS = [
+        self::PING,
+        self::PONG,
+        self::AUTH_REQUEST,
+        self::CONNECTED,
+    ];
+
+    /**
+     * Non-SyncPlay events that require an authenticated connection. SyncPlay
+     * control types are covered by the {@see SYNCPLAY_PREFIX} check, not this list.
+     *
+     * @var list<string>
+     */
+    private const PRIVILEGED_EVENTS = [
+        self::SUBSCRIBE_DASHBOARD,
+        self::DASHBOARD_NOW_PLAYING,
+        self::PLAYBACK_START,
+        self::PLAYBACK_PAUSE,
+        self::PLAYBACK_STOP,
+        self::PLAYBACK_PROGRESS,
+        self::PLAYBACK_SEEK,
+        self::SESSION_START,
+        self::SESSION_END,
+        self::SESSION_JOIN,
+        self::SESSION_LEAVE,
+    ];
+
+    /**
+     * Whether an event type may be sent by an unauthenticated client.
+     *
+     * @param string $type The wire event type.
+     * @return bool True for ping/pong/auth_request/connected.
+     */
+    public static function isPublic(string $type): bool
+    {
+        return in_array($type, self::PUBLIC_EVENTS, true);
+    }
+
+    /**
+     * Whether an event type requires an authenticated connection.
+     *
+     * Privileged = every SyncPlay control message (prefixed with
+     * {@see SYNCPLAY_PREFIX}) plus the explicit {@see PRIVILEGED_EVENTS} set
+     * (dashboard subscription, playback/session updates). Public events
+     * ({@see isPublic}) are never privileged.
+     *
+     * @param string $type The wire event type.
+     * @return bool True if the event must be gated behind authentication.
+     */
+    public static function isPrivileged(string $type): bool
+    {
+        if (self::isPublic($type)) {
+            return false;
+        }
+
+        if (str_starts_with($type, self::SYNCPLAY_PREFIX)) {
+            return true;
+        }
+
+        return in_array($type, self::PRIVILEGED_EVENTS, true);
+    }
+
     /**
      * Private constructor to prevent instantiation.
      *

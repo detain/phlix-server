@@ -113,7 +113,93 @@ class SyncPlayAuthMiddleware
     }
 
     /**
-     * Handle a new WebSocket connection.
+     * Authenticate a WebSocket connection at the handshake stage (SV-4.7).
+     *
+     * This is the REAL, wired auth path: {@see WebSocketServer::onWebSocketConnect}
+     * runs at the WS-handshake stage — where the upgrade request's query string
+     * (`?token=<jwt>`) is actually populated — extracts the token from the parsed
+     * {@see \Workerman\Protocols\Http\Request}, and delegates to this method. On a
+     * valid token the validated `sub` is handed straight to
+     * {@see Connection::setAuthenticated()}; the caller closes the connection when
+     * this returns false.
+     *
+     * Behaviour:
+     * - Missing/empty token: rejected (returns false) when auth is required
+     *   ({@see $requireAuth} — i.e. a JWT secret is configured); allowed anonymous
+     *   (returns true) when auth is not required (dev, no secret).
+     * - Invalid/expired token, or a token without a string `sub`: rejected.
+     * - Valid token: marks the connection authenticated with the derived user id
+     *   and returns true.
+     *
+     * Unlike {@see onConnect()} this does NOT read `$_GET` (empty/stale at the
+     * TCP-accept stage under Workerman) and does NOT stash the user id in a
+     * superglobal — it authenticates the {@see Connection} wrapper directly.
+     *
+     * @param Connection  $connection The WebSocket connection wrapper to authenticate.
+     * @param string|null $token      The `token` query param from the handshake request.
+     * @return bool True if the connection may proceed; false if it must be rejected/closed.
+     */
+    public function authenticateConnection(Connection $connection, ?string $token): bool
+    {
+        $remoteIp = $connection->getConnection()->getRemoteIp();
+
+        if ($token === null || $token === '') {
+            if ($this->requireAuth) {
+                $this->logger?->warning('WS connection rejected: missing token', [
+                    'remote_ip' => $remoteIp,
+                ]);
+                return false;
+            }
+
+            $this->logger?->debug('WS unauthenticated connection allowed (auth not required)', [
+                'remote_ip' => $remoteIp,
+            ]);
+            return true;
+        }
+
+        try {
+            $payload = $this->jwtHandler->validateToken($token);
+
+            if ($payload === null) {
+                $this->logger?->warning('WS connection rejected: invalid token', [
+                    'remote_ip' => $remoteIp,
+                    'reason' => 'Token validation failed',
+                ]);
+                return false;
+            }
+
+            $sub = $payload['sub'] ?? null;
+            if (!is_string($sub) || $sub === '') {
+                $this->logger?->warning('WS connection rejected: missing user ID in token', [
+                    'remote_ip' => $remoteIp,
+                ]);
+                return false;
+            }
+
+            $connection->setAuthenticated(true, $sub);
+
+            $this->logger?->info('WS connection authenticated', [
+                'user_id' => $sub,
+                'remote_ip' => $remoteIp,
+            ]);
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger?->error('WS authentication error', [
+                'remote_ip' => $remoteIp,
+                'error' => $e->getMessage(),
+            ]);
+            return false;
+        }
+    }
+
+    /**
+     * LEGACY TCP-accept handler — kept for backward compatibility only.
+     *
+     * @deprecated Reads `$_GET['token']` at the TCP-accept stage, BEFORE the WS
+     *   handshake, where the query string is not yet populated under Workerman, and
+     *   stashes the user id in `$_GET`. Use {@see authenticateConnection()} from the
+     *   handshake-stage {@see WebSocketServer::onWebSocketConnect} hook instead —
+     *   that is the wired, correct-lifecycle auth path.
      *
      * Validates the token from `?token=...` query parameter and either:
      * - Closes the connection with code 4001 if token is invalid/expired

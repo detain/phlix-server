@@ -39,12 +39,19 @@ class MessageHandlerFrameShapeTest extends TestCase
             $this->sentMessages[] = $decoded;
         });
 
-        return new class($mockTcp) extends Connection {
+        $connection = new class ($mockTcp) extends Connection {
             public function __construct(TcpConnection $connection)
             {
                 parent::__construct($connection);
             }
         };
+
+        // These frame-shape / protocol tests exercise dispatch, not the SV-4.7
+        // auth gate — authenticate so privileged SyncPlay events pass the gate
+        // and reach the shape/protocol logic under test.
+        $connection->setAuthenticated(true, 'frame-shape-user');
+
+        return $connection;
     }
 
     /**

@@ -234,6 +234,12 @@ class WebSocketServerTest extends TestCase
         $this->assertSame([$server, 'onClose'], $listener->onClose);
         $this->assertSame([$server, 'onError'], $listener->onError);
 
+        // SV-4.7: the handshake-stage auth hook must also bind to the accepting
+        // worker (the Websocket protocol resolves it via
+        // `$connection->worker->onWebSocketConnect`); otherwise handshake auth
+        // never runs in the resident path.
+        $this->assertSame([$server, 'onWebSocketConnect'], $listener->onWebSocketConnect);
+
         // The load-bearing one: the pong handler must resolve off the accepting
         // worker, so it must be bound on the injected listener.
         // @phpstan-ignore-next-line property.notFound

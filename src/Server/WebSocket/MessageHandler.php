@@ -136,8 +136,24 @@ class MessageHandler
 
         $event = $message['type'];
 
+        // SV-4.7: authentication gate. Privileged events (SyncPlay control,
+        // dashboard subscription, playback/session updates — see
+        // WebSocketEvents::isPrivileged) may only be dispatched for an
+        // authenticated connection. An unauthenticated client attempting a
+        // privileged event is rejected with a NOT_AUTHENTICATED-shaped error and
+        // the message is NOT dispatched. Public events (ping/pong/auth_request/
+        // connected) always pass. This is the coarse connection-level gate; the
+        // per-event SyncPlay handlers keep their own finer-grained checks.
+        if (WebSocketEvents::isPrivileged($event) && !$connection->isAuthenticated()) {
+            $connection->sendFlat(\Phlix\Session\SyncPlay\Messages::TYPE_ERROR, [
+                'error_code' => 'NOT_AUTHENTICATED',
+                'message' => 'Authentication required',
+            ]);
+            return;
+        }
+
         // Handle subscribe_dashboard event - keep BC with deprecated {type,data} envelope
-        if ($event === 'subscribe_dashboard') {
+        if ($event === WebSocketEvents::SUBSCRIBE_DASHBOARD) {
             $payload = $message['data'] ?? [];
             $this->connections->add($connection);
             $payloadMap = [];

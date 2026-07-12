@@ -84,6 +84,17 @@ class WebSocketServer
         $this->worker->onMessage = [$this, 'onMessage'];
         $this->worker->onClose = [$this, 'onClose'];
         $this->worker->onError = [$this, 'onError'];
+
+        // S-F28: application-level liveness. Workerman 5.x does not expose a
+        // Worker-level pingInterval/pingNotResponseLimit (that lived in
+        // GatewayWorker), so we drive server-side pings from a timer in onStart()
+        // and reap connections whose peers stop answering. Binding the pong
+        // callback here lets the WS protocol layer notify us when a peer replies.
+        // onWebSocketPong is a dynamic Workerman worker callback (Worker is
+        // #[AllowDynamicProperties]); the Websocket protocol reads it as
+        // $connection->worker->onWebSocketPong.
+        // @phpstan-ignore-next-line property.notFound
+        $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
     }
 
     /**
@@ -128,6 +139,75 @@ class WebSocketServer
                     }
                 });
             }
+
+            // S-F28: application-level ping timer. Each tick pings every live
+            // connection and reaps any whose peer has not answered within the
+            // non-response limit — this detects half-open sockets that the
+            // receive-side-only stale-connection reaper cannot see.
+            $pingIntervalRaw = $this->config['ping_interval'] ?? 30;
+            $pingInterval = is_numeric($pingIntervalRaw) ? (int) $pingIntervalRaw : 30;
+            if ($pingInterval < 1) {
+                $pingInterval = 30;
+            }
+
+            $pingLimitRaw = $this->config['ping_not_response_limit'] ?? 2;
+            $pingLimit = is_numeric($pingLimitRaw) ? (int) $pingLimitRaw : 2;
+            if ($pingLimit < 1) {
+                $pingLimit = 2;
+            }
+
+            \Workerman\Timer::add($pingInterval, function () use ($pingLimit): void {
+                $this->pingConnections($pingLimit);
+            });
+        }
+    }
+
+    /**
+     * Ping every live connection and reap those whose peer has stopped answering.
+     *
+     * Armed on a periodic timer by {@see onStart()}. A connection that has not
+     * answered {@see $notRespondedLimit} consecutive pings is treated as a
+     * half-open socket and closed + removed from the pool; every other
+     * connection is pinged (incrementing its outstanding-ping count until a pong
+     * resets it via {@see onWebSocketPong()}).
+     *
+     * @param int $notRespondedLimit Outstanding-ping count at which a connection
+     *                               is considered dead and reaped.
+     * @return void
+     */
+    public function pingConnections(int $notRespondedLimit): void
+    {
+        foreach ($this->connections->all() as $wsConnection) {
+            if (!$wsConnection instanceof Connection) {
+                continue;
+            }
+
+            if ($wsConnection->getPendingPings() >= $notRespondedLimit) {
+                // Half-open socket: pings went unanswered past the limit. Reap it.
+                $wsConnection->close();
+                $this->connections->remove($wsConnection->getId());
+                continue;
+            }
+
+            $wsConnection->ping();
+        }
+    }
+
+    /**
+     * Called by the WebSocket protocol layer when a peer answers a ping.
+     *
+     * Clears the connection's outstanding-ping count so the ping timer does not
+     * reap a peer that is alive and responding.
+     *
+     * @param TcpConnection $connection The Workerman TCP connection that ponged.
+     * @param string        $data       The pong payload (echo of the ping data).
+     * @return void
+     */
+    public function onWebSocketPong(TcpConnection $connection, string $data): void
+    {
+        $wsConnection = $this->findConnection($connection);
+        if ($wsConnection !== null) {
+            $wsConnection->recordPong();
         }
     }
 

@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Server\WebSocket;
 
 use Workerman\Connection\TcpConnection;
+use Workerman\Protocols\Ws;
 
 /**
  * Wraps a Workerman TcpConnection with additional Phlix-specific functionality.
@@ -50,6 +51,26 @@ class Connection implements ConnectionInterface
 
     /** @var bool Whether the connection's send buffer is full (backpressure) */
     private bool $bufferFull = false;
+
+    /**
+     * Number of application-level pings sent since the last pong was received.
+     *
+     * The WebSocket worker's ping timer increments this each time it pings the
+     * connection; {@see recordPong()} resets it to zero when the peer answers.
+     * When it reaches the worker's non-response limit the connection is treated
+     * as a half-open socket and reaped — receive-side idle tracking alone cannot
+     * detect a peer that has silently vanished (S-F28).
+     *
+     * @var int
+     */
+    private int $pendingPings = 0;
+
+    /**
+     * WebSocket PING control frame header byte: FIN bit (0x80) + opcode 0x9.
+     *
+     * Sending an empty payload with this frame type asks the peer for a pong.
+     */
+    private const WS_PING_FRAME = "\x89";
 
     /**
      * Creates a new Connection wrapper.
@@ -178,6 +199,48 @@ class Connection implements ConnectionInterface
     public function isBufferFull(): bool
     {
         return $this->bufferFull;
+    }
+
+    /**
+     * Sends an application-level WebSocket ping control frame to the peer and
+     * records that a ping is now outstanding.
+     *
+     * The peer's pong is delivered to the worker's {@see WebSocketServer::onWebSocketPong()}
+     * handler, which calls {@see recordPong()} to clear the outstanding count.
+     * The frame type is restored immediately so subsequent data sends are not
+     * emitted as ping frames.
+     *
+     * @return void
+     */
+    public function ping(): void
+    {
+        $previousType = $this->connection->websocketType ?? Ws::BINARY_TYPE_BLOB;
+        $this->connection->websocketType = self::WS_PING_FRAME;
+        $this->connection->send('');
+        $this->connection->websocketType = $previousType;
+        $this->pendingPings++;
+    }
+
+    /**
+     * Records that the peer answered a ping, clearing the outstanding count and
+     * refreshing the activity timestamp.
+     *
+     * @return void
+     */
+    public function recordPong(): void
+    {
+        $this->pendingPings = 0;
+        $this->updateActivity();
+    }
+
+    /**
+     * Gets the number of pings sent since the last pong was received.
+     *
+     * @return int Outstanding (unanswered) ping count
+     */
+    public function getPendingPings(): int
+    {
+        return $this->pendingPings;
     }
 
     /**

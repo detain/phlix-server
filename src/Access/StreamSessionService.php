@@ -35,10 +35,18 @@ final class StreamSessionService
      * At most ONE entry exists per active session: registration is deduped so a
      * burst of stream requests for the same session (e.g. every HLS segment)
      * does not create a timer per request. Each timer is one-shot — when it
-     * fires it clears its own slot so the next request re-arms it (refresh) —
-     * and {@see releaseStream()} cancels it on stream teardown. This bounds the
-     * live timer count to the number of sessions with activity in the last
-     * {@see HEARTBEAT_INTERVAL_SECONDS} seconds rather than growing per request.
+     * fires it clears its own slot so the next request re-arms it (refresh). This
+     * bounds the live timer count to the number of sessions with activity in the
+     * last {@see HEARTBEAT_INTERVAL_SECONDS} seconds rather than growing per
+     * request.
+     *
+     * Teardown in the resident HTTP path is TIMEOUT-DRIVEN, not event-driven: the
+     * streaming path has no stream-end signal (the client just stops requesting),
+     * so the last one-shot timer self-clears ~{@see HEARTBEAT_INTERVAL_SECONDS}
+     * after the final request and the 60s {@see cleanupStaleStreams()} sweep
+     * removes the DB row. {@see releaseStream()} additionally cancels a pending
+     * timer for the (currently test-only) callers that DO have an explicit
+     * stream-end signal.
      *
      * @var array<string, int>
      */
@@ -128,7 +136,10 @@ final class StreamSessionService
      * Release (remove) a stream session.
      *
      * Also tears down any pending heartbeat timer for the session so no timer
-     * outlives the stream it serves.
+     * outlives the stream it serves. This is the EXPLICIT teardown path, invoked
+     * by callers that have a genuine stream-end signal; the resident HTTP
+     * streaming path has none, so there it relies on the one-shot timer's
+     * self-clear plus the 60s {@see cleanupStaleStreams()} sweep instead.
      *
      * @param string $sessionId The streaming session identifier.
      *
@@ -152,7 +163,10 @@ final class StreamSessionService
      * is a no-op, so a burst of requests (e.g. HLS segment fetches) yields at
      * most ONE timer per session instead of one per request. The timer is
      * one-shot; when it fires it clears its own slot so the next request re-arms
-     * it. {@see releaseStream()} cancels it on stream teardown.
+     * it. In the resident HTTP path there is no stream-end signal, so a session's
+     * last timer self-clears ~{@see HEARTBEAT_INTERVAL_SECONDS} after its final
+     * request (teardown is timeout-driven); {@see releaseStream()} cancels a
+     * pending timer for callers that have an explicit stream-end signal.
      *
      * No-op outside a Workerman runtime (the Timer class is unavailable).
      *

@@ -18,76 +18,6 @@ class FfmpegRunnerHlsTest extends TestCase
         return new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
     }
 
-    public function testBuildHlsCommandCopiesCompatibleStreams(): void
-    {
-        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-            'segment_seconds' => 6,
-        ]);
-
-        $this->assertStringContainsString('-c:v copy', $cmd);
-        $this->assertStringContainsString('-c:a copy', $cmd);
-        $this->assertStringContainsString('-f hls', $cmd);
-        $this->assertStringContainsString('-hls_time 6', $cmd);
-        $this->assertStringContainsString('-hls_segment_type mpegts', $cmd);
-        $this->assertStringContainsString("segment_0_%03d.ts", $cmd);
-        $this->assertStringContainsString("stream_0.m3u8", $cmd);
-        // A pure remux must NOT encode.
-        $this->assertStringNotContainsString('libx264', $cmd);
-        // Defaults to a closed VOD playlist, never an open 'event' (live) one
-        // that would make the player report an ever-growing duration.
-        $this->assertStringContainsString("-hls_playlist_type 'vod'", $cmd);
-        $this->assertStringNotContainsString('event', $cmd);
-    }
-
-    public function testBuildHlsCommandEncodesAndScalesWhenRequested(): void
-    {
-        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
-            'video_codec' => 'libx264',
-            'crf' => 23,
-            'preset' => 'veryfast',
-            'width' => 1920,
-            'height' => 1080,
-            'audio_codec' => 'aac',
-            'audio_bitrate' => '128k',
-            'audio_channels' => 2,
-        ]);
-
-        $this->assertStringContainsString('-c:v libx264', $cmd);
-        $this->assertStringContainsString('-preset veryfast', $cmd);
-        $this->assertStringContainsString('-crf 23', $cmd);
-        $this->assertStringContainsString('scale=1920:1080:force_original_aspect_ratio=decrease', $cmd);
-        $this->assertStringContainsString('-g 48', $cmd);
-        $this->assertStringContainsString('-sc_threshold 0', $cmd);
-        $this->assertStringContainsString('-c:a aac', $cmd);
-        $this->assertStringContainsString('-b:a 128k', $cmd);
-        $this->assertStringContainsString('-ac 2', $cmd);
-    }
-
-    public function testBuildHlsCommandHonorsVariantIndex(): void
-    {
-        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
-            'variant_index' => 2,
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-        ]);
-
-        $this->assertStringContainsString('segment_2_%03d.ts', $cmd);
-        $this->assertStringContainsString('stream_2.m3u8', $cmd);
-    }
-
-    public function testBuildHlsCommandDefaultsSegmentSecondsWhenInvalid(): void
-    {
-        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
-            'video_codec' => 'copy',
-            'audio_codec' => 'copy',
-            'segment_seconds' => 0,
-        ]);
-
-        $this->assertStringContainsString('-hls_time 6', $cmd);
-    }
-
     public function testBuildCmafCommandEmitsDashWithHlsPlaylist(): void
     {
         $cmd = $this->runner()->buildCmafCommand('/in.mkv', '/out', [
@@ -159,17 +89,6 @@ class FfmpegRunnerHlsTest extends TestCase
         ]);
         $this->assertStringNotContainsString('-pix_fmt', $cmd);
         $this->assertStringNotContainsString('-profile:v', $cmd);
-    }
-
-    public function testBuildHlsCommandForcesBrowserDecodableH264Profile(): void
-    {
-        $cmd = $this->runner()->buildHlsCommand('/in.mkv', '/out', [
-            'video_codec' => 'libx264',
-            'audio_codec' => 'aac',
-        ]);
-        $this->assertStringContainsString('-pix_fmt yuv420p', $cmd);
-        $this->assertStringContainsString('-profile:v high', $cmd);
-        $this->assertStringContainsString('-level 4.1', $cmd);
     }
 
     public function testStartDetachedReturnsPidAndIsNonBlocking(): void

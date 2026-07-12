@@ -1141,3 +1141,61 @@ Verification (actual output):
   - SV-4.13: `FfmpegRunnerTest::testBuildTranscodeCommand*` (3) + `FfmpegRunnerHlsTest::testBuildHlsCommand*` (5) = 8 err
 - `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
 - `phpcs --standard=PSR12` on both touched files → 0 errors.
+
+## Fixer — SV-2.8 + SV-4.13 known-drift — 2026-07-12
+
+Cleared the last two known-drift RED buckets → full Unit suite is now GREEN (0 err / 0 fail).
+
+**SV-2.8 (`ItemRepositoryTest::testAddStream{InsertsStream,PersistsTrackMetadataColumns}`) — STALE
+TEST, impl VERIFIED CORRECT (no impl change).**
+- `ItemRepository::addStream()` (`src/Media/Library/ItemRepository.php:1253-1291`) binds **17**
+  params, matching the `media_streams` schema exactly: base `001` (id, media_item_id, stream_index,
+  stream_type, codec, language, bitrate, width, height) + migration `071` (channels, title,
+  is_default) + migration `073`/SV-1.1 (color_space, color_transfer, color_primaries, max_luminance,
+  avg_luminance). The luminance binds are `is_numeric`-guarded `(float)` casts (DECIMAL(10,2)
+  columns) — correct. The tests still asserted the pre-SV-1.1 `count($params) === 12`; the first 12
+  bindings are unchanged, so every existing value assertion ([1]–[11]) was still valid — only the
+  count was stale and the 5 color columns were unasserted.
+- Fix (TESTS only, no assertions weakened): both tests updated to `count($params) === 17`;
+  `testAddStreamInsertsStream` now also asserts params[12]–[16] are NULL when color meta is unset.
+  Added `testAddStreamPersistsColorMetadataColumns` to strongly cover the SV-1.1 columns + the
+  luminance guard: passes color_space/transfer/primaries + `max_luminance:'1000'` (numeric string →
+  `1000.0`) + `avg_luminance:'N/A'` (non-numeric → NULL), asserting the exact persisted values.
+
+**SV-4.13 (`FfmpegRunnerTest::testBuildTranscodeCommand*` ×3 + `FfmpegRunnerHlsTest::testBuildHlsCommand*`
+×5) — orphaned tests of REMOVED methods; deleted.**
+- CONFIRMED gone from `src/Media/Transcoding/FfmpegRunner.php` with ZERO callers (whole-repo grep,
+  vendor excluded): `buildTranscodeCommand`, `buildHlsCommand`, `buildHwaccelCommand`. Only stale
+  docref `@see` mentions remain (`TranscodeManager.php:2119`, `FfmpegRunner.php:512/517`) — cosmetic,
+  do not break phpstan.
+- KEEP items all still present + tested: `buildCmafCommand`/`startCmafTranscode`/
+  `startCmafTranscodeWithSubtitles` (`:523/601/626`, covered by `testBuildCmafCommand*` ×5 in
+  FfmpegRunnerHlsTest) and `buildGaplessSegmentCommand` (`:2339`, KEEP-but-unbuilt per §8 D2 — was
+  untested before, unrelated to removed builders).
+- Per-segment REPLACEMENTS retain full coverage (so no real coverage dropped): `buildSegmentCommand`
+  + `buildAudioSegmentCommand` → `testBuildSegmentCommand*`/`testBuildAudioSegmentCommand*` in
+  FfmpegRunnerHlsTest; `buildHwaccelSegmentCommand` → FfmpegRunnerHwaccelTest (8 refs).
+- Deleted the 8 orphaned test methods: `testBuildTranscodeCommand`,
+  `testBuildTranscodeCommandIgnoresNonScalarParams`, `testBuildTranscodeCommandHonoursValidWidthHeight`
+  (FfmpegRunnerTest); `testBuildHlsCommandCopiesCompatibleStreams`,
+  `testBuildHlsCommandEncodesAndScalesWhenRequested`, `testBuildHlsCommandHonorsVariantIndex`,
+  `testBuildHlsCommandDefaultsSegmentSecondsWhenInvalid`,
+  `testBuildHlsCommandForcesBrowserDecodableH264Profile` (FfmpegRunnerHlsTest). Both files retain
+  their other still-valid tests (probe/isAvailable/getTranscodeDir/detached/CMAF/segment) — neither
+  file became empty. No test for a still-live method was removed.
+- ⚠️ **NOTE (SV-4.13 impl incompleteness, out of my test-scope):** `buildTranscodeCommandWithProfile`
+  (`FfmpegRunner.php:1163`) — classified REMOVE in §6 R1 — is STILL PRESENT (zero callers, zero
+  tests, whole-repo grep). It does NOT affect the Unit suite or gates and no orphaned test references
+  it, so I left the impl untouched (my two commits are test-only per the prescribed messages). Flagging
+  for the SV-4.13 impl owner to complete the removal + fix the stale `buildHlsCommand`/`buildHwaccelCommand`
+  docrefs.
+
+**Verification (actual output):**
+- `phpunit --filter 'ItemRepository|FfmpegRunner'` → `OK (193 tests, 554 assertions)`.
+- `phpunit --testsuite Unit` → `OK, but some tests were skipped! Tests: 4900, Assertions: 38479,
+  Skipped: 11.` — **0 errors / 0 failures.** All triage buckets cleared; full Unit suite GREEN.
+  (4907 → 4900 = removed 8 orphaned tests + added 1 color test; skips are env-dependent swoole/coroutine
+  markTestSkipped, not reds.)
+- `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
+- `phpcs --standard=PSR12` on the 3 touched test files → 0 errors (only pre-existing >120-char
+  warnings, all outside my edit regions).

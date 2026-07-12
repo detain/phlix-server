@@ -476,6 +476,54 @@ class Response
     }
 
     /**
+     * Collapse a file-backed ({@see withFile()}) response into a fully-buffered one
+     * whose {@see $statusCode}, {@see $headers} and {@see $body} equal EXACTLY what
+     * the deferred emit paths put on the wire: {@see finalizeFileHeaders()} derives
+     * `Content-Length` / `Accept-Ranges` / `Content-Range` (and forces 206 for a byte
+     * window) identically to Workerman's native `withFile()` encode
+     * (`vendor/workerman/workerman/src/Protocols/Http.php::encode()`, mirrored by
+     * {@see send()}), and the windowed bytes are read from disk into {@see $body}
+     * using the same offset/length window Workerman streams. A non-file response is
+     * returned unchanged.
+     *
+     * Production never calls this — it streams lazily via {@see toWorkermanResponse()}
+     * / {@see send()} so multi-MB media never lands in worker heap. It exists so
+     * callers and unit tests can assert the true materialized wire output (status +
+     * headers + windowed body) without a live socket or event loop. Idempotent: after
+     * it runs {@see $filePath} is null and the response behaves like any buffered one.
+     *
+     * @return self For method chaining.
+     */
+    public function materializeFileWindow(): self
+    {
+        $path = $this->filePath;
+        if ($path === null) {
+            return $this;
+        }
+
+        // Derive Content-Length / Accept-Ranges / Content-Range (+ 206) via the
+        // exact same private computation the CGI send() path uses.
+        $this->finalizeFileHeaders();
+
+        $body = '';
+        if (!$this->headOnly && is_file($path)) {
+            $fileSize = (int) filesize($path);
+            $bodyLen = $this->fileLength > 0 ? $this->fileLength : $fileSize - $this->fileOffset;
+            if ($bodyLen > 0) {
+                $read = file_get_contents($path, false, null, $this->fileOffset, $bodyLen);
+                $body = $read === false ? '' : $read;
+            }
+        }
+
+        $this->body = $body;
+        $this->filePath = null;
+        $this->fileOffset = 0;
+        $this->fileLength = 0;
+
+        return $this;
+    }
+
+    /**
      * CGI/FPM fallback for {@see withFile()} responses: stream the file to output
      * in bounded chunks (honouring `$fileOffset`/`$fileLength`) rather than reading
      * it into memory.

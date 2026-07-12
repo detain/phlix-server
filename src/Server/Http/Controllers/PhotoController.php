@@ -424,14 +424,21 @@ class PhotoController
 
         // withFile() streams the file via the Workerman event loop without
         // buffering the whole file in memory. finalizeFileHeaders() derives
-        // Content-Length / Content-Range / Accept-Ranges and forces 206.
+        // Content-Length / Content-Range / Accept-Ranges and forces 206 for a
+        // byte window.
+        //
+        // For a full non-range GET pass NO window (offset 0, length 0): handing an
+        // explicit length trips Workerman's `if ($offset || $length)` branch, which
+        // would force a 206 + Content-Range onto a request that never sent a Range
+        // (an RFC 7233 violation). length 0 keeps the correct 200.
+        $isPartial = $rangeHeader !== null;
         return (new Response())
-            ->status($rangeHeader !== null ? 206 : 200)
+            ->status($isPartial ? 206 : 200)
             ->header('Content-Type', $mimeType)
             ->header('Accept-Ranges', 'bytes')
             ->header('ETag', $etag)
             ->header('Last-Modified', $lastModified)
-            ->withFile($path, $start, $length);
+            ->withFile($path, $start, $isPartial ? $length : 0);
     }
 
     /**

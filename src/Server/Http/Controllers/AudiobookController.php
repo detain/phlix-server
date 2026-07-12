@@ -525,11 +525,20 @@ class AudiobookController
         // finalizeFileHeaders() computes Content-Length / Content-Range /
         // Accept-Ranges and forces status 206 when offset/length is set,
         // giving identical Range semantics to the old buffered approach.
+        //
+        // A full non-range GET from the start of the file (no Range header AND no
+        // chapter/offset resume window) must pass NO window (offset 0, length 0):
+        // handing an explicit length trips Workerman's `if ($offset || $length)`
+        // branch, which would force a 206 + Content-Range onto a request that never
+        // sent a Range (an RFC 7233 violation). length 0 keeps the correct 200 while
+        // still emitting Content-Length + Accept-Ranges. A resume window ($start > 0)
+        // legitimately serves partial content and keeps its byte window.
+        $isFullFromStart = $rangeHeader === null && $start === 0;
         return (new Response())
             ->status($rangeHeader !== null ? 206 : 200)
             ->header('Content-Type', $mimeType)
             ->header('Accept-Ranges', 'bytes')
-            ->withFile($path, $start, $length);
+            ->withFile($path, $start, $isFullFromStart ? 0 : $length);
     }
 
     /**

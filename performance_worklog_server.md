@@ -1012,3 +1012,28 @@ NONE env-dependent (withFile uses tempnam temp files; FfmpegRunner tests are pur
 - **SV-2.6 SyncPlayManager ×2:** testBroadcastToGroup{DeliversToAllConnectedMembers,ExcludesSpecifiedMemberIds} ERROR — ConnectionInterface::send():bool mock returns null (not stubbed willReturn(true)); backpressure reads the bool. Test-side stub gap (verify prod send() always returns bool).
 
 **Non-red hygiene note:** TranscodeManager.php:2161-2164 reads color_transfer/primaries/space without ?? → ~15 benign 'Undefined array key' warnings in TranscodeManagerTest (tests PASS); SV-1.1 area, add ?? guards (low priority).
+
+## Fixer — withFile Response-contract cluster (SV-2.4/2.5/3.2) — 2026-07-12
+
+Reopened the 15-red `withFile()` cluster (ThemeMediaStreamController ×7, PhotoController ×3, AudiobookController ×5). Per the FIX RULE, verified the deferred `finalizeFileHeaders()` path against Workerman's native encode (`vendor/workerman/workerman/src/Protocols/Http.php::encode()` lines 407-435) BEFORE touching tests. `finalizeFileHeaders()` is a faithful mirror of Workerman's encode: `bodyLen = length>0 ? length : fileSize-offset`; Content-Length=bodyLen; Accept-Ranges=bytes; `if (offset || length)` → Content-Range `bytes offset-offsetEnd/fileSize` + status 206.
+
+**Deferred path correct? — per case:**
+- **RANGE (bytes=2-5, suffix -3, open-ended 5-, clamp 8-100) → CORRECT.** Byte-emulated all four (probe): Content-Range/Content-Length/206/body window all byte-exact. These tests asserted the REAL contract, just eagerly (before finalize runs). → STALE-TEST.
+- **FULL non-range (offset 0, `length=fileSize`) → WRONG = REAL BUG.** All three controllers passed `withFile($path, 0, $fileSize)` (or `$start,$length` with length=full) for a plain non-Range GET. Because `length>0`, Workerman's `if ($offset || $length)` branch fires → it forces a **206 + Content-Range onto a request that never sent a Range** (RFC 7233 violation: 206 only for range requests). The controllers set status(200) but the event loop overrides to 206 on the wire. This is a genuine production defect, not test drift.
+
+**Verdict per controller:**
+- **ThemeMediaStreamController (SV-2.4):** REAL-BUG in the 200 path (`streamFile()`), STALE-TEST for the range paths. Fixed: full GET now calls `withFile($filePath)` (no window) → correct 200 + Content-Length, no spurious 206.
+- **PhotoController (SV-2.5):** REAL-BUG in `getFull()` no-range path, STALE-TEST for range. Fixed: `$isPartial = $rangeHeader !== null`; full GET passes length 0 → 200; range keeps `withFile($path,$start,$length)` → 206.
+- **AudiobookController (SV-3.2):** REAL-BUG in `streamAudiobook()` full-from-start path, STALE-TEST for range/binary. Fixed: `$isFullFromStart = $rangeHeader===null && $start===0` passes length 0 → 200. The chapter/offset resume window ($start>0) legitimately serves partial content and KEEPS its byte window (unchanged; `testStreamAudiobookResumesInChapter` still 200 at return).
+
+**Impl changes:**
+- `src/Server/Http/Response.php` — added public `materializeFileWindow(): self`. Collapses a `withFile()` response into a buffered one whose statusCode/headers/body equal EXACTLY the deferred wire output: runs the same private `finalizeFileHeaders()` the CGI `send()` path uses, then reads the identical offset/length window Workerman streams into `$body`. Production never calls it (still streams lazily via `toWorkermanResponse()`/`send()` — no heap buffering regression); it exists as the unit-test/inspection seam. Idempotent (clears filePath). Does NOT touch the SV-2.1 relay path or `toWorkermanResponse()`.
+- `ThemeMediaStreamController.php` (streamFile 200 branch), `PhotoController.php` (getFull), `AudiobookController.php` (streamAudiobook) — full non-range GET now passes NO byte window so the deferred path keeps a correct 200.
+
+**Test changes:** the 15 tests now call `$response->materializeFileWindow()` before asserting body/Content-Range/Content-Length — so they verify the TRUE deferred wire output (the same computation production emits), not a stale eager contract. No assertions weakened; every range/full case still proves correct status + Content-Range + Content-Length + windowed body.
+
+**Verification (actual output):**
+- `phpunit --filter 'ThemeMediaStreamController|PhotoController|AudiobookController'` → `OK (70 tests, 162 assertions)` (was 15 red).
+- `phpunit --testsuite Unit` → `Tests: 4907, Assertions: 38448, Errors: 11, Failures: 6, Skipped: 5`. Failures dropped 21→6; the 15 cleared. Remaining reds are ONLY other buckets: SV-2.8 ItemRepository::testAddStream* (2), SV-4.13 FfmpegRunner*/Hls* (8), SV-3.5 LibraryMetadataMatcher (2), SV-2.9 LibraryScanWorker/LibraryScanCommand (2), BookProgressStore (1), SV-2.6 SyncPlayManager (2). No ThemeMediaStream/Photo/Audiobook reds remain; no NEW reds introduced.
+- `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors`.
+- `phpcs --standard=PSR12` on the 4 touched src files → 0 errors (1 PRE-EXISTING >120-char warning at PhotoController.php:387, outside my diff hunks 427-441).

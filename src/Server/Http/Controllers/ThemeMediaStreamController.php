@@ -158,11 +158,17 @@ class ThemeMediaStreamController
         // withFile() streams the file via the Workerman event loop without
         // buffering the whole file in memory. finalizeFileHeaders() derives
         // Content-Length / Accept-Ranges automatically.
+        //
+        // Pass NO window (offset 0, length 0) for a full non-range GET: passing an
+        // explicit length trips Workerman's `if ($offset || $length)` branch, which
+        // would force a 206 + Content-Range onto a request that never sent a Range —
+        // an RFC 7233 violation. length 0 keeps the correct 200 while still emitting
+        // Content-Length + Accept-Ranges.
         return (new Response())
             ->status(200)
             ->header('Content-Type', $contentType)
             ->header('Accept-Ranges', 'bytes')
-            ->withFile($filePath, 0, $fileSize);
+            ->withFile($filePath);
     }
 
     /**

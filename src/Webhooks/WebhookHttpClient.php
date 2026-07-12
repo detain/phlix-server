@@ -66,9 +66,18 @@ class WebhookHttpClient
             'X-Phlix-Delivery' => $deliveryId,
         ];
 
-        // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
-        // so those requests must take the blocking cURL path.
-        return \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)
+        // SV-0.4: postAsync() waits on a Swoole\Coroutine\Channel, which is only
+        // valid inside a coroutine (getCid() > 0); outside one Channel::pop()
+        // returns false immediately = a false timeout. Webhooks are often
+        // delivered from a Timer callback that is NOT a coroutine, so gate the
+        // async path on inCoroutine() and use blocking cURL otherwise.
+        // https + Swoole event loop: async TLS reads also stall (see
+        // EventLoopTls), so those requests take the blocking cURL path too.
+        $useAsync = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()
+            && \Phlix\Common\Runtime\WorkerContext::inCoroutine()
+            && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
+
+        return $useAsync
             ? $this->postAsync($url, $headers, $jsonPayload)
             : $this->postCurl($url, $headers, $jsonPayload);
     }

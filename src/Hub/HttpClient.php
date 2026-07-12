@@ -14,7 +14,6 @@ namespace Phlix\Hub;
 use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
-use Workerman\Coroutine;
 use Workerman\Http\Client;
 
 /**
@@ -173,15 +172,17 @@ class HttpClient implements HttpClientInterface
             return $this->requestCurl($method, $url, $body, $requestHeaders);
         }
 
-        // Use coroutine if available for true async behavior
-        if (Coroutine::isCoroutine()) {
+        // SV-0.4: only take the async (event-loop cooperative) path when we are
+        // actually inside a coroutine (getCid() > 0). requestCoroutine() lets
+        // the hooked Workerman client suspend/resume the current coroutine,
+        // which is only valid there. Outside a coroutine we must NOT spin or
+        // touch a Channel (that would false-timeout) — fall back to blocking
+        // cURL (unit tests, non-coroutine timer callbacks, plain CLI).
+        if (
+            \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()
+            && \Phlix\Common\Runtime\WorkerContext::inCoroutine()
+        ) {
             return $this->requestCoroutine($method, $url, $body, $requestHeaders);
-        }
-
-        // When in workerman context, use async client with cooperative wait
-        // Otherwise fall back to synchronous curl (for unit tests etc.)
-        if (\Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()) {
-            return $this->requestAsync($method, $url, $body, $requestHeaders);
         }
 
         return $this->requestCurl($method, $url, $body, $requestHeaders);
@@ -320,68 +321,6 @@ class HttpClient implements HttpClientInterface
         }
 
         return $this->psr7ResponseToHttpResponse($response);
-    }
-
-    /**
-     * Perform request using async client with cooperative wait.
-     *
-     * This uses a Channel to yield to the event loop while waiting for the
-     * async HTTP response, avoiding CPU spin from usleep-based polling.
-     *
-     * @param string $method HTTP method.
-     * @param string $url Full URL.
-     * @param string|null $body Request body.
-     * @param array<string, string> $headers Request headers.
-     * @return HttpResponse Parsed response.
-     * @throws RuntimeException On errors or timeout.
-     */
-    private function requestAsync(string $method, string $url, ?string $body, array $headers): HttpResponse
-    {
-        $client = $this->getAsyncClient();
-        $options = [
-            'method' => $method,
-            'headers' => $headers,
-        ];
-
-        if ($body !== null) {
-            $options['data'] = $body;
-        }
-
-        // Channel-based wait: push is called by success/error callbacks,
-        // and pop() yields to the coroutine scheduler until done or timeout.
-        $channel = new \Swoole\Coroutine\Channel(1);
-
-        // State shared between callback and channel
-        $state = [
-            'response' => null,
-            'error' => null,
-        ];
-
-        $options['success'] = function (ResponseInterface $response) use (&$state, $channel): void {
-            $state['response'] = $response;
-            $channel->push(true);
-        };
-
-        $options['error'] = function (\Throwable $error) use (&$state, $channel): void {
-            $state['error'] = $error;
-            $channel->push(true);
-        };
-
-        // Initiate async request (non-blocking)
-        $client->request($url, $options);
-
-        // Yield to event loop via Channel pop with timeout
-        $channel->pop((float) $this->timeout);
-
-        if ($state['error'] !== null) {
-            throw new RuntimeException('Async HTTP error: ' . $state['error']->getMessage(), 0, $state['error']);
-        }
-
-        if ($state['response'] === null) {
-            throw new RuntimeException('Async HTTP request timed out after ' . $this->timeout . ' seconds');
-        }
-
-        return $this->psr7ResponseToHttpResponse($state['response']);
     }
 
     /**

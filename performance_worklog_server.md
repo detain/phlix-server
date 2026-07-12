@@ -54,11 +54,11 @@
   - **Migration runner:** runs every boot (apply-all-every-time); idempotent via `IF NOT EXISTS` and error-substring allowlist
 
 ## Progress
-- [~] SV-0.1  wire hardware acceleration + tone-mapping config  REVIEW-1 FOUND DEFECT 2026-07-12 → FIX spawned. Complete landed (1c8f12e3,c7f10d0f) but review found: #1 CONFIRMED GPU-only defect — buildHwaccelInputFlags() emits -hwaccel_output_format cuda/vaapi (frames stay HW surfaces) while buildHwaccelSegmentCommand appends SOFTWARE scale=/tonemap → ffmpeg "impossible to convert" on every downscaled/HDR NVENC/VAAPI segment (NVENC profile deliberately omits the flag; segment path must match). #2 method diverges from profiles' getInputDeviceArgs() (docblock claim false) — delegating resolves #1. #3 test never passes width/height or require_hdr_tone_map so the colliding branch is untested (vaapi test bakes wrong expectation). #4 low: public/index.php lazy-probe no boot log (confirm OK). Out-of-scope: QsvProbe.php:67 stores '-device' but readers use 'device' → QSV always default device. → FIX agent spawned (findings #1/#2/#3 + QSV key).
+- [~] SV-0.1  wire hardware acceleration + tone-mapping config  FIX-1 LANDED 2026-07-12 → RE-REVIEW spawned. Review-1 defect (HW-surface/software-filter collision) FIXED: buildHwaccelInputFlags() now delegates to profiles' getInputDeviceArgs() (no divergence); new hwaccelUploadFilter() appends format=nv12,hwupload AFTER software filters for VAAPI/QSV only (NVENC/VT/AMF take system memory); added HwaccelProfileFactory::getProfileForVendor(). #3 vaapi test corrected + 4 coherence tests (downscale NVENC/VAAPI hwupload-ordering, HDR NVENC, QSV device); --filter Hwaccel 139 green. QSV device-key fixed. #4 confirmed (FPM lazy-probe, no boot log — OK). Commits 02606550,e54cf142,f37fc0f9. ⚠️ SCOPE-CREEP (beneficial): commit 4d49d9bc ALSO cleared the other pre-existing errors → phpstan L9 now [OK] 0 errors + phpcs 0 errors. That touched SV-2.8 (ItemRepository is_numeric-guarded casts) and SV-3.2 (WebPortalServicesProvider:295 BookController factory: BookLibraryManager→LibraryManager — was a LATENT RUNTIME FATAL). Those steps' audits MUST account for this. testAddStream* reds remain = pre-existing SV-2.8 test-drift (unchanged). REVIEW-2 2026-07-12: essentially CLEAN — VAAPI+NVENC+libx264-fallback correct (high confidence), collision defect genuinely fixed, tests guard the seam, scope-creep edits all verified correct. 1 finding LOWER-CONFIDENCE/Intel-QSV-only/unverifiable-here (QSV hwupload needs -init_hw_device qsv=hw -filter_hw_device hw + hwupload=...,format=qsv; NOT a regression) → DEFERRED to task #6 (verify on Intel HW; won't write untestable ffmpeg blind). SV-0.1 code+tests DONE for verifiable scope; docs batched w/ wave. SV-0.1/0.2 effectively DONE ✅ (docs pending).
 - [x] SV-0.2  reconcile hwaccel config  RE-AUDIT 2026-07-12: DONE — single source HwAccelConfig::get(); ffmpeg.php+hwaccel.php delegate; no contradictory flags. Regression test added: HwAccelConfigTest(7) green (commit 0a35848a). Pending confirming review alongside SV-0.1.
-- [x] SV-0.3  isWorkermanContext fix ✅ (commit e48e4aba)
-- [x] SV-0.4  replace usleep spin-wait with Channel ✅ (commit e48e4aba)
-- [x] SV-0.5  fix WS reaper + heartbeat timer guards ✅ (commit b95a9c22)
+- [~] SV-0.3  isWorkermanContext fix  RE-AUDIT 2026-07-12: PARTIAL — impl CORRECT (shared Common\Runtime\WorkerContext::isEventLoopRunning() via Worker::isRunning(); all 4 clients + PluginCatalogService use it; old defined() guard gone). GAP: mandated regression test MISSING (no WorkerContextTest, no branch-selection test). → COMBINED SV-0.3+0.4 fix spawned. (e48e4aba)
+- [~] SV-0.4  replace usleep spin-wait with Channel  RE-AUDIT 2026-07-12: PARTIAL + REAL BUG — spin-wait gone, but coroutine gating WRONG: Metadata/Webhook/S3 route to Channel path on isEventLoopRunning()&&!requiresBlockingCurl() with NO getCid()>0 gate → Channel::pop() outside a coroutine returns false immediately = FALSE TIMEOUT while callback pending. HttpClient INVERTED (Channel used only in non-coroutine case where it's invalid). AC requires: getCid()>0 → Channel; else blocking client explicitly. No tests. → COMBINED SV-0.3+0.4 fix spawned. (e48e4aba)
+- [~] SV-0.5  fix WS reaper + heartbeat timer guards  RE-AUDIT 2026-07-12: PARTIAL — function_exists→class_exists fixed (3 sites); WS reaper arms (per-worker repeating); stream heartbeats one-shot (Timer::add(30,...,[],false), storm CAPPED). GAPS: (1) S-F28 WS app-level ping ABSENT (no pingInterval/pingNotResponseLimit, no ping timer → half-open sockets undetectable); (2) heartbeat NOT keyed-per-session/deduped/torn-down on stream end (each request re-registers → bounded accumulation, not the keyed+cancelled AC); (3) tests shallow (smoke test w/ stale comment; no leak test). → completion queued.
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
 - [x] SV-0.8  fix path_hash reads + stop re-probing ✅ (commit 510c8761)
@@ -140,7 +140,7 @@ owning step, not waved off.
 - SV-2.1 pre-audit (via X3 investigation): DONE — sendHttpResponse chunk-streams file-backed GET via
   streamFileChunks() with MAX_BODY_CHUNK + send-buffer backpressure; empty-body bug fixed; HEAD reports
   real Content-Length. Confirm with a test when SV-2.1's turn comes.
-- X10 bug-class sweep: grep `defined('\...::$` and `function_exists('Workerman`.
+- X10 bug-class sweep: DONE 2026-07-12 — CLEAN. 0 hits for `defined('\Workerman`, `function_exists('Workerman`, `Worker::$_instance` in src/. All class_exists(\Workerman\Timer::class) sites correct. No HTTP-client usleep spin-waits remain (survivors are legit poll/backoff in LiveTv/Roku/NatPmp/pool/transcode; MetadataHttpClient:199 is an SV-3.5 retry-backoff blocking-sleep = adjacent debt, not SV-0.4). Bug-class eradicated. ✅
 
 ## Implementer — SV-0.1 / SV-0.2 complete (2026-07-12)
 
@@ -337,3 +337,87 @@ Master phpstan L9 is now fully **[OK] No errors** (was 3) and phpcs PSR-12 on `s
   registered/autowired + used by sibling factories in the same provider) and dropped the now-unused import.
 - `src/Server/Http/Controllers/AudiobookController.php:40` — phpcs PSR-12 "Opening brace must not be
   followed by a blank line": removed the stray blank line after the class brace.
+
+## Reviewer (RE-REVIEW / REVIEW-2, SV-0.1 FIX-1) — 2026-07-12
+
+Re-reviewed the fix diff `0a35848a..4d49d9bc`. The REVIEW-1 CONFIRMED defect (HW-surface frames
+colliding with software scale=/tonemap) is genuinely fixed and the fix is correct for NVENC / VAAPI /
+VideoToolbox / AMF. Verified locally: phpstan L9 `-c phpstan.neon.dist` = [OK] 0 errors; phpunit
+`--filter Hwaccel` = 139 tests / 333 assertions green.
+
+What I confirmed CORRECT (no action):
+- Delegation: `buildHwaccelInputFlags()` now returns `profile->getInputDeviceArgs($cap)` (same source
+  of truth as `HwaccelCommandBuilder`) and no profile emits `-hwaccel_output_format`, so decoded frames
+  land in system memory where the software scale=/tonemap filters are valid. `getProfileForVendor()`
+  does a direct `$this->profiles[strtolower($vendor)] ?? null` lookup — unknown/software vendor → null
+  → '' (no crash, no input flags), and `hwaccelUploadFilter()` default '' → no stray upload. Safe.
+- Filter ORDER (FfmpegRunner.php:1746-1773): tonemap → scale → hwupload, emitted in that array order;
+  hwupload appended even with no other filter (needed for the full-res VAAPI/QSV "original" variant).
+- NVENC / VideoToolbox / AMF: no upload filter (encoders consume system-memory frames; nvenc uploads
+  internally). No residual `-hwaccel_output_format cuda`. Correct.
+- VAAPI: `-vaapi_device <dev>` + `format=nv12,hwupload` + `-c:v h264_vaapi` is the canonical
+  software-decode→hardware-encode pattern; `-vaapi_device` gives hwupload its device. CORRECT.
+- 10-bit/HDR: the tonemap graph ends in `format=yuv420p`; a following `format=nv12` (8-bit 4:2:0 →
+  8-bit 4:2:0) before hwupload is a safe no-loss conversion, not a clobber. Safe.
+- libx264 no-HW fallback (`buildSegmentCommand`) unchanged.
+- Tests genuinely guard the seam: `_downscaled_vaapi_segment_uploads_after_software_scale` asserts
+  `strpos(scale) < strpos(hwupload)` (ordering), the NVENC downscale/HDR cases assert scale/tonemap
+  present with NO `-hwaccel_output_format`, and `_qsv_segment_uses_probe_device` asserts the probed
+  device reaches `-qsv_device`. A reorder or a dropped upload would fail these. Good.
+- Scope-creep edits verified CORRECT: `WebPortalServicesProvider.php:295` — BookController's ctor is
+  typed `LibraryManager` and it calls `getAllLibraries()`/`getLibrary()` then filters
+  `type==='book'` itself (BookController.php:126-127,159), so it needs the generic manager, not a
+  book-scoped one; the old `BookLibraryManager` resolve was a real TypeError-at-construction, fix is
+  right. `ItemRepository.php:1283-1284` — `is_numeric(... ?? null) ? (float) : null` yields null (not
+  a silent 0.0) for non-numeric/absent luminance, a sane "unknown", strictly better than the old
+  `isset()` cast. `QsvProbe.php:67` `'-device'`→`'device'` aligns writer with the only reader
+  (`QsvProfile::getInputDeviceArgs`), no other reader of `'-device'` exists.
+
+Findings:
+
+1. **[LOWER-CONFIDENCE — GPU-only, Intel-QSV only, unverifiable on this GPU-less box]**
+   `src/Media/Transcoding/FfmpegRunner.php:1861-1868` (`hwaccelUploadFilter`, `qsv` arm) together with
+   `QsvProfile::getInputDeviceArgs` (emits only `-qsv_device <dev>`).
+   For QSV the command becomes `... -qsv_device <dev> -i in -vf "...,format=nv12,hwupload=extra_hw_frames=64" -c:v h264_qsv ...`.
+   Two ffmpeg-semantics concerns that this box cannot catch:
+   (a) The generic `hwupload` filter needs a *filter* hardware device to upload INTO. `-qsv_device` is
+       an option consumed by the h264_qsv *encoder*, not a filter-device initializer; the documented
+       QSV software→hardware upload pattern initializes the device explicitly
+       (`-init_hw_device qsv=hw:/dev/dri/renderDXXX -filter_hw_device hw`) and neither flag is emitted
+       anywhere in the codebase (grep for `init_hw_device`/`filter_hw_device` = none). On a real Intel
+       box `hwupload` may abort with "A hardware device reference is required to upload frames to."
+   (b) The canonical QSV chain is `hwupload=extra_hw_frames=N,format=qsv` (upload, then declare the QSV
+       pixel format), whereas this emits `format=nv12,hwupload`. VAAPI's `format=nv12,hwupload` is fine
+       because `-vaapi_device` sets the default device; QSV differs and this asymmetry is exactly the
+       "QSV needs a different upload than VAAPI" case flagged in the review brief. The fix did add
+       `extra_hw_frames=64` (good) but likely still lacks the device-init half.
+   Why it matters: SV-0.1 AC requires "on a box with … QSV available … a segment encodes via the HW
+   encoder." VAAPI and NVENC are correct with high confidence; QSV specifically remains unverified and
+   at risk of a hard ffmpeg failure (not a clean libx264 fallback). NOT a regression introduced by this
+   fix — the whole-file `HwaccelCommandBuilder` path has the same/worse QSV limitation (it emits no
+   hwupload at all) — so this can be tracked/verified rather than blocking, but it should be verified on
+   real Intel hardware before QSV is claimed working.
+   Fix direction: for QSV emit `-init_hw_device qsv=hw:<dev> -filter_hw_device hw` on the input side
+   (in place of / alongside `-qsv_device`) and use `hwupload=extra_hw_frames=64,format=qsv`; confirm on
+   an Intel box (`ffmpeg -qsv_device …` vs `-init_hw_device qsv`). Applies equally to the whole-file
+   builder for consistency.
+
+## Implementer — 2026-07-12 (SV-0.3 + SV-0.4 combined fix + tests)
+
+**Scope:** the 4 async HTTP clients' worker-context detection + coroutine wait. SV-0.5 (WS reaper/heartbeat) NOT touched.
+
+**SV-0.4 bug fixed — Channel::pop() only ever reached inside a coroutine (getCid()>0):**
+Added shared guard `WorkerContext::inCoroutine()` = `extension_loaded('swoole') && Swoole\Coroutine::getCid() > 0`.
+- `src/Media/Metadata/MetadataHttpClient.php` (get loop): gate now `needsBlocking = !isEventLoopRunning() || !inCoroutine() || requiresBlockingCurl(url)`. getCid>0 (+event loop, +not-TLS) → requestAsync (Channel); getCid<=0 → requestCurl (blocking). TLS still → curl.
+- `src/Webhooks/WebhookHttpClient.php` (post): `useAsync = isEventLoopRunning() && inCoroutine() && !requiresBlockingCurl(url)` → postAsync (Channel) else postCurl. Timer-dispatched webhooks (non-coroutine) now correctly blocking.
+- `src/Admin/S3Client.php` (doRequest): same `useAsync` gate → requestAsync (Channel) else requestCurl.
+- `src/Hub/HttpClient.php` (request): INVERSION corrected. Was: in-coroutine→requestCoroutine (valid) but non-coroutine→requestAsync (Channel, INVALID). Now: requiresBlockingCurl→curl; `isEventLoopRunning() && inCoroutine()`→requestCoroutine (hooked client suspends the coroutine — coroutine-valid, the existing correct in-coroutine path is KEPT); else→requestCurl. Removed the misplaced Channel `requestAsync()` method (now dead) and the unused `use Workerman\Coroutine;` import.
+EventLoopTls `requiresBlockingCurl()` fallback preserved (blocking-by-design) and still reachable in every client. Timeout→clean-error/null behavior unchanged.
+
+**Tests added:**
+- `tests/Unit/Common/Runtime/WorkerContextTest.php` — SV-0.3: `isEventLoopRunning()` false outside a worker; SV-0.4: `inCoroutine()` false on main stack; branch-selection guard via real client seam (`WebhookHttpClient::post('')` returns blocking-only `'Empty URL'` sentinel → proves blocking path chosen out of coroutine).
+- `tests/Unit/Common/Runtime/CoroutineChannelWaitTest.php` — SV-0.4 **coroutine strategy** (swoole present on box): `Swoole\Coroutine\run` asserts (a) `inCoroutine()` flips false→true across coroutine boundary; (b) Channel waiter wakes on callback `push(true)` before timeout; (c) returns false after actually waiting the timeout window (clean timeout, not the immediate-false of an out-of-coroutine invalid pop). Drives the Channel/callback pattern directly because the private client methods need a live Workerman\Http\Client + event loop a bare coroutine can't supply; the pattern is byte-for-byte the client callbacks. Deliberately never calls Channel::pop out of a coroutine (that emits a warning = the bug).
+
+**Verify:** phpstan (level 9, `-c phpstan.neon.dist`) 0 errors. phpunit `--filter 'WorkerContext|CoroutineChannelWait|HttpClient|MetadataHttpClient|Webhook|S3Client'` = OK (91 tests, 244 assertions). phpcs PSR12 on all 5 src files + 2 tests = 0 errors (only pre-existing >120-char warnings in S3Client lines 212/238/256, not on changed lines).
+
+**Adjacent (out of scope, noted):** `src/Plugins/Catalog/PluginCatalogService.php::defaultFetcher()` (SV-4.11) has the same latent no-getCid-gate on its `asyncFetch` Channel path — separate step, not touched here.

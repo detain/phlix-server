@@ -275,9 +275,17 @@ class S3Client
      */
     private function doRequest(string $method, string $url, ?string $body, array $headers): ?ResponseInterface
     {
-        // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
-        // so those requests must take the blocking cURL path.
-        if (\Phlix\Common\Runtime\WorkerContext::isEventLoopRunning() && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url)) {
+        // SV-0.4: requestAsync() waits on a Swoole\Coroutine\Channel, which is
+        // only valid inside a coroutine (getCid() > 0); outside one
+        // Channel::pop() returns false immediately = a false timeout, so use the
+        // blocking cURL client there instead.
+        // https + Swoole event loop: async TLS reads also stall (see
+        // EventLoopTls), so those requests take the blocking cURL path too.
+        $useAsync = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()
+            && \Phlix\Common\Runtime\WorkerContext::inCoroutine()
+            && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
+
+        if ($useAsync) {
             return $this->requestAsync($method, $url, $body, $headers);
         }
 

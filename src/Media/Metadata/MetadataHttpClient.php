@@ -165,10 +165,16 @@ class MetadataHttpClient
         // (429) and server errors (5xx). Loop retries on retryable statuses
         // until success, non-retryable failure, or max retries exhausted.
         for ($attempt = 0; $attempt <= self::RETRY_MAX_RETRIES; $attempt++) {
-            // https + Swoole event loop: async TLS reads stall (see EventLoopTls),
-            // so those requests must take the blocking cURL path.
+            // SV-0.4: the async path waits on a Swoole\Coroutine\Channel, which
+            // is only valid inside a coroutine (getCid() > 0). Outside a
+            // coroutine Channel::pop() returns false immediately = a false
+            // timeout, so we must use the blocking cURL client there instead.
+            // https + Swoole event loop: async TLS reads also stall (see
+            // EventLoopTls), so those requests take the blocking cURL path too.
             $isEventLoop = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning();
+            $inCoroutine = \Phlix\Common\Runtime\WorkerContext::inCoroutine();
             $needsBlocking = !$isEventLoop
+                || !$inCoroutine
                 || \Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
             $response = $needsBlocking
                 ? $this->requestCurl($url, $requestHeaders)

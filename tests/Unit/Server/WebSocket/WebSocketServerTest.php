@@ -204,6 +204,47 @@ class WebSocketServerTest extends TestCase
     }
 
     /**
+     * Regression guard for the dual-entrypoint bug: when a listening worker is
+     * injected (as `start.php` does with its real :8097 worker), the
+     * connection-lifecycle callbacks — and critically `onWebSocketPong`, which
+     * the Websocket protocol resolves via `$connection->worker->onWebSocketPong`
+     * — MUST bind to that exact injected worker instance, not to a throwaway
+     * internal worker that never listens. Previously they bound to an internal
+     * worker created after `Worker::runAll()`, so in production the pool was
+     * never populated and pongs never reached `recordPong()` (S-F28 dead).
+     *
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::__construct
+     * @covers \Phlix\Server\WebSocket\WebSocketServer::getWorker
+     */
+    public function testCallbacksBindToInjectedListeningWorker(): void
+    {
+        $listener = new \Workerman\Worker('websocket://0.0.0.0:8097');
+        // Simulate start.php owning the worker lifecycle.
+        $listener->onWorkerStart = static function (): void {
+        };
+
+        $server = new WebSocketServer(['host' => '0.0.0.0', 'port' => 8097], null, $listener);
+
+        // The server must be wired to the SAME instance that accepts connections.
+        $this->assertSame($listener, $server->getWorker());
+
+        // All connection-lifecycle callbacks live on the injected listener.
+        $this->assertSame([$server, 'onConnect'], $listener->onConnect);
+        $this->assertSame([$server, 'onMessage'], $listener->onMessage);
+        $this->assertSame([$server, 'onClose'], $listener->onClose);
+        $this->assertSame([$server, 'onError'], $listener->onError);
+
+        // The load-bearing one: the pong handler must resolve off the accepting
+        // worker, so it must be bound on the injected listener.
+        // @phpstan-ignore-next-line property.notFound
+        $this->assertSame([$server, 'onWebSocketPong'], $listener->onWebSocketPong);
+
+        // The injected caller-owned onWorkerStart must NOT be clobbered — the
+        // resident path owns that lifecycle and calls onStart() itself.
+        $this->assertNotSame([$server, 'onStart'], $listener->onWorkerStart);
+    }
+
+    /**
      * The stale-connection reaper, stale-group reaper, and the S-F28
      * application-level ping timer must all register when the Workerman Timer
      * class is available. (Previously a `function_exists('Workerman\Timer')`

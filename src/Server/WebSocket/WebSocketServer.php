@@ -57,6 +57,15 @@ class WebSocketServer
      *
      * @param array<string, mixed> $config Server configuration with 'host' and 'port' keys
      * @param MessageHandler|null $handler Optional message handler (for SP1 singletons)
+     * @param Worker|null $worker Optional pre-created listening worker to attach
+     *        the connection-lifecycle callbacks to. In the resident `start.php`
+     *        path this MUST be the same worker that actually accepts connections
+     *        on :8097 — otherwise the callbacks (and, critically, the pong
+     *        handler the Websocket protocol resolves via
+     *        `$connection->worker->onWebSocketPong`) bind to a throwaway worker
+     *        that never listens, so the pool is never populated and half-open
+     *        detection (S-F28) cannot function. When null, the server owns a
+     *        freshly created worker (standalone / test / {@see run()} path).
      *
      * @example
      * ```php
@@ -67,34 +76,73 @@ class WebSocketServer
      * $server->run();
      * ```
      */
-    public function __construct(array $config, ?MessageHandler $handler = null)
+    public function __construct(array $config, ?MessageHandler $handler = null, ?Worker $worker = null)
     {
         $this->config = $config;
         $this->connections = ConnectionPool::getInstance();
         $this->handler = $handler ?? new MessageHandler($this->connections);
 
-        $host = $config['host'] ?? '0.0.0.0';
-        $port = $config['port'] ?? 8097;
-        $hostStr = is_string($host) ? $host : '0.0.0.0';
-        $portStr = is_numeric($port) ? (string)(int)$port : '8097';
+        if ($worker !== null) {
+            // Resident path (start.php): attach to the ACTUAL listening worker.
+            // The caller owns onWorkerStart (it builds the per-worker container
+            // and invokes onStart() itself), so we do NOT overwrite it here — we
+            // only bind the connection-lifecycle callbacks onto the real listener.
+            $this->worker = $worker;
+        } else {
+            // Standalone path (tests / SyncPlayWorker / run()): own the worker
+            // fully, including its onWorkerStart lifecycle.
+            $host = $config['host'] ?? '0.0.0.0';
+            $port = $config['port'] ?? 8097;
+            $hostStr = is_string($host) ? $host : '0.0.0.0';
+            $portStr = is_numeric($port) ? (string)(int)$port : '8097';
 
-        $this->worker = new Worker("websocket://{$hostStr}:{$portStr}");
-        $this->worker->onWorkerStart = [$this, 'onStart'];
+            $this->worker = new Worker("websocket://{$hostStr}:{$portStr}");
+            $this->worker->onWorkerStart = [$this, 'onStart'];
+        }
+
+        $this->bindConnectionCallbacks();
+    }
+
+    /**
+     * Bind the connection-lifecycle callbacks onto the listening worker.
+     *
+     * Workerman reads these at runtime off the ACCEPTING worker
+     * (`$connection->worker`): onConnect populates the pool, onMessage routes to
+     * the handler, onClose reaps, and — the S-F28 load-bearing one —
+     * onWebSocketPong is resolved by the Websocket protocol as
+     * `$connection->worker->onWebSocketPong` to clear the outstanding-ping count.
+     * They MUST live on the same worker that accepts connections; see the
+     * constructor for why the resident path injects that worker rather than
+     * letting this class create its own (which, being built after Worker::runAll()
+     * inside a forked child, would never listen).
+     *
+     * onWebSocketPong is a dynamic Workerman worker callback (Worker is
+     * #[AllowDynamicProperties]).
+     *
+     * @return void
+     */
+    private function bindConnectionCallbacks(): void
+    {
         $this->worker->onConnect = [$this, 'onConnect'];
         $this->worker->onMessage = [$this, 'onMessage'];
         $this->worker->onClose = [$this, 'onClose'];
         $this->worker->onError = [$this, 'onError'];
-
-        // S-F28: application-level liveness. Workerman 5.x does not expose a
-        // Worker-level pingInterval/pingNotResponseLimit (that lived in
-        // GatewayWorker), so we drive server-side pings from a timer in onStart()
-        // and reap connections whose peers stop answering. Binding the pong
-        // callback here lets the WS protocol layer notify us when a peer replies.
-        // onWebSocketPong is a dynamic Workerman worker callback (Worker is
-        // #[AllowDynamicProperties]); the Websocket protocol reads it as
-        // $connection->worker->onWebSocketPong.
         // @phpstan-ignore-next-line property.notFound
         $this->worker->onWebSocketPong = [$this, 'onWebSocketPong'];
+    }
+
+    /**
+     * The underlying listening worker these callbacks/timers are bound to.
+     *
+     * Exposed so callers (and the dual-entrypoint regression test) can assert
+     * that the callback surface — especially onWebSocketPong — is attached to the
+     * same worker instance that accepts connections.
+     *
+     * @return Worker The Workerman worker this server is wired to.
+     */
+    public function getWorker(): Worker
+    {
+        return $this->worker;
     }
 
     /**
@@ -144,6 +192,12 @@ class WebSocketServer
             // connection and reaps any whose peer has not answered within the
             // non-response limit — this detects half-open sockets that the
             // receive-side-only stale-connection reaper cannot see.
+            //
+            // Reap latency: a silently-gone peer is reaped on the sweep that
+            // OBSERVES pendingPings >= limit, which is the (limit + 1)th sweep
+            // (each of the first `limit` sweeps only increments the counter). So
+            // with the defaults (interval 30s, limit 2) a dead peer is reaped
+            // after ~(limit + 1) x interval ≈ 90s, not ~2x.
             $pingIntervalRaw = $this->config['ping_interval'] ?? 30;
             $pingInterval = is_numeric($pingIntervalRaw) ? (int) $pingIntervalRaw : 30;
             if ($pingInterval < 1) {

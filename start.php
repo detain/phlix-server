@@ -271,7 +271,15 @@ try {
         $wsConfig['stale_group_timeout'] = $wsConfig['stale_group_timeout'] ?? 3600;
 
         /** @var array<string, mixed> $wsConfig */
-        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler);
+        // Inject THIS worker ($wsWorker) — the one that actually listens on :8097
+        // — so WebSocketServer binds its connection-lifecycle callbacks
+        // (onConnect / onMessage / onClose / onError / onWebSocketPong) onto the
+        // real accepting worker. Without this the callbacks would bind to a
+        // throwaway internal Worker created after Worker::runAll() (never listens),
+        // so the pool would stay empty and pongs would never reach recordPong() —
+        // breaking S-F28 half-open detection and SyncPlay routing in the resident
+        // path.
+        $wsServer = new \Phlix\Server\WebSocket\WebSocketServer($wsConfig, $messageHandler, $w);
         $wsServer->setSyncPlayManager($syncPlayManager);
 
         // S2 metrics: wire the metrics collector into the WS server.
@@ -281,9 +289,12 @@ try {
             $wsServer->setMetricsCollector($wsMetricsCollector);
         }
 
-        // Trigger onStart to log the startup message and arm cleanup timers.
-        // The actual Workerman worker callbacks (onConnect, onMessage, onClose)
-        // are already bound in the WebSocketServer constructor.
+        // Trigger onStart to log the startup message and arm cleanup + ping
+        // timers (Timer::add registers into THIS worker process, so the reaper
+        // and ping sweeps run here). The connection-lifecycle callbacks
+        // (onConnect / onMessage / onClose / onError / onWebSocketPong) were just
+        // bound onto $w (this listening worker) by the WebSocketServer
+        // constructor above.
         $wsServer->onStart();
 
         // S2 metrics: arm the live-connection touch timer + the flush timer in the

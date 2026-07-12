@@ -54,8 +54,8 @@
   - **Migration runner:** runs every boot (apply-all-every-time); idempotent via `IF NOT EXISTS` and error-substring allowlist
 
 ## Progress
-- [x] SV-0.1  wire hardware acceleration + tone-mapping config ✅ (commits 5d3a3cdf, 809b34b3)
-- [x] SV-0.2  reconcile hwaccel config ✅ (commit 85aec93c)
+- [~] SV-0.1  wire hardware acceleration + tone-mapping config  REVIEW-1 FOUND DEFECT 2026-07-12 → FIX spawned. Complete landed (1c8f12e3,c7f10d0f) but review found: #1 CONFIRMED GPU-only defect — buildHwaccelInputFlags() emits -hwaccel_output_format cuda/vaapi (frames stay HW surfaces) while buildHwaccelSegmentCommand appends SOFTWARE scale=/tonemap → ffmpeg "impossible to convert" on every downscaled/HDR NVENC/VAAPI segment (NVENC profile deliberately omits the flag; segment path must match). #2 method diverges from profiles' getInputDeviceArgs() (docblock claim false) — delegating resolves #1. #3 test never passes width/height or require_hdr_tone_map so the colliding branch is untested (vaapi test bakes wrong expectation). #4 low: public/index.php lazy-probe no boot log (confirm OK). Out-of-scope: QsvProbe.php:67 stores '-device' but readers use 'device' → QSV always default device. → FIX agent spawned (findings #1/#2/#3 + QSV key).
+- [x] SV-0.2  reconcile hwaccel config  RE-AUDIT 2026-07-12: DONE — single source HwAccelConfig::get(); ffmpeg.php+hwaccel.php delegate; no contradictory flags. Regression test added: HwAccelConfigTest(7) green (commit 0a35848a). Pending confirming review alongside SV-0.1.
 - [x] SV-0.3  isWorkermanContext fix ✅ (commit e48e4aba)
 - [x] SV-0.4  replace usleep spin-wait with Channel ✅ (commit e48e4aba)
 - [x] SV-0.5  fix WS reaper + heartbeat timer guards ✅ (commit b95a9c22)
@@ -103,6 +103,237 @@
 - [x] SV-4.13 Remove superseded whole-file command builders ✅ (commit c8f94c04)
 - [x] SV-4.14 Fix phantom self::transcode() docref ✅ (commit c8f94c04)
 
-## Notes / cross-repo blockers
+## Re-baseline — Claude Code orchestrator pass (2026-07-12)
 
-(End of file - total 104 lines)
+**Subagent capability (RESOLVED):** a spawned subagent here runs git, `./vendor/bin/phpunit`,
+`phpstan`, `phpcs`, and `gh` (after `unset GITHUB_TOKEN GH_TOKEN`) with NO permission prompts.
+=> Full-delegation model per plan §A/§G: workers self-verify AND commit+push to master themselves.
+(The old memory claiming CC subagents can't run npm/vendor-bin/gh is OUTDATED for this runtime.)
+git identity: Joe Huss <detain@interserver.net>. PHP 8.3.6, PCOV coverage driver. Unit suite does
+NOT need live MySQL (Connection is mocked). Both dual entrypoints exist: `public/index.php` + `start.php`
+(CLAUDE.md's "start.php doesn't exist" note is STALE — start.php is live, verify by hand, outside CI).
+
+**MASTER HEALTH AT PASS START (baseline — master is RED before my changes):**
+- PHPUnit Unit: 4870 tests, 11 errors, 21 failures, 7 warn, 8 skip, 3 risky. Line coverage 53%.
+- PHPStan L9 (`-c phpstan.neon.dist`): **6 errors**, incl.:
+  - `FfmpegRunner.php:1168` uses `HwaccelCommandBuilder` — **class.notFound** (class does not exist)
+  - `FfmpegRunner.php:1676` calls undefined `FfmpegRunner::buildHwaccelInputFlags()`
+  - `ItemRepository.php:1283-1284` cast mixed→float / argument.type
+- PHPCS PSR-12 src/: 1 error + 205 warnings (mostly >120-char lines).
+- The FfmpegRunner phpstan errors + FfmpegRunnerTest/HlsTest failures are opencode's SV-0.1/SV-1.x
+  hwaccel work left BROKEN (missing/renamed HwaccelCommandBuilder + method). This is IN-SCOPE for
+  SV-0.1 (not pre-existing-unrelated), so fixing it is part of the SV-0.1/SV-0.2 cycle.
+- ItemRepository failures (testAddStream*) + phpstan cast errors relate to SV-2.8 / stream persistence.
+
+**Strategy:** master-red is concentrated in hwaccel (SV-0.1) + ItemRepository (SV-2.8). Drive server
+W0 in order (SV-0.2 → SV-0.1 first, since we KNOW it's broken), audit-and-complete each. Definition
+of done requires master green for the touched area (plan §I), so these red items get fixed by their
+owning step, not waved off.
+
+## Notes / cross-repo blockers
+- X3 HEAD-over-relay: RESOLVED 2026-07-12 — server ALREADY emits HEAD→END(zero-body)→HTTP_CANCEL for
+  HEAD withFile (RelayConsumer::sendHttpResponse, END unconditional @:1010; headOnly guard @:1002 skips
+  file body). No server change needed; hub HB-0.3 just adds tests. ✅
+- X9 heartbeat: RESOLVED 2026-07-12 — server ALREADY sends HEARTBEAT every 30s (RelayConsumer::
+  startHeartbeatTimer @:1517, repeating timer, RelayConfig::pingInterval default 30) + echoes hub
+  heartbeats (onHeartbeat @:1184). Hub HB-0.1 safe; no server change. ✅
+- SV-2.1 pre-audit (via X3 investigation): DONE — sendHttpResponse chunk-streams file-backed GET via
+  streamFileChunks() with MAX_BODY_CHUNK + send-buffer backpressure; empty-body bug fixed; HEAD reports
+  real Content-Length. Confirm with a test when SV-2.1's turn comes.
+- X10 bug-class sweep: grep `defined('\...::$` and `function_exists('Workerman`.
+
+## Implementer — SV-0.1 / SV-0.2 complete (2026-07-12)
+
+Completed the SV-0.1 gap list + added the missing SV-0.1/SV-0.2 tests. NOT marked done — Review pending.
+
+**Code (files touched):**
+- `src/Media/Transcoding/FfmpegRunner.php` — Fix A: added
+  `use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;` (clears phpstan class.notFound @:1168,
+  which was the `new HwaccelCommandBuilder(...)` in `buildTranscodeCommandWithProfile`). Fix B:
+  implemented `private function buildHwaccelInputFlags(HwaccelCapability): string` (clears
+  method.notFound @:1676; unbreaks the live `buildHwaccelSegmentCommand` path). Per-vendor input/decode
+  flags placed before `-i`, deriving device from `$capability->extra_args` (mirrors the vendor profiles'
+  `getInputDeviceArgs()` used by HwaccelCommandBuilder so the two paths don't diverge): vaapi →
+  `-hwaccel vaapi -hwaccel_device <dev> -hwaccel_output_format vaapi`, qsv → `-hwaccel qsv -qsv_device <dev>`,
+  nvenc/cuda → `-hwaccel cuda [-hwaccel_device N] -hwaccel_output_format cuda`, videotoolbox/amf mapped,
+  software/unknown → ''. Also added `getHardwareAccelerationSummary(): array` for the boot log.
+  (Idempotent probe guard `$hwaccelProbed` already existed.)
+- `start.php` — Fix C: added `use ...LogChannels`; in the HTTP worker `onWorkerStart`, resolve the
+  FfmpegRunner, call `probeHardwareAcceleration()` explicitly at worker start (idempotent), and log the
+  chosen accelerator ONCE via `LoggerFactory::get(LogChannels::STREAMING)` +
+  `getHardwareAccelerationSummary()`. Runs outside any coroutine so the probe's blocking exec can't stall
+  the loop. DI `setConfig` + factory probe retained (lazy once-probe still covers the FPM `public/index.php`).
+- `src/Server/Core/Application.php` — Fix D: `setConfig(\Phlix\Config\HwAccelConfig::get())` after both
+  non-segment `new FfmpegRunner(...)` (MediaItemController→GaplessPlaybackManager ~:2760, SubtitleController
+  ~:2790) so every runner shares the single merged config source.
+
+**Tests (added, build-out opencode skipped):**
+- `tests/Unit/Config/HwAccelConfigTest.php` (7 tests) — SV-0.2 regression: single merged config;
+  `enabled` from hwaccel_base.php; tone_mapping_mode/preferred_accelerator from transcoding.php;
+  ffmpeg.php `hwaccel` === HwAccelConfig::get() (no contradictory flags); hwaccel.php shares base; cached.
+- `tests/Unit/Media/Transcoding/FfmpegRunnerHwaccelTest.php` (5 tests) — segment cmd contains `-hwaccel`
+  + `-c:v h264_nvenc` when registry (reflection-seeded, deterministic) reports HW; vaapi input flags;
+  null when no HW encoder; software fallback `buildSegmentCommand` uses libx264; summary reflects probe.
+- `tests/Unit/Common/Container/Providers/TranscodeServicesProviderTest.php` (2 tests) — resolving
+  FfmpegRunner through the provider calls setConfig (config has merged `enabled`) + probe (registry set,
+  summary reflects seeded encoder).
+
+**Verification:**
+- phpstan L9 `-c phpstan.neon.dist`: the TWO hwaccel errors (:1168 class.notFound, :1676 method.notFound)
+  are GONE. Remaining: 3 pre-existing errors NOT mine — ItemRepository.php:1283-1284 (SV-2.8) +
+  WebPortalServicesProvider.php:295 (SV-3.2/BookController).
+- phpunit: new tests 13/13 green; `--filter Hwaccel` 135/135 green.
+- phpcs PSR-12 on touched src (FfmpegRunner.php, Application.php): 0 errors (only pre-existing >120-char
+  warnings on untouched lines). start.php clean. (Test method snake_case matches existing test convention;
+  tests/ is outside the `src/`-only phpcs scope.)
+- Pre-existing FfmpegRunnerTest `buildTranscodeCommand()` drift STILL FAILS (3 errors) — SV-4.13's job,
+  left untouched as instructed.
+
+## Reviewer (per-step: SV-0.1 + SV-0.2) — 2026-07-12
+
+Verified: phpstan L9 clean on all touched files (only the 3 pre-existing errors remain —
+ItemRepository.php:1283-1284 + WebPortalServicesProvider/BookLibraryManager argument.type — NOT
+introduced here). `--filter Hwaccel` 135/135 green; the 13 new tests green. SV-0.2 is fully correct
+(single source `HwAccelConfig::get()`; ffmpeg.php + hwaccel.php both delegate; no contradictory
+`enabled`; `HwAccelConfigTest` genuinely asserts ffmpeg.php['hwaccel'] === HwAccelConfig::get() and
+enabled/tone-map/preferred provenance). Fix C probe placement is correct (lazy shared DI factory +
+explicit idempotent `probeHardwareAcceleration()` in `start.php` onWorkerStart, OUTSIDE any coroutine,
+before the loop serves — blocking exec at boot does not violate the no-native-exec hook mask). Fix D
+config source is correct with no side effects.
+
+Findings:
+
+1. **[CONFIRMED — correctness, GPU-only so untestable on this box]**
+   `src/Media/Transcoding/FfmpegRunner.php:1819-1867` (`buildHwaccelInputFlags`, nvenc + vaapi cases)
+   vs `:1746-1760` (`buildHwaccelSegmentCommand` filter chain).
+   The nvenc case emits `-hwaccel_output_format cuda` and the vaapi case emits
+   `-hwaccel_output_format vaapi`, which force the decoded frames to stay as HARDWARE surfaces (CUDA /
+   VAAPI). But `buildHwaccelSegmentCommand` then appends SOFTWARE filters to the same command:
+   `scale={w}:{h}:...` whenever width+height are supplied (line 1756 — i.e. every downscaled ABR
+   variant) and the software tone-map graph whenever `$needsToneMap` is true (lines 1746-1750, i.e. all
+   HDR content on non-HDR-capable encoders — which includes `h264_nvenc`/`h264_vaapi`). ffmpeg does NOT
+   auto-insert `hwdownload` between a hardware-format source and a software filter; it aborts with
+   "Impossible to convert between the formats". Net effect: on a real NVENC/VAAPI box the HW segment
+   encode SUCCEEDS only for the full-resolution, non-HDR "original" variant and FAILS for every
+   downscaled variant and every HDR-tone-mapped segment — directly undermining the SV-0.1 AC ("a
+   segment encodes via the HW encoder … falls back to libx264 cleanly"; here it would hard-fail, not
+   fall back). Note the NVENC profile (`NvencProfile::getInputDeviceArgs`) deliberately emits only
+   `-hwaccel cuda -hwaccel_device N` with NO `-hwaccel_output_format`, precisely so decoded frames land
+   in system memory and software filters work; the segment path should do the same.
+   Fix direction: drop `-hwaccel_output_format cuda`/`vaapi` (let frames download to system memory so
+   the existing software scale/tonemap filters apply), OR switch the segment filter chain to hardware
+   filters (`scale_cuda`/`scale_vaapi`) with `hwdownload,format=...` before any software tone-map.
+
+2. **[MAINTAINABILITY / plan-directive miss]**
+   `src/Media/Transcoding/FfmpegRunner.php:1819-1867`.
+   The plan (performance_plan.md SV-0.1) and the review brief both call for aligning with
+   `HwaccelCommandBuilder`'s vendor logic "rather than diverging". `buildHwaccelInputFlags`
+   reimplements the input-device flags independently of the vendor profiles' `getInputDeviceArgs()`,
+   and the two genuinely diverge: vaapi profile → `-vaapi_device <dev>` vs. segment →
+   `-hwaccel vaapi -hwaccel_device <dev> -hwaccel_output_format vaapi`; nvenc profile has no
+   output-format vs. segment adds one. The method docblock's claim that it "mirrors the vendor
+   profiles' getInputDeviceArgs()" is therefore inaccurate. Two hand-maintained codepaths for the same
+   concept will drift. Fix direction: delegate to
+   `HwaccelProfileFactory->…->getInputDeviceArgs($capability)` (already imported) so the segment and
+   whole-file paths share one source of truth — this also resolves finding #1 for free.
+
+3. **[TEST COVERAGE GAP at the exact risky seam]**
+   `tests/Unit/Media/Transcoding/FfmpegRunnerHwaccelTest.php:74-128`.
+   Both HW-path tests call `buildHwaccelSegmentCommand` with `['video_codec' => 'libx264']` only — no
+   `width`/`height` and no `require_hdr_tone_map` — so the scale/tone-map filter branch (the branch
+   that collides with `-hwaccel_output_format` per finding #1) is never exercised. The vaapi test even
+   asserts `-hwaccel_output_format vaapi` is present, baking the questionable flag in as expected. The
+   tests pass trivially and cannot catch #1. Fix direction: add a case with width/height (and one with
+   `require_hdr_tone_map => true`) asserting the input flags and the filter chain are format-compatible
+   (i.e. no software `scale=`/tonemap after a hardware-only output format).
+
+4. **[LOW — dual-entrypoint / observation]**
+   `public/index.php` (bootstrap) was not touched. The plan's SV-0.1 step asks to "mirror the DI change
+   in start.php and index.php bootstraps". Functionally index.php IS covered (it builds the container
+   via `ContainerFactory::create`, and the shared `TranscodeServicesProvider` factory runs
+   `setConfig()` + `probeHardwareAcceleration()` lazily on first `FfmpegRunner` resolution), so this is
+   acceptable under the resident model — but that entrypoint emits no one-time boot log of the chosen
+   accelerator and probes lazily on first transcode rather than at worker start. Confirm this is
+   intended; if a boot-time log is wanted for the index.php entrypoint it must be added there too.
+
+Out-of-scope note (NOT introduced by this diff, do not fix here): `QsvProbe.php:67` stores the device
+under key `'-device'` while both `QsvProfile::getInputDeviceArgs` and the new `buildHwaccelInputFlags`
+read `extra_args['device']`, so QSV always uses the `/dev/dri/renderD128` default. Harmless today;
+flagging for a future Hwaccel-probe build-out step.
+
+## Fixer — SV-0.1 REVIEW-1 findings (2026-07-12)
+
+Fixed ALL REVIEW-1 findings (#1/#2 correctness defect, #3 test gap, #4 confirmed, plus the QSV
+device-key bug). phpstan/phpunit/phpcs green; only the 3 pre-existing phpstan errors remain.
+
+**#1 + #2 (CONFIRMED correctness defect — root fix via profile delegation).**
+`src/Media/Transcoding/FfmpegRunner.php`
+- Reworked `buildHwaccelInputFlags(HwaccelCapability)` to STOP re-deriving per-vendor input flags
+  (which emitted `-hwaccel_output_format cuda`/`vaapi`, keeping decoded frames on a HW surface that
+  the software `scale=`/tonemap filters cannot consume → ffmpeg "Impossible to convert between the
+  formats" on every downscaled/HDR NVENC/VAAPI segment). It now DELEGATES to the resolved vendor
+  profile's `getInputDeviceArgs($capability)` — the SAME source of truth `HwaccelCommandBuilder` uses
+  for the whole-file path (:422). Added `HwaccelProfileFactory::getProfileForVendor(string): ?profile`
+  (direct vendor→profile lookup, no availability fallback) and a lazily-built `$hwaccelProfileFactory`
+  field on the runner. NONE of the profiles emit `-hwaccel_output_format`, so decoded frames now land
+  in SYSTEM MEMORY where the software scale/tonemap filters are valid. Rewrote the (previously
+  inaccurate) docblock to describe the delegation.
+- Frames-flow now: HW/SW decode → frames in system memory → software scale/tonemap (valid) → for
+  VAAPI/QSV encoders (which cannot consume system-memory frames) a trailing `format=nv12,hwupload`
+  (`…extra_hw_frames=64` for QSV) is appended AFTER the software filters via the new
+  `hwaccelUploadFilter(vendor)` helper → HW encode. NVENC/VideoToolbox/AMF accept system-memory frames
+  so no upload filter is added. This makes BOTH the downscaled and the HDR-tonemap segment commands
+  coherent for NVENC/VAAPI/QSV; the libx264 software fallback path (`buildSegmentCommand`) is unchanged.
+- Note (delegation consequence, documented not fixed): v4l2 now also delegates to `V4L2Profile`
+  (capture-oriented `getInputDeviceArgs`) exactly as the whole-file `HwaccelCommandBuilder` already
+  does — segment and whole-file paths are now identical for every vendor, which is the point of #2.
+  Any V4L2Profile transcode-vs-capture concern is a single, shared profile issue (out of scope here).
+
+**#3 (test gap that hid #1).** `tests/Unit/Media/Transcoding/FfmpegRunnerHwaccelTest.php`
+- Corrected the vaapi test: it no longer asserts `-hwaccel_output_format vaapi` (the buggy expectation)
+  — now asserts `-vaapi_device` + `-c:v h264_vaapi` and NO `-hwaccel_output_format`.
+- Added 4 coherence cases exercising the previously-untested colliding branch:
+  `test_downscaled_nvenc_segment_has_no_hw_surface_software_filter_collision` (width/height → software
+  `scale=1280:720`, no output-format), `test_downscaled_vaapi_segment_uploads_after_software_scale`
+  (scale + `hwupload` ordered AFTER the scale, no output-format), `test_hdr_tonemap_nvenc_segment_has_no_hw_surface_collision`
+  (forces a real tonemap graph via an anon FfmpegRunner subclass + an HDR-capable NVENC cap; asserts
+  tonemap present, no output-format), and `test_qsv_segment_uses_probe_device` (non-default QSV device
+  flows through to `-qsv_device /dev/dri/renderD129`, hwupload present, no output-format).
+
+**QSV device-key bug (in-domain).** `src/Media/Transcoding/Hwaccel/VendorProbe/QsvProbe.php:67`
+- Fixed the writer: `extra_args` key `'-device'` → `'device'` so it matches what
+  `QsvProfile::getInputDeviceArgs` (and the delegated segment path) read. QSV now honors the probed
+  device instead of always falling back to `/dev/dri/renderD128`. Reader-side already had a test
+  (`QsvProfileTest::test_qsv_device_arg`); added the whole-chain `test_qsv_segment_uses_probe_device`.
+
+**#4 (low — confirmed, no code change).** `public/index.php` is intentionally NOT probed at boot: it
+builds the container via `ContainerFactory::create`, and the shared `TranscodeServicesProvider` factory
+runs `setConfig()` + `probeHardwareAcceleration()` LAZILY on first `FfmpegRunner` resolution (once, via
+the guard) — correct for the resident model. The one-time boot-log of the chosen accelerator is a
+`start.php`/daemon concern only (that entrypoint probes explicitly in `onWorkerStart` and logs); the
+FPM/index.php path probes lazily on first transcode and does not emit a boot log. Accepted as intended.
+
+**Verification (this fixer pass):**
+- phpstan L9 `-c phpstan.neon.dist`: only the 3 PRE-EXISTING errors remain (ItemRepository.php:1283-1284
+  cast.double; WebPortalServicesProvider.php:295 BookLibraryManager argument.type). NONE introduced.
+- phpunit `--filter Hwaccel`: 139 tests / 333 assertions green (incl. the 4 new coherence cases).
+  Related suites (HwaccelProfileFactoryTest, QsvProfileTest, TranscodeServicesProviderTest, the full
+  FfmpegRunnerHwaccelTest): 28/28 green.
+- phpcs PSR-12 on FfmpegRunner.php + QsvProbe.php + HwaccelProfileFactory.php: 0 errors (only
+  pre-existing >120-char warnings on untouched lines 756 / 71 / 82).
+
+**Extra (user-requested during this pass): cleared the pre-existing phpstan L9 + phpcs errors.**
+Master phpstan L9 is now fully **[OK] No errors** (was 3) and phpcs PSR-12 on `src/` has **0 errors**
+(was 1); the ~205 line-length WARNINGS are left as-is (plan §0.2 marks them non-blocking).
+- `src/Media/Library/ItemRepository.php:1283-1284` (SV-2.8 leftover) — `cast.double` (Cannot cast mixed
+  to float) on `(float) $streamData['max_luminance'|'avg_luminance']`. Guarded with
+  `is_numeric($streamData[...] ?? null)` (behaviour-neutral for numeric/absent; a non-numeric string now
+  yields null instead of `0.0`, a minor correctness win). The pre-existing `testAddStream*` red is SV-2.8
+  test-drift (fails identically without this edit — verified via git stash), NOT caused here.
+- `src/Common/Container/Providers/WebPortalServicesProvider.php:295` (SV-3.2 leftover) — `argument.type`:
+  the BookController factory resolved `BookLibraryManager` where the ctor needs `LibraryManager`.
+  BookController calls `getAllLibraries()`/`getLibrary()` which BookLibraryManager does NOT expose, so
+  this was also a latent runtime fatal — switched the factory to `$c->get(LibraryManager::class)` (already
+  registered/autowired + used by sibling factories in the same provider) and dropped the now-unused import.
+- `src/Server/Http/Controllers/AudiobookController.php:40` — phpcs PSR-12 "Opening brace must not be
+  followed by a blank line": removed the stray blank line after the class brace.

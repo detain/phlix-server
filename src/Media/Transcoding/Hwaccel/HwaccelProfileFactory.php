@@ -97,6 +97,27 @@ final class HwaccelProfileFactory
     }
 
     /**
+     * Returns the registered profile for a vendor directly, without any
+     * availability fallback.
+     *
+     * Unlike {@see getProfile()}, this does not consult the registry or fall
+     * back to software: it returns exactly the profile registered for the given
+     * vendor, or null when the vendor is unknown. It is the single source of
+     * truth for per-vendor input/device flags shared by the whole-file and
+     * segment transcode paths (so those paths cannot diverge).
+     *
+     * @param string $vendor Vendor name (e.g., 'nvenc', 'vaapi', 'qsv')
+     *
+     * @return HwaccelEncoderProfileInterface|null The profile, or null if unknown
+     *
+     * @since 0.36.0
+     */
+    public function getProfileForVendor(string $vendor): ?HwaccelEncoderProfileInterface
+    {
+        return $this->profiles[strtolower($vendor)] ?? null;
+    }
+
+    /**
      * Returns all registered profiles sorted by vendor priority.
      *
      * @return array<string, HwaccelEncoderProfileInterface>

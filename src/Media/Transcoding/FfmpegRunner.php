@@ -48,6 +48,9 @@ class FfmpegRunner
     /** @var HwaccelRegistry|null Hardware acceleration registry */
     private ?HwaccelRegistry $hwaccelRegistry = null;
 
+    /** @var HwaccelProfileFactory|null Lazily-built factory for per-vendor encoder profiles */
+    private ?HwaccelProfileFactory $hwaccelProfileFactory = null;
+
     /** @var bool Whether hardware acceleration has been probed */
     private bool $hwaccelProbed = false;
 
@@ -1756,6 +1759,15 @@ class FfmpegRunner
             $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
         }
 
+        // Upload the (system-memory) frames to a HW surface for encoders that
+        // require it (VAAPI/QSV). This MUST come after the software scale/tonemap
+        // filters and is emitted even when no other filter is present (the decode
+        // path no longer keeps frames on a HW surface). NVENC/etc. return ''.
+        $uploadFilter = $this->hwaccelUploadFilter($capability->vendor);
+        if ($uploadFilter !== '') {
+            $filters[] = $uploadFilter;
+        }
+
         if (!empty($filters)) {
             $cmd .= ' -vf "' . implode(',', $filters) . '"';
         }
@@ -1791,24 +1803,21 @@ class FfmpegRunner
 
     /**
      * Builds the ffmpeg INPUT/decode hardware-acceleration flags for a segment
-     * encode.
+     * encode by delegating to the resolved vendor profile.
      *
-     * These flags are placed BEFORE `-i` (input-side) so ffmpeg selects the
-     * correct decode path and surface format for the chosen accelerator. The
-     * per-vendor mapping mirrors the intent of each
+     * These flags are placed BEFORE `-i` (input-side). Rather than re-deriving
+     * per-vendor flags here (which historically diverged from the profiles and
+     * emitted `-hwaccel_output_format cuda`/`vaapi`, forcing decoded frames to
+     * stay as HARDWARE surfaces incompatible with the software `scale=`/tonemap
+     * filters the segment command appends), this now delegates to the same
      * {@see \Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::getInputDeviceArgs()}
-     * used by {@see HwaccelCommandBuilder} for the whole-file transcode path,
-     * so the segment path and the builder path do not diverge:
-     *  - vaapi → `-hwaccel vaapi -hwaccel_device <dev> -hwaccel_output_format vaapi`
-     *  - qsv   → `-hwaccel qsv -qsv_device <dev>`
-     *  - nvenc → `-hwaccel cuda -hwaccel_output_format cuda`
-     *  - videotoolbox → `-hwaccel videotoolbox`
-     *  - amf   → `-hwaccel d3d11va`
+     * used by {@see HwaccelCommandBuilder} for the whole-file transcode path, so
+     * the two paths share ONE source of truth and cannot drift.
      *
-     * The device is derived from the capability's `extra_args` (matching the
-     * vendor profiles: `device` string for vaapi/qsv, `device_index` int for
-     * nvenc), falling back to sane defaults when absent. Software / unknown
-     * vendors emit no input flags.
+     * None of the profiles emit `-hwaccel_output_format`, so decoded frames land
+     * in system memory where the software scale/tonemap filters are valid. Any
+     * re-upload required by a HW encoder (VAAPI/QSV) is added to the filter
+     * chain by {@see hwaccelUploadFilter()}, not here.
      *
      * @param HwaccelCapability $capability The probed hardware capability
      *
@@ -1818,43 +1827,44 @@ class FfmpegRunner
      */
     private function buildHwaccelInputFlags(HwaccelCapability $capability): string
     {
-        $extra = $capability->extra_args;
-
-        switch (strtolower($capability->vendor)) {
-            case 'vaapi':
-                $device = (isset($extra['device']) && is_string($extra['device']) && $extra['device'] !== '')
-                    ? $extra['device']
-                    : '/dev/dri/renderD128';
-
-                return ' -hwaccel vaapi -hwaccel_device ' . escapeshellarg($device)
-                    . ' -hwaccel_output_format vaapi';
-
-            case 'qsv':
-                $device = (isset($extra['device']) && is_string($extra['device']) && $extra['device'] !== '')
-                    ? $extra['device']
-                    : '/dev/dri/renderD128';
-
-                return ' -hwaccel qsv -qsv_device ' . escapeshellarg($device);
-
-            case 'nvenc':
-            case 'cuda':
-                $flags = ' -hwaccel cuda';
-                $deviceIndex = $extra['device_index'] ?? null;
-                if (is_int($deviceIndex)) {
-                    $flags .= ' -hwaccel_device ' . $deviceIndex;
-                }
-
-                return $flags . ' -hwaccel_output_format cuda';
-
-            case 'videotoolbox':
-                return ' -hwaccel videotoolbox';
-
-            case 'amf':
-                return ' -hwaccel d3d11va';
-
-            default:
-                return '';
+        if ($this->hwaccelRegistry === null) {
+            return '';
         }
+
+        $this->hwaccelProfileFactory ??= new HwaccelProfileFactory($this->hwaccelRegistry);
+
+        $profile = $this->hwaccelProfileFactory->getProfileForVendor($capability->vendor);
+        if ($profile === null) {
+            return '';
+        }
+
+        return $profile->getInputDeviceArgs($capability);
+    }
+
+    /**
+     * Returns the filter needed to upload system-memory frames to a hardware
+     * frames context for encoders that cannot consume system-memory frames.
+     *
+     * After the input flags decode into system memory (no
+     * `-hwaccel_output_format`) and the software scale/tonemap filters run,
+     * VAAPI and QSV encoders (`h264_vaapi`, `h264_qsv`, …) still require the
+     * frames to be uploaded to a HW surface. NVENC / VideoToolbox / AMF
+     * encoders accept system-memory frames directly, so no upload is needed and
+     * an empty string is returned.
+     *
+     * @param string $vendor The hardware vendor identifier
+     *
+     * @return string The trailing filter (empty when no upload is required)
+     *
+     * @since 0.36.0
+     */
+    private function hwaccelUploadFilter(string $vendor): string
+    {
+        return match (strtolower($vendor)) {
+            'vaapi' => 'format=nv12,hwupload',
+            'qsv' => 'format=nv12,hwupload=extra_hw_frames=64',
+            default => '',
+        };
     }
 
     /**

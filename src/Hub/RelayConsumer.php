@@ -17,6 +17,9 @@ use Phlix\Server\Http\Response as ServerResponse;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
 use Phlix\Shared\Relay\RelayHttpRequest;
+use Phlix\Shared\Relay\RelayHttpRequestChunk;
+use Phlix\Shared\Relay\RelayHttpRequestCodec;
+use Phlix\Shared\Relay\RelayHttpRequestHead;
 use Phlix\Shared\Relay\RelayHttpResponseCodec;
 use Phlix\Shared\Relay\RelayHttpResponseHead;
 use Throwable;
@@ -105,6 +108,24 @@ final class RelayConsumer
      */
     private const DISPATCH_DEADLINE_SECONDS = 30;
 
+    /**
+     * Maximum total size (bytes) of a reassembled chunked relayed request body.
+     *
+     * A chunked HTTP_REQUEST (HB-2.1) whose accumulated body exceeds this cap is
+     * dropped with a 413 and its accumulator discarded, so a malicious or broken
+     * producer cannot grow a resident worker's memory without bound. 25 MiB
+     * comfortably covers artwork/poster uploads while staying bounded.
+     */
+    private const MAX_REASSEMBLED_REQUEST_BODY = 26214400;
+
+    /**
+     * Maximum number of concurrent in-flight chunked-request assemblies.
+     *
+     * A HEAD chunk that would exceed this is refused with 503 so an attacker
+     * cannot open unbounded accumulators by sending many HEADs that never END.
+     */
+    private const MAX_CONCURRENT_REQUEST_ASSEMBLIES = 128;
+
     /** @var RelayConfig */
     private RelayConfig $config;
 
@@ -154,6 +175,21 @@ final class RelayConsumer
      * @var array<int, AsyncTcpConnection>
      */
     private array $localConnections = [];
+
+    /**
+     * In-flight chunked-request assemblies keyed by relay request id (HB-2.1).
+     *
+     * A relayed request whose body exceeds a single 65535-byte frame arrives as
+     * an HTTP_REQUEST HEAD chunk, then zero or more BODY chunks, then an END
+     * chunk, all sharing one request id (see {@see RelayHttpRequestCodec}). This
+     * map accumulates the head + raw body bytes between those frames and is
+     * finalized (and cleared) on END. It is also cleared on cancel and tunnel
+     * teardown so a producer that never sends END cannot leak memory in the
+     * resident worker.
+     *
+     * @var array<int, array{head: RelayHttpRequestHead, body: string, size: int}>
+     */
+    private array $requestAccumulators = [];
 
     /**
      * Factory that opens the outbound hub WS connection.
@@ -268,6 +304,7 @@ final class RelayConsumer
         }
 
         $this->recvBuffer = '';
+        $this->requestAccumulators = [];
         $this->state = self::STATE_DISCONNECTED;
 
         $this->logger->info('RelayConsumer stopped');
@@ -735,6 +772,8 @@ final class RelayConsumer
         $requestId = $frame->channelId();
 
         if ($this->httpDispatcher === null) {
+            // Drop any partial assembly for this id; we cannot service it.
+            $this->discardRequestAccumulator($requestId);
             $this->logger->warning('RelayConsumer: HTTP_REQUEST received but no dispatcher configured', [
                 'request_id' => $requestId,
             ]);
@@ -742,8 +781,23 @@ final class RelayConsumer
             return;
         }
 
+        $payload = $frame->payload;
+
+        // Chunked request framing (HB-2.1): a payload whose first byte is a
+        // RelayHttpRequestCodec tag (HEAD 0x01 / BODY 0x02 / END 0x03) is one
+        // chunk of a multi-frame request sharing this request id. The legacy
+        // single-frame JSON envelope always begins with '{' (0x7B), which never
+        // collides with the tag bytes, so the first byte unambiguously selects
+        // the path. An empty payload falls through to the legacy branch, which
+        // rejects it as malformed exactly as before (back-compat preserved).
+        if ($payload !== '' && $this->isChunkedRequestFrame($payload)) {
+            $this->onHttpRequestChunk($requestId, $payload);
+            return;
+        }
+
+        // Legacy single-frame path (small/empty body) — behaviour unchanged.
         try {
-            $envelope = RelayHttpRequest::fromJson($frame->payload);
+            $envelope = RelayHttpRequest::fromJson($payload);
         } catch (Throwable $e) {
             $this->logger->warning('RelayConsumer: malformed HTTP_REQUEST envelope', [
                 'request_id' => $requestId,
@@ -753,6 +807,187 @@ final class RelayConsumer
             return;
         }
 
+        $this->dispatchEnvelope($requestId, $envelope);
+    }
+
+    /**
+     * Whether an HTTP_REQUEST frame payload is a chunked-request tag-byte frame
+     * ({@see RelayHttpRequestCodec} HEAD/BODY/END) rather than a legacy
+     * single-frame {@see RelayHttpRequest} JSON envelope.
+     *
+     * The caller guarantees `$payload !== ''`.
+     *
+     * @param string $payload Non-empty HTTP_REQUEST frame payload.
+     *
+     * @return bool True when the first byte is a codec tag byte.
+     *
+     * @since 0.19.0
+     */
+    private function isChunkedRequestFrame(string $payload): bool
+    {
+        $tag = ord($payload[0]);
+
+        return $tag === RelayHttpRequestCodec::TAG_HEAD
+            || $tag === RelayHttpRequestCodec::TAG_BODY
+            || $tag === RelayHttpRequestCodec::TAG_END;
+    }
+
+    /**
+     * Accumulate one chunk of a multi-frame relayed request and, on END,
+     * reassemble + dispatch the full {@see RelayHttpRequest} (HB-2.1).
+     *
+     * Mirrors the hub's response-side reassembly: a per-request-id accumulator
+     * carries the HEAD (method/path/headers) and the concatenated raw BODY
+     * bytes; END finalizes it. The accumulated body is capped
+     * ({@see self::MAX_REASSEMBLED_REQUEST_BODY}) and the accumulator is dropped
+     * on overflow, duplicate HEAD, or END/BODY-without-HEAD so the resident
+     * worker cannot be driven to grow memory without bound.
+     *
+     * @param int    $requestId Hub-allocated request id (shared by all chunks).
+     * @param string $payload   Non-empty tag-byte chunk payload.
+     *
+     * @return void
+     *
+     * @since 0.19.0
+     */
+    private function onHttpRequestChunk(int $requestId, string $payload): void
+    {
+        try {
+            $chunk = RelayHttpRequestCodec::decode($payload);
+        } catch (Throwable $e) {
+            $this->logger->warning('RelayConsumer: malformed HTTP_REQUEST chunk', [
+                'request_id' => $requestId,
+                'error' => $e->getMessage(),
+            ]);
+            $this->discardRequestAccumulator($requestId);
+            $this->sendHttpError($requestId, 400, 'malformed relay request chunk');
+            return;
+        }
+
+        switch ($chunk->kind) {
+            case RelayHttpRequestChunk::KIND_HEAD:
+                if (isset($this->requestAccumulators[$requestId])) {
+                    $this->logger->warning('RelayConsumer: duplicate HTTP_REQUEST HEAD chunk', [
+                        'request_id' => $requestId,
+                    ]);
+                    $this->discardRequestAccumulator($requestId);
+                    $this->sendHttpError($requestId, 400, 'duplicate relay request head');
+                    return;
+                }
+
+                if (count($this->requestAccumulators) >= self::MAX_CONCURRENT_REQUEST_ASSEMBLIES) {
+                    $this->logger->warning('RelayConsumer: too many concurrent chunked requests', [
+                        'request_id' => $requestId,
+                        'in_flight' => count($this->requestAccumulators),
+                    ]);
+                    $this->sendHttpError($requestId, 503, 'too many concurrent relay requests');
+                    return;
+                }
+
+                // $chunk->head is guaranteed non-null for a HEAD chunk (codec contract).
+                /** @var RelayHttpRequestHead $head */
+                $head = $chunk->head;
+                $this->requestAccumulators[$requestId] = [
+                    'head' => $head,
+                    'body' => '',
+                    'size' => 0,
+                ];
+                return;
+
+            case RelayHttpRequestChunk::KIND_BODY:
+                if (!isset($this->requestAccumulators[$requestId])) {
+                    $this->logger->warning('RelayConsumer: HTTP_REQUEST BODY chunk before HEAD', [
+                        'request_id' => $requestId,
+                    ]);
+                    $this->sendHttpError($requestId, 400, 'relay request body before head');
+                    return;
+                }
+
+                $newSize = $this->requestAccumulators[$requestId]['size'] + strlen($chunk->body);
+                if ($newSize > self::MAX_REASSEMBLED_REQUEST_BODY) {
+                    $this->logger->warning('RelayConsumer: reassembled request body exceeds cap', [
+                        'request_id' => $requestId,
+                        'size' => $newSize,
+                        'cap' => self::MAX_REASSEMBLED_REQUEST_BODY,
+                    ]);
+                    $this->discardRequestAccumulator($requestId);
+                    $this->sendHttpError($requestId, 413, 'relay request body too large');
+                    return;
+                }
+
+                $this->requestAccumulators[$requestId]['body'] .= $chunk->body;
+                $this->requestAccumulators[$requestId]['size'] = $newSize;
+                return;
+
+            case RelayHttpRequestChunk::KIND_END:
+                if (!isset($this->requestAccumulators[$requestId])) {
+                    $this->logger->warning('RelayConsumer: HTTP_REQUEST END chunk before HEAD', [
+                        'request_id' => $requestId,
+                    ]);
+                    $this->sendHttpError($requestId, 400, 'relay request end before head');
+                    return;
+                }
+
+                $acc = $this->requestAccumulators[$requestId];
+                // Finalize: remove the accumulator before dispatch so a slow
+                // dispatch cannot pin it and a late duplicate END is a no-op.
+                unset($this->requestAccumulators[$requestId]);
+
+                try {
+                    $head = $acc['head'];
+                    $envelope = new RelayHttpRequest(
+                        $head->method,
+                        $head->path,
+                        $head->query,
+                        $head->headers,
+                        $acc['body'],
+                    );
+                    // Inherit the same method/path safety gate fromJson applies.
+                    $envelope->assertSafe();
+                } catch (Throwable $e) {
+                    $this->logger->warning('RelayConsumer: invalid reassembled relay request', [
+                        'request_id' => $requestId,
+                        'error' => $e->getMessage(),
+                    ]);
+                    $this->sendHttpError($requestId, 400, 'malformed relay request');
+                    return;
+                }
+
+                $this->dispatchEnvelope($requestId, $envelope);
+                return;
+        }
+    }
+
+    /**
+     * Discard any in-flight chunked-request assembly for a request id.
+     *
+     * @param int $requestId Relay request id.
+     *
+     * @return void
+     *
+     * @since 0.19.0
+     */
+    private function discardRequestAccumulator(int $requestId): void
+    {
+        unset($this->requestAccumulators[$requestId]);
+    }
+
+    /**
+     * Dispatch a fully-decoded request envelope through the local app and send
+     * the response back over the tunnel.
+     *
+     * Shared tail of both the legacy single-frame path and the chunked
+     * reassembly path.
+     *
+     * @param int             $requestId Relay request id.
+     * @param RelayHttpRequest $envelope  Decoded request envelope.
+     *
+     * @return void
+     *
+     * @since 0.19.0
+     */
+    private function dispatchEnvelope(int $requestId, RelayHttpRequest $envelope): void
+    {
         $response = $this->dispatchWithDeadline($requestId, $envelope);
 
         if ($response === null) {
@@ -1212,6 +1447,10 @@ final class RelayConsumer
             'request_id' => $channelId,
         ]);
 
+        // Drop any partial chunked-request assembly for this id so a cancelled
+        // request in mid-upload cannot leave a dangling accumulator.
+        $this->discardRequestAccumulator($channelId);
+
         // Close the local connection to abort any in-progress streaming response.
         // The requestId in the frame IS the channelId (set by the hub at
         // CLIENT_CONNECT time and echoed in every client-scoped frame).
@@ -1432,6 +1671,8 @@ final class RelayConsumer
         $this->lastDisconnectTime = new \DateTimeImmutable();
         $this->connection = null;
         $this->recvBuffer = '';
+        // Abandon any in-flight chunked-request assemblies — their tunnel is gone.
+        $this->requestAccumulators = [];
 
         if ($this->heartbeatTimer !== null) {
             Timer::del($this->heartbeatTimer);

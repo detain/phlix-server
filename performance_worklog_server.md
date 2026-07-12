@@ -903,3 +903,90 @@ neither `start.php` nor `public/index.php` needed mirroring.
 FOLLOW-UPS (owned by the phase coordinator, not this task): hub emission unit test
 (RelayProxyManager >64KB → HEAD+N·BODY+END on one requestId) + the full end-to-end
 hub-emit → server-reassemble round-trip integration test.
+
+## Reviewer — X2/HB-2.1 server side (post-deps verify) — 2026-07-12
+
+Post-pause re-verification after the external deps change. Server HEAD is now
+`9fe18fa9 deps: source detain/phlix-shared from Packagist (^0.20.0), drop dev path repo`.
+The X2 implementer's OLD approach (dev path repo → v0.18.0, ref 216ea5d) has been
+REPLACED: `phlix-shared` is now sourced from Packagist `^0.20.0`. The exact ref the
+implementer pinned no longer applies, so this pass re-confirms the reassembly work
+survived the swap.
+
+### (1) Master-green status — X2/HB-2.1 targeted gates (actual output)
+
+- `composer install` → `Nothing to install, update or remove` (lock in sync; only the
+  known abandoned-package + PSR-4 skip notices, both pre-existing/cosmetic).
+- **Request codec vendored (^0.20.0):**
+  `vendor/detain/phlix-shared/src/Relay/RelayHttpRequestCodec.php` (5874 B),
+  `RelayHttpRequestHead.php` (5169 B), `RelayHttpRequestChunk.php` (1275 B),
+  `RelayHttpRequest.php` (11172 B) — ALL PRESENT.
+  `composer.lock` → `detain/phlix-shared 0.20.0`, dist type `zip`, ref `94458ab7…`
+  (Packagist-sourced, no path repo). NOT a RED blocker — the reassembly code's codec
+  dependency resolves.
+- `phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (645 files, 0 errors).
+- `phpunit --filter 'RelayConsumer|RelayHttpRequest'` → **OK (45 tests, 227 assertions)**.
+- `phpcs --standard=PSR12 src/Hub/RelayConsumer.php` → **0 errors**.
+
+Broader `phpunit --testsuite Unit` sanity (OUT OF SCOPE for this step): 4907 tests,
+11 errors / 21 failures. All reds are in unrelated domains and NONE touch
+RelayConsumer / RelayHttpRequest / phlix-shared, and NONE are caused by the deps bump:
+- SV-4.13 command-builder drift: `FfmpegRunnerTest::testBuildTranscodeCommand*`,
+  `FfmpegRunnerHlsTest::testBuildHlsCommand*`, `TranscodeManagerTest::*` (whole-file
+  builder removals — separate step).
+- SV-2.8 stream drift: `ItemRepositoryTest::testAddStream*`.
+- Other pre-existing/domain-or-env reds: `ThemeMediaStreamControllerTest`,
+  `PhotoControllerTest`, `AudiobookControllerTest` (Range requests),
+  `BookProgressStoreTest`, `LibraryMetadataMatcherTest`, `SyncPlayManagerTest`,
+  `LibraryScanWorkerTest`, `LibraryScanCommandTest`.
+These are tracked under their own steps; the deps swap only changed phlix-shared
+sourcing (path→Packagist, 0.18→0.20) and the relay-codec content is byte-for-byte the
+`@since 0.17.0` API the reassembly targets. The X2/HB-2.1 slice is GREEN.
+
+### (2) Request codec confirmed vendored via ^0.20.0
+
+`RelayHttpRequestCodec` / `RelayHttpRequestHead` / `RelayHttpRequestChunk` /
+`RelayHttpRequest` are all present in the Packagist-sourced `0.20.0` package. The codec
+constants are unchanged from the version the implementer coded against:
+`TAG_HEAD=0x01`, `TAG_BODY=0x02`, `TAG_END=0x03`, `MAX_BODY_CHUNK=65534`;
+chunk kinds `KIND_HEAD='head'`, `KIND_BODY='body'`, `KIND_END='end'`;
+`RelayHttpRequest(method, path, query, headers, body)` + `assertSafe()`;
+`RelayHttpRequestHead(method, path, query, headers)` + `withBodySize()`. No 0.18→0.20
+API drift that affects the reassembly.
+
+### (3) Confirming review of the reassembly (RelayConsumer::onHttpRequest + accumulator + tests)
+
+Reviewed `src/Hub/RelayConsumer.php:770-973` (branch/accumulator/finalize),
+`:1442-1452` (cancel), `:306-308`/`:1668-1675` (teardown), and
+`tests/Unit/Hub/RelayConsumerTest.php:819-1068`. Verified against the ^0.20.0 codec API:
+
+- First-byte branch (`isChunkedRequestFrame`, :826-833) tests exactly
+  `RelayHttpRequestCodec::TAG_HEAD/BODY/END`; legacy JSON envelope begins `{` (0x7B),
+  which cannot collide with 0x01/0x02/0x03 — unambiguous. Empty payload falls through
+  to the legacy branch and is rejected 400 as before (back-compat preserved).
+- Per-requestId accumulator: HEAD opens (rejects duplicate HEAD → 400+clear; rejects
+  when ≥128 concurrent → 503 without opening); BODY appends raw `$chunk->body`
+  (rejects body-before-HEAD → 400; enforces the 25 MiB / 26214400-byte cap →
+  413+clear); END finalizes — accumulator is `unset` BEFORE dispatch (slow dispatch
+  can't pin it; late duplicate END is a no-op), rebuilds the full `RelayHttpRequest`
+  with the byte-identical concatenated binary body and calls `assertSafe()` (same
+  method/path gate `fromJson` applies) before `dispatchEnvelope`.
+- Abuse guards all present: 25 MiB cap→413, 128-assembly cap→503,
+  orphan BODY/END→400, duplicate HEAD→400, malformed chunk/head→400+clear.
+- No resident-worker leak: accumulator cleared on END, on decode error, on overflow,
+  on duplicate HEAD, on missing-dispatcher, on HTTP_CANCEL (:1452), and the whole map
+  is reset on stop (:307) and disconnect (:1675).
+- Tests genuinely exercise the REAL vendored codec: the binary-body test
+  (`test_http_request_chunked_reassembles_binary_body_and_dispatches`, :819) builds a
+  140000-byte body spanning the full 0x00–0xFF range via
+  `RelayHttpRequestCodec::encodeHead/chunkBody/encodeEnd`, asserts >2 BODY frames,
+  asserts NO dispatch before END, and asserts the reassembled `rawBody` is
+  byte-identical. Companion tests cover legacy single-frame-with-body (:890),
+  body-before-HEAD 400 (:923), END-before-HEAD 400 (:941), duplicate HEAD 400+clear
+  (:959), malformed HEAD 400 (:983), overflow 413+clear (:1005), and
+  HTTP_CANCEL clears the pending accumulator (:1044) — each asserting the
+  accumulator count returns to 0.
+
+**NO FINDINGS.** The X2/HB-2.1 server-side chunk reassembly survived the phlix-shared
+path→Packagist ^0.20.0 swap intact, matches the vendored codec API exactly, and is
+correct.

@@ -34,6 +34,17 @@ use Workerman\MySQL\Connection;
  * 2. Then by start_time (earlier first)
  * 3. Skip if no tuner is free
  *
+ * ## Timed stop (SV-3.1c)
+ *
+ * Each tick ({@see tick()}) runs two passes:
+ * 1. {@see processDueRecordings()} — start recordings whose start_time (minus
+ *    pre-padding) has arrived, and arm a per-recording one-shot Workerman timer
+ *    that stops them at their effective end (`end_time + post_padding`).
+ * 2. {@see processCompletedRecordings()} — the safety-net scan: stop any
+ *    in-progress recording whose effective end has already passed but whose
+ *    one-shot timer never fired (e.g. recordings re-attached by boot recovery,
+ *    whose in-memory timer was lost across a restart, or any missed timer).
+ *
  * @since 0.12.0
  */
 class RecordingScheduler
@@ -49,6 +60,15 @@ class RecordingScheduler
 
     /** @var StructuredLogger Structured logger instance */
     private StructuredLogger $logger;
+
+    /**
+     * Per-recording one-shot stop timers, keyed by recording_id → Workerman
+     * timer id, so a manual stop / completion can cancel a pending timer and
+     * the count is observable for tests.
+     *
+     * @var array<string, int>
+     */
+    private array $stopTimerIds = [];
 
     /**
      * Creates a new RecordingScheduler instance.
@@ -118,6 +138,13 @@ class RecordingScheduler
                 // Start the recording
                 $success = $this->recorder->startRecording($recordingId);
                 if ($success) {
+                    // Primary timed-stop: arm a per-recording one-shot timer that
+                    // stops this capture at its effective end (end_time +
+                    // post_padding). The safety-net scan
+                    // ({@see processCompletedRecordings()}) covers the case where
+                    // this timer is lost (e.g. across a worker restart).
+                    $this->scheduleStopTimer($recordingId, $row);
+
                     $this->logger->info('Recording started by scheduler', [
                         'recording_id' => $recordingId,
                         'channel_id' => $channelId,
@@ -137,6 +164,179 @@ class RecordingScheduler
         }
 
         return $stats;
+    }
+
+    /**
+     * Run one full scheduler tick: start due recordings AND stop completed ones.
+     *
+     * Invoked by the periodic Workerman timer wired in `start.php` (worker 0
+     * only). Combines the start pass ({@see processDueRecordings()}) with the
+     * timed-stop safety-net scan ({@see processCompletedRecordings()}).
+     *
+     * @return array{
+     *     due: array{started: int, skipped: int, errors: int},
+     *     completed: array{ended: int, errors: int}
+     * } Combined per-pass statistics.
+     *
+     * @since SV-3.1c
+     */
+    public function tick(): array
+    {
+        return [
+            'due' => $this->processDueRecordings(),
+            'completed' => $this->processCompletedRecordings(),
+        ];
+    }
+
+    /**
+     * Safety-net scan: stop recordings whose effective end has passed.
+     *
+     * Delegates the post-padding formula to
+     * {@see Recorder::getRecordingsDueToStop()} (which selects in-progress rows
+     * where `end_time + post_padding <= now`) and calls the authoritative
+     * {@see Recorder::endRecording()} for each. Catches recordings whose
+     * per-recording one-shot timer was lost — e.g. re-attached by boot recovery
+     * after a restart, or a missed timer. Each stop is wrapped in try/catch so a
+     * single failure cannot abort the whole scan.
+     *
+     * @return array{ended: int, errors: int} Processing statistics.
+     *
+     * @since SV-3.1c
+     */
+    public function processCompletedRecordings(): array
+    {
+        $stats = ['ended' => 0, 'errors' => 0];
+
+        foreach ($this->recorder->getRecordingsDueToStop() as $recordingId) {
+            try {
+                if ($this->recorder->endRecording($recordingId)) {
+                    $stats['ended']++;
+                    $this->logger->info('Recording stopped by scheduler (effective end reached)', [
+                        'recording_id' => $recordingId,
+                    ]);
+                }
+                // A pending one-shot timer for this recording is now redundant.
+                $this->cancelStopTimer($recordingId);
+            } catch (\Throwable $e) {
+                $this->logger->error('Error ending due recording', [
+                    'recording_id' => $recordingId,
+                    'error' => $e->getMessage(),
+                ]);
+                $stats['errors']++;
+            }
+        }
+
+        return $stats;
+    }
+
+    /**
+     * Number of pending per-recording one-shot stop timers.
+     *
+     * Exposed for observability / tests (the timers self-clear on fire and are
+     * cancelled when a recording is stopped by the scan).
+     *
+     * @return int
+     *
+     * @since SV-3.1c
+     */
+    public function activeStopTimerCount(): int
+    {
+        return count($this->stopTimerIds);
+    }
+
+    /**
+     * Arm a one-shot timer that stops a recording at its effective end.
+     *
+     * The effective end (`end_time + post_padding`) is computed via the
+     * authoritative {@see Recorder::effectiveEndTime()} so the padding formula is
+     * never duplicated here. A prior timer for the same recording is replaced
+     * (idempotent re-arm). No-op outside a Workerman runtime.
+     *
+     * @param string               $recordingId The recording to stop.
+     * @param array<string, mixed>  $row         The raw `livetv_recordings` row.
+     *
+     * @return void
+     *
+     * @since SV-3.1c
+     */
+    private function scheduleStopTimer(string $recordingId, array $row): void
+    {
+        if (!class_exists(\Workerman\Timer::class)) {
+            return;
+        }
+
+        $endTime = RowAccess::int($row, 'end_time');
+        $postPadding = RowAccess::int($row, 'post_padding_seconds', 60);
+        $effectiveEnd = $this->recorder->effectiveEndTime($endTime, $postPadding);
+
+        // Fire at the effective end, but never sooner than 1s from now.
+        $delay = max(1, $effectiveEnd - time());
+
+        // Replace any prior timer for this recording (idempotent re-arm).
+        $this->cancelStopTimer($recordingId);
+
+        $timerId = \Workerman\Timer::add(
+            $delay,
+            function () use ($recordingId): void {
+                $this->fireStopTimer($recordingId);
+            },
+            [],
+            false, // one-shot
+        );
+
+        if ($timerId > 0) {
+            $this->stopTimerIds[$recordingId] = $timerId;
+        }
+    }
+
+    /**
+     * One-shot stop-timer callback: end the recording, tolerating failures.
+     *
+     * Runs inside a coroutine under the Workerman Swoole event adapter (timer
+     * callbacks are wrapped in Coroutine::create()), so the DB work + process
+     * kill performed by {@see Recorder::endRecording()} run in a valid context.
+     * Wrapped in try/catch so a stop failure can never bubble out of the loop.
+     *
+     * @param string $recordingId The recording to end.
+     *
+     * @return void
+     *
+     * @since SV-3.1c
+     */
+    private function fireStopTimer(string $recordingId): void
+    {
+        unset($this->stopTimerIds[$recordingId]);
+
+        try {
+            $this->recorder->endRecording($recordingId);
+        } catch (\Throwable $e) {
+            $this->logger->error('Timed stop timer failed', [
+                'recording_id' => $recordingId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Cancel and forget a pending per-recording stop timer.
+     *
+     * @param string $recordingId The recording whose timer to cancel.
+     *
+     * @return void
+     *
+     * @since SV-3.1c
+     */
+    private function cancelStopTimer(string $recordingId): void
+    {
+        if (!isset($this->stopTimerIds[$recordingId])) {
+            return;
+        }
+
+        if (class_exists(\Workerman\Timer::class)) {
+            \Workerman\Timer::del($this->stopTimerIds[$recordingId]);
+        }
+
+        unset($this->stopTimerIds[$recordingId]);
     }
 
     /**

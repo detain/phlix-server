@@ -775,34 +775,149 @@ class Recorder
     }
 
     /**
-     * End a scheduled recording at end_time + post_padding.
+     * End a scheduled recording at its effective end (end_time + post_padding).
      *
-     * Called by the recording scheduler when the effective end time is
-     * reached (scheduled end time plus configured post-padding). This is
-     * the timed stop path — unlike {@see stopRecording()} (manual stop),
-     * this one also triggers the post-padding gap closure and marks the
-     * recording as completed with the actual end time.
+     * This is the AUTHORITATIVE timed-stop path and the single place the
+     * post-padding is applied when finishing a recording. It is invoked by the
+     * {@see \Phlix\LiveTv\Recording\RecordingScheduler} — either the
+     * per-recording one-shot stop timer armed when the capture starts, or the
+     * safety-net scan ({@see getRecordingsDueToStop()}) — only once
+     * `time()` has reached the effective end.
+     *
+     * NOTE: {@see scheduleRecording()} persists the RAW programme `end_time`
+     * (the guide's scheduled end), NOT `end_time + post_padding`. The padding is
+     * therefore applied at stop time here (and mirrored, for the SQL scan, in
+     * {@see getRecordingsDueToStop()} and, for the timer delay, via
+     * {@see effectiveEndTime()}) — never folded into the stored `end_time`, so a
+     * displayed schedule keeps its true programme boundaries and padding is never
+     * double-counted.
+     *
+     * When the recording is live in this worker's memory the real ffmpeg process
+     * is terminated via {@see stopRecording()}. As a safety net, when the row is
+     * still `recording` in the DB but has no in-memory handle on this worker
+     * (e.g. its owning one-shot timer was lost across a restart), any stored pid
+     * that is still alive is killed and the row is transitioned to `completed`
+     * so the periodic scan cannot keep re-selecting it forever.
      *
      * @param string $recordingId The recording to end
-     * @return bool True if ended successfully, false if not active
+     * @return bool True if ended (stopped or reconciled), false otherwise
      *
      * @since SV-3.1
+     * @since SV-3.1c Authoritative post-padding + orphan reconcile.
      */
     public function endRecording(string $recordingId): bool
     {
-        if (!isset($this->activeRecordings[$recordingId])) {
-            return false;
-        }
-
         $recording = $this->getRecording($recordingId);
-        if (!$recording) {
+        if ($recording === null) {
             return false;
         }
 
-        // The post-padding gap is already accounted for in the scheduled
-        // end_time stored in the DB (it was written as end_time + post_padding
-        // when the recording was scheduled). Just stop now.
-        return $this->stopRecording($recordingId);
+        $endTime = is_int($recording['end_time'] ?? null) ? $recording['end_time'] : 0;
+        $postPadding = is_int($recording['post_padding_seconds'] ?? null)
+            ? $recording['post_padding_seconds']
+            : 60;
+        $effectiveEnd = $this->effectiveEndTime($endTime, $postPadding);
+
+        $this->logger->info('Ending recording at effective end (end_time + post_padding)', [
+            'recording_id' => $recordingId,
+            'scheduled_end' => $endTime,
+            'post_padding' => $postPadding,
+            'effective_end' => $effectiveEnd,
+        ]);
+
+        // Live in this worker's memory: stop the real ffmpeg process.
+        if (isset($this->activeRecordings[$recordingId])) {
+            return $this->stopRecording($recordingId);
+        }
+
+        // Safety-net reconcile: still `recording` in the DB but no in-memory
+        // handle on this worker. Kill any stored pid still alive and finalise the
+        // row so the scan does not loop on it.
+        if ($recording['status'] === self::STATUS_RECORDING) {
+            $pid = self::asPid($recording['pid'] ?? null);
+            if ($pid !== null && $this->isPidAlive($pid)) {
+                $this->terminateRecording($pid);
+            }
+
+            $filePath = $this->getRecordingPath($recordingId);
+            $fileSize = file_exists($filePath) ? filesize($filePath) : 0;
+
+            $this->db->query(
+                "UPDATE livetv_recordings
+                 SET status = ?, end_time = ?, storage_size = ?, updated_at = NOW()
+                 WHERE recording_id = ?",
+                [self::STATUS_COMPLETED, time(), $fileSize, $recordingId]
+            );
+
+            $this->fireOnCompleteCallbacks($recordingId, $filePath);
+
+            $this->logger->info('Recording ended via reconcile (no in-memory handle)', [
+                'recording_id' => $recordingId,
+            ]);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Compute the authoritative effective end time of a recording.
+     *
+     * A recording runs until its scheduled programme `end_time` PLUS the
+     * configured post-padding. This is the single source of truth for the
+     * post-padding formula: both the per-recording one-shot stop timer
+     * (armed by {@see \Phlix\LiveTv\Recording\RecordingScheduler}) and
+     * {@see getRecordingsDueToStop()} derive the stop moment from it, so the
+     * padding is never re-derived ad-hoc at a call site.
+     *
+     * @param int $endTime Scheduled programme end time (unix seconds).
+     * @param int $postPaddingSeconds Post-roll padding in seconds.
+     * @return int Effective stop time (unix seconds) = end_time + max(0, padding).
+     *
+     * @since SV-3.1c
+     */
+    public function effectiveEndTime(int $endTime, int $postPaddingSeconds): int
+    {
+        return $endTime + max(0, $postPaddingSeconds);
+    }
+
+    /**
+     * Find in-progress recordings whose effective end has already passed.
+     *
+     * The effective end is `end_time + post_padding_seconds` (the authoritative
+     * post-padding formula, expressed here in SQL). This is the safety-net scan
+     * the {@see \Phlix\LiveTv\Recording\RecordingScheduler} runs each tick to
+     * stop recordings whose per-recording one-shot timer never fired — e.g.
+     * recordings re-attached by boot recovery (whose in-memory timer was lost)
+     * or any missed timer.
+     *
+     * @param int|null $now Reference time (defaults to time()); injectable for tests.
+     * @return array<int, string> recording_ids due to be stopped.
+     *
+     * @since SV-3.1c
+     */
+    public function getRecordingsDueToStop(?int $now = null): array
+    {
+        $now ??= time();
+
+        $result = $this->db->query(
+            "SELECT recording_id FROM livetv_recordings
+             WHERE status = ?
+               AND (end_time + COALESCE(post_padding_seconds, 60)) <= ?
+             ORDER BY end_time ASC",
+            [self::STATUS_RECORDING, $now]
+        );
+
+        $ids = [];
+        foreach (RowQuery::rows($result) as $row) {
+            $id = self::asString($row['recording_id'] ?? '');
+            if ($id !== '') {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
     }
 
     /**

@@ -370,6 +370,19 @@ return [
          * @default true
          */
         'auto_resolution' => true,
+
+        /**
+         * DVR scheduler tick interval in seconds (SV-3.1c).
+         *
+         * How often the daemon (worker 0 only) scans for scheduled recordings
+         * that are due to START (start_time - pre_padding <= now) and in-progress
+         * recordings that are due to STOP (end_time + post_padding <= now). The
+         * scan is the safety net for the per-recording one-shot stop timers, so
+         * this also bounds the maximum stop overrun after a worker restart.
+         *
+         * @default 30
+         */
+        'scheduler_interval_seconds' => 30,
     ],
 
     /**

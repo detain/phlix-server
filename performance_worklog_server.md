@@ -1488,3 +1488,106 @@ controller only does path lookups; cross-worker state is an SV-3.1f/timeshift co
 precedence the provider's `dvrStorage()` uses, so the two cannot diverge given identical config keys.
 
 **Verdict: NO FINDINGS.**
+
+## Implementer — SV-3.1c (scheduler Timer + timed-stop + padding fix) — 2026-07-12
+
+Sub-step **c** on top of the foundation (`39899c70`). Wires the production scheduler
+Timer, the per-recording timed stop, the safety-net scan, and fixes the padding bug.
+NOT marked done — Review/Test pending. **Git NOT run here** (Phase Coordinator owns the
+git cycle); working tree carries the change for the coordinator to commit/push in two
+commits (impl + tests, messages below).
+
+### The padding bug + the fix (authoritative in Recorder)
+`scheduleRecording()` persists the RAW programme `end_time` (guide boundary) + a separate
+`post_padding_seconds` column — it does NOT fold padding into `end_time`. The old
+`endRecording()` docblock/comment FALSELY claimed "end_time already = end_time + post_padding"
+and just stopped immediately. Fix: padding is now applied at STOP time, authoritatively in the
+Recorder, and NEVER folded into the stored `end_time` (so schedules keep true boundaries and
+padding can't double-count). One formula, three consumers, all in `Recorder`:
+- `Recorder::effectiveEndTime(int $endTime, int $postPadding): int` — the single formula
+  (`end_time + max(0,padding)`); used by the scheduler to compute the one-shot timer delay.
+- `Recorder::getRecordingsDueToStop(?int $now=null): array<string>` — the scan, expressing the
+  formula in SQL: `status='recording' AND (end_time + COALESCE(post_padding_seconds,60)) <= now`.
+- `Recorder::endRecording()` — rewritten as the AUTHORITATIVE timed-stop entry. Live-in-memory →
+  `stopRecording()` (kills ffmpeg, status→completed). Orphan safety net (row still `recording`
+  but no in-memory handle on this worker, e.g. timer lost across restart) → kill any live stored
+  pid + UPDATE status=completed + fire onComplete, so the scan can't loop forever. Corrected the
+  misleading comment.
+
+### Scheduler (RecordingScheduler) — start + timed-stop
+- `processDueRecordings()` (starts) now arms a **per-recording one-shot** `Workerman\Timer`
+  after a successful `startRecording()`, at `effectiveEndTime(end_time, post_padding) - now`
+  (min 1s), keyed in `stopTimerIds` (guarded `class_exists(\Workerman\Timer::class)`, `[], false`
+  one-shot; idempotent re-arm; `Timer::del` on cancel). The timer callback (`fireStopTimer`)
+  wraps `endRecording()` in try/catch.
+- `processCompletedRecordings()` (NEW safety-net scan) — iterates
+  `recorder->getRecordingsDueToStop()`, calls the authoritative `endRecording()` per id, cancels
+  any lingering timer; each stop in its own try/catch so one failure can't abort the scan.
+- `tick()` (NEW) — runs BOTH passes; this is what the production Timer calls.
+- `activeStopTimerCount()` (NEW, test observability).
+
+### Production Timer wiring (start.php, daemon-only, worker 0)
+Added a periodic `\Workerman\Timer::add($schedulerInterval, fn → $scheduler->tick())` inside the
+HTTP `onWorkerStart`, gated `(int)$w->id === 0` (same gate as the SV-3.1e boot recovery) so it
+runs on ONE worker not 14. Cadence from `config/livetv.php` `dvr.scheduler_interval_seconds`
+(default **30s**), sanitized. Wiring + tick body both wrapped in try/catch (a scan error can never
+kill the worker) and logs "DVR scheduler timer armed". NOT mirrored in `public/index.php` (CGI
+runs no timers — dual-entrypoint §0.3 satisfied; no ctor/DI signature changed, DI via the existing
+`LiveTvServicesProvider` singletons).
+
+### Coroutine/Swoole correctness (§0.3)
+The Workerman Swoole event adapter wraps EVERY timer callback in `Coroutine::create()`
+(`Events/Swoole.php::safeCall`, verified), so `getCid()>0` holds inside both the periodic tick and
+the one-shot stop callbacks → the hooked-PDO DB work in `tick()`/`endRecording()` runs in a valid
+coroutine context. No NEW subprocess spawn/kill is introduced by this sub-step (the stop reuses the
+foundation's `terminateRecording()` which uses `posix_kill` — a syscall, not exec — with a
+`shell_exec` fallback only when posix is absent; `SWOOLE_HOOK_NATIVE_CURL`/exec mask untouched). All
+new callbacks additionally have explicit try/catch on top of `safeCall`'s.
+
+### Files changed
+- `src/LiveTv/Recorder.php` — `endRecording()` rewrite (authoritative padding + orphan reconcile);
+  NEW `effectiveEndTime()`, `getRecordingsDueToStop()`.
+- `src/LiveTv/Recording/RecordingScheduler.php` — `stopTimerIds` state; `processDueRecordings()`
+  arms one-shot stop timer; NEW `tick()`, `processCompletedRecordings()`, `activeStopTimerCount()`,
+  `scheduleStopTimer()`, `fireStopTimer()`, `cancelStopTimer()`.
+- `start.php` — worker-0 periodic scheduler Timer wiring (after the boot-recovery block).
+- `config/livetv.php` — NEW `dvr.scheduler_interval_seconds` (default 30).
+
+### Tests (added/extended)
+- NEW `tests/Unit/LiveTv/RecorderTimedStopTest.php` (5): `effectiveEndTime` applies/clamps padding;
+  `getRecordingsDueToStop` scan SQL asserts `end_time + COALESCE(post_padding_seconds, 60)` +
+  `status='recording'` + `now` bind (**the padding-applied assertion**); `endRecording` false when
+  not found; `endRecording` reconciles an overdue `recording` row → exactly one UPDATE to COMPLETED
+  + onComplete fires.
+- EXTENDED `tests/Unit/LiveTv/Recording/RecordingSchedulerTest.php` (+4, +`new Worker()` in setUp +
+  `fakeResult`): starting a due recording arms exactly one stop timer via
+  `effectiveEndTime(end_time, post_padding)` (mock `expects(...)->with($endTime, 90)` — **padding
+  applied in the timer path**); scan ends all due recordings; scan isolates a failure (1 ended,
+  1 error); `tick()` runs both passes.
+
+### Verification (actual)
+- `./vendor/bin/phpstan analyse -c phpstan.neon.dist` → **[OK] No errors** (646 files).
+- `./vendor/bin/phpunit --testsuite Unit --no-coverage` → **Tests: 4931, 0 failures, 0 errors**
+  (4 warnings / 8 skipped, pre-existing). `--filter 'RecorderTimedStop|RecordingScheduler'` → 14 OK;
+  `--filter 'Recorder|RecordingScheduler|LiveTvServicesProvider'` → 43 OK.
+- `./vendor/bin/phpcs --standard=PSR12` on `src/LiveTv/Recorder.php` + `RecordingScheduler.php` →
+  **0 errors** (2 pre-existing >120-char warnings on untouched lines 191/1538 of Recorder). `phpcs`
+  on `start.php` + both test files → clean.
+
+### Intended commits (for the Coordinator)
+1. `transcode/livetv: SV-3.1c scheduler timer + timed-stop at end_time+post_padding + padding fix`
+   → Recorder.php, RecordingScheduler.php, start.php, config/livetv.php
+2. `SV-3.1c tests: timed-stop padding scan + per-recording stop timer + endRecording reconcile`
+   → RecorderTimedStopTest.php, RecordingSchedulerTest.php
+
+### On-box verification OWED (start.php outside CI)
+Deploy + restart with a `scheduled` (due) and an active `recording` row and confirm: (1)
+"DVR scheduler timer armed" logs once (worker 0); (2) a due schedule starts within one tick and
+a per-recording stop timer is armed; (3) an in-progress recording stops at `end_time + post_padding`
+(timer path) and, after a mid-recording restart, the scan stops it within ≤ scheduler_interval.
+
+### Seams left for later sub-steps (NOT done here)
+- **d** — register the completed `.ts` as a `media_items` row + wire comskip EDL→chapters to the
+  real `media_item_id` (RecordingHooks still has no caller; onComplete fires but no INSERT).
+- **f** — timeshift endpoint (still the 501 stub at `LiveTvStreamController.php:~129`).
+- **g** — storage accounting on real files. **h** — `LiveTvStreamController` tests.

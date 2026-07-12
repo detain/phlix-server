@@ -216,6 +216,61 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         }
     }
 
+    // SV-3.1c: DVR scheduler + timed-stop. Arm a single periodic Timer (worker 0
+    // only, mirroring the boot-recovery gate above so 14 HTTP workers don't each
+    // run the scan) that on every tick (a) starts recordings whose start_time
+    // (minus pre-padding) has arrived — arming a per-recording one-shot stop
+    // timer at end_time + post_padding — and (b) stops any in-progress recording
+    // whose effective end (end_time + post_padding) has already passed but whose
+    // one-shot timer was lost (the boot-recovery / missed-timer safety net). The
+    // Workerman Swoole event adapter wraps every timer callback in
+    // Coroutine::create() (safeCall), so the DB work + process kills inside the
+    // tick run in a valid coroutine context (hooked PDO can yield); the body is
+    // additionally wrapped in try/catch so a scan error can never bubble out and
+    // kill the worker. Timers belong only to the resident daemon — this is NOT
+    // mirrored in public/index.php (single-shot CGI runs no timers).
+    if ((int) $w->id === 0) {
+        try {
+            /** @var \Phlix\LiveTv\Recording\RecordingScheduler $recordingScheduler */
+            $recordingScheduler = $container->get(\Phlix\LiveTv\Recording\RecordingScheduler::class);
+
+            /** @var array<string, mixed> $livetvCfg */
+            $livetvCfg = is_array($config['livetv'] ?? null) ? $config['livetv'] : [];
+            /** @var array<string, mixed> $dvrCfg */
+            $dvrCfg = is_array($livetvCfg['dvr'] ?? null) ? $livetvCfg['dvr'] : [];
+            $intervalRaw = $dvrCfg['scheduler_interval_seconds'] ?? 30;
+            $schedulerInterval = is_int($intervalRaw) && $intervalRaw > 0
+                ? $intervalRaw
+                : ((is_numeric($intervalRaw) && (int) $intervalRaw > 0) ? (int) $intervalRaw : 30);
+
+            \Workerman\Timer::add(
+                $schedulerInterval,
+                static function () use ($recordingScheduler): void {
+                    try {
+                        $recordingScheduler->tick();
+                    } catch (\Throwable $e) {
+                        LoggerFactory::get(LogChannels::LIVETV)->error(
+                            'DVR scheduler tick failed',
+                            ['error' => $e->getMessage()],
+                        );
+                    }
+                },
+            );
+
+            LoggerFactory::get(LogChannels::LIVETV)->info(
+                'DVR scheduler timer armed',
+                ['interval_seconds' => $schedulerInterval],
+            );
+        } catch (\Throwable $e) {
+            // A scheduler-wiring failure must never stop the HTTP worker from
+            // serving. Log and continue.
+            LoggerFactory::get(LogChannels::LIVETV)->error(
+                'DVR scheduler timer wiring failed',
+                ['error' => $e->getMessage()],
+            );
+        }
+    }
+
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);
 

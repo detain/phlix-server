@@ -1890,10 +1890,34 @@ class LibraryMetadataMatcher
             $processed = 0;
             foreach ($matchable as $entry) {
                 $processed++;
-                $hit = $this->executeMatchForItem($entry['item'], $entry['is_series'], $effective);
+                // Per-item try/catch: a single item's failure (resolver error,
+                // malformed metadata, persistence error) is logged on the MEDIA
+                // channel and the run CONTINUES to the next item — one bad item
+                // must never abort the whole library (see class docblock).
+                try {
+                    $hit = $this->executeMatchForItem($entry['item'], $entry['is_series'], $effective);
+                } catch (Throwable $e) {
+                    $this->logger->warning('LibraryMetadataMatcher: item match failed; skipping', [
+                        'library_id' => $libraryId,
+                        'item_id' => $entry['id'],
+                        'name' => $entry['name'],
+                        'error' => $e->getMessage(),
+                    ]);
+                    continue;
+                }
                 if ($hit) {
                     $matched++;
                     $this->logger->debug('LibraryMetadataMatcher: item matched', [
+                        'library_id' => $libraryId,
+                        'item_id' => $entry['id'],
+                        'name' => $entry['name'],
+                        'processed' => $processed,
+                        'matched' => $matched,
+                    ]);
+                } else {
+                    // A processed-but-unmatched item still emits a per-item DEBUG
+                    // line so the log shows every item being visited, not just hits.
+                    $this->logger->debug('LibraryMetadataMatcher: item not matched', [
                         'library_id' => $libraryId,
                         'item_id' => $entry['id'],
                         'name' => $entry['name'],
@@ -1928,6 +1952,12 @@ class LibraryMetadataMatcher
                     if ($hit) {
                         $matched++;
                         $this->logger->debug('LibraryMetadataMatcher: item matched', [
+                            'library_id' => $libraryId,
+                            'item_id' => $entry['id'],
+                            'name' => $entry['name'],
+                        ]);
+                    } else {
+                        $this->logger->debug('LibraryMetadataMatcher: item not matched', [
                             'library_id' => $libraryId,
                             'item_id' => $entry['id'],
                             'name' => $entry['name'],

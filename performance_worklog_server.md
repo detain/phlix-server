@@ -1037,3 +1037,26 @@ Reopened the 15-red `withFile()` cluster (ThemeMediaStreamController ×7, PhotoC
 - `phpunit --testsuite Unit` → `Tests: 4907, Assertions: 38448, Errors: 11, Failures: 6, Skipped: 5`. Failures dropped 21→6; the 15 cleared. Remaining reds are ONLY other buckets: SV-2.8 ItemRepository::testAddStream* (2), SV-4.13 FfmpegRunner*/Hls* (8), SV-3.5 LibraryMetadataMatcher (2), SV-2.9 LibraryScanWorker/LibraryScanCommand (2), BookProgressStore (1), SV-2.6 SyncPlayManager (2). No ThemeMediaStream/Photo/Audiobook reds remain; no NEW reds introduced.
 - `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors`.
 - `phpcs --standard=PSR12` on the 4 touched src files → 0 errors (1 PRE-EXISTING >120-char warning at PhotoController.php:387, outside my diff hunks 427-441).
+
+## Fixer — SV-3.5 — 2026-07-12
+
+Cleared the 2 genuine SV-3.5 reds (`LibraryMetadataMatcherTest::testPerItemExceptionDoesNotAbortRun` ERROR + `testEmitsProgressLogEntriesAsItRuns` failure). Both were real logic gaps in the SEQUENTIAL (non-coroutine) branch of `matchBatchConcurrently()` — PHPUnit CLI never enters a Swoole coroutine, so the sequential path is what tests exercise, and it lacked the per-item try/catch + `not matched` instrumentation that the coroutine branch already had.
+
+**Root cause:**
+- The coroutine fan-out branch (LibraryMetadataMatcher.php ~1936) already wrapped `executeMatchForItem()` in a per-item `try/catch (Throwable)` that logs a MEDIA-channel warning and continues via `finally`. The sequential branch (~1891-1904) called `executeMatchForItem()` bare, so a resolver throwing (`RuntimeException: resolver exploded`) propagated out of the batch loop → out of `matchLibrary()` → aborting the whole run (the remaining `item-good` was never processed). Hence the ERROR + wrong `{matched,processed}`.
+- The sequential branch only emitted `item matched` on a hit; a processed-but-unmatched item emitted nothing, so `item not matched` never reached the DEBUG log the test asserts.
+
+**Fix (impl only, no test contortion):**
+- `src/Media/Metadata/LibraryMetadataMatcher.php` — sequential branch: wrapped the per-item `executeMatchForItem()` in `try/catch (Throwable)`; on throw it logs `LibraryMetadataMatcher: item match failed; skipping` on the injected StructuredLogger (MEDIA channel) with `library_id/item_id/name/error` and `continue`s to the next item (the item still counts as `processed` since `$processed++` runs before the try). On a resolver miss (`$hit === false`) it now emits a per-item DEBUG `LibraryMetadataMatcher: item not matched` line mirroring the existing `item matched` shape.
+- Same `item not matched` DEBUG added to the coroutine branch's `else` for genuine parity, so both execution paths emit identical per-item progress instrumentation (not a test-only hack).
+- Preserved all SV-3.5 work: bounded-concurrency semaphore, coroutine fan-out, 429/backoff (in MetadataHttpClient), bounded cache — untouched. Sequential path still exact-sequential for non-coroutine callers.
+
+**Behaviour now:** one item's exception is isolated per-item, logged, and the run continues to process every subsequent item; `matchLibrary()` returns the full `{matched, processed}` count. `testPerItemExceptionDoesNotAbortRun` → `{matched:1, processed:2}`. Progress log emits start (INFO) + per-batch progress (INFO) + complete (INFO) + per-item `item matched`/`item not matched` (DEBUG).
+
+**Verification (actual output):**
+- `phpunit --filter 'LibraryMetadataMatcher'` → `OK (39 tests, 142 assertions)` (was 2 red).
+- `phpunit --testsuite Unit` → `Tests: 4907, Assertions: 38450, Errors: 10, Failures: 5, Skipped: 5, Risky: 3`. Errors 11→10, Failures 6→5 — exactly the 2 SV-3.5 reds cleared; no NEW reds. Remaining reds are ONLY the other triage buckets: SV-2.8 ItemRepository::testAddStream* (2), SV-4.13 FfmpegRunner*/Hls* (8), SV-2.9 LibraryScanWorker/LibraryScanCommand (2), SV-3.2 BookProgressStore (1), SV-2.6 SyncPlayManager (2).
+- `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors`.
+- `phpcs --standard=PSR12 src/Media/Metadata/LibraryMetadataMatcher.php` → 0 errors (5 PRE-EXISTING >120-char warnings at lines 604/609/1227/1429/1436, all outside my ~1888-1955 diff region).
+
+SV-3.5 red cleared — step done-note stands; the 2 shipped-red tests are now green because the behaviour is correct.

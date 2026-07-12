@@ -990,3 +990,25 @@ Reviewed `src/Hub/RelayConsumer.php:770-973` (branch/accumulator/finalize),
 **NO FINDINGS.** The X2/HB-2.1 server-side chunk reassembly survived the phlix-shared
 path→Packagist ^0.20.0 swap intact, matches the vendored codec API exactly, and is
 correct.
+
+## Unit-suite RED triage (orchestrator, post-deps resume) — 2026-07-12
+
+Gates GREEN: phpstan L9 0 errors, phpcs 0. Full `--testsuite Unit`: 4870 pass / 11 err / 21 fail / 5 skip.
+NONE env-dependent (withFile uses tempnam temp files; FfmpegRunner tests are pure command-string builders; DB mocked). Classified:
+
+**A — KNOWN-DRIFT (owned by step, expected):**
+- SV-2.8: ItemRepositoryTest::testAddStream{PersistsTrackMetadataColumns,InsertsStream} — INSERT param projection drift.
+- SV-4.13: FfmpegRunnerTest::testBuildTranscodeCommand* (×3) + FfmpegRunnerHlsTest::testBuildHlsCommand* (×5) — reference removed whole-file builders.
+
+**C — GENUINE (step marked [x] but red → REOPEN):**
+- **withFile Response-contract cluster (15 reds, ONE root cause):** Response::withFile() stores filePath/offset/length; Content-Range/Content-Length/body computed by PRIVATE finalizeFileHeaders() at send-time (Response.php:458, run at :398/:435/:542), so post-return `headers['Content-Range']`==null, `body`==''. Tests assert the pre-refactor EAGER contract.
+  - SV-2.4 ThemeMediaStreamControllerTest ×7 (range/suffix/openended/clamp/200-body)
+  - SV-2.5 PhotoControllerTest ×3 (full Content-Length + range)
+  - SV-3.2 AudiobookControllerTest ×5 (range/full/binary-not-base64 — empty body)
+  ⚠️ FIX RULE: VERIFY the deferred finalizeFileHeaders path actually emits correct Range output at emit-time BEFORE aligning tests; only update tests to the real deferred contract (or expose a test-visible finalizer). If runtime Range is actually wrong, fix the IMPL. Do NOT weaken assertions to hide a real bug.
+- **SV-3.5 LibraryMetadataMatcher ×2 (real logic gap):** testPerItemExceptionDoesNotAbortRun ERRORs — per-item resolver exception NOT caught, aborts whole run (missing per-item try/catch); testEmitsProgressLogEntriesAsItRuns — 'item not matched' progress log not emitted.
+- **SV-2.9 scanner rescan ×2 (real logic gap):** LibraryScanWorkerTest::testRunOnceProcessesRescanJob (rescan path calls unwired collaborator → swallowed into markFailed @LibraryScanWorker.php:170); LibraryScanCommandTest::testRescanFlagCallsRescanLibrary (--rescan returns exit 1 not 0).
+- **SV-3.2 BookProgressStore ×1:** testSaveAndRetrieveProgress — saveProgress passes raw float percent_complete (BookProgressStore.php:95) where test expects is_string($params[5]); determine correct persisted-type contract.
+- **SV-2.6 SyncPlayManager ×2:** testBroadcastToGroup{DeliversToAllConnectedMembers,ExcludesSpecifiedMemberIds} ERROR — ConnectionInterface::send():bool mock returns null (not stubbed willReturn(true)); backpressure reads the bool. Test-side stub gap (verify prod send() always returns bool).
+
+**Non-red hygiene note:** TranscodeManager.php:2161-2164 reads color_transfer/primaries/space without ?? → ~15 benign 'Undefined array key' warnings in TranscodeManagerTest (tests PASS); SV-1.1 area, add ?? guards (low priority).

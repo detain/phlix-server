@@ -1420,3 +1420,71 @@ phantom getmypid recording).
 ### Follow-up sub-steps (NOT done here)
 SV-3.1c scheduler Timers · SV-3.1d comskip EDL→chapters + media_items registration · SV-3.1f
 timeshift stream. LiveTvStreamController timeshift is still a 501 stub (SV-3.1f).
+
+## Reviewer (SV-3.1 foundation: a + b0 + e) — 2026-07-12
+
+Reviewed commit `39899c70` (diff `fecd0ab5..39899c70`) — the DVR foundation only (a/b0/e).
+Verified locally: **phpstan L9 `-c phpstan.neon.dist` = [OK] 0 errors** (646/646);
+`phpunit LiveTvServicesProviderTest + ContainerFactoryTest + RecorderRecoveryTest` = **20/20 OK
+(80 assertions)**; **phpcs PSR-12 = 0 errors** on the changed files (only pre-existing >120-char
+warnings on untouched lines). Reviewed against foundation scope; c/d/f/g/h are plan-deferred and
+their absence is not a finding.
+
+Confirmed CORRECT (high confidence):
+- **b0 DI coherence:** every ctor the provider calls matches the real signature — `Recorder($db,
+  storagePath, maxStorageBytes, logger, ComskipLifecycleManager, ffmpegPath, null)`, `LiveTvManager($db,
+  ChannelManager, GuideManager, Recorder, TunerDriverInterface, logger)`, `RecordingScheduler($db,
+  Recorder, LiveTvManager, logger)`, plus ComskipLifecycleManager/ComskipIntegration/ComskipRunner/
+  ComskipEdlParser/HdHomeRun{Discovery,ApiClient,TunerDriver}/ChannelManager/GuideManager. The
+  Recorder↔LiveTvManager cycle is broken correctly: Recorder built with `null` manager, LiveTvManager
+  factory calls `$recorder->setLiveTvManager($manager)` on the SAME PHP-DI singleton, and
+  RecordingScheduler resolves LiveTvManager first so the back-ref is set before it receives the recorder.
+  `logger.livetv` (CoreServicesProvider channel alias → StructuredLogger), `Connection::class` and
+  `app.config` all resolve. Config keys the provider reads (`hdhomerun.ssdp_timeout_secs`,
+  `comskip.{binary_path,queue_processing,max_concurrent}`, `dvr.{storage_path,max_storage_bytes}`,
+  top-level `storage_path`, `dvbt.ffmpeg_path`) all exist in `config/livetv.php`.
+- **b0 wired-Recorder usage:** `Application::getLiveTvStreamController()` now resolves
+  `LiveTvManager` (which links the shared Recorder) and passes `$liveTvManager->getRecorder()` — the one
+  wired singleton — to the stream controller. The only `new Recorder(`/`new LiveTvManager(` in src/ are
+  in the provider; no second unwired instance remains. The removed `createDatabaseConnection()` call has
+  seven other live callers (not orphaned).
+- **a getmypid() removal:** the no-tuner branch marks the row FAILED ('No tuner available'), returns
+  false, adds NO `activeRecordings` entry, and never spawns ffmpeg; `pid` stays NULL (the row was
+  `scheduled`, pid never set; `updateRecordingStatus` does not touch pid). No orphaned/partial state.
+  Guarded by `testStartRecordingWithNoTunerMarksFailedWithNoFakePid` (asserts no getmypid PID is bound)
+  and `testScheduledDueRecordingWithNoTunerIsSkippedNotRearmed`.
+- **DUAL-ENTRYPOINT (§0.3):** `LiveTvServicesProvider` is registered in `ContainerFactory` (13→14),
+  which BOTH `public/index.php:72` and `start.php:154` call via `ContainerFactory::create($config)`;
+  `config/server.php` now `require`s `config/livetv.php`, and both entrypoints load `config/server.php`.
+  The `getLiveTvStreamController()` change lives in `Application`, which only the daemon builds (the CGI
+  path dispatches via `Router`+`WebPortalRouter` and never constructs `Application` nor its LiveTv route),
+  so no CGI mirror is required and no CGI behavior changed. `bootstrap()` recovery is intentionally
+  start.php-only. The `$this->container === null` throw in `getLiveTvStreamController()` is unreachable
+  in practice (Application's ctor requires a non-null container).
+- **e worker-0 gating:** the recovery block sits inside `$httpWorker->onWorkerStart` (count=14) gated on
+  `(int) $w->id === 0`, so it fires exactly once per boot — consistent with the repo's existing
+  `(int) $w->id` usage in the same closure. `$container`, `LoggerFactory`, `LogChannels::LIVETV` are all
+  in scope/imported. `bootstrap()` resolves LiveTvManager (linking the Recorder) BEFORE calling
+  `resumeActiveRecordings()`, so tuner resolution works during re-arm. Wrapped in try/catch so a recovery
+  failure never stops the HTTP worker.
+- **Swoole/coroutine (§0.3):** recovery runs at boot in `onWorkerStart`, OUTSIDE any coroutine, so the
+  blocking process checks / detached spawns reachable via `resumeActiveRecordings()→startRecording()` are
+  valid there (same as the adjacent hwaccel probe); the curated hook mask only affects in-coroutine work.
+  All DB access is via `Workerman\MySQL\Connection` (`Connection::class`), no raw PDO. (The
+  scheduler/timed-stop Timers that WOULD need `getCid()>0`/`Coroutine\System::exec` guards are SV-3.1c,
+  deferred — not in this commit.)
+- **Security:** storage_path is a trusted `config/livetv.php` value; `getRecordingPath()` composes it
+  with an internal UUID `recordingId` (no user input), so no path-traversal vector in the foundation; the
+  DI/recovery wiring opens no unauth path (timeshift endpoint is still the 501 stub, SV-3.1f).
+- **No SV-4.7 regression:** the commit touches only config/server.php, ContainerFactory, Recorder,
+  Application::getLiveTvStreamController, and the HTTP-worker `onWorkerStart` in start.php — it does not
+  touch the :8097 WS worker, its handshake auth, or any WS wiring landed by `fecd0ab5`.
+
+Benign observations (NOT findings — no action required): (1) in-memory `activeRecordings` is populated
+by recovery only on HTTP worker 0, so other workers' Recorder singletons start empty — inherent to the
+per-worker-singleton design and harmless for the foundation (DB is source of truth; the stream
+controller only does path lookups; cross-worker state is an SV-3.1f/timeshift concern). (2)
+`Application::getLiveTvStreamController()` recomputes `storagePath` from config inline with the same
+precedence the provider's `dvrStorage()` uses, so the two cannot diverge given identical config keys.
+
+**Verdict: NO FINDINGS.**

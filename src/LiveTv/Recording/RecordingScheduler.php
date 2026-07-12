@@ -90,6 +90,17 @@ class RecordingScheduler
         $this->recorder = $recorder;
         $this->liveTvManager = $liveTvManager;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
+
+        // Couple manual stops to the per-recording one-shot stop timer: whenever
+        // the Recorder stops/cancels/deletes a recording it fires its onStop
+        // hooks, and this cancels the matching pending timer so
+        // {@see activeStopTimerCount()} returns to baseline (SV-3.1c finding 2).
+        // Registering the hook here (not via a ctor arg on the Recorder) keeps
+        // the two singletons free of a construction cycle — the Recorder is built
+        // first and injected, and this is a runtime callback registration.
+        $this->recorder->onStop(function (string $recordingId): void {
+            $this->cancelStopTimer($recordingId);
+        });
     }
 
     /**
@@ -208,6 +219,16 @@ class RecordingScheduler
         $stats = ['ended' => 0, 'errors' => 0];
 
         foreach ($this->recorder->getRecordingsDueToStop() as $recordingId) {
+            // Skip recordings whose per-recording one-shot stop timer is still
+            // armed on this worker — that timer is the PRIMARY stop path and will
+            // fire; the scan is only a safety-net for orphaned rows (e.g. timers
+            // lost across a restart), never a competitor to the live timer. The
+            // atomic completion CAS in Recorder::stopRecording()/endRecording() is
+            // the ultimate idempotency guard for any residual timing window.
+            if (isset($this->stopTimerIds[$recordingId])) {
+                continue;
+            }
+
             try {
                 if ($this->recorder->endRecording($recordingId)) {
                     $stats['ended']++;
@@ -305,8 +326,6 @@ class RecordingScheduler
      */
     private function fireStopTimer(string $recordingId): void
     {
-        unset($this->stopTimerIds[$recordingId]);
-
         try {
             $this->recorder->endRecording($recordingId);
         } catch (\Throwable $e) {
@@ -314,6 +333,15 @@ class RecordingScheduler
                 'recording_id' => $recordingId,
                 'error' => $e->getMessage(),
             ]);
+        } finally {
+            // Clear the slot only AFTER endRecording() returns. endRecording() may
+            // park for several seconds terminating ffmpeg; keeping the id in
+            // stopTimerIds for that whole window means a concurrent scan tick sees
+            // the armed timer and skips this recording (finding 1b) — the scan
+            // competes only for genuinely orphaned rows. The Workerman one-shot
+            // timer has already self-deleted by the time this callback runs, so no
+            // Timer::del is needed here.
+            unset($this->stopTimerIds[$recordingId]);
         }
     }
 

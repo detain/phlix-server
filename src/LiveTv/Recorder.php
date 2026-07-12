@@ -76,6 +76,19 @@ class Recorder
     /** @var callable[] Post-complete callbacks (media_item_id, recording_path) => void */
     private array $onCompleteCallbacks = [];
 
+    /**
+     * Stop hooks fired on ANY terminal transition of a recording — a timed
+     * stop, a manual stop, a cancel, or a delete. Unlike {@see $onCompleteCallbacks}
+     * (which carry "completed successfully" semantics and drive comskip /
+     * media-item registration) these are purely for stop-time housekeeping —
+     * chiefly cancelling the {@see \Phlix\LiveTv\Recording\RecordingScheduler}'s
+     * per-recording one-shot stop timer so its count returns to baseline on a
+     * manual stop. Consumers MUST be idempotent (a hook may fire more than once).
+     *
+     * @var callable[] (string $recordingId) => void
+     */
+    private array $onStopCallbacks = [];
+
     /** @var string Path to ffmpeg binary for recording spawns */
     private string $ffmpegPath;
 
@@ -223,6 +236,28 @@ class Recorder
     public function onComplete(callable $callback): void
     {
         $this->onCompleteCallbacks[] = $callback;
+    }
+
+    /**
+     * Register a callback invoked whenever a recording reaches a terminal state.
+     *
+     * Fires on every stop path — {@see stopRecording()}, {@see cancelRecording()}
+     * and {@see deleteRecording()} — regardless of whether the recording actually
+     * completed. Its purpose is stop-time housekeeping that must run on ANY stop
+     * (e.g. the {@see \Phlix\LiveTv\Recording\RecordingScheduler} cancelling a
+     * pending one-shot stop timer for the recording), so it complements — it does
+     * NOT replace — {@see onComplete()}. The callback MUST be idempotent: it may
+     * be invoked more than once for the same recording id.
+     *
+     * @param callable $callback (string $recordingId) => void
+     *
+     * @return void
+     *
+     * @since SV-3.1c
+     */
+    public function onStop(callable $callback): void
+    {
+        $this->onStopCallbacks[] = $callback;
     }
 
     /**
@@ -755,12 +790,33 @@ class Recorder
         $filePath = $this->getRecordingPath($recordingId);
         $fileSize = file_exists($filePath) ? filesize($filePath) : 0;
 
-        $this->db->query(
+        // Atomic completion compare-and-swap: only flip a row that is STILL
+        // `recording`. The Workerman MySQL client returns the affected-row count
+        // for an UPDATE (see PhlixMySQLConnection::query()), so affected < 1 means
+        // a concurrent completer — the per-recording one-shot stop timer or the
+        // safety-net scan, which can interleave with this call at the yields in
+        // terminateRecording() under the Swoole runtime — already finalised this
+        // recording. Guarding onComplete on affected==1 makes the completion side
+        // effects (comskip / media-item registration under SV-3.1d) run EXACTLY
+        // once regardless of timing.
+        $affected = $this->db->query(
             "UPDATE livetv_recordings
              SET status = ?, end_time = ?, storage_size = ?, updated_at = NOW()
-             WHERE recording_id = ?",
-            [self::STATUS_COMPLETED, time(), $fileSize, $recordingId]
+             WHERE recording_id = ? AND status = ?",
+            [self::STATUS_COMPLETED, time(), $fileSize, $recordingId, self::STATUS_RECORDING]
         );
+
+        // Cancel any armed one-shot stop timer for this recording regardless of
+        // who won the completion race (idempotent housekeeping).
+        $this->fireOnStopCallbacks($recordingId);
+
+        if (!is_int($affected) || $affected < 1) {
+            // Lost the race — another completer already transitioned this row.
+            $this->logger->debug('Recording already finalised by a concurrent completer; skipping duplicate', [
+                'recording_id' => $recordingId,
+            ]);
+            return false;
+        }
 
         $this->logger->info('Recording stopped', [
             'recording_id' => $recordingId,
@@ -842,12 +898,23 @@ class Recorder
             $filePath = $this->getRecordingPath($recordingId);
             $fileSize = file_exists($filePath) ? filesize($filePath) : 0;
 
-            $this->db->query(
+            // Atomic completion compare-and-swap (see stopRecording()): only the
+            // completer that flips the still-`recording` row fires onComplete, so
+            // a one-shot timer and a concurrent scan tick reconciling the same
+            // orphaned row cannot double-complete it.
+            $affected = $this->db->query(
                 "UPDATE livetv_recordings
                  SET status = ?, end_time = ?, storage_size = ?, updated_at = NOW()
-                 WHERE recording_id = ?",
-                [self::STATUS_COMPLETED, time(), $fileSize, $recordingId]
+                 WHERE recording_id = ? AND status = ?",
+                [self::STATUS_COMPLETED, time(), $fileSize, $recordingId, self::STATUS_RECORDING]
             );
+
+            if (!is_int($affected) || $affected < 1) {
+                $this->logger->debug('Reconcile lost the completion race; already finalised', [
+                    'recording_id' => $recordingId,
+                ]);
+                return false;
+            }
 
             $this->fireOnCompleteCallbacks($recordingId, $filePath);
 
@@ -901,10 +968,13 @@ class Recorder
     {
         $now ??= time();
 
+        // GREATEST(0, …) mirrors effectiveEndTime()'s max(0, padding) clamp so a
+        // (mis-stored) negative post_padding cannot make the scan fire earlier
+        // than the timer path.
         $result = $this->db->query(
             "SELECT recording_id FROM livetv_recordings
              WHERE status = ?
-               AND (end_time + COALESCE(post_padding_seconds, 60)) <= ?
+               AND (end_time + GREATEST(0, COALESCE(post_padding_seconds, 60))) <= ?
              ORDER BY end_time ASC",
             [self::STATUS_RECORDING, $now]
         );
@@ -1177,6 +1247,35 @@ class Recorder
     }
 
     /**
+     * Fire all registered onStop callbacks (housekeeping on ANY stop path).
+     *
+     * Invoked from {@see stopRecording()}, {@see cancelRecording()} and
+     * {@see deleteRecording()} so stop-time housekeeping (e.g. cancelling the
+     * scheduler's pending one-shot stop timer) runs whenever a recording reaches
+     * a terminal state. Callbacks are idempotent by contract; exceptions are
+     * swallowed and logged so one hook cannot abort a stop.
+     *
+     * @param string $recordingId The recording ID.
+     *
+     * @return void
+     *
+     * @since SV-3.1c
+     */
+    private function fireOnStopCallbacks(string $recordingId): void
+    {
+        foreach ($this->onStopCallbacks as $callback) {
+            try {
+                $callback($recordingId);
+            } catch (\Throwable $e) {
+                $this->logger->error('onStop callback threw exception', [
+                    'recording_id' => $recordingId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    /**
      * Cancel a scheduled or in-progress recording.
      *
      * @param string $recordingId The recording to cancel
@@ -1189,11 +1288,20 @@ class Recorder
             return false;
         }
 
+        // A live capture is stopped via stopRecording(), which already fires the
+        // onStop hooks (cancelling any armed one-shot stop timer). When the row
+        // is not live in this worker's memory, fire the hooks ourselves so the
+        // timer is still cancelled and activeStopTimerCount() returns to baseline.
+        $wasActive = isset($this->activeRecordings[$recordingId]);
         if ($recording['status'] === self::STATUS_RECORDING) {
             $this->stopRecording($recordingId);
         }
 
         $this->updateRecordingStatus($recordingId, self::STATUS_CANCELLED);
+
+        if (!$wasActive) {
+            $this->fireOnStopCallbacks($recordingId);
+        }
 
         $this->logger->info('Recording cancelled', ['recording_id' => $recordingId]);
 
@@ -1213,7 +1321,11 @@ class Recorder
             return false;
         }
 
-        if (isset($this->activeRecordings[$recordingId])) {
+        // Stop a live capture (fires onStop → cancels any armed stop timer). When
+        // the row is not live here, fire the hooks ourselves so a pending timer
+        // is still cancelled on delete.
+        $wasActive = isset($this->activeRecordings[$recordingId]);
+        if ($wasActive) {
             $this->stopRecording($recordingId);
         }
 
@@ -1223,6 +1335,10 @@ class Recorder
         }
 
         $this->db->query("DELETE FROM livetv_recordings WHERE recording_id = ?", [$recordingId]);
+
+        if (!$wasActive) {
+            $this->fireOnStopCallbacks($recordingId);
+        }
 
         $this->logger->info('Recording deleted', ['recording_id' => $recordingId]);
 

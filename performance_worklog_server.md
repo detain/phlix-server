@@ -1668,3 +1668,87 @@ the reconcile test asserts exactly one onComplete + one COMPLETED UPDATE — all
 
 **Verdict: 3 FINDINGS** (1 MEDIUM, 1 LOW-MEDIUM, 1 LOW). Padding-default consistency (check #1) PASSED —
 not a finding. Loop to the Fixer for findings 1 & 2 (finding 3 is a low-risk hardening nit).
+
+## Fixer (per-step) — SV-3.1c — 2026-07-12
+
+Fixed ALL THREE review findings. Committed + pushed myself (§F). phpstan L9 0, Unit 4935/0, phpcs on
+touched files clean (2 pre-existing >120-char warnings on untouched Recorder lines 204/1654 only).
+
+### Finding 1 — Double-completion race [MEDIUM] — belt AND suspenders
+**(a) Atomic completion CAS (the authoritative guard).** Both completion writes are now conditional +
+affected-rows-gated, using the SAME idiom as `ScanJobRepository::claimNext()` (the Workerman MySQL
+client returns the affected-row count for an UPDATE; verified via `PhlixMySQLConnection::query()` →
+`parent::query()`):
+- `Recorder::stopRecording()` (`src/LiveTv/Recorder.php`) — `UPDATE livetv_recordings SET status=... 
+  WHERE recording_id=? AND status=?` (bind prior status = `recording`); `fireOnCompleteCallbacks()`
+  runs ONLY when `is_int($affected) && $affected >= 1`. On a lost race it logs debug + returns false
+  (the process was still stopped; only the duplicate onComplete side effect is suppressed).
+- `Recorder::endRecording()` reconcile branch — same conditional CAS + affected-rows gate before
+  `fireOnCompleteCallbacks()`.
+This makes concurrent completers (one-shot timer + scan tick interleaving at `terminateRecording`'s
+`Coroutine::sleep` yields) idempotent regardless of timing → exactly one onComplete + one status→
+completed UPDATE. Matters once SV-3.1d wires comskip / media-item registration into onComplete.
+**(b) Scan exclusion (defense-in-depth).** `RecordingScheduler::processCompletedRecordings()` now
+`continue`s past any `recording_id` still present in `$this->stopTimerIds` (a live one-shot timer =
+the primary stop path). Chose the SCHEDULER's timer-set as the exclusion key rather than the Recorder's
+`activeRecordings` — **deliberately did NOT filter getRecordingsDueToStop() by activeRecordings**,
+because boot recovery (`resumeActiveRecordings`) re-attaches pid-alive recordings to `activeRecordings`
+WITHOUT re-arming a stop timer, so the scan is their ONLY stop path; excluding activeRecordings would
+strand them past their effective end. Also moved `RecordingScheduler::fireStopTimer()`'s
+`unset($stopTimerIds[$id])` into a `finally` AFTER `endRecording()` returns, so the id stays in the set
+throughout the (multi-second) ffmpeg teardown and a concurrent scan tick during that fire window still
+skips it. The CAS remains the ultimate guard for any residual window.
+
+### Finding 2 — Stop-timer not cancelled on manual stop [LOW-MED] — callback hook, no ctor cycle
+Added an idempotent stop-hook mechanism to the Recorder: `onStop(callable)` +
+`private array $onStopCallbacks` + `fireOnStopCallbacks($recordingId)` (mirrors the existing
+onComplete plumbing but fires on ANY terminal transition, not just successful completion). Fired from
+all three manual paths — `stopRecording()` (always, before the CAS branch), `cancelRecording()` and
+`deleteRecording()` (via a `$wasActive` guard so it fires exactly once whether or not the row was live
+in memory). `RecordingScheduler.__construct()` registers the hook: `$this->recorder->onStop(fn($id) =>
+$this->cancelStopTimer($id))`. **No ctor cycle / no DI-signature change** — the Recorder is built first
+and injected into the scheduler (existing `LiveTvServicesProvider` order); the hook is a runtime
+callback registration, not a constructor dependency. `cancelStopTimer` stays private (the closure binds
+`$this`). Therefore **no `public/index.php` / `start.php` mirroring needed** (neither entrypoint
+constructs the scheduler directly — DI does; §0.3 satisfied). `activeStopTimerCount()` now returns to
+baseline after a manual stop.
+
+### Finding 3 — Negative-padding clamp [LOW]
+`Recorder::getRecordingsDueToStop()` scan SQL → `end_time + GREATEST(0, COALESCE(post_padding_seconds,
+60))`, mirroring `effectiveEndTime()`'s `max(0, padding)` so a mis-stored negative padding cannot make
+the scan fire earlier than the timer path.
+
+### Tests (built out around each fix)
+- `RecorderTimedStopTest::testCompletionIsIdempotentUnderTimerVsScanRace` (finding 1) — two
+  `endRecording()` calls on the same still-`recording` orphan; DB mock returns affected-rows **1 then
+  0**; asserts onComplete fires EXACTLY once, first returns true / second false, both attempted the
+  conditional UPDATE. No sleeps/timers — deterministic.
+- `RecorderTimedStopTest::testEndRecordingReconcilesOverdueRecordingToCompleted` (updated) — mock UPDATE
+  now returns 1; added assertions that the completion UPDATE is a CAS (`status = ?` in SQL + prior
+  `recording` status bound).
+- `RecorderTimedStopTest::testOnStopFiresOnManualStopPaths` (finding 2) — real Recorder; asserts onStop
+  fires on live `stopRecording` (activeRecordings seeded via reflection, pid=0 → no real kill),
+  `cancelRecording`, and `deleteRecording`.
+- `RecordingSchedulerTest::testScanSkipsRecordingsWithAnArmedStopTimer` (finding 1b) — arms a timer,
+  then the scan reports the same id due-to-stop; asserts `endRecording` is NEVER called + the timer is
+  left intact.
+- `RecordingSchedulerTest::testManualCancelCancelsArmedStopTimer` (finding 2) — REAL Recorder (only
+  `startRecording` stubbed to avoid ffmpeg) so the onStop hook is genuinely wired; arm timer via
+  `processDueRecordings`, then `cancelRecording` → `activeStopTimerCount()` back to 0.
+- `RecorderTimedStopTest::testGetRecordingsDueToStopAppliesPostPaddingInScan` (updated, finding 3) —
+  scan-SQL assertion now expects `end_time + GREATEST(0, COALESCE(post_padding_seconds, 60))`.
+
+### Verification (actual)
+- `./vendor/bin/phpstan analyse -c phpstan.neon.dist` → **[OK] No errors** (646 files).
+- `./vendor/bin/phpunit --testsuite Unit --no-coverage` → **Tests: 4935, 0 failures / 0 errors**
+  (4 warnings / 8 skipped, all pre-existing in unrelated TranscodeManagerTest). `--filter
+  'RecorderTimedStop|RecordingScheduler|Recorder'` → 40 OK.
+- `./vendor/bin/phpcs --standard=PSR12` on the 4 touched files → 0 errors; only 2 pre-existing
+  >120-char warnings on untouched Recorder lines 204 (comskip callback) / 1654 (docblock array shape).
+
+### Files changed
+- `src/LiveTv/Recorder.php` — CAS on both completion UPDATEs; onStop hook infra + firing on
+  stop/cancel/delete; scan-SQL `GREATEST(0, …)` clamp.
+- `src/LiveTv/Recording/RecordingScheduler.php` — scan skips ids with a live timer; onStop hook
+  registered in ctor; `fireStopTimer` unset moved to `finally`.
+- `tests/Unit/LiveTv/RecorderTimedStopTest.php`, `tests/Unit/LiveTv/Recording/RecordingSchedulerTest.php`.

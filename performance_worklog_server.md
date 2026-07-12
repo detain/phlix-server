@@ -738,3 +738,80 @@ confirmation after deploy: connect a real WS client that pongs and confirm it
 survives ≥2 ping intervals, then kill a WS client (suppress pongs) and confirm it
 is reaped within ~(limit+1)× the ping interval, and confirm SyncPlay message
 routing works over the live socket.
+
+## Reviewer (REVIEW-2) — SV-0.5 — 2026-07-12
+
+Confirming review of the Fixer's changes for the 3 per-step findings (commits
+`1a54bc2b`, `1fbfacf7`, `238dced8`; diff `24cbd6a6..238dced8`). Read the actual
+current code (not the Fixer note): `WebSocketServer.php`, `start.php`,
+`StreamSessionService.php`, the regression test, and the Workerman
+`Protocols/Websocket.php` pong resolution.
+
+Verifications (this box):
+- `phpunit --filter 'WebSocketServer|StreamLimit|HttpHandler|StreamSession'` →
+  **OK (86 tests, 182 assertions)**.
+- `phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (645/645).
+- `phpcs --standard=PSR12` on `WebSocketServer.php` + `StreamSessionService.php`
+  → **0 errors**; the only 5 warnings are the PRE-EXISTING >120-char lines in
+  `getActiveStreamsForProfile` (lines 370-375) — confirmed untouched (diff hunks
+  are only at 35-45 / 128-145 / 152-172). No new phpcs/phpstan issues.
+
+Finding-by-finding confirmation:
+
+1. **[HIGH — RESOLVED, on-box verify still open] WS ping/pong now binds to the
+   real listening worker.** Confirmed:
+   - `WebSocketServer::__construct` (WebSocketServer.php:79-104) takes optional
+     `?Worker $worker`; when injected it becomes `$this->worker` WITHOUT the
+     `onWorkerStart = [$this,'onStart']` assignment (that only happens in the
+     else/standalone branch), so the caller's `onWorkerStart` is NOT clobbered.
+     `bindConnectionCallbacks()` (124-132) binds onConnect/onMessage/onClose/
+     onError/onWebSocketPong onto that worker.
+   - `start.php:239-298`: `$wsWorker` is declared BEFORE `runAll()` (real
+     listener on :8097); its `onWorkerStart` receives the forked worker `$w`
+     (=`$wsWorker` in-child) and passes `$w` as the 3rd ctor arg, then calls
+     `onStart()`. So (a) the pong genuinely resolves on the accepting worker:
+     `Protocols/Websocket.php:215` reads `$connection->worker->onWebSocketPong`
+     and `$connection->worker` is `$wsWorker`=`$w`, which now carries the bound
+     `onWebSocketPong` → `recordPong()`; (b) `onWorkerStart` is start.php's
+     container-building closure, untouched; (c) the ping/reaper timers arm via
+     `onStart()` inside `$w`'s `onWorkerStart`, so `Timer::add` registers in the
+     same process whose `onConnect` fills the (singleton) `ConnectionPool` that
+     `pingConnections()` iterates — pool and timers coincide; (d) null-worker
+     path preserved: else-branch creates its own worker + `onWorkerStart`, and
+     `run()`→`Worker::runAll()` still listens (tests / SyncPlayWorker / `run()`);
+     (e) MessageHandler wiring intact (onMessage → handler, unchanged); (f) no
+     double-listen — the resident path creates NO second Worker, so it cannot
+     fight start.php's listener.
+   - `public/index.php` has NO WS worker (grep for
+     `websocket|WebSocketServer|8097|wsWorker` returns nothing) → no mirroring
+     needed; correct.
+   - Regression test `testCallbacksBindToInjectedListeningWorker` genuinely
+     guards the pre-fix defect: it asserts `getWorker() === $listener` (the
+     accessor did not exist pre-fix) and that all four lifecycle callbacks AND
+     `onWebSocketPong` are `[$server, …]` on the INJECTED listener (pre-fix they
+     bound to the throwaway internal worker), and that the caller-owned
+     `onWorkerStart` is not overwritten. Fails against the old wiring.
+   - Residual: this is a resident-runtime fix; `start.php` is OUTSIDE CI so unit
+     tests cannot exercise the live :8097 socket. Per §0.7 an on-box
+     confirmation remains the ONLY open item (a ponging client survives ≥2 ping
+     intervals; a pong-suppressed client is reaped at ~(limit+1)×interval;
+     SyncPlay routing works over the live socket).
+
+2. **[LOW — RESOLVED] `releaseStream()` teardown wording corrected.** The
+   `heartbeatTimerIds` / `registerHeartbeatTimer()` / `releaseStream()`
+   docblocks now state teardown in the resident HTTP path is TIMEOUT-DRIVEN
+   (one-shot self-clear ~30s after the last request + the 60s
+   `cleanupStaleStreams()` sweep) and that `releaseStream()` is the explicit
+   path for callers with a real stream-end signal (currently tests). Accurate;
+   no behavior change; still not a leak (self-clearing one-shot bounds the
+   count).
+
+3. **[LOW — RESOLVED] Reap-latency comment corrected.** The `onStart()`
+   ping-timer block now documents reap on the sweep that OBSERVES
+   `pendingPings >= limit` = the `(limit+1)`th sweep → `~(limit+1)×interval
+   ≈ 90s` at the defaults, matching `testPingSweepReapsNonRespondingConnection`.
+
+**Verdict: NO FINDINGS.** SV-0.5 is code/test-complete (all 3 prior findings
+resolved; suite green, phpstan 0, no new phpcs) — modulo the on-box confirmation
+of the resident :8097 ping/pong + SyncPlay routing (start.php is outside CI) and
+the pending Docs cycle.

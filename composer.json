@@ -3,22 +3,11 @@
     "description": "Phlix media server - streaming, library management, user auth, and SyncPlay coordination",
     "type": "project",
     "license": "proprietary",
-    "repositories": [
-        {
-            "type": "path",
-            "url": "/home/sites/phlix/phlix-shared",
-            "options": { "symlink": false }
-        },
-        {
-            "type": "vcs",
-            "url": "https://github.com/detain/phlix-shared.git"
-        }
-    ],
     "require": {
         "php": ">=8.3",
         "ext-ldap": "*",
         "crell/tukio": "^2.0",
-        "detain/phlix-shared": "^0.18.0",
+        "detain/phlix-shared": "^0.20.0",
         "directorytree/ldaprecord": "^3.0",
         "justinrainbow/json-schema": "^5.2",
         "monolog/monolog": "^3.0",

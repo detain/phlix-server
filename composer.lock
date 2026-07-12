@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "084fe0be3de3a9e6f3a572e6c6c3b6c0",
+    "content-hash": "f8909e256692459be9d4274d3a35ca44",
     "packages": [
         {
             "name": "brick/math",
@@ -412,11 +412,17 @@
         },
         {
             "name": "detain/phlix-shared",
-            "version": "0.18.0",
+            "version": "0.20.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/detain/phlix-shared.git",
+                "reference": "94458ab71e2627b0a92cec28bc705e115f0b1f66"
+            },
             "dist": {
-                "type": "path",
-                "url": "/home/sites/phlix/phlix-shared",
-                "reference": "b91278ccd19308ce8433f12dfd06c9e68ace0059"
+                "type": "zip",
+                "url": "https://api.github.com/repos/detain/phlix-shared/zipball/94458ab71e2627b0a92cec28bc705e115f0b1f66",
+                "reference": "94458ab71e2627b0a92cec28bc705e115f0b1f66",
+                "shasum": ""
             },
             "require": {
                 "php": "^8.3",
@@ -442,33 +448,16 @@
                     "Phlix\\Shared\\": "src/"
                 }
             },
-            "autoload-dev": {
-                "psr-4": {
-                    "Phlix\\Shared\\Tests\\": "tests/"
-                }
-            },
-            "scripts": {
-                "test": [
-                    "phpunit"
-                ],
-                "stan": [
-                    "phpstan analyze --no-progress"
-                ],
-                "cs": [
-                    "phpcs --standard=PSR12 src/"
-                ],
-                "psalm": [
-                    "psalm --no-progress"
-                ]
-            },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
             "description": "Shared interfaces, DTOs, event names, and protocol types used by both phlix-server and phlix-hub. Composer-installable, PHP 8.3+, zero I/O by charter — the only bundled network code is the blocking CurlArrTransport (CLI/test only); event-loop consumers MUST inject an async ArrTransportInterface.",
-            "transport-options": {
-                "symlink": false,
-                "relative": false
-            }
+            "support": {
+                "issues": "https://github.com/detain/phlix-shared/issues",
+                "source": "https://github.com/detain/phlix-shared/tree/v0.20.0"
+            },
+            "time": "2026-07-12T18:59:52+00:00"
         },
         {
             "name": "directorytree/ldaprecord",

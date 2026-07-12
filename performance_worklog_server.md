@@ -1106,3 +1106,38 @@ for movie/TV/generic libraries** — no delete, no rescan. It also changed the s
 - `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
 - `phpcs --standard=PSR12` on all touched files → 0 errors (one PRE-EXISTING >120-char warning at
   `LibraryManager.php:170`, an unrelated `getLibrary()` docblock example, outside my diff).
+
+## Fixer — SV-3.2 BookProgressStore + SV-2.6 SyncPlay — 2026-07-12
+
+Cleared the last 3 genuine-red triage entries. Root cause impl-vs-test per red:
+
+- **SV-3.2 BookProgressStore ×1 (IMPL fix).** `book_progress.percent_complete` is `DECIMAL(5,2)`
+  (`migrations/075_book_progress.sql:11`). `saveProgress()` bound the raw float `25.5`; the test
+  correctly asserted the DECIMAL-string persisted contract (`is_string($params[5])`). Fixed impl to
+  bind `number_format($progress->percent_complete, 2, '.', '')` → deterministic `"25.50"` at the
+  column scale, locale-safe (explicit '.' separator, unlike `sprintf('%.2f')`/LC_NUMERIC). Round-trip
+  preserved: `getProgress()` reads it back with `(float)` (`testGetProgressReturnsProgressWhenFound`
+  7.5 → `"7.50"` → 7.5 still `assertSame`). Mirrors the sibling `AudiobookProgressStore` DECIMAL
+  handling. Did NOT flip the assertion.
+- **SV-2.6 SyncPlayManager ×2 (TEST fix).** `ConnectionInterface::send(): bool`
+  (`ConnectionInterface.php:40`); verified the only concrete impl `Connection::send()`
+  (`Connection.php:113-124`) always returns bool (`return $result !== false;`) — so the null was a
+  pure mock artifact. The two `testBroadcastToGroup*` tests stubbed `send()` with
+  `willReturnCallback(... : void)` which returns null → PHPUnit's generated `: bool` mock method
+  raised `TypeError`. Fixed the 5 callbacks to `: bool` + `return true;`. No false/backpressure branch
+  added: `SyncPlayManager::broadcastToGroup` (`:1227`) does not consume the send() bool (SV-2.6's
+  buffer-full skip/pause logic lives in MessageHandler/WebSocketServer, owned by SV-2.6 proper), so a
+  false-return test here would assert nothing.
+
+Files: `src/Media/Library/BookProgressStore.php`,
+`tests/Unit/Session/SyncPlay/SyncPlayManagerTest.php`.
+
+Verification (actual output):
+- `phpunit --filter 'BookProgressStore|SyncPlayManager'` → `OK (46 tests, 125 assertions)`.
+- `phpunit --testsuite Unit` → `Tests: 4907, Assertions: 38485, Errors: 8, Failures: 2, Skipped: 5,
+  Risky: 2.` The 3 targeted reds cleared; NO new reds. Remaining 10 reds are ONLY the known-drift
+  buckets (owned by their own steps, untouched here):
+  - SV-2.8: `ItemRepositoryTest::testAddStream{InsertsStream,PersistsTrackMetadataColumns}` (2 fail)
+  - SV-4.13: `FfmpegRunnerTest::testBuildTranscodeCommand*` (3) + `FfmpegRunnerHlsTest::testBuildHlsCommand*` (5) = 8 err
+- `phpstan analyze -c phpstan.neon.dist` → `[OK] No errors` (645 files).
+- `phpcs --standard=PSR12` on both touched files → 0 errors.

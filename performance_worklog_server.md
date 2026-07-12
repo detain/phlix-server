@@ -642,3 +642,99 @@ What is genuinely correct (high confidence):
    `pending >= limit` is reached *at ping time* if a tighter bound is wanted).
 
 **Verdict: 3 findings (1 HIGH requiring on-box verification / rewire, 2 LOW).**
+
+## Fixer — SV-0.5 review findings — 2026-07-12
+
+All 3 findings fixed. Files touched:
+`src/Server/WebSocket/WebSocketServer.php`, `start.php`,
+`src/Access/StreamSessionService.php`,
+`tests/Unit/Server/WebSocket/WebSocketServerTest.php`.
+
+### Finding 1 (HIGH) — WS ping/pong bound to a worker that never listens
+
+Root cause confirmed by reading `start.php` + Workerman `vendor/`: `start.php`
+declares the real listener `$wsWorker` (pre-`runAll`), but `WebSocketServer`'s
+constructor built its OWN `Worker` (post-`runAll`, inside the forked child's
+`onWorkerStart`) and bound `onConnect/onMessage/onClose/onError/onWebSocketPong`
+to THAT throwaway worker. Workerman only `listen()`s workers created before
+`runAll()`, so the internal worker never accepted connections; the accepting
+`$wsWorker` had no callbacks. The Websocket protocol resolves pongs via
+`$connection->worker->onWebSocketPong` (= the accepting `$wsWorker`), so pongs
+never reached `recordPong()`, the pool was never populated via `onConnect`, and
+S-F28 half-open detection (and, by the same defect, SyncPlay message routing)
+was dead in the resident path.
+
+**Options considered:**
+(a) inject the real `$wsWorker` into `WebSocketServer` and bind the callbacks
+onto it; (b) have `WebSocketServer` declare/run its own worker before `runAll()`
+(would duplicate the listener + fight `start.php`'s container-building
+`onWorkerStart`); (c) copy callbacks onto `$wsWorker` in `start.php` by hand
+(leaks WS wiring into bootstrap, easy to drift).
+
+**Chosen: (a).** `WebSocketServer::__construct` now takes an optional third arg
+`?Worker $worker`. When provided it is used as `$this->worker` (the caller keeps
+ownership of `onWorkerStart` — we do NOT clobber it), and the new private
+`bindConnectionCallbacks()` binds `onConnect/onMessage/onClose/onError/`
+`onWebSocketPong` onto that real listener. When null (tests / SyncPlayWorker /
+`run()`) the old standalone behaviour is preserved (own worker + own
+`onWorkerStart`). `start.php` now passes `$w` (the `onWorkerStart`-supplied
+listening worker) as the third arg, so all callbacks — crucially the pong
+handler — bind to the worker that actually accepts on :8097. The reaper + ping
+timers are unchanged: they arm via `onStart()` which `start.php` calls inside
+`$w`'s `onWorkerStart`, so `Timer::add` registers in that same worker process,
+and they now operate over a pool that `onConnect` genuinely fills.
+New `getWorker()` accessor exposes the wired worker.
+
+Regression guard: `testCallbacksBindToInjectedListeningWorker` injects a listener
+worker (with a caller-owned `onWorkerStart`) and asserts `getWorker()` returns
+that same instance, that all four lifecycle callbacks AND `onWebSocketPong` are
+bound to it, and that the caller's `onWorkerStart` is NOT overwritten. This
+fails against the old code (callbacks would be on the internal throwaway worker).
+
+Dual-entrypoint: `public/index.php` has NO WS worker (verified — `grep` for
+`websocket|WebSocketServer|8097|wsWorker` returns nothing), so no mirroring is
+needed; the WS worker is resident-only (`start.php`). `SyncPlayWorker` (the
+self-listening reference pattern) is unused in both entrypoints (only referenced
+in its own docblock example), so it was left untouched.
+
+### Finding 2 (LOW) — `releaseStream()` teardown wording overstated
+
+No clean stream-end hook exists: the streaming path is pure signed-URL HTTP GETs
+(direct + HLS segments); the client just stops requesting, and `active_streams`
+rows are removed only by the 60s `cleanupStaleStreams()` sweep. Chose the honest
+option (correct the wording, do NOT invent a fake hook). Reworded the
+`heartbeatTimerIds` property docblock, `registerHeartbeatTimer()` docblock, and
+`releaseStream()` docblock in `StreamSessionService` to state teardown in the
+resident HTTP path is TIMEOUT-DRIVEN (one-shot self-clear ~30s after the last
+request + the 60s stale sweep), and that `releaseStream()` is the EXPLICIT
+teardown path for callers that DO have a stream-end signal (currently tests).
+
+### Finding 3 (LOW) — reap-latency figure corrected
+
+The "~2×" figure lived in the previous implementer note. Added an accurate
+comment in `WebSocketServer::onStart()` (ping-timer block): a dead peer is reaped
+on the sweep that OBSERVES `pendingPings >= limit`, i.e. the `(limit + 1)`th
+sweep, so with defaults (interval 30s, limit 2) reap latency is
+`~(limit + 1) x interval ≈ 90s`, not ~2x. (This note's Gap-1 "~2× ping window"
+line above is superseded by that figure.)
+
+### Verification (this box)
+- `phpunit --filter 'WebSocketServer|StreamLimit|HttpHandler|StreamSession'` →
+  **OK (86 tests, 182 assertions)** (was 85; +1 regression test).
+- `phpunit tests/Unit/Server/WebSocket tests/Unit/Access` → **OK (37 tests, 120
+  assertions)** (constructor-signature regression check across the WS/Access
+  suites).
+- `phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (645/645).
+- `phpcs --standard=PSR12` on touched files → WebSocketServer.php + the test file
+  **clean**; StreamSessionService.php only the 5 PRE-EXISTING >120-char warnings
+  in `getActiveStreamsForProfile` (lines 370-375, untouched); start.php only the
+  PRE-EXISTING line-5 file-header error (my diff starts at line 271). No NEW
+  errors/warnings introduced.
+
+### On-box verification STILL NEEDED
+Finding 1 is a resident-runtime wiring fix and `start.php` is OUTSIDE CI, so unit
+tests cannot exercise the real :8097 listener. Per §0.7 this warrants an on-box
+confirmation after deploy: connect a real WS client that pongs and confirm it
+survives ≥2 ping intervals, then kill a WS client (suppress pongs) and confirm it
+is reaped within ~(limit+1)× the ping interval, and confirm SyncPlay message
+routing works over the live socket.

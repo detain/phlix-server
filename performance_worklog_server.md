@@ -1752,3 +1752,64 @@ the scan fire earlier than the timer path.
 - `src/LiveTv/Recording/RecordingScheduler.php` — scan skips ids with a live timer; onStop hook
   registered in ctor; `fireStopTimer` unset moved to `finally`.
 - `tests/Unit/LiveTv/RecorderTimedStopTest.php`, `tests/Unit/LiveTv/Recording/RecordingSchedulerTest.php`.
+
+## Reviewer (re-review) — SV-3.1c fix — 2026-07-12
+
+Re-reviewed the fix range `bcac8e50..a61f7782` (impl `ddd41106` + tests `a61f7782`)
+against the 3 original findings. Verified locally: phpstan L9 `-c phpstan.neon.dist`
+= [OK] 0 errors; `phpunit --filter 'RecorderTimedStop|RecordingScheduler|Recorder'`
+= OK (40 tests, 112 assertions); phpcs PSR-12 on both touched src files = 0 errors
+(2 pre-existing >120-char warnings on unchanged lines 204/1654, non-blocking §0.2).
+
+Check-by-check:
+1. CAS RETURN-TYPE (highest priority) — CONFIRMED CORRECT. The parent Workerman
+   client `Connection::query()` (vendor/workerman/mysql/src/Connection.php:1859-1860)
+   returns `$this->sQuery->rowCount()` — an INT — for `update|delete|replace`;
+   `PhlixMySQLConnection::query()` delegates to `parent::query()`. So `$affected` is a
+   genuine int affected-row count and `is_int($affected) && $affected >= 1` is a valid
+   gate. The normal (non-race) path matches the still-`recording` row and, because the
+   UPDATE always changes `status`/`updated_at`, rowCount is 1 → onComplete fires exactly
+   once (no MYSQL_ATTR_FOUND_ROWS "matched-but-unchanged 0" trap). The cited precedent
+   `ScanJobRepository::claimNext()` (:158-166) relies on the identical `is_int(...) &&
+   < 1` idiom for a conditional UPDATE — the usage matches. NOT the feared regression.
+2. IDEMPOTENCY (finding 1) — CONFIRMED. Both completion writes are conditional CAS
+   (`WHERE recording_id=? AND status='recording'`): stopRecording (Recorder.php:802-828)
+   fires onComplete only after the affected>=1 guard; endRecording's reconcile branch
+   (:905-919) likewise; endRecording's live branch delegates to stopRecording (no
+   separate write). No path fires onComplete unconditionally. Test
+   `testCompletionIsIdempotentUnderTimerVsScanRace` (affected 1→0) proves exactly-once
+   and would double-fire against pre-fix code.
+3. SCAN EXCLUSION + SLOT TIMING (finding 1b) — CONFIRMED. processCompletedRecordings
+   skips ids in `stopTimerIds` (RecordingScheduler.php:228); fireStopTimer clears the
+   slot in `finally` AFTER endRecording returns (:336-345), so the id stays set through
+   the ffmpeg-teardown window (terminateRecording precedes the CAS in stopRecording, so
+   the id is present during the multi-second kill; cancelStopTimer only removes it after
+   the row is already `completed`). Skipping by `stopTimerIds` (NOT `activeRecordings`)
+   is correct: boot recovery (LiveTvManager::bootstrap→Recorder::resumeActiveRecordings)
+   re-attaches pid-alive rows WITHOUT calling scheduleStopTimer, so recovered recordings
+   are NOT in stopTimerIds and remain covered by the scan. No recording is left with
+   neither a timer nor scan coverage. Test asserts endRecording is never called for an
+   armed-timer row.
+4. onStop EXACTLY-ONCE + NO CYCLE/RECURSION (finding 2) — CONFIRMED. onStop fires once
+   per manual path via the `$wasActive` guard (stopRecording fires it; cancel/delete fire
+   it only in the `!$wasActive` fallback). The scheduler ctor registers
+   `onStop(fn=>cancelStopTimer)` on the already-built Recorder — the DI provider
+   (LiveTvServicesProvider.php:205-219) builds Recorder→LiveTvManager→scheduler in order,
+   no construction cycle; ctor signature unchanged; scheduler is only ever obtained via
+   `container->get` (start.php:235) and is never `new`ed in index.php/start.php, so no
+   entrypoint mirroring is owed. cancelStopTimer touches only Timer::del + the local
+   array — it cannot re-enter the Recorder, so no recursion. activeStopTimerCount()
+   returns to baseline on manual cancel (test `testManualCancelCancelsArmedStopTimer`).
+5. PADDING CLAMP (finding 3) — CONFIRMED. Scan SQL `end_time + GREATEST(0,
+   COALESCE(post_padding_seconds, 60))` (Recorder.php:977) mirrors effectiveEndTime()'s
+   `$endTime + max(0, $postPaddingSeconds)` (:949); COALESCE default 60 matches the PHP
+   default in endRecording. Timer and scan agree on the effective stop for the same row.
+6. NO NEW REGRESSION — phpstan L9 clean; no exit/die/blocking-sleep introduced; onStop
+   registered exactly once (single scheduler singleton) so onStopCallbacks is not an
+   unbounded static; SV-3.1c timer/scan/padding behavior intact; Recorder↔Scheduler
+   wiring sound.
+7. TESTS GENUINE — the idempotency, onStop-on-all-manual-paths, and scan-skips-timer-held
+   tests each fail against the pre-fix code (double onComplete, missing onStop mechanism,
+   endRecording called by the scan respectively). They guard the exact seams.
+
+NO FINDINGS

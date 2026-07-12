@@ -547,3 +547,98 @@ are captured automatically.
   `getActiveStreamsForProfile`).
 
 NO FINDINGS (pending review)
+
+## Reviewer (per-step) — SV-0.5 — 2026-07-12
+
+Reviewed commits `4decf21e`, `dd842326`, `98073f0f` against the SV-0.5 Acceptance
+Criteria, §0.3 async/Swoole + dual-entrypoint rules, and the ping/heartbeat
+correctness contract. Verifications (this box):
+- `phpunit --filter 'WebSocketServer|StreamLimit|HttpHandler|StreamSession'` → **OK (85 tests, 175 assertions)**.
+- `phpstan analyze -c phpstan.neon.dist` → **[OK] No errors** (645/645).
+- `phpcs --standard=PSR12` on the 5 touched files → **0 errors**, 5 pre-existing
+  >120-char warnings in `StreamSessionService::getActiveStreamsForProfile`
+  (lines 356-361, untouched by this step; OK per §0.2).
+
+What is genuinely correct (high confidence):
+- `function_exists`→`class_exists` applied at all 3 sites (WebSocketServer.php:124,
+  StreamSessionService.php:165/221, and the removed HttpHandler/StreamLimitMiddleware
+  helpers). Reaper + ping timers now arm.
+- Stream heartbeat timers are one-shot (`Timer::add(30,…,[],false)`), per-session
+  keyed, deduped, self-clearing on fire, and cancelled in `releaseStream()`. The
+  leak test is deterministic (100 sessions × 3 registers → 100 timers → 0 after
+  release) and genuinely guards the seam. DI confirms one shared PHP-DI singleton
+  feeds both the HttpHandler (`container->get`) and StreamLimitMiddleware
+  (autowired) paths, so the registry is shared as claimed.
+- The `ping()` frame encoding is valid: `Websocket::encode` uses
+  `$connection->websocketType` as the frame first byte, so `websocketType="\x89"`
+  + `send('')` emits a well-formed empty-payload PING; the prior type is restored
+  synchronously (encode runs inside send()). Pong→recordPong resets the counter,
+  so a responding client is never reaped (test confirms).
+
+### Findings
+
+1. **[HIGH — behavioral AC unverified; static analysis says it fails in the live
+   path] The WS ping/pong callback surface is bound to a Worker that never
+   listens in the resident `start.php` path (dual-entrypoint gap, §0.3).**
+   - `WebSocketServer::__construct` binds `onConnect`/`onMessage`/`onClose`/
+     `onWebSocketPong` and creates its socket on its **own** `$this->worker`
+     (`WebSocketServer.php:81-97`). But `start.php` does **not** run that worker:
+     it declares a **separate** listener `$wsWorker = new Worker('websocket://0.0.0.0:8097')`
+     at `start.php:239` (the pre-`runAll` registered worker), and inside
+     `$wsWorker->onWorkerStart` it constructs the `WebSocketServer` and calls only
+     `$wsServer->onStart()` (`start.php:274-287`). It never calls `$wsServer->run()`
+     and never copies WebSocketServer's callbacks onto `$wsWorker`.
+   - The `WebSocketServer` internal worker is constructed **after** `Worker::runAll()`
+     (inside a forked child's `onWorkerStart`); Workerman only calls `listen()`
+     during `runAll()` → `initWorkers()` (`vendor/workerman/workerman/src/Worker.php:588-609`,
+     and `start.php:356-357` states this rule outright). So that worker never
+     accepts connections — `$wsWorker` is the real listener.
+   - The Websocket protocol resolves the pong handler as
+     `$connection->onWebSocketPong ?? $connection->worker->onWebSocketPong`
+     (`vendor/workerman/workerman/src/Protocols/Websocket.php:215`), where
+     `$connection->worker` is the **accepting** worker (`$wsWorker`), which has no
+     `onWebSocketPong` (nor `onConnect`/`onMessage`). Consequences in production:
+     the pool is never populated via `WebSocketServer::onConnect`, and even if it
+     were, pongs would not reach `recordPong()` → `pendingPings` never resets. The
+     ping sweep therefore cannot satisfy the AC ("a killed WS client is reaped
+     within the ping window" **and** a live/ponging client survives).
+   - The unit tests pass because they drive `WebSocketServer` in isolation, where
+     its own internal worker holds the callbacks and pool — they cannot catch this
+     integration gap. Per §0.7, a behavioral change like this needs an on-the-box
+     verification against the running :8097 worker.
+   - Why it matters: this is the exact dual-entrypoint trap §0.3 warns about. As
+     wired, the SV-0.5 ping/pong (and, by the same defect, the pre-existing
+     SyncPlay callback surface) is disconnected from the actual listener, so
+     S-F28's half-open detection does not function in the resident path.
+   - Fix direction: make the accepting worker and the callback-bearing worker the
+     same instance — either (a) bind `onConnect/onMessage/onClose/onError/onWebSocketPong`
+     (and the ping/reaper timers) onto `$wsWorker` in `start.php` (e.g. have
+     `WebSocketServer` accept an injected Worker or expose a `bindTo(Worker $w)`),
+     or (b) declare/run the `WebSocketServer` worker itself before `runAll()`.
+     Then verify on the box: a real WS client that pongs survives ≥2 ping
+     intervals, and a client killed with pongs suppressed is reaped.
+
+2. **[LOW — accuracy of the stated teardown mechanism] `releaseStream()` has no
+   production caller.** `grep` finds `releaseStream` referenced only in tests and
+   the doc comments; no HTTP endpoint, `HttpHandler`, or middleware invokes it on
+   stream end (`StreamLimitController` exposes get/update/list only). The
+   worklog/comments call `releaseStream()` "the canonical stream-teardown path"
+   for timer cancellation, but in production timers are only ever removed by the
+   one-shot self-clear (~30s after the last request) and DB rows only decrement
+   via the 60s `cleanupStaleStreams` sweep. This is **not** a leak (the
+   self-clearing one-shot design bounds the timer count, as the implementer note
+   acknowledges) and the AC "accounting decrements on stream end" is still met via
+   the heartbeat-timeout sweep — so not blocking. Flagged only because the stated
+   design overstates what runs in production; if explicit teardown is desired,
+   wire `releaseStream()` into a real stream-end signal.
+
+3. **[LOW — doc/comment inaccuracy] Reap latency is ~(limit+1)× the ping interval,
+   not "~2×".** With the default `ping_not_response_limit=2`, a dead peer is
+   reaped on the **third** sweep (sweep1 pending→1, sweep2 pending→2, sweep3
+   observes ≥2 and reaps), i.e. ≈90s at the 30s default — as
+   `testPingSweepReapsNonRespondingConnection` itself demonstrates. The
+   implementer note and the code comment say "~2× ping window." The AC ("within
+   the ping window") is still loosely satisfied; adjust the wording (or reap when
+   `pending >= limit` is reached *at ping time* if a tighter bound is wanted).
+
+**Verdict: 3 findings (1 HIGH requiring on-box verification / rewire, 2 LOW).**

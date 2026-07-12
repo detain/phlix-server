@@ -1360,15 +1360,22 @@ class ItemRepositoryTest extends TestCase
             ->with(
                 $this->stringContains('INSERT INTO media_streams'),
                 $this->callback(function ($params) {
-                    // 12 bindings since migration 071 added channels/title/is_default.
-                    return count($params) === 12
+                    // 17 bindings: migration 071 added channels/title/is_default;
+                    // migration 073 (SV-1.1) added color_space/color_transfer/
+                    // color_primaries/max_luminance/avg_luminance.
+                    return count($params) === 17
                         && $params[1] === 'movie-1'
                         && $params[2] === 0
                         && $params[3] === 'video'
                         && $params[4] === 'h264'
                         && $params[7] === null   // channels (video row)
                         && $params[10] === null  // title
-                        && $params[11] === 0;    // is_default defaults to 0
+                        && $params[11] === 0     // is_default defaults to 0
+                        && $params[12] === null  // color_space (unset)
+                        && $params[13] === null  // color_transfer (unset)
+                        && $params[14] === null  // color_primaries (unset)
+                        && $params[15] === null  // max_luminance (unset)
+                        && $params[16] === null; // avg_luminance (unset)
                 })
             );
 
@@ -1397,7 +1404,8 @@ class ItemRepositoryTest extends TestCase
                     $this->stringContains('is_default')
                 ),
                 $this->callback(function ($params) {
-                    return count($params) === 12
+                    // 17 bindings after migration 073 (SV-1.1) color columns.
+                    return count($params) === 17
                         && $params[3] === 'audio'
                         && $params[5] === 'eng'      // language
                         && $params[7] === 6          // channels
@@ -1416,6 +1424,49 @@ class ItemRepositoryTest extends TestCase
             'channels' => 6,
             'title' => 'Surround 5.1',
             'is_default' => 1,
+        ]);
+
+        $this->assertNotEmpty($id);
+    }
+
+    public function testAddStreamPersistsColorMetadataColumns(): void
+    {
+        // Migration 073 (SV-1.1): HDR color metadata flows through the INSERT so
+        // the transcode/tone-map pipeline can read the source's color primaries
+        // and mastering-display luminance. Luminance is is_numeric-guarded and
+        // cast to float; a non-numeric value persists as NULL.
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO media_streams'),
+                    $this->stringContains('color_space'),
+                    $this->stringContains('color_transfer'),
+                    $this->stringContains('color_primaries'),
+                    $this->stringContains('max_luminance'),
+                    $this->stringContains('avg_luminance')
+                ),
+                $this->callback(function ($params) {
+                    return count($params) === 17
+                        && $params[12] === 'bt2020nc'   // color_space
+                        && $params[13] === 'smpte2084'  // color_transfer
+                        && $params[14] === 'bt2020'     // color_primaries
+                        && $params[15] === 1000.0       // max_luminance: numeric → float
+                        && $params[16] === null;        // avg_luminance: non-numeric → NULL
+                })
+            );
+
+        $repo = new ItemRepository($db);
+        $id = $repo->addStream('movie-1', [
+            'stream_index' => 0,
+            'stream_type' => 'video',
+            'codec' => 'hevc',
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => '1000',   // numeric string → (float) 1000.0
+            'avg_luminance' => 'N/A',    // non-numeric → is_numeric guard → NULL
         ]);
 
         $this->assertNotEmpty($id);

@@ -426,18 +426,21 @@ class SyncPlayManagerTest extends TestCase
         $sentTo = [];
         $mockConnHost->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+            ->willReturnCallback(function (array $frame) use (&$sentTo): bool {
                 $sentTo['conn-host'] = $frame;
+                return true;
             });
         $mockConn2->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+            ->willReturnCallback(function (array $frame) use (&$sentTo): bool {
                 $sentTo['conn-member-2'] = $frame;
+                return true;
             });
         $mockConn3->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+            ->willReturnCallback(function (array $frame) use (&$sentTo): bool {
                 $sentTo['conn-member-3'] = $frame;
+                return true;
             });
 
         $pool->add($mockConnHost);
@@ -494,15 +497,17 @@ class SyncPlayManagerTest extends TestCase
         $sentTo = [];
         $mockConnHost->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+            ->willReturnCallback(function (array $frame) use (&$sentTo): bool {
                 $sentTo['conn-host'] = $frame;
+                return true;
             });
         // member_2 should NOT be called (excluded by member ID)
         $mockConn2->expects($this->never())->method('send');
         $mockConn3->expects($this->once())
             ->method('send')
-            ->willReturnCallback(function (array $frame) use (&$sentTo): void {
+            ->willReturnCallback(function (array $frame) use (&$sentTo): bool {
                 $sentTo['conn-member-3'] = $frame;
+                return true;
             });
 
         $pool->add($mockConnHost);

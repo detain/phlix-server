@@ -286,4 +286,120 @@ class RecordingSchedulerTest extends TestCase
         $this->assertSame(0, $result['due']['started']);
         $this->assertSame(1, $result['completed']['ended']);
     }
+
+    /**
+     * SV-3.1c finding 1(b): the safety-net scan must NOT compete with the live
+     * one-shot stop timer. A recording that has just been started (and therefore
+     * holds an armed per-recording stop timer) is reported by the Recorder as
+     * due-to-stop, but the scan skips it — that timer is the primary stop path.
+     * endRecording() must never be called for it via the scan.
+     */
+    public function testScanSkipsRecordingsWithAnArmedStopTimer(): void
+    {
+        $now = time();
+        $endTime = $now + 3600;
+
+        $row = [
+            'recording_id' => 'rec-1',
+            'channel_id' => 'ch-1',
+            'start_time' => $now - 30,
+            'end_time' => $endTime,
+            'pre_padding_seconds' => 60,
+            'post_padding_seconds' => 90,
+            'priority' => 5,
+            'status' => 'scheduled',
+        ];
+
+        $this->mockDb->method('query')->willReturn($this->fakeResult([$row]));
+        $this->mockLiveTvManager->method('getTuners')->willReturn([
+            ['id' => 'tuner-1', 'status' => LiveTvManager::TUNER_STATUS_IDLE],
+        ]);
+        $this->mockRecorder->method('startRecording')->with('rec-1')->willReturn(true);
+        $this->mockRecorder->method('effectiveEndTime')->willReturn($endTime + 90);
+
+        // Arm the one-shot stop timer for rec-1.
+        $this->scheduler->processDueRecordings();
+        $this->assertSame(1, $this->scheduler->activeStopTimerCount());
+
+        // The scan reports rec-1 as due-to-stop, but its timer is still armed.
+        $this->mockRecorder->method('getRecordingsDueToStop')->willReturn(['rec-1']);
+        $this->mockRecorder->expects($this->never())->method('endRecording');
+
+        $stats = $this->scheduler->processCompletedRecordings();
+
+        $this->assertSame(0, $stats['ended'], 'recording with an armed timer is skipped by the scan');
+        $this->assertSame(0, $stats['errors']);
+        $this->assertSame(1, $this->scheduler->activeStopTimerCount(), 'the armed timer is left intact');
+    }
+
+    /**
+     * SV-3.1c finding 2: a manual stop must cancel the pending one-shot stop
+     * timer. Uses a REAL Recorder (only startRecording stubbed, to avoid spawning
+     * ffmpeg) so the scheduler's onStop hook is genuinely wired: after arming a
+     * timer via processDueRecordings(), a manual cancelRecording() fires the
+     * Recorder's onStop hook, which cancels the timer and returns
+     * activeStopTimerCount() to baseline.
+     */
+    public function testManualCancelCancelsArmedStopTimer(): void
+    {
+        $now = time();
+        $endTime = $now + 3600;
+
+        $scheduledRow = [
+            'recording_id' => 'rec-1',
+            'channel_id' => 'ch-1',
+            'start_time' => $now - 30,
+            'end_time' => $endTime,
+            'pre_padding_seconds' => 60,
+            'post_padding_seconds' => 90,
+            'priority' => 5,
+            'status' => 'scheduled',
+        ];
+        $recordingRow = array_merge($scheduledRow, [
+            'status' => 'recording',
+            'pid' => null,
+        ]);
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use ($scheduledRow, $recordingRow) {
+                if (strpos($sql, "r.status = 'scheduled'") !== false) {
+                    return $this->fakeResult([$scheduledRow]); // processDueRecordings
+                }
+                if (stripos($sql, 'SELECT') === 0) {
+                    return $this->fakeResult([$recordingRow]);  // getRecording
+                }
+                return 1; // UPDATE / DELETE affected-rows
+            }
+        );
+
+        // Real Recorder; only startRecording is stubbed so no ffmpeg is spawned
+        // and activeRecordings stays empty (the cancel exercises the non-live
+        // onStop fallback path).
+        $recorder = $this->getMockBuilder(Recorder::class)
+            ->setConstructorArgs([$db, '/tmp/phlix-nonexistent', 0, $this->mockLogger, null, '/usr/bin/ffmpeg', null])
+            ->onlyMethods(['startRecording'])
+            ->getMock();
+        $recorder->method('startRecording')->willReturn(true);
+
+        $liveTvManager = $this->createMock(LiveTvManager::class);
+        $liveTvManager->method('getTuners')->willReturn([
+            ['id' => 'tuner-1', 'status' => LiveTvManager::TUNER_STATUS_IDLE],
+        ]);
+
+        $scheduler = new RecordingScheduler($db, $recorder, $liveTvManager, $this->mockLogger);
+
+        // Arm the one-shot stop timer.
+        $stats = $scheduler->processDueRecordings();
+        $this->assertSame(1, $stats['started']);
+        $this->assertSame(1, $scheduler->activeStopTimerCount(), 'a stop timer is armed after start');
+
+        // Manual cancel must cancel the armed timer via the onStop hook.
+        $this->assertTrue($recorder->cancelRecording('rec-1'));
+        $this->assertSame(
+            0,
+            $scheduler->activeStopTimerCount(),
+            'the one-shot stop timer is cancelled on manual cancel — count back to baseline'
+        );
+    }
 }

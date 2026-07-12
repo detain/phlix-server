@@ -51,6 +51,10 @@ class ThemeMediaStreamControllerTest extends TestCase
 
             $response = $controller->streamAudio($request, ['libraryId' => 'lib-1']);
 
+            // withFile() streams lazily; materialize the deferred wire output
+            // (status/headers/body window) exactly as the event loop / send() emit it.
+            $response->materializeFileWindow();
+
             $this->assertSame(200, $response->statusCode);
             $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
             $this->assertSame('fake mp3 audio content', $response->body);
@@ -193,6 +197,8 @@ class ThemeMediaStreamControllerTest extends TestCase
             $request = new Request();
 
             $response = $controller->streamVideo($request, ['libraryId' => 'lib-1']);
+
+            $response->materializeFileWindow();
 
             $this->assertSame(200, $response->statusCode);
             $this->assertSame('video/mp4', $response->headers['Content-Type']);
@@ -376,6 +382,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         try {
             $controller = $this->audioControllerFor($tempFile);
             $response = $controller->streamAudio($this->rangeRequest('bytes=2-5'), ['libraryId' => 'lib-1']);
+            $response->materializeFileWindow();
 
             $this->assertSame(206, $response->statusCode);
             $this->assertSame('audio/mpeg', $response->headers['Content-Type']);
@@ -398,6 +405,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         try {
             $controller = $this->audioControllerFor($tempFile);
             $response = $controller->streamAudio($this->rangeRequest('bytes=-3'), ['libraryId' => 'lib-1']);
+            $response->materializeFileWindow();
 
             $this->assertSame(206, $response->statusCode);
             $this->assertSame('bytes 7-9/10', $response->headers['Content-Range']);
@@ -418,6 +426,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         try {
             $controller = $this->audioControllerFor($tempFile);
             $response = $controller->streamAudio($this->rangeRequest('bytes=8-100'), ['libraryId' => 'lib-1']);
+            $response->materializeFileWindow();
 
             $this->assertSame(206, $response->statusCode);
             $this->assertSame('bytes 8-9/10', $response->headers['Content-Range']);
@@ -457,6 +466,7 @@ class ThemeMediaStreamControllerTest extends TestCase
         try {
             $controller = $this->audioControllerFor($tempFile);
             $response = $controller->streamAudio($this->rangeRequest('bytes=5-'), ['libraryId' => 'lib-1']);
+            $response->materializeFileWindow();
 
             $this->assertSame(206, $response->statusCode);
             $this->assertSame('bytes 5-9/10', $response->headers['Content-Range']);
@@ -505,6 +515,7 @@ class ThemeMediaStreamControllerTest extends TestCase
             $controller = new ThemeMediaStreamController($repo);
 
             $response = $controller->streamVideo($this->rangeRequest('bytes=0-3'), ['libraryId' => 'lib-1']);
+            $response->materializeFileWindow();
 
             $this->assertSame(206, $response->statusCode);
             $this->assertSame('video/mp4', $response->headers['Content-Type']);

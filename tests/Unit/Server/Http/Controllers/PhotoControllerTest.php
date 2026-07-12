@@ -383,6 +383,8 @@ class PhotoControllerTest extends TestCase
             ]);
 
             $response = $this->controller->getFull($request, $params);
+            // withFile() streams lazily; materialize the deferred wire output.
+            $response->materializeFileWindow();
 
             $this->assertEquals(206, $response->statusCode);
             $this->assertEquals('image/jpeg', $response->headers['Content-Type']);
@@ -438,6 +440,7 @@ class PhotoControllerTest extends TestCase
             ]);
 
             $response = $this->controller->getFull($request, $params);
+            $response->materializeFileWindow();
 
             $this->assertEquals(206, $response->statusCode); // Partial content, not 200
             $this->assertEquals('image/jpeg', $response->headers['Content-Type']);
@@ -482,6 +485,7 @@ class PhotoControllerTest extends TestCase
             ]);
 
             $response = $this->controller->getFull($request, $params);
+            $response->materializeFileWindow();
 
             $this->assertEquals(200, $response->statusCode);
             $this->assertEquals('image/jpeg', $response->headers['Content-Type']);

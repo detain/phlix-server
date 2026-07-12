@@ -302,6 +302,9 @@ class AudiobookControllerTest extends TestCase
 
         $request = new Request();
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+        // withFile() streams lazily; materialize the deferred wire output
+        // (status/headers/body window) exactly as the event loop / send() emit it.
+        $response->materializeFileWindow();
 
         $this->assertEquals(200, $response->statusCode);
         $this->assertEquals($originalContent, $response->body);
@@ -363,6 +366,7 @@ class AudiobookControllerTest extends TestCase
         $request->headers['Range'] = 'bytes=5-10';
 
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+        $response->materializeFileWindow();
 
         $this->assertEquals(206, $response->statusCode); // Partial content
         $this->assertEquals('56789A', $response->body); // bytes 5-10
@@ -407,6 +411,7 @@ class AudiobookControllerTest extends TestCase
         $request->headers['RANGE'] = 'bytes=5-10';
 
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+        $response->materializeFileWindow();
 
         $this->assertEquals(206, $response->statusCode); // Partial content, not 200
         $this->assertEquals('56789A', $response->body); // bytes 5-10
@@ -519,6 +524,7 @@ class AudiobookControllerTest extends TestCase
         // No Range header => must return the COMPLETE file.
         $request = new Request();
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+        $response->materializeFileWindow();
 
         $this->assertEquals(200, $response->statusCode);
         // Content-Length must equal the full file size...
@@ -558,6 +564,7 @@ class AudiobookControllerTest extends TestCase
         $request->headers['Range'] = "bytes={$start}-{$end}";
 
         $response = $controller->streamAudiobook($request, ['id' => 'audiobook-123']);
+        $response->materializeFileWindow();
 
         $expectedLength = $end - $start + 1;
         $this->assertEquals(206, $response->statusCode);

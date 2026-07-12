@@ -12,6 +12,7 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
+use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
@@ -1786,6 +1787,121 @@ class FfmpegRunner
         $cmd .= ' -f mpegts ' . escapeshellarg($outFile);
 
         return $cmd;
+    }
+
+    /**
+     * Builds the ffmpeg INPUT/decode hardware-acceleration flags for a segment
+     * encode.
+     *
+     * These flags are placed BEFORE `-i` (input-side) so ffmpeg selects the
+     * correct decode path and surface format for the chosen accelerator. The
+     * per-vendor mapping mirrors the intent of each
+     * {@see \Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::getInputDeviceArgs()}
+     * used by {@see HwaccelCommandBuilder} for the whole-file transcode path,
+     * so the segment path and the builder path do not diverge:
+     *  - vaapi → `-hwaccel vaapi -hwaccel_device <dev> -hwaccel_output_format vaapi`
+     *  - qsv   → `-hwaccel qsv -qsv_device <dev>`
+     *  - nvenc → `-hwaccel cuda -hwaccel_output_format cuda`
+     *  - videotoolbox → `-hwaccel videotoolbox`
+     *  - amf   → `-hwaccel d3d11va`
+     *
+     * The device is derived from the capability's `extra_args` (matching the
+     * vendor profiles: `device` string for vaapi/qsv, `device_index` int for
+     * nvenc), falling back to sane defaults when absent. Software / unknown
+     * vendors emit no input flags.
+     *
+     * @param HwaccelCapability $capability The probed hardware capability
+     *
+     * @return string The leading input-side hwaccel flags (empty for software)
+     *
+     * @since 0.36.0
+     */
+    private function buildHwaccelInputFlags(HwaccelCapability $capability): string
+    {
+        $extra = $capability->extra_args;
+
+        switch (strtolower($capability->vendor)) {
+            case 'vaapi':
+                $device = (isset($extra['device']) && is_string($extra['device']) && $extra['device'] !== '')
+                    ? $extra['device']
+                    : '/dev/dri/renderD128';
+
+                return ' -hwaccel vaapi -hwaccel_device ' . escapeshellarg($device)
+                    . ' -hwaccel_output_format vaapi';
+
+            case 'qsv':
+                $device = (isset($extra['device']) && is_string($extra['device']) && $extra['device'] !== '')
+                    ? $extra['device']
+                    : '/dev/dri/renderD128';
+
+                return ' -hwaccel qsv -qsv_device ' . escapeshellarg($device);
+
+            case 'nvenc':
+            case 'cuda':
+                $flags = ' -hwaccel cuda';
+                $deviceIndex = $extra['device_index'] ?? null;
+                if (is_int($deviceIndex)) {
+                    $flags .= ' -hwaccel_device ' . $deviceIndex;
+                }
+
+                return $flags . ' -hwaccel_output_format cuda';
+
+            case 'videotoolbox':
+                return ' -hwaccel videotoolbox';
+
+            case 'amf':
+                return ' -hwaccel d3d11va';
+
+            default:
+                return '';
+        }
+    }
+
+    /**
+     * Returns a summary of the probed hardware-acceleration state, suitable for
+     * a one-time boot log of the chosen accelerator.
+     *
+     * @return array{
+     *     enabled: bool,
+     *     prefer_hardware: bool,
+     *     available: list<string>,
+     *     preferred: string|null,
+     *     chosen_vendor: string|null,
+     *     chosen_encoder: string|null
+     * }
+     *
+     * @since 0.36.0
+     */
+    public function getHardwareAccelerationSummary(): array
+    {
+        $enabled = ($this->config['enabled'] ?? false) === true;
+        $preferHardware = ($this->config['prefer_hardware'] ?? true) === true;
+
+        $available = [];
+        $chosenVendor = null;
+        $chosenEncoder = null;
+
+        if ($this->hwaccelRegistry !== null) {
+            $available = array_values(array_map(
+                static fn(HwaccelCapability $cap): string => $cap->vendor,
+                $this->hwaccelRegistry->getAll()
+            ));
+
+            $best = $this->hwaccelRegistry->getEncoder('h264');
+            if ($best !== null) {
+                $chosenVendor = $best->vendor;
+                $chosenEncoder = $best->encoder;
+            }
+        }
+
+        return [
+            'enabled' => $enabled,
+            'prefer_hardware' => $preferHardware,
+            'available' => $available,
+            'preferred' => $this->preferredAccelerator,
+            'chosen_vendor' => $chosenVendor,
+            'chosen_encoder' => $chosenEncoder,
+        ];
     }
 
     /**

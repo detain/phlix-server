@@ -2761,6 +2761,8 @@ class Application
                 $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
                 $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
             );
+            // SV-0.1: share the single merged hwaccel config source with all runners.
+            $ffmpegRunner->setConfig(\Phlix\Config\HwAccelConfig::get());
             $gaplessManager = new \Phlix\Media\Playback\GaplessPlaybackManager(null, $ffmpegRunner);
             $trickplayController = $this->getTrickplayController();
             $chapterMarkerService = new \Phlix\Media\MarkerService($db);
@@ -2791,6 +2793,8 @@ class Application
             $this->configString($ffmpegConfig, 'ffmpeg_path', '/usr/bin/ffmpeg'),
             $this->configString($ffmpegConfig, 'ffprobe_path', '/usr/bin/ffprobe'),
         );
+        // SV-0.1: share the single merged hwaccel config source with all runners.
+        $ffmpeg->setConfig(\Phlix\Config\HwAccelConfig::get());
         $extractor = new \Phlix\Media\Transcoding\Subtitles\SubtitleExtractor();
 
         if ($this->container === null) {

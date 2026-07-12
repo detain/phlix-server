@@ -24,6 +24,7 @@ use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
 use Phlix\Common\Database\ConnectionPool;
+use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
@@ -169,6 +170,20 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
     /** @var ConnectionPool $connectionPool */
     $connectionPool = $container->get(ConnectionPool::class);
     $application = new Application($container, $config, $connectionPool);
+
+    // SV-0.1: probe hardware acceleration exactly once per worker at start (not
+    // per request) and log the chosen accelerator a single time. Resolving the
+    // FfmpegRunner runs the DI factory which calls setConfig() + the probe; the
+    // probe is idempotent (guarded by $hwaccelProbed) so this explicit call is
+    // safe and merely guarantees it happened at boot. It runs OUTSIDE any
+    // coroutine here, so the probe's blocking exec cannot stall the event loop.
+    /** @var \Phlix\Media\Transcoding\FfmpegRunner $ffmpegRunner */
+    $ffmpegRunner = $container->get(\Phlix\Media\Transcoding\FfmpegRunner::class);
+    $ffmpegRunner->probeHardwareAcceleration();
+    LoggerFactory::get(LogChannels::STREAMING)->info(
+        'Hardware acceleration probed at worker start',
+        $ffmpegRunner->getHardwareAccelerationSummary(),
+    );
 
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);

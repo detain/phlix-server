@@ -128,8 +128,18 @@ class AuthManager
      * Avoids a PK lookup on user_repository.getStatus() for every authenticated
      * request when the same user makes multiple concurrent requests. The short
      * TTL (5 seconds) means status revocation takes effect within a few seconds
-     * rather than immediately, which is acceptable for the "disable account"
-     * use-case while significantly reducing DB load.
+     * rather than immediately (see {@see self::invalidateUserStatusCache()} for
+     * the in-process path that makes a status change take effect immediately,
+     * without waiting for the TTL), which is acceptable for the "disable
+     * account" use-case while significantly reducing DB load.
+     *
+     * Bounded by {@see self::USER_STATUS_CACHE_MAX}: insertion order doubles as
+     * an LRU (a cache hit re-inserts the entry at the end via unset()+reassign,
+     * so the map's key order is always oldest-first) exactly like
+     * {@see \Phlix\Media\Library\ItemRepository::$genreFacetCache} — see that
+     * property's docblock for why the unset()-before-reassign step matters for
+     * eviction correctness (a plain value overwrite of an existing key leaves
+     * it in its original position, not the end).
      *
      * @var array<string, array{status: string, cachedAt: int}> keyed by userId
      */
@@ -137,6 +147,16 @@ class AuthManager
 
     /** User status cache TTL in nanoseconds (5 seconds). */
     private const USER_STATUS_CACHE_TTL_NS = 5_000_000_000;
+
+    /**
+     * Hard cap on distinct user IDs held in {@see $userStatusCache}. Without a
+     * cap, a single long-lived worker would accumulate one entry per distinct
+     * user that ever authenticated against it for the lifetime of the
+     * process — unbounded growth on a busy, long-running resident worker.
+     * When the cap is reached, the oldest (least-recently-used) entry is
+     * evicted to make room for the new one.
+     */
+    private const USER_STATUS_CACHE_MAX = 5000;
 
     /**
      * Create a new AuthManager instance.
@@ -217,6 +237,13 @@ class AuthManager
         if (isset($this->userStatusCache[$userId])) {
             $entry = $this->userStatusCache[$userId];
             if (($now - $entry['cachedAt']) < self::USER_STATUS_CACHE_TTL_NS) {
+                // LRU touch: move to the MRU (end) position so a hot user's
+                // entry outlives cold ones when the cache is at its cap. Plain
+                // key lookups leave a PHP array's key order untouched, so this
+                // unset()+reassign is required for the eviction below to be a
+                // genuine LRU rather than pure insertion order.
+                unset($this->userStatusCache[$userId]);
+                $this->userStatusCache[$userId] = $entry;
                 return $entry['status'];
             }
         }
@@ -224,17 +251,41 @@ class AuthManager
         // Cache miss or expired - fetch from DB
         $status = $this->userRepository->getStatus($userId) ?? 'active';
 
-        // Store in cache
+        // Store in cache. unset() first (see the LRU-touch comment above) so a
+        // stale-entry recompute is reinserted at the MRU end rather than left
+        // in its original array position.
+        unset($this->userStatusCache[$userId]);
         $this->userStatusCache[$userId] = [
             'status' => $status,
             'cachedAt' => (int) $now,
         ];
+
+        // Bound the cache: evict the oldest (least-recently-used) entry once
+        // over the cap so a single worker cannot accumulate one entry per
+        // distinct user forever.
+        if (count($this->userStatusCache) > self::USER_STATUS_CACHE_MAX) {
+            $oldest = array_key_first($this->userStatusCache);
+            if ($oldest !== null) {
+                unset($this->userStatusCache[$oldest]);
+            }
+        }
 
         return $status;
     }
 
     /**
      * Clears the cached user status for a user (call when status changes).
+     *
+     * Called by {@see \Phlix\Server\Http\Controllers\Admin\AdminUserController}
+     * after any admin action that changes a user's `status` column (approve,
+     * disable, reject/delete) so an in-process status change is reflected on
+     * THIS worker's very next request for that user, instead of waiting out
+     * the {@see self::USER_STATUS_CACHE_TTL_NS} TTL. Other resident workers in
+     * the same process pool do not share this cache (it is in-worker only,
+     * exactly like {@see UserRepository::$statusCacheById}) and converge only
+     * via the TTL — the 5-second window is the ceiling on cross-worker
+     * revocation latency, immediate invalidation is only possible for
+     * same-worker requests.
      *
      * @param string $userId The user ID to invalidate
      * @return void

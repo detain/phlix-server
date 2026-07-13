@@ -16,6 +16,7 @@ use Phlix\Admin\BackupManager;
 use Phlix\Admin\DashboardService;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Admin\WatchHistoryService;
+use Phlix\Auth\AuthManager;
 use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Media\Library\DuplicateFinder;
 use Phlix\Media\Transcoding\FfmpegRunner;
@@ -25,6 +26,7 @@ use Phlix\Server\Http\Controllers\Admin\AdminMergeController;
 use Phlix\Server\Http\Controllers\Admin\AdminMetadataSourceController;
 use Phlix\Server\Http\Controllers\Admin\AdminTranscodingController;
 use Phlix\Server\Http\Controllers\Admin\AdminSettingsController;
+use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Controllers\Admin\AdminWebhooksController;
 use Phlix\Server\Http\Controllers\Admin\BackupController;
 use Phlix\Server\Http\Controllers\Admin\DashboardController;
@@ -41,6 +43,7 @@ use Workerman\MySQL\Connection;
 
 use function DI\autowire;
 use function DI\factory;
+use function DI\get;
 
 /**
  * Wires admin-tier services into the container.
@@ -97,6 +100,17 @@ final class AdminServicesProvider implements ServiceProviderInterface
             // Server-wide settings store + admin API (Step 0.5).
             SettingsRepository::class      => autowire(),
             AdminSettingsController::class => autowire(),
+
+            // Admin user management (Step 1.2a). `authManager` is named
+            // explicitly (SV-2.7): PHP-DI skips optional ctor params with
+            // class-typed defaults during autowiring, so without this the
+            // controller would always see a null AuthManager and its
+            // approve/disable/reject/delete actions could never invalidate
+            // AuthManager's in-worker user-status cache — a status change
+            // would then only ever take effect after the cache TTL elapses,
+            // even for a request landing on the SAME worker that made it.
+            AdminUserController::class => autowire()
+                ->constructorParameter('authManager', get(AuthManager::class)),
 
             // Filesystem browse endpoint (Step 0.6) — roots come from config/filesystem.php.
             FsBrowseController::class => factory(static function (): FsBrowseController {

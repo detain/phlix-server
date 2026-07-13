@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Server\Http\Controllers\Admin;
 
+use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Server\Http\Request;
@@ -852,5 +853,118 @@ final class AdminUserControllerTest extends TestCase
         /** @var array{error: string} $body */
         $body = json_decode($response->body, true);
         $this->assertStringContainsString('pending', $body['error']);
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // SV-2.7: AuthManager user-status cache invalidation wiring
+    //
+    // Every action here that mutates a user's `status` column must
+    // immediately invalidate AuthManager's in-worker status cache so a
+    // status change takes effect on THIS worker's very next request for
+    // that user, instead of waiting out the cache TTL. All other tests in
+    // this file construct the controller with no AuthManager (the default
+    // null) and already prove that omission is a harmless no-op (the
+    // nullsafe `?->` call), so these tests only need to cover the
+    // "AuthManager IS wired" side.
+    // ─────────────────────────────────────────────────────────────────
+
+    public function testApproveInvalidatesAuthManagerUserStatusCache(): void
+    {
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'pending'];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('setStatus')->with('3', 'active');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('invalidateUserStatusCache')
+            ->with('3');
+
+        $controller = new AdminUserController($repo, $authManager);
+        $response = $controller->approve($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testDisableInvalidatesAuthManagerUserStatusCache(): void
+    {
+        $this->setCurrentUser('1');
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'active', 'is_admin' => 0];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('setStatus')->with('3', 'disabled');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('invalidateUserStatusCache')
+            ->with('3');
+
+        $controller = new AdminUserController($repo, $authManager);
+        $response = $controller->disable($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->clearCurrentUser();
+    }
+
+    public function testDisableDoesNotInvalidateWhenBlockedByLastAdminGuard(): void
+    {
+        $this->setCurrentUser('1');
+        $user = ['id' => '2', 'username' => 'admin2', 'status' => 'active', 'is_admin' => 1];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('2')->willReturn($user);
+        $repo->method('countUsers')->with('is_admin = 1')->willReturn(1);
+        $repo->expects($this->never())->method('setStatus');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->never())->method('invalidateUserStatusCache');
+
+        $controller = new AdminUserController($repo, $authManager);
+        $response = $controller->disable($this->makeRequest(), ['id' => '2']);
+
+        $this->assertSame(400, $response->statusCode);
+        $this->clearCurrentUser();
+    }
+
+    public function testRejectInvalidatesAuthManagerUserStatusCache(): void
+    {
+        $user = ['id' => '3', 'username' => 'nina', 'status' => 'pending'];
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('3')->willReturn($user);
+        $repo->expects($this->once())->method('delete')->with('3');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('invalidateUserStatusCache')
+            ->with('3');
+
+        $controller = new AdminUserController($repo, $authManager);
+        $response = $controller->reject($this->makeRequest(), ['id' => '3']);
+
+        $this->assertSame(200, $response->statusCode);
+    }
+
+    public function testDeleteInvalidatesAuthManagerUserStatusCache(): void
+    {
+        $user = ['id' => '2', 'username' => 'bob', 'email' => 'bob@example.com', 'is_admin' => 0];
+        $this->setCurrentUser('1');
+
+        $repo = $this->createMock(UserRepository::class);
+        $repo->method('findById')->with('2')->willReturn($user);
+        $repo->expects($this->once())->method('delete')->with('2');
+
+        $authManager = $this->createMock(AuthManager::class);
+        $authManager->expects($this->once())
+            ->method('invalidateUserStatusCache')
+            ->with('2');
+
+        $controller = new AdminUserController($repo, $authManager);
+        $response = $controller->delete($this->makeRequest(), ['id' => '2']);
+
+        $this->assertSame(200, $response->statusCode);
+        $this->clearCurrentUser();
     }
 }

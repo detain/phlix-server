@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Auth\AuthManager;
 use Phlix\Auth\UserRepository;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestContext;
@@ -42,10 +43,20 @@ use Phlix\Server\Http\Response;
 final class AdminUserController
 {
     /**
-     * @param UserRepository $userRepository Repository for user data access
+     * @param UserRepository   $userRepository Repository for user data access
+     * @param AuthManager|null $authManager    Optional; when supplied, its
+     *                         in-worker user-status cache (SV-2.7) is
+     *                         invalidated immediately after any action here
+     *                         that changes a user's `status` (approve,
+     *                         disable, reject/delete) so a status change
+     *                         takes effect on THIS worker's very next request
+     *                         for that user rather than waiting out the
+     *                         cache TTL. Null in unit tests / legacy callers,
+     *                         in which case only the TTL bounds staleness.
      */
     public function __construct(
         private readonly UserRepository $userRepository,
+        private readonly ?AuthManager $authManager = null,
     ) {
     }
 
@@ -117,6 +128,7 @@ final class AdminUserController
         }
 
         $this->userRepository->setStatus($id, 'disabled');
+        $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User disabled successfully']);
     }
 
@@ -147,6 +159,7 @@ final class AdminUserController
         }
 
         $this->userRepository->delete($id);
+        $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User rejected successfully']);
     }
 
@@ -167,6 +180,7 @@ final class AdminUserController
         }
 
         $this->userRepository->setStatus($id, $status);
+        $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => $successMessage]);
     }
 
@@ -371,6 +385,7 @@ final class AdminUserController
         }
 
         $this->userRepository->delete($id);
+        $this->authManager?->invalidateUserStatusCache($id);
         return (new Response())->json(['message' => 'User deleted successfully']);
     }
 

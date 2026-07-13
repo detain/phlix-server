@@ -14,6 +14,7 @@ use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Server\Http\Controllers\Admin\AdminUserController;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
@@ -416,6 +417,32 @@ final class ContainerFactoryTest extends TestCase
             $this->readPrivate($manager, 'loginRateLimitStore'),
             'AuthManager must resolve with a DB-backed login rate-limit store, '
             . 'not the unbounded static fallback.'
+        );
+    }
+
+    /**
+     * SV-2.7: the AuthManager user-status cache (5s TTL) is invalidated by
+     * AdminUserController on approve/disable/reject/delete so an in-process
+     * status change takes effect on this worker's very next request instead
+     * of waiting out the TTL. The controller's ctor takes
+     * `?AuthManager $authManager = null`; PHP-DI silently skips optional
+     * defaulted params unless named, so a missing
+     * `->constructorParameter('authManager', …)` leaves the field null and
+     * those admin actions would never invalidate the cache. This asserts the
+     * real container wires AuthManager into the controller.
+     */
+    public function test_admin_user_controller_wires_auth_manager_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var AdminUserController $controller */
+        $controller = $container->get(AdminUserController::class);
+
+        $this->assertInstanceOf(
+            AuthManager::class,
+            $this->readPrivate($controller, 'authManager'),
+            'AdminUserController must resolve with an AuthManager so status-changing '
+            . 'actions invalidate the in-worker user-status cache immediately.'
         );
     }
 

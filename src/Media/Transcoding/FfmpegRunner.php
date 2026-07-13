@@ -1038,18 +1038,81 @@ class FfmpegRunner
     }
 
     /**
+     * Builds the FFmpeg command line for {@see generateThumbnailBatch()}.
+     *
+     * Extracted as its own public builder (matching {@see buildCmafCommand()} /
+     * {@see buildSegmentCommand()} etc.) so the command SHAPE is directly
+     * testable without invoking a real FFmpeg binary.
+     *
+     * Each timestamp gets its **own** `-ss <timestamp> -i <inputPath>` pair so
+     * every seek stays **input-side** (fast, demuxer-level keyframe seeking)
+     * even though all N frames are pulled by a single FFmpeg process — FFmpeg
+     * supports repeating `-i` for the same file with different per-input
+     * options. All output groups are declared after every input, each pinned
+     * to its own input occurrence via an explicit `-map <index>:v:0`; without
+     * that, FFmpeg's default per-output stream auto-selection is free to pick
+     * *any* already-open input, and since every input here is literally the
+     * same file re-opened at a different offset, an unmapped output could
+     * silently grab the wrong (or a duplicate) timestamp's frame.
+     *
+     * @param string $inputPath Source video path
+     * @param array<int> $timestamps Array of timestamps (seconds) to capture
+     * @param string $outputDir Directory for output images (named frame_00000.jpg, frame_00001.jpg, etc.)
+     *
+     * @return string The fully built, shell-escaped FFmpeg command line.
+     *
+     * @since SV-0.9
+     */
+    public function buildThumbnailBatchCommand(string $inputPath, array $timestamps, string $outputDir): string
+    {
+        $timestamps = array_values($timestamps);
+
+        $inputArgs = '';
+        $outputArgs = '';
+        foreach ($timestamps as $index => $timestamp) {
+            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+
+            // Input-side seek: `-ss` before its own `-i` re-open of the same
+            // file performs a fast demuxer-level seek instead of decoding
+            // from the start of the stream.
+            $inputArgs .= sprintf(' -ss %d -i %s', (int) $timestamp, escapeshellarg($inputPath));
+
+            // Explicit map ties this output to the input occurrence that
+            // carries its matching seek offset (see docblock above).
+            $outputArgs .= sprintf(' -map %d:v:0 -vframes 1 %s', $index, escapeshellarg($framePath));
+        }
+
+        return sprintf(
+            '%s -y -hide_banner -loglevel error%s%s',
+            escapeshellarg($this->ffmpegPath),
+            $inputArgs,
+            $outputArgs
+        );
+    }
+
+    /**
      * Generates multiple thumbnails at different timestamps in a single command.
      *
-     * Uses FFmpeg's capability to output multiple files from a single input
-     * with multiple -ss and -vframes pairs for efficient batch extraction.
+     * Uses FFmpeg's capability to open the same input multiple times (once per
+     * requested timestamp, each with its own fast input-side `-ss`) and emit
+     * one image per input via an explicit `-map`, so N frames are captured by
+     * a single FFmpeg process invocation. See {@see buildThumbnailBatchCommand()}
+     * for the exact command shape.
      *
      * @param string $inputPath Source video path
      * @param array<int> $timestamps Array of timestamps to capture
-     * @param string $outputDir Directory for output images (images named frame_00000.ext, frame_00001.ext, etc.)
+     * @param string $outputDir Directory for output images (images named frame_00000.jpg, frame_00001.jpg, etc.)
      *
      * @return bool True if batch extraction succeeded
      *
      * @since 0.11.0
+     * @since SV-0.9 Fixed malformed multi-timestamp command shape (all seek/output
+     *        groups were previously bunched before one shared `-i`, producing no
+     *        thumbnails at all whenever more than one timestamp was requested).
+     *        Also verified at least one output file was actually written: FFmpeg
+     *        exits 0 even when every requested `-ss` lands past end-of-file (it
+     *        just logs "Output file is empty" and skips that output), so exit
+     *        code alone is not a reliable success signal for this command shape.
      */
     public function generateThumbnailBatch(string $inputPath, array $timestamps, string $outputDir): bool
     {
@@ -1057,28 +1120,24 @@ class FfmpegRunner
             return true;
         }
 
-        // Build input-side seek args first (fast seeking - before -i)
-        $seekArgs = '';
-        foreach ($timestamps as $index => $timestamp) {
-            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
-            $seekArgs .= sprintf(
-                ' -ss %d -vframes 1 %s',
-                (int) $timestamp,
-                escapeshellarg($framePath)
-            );
-        }
-
-        $cmd = sprintf(
-            '%s -y -hide_banner -loglevel error%s -i %s',
-            escapeshellarg($this->ffmpegPath),
-            $seekArgs,
-            escapeshellarg($inputPath)
-        );
+        $timestamps = array_values($timestamps);
+        $cmd = $this->buildThumbnailBatchCommand($inputPath, $timestamps, $outputDir);
 
         $output = [];
         $exitCode = 0;
         $this->runCoroutineAwareCommand($cmd, $output, $exitCode);
-        return $exitCode === 0;
+        if ($exitCode !== 0) {
+            return false;
+        }
+
+        foreach (array_keys($timestamps) as $index) {
+            $framePath = $outputDir . '/frame_' . str_pad((string) $index, 5, '0', STR_PAD_LEFT) . '.jpg';
+            if (is_file($framePath) && filesize($framePath) > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

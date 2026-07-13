@@ -17,6 +17,9 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
 use Phlix\Media\Transcoding\HardwareAccelerator;
+use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
+use Phlix\Media\Transcoding\Subtitles\SubtitleFormat;
+use Phlix\Media\Transcoding\Subtitles\SubtitleTrack;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -83,6 +86,17 @@ class FfmpegRunner
 
     /** @var bool|null Whether FFmpeg has libplacebo filter support (null = not yet checked) */
     private ?bool $hasLibplacebo = null;
+
+    /**
+     * Lazily-built {@see SubtitleBurner} used by {@see resolveSubtitleBurnInFilter()}
+     * to turn a `subtitle_burn_in` segment param into a filtergraph-escaped
+     * `subtitles=`/`ass=` filter fragment for the LIVE per-segment pipeline
+     * (SV-1.6). Constructed on first use rather than injected, since
+     * {@see SubtitleBurner}'s only dependency on this class
+     * ({@see extractSubtitle()}) is unused by the filter-building path this
+     * consumes — avoiding any circular-construction concern.
+     */
+    private ?SubtitleBurner $subtitleBurner = null;
 
     /**
      * Per-worker registry of detached segment-encode PIDs, keyed by cancel key,
@@ -605,6 +619,82 @@ class FfmpegRunner
         // output (peak luminance is auto-detected — no `peak` option exists).
         return 'libplacebo=tonemapping=hable:colorspace=bt709:'
             . 'color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p';
+    }
+
+    /**
+     * Lazily builds the {@see SubtitleBurner} used for per-segment burn-in.
+     *
+     * @since SV-1.6
+     */
+    private function subtitleBurner(): SubtitleBurner
+    {
+        return $this->subtitleBurner ??= new SubtitleBurner($this);
+    }
+
+    /**
+     * Resolves a `subtitle_burn_in` segment param into a filtergraph-escaped
+     * `subtitles=`/`ass=` filter fragment for the LIVE per-segment pipeline
+     * (SV-1.6) — wires {@see SubtitleBurner} into
+     * {@see buildSegmentCommand()} / {@see buildHwaccelSegmentCommand()},
+     * which previously never referenced subtitles at all.
+     *
+     * Gated on the caller supplying `$params['subtitle_burn_in']` — an array
+     * shaped `['path' => string, 'format' => ?string, 'style' =>
+     * ?array<string, mixed>]` — populated by
+     * {@see \Phlix\Media\Transcoding\TranscodeManager} from a job's
+     * (optional) `subtitle_burn_in_index` option, resolved against the
+     * already-extracted `sub-{index}.vtt` sidecar. When the sidecar has not
+     * been extracted yet (a background, best-effort step) this degrades
+     * silently to "no burn-in for this segment" rather than failing the
+     * encode, mirroring the existing subtitle-extraction failure tolerance.
+     *
+     * @param array<string, mixed> $params Segment params (see {@see buildSegmentCommand()}).
+     *
+     * @return string|null The burn-in filter fragment (e.g. `subtitles=/path/to/sub.vtt`),
+     *                      or null when burn-in is not configured or the subtitle file
+     *                      is not (yet) available on disk.
+     *
+     * @since SV-1.6
+     */
+    private function resolveSubtitleBurnInFilter(array $params): ?string
+    {
+        $burnIn = $params['subtitle_burn_in'] ?? null;
+        if (!is_array($burnIn)) {
+            return null;
+        }
+
+        $path = $burnIn['path'] ?? null;
+        if (!is_string($path) || $path === '' || !is_file($path)) {
+            return null;
+        }
+
+        $formatValue = $burnIn['format'] ?? null;
+        $format = is_string($formatValue) ? SubtitleFormat::tryFrom($formatValue) : null;
+        $format ??= SubtitleFormat::VTT;
+
+        $style = $burnIn['style'] ?? [];
+        if (!is_array($style)) {
+            $style = [];
+        }
+        /** @var array{
+         *     font_name?: string,
+         *     font_size?: int,
+         *     primary_color?: string,
+         *     outline_color?: string,
+         *     outline_thickness?: int,
+         *     position?: string,
+         *     margin?: int
+         * } $style
+         */
+        $track = new SubtitleTrack(
+            index: '0',
+            language: 'und',
+            label: '',
+            format: $format,
+            path: $path,
+        );
+
+        return $this->subtitleBurner()->getBurnInFilter($track, $style);
     }
 
     /**
@@ -1459,7 +1549,11 @@ class FfmpegRunner
      *                                         `-b:v`), `pix_fmt`/`profile`/`level`,
      *                                         `width`/`height` (downscale),
      *                                         `audio_codec` (`aac`/…/`copy`),
-     *                                         `audio_bitrate`, `audio_channels`.
+     *                                         `audio_bitrate`, `audio_channels`,
+     *                                         `subtitle_burn_in` (SV-1.6; optional
+     *                                         `['path' => string, 'format' => ?string,
+     *                                         'style' => ?array]` — see
+     *                                         {@see resolveSubtitleBurnInFilter()}).
      *
      * @return string The complete FFmpeg segment command.
      */
@@ -1544,6 +1638,14 @@ class FfmpegRunner
                 if ($toneMapFilter !== null && $toneMapFilter !== '') {
                     $filters[] = $toneMapFilter;
                 }
+            }
+            // SV-1.6: subtitle burn-in — a software (libass) filter, so it must run
+            // BEFORE any scale (scale operates on the already-composited frame, same
+            // ordering HwaccelCommandBuilder uses for the whole-file path) and,
+            // for the hwaccel builder below, before the hardware-surface hwupload.
+            $subtitleBurnInFilter = $this->resolveSubtitleBurnInFilter($params);
+            if ($subtitleBurnInFilter !== null) {
+                $filters[] = $subtitleBurnInFilter;
             }
             if ($width !== null && $height !== null) {
                 $filters[] = "scale={$width}:{$height}:force_original_aspect_ratio=decrease";
@@ -1861,6 +1963,16 @@ class FfmpegRunner
             if ($toneMapFilter !== null && $toneMapFilter !== '') {
                 $filters[] = $toneMapFilter;
             }
+        }
+
+        // SV-1.6: subtitle burn-in — a software (libass) filter that MUST run
+        // before the frame is uploaded to a hardware surface (a VAAPI/QSV hw
+        // surface cannot be processed by a software filter — the same ordering
+        // fix applied to SubtitleBurner's own VAAPI branch), so it is inserted
+        // here, before both the scale filter and the hwupload filter below.
+        $subtitleBurnInFilter = $this->resolveSubtitleBurnInFilter($params);
+        if ($subtitleBurnInFilter !== null) {
+            $filters[] = $subtitleBurnInFilter;
         }
 
         $width = self::paramInt($params, 'width');

@@ -248,6 +248,57 @@ class TranscodeManagerTest extends TestCase
         $this->assertArrayNotHasKey('width', $insert['segment_params']);
     }
 
+    /**
+     * SV-1.6: `ensureHlsJob()`'s `subtitle_burn_in_index`/`force_subtitle_burn_in`
+     * options (matching {@see \Phlix\Media\Streaming\StreamManager::getSubtitleBurnInConfig()}'s
+     * shape) are persisted into the job's base `segment_params` so
+     * {@see TranscodeManager::applySubtitleBurnIn()} can resolve them per
+     * segment later. Defaults (no option passed) persist a null/false pair —
+     * no behavior change for every existing caller.
+     */
+    public function testEnsureHlsJobPersistsSubtitleBurnInOptions(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web', [
+            'subtitle_burn_in_index' => 2,
+            'force_subtitle_burn_in' => true,
+        ]);
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+
+        $this->assertSame(2, $p['subtitle_burn_in_index']);
+        $this->assertTrue($p['force_subtitle_burn_in']);
+    }
+
+    public function testEnsureHlsJobDefaultsSubtitleBurnInToDisabled(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'h264', 'width' => 1280, 'height' => 720],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+
+        $this->assertNull($p['subtitle_burn_in_index']);
+        $this->assertFalse($p['force_subtitle_burn_in']);
+    }
+
     public function testEnsureHlsJobEncodesHevcAndDownscales4kForWeb(): void
     {
         $captured = [];
@@ -1243,6 +1294,102 @@ class TranscodeManagerTest extends TestCase
     }
 
     /**
+     * SV-1.6: a legacy (single-variant) job with `subtitle_burn_in_index` set
+     * in its persisted `segment_params` resolves to the real, already-extracted
+     * `sub-{index}.vtt` sidecar and threads it through to
+     * {@see FfmpegRunner::startSegmentEncode()} as a `subtitle_burn_in` param —
+     * proving the toggle reaches the real per-segment builder, not just the
+     * job-creation INSERT.
+     */
+    public function testEnsureSegmentResolvesSubtitleBurnInForLegacyJob(): void
+    {
+        $dir = $this->segmentDir . '/seg-subs-legacy';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        file_put_contents("{$dir}/sub-0.vtt", "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHi\n");
+
+        $jobRow = [
+            'id' => 'seg-job',
+            'hls_dir' => $dir,
+            'input_path' => $input,
+            'status' => 'completed',
+            'duration_seconds' => 60,
+            'segment_seconds' => 6,
+            'segment_params' => json_encode([
+                'video_codec' => 'libx264',
+                'audio_codec' => 'aac',
+                'subtitle_burn_in_index' => 0,
+                'force_subtitle_burn_in' => false,
+            ]),
+        ];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $jobRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', null, 0);
+
+        $this->assertNotNull($captParams);
+        $this->assertSame(
+            ['path' => "{$dir}/sub-0.vtt", 'format' => 'vtt'],
+            $captParams['subtitle_burn_in'] ?? null
+        );
+    }
+
+    /**
+     * SV-1.6: when the requested index's sidecar has not been extracted yet
+     * (or never will be — e.g. a bitmap-only track), the toggle degrades
+     * silently: no `subtitle_burn_in` param is passed, rather than pointing
+     * FfmpegRunner at a nonexistent file.
+     */
+    public function testEnsureSegmentSkipsSubtitleBurnInWhenSidecarMissing(): void
+    {
+        $dir = $this->segmentDir . '/seg-subs-missing';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        // Deliberately do NOT create sub-0.vtt.
+
+        $jobRow = [
+            'id' => 'seg-job',
+            'hls_dir' => $dir,
+            'input_path' => $input,
+            'status' => 'completed',
+            'duration_seconds' => 60,
+            'segment_seconds' => 6,
+            'segment_params' => json_encode([
+                'video_codec' => 'libx264',
+                'audio_codec' => 'aac',
+                'subtitle_burn_in_index' => 0,
+            ]),
+        ];
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $jobRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', null, 0);
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayNotHasKey('subtitle_burn_in', $captParams);
+    }
+
+    /**
      * Builds a manager with the on-demand concurrency / cache / poll seams exposed
      * so segment behaviour can be exercised without a 30 s real-world wait.
      */
@@ -1651,6 +1798,57 @@ class TranscodeManagerTest extends TestCase
         $maxrate = $captParams['maxrate'];
         $this->assertIsInt($maxrate);
         $this->assertSame($maxrate * 2, $captParams['bufsize']);
+    }
+
+    /**
+     * SV-1.6: {@see TranscodeManager::segmentParamsForRendition()} rebuilds
+     * segParams FRESH per-rendition from the ABR ladder and does NOT itself
+     * carry the job-level `subtitle_burn_in_index` — proving the toggle still
+     * reaches a MULTI-VARIANT job's per-rendition segment encode (not just
+     * the legacy single-variant path) requires
+     * {@see TranscodeManager::applySubtitleBurnIn()} to merge it back in from
+     * the row's persisted base `segment_params`.
+     */
+    public function testEnsureSegmentResolvesSubtitleBurnInForMultiVariantJob(): void
+    {
+        $dir = $this->segmentDir . '/mv-subs';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        file_put_contents("{$dir}/sub-1.vtt", "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHi\n");
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $jobRow = $this->multiVariantJobRow($dir, $input, $ladderJson);
+        $jobRow['segment_params'] = json_encode([
+            'video_codec' => 'copy',
+            'audio_codec' => 'copy',
+            'subtitle_burn_in_index' => 1,
+        ]);
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $jobRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertSame(
+            ['path' => "{$dir}/sub-1.vtt", 'format' => 'vtt'],
+            $captParams['subtitle_burn_in'] ?? null
+        );
+        // The rendition-specific encode contract is untouched by the merge.
+        $this->assertSame('libx264', $captParams['video_codec']);
     }
 
     /**

@@ -125,26 +125,74 @@ class SubtitleBurner
     /**
      * Escapes a string for use in an FFmpeg filtergraph argument.
      *
-     * FFmpeg filtergraphs use ':' as a separator and do not use shell quoting.
-     * escapeshellarg() is inappropriate because it injects literal single quotes
-     * into the filtergraph, causing FFmpeg to fail parsing.
+     * FFmpeg filtergraphs use ':' to separate a filter name from its options
+     * (and one option from the next) and do not use shell quoting. A bare,
+     * unescaped ':' inside an option VALUE (e.g. a Windows-style path like
+     * `C:\Users\...`, or any path containing a literal colon) is parsed by
+     * FFmpeg as the start of the next `key=value` pair, corrupting the
+     * filtergraph. escapeshellarg() is separately inappropriate because it
+     * injects literal single quotes into the filtergraph, causing FFmpeg to
+     * fail parsing.
+     *
+     * Per FFmpeg's filtergraph escaping rules, three characters are
+     * backslash-escaped in this order (order matters — escaping '\' first
+     * avoids double-escaping the backslashes just inserted by the later
+     * steps): '\\' itself, then "'", then ':'.
+     *
+     * The `subtitles`/`ass` filters specifically parse their `filename`
+     * argument TWICE: once by the general filtergraph option-value tokenizer
+     * (the level this method implements), and a SECOND time internally by
+     * the filter's own suboption parser (the same one used for
+     * `original_size`/`fontsdir`/`force_style`, which also splits on ':').
+     * A value that has only been escaped ONCE therefore still gets
+     * mis-tokenized by that second, inner pass (verified empirically on this
+     * box: a single escape round left `Unable to parse option value ...` /
+     * `Error applying option 'original_size'` errors — the colon-bearing
+     * path was split into two bogus positional filter options). Applying
+     * this same escape a SECOND time (composing it with itself) round-trips
+     * correctly through both parser passes and was confirmed, by actually
+     * running `ffmpeg -vf "subtitles=<double-escaped colon/backslash/quote
+     * path>"`, to reach the real path unmangled (exit 0, subtitle rendered
+     * for a plain colon-bearing path; the expected `Unable to open <path>` /
+     * `Could not create a libass track` terminal errors — not a parse error —
+     * for a Windows-style/apostrophe path that doesn't exist on this Linux
+     * box, i.e. parsing succeeded and only the file-open step legitimately
+     * failed). See {@see getBurnInFilter()} / {@see getBurnInArgs()} — both
+     * embed the returned value directly into a `subtitles=`/`ass=` argument,
+     * so this double round is applied uniformly here rather than at each
+     * call site.
      *
      * @param string $path The path to escape
      *
-     * @return string The filtergraph-escaped path
+     * @return string The double filtergraph-escaped path (safe for the
+     *                 `subtitles=`/`ass=` filename argument)
      *
      * @since 0.11.0
      */
     private function filtergraphEscape(string $path): string
     {
-        // FFmpeg filtergraph escaping: escape \ then ' then :
-        // Order matters: escape \ first to avoid double-escaping
-        $path = str_replace('\\', '\\\\', $path);
-        $path = str_replace("'", "\\'", $path);
-        // Note: ':' does not need escaping when inside a single-quoted value
-        // but we don't use quotes here - we rely on the filter accepting the path
-        // as a plain string argument
-        return $path;
+        return $this->filtergraphEscapeOnce($this->filtergraphEscapeOnce($path));
+    }
+
+    /**
+     * A single round of FFmpeg's generic filtergraph value escaping: escape
+     * '\\' then "'" then ':', in that order (escaping '\' first avoids
+     * double-escaping the backslashes the later steps insert).
+     *
+     * @param string $value The raw value to escape
+     *
+     * @return string The once-escaped value
+     *
+     * @since 0.11.0
+     */
+    private function filtergraphEscapeOnce(string $value): string
+    {
+        $value = str_replace('\\', '\\\\', $value);
+        $value = str_replace("'", "\\'", $value);
+        // ':' separates a filter's key=value options — an unescaped colon in the
+        // value (e.g. a Windows drive letter) truncates/corrupts the filtergraph.
+        $value = str_replace(':', '\\:', $value);
+        return $value;
     }
 
     /**
@@ -242,10 +290,13 @@ class SubtitleBurner
                 '-vf', sprintf("subtitles=%s,hwupload=extra_hw_frames=4", $escaped_path),
             ],
             'vaapi' => [
-                // VAAPI: use hwupload to get video on GPU, burn subtitles in software
-                // using libass (VAAPI hw decode + sw composite + hw encode is complex),
-                // then convert format back to NV12 for VAAPI encoding
-                '-vf', sprintf("hwupload,subtitles=%s,format=nv12", $escaped_path),
+                // VAAPI: burn subtitles in software using libass FIRST (a VAAPI
+                // hardware surface cannot be processed by the software subtitles/
+                // libass filter — hwupload must come AFTER the software filter, not
+                // before it), then convert to NV12 and upload to the GPU surface for
+                // VAAPI encoding. Mirrors the nvenc branch's ordering below
+                // (software filter, then hwupload).
+                '-vf', sprintf("subtitles=%s,format=nv12,hwupload", $escaped_path),
                 '-vaapi_device', '/dev/dri/renderD128',
             ],
             'qsv' => [

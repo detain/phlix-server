@@ -163,11 +163,22 @@ class SubtitleBurnerTest extends TestCase
 
         $this->assertContains('-vf', $args);
         $args_str = implode(' ', $args);
-        // VAAPI uses hwupload to get video on GPU, then software subtitles burn-in
-        // then format conversion back to NV12
-        $this->assertStringContainsString('hwupload', $args_str);
+        // VAAPI must burn subtitles in software (libass) BEFORE the frame is
+        // uploaded to the hardware surface — a VAAPI hw surface cannot be
+        // processed by the software subtitles filter. Assert the ORDER, not
+        // just substring presence: subtitles=..., THEN format=nv12, THEN
+        // hwupload (mirrors the nvenc branch's software-then-hwupload order).
         $this->assertStringContainsString('subtitles=', $args_str);
         $this->assertStringContainsString('format=nv12', $args_str);
+        $this->assertStringContainsString('hwupload', $args_str);
+        $subtitlesPos = strpos($args_str, 'subtitles=');
+        $formatPos = strpos($args_str, 'format=nv12');
+        $hwuploadPos = strpos($args_str, 'hwupload');
+        $this->assertNotFalse($subtitlesPos);
+        $this->assertNotFalse($formatPos);
+        $this->assertNotFalse($hwuploadPos);
+        $this->assertLessThan($formatPos, $subtitlesPos, 'subtitles= must come before format=nv12');
+        $this->assertLessThan($hwuploadPos, $formatPos, 'format=nv12 must come before hwupload');
         $this->assertContains('-vaapi_device', $args);
     }
 
@@ -308,19 +319,72 @@ class SubtitleBurnerTest extends TestCase
         $ffmpeg = $this->createMockFfmpegRunner();
         $burner = new SubtitleBurner($ffmpeg);
 
-        // Windows-style path with backslashes
+        // Windows-style path with backslashes AND a colon (drive letter).
+        // VTT (not SRT) is used so getBurnInFilter() does not append a
+        // `:force_style='...'` suffix, keeping this an exact-match test of
+        // ONLY the path-escaping behavior.
         $track = new SubtitleTrack(
             index: '2',
             language: 'eng',
             label: 'English',
-            format: SubtitleFormat::SRT,
+            format: SubtitleFormat::VTT,
             path: 'C:\Users\Test\ subtitles\movie.srt'
         );
 
         $filter = $burner->getBurnInFilter($track);
 
-        // Backslashes should be escaped
+        // Backslashes should be escaped.
         $this->assertStringContainsString('\\\\', $filter);
+
+        // The drive-letter colon must ALSO be escaped — a bare, unescaped ':'
+        // is parsed by FFmpeg's filtergraph tokenizer as the start of the
+        // next option, corrupting the whole filter. Verified against real
+        // ffmpeg: the pre-fix (bare-colon) filter failed with "Error applying
+        // option 'original_size' to filter 'subtitles'" (the colon-bearing
+        // path was split into two bogus positional filter options); the
+        // fixed (escaped-colon) filter, run through real ffmpeg, reaches the
+        // real path unmangled (exit 0 for a real colon-bearing directory).
+        //
+        // The `subtitles`/`ass` filters parse their filename argument TWICE
+        // (once by the general filtergraph tokenizer, once more internally
+        // by the filter's own suboption parser), so a correctly round-
+        // tripping escape must apply FFmpeg's standard '\\'/"'"/':' escape
+        // TWICE — i.e. each literal '\' in the source path becomes 4
+        // backslashes, and each literal ':' becomes 3 backslashes + ':' —
+        // NOT the naive single-escape shape (2 backslashes / 1 backslash +
+        // ':') which still corrupts the filter as shown above. Build the
+        // expected value programmatically (not hand-counted) to keep the
+        // backslash arithmetic unambiguous.
+        $expectedPath = 'C' . str_repeat('\\', 3) . ':'
+            . str_repeat('\\', 4) . 'Users'
+            . str_repeat('\\', 4) . 'Test'
+            . str_repeat('\\', 4) . ' subtitles'
+            . str_repeat('\\', 4) . 'movie.srt';
+        $this->assertSame('subtitles=' . $expectedPath, $filter);
+    }
+
+    public function test_filtergraph_escaping_colon_only_path(): void
+    {
+        $ffmpeg = $this->createMockFfmpegRunner();
+        $burner = new SubtitleBurner($ffmpeg);
+
+        // A path with a bare colon and no backslashes at all (e.g. a Linux
+        // directory name that happens to contain a literal ':'). VTT is used
+        // (not SRT) so no `:force_style='...'` suffix is appended.
+        $track = new SubtitleTrack(
+            index: '2',
+            language: 'eng',
+            label: 'English',
+            format: SubtitleFormat::VTT,
+            path: '/var/subtitles/colon:dir/movie.srt'
+        );
+
+        $filter = $burner->getBurnInFilter($track);
+
+        // A bare (unescaped) colon must not survive in the path segment.
+        $this->assertStringNotContainsString('colon:dir', $filter);
+        $expectedPath = '/var/subtitles/colon' . str_repeat('\\', 3) . ':dir/movie.srt';
+        $this->assertSame('subtitles=' . $expectedPath, $filter);
     }
 
     public function test_factory_creates_correct_burner(): void

@@ -304,6 +304,18 @@ class TranscodeManager
      *                                          Client decoder capabilities. When provided and the source
      *                                          audio codec is not supported by the client, the audio
      *                                          will be transcoded to AAC instead of copied.
+     *                                        - 'subtitle_burn_in_index' (?int) / 'force_subtitle_burn_in'
+     *                                          (bool, default false): SV-1.6. When `subtitle_burn_in_index`
+     *                                          is set, every produced segment for this job burns in the
+     *                                          text-subtitle track at that (per-type, `sub-{index}.vtt`)
+     *                                          ordinal — the SAME index {@see SubtitleExtractor::detectTextTracks()}
+     *                                          assigns. Resolved lazily per segment against the sidecar's
+     *                                          on-disk presence (extraction runs detached in the background,
+     *                                          so a very-early segment request degrades to "no burn-in yet"
+     *                                          rather than failing). This shape matches
+     *                                          {@see \Phlix\Media\Streaming\StreamManager::getSubtitleBurnInConfig()}'s
+     *                                          return keys 1:1, so a caller with a live StreamManager-tracked
+     *                                          stream can spread that config straight into `$options`.
      *
      * @return array{
      *     job_id: string, status: string, master_url: string, hls_url: string, dash_url: string, reused: bool,
@@ -397,7 +409,19 @@ class TranscodeManager
         // multi-variant ABR ladder below and persists it in `variants`.
         $rawClientCapabilities = $options['client_capabilities'] ?? null;
         $clientCapabilities = $rawClientCapabilities instanceof \Phlix\Media\Streaming\ClientCapabilities ? $rawClientCapabilities : null;
-        $segParams = $this->computeSegmentParams($probe, $profileName, $clientCapabilities);
+        // SV-1.6: job-level subtitle burn-in toggle (see docblock above).
+        $rawSubtitleBurnInIndex = $options['subtitle_burn_in_index'] ?? null;
+        $subtitleBurnInIndex = is_int($rawSubtitleBurnInIndex) && $rawSubtitleBurnInIndex >= 0
+            ? $rawSubtitleBurnInIndex
+            : null;
+        $forceSubtitleBurnIn = ($options['force_subtitle_burn_in'] ?? false) === true;
+        $segParams = $this->computeSegmentParams(
+            $probe,
+            $profileName,
+            $clientCapabilities,
+            $subtitleBurnInIndex,
+            $forceSubtitleBurnIn
+        );
         $segSeconds = $this->segmentSeconds;
 
         // A5: resolve the ABR ladder. Prefer A1's persisted source metadata blob
@@ -658,6 +682,12 @@ class TranscodeManager
             if ($this->audioTracksOf($entry) !== null) {
                 $segParams['video_only'] = true;
             }
+            // SV-1.6: segmentParamsForRendition() rebuilds params fresh per-rendition
+            // from the ABR ladder and therefore does NOT carry the job-level
+            // subtitle_burn_in_index/force_subtitle_burn_in persisted in the row's
+            // base segment_params — resolve+merge it back in here so every rendition
+            // of a multi-variant job honours the same job-wide burn-in toggle.
+            $segParams = $this->applySubtitleBurnIn($row, $segParams);
             return $this->produceSegment($jobId, $row, $variant, $index, $segParams);
         }
 
@@ -677,8 +707,73 @@ class TranscodeManager
         foreach ($decodedParams as $paramKey => $paramValue) {
             $segParams[(string) $paramKey] = $paramValue;
         }
+        // SV-1.6: resolve the job-level subtitle_burn_in_index (already present in
+        // $segParams here, since it's the raw persisted segment_params) to a
+        // concrete subtitle_burn_in path/format FfmpegRunner consumes.
+        $segParams = $this->applySubtitleBurnIn($row, $segParams);
 
         return $this->produceSegment($jobId, $row, null, $index, $segParams);
+    }
+
+    /**
+     * Resolves a job-level `subtitle_burn_in_index` (SV-1.6; see
+     * {@see ensureHlsJob()}'s `$options` docblock) into the concrete
+     * `subtitle_burn_in` param {@see FfmpegRunner::buildSegmentCommand()} /
+     * {@see FfmpegRunner::buildHwaccelSegmentCommand()} consume.
+     *
+     * Always reads the index from the JOB ROW's persisted base
+     * `segment_params` JSON (written once by {@see computeSegmentParams()} at
+     * job-creation time for BOTH the legacy and multi-variant paths) rather
+     * than from `$segParams`, because the multi-variant path's `$segParams`
+     * is rebuilt fresh per-rendition by {@see segmentParamsForRendition()}
+     * and never carries this job-level key.
+     *
+     * The index corresponds 1:1 with {@see SubtitleExtractor::detectTextTracks()}'s
+     * per-type text-track ordinal, i.e. the same `sub-{index}.vtt` sidecar
+     * {@see SubtitleExtractor::buildExtractCommand()} writes into the job's
+     * `hls_dir`. Extraction runs detached in the background at job creation
+     * (see {@see ensureHlsJob()}), so the sidecar may not exist yet for a very
+     * early segment request — this degrades to "no burn-in for this segment"
+     * rather than failing the encode, mirroring the class's existing
+     * best-effort subtitle-extraction tolerance.
+     *
+     * @param array<string, mixed> $row       Job row (needs `hls_dir` + `segment_params`).
+     * @param array<string, mixed> $segParams Segment params to augment.
+     *
+     * @return array<string, mixed> `$segParams`, with `subtitle_burn_in` added when resolvable.
+     *
+     * @since SV-1.6
+     */
+    private function applySubtitleBurnIn(array $row, array $segParams): array
+    {
+        $index = null;
+        $segParamsRaw = $row['segment_params'] ?? null;
+        if (is_string($segParamsRaw) && $segParamsRaw !== '') {
+            $decoded = json_decode($segParamsRaw, true);
+            if (is_array($decoded) && is_int($decoded['subtitle_burn_in_index'] ?? null)) {
+                $index = $decoded['subtitle_burn_in_index'];
+            }
+        }
+        if ($index === null || $index < 0) {
+            return $segParams;
+        }
+
+        $dir = is_string($row['hls_dir'] ?? null) ? (string) $row['hls_dir'] : '';
+        if ($dir === '') {
+            return $segParams;
+        }
+
+        $vttPath = $dir . '/sub-' . $index . '.vtt';
+        if (!is_file($vttPath)) {
+            // Not extracted (yet), or the requested index has no text track —
+            // degrade silently rather than emitting a filter arg for a
+            // nonexistent file.
+            return $segParams;
+        }
+
+        $segParams['subtitle_burn_in'] = ['path' => $vttPath, 'format' => 'vtt'];
+
+        return $segParams;
     }
 
     /**
@@ -1566,11 +1661,24 @@ class TranscodeManager
      * @param string                                $profileName       Device profile name.
      * @param \Phlix\Media\Streaming\ClientCapabilities|null $clientCapabilities SV-3.3
      *                                                                           Client decoder capabilities.
+     * @param int|null                              $subtitleBurnInIndex SV-1.6 job-level burn-in
+     *                                                                    toggle (per-type text-track
+     *                                                                    ordinal), or null to disable.
+     * @param bool                                  $forceSubtitleBurnIn SV-1.6 force flag (carried
+     *                                                                    through for parity with
+     *                                                                    {@see \Phlix\Media\Streaming\StreamManager::getSubtitleBurnInConfig()};
+     *                                                                    not yet consumed by the
+     *                                                                    encode path itself).
      *
      * @return array<string, mixed> Parameters for {@see FfmpegRunner::buildSegmentCommand()}.
      */
-    private function computeSegmentParams(array $probe, string $profileName, ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null): array
-    {
+    private function computeSegmentParams(
+        array $probe,
+        string $profileName,
+        ?\Phlix\Media\Streaming\ClientCapabilities $clientCapabilities = null,
+        ?int $subtitleBurnInIndex = null,
+        bool $forceSubtitleBurnIn = false
+    ): array {
         $params = $this->computeHlsParams($probe, $profileName, $clientCapabilities);
 
         if (($params['video_codec'] ?? null) === 'copy') {
@@ -1585,6 +1693,15 @@ class TranscodeManager
             $params['audio_codec'] = 'aac';
             $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null) ? $params['audio_bitrate'] : '128k';
         }
+
+        // SV-1.6: persisted job-level (not per-rendition) burn-in toggle. Every
+        // rendition's segParams gets this merged back in by
+        // {@see subtitleBurnInFromRow()} at segment-production time (both the
+        // legacy single-variant path, which reuses this array directly, and the
+        // multi-variant/ABR path, which otherwise rebuilds segParams fresh
+        // per-rendition and would silently drop it).
+        $params['subtitle_burn_in_index'] = $subtitleBurnInIndex;
+        $params['force_subtitle_burn_in'] = $forceSubtitleBurnIn;
 
         return $params;
     }

@@ -91,7 +91,7 @@
 - [x] SV-4.1  segment-cap reservation before glob() ✅ (commit 9f06522b)
 - [x] SV-4.2  detached-ffmpeg cancellation + apply transcode_timeout ✅ (commit 410ffce0)
 - [x] SV-4.3  ComskipRunner non-blocking pipe + reachable timeout ✅ (commit 410ffce0)
-- [x] SV-4.4  WebhookDispatcher backoff + connect-timeout ✅ (commit 410ffce0)
+- [x] SV-4.4  WebhookDispatcher backoff + connect-timeout ✅ RE-COMPLETED 2026-07-13: the `410ffce0` reference above is stale/nonexistent audit-trail (that commit does not exist in this repo's history — same rot pattern as the SV-4.10/SV-0.8 stale-hash incidents). Fresh audit found genuinely PARTIAL: `WebhookDispatcher::dispatchAsync`'s jittered-backoff+one-shot-timer was correct but had ZERO callers (dead); `WebhookHttpClient` had no connect-timeout at all; the live admin "test webhook" path (`WebhookDispatcher::sendToWebhook`, S-F10's literal original target) duplicated a fresh blocking cURL call with immediate (zero-delay) retries; the REAL production event-driven delivery path (`WebhookService`/`WebhookEventSubscriber`) already had DB-persisted retry + a genuinely one-shot Timer, but its fixed 30s/300s/1800s schedule had NO jitter at all (a real thundering-herd risk). Fixed `7f434d03`: connect-timeout added to `WebhookHttpClient` (curl + async client, both config-driven); `sendToWebhook` now delegates through a new `postWithHeaders()` (same wire format, no breaking change to registered webhook receivers) + jittered backoff between sync retry attempts; `WebhookDeliveryRecord` gained a jittered `calculateNextRetryDelaySeconds()` (+/-20%) used by `WebhookService::handleFailedDelivery` for BOTH the persisted `next_retry_at` and the retry Timer (single source of truth, can't drift). Dead `dispatchAsync` left in place per §0.1 (not deleted) — flagged below as a candidate for the §6 removal-confirmation queue, not actioned without user sign-off. New tests directly inspect Workerman's own internal timer bookkeeping (not just source review) to prove the retry timer is genuinely one-shot. 82/82 Webhook-filtered tests + full Unit 5152/5152 (8 skip) green, phpstan/phpcs clean. See Implementer entry below for full detail. **DONE.**
 - [x] SV-4.5  Roku/MusicBrainz blocking-I/O → coroutine/async ✅ (commit 410ffce0)
 - [x] SV-4.6  original copy variant handling ✅ (commit 088bb99c)
 - [ ] SV-4.7  WS auth enforcement
@@ -4896,3 +4896,176 @@ previously had zero coverage.
 **Commit:** `d3062086` — `transcode: SV-0.9 fix generateThumbnailBatch malformed multi-timestamp
 command`. Pulled (`git pull --rebase origin master` — already up to date, no conflicts) and
 pushed directly to `master` per §F.
+
+## Implementer — SV-4.4 (webhook connect-timeout + jittered one-shot backoff retry) — 2026-07-13
+
+**Audit (per this pass's "don't trust a prior claim, verify against current code" discipline):**
+the checklist line at the top of this file cited commit `410ffce0` as the fix — that commit
+**does not exist** in this repo's history (`git show 410ffce0` → "unknown revision"), the same
+stale-audit-trail rot already documented for SV-4.10/SV-0.8 earlier this pass. The one trustworthy
+prior note was the 2026-07-12 re-audit roll-up (this file, "SV-4.1–4.6 RE-AUDIT" section):
+"PARTIAL (inert)". Re-verified against the actual current code rather than taking either claim on
+faith:
+
+1. **Two entirely separate, both-live webhook subsystems exist** (confirmed by grepping every
+   caller of both):
+   - `WebhookDispatcher` (table `webhooks`/`webhook_logs`) is CRUD-only in practice: its `dispatch()`
+     method has exactly ONE caller anywhere in `src/` — `WebhookAdminController::test()`, the admin
+     "send a test event to this webhook now" button (`POST /api/v1/admin/webhooks/{id}/test`).
+     `dispatchAsync()`/`sendToWebhookWithBackoff()`/`computeBackoffDelayMs()` (added by an earlier
+     partial pass, with the CORRECT jittered-backoff-via-one-shot-Timer shape) have **zero callers
+     anywhere** — genuinely dead code, confirmed via `grep -rn "dispatchAsync\b" src/ tests/` →
+     only the definition line matches.
+   - `WebhookService` (tables `webhook_subscriptions`/`webhook_events`/`webhook_deliveries`) is the
+     REAL production path: `WebhookEventSubscriber` (wired in `EventServicesProvider`, the only
+     class bound to the PSR-14 event dispatcher for webhooks) calls `WebhookService::emit()` for
+     every real domain event (`media.added`, `playback.started`, `user.login`, etc.) →
+     `queueDeliveries()` → a one-shot `Timer::add(0, …, [], false)` → `processDelivery()` →
+     `handleFailedDelivery()` on failure, which already had DB-persisted retry state + a genuinely
+     one-shot Timer, but its base delay (30s/300s/1800s from `WebhookDeliveryRecord::RETRY_DELAYS`)
+     had **zero jitter** — a real thundering-herd risk (e.g. many deliveries queued around a worker
+     restart, or many subscriptions pointing at the same now-down endpoint, would all retry at the
+     exact same instant).
+   - `S-F10`'s finding location (`WebhookDispatcher.php:261-309`, blocking curl + immediate 3×
+     retry + no connect-timeout) maps onto the CURRENT `sendToWebhook()` (the method backing the
+     one live caller, `dispatch()`/admin-test) — it still had the exact defect described: a fresh,
+     duplicated raw `curl_init()`/`curl_setopt()` block (not delegating through `WebhookHttpClient`
+     at all), `CURLOPT_TIMEOUT` only (no `CURLOPT_CONNECTTIMEOUT`), and a `do..while` retry loop
+     that `continue`s immediately on failure with **zero delay**.
+   - `WebhookHttpClient` (shared by both subsystems) had **no connect-timeout anywhere** — neither
+     `CURLOPT_CONNECTTIMEOUT` in its blocking-cURL fallback nor a `'connect_timeout'` option on its
+     `Workerman\Http\Client` construction (confirmed `workerman/http-client`'s `ConnectionPool`
+     genuinely tracks `connect_timeout` as a knob distinct from `timeout` — read
+     `vendor/workerman/http-client/src/ConnectionPool.php:44-50,164-196` — so this is a real, not
+     cargo-culted, fix, matching the exact pattern already used by `ArtworkStorage` (SV-3.4), the
+     only other class in this codebase that already sets both).
+
+**Fix (`7f434d03`):**
+1. **`src/Webhooks/WebhookHttpClient.php`** — added `DEFAULT_CONNECT_TIMEOUT=5` + a `$connectTimeout`
+   ctor param (threaded to both the async `Client(['timeout'=>…, 'connect_timeout'=>…])` and
+   `curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, …)` on the blocking fallback), plus a
+   `getConnectTimeout()` getter (for tests). Refactored `post()` to delegate through a new public
+   `postWithHeaders(string $url, array $headers, string $body)` — generalizes the already-generic
+   private `postAsync`/`postCurl` methods to accept caller-supplied headers/body instead of only
+   `post()`'s hardcoded `X-Phlix-Event`/`X-Phlix-Delivery` + `{payload,signature}` JSON envelope,
+   so `WebhookDispatcher::sendToWebhook()` (below) can reuse the same connect-timeout-aware,
+   coroutine/blocking-context-aware dispatch **without changing its wire format** (still
+   `X-Phlix-Signature` header + raw event JSON body — a real webhook receiver sees no difference).
+2. **`config/webhooks.php`** — added a documented `'connect_timeout' => 5` key (mirrors the
+   existing `'timeout'`/`'max_retries'` config-driven pattern).
+3. **`src/Webhooks/WebhookDispatcher.php`**:
+   - `getHttpClient()` now reads `connect_timeout` from config too (used by the dead
+     `dispatchAsync` path, left in place — see below).
+   - `sendToWebhook()` (the live method) rewritten to call
+     `$this->getHttpClient()->postWithHeaders($url, $headers, $payload)` instead of a fresh
+     `curl_init()` block, and to sleep a jittered backoff delay (`computeBackoffDelayMs()`, already
+     present but previously only used by the dead code path — now doing real work) between
+     synchronous retry attempts via a new `protected function sleepMilliseconds(int $ms): void`
+     (`usleep()`, cooperatively yields under the Swoole coroutine SLEEP hook — the exact same idiom
+     already established in `MetadataHttpClient::get()`'s retry loop; protected so tests can spy/
+     no-op it). Retry count/attempt semantics (`max_retries`, default 2 ⇒ 3 total attempts)
+     unchanged — only the zero-delay behavior between attempts was fixed.
+4. **`src/Webhooks/WebhookDeliveryRecord.php`** — added `RETRY_JITTER_FRACTION=0.2` and a new
+   `calculateNextRetryDelaySeconds(): ?int` (base delay from the existing fixed `RETRY_DELAYS`
+   schedule ± a uniform random 20% window via `mt_rand`, `null` once `attempt >= MAX_ATTEMPTS` —
+   the retry cap). `calculateNextRetryAt()` gained an optional `$delaySecondsOverride` param so a
+   caller can compute the jittered delay **once** and thread the identical value into both the
+   persisted timestamp and a Timer delay — calling either method twice independently would draw
+   two different random jitters and let the DB `next_retry_at` drift from the actual retry.
+5. **`src/Webhooks/WebhookService.php`** — `handleFailedDelivery()` now computes
+   `$delaySeconds = $delivery->calculateNextRetryDelaySeconds()` once, derives `$nextRetryAt` from
+   that same value via the override param, and schedules `Timer::add((float) $delaySeconds, …, [],
+   false)` from that same value — the DB row and the actual retry can never disagree. Removed the
+   now-redundant private `calculateDelaySeconds()` (duplicated the same `RETRY_DELAYS` lookup with
+   no jitter; superseded by the DTO method). The one-shot `Timer::add(…, [], false)` shape itself
+   was already correct and is unchanged — only the delay computation changed.
+
+**Dead `dispatchAsync` — left in place, not wired, not deleted (per §0.1/§6):** wiring it in would
+mean adding a SECOND, competing, less-durable delivery mechanism (in-memory attempt counter that
+doesn't survive a worker restart) alongside the already-live, DB-persisted `WebhookService` path —
+that would be new architecture invention, not a fix for S-F10. Deleting it is also not this
+session's call per §0.1 (no deletion without user sign-off). Recording it here as a genuine
+**candidate for the global §6 removal-confirmation queue** in `performance_plan.md` (not edited by
+this step, since that file is the orchestrator's shared cross-repo document): `WebhookDispatcher::
+dispatchAsync()` / `sendToWebhookWithBackoff()` / (now, incidentally, no longer `computeBackoffDelayMs()`
+— that helper is now genuinely used by `sendToWebhook()`) are zero-caller and duplicate
+functionality `WebhookService` already provides more robustly. A future pass should ask the user
+whether to remove `dispatchAsync`/`sendToWebhookWithBackoff` specifically (keeping
+`computeBackoffDelayMs()`, which is now live).
+
+**Tests added (all new files — `WebhookHttpClientTest`/`WebhookDeliveryRecordTest`/
+`WebhookServiceTest` did not exist before this change; `WebhookService` had ZERO test coverage of
+any kind prior to this step):**
+- `tests/Unit/Webhooks/WebhookHttpClientTest.php` — connect-timeout getter defaults/configurable;
+  a reflection-based test that the async client's real underlying `Workerman\Http\ConnectionPool`
+  (not just this class's own field) is constructed with the configured `connect_timeout` **distinct**
+  from `timeout` (reads `Client::$_connectionPool`→`ConnectionPool::$options` directly — proves the
+  wiring reaches the actual vendor knob, not just an echoed getter); async client is lazily cached
+  (not rebuilt per request); `post()` still produces its documented wire format after being
+  refactored to delegate through `postWithHeaders()` (regression guard for the refactor); empty-URL
+  short-circuit on both `post()`/`postWithHeaders()` (kept fast/offline — no real network needed).
+  **Curl-option verification boundary, documented rather than faked:** consistent with this
+  codebase's existing convention (`ArtworkStorageTest`/`PluginCatalogServiceTest` don't unit-test
+  literal `curl_setopt()` values either — there's no interception seam for a static-function C
+  extension call), this suite does not assert `CURLOPT_CONNECTTIMEOUT`'s literal value on the
+  blocking path; it is wired from the exact same `$this->connectTimeout` property proven-correct on
+  the async side, and is `phpstan`-typed (`int`) end-to-end.
+- `tests/Unit/Webhooks/WebhookDeliveryRecordTest.php` — jittered delay stays within the documented
+  ±20% window for attempts 0/1/2 (30s/300s/1800s bases ⇒ [24,36]/[240,360]/[1440,2160], which
+  **never overlap**, so "grows across retries" holds regardless of the random draw — asserted over
+  50 iterations, not a single flaky sample); jitter genuinely varies across calls (not collapsed to
+  a constant — asserted `count(array_unique(...)) > 1` over 30 draws); `null` at and beyond
+  `MAX_ATTEMPTS` (the cap); `calculateNextRetryAt()` uses a provided override delay exactly (proves
+  the drift-prevention contract) and returns `null` when the override is `null`.
+- `tests/Unit/Webhooks/WebhookServiceTest.php` — the most important file for this step's stated
+  priority ("the single most important regression guard here"): **genuinely-one-shot is proven
+  against Workerman's own internal bookkeeping, not source inspection.** `Timer::add()`'s real
+  implementation (`vendor/workerman/workerman/src/Timer.php`) stores
+  `self::$tasks[$runTime][$timerId] = [$func, $args, $persistent, $timeInterval]` and increments a
+  protected static `$timerId` counter by exactly 1 per call (confirmed by reading the vendor source
+  first) — mirrors the `StreamSessionServiceTest`/SV-0.5 idiom of constructing a bare
+  `if (!Worker::getAllWorkers()) { new Worker(); }` so `Timer::add()` doesn't throw, but goes one
+  step further than that existing pattern (which only asserts bookkeeping counts) by reflecting
+  into `Timer::$timerId`/`Timer::$tasks` to read back the **literal `persistent` flag Workerman
+  stored** for the exact timer id the call under test just registered, and asserting it's `false`.
+  A source-level regression that flipped the 4th `Timer::add()` arg from `false` to `true` (or
+  dropped it, defaulting to the persistent/repeating form — exactly SV-0.5's WS-reaper timer-storm
+  bug class) would be caught by this test, not just by re-reading the diff. Covers: a failed
+  delivery with retries remaining registers exactly one new one-shot timer AND the persisted
+  `next_retry_at` timestamp falls within the same jittered window used for that timer (proves the
+  single-source-of-truth fix — this is the exact drift bug the refactor closes); max-attempts
+  reached marks the delivery permanently `'failed'` and registers **no** new timer (the retry cap);
+  two consecutive failures each register their OWN distinct one-shot timer (guards against
+  accidentally reusing one repeating timer for a whole retry sequence). Each test explicitly
+  `Timer::del()`s any timer it registers so nothing leaks into other tests sharing the process.
+
+**Verification:**
+- `phpunit --filter Webhook --testdox` → **82/82 passed, 1088 assertions** (includes the 3
+  pre-existing Webhook* suites — `WebhookDispatcherTest`, `WebhookEventTest`,
+  `WebhookAdminControllerTest`, `TlsVerificationTest`, the plugin suites — none regressed).
+- `phpstan analyze -c phpstan.neon.dist` on all 5 changed/new source files + 3 new test files →
+  **0 errors**.
+- `phpcs --standard=PSR12` on the same 8 files → **0 errors**; 1 pre-existing 125-char warning at
+  `WebhookDeliveryRecord.php:126` (the `fromRow()` `responseCode:` line) — confirmed via
+  `git diff --unified=0` that this line is untouched by this change, left as-is (out of scope).
+- Full `phpunit --testsuite Unit` → **5152 tests, 40148 assertions, 0 failures, 8 skipped**
+  (pre-existing skips — no reachable MySQL/real-network fixtures in this sandbox, unrelated to
+  this change).
+
+**Acceptance criteria met:** (1) live delivery path identified correctly (`WebhookService`, not the
+dead `WebhookDispatcher::dispatchAsync`) before making any change, per the task's explicit
+don't-assume-from-the-name instruction. (2) Connect-timeout added and config-driven on both the
+blocking-cURL and async-client code paths, distinct from the total request timeout. (3) Jittered
+exponential/percentage backoff added to the LIVE retry path (`WebhookDeliveryRecord`/
+`WebhookService`) and to the previously-zero-delay synchronous admin-test path
+(`WebhookDispatcher::sendToWebhook`), both capped (MAX_ATTEMPTS=3 / `max_retries` config). (4) The
+one-shot `Timer::add(…, [], false)` shape was already correct on the live path and is now backed by
+a test that inspects Workerman's real bookkeeping rather than trusting the source. (5) Dispatch
+confirmed to already use the async-client pattern (Channel-based cooperative wait in a coroutine,
+blocking cURL fallback otherwise) consistent with the other 4 clients from SV-0.3/0.4 — the
+`sendToWebhook` admin-test path now also goes through that same pattern instead of a fresh raw
+`curl_init()` call.
+
+**Commit:** `7f434d03` — `webhooks: SV-4.4 add connect-timeout + jittered one-shot backoff retry`.
+Pulled (`git pull --rebase origin master` — already up to date, no conflicts) and pushed directly
+to `master` per §F.

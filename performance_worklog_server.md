@@ -5739,3 +5739,69 @@ Result: **GREEN.** Note carried along in this worklog: the pre-existing uncommit
 (cumulative) — SV-3.1 f** entry above (2 findings, stable ~4 min, complete) was swept into the
 worklog commit per the documented orchestrator-sweep pattern; it is unrelated to these tests and
 still owed a Fixer pass.
+
+---
+
+## Implementer — SV-3.6b (de-block Trakt HTTP path) — 2026-07-13 — ✅ DONE (commit `51e6a16e`, pushed origin/master)
+
+**Scope (exactly this, nothing else):** de-block the Trakt PULL-sync HTTP path so it can later be
+driven by a resident-worker Timer (3.6a) without stalling the event loop. Did NOT touch the
+Timer wiring (3.6a), resume positions (3.6c), pagination (3.6d), or tests (3.6e).
+
+**Files changed (2):**
+- `src/Plugins/Scrobbler/Trakt/HttpClient.php` — rewrote the private `request()` transport. Was
+  unconditional synchronous cURL; now selects transport the SAME way the donors do:
+  `EventLoopTls::requiresBlockingCurl($url) || !WorkerContext::isEventLoopRunning() || !WorkerContext::inCoroutine()`
+  → blocking cURL, else the async `workerman/http-client` cooperative-wait. Added lazy
+  `getAsyncClient()` (`new Client(['timeout'=>$this->timeout])`), `requestAsync()`
+  (Channel-based: success/error callbacks push a `Swoole\Coroutine\Channel(1)`, `pop((float)$timeout)`
+  yields the coroutine), and `requestCurl()` (fallback; now captures response headers via
+  `CURLOPT_HEADERFUNCTION` into an assoc array and returns a `Workerman\Http\Response` so
+  `Retry-After` on 429 survives). Status handling (401→`TraktAuthenticationException`,
+  429→`TraktRateLimitException` with `Retry-After` via PSR-7 `getHeaderLine()`, ≥400→`TraktApiException`,
+  JSON decode) is now transport-agnostic and behaviourally identical. Public
+  `get()/post()` signatures + the `HttpClientInterface` contract UNCHANGED; ctor still
+  `__construct(int $timeout = 15)` so the `new HttpClient()` call sites (`TraktPlugin.php:446`,
+  `TraktOAuthController.php`) are unaffected. Dropped the dead `CURLOPT_CUSTOMREQUEST` branch
+  (Trakt only issues GET/POST — the original had no such branch) and the unused `NullLogger` import.
+- `src/Plugins/Scrobbler/Trakt/TraktApi.php` — `getWatchedHistory()` 429-backoff loop (was
+  `usleep((int)($delayMs*1_000))` at ~:436): now `\Co\sleep($delayMs/1_000)` under
+  `function_exists('\Co\sleep')`, `usleep` fallback otherwise — mirrors the existing idiom at
+  `refreshAfterAuthFailure()` (:189-193/:222-226). This is the sole remaining blocking sleep on the
+  pull path.
+
+**Donor pattern mirrored:** `Phlix\Media\Metadata\MetadataHttpClient` (Channel + success/error
+callbacks + `requestCurl` returning a PSR-7 `Workerman\Http\Response`) and `Phlix\Hub\HttpClient`
+(the `EventLoopTls` + `WorkerContext::isEventLoopRunning()/inCoroutine()` transport gate). Verified
+via `vendor/workerman/http-client/src/Client.php` that non-2xx (401/429/4xx/5xx) responses arrive
+through the `success` callback (only 3xx are auto-followed; connection/timeout errors hit `error`),
+so Trakt's status-based branching is preserved.
+
+**Non-coroutine fallback preserved:** `WorkerContext::inCoroutine()` returns false when swoole is
+absent (plain CLI/PHPUnit) and `isEventLoopRunning()` false outside a running worker, so both the
+transport selection AND `\Co\sleep` gate fall back to blocking cURL / `usleep`. Unit tests use a
+`MockHttpClient` (implements `HttpClientInterface`) and never touch the real client — all green.
+
+**Verification (verbatim summary lines):**
+- `phpstan analyse -c phpstan.neon.dist --level=9` (both changed files) → **[OK] No errors**.
+- `phpcs --standard=PSR12 src/Plugins/Scrobbler/Trakt/` → **0 ERRORS** (only pre-existing
+  line-length WARNINGS in TraktPlugin/TraktApi/TraktHistorySync; `HttpClient.php` clean).
+- `phpunit --filter Trakt --no-coverage` → **OK (63 tests, 131 assertions)**.
+
+**Notes for adjacent sub-steps (NOT implemented here):**
+- **3.6a (Timer wiring):** the path is now event-loop-safe to call from a coroutine timer — the
+  async client yields, the backoff yields. Only residual blocking I/O on the pull path is the
+  `flock()`-based cross-process refresh mutex in `refreshAfterAuthFailure()`, which already uses
+  `LOCK_NB` + `\Co\sleep` polling (bounded ~2s) — so it also yields. Put the `Timer::add` in
+  `start.php` `onWorkerStart`, worker-0-gated, NOT `index.php`.
+- **3.6c/3.6d:** untouched — `syncTraktToPhlix` still force-writes `STATUS_COMPLETED` and
+  `getWatchedHistory` is still called with hardcoded `page=1,limit=100`. When 3.6d adds a page
+  loop, the between-page backoff should reuse the same `\Co\sleep`-under-cid idiom now in
+  `getWatchedHistory`.
+- **EventLoopTls caveat:** Trakt is always `https://api.trakt.tv`, so under the Swoole event loop
+  `requiresBlockingCurl()` returns true today → the blocking-cURL branch is taken in prod (curl is
+  unhooked, runs as a plain blocking call — the accepted repo-wide tradeoff for low-frequency
+  control-plane clients, same as Metadata/Hub). The async branch activates automatically if/when
+  the upstream Swoole-TLS stall is fixed (EventLoopTls flips to false). The genuine de-block that
+  matters right now on the loop is the sleep conversion; the transport now matches the rest of the
+  repo instead of being an unconditional blocking outlier.

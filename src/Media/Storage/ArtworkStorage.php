@@ -12,7 +12,11 @@ declare(strict_types=1);
 namespace Phlix\Media\Storage;
 
 use Phlix\Auth\SignedUrl;
+use Phlix\Common\Http\EventLoopTls;
+use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Server\Http\Response;
+use Psr\Http\Message\ResponseInterface;
+use Workerman\Http\Client;
 
 /**
  * Downloads, resizes, and serves TMDB poster images locally.
@@ -65,6 +69,12 @@ class ArtworkStorage
 
     /** Timeout for downloading poster from TMDB (seconds). */
     private const DOWNLOAD_TIMEOUT = 30;
+
+    /** Connect timeout for downloading poster from TMDB (seconds). */
+    private const CONNECT_TIMEOUT = 10;
+
+    /** @var Client|null Async HTTP client instance (lazy initialized). */
+    private ?Client $asyncClient = null;
 
     public function __construct(
         private string $storageDir = '/var/artwork/',
@@ -291,6 +301,21 @@ class ArtworkStorage
     /**
      * Download a file from URL to a temp location.
      *
+     * SV-3.4: this class is reachable from an interactive HTTP handler
+     * (`MediaMatchController::apply()` → `LibraryMetadataMatcher::applyMatch()`
+     * → … → `downloadAndStore()`), so the network fetch must never block the
+     * resident Workerman worker. When running inside a Workerman worker AND a
+     * live Swoole coroutine (and the URL is not a Swoole-event-loop-TLS-stall
+     * case) we use the non-blocking {@see Client} + coroutine-Channel
+     * cooperative wait — the same pattern as {@see \Phlix\Media\Metadata\MetadataHttpClient}.
+     * Otherwise (CLI scans, PHPUnit, or the https-under-Swoole TLS stall) we
+     * fall back to blocking cURL, which is deliberately excluded from the
+     * curated coroutine hook mask so it runs as a plain blocking call.
+     *
+     * The decision is delegated to {@see shouldUseBlockingDownload()} via the
+     * shared {@see WorkerContext} helper (introduced by SV-0.3/SV-0.4) so we do
+     * not hand-roll a fresh context check.
+     *
      * @param string $url Full URL to download
      * @return string     Path to temp file
      * @throws \RuntimeException if download fails
@@ -302,29 +327,152 @@ class ArtworkStorage
             throw new \RuntimeException('Failed to create temp file for artwork download');
         }
 
+        // CURLOPT_URL / the async client both require a non-empty URL.
+        assert($url !== '');
+
+        if ($this->shouldUseBlockingDownload($url)) {
+            return $this->downloadToTempBlocking($url, $tmpFile);
+        }
+
+        return $this->downloadToTempAsync($url, $tmpFile);
+    }
+
+    /**
+     * Decide whether the blocking cURL download path must be used.
+     *
+     * Blocking is required when there is no running Workerman event loop
+     * (CLI/scan/PHPUnit), when we are not inside a live Swoole coroutine (a
+     * `Swoole\Coroutine\Channel` may only be used there — see
+     * {@see WorkerContext::inCoroutine()}), or when the URL is an https request
+     * that would stall under the Swoole event loop's TLS reads
+     * ({@see EventLoopTls::requiresBlockingCurl()}).
+     *
+     * Protected so a unit test can force the async path without a live worker.
+     *
+     * @param string $url Absolute request URL.
+     */
+    protected function shouldUseBlockingDownload(string $url): bool
+    {
+        return !WorkerContext::isEventLoopRunning()
+            || !WorkerContext::inCoroutine()
+            || EventLoopTls::requiresBlockingCurl($url);
+    }
+
+    /**
+     * Lazily construct the non-blocking Workerman HTTP client.
+     *
+     * Protected so a unit test can substitute a fake client that resolves the
+     * success/error callbacks synchronously (no network).
+     */
+    protected function getAsyncClient(): Client
+    {
+        if ($this->asyncClient === null) {
+            $this->asyncClient = new Client([
+                'timeout' => self::DOWNLOAD_TIMEOUT,
+                'connect_timeout' => self::CONNECT_TIMEOUT,
+            ]);
+        }
+
+        return $this->asyncClient;
+    }
+
+    /**
+     * Download via the non-blocking async client, waiting cooperatively on a
+     * Swoole coroutine Channel (yields to the event loop, never busy-spins).
+     *
+     * @param non-empty-string $url     Full URL to download.
+     * @param string           $tmpFile Pre-created temp file to write the body into.
+     * @return string          Path to the temp file on success.
+     * @throws \RuntimeException on timeout, transport error, non-200, or write failure.
+     */
+    private function downloadToTempAsync(string $url, string $tmpFile): string
+    {
+        $channel = new \Swoole\Coroutine\Channel(1);
+
+        /** @var array{response: ResponseInterface|null, error: \Throwable|null} $state */
+        $state = [
+            'response' => null,
+            'error' => null,
+        ];
+
+        $this->getAsyncClient()->request($url, [
+            'method' => 'GET',
+            'success' => function (ResponseInterface $response) use (&$state, $channel): void {
+                $state['response'] = $response;
+                $channel->push(true);
+            },
+            'error' => function (\Throwable $error) use (&$state, $channel): void {
+                $state['error'] = $error;
+                $channel->push(true);
+            },
+        ]);
+
+        // Yield to the event loop until a callback pushes or the timeout fires.
+        // A false return here is a timeout: state stays empty and we fail below.
+        $channel->pop((float) self::DOWNLOAD_TIMEOUT);
+
+        $response = $state['response'];
+
+        if ($state['error'] !== null || !$response instanceof ResponseInterface) {
+            $this->cleanupTemp($tmpFile);
+            throw new \RuntimeException(sprintf(
+                'Failed to download artwork from TMDB (async): %s',
+                $state['error'] instanceof \Throwable ? $state['error']->getMessage() : 'timeout',
+            ));
+        }
+
+        $httpCode = $response->getStatusCode();
+        if ($httpCode !== 200) {
+            $this->cleanupTemp($tmpFile);
+            throw new \RuntimeException(sprintf(
+                'Failed to download artwork from TMDB: HTTP %d - %s',
+                $httpCode,
+                'async request',
+            ));
+        }
+
+        $body = (string) $response->getBody();
+        if ($body === '' || file_put_contents($tmpFile, $body) === false) {
+            $this->cleanupTemp($tmpFile);
+            throw new \RuntimeException('Failed to write downloaded artwork to temp file');
+        }
+
+        return $tmpFile;
+    }
+
+    /**
+     * Blocking cURL download into the pre-created temp file. Used in CLI/scan/
+     * test contexts and for the https-under-Swoole TLS-stall case. cURL is
+     * excluded from the coroutine hook mask, so this is a plain blocking call.
+     *
+     * @param non-empty-string $url     Full URL to download.
+     * @param string           $tmpFile Pre-created temp file to write the body into.
+     * @return string          Path to the temp file on success.
+     * @throws \RuntimeException on init/open/transport error or non-200.
+     */
+    private function downloadToTempBlocking(string $url, string $tmpFile): string
+    {
         // Use cURL for reliable download with timeout
         $ch = curl_init();
         if ($ch === false) {
-            unlink($tmpFile);
+            $this->cleanupTemp($tmpFile);
             throw new \RuntimeException('Failed to initialize cURL');
         }
 
         $fp = fopen($tmpFile, 'wb');
         if ($fp === false) {
             curl_close($ch);
-            unlink($tmpFile);
+            $this->cleanupTemp($tmpFile);
             throw new \RuntimeException('Failed to open temp file for artwork download');
         }
 
-        // Use individual curl_setopt calls to avoid PHPStan array type strictness
-        // Assert non-empty since CURLOPT_URL requires non-empty-string
-        assert($url !== '');
+        // Use individual curl_setopt calls to avoid PHPStan array type strictness.
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
         curl_setopt($ch, CURLOPT_MAXREDIRS, 3);
         curl_setopt($ch, CURLOPT_TIMEOUT, self::DOWNLOAD_TIMEOUT);
-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, self::CONNECT_TIMEOUT);
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_FILE, $fp);
 
@@ -332,15 +480,26 @@ class ArtworkStorage
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
+        fclose($fp);
 
         if (!$success || $httpCode !== 200) {
-            unlink($tmpFile);
+            $this->cleanupTemp($tmpFile);
             throw new \RuntimeException(
                 sprintf('Failed to download artwork from TMDB: HTTP %d - %s', $httpCode, $error ?: 'Unknown error'),
             );
         }
 
         return $tmpFile;
+    }
+
+    /**
+     * Best-effort removal of a temp file after a failed download.
+     */
+    private function cleanupTemp(string $tmpFile): void
+    {
+        if (is_file($tmpFile)) {
+            @unlink($tmpFile);
+        }
     }
 
     /**

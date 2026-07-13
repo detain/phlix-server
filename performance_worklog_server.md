@@ -3119,3 +3119,18 @@ warnings on untouched lines).
   goes red despite the DB mock. phpunit --filter DbLoginRateLimitStore = 6/6 OK. phpstan L9 (dist) on
   both changed files = No errors. phpcs src = clean (test file has pre-existing test_snake_case names,
   file-wide convention).
+
+## Implementer — 2026-07-13 — SV-3.4 sub-step 1/7 (ArtworkStorage non-blocking download)
+- `src/Media/Storage/ArtworkStorage.php`: `downloadToTemp()` now dispatches via `shouldUseBlockingDownload()`
+  (reuses shared `Common\Runtime\WorkerContext::isEventLoopRunning()/inCoroutine()` + `Common\Http\EventLoopTls::requiresBlockingCurl()`)
+  → async path `downloadToTempAsync()` uses `Workerman\Http\Client` + `Swoole\Coroutine\Channel` cooperative
+  wait (mirrors MetadataHttpClient; no busy-spin, 30s timeout via Channel::pop), blocking fallback
+  `downloadToTempBlocking()` keeps the original cURL (CLI/scan/test + https-under-Swoole TLS stall) and now
+  fclose()s the file handle. Failure = clean `\RuntimeException` (caller `cacheArtworkLocally` already
+  try/catches → never bubbles to HTTP handler). GD/resize + public signatures unchanged.
+- Tests: `tests/Unit/Media/Storage/ArtworkStorageTest.php` (+ fixture `TestableArtworkStorage.php`): async
+  success writes temp + generates variants; non-worker context selects blocking; async error / non-200 →
+  clean RuntimeException, no partial dir. phpunit --filter ArtworkStorage = 5 tests / 22 assertions OK;
+  phpstan L (dist) 3 files = No errors; phpcs PSR12 3 files = clean.
+- Wiring note: ArtworkStorage stays `autowire()` in MediaServicesProvider (no ctor change) — next sub-step
+  can wire LibraryMetadataMatcher::$artworkStorage without a blocking-I/O CARDINAL violation.

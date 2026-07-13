@@ -63,6 +63,7 @@
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
 - [x] SV-0.8  fix path_hash reads + stop re-probing ✅ RE-COMPLETED 2026-07-13 (perf-7): earlier "DONE" (citing non-existent 510c8761, real prior commit 3bfa7d96) was INCOMPLETE — findPathsMap lacked library_id scoping (commit 46463be5 fixed that + a real cross-library correctness bug) but review found a HIGH severity gap: path_hash is NULL for non-deduped types (series/season/image/audiobook) so lookups always missed → duplicate rows every rescan. Fixed f31f34b5 (two-pass path_hash-then-raw-path fallback, every call site threaded with libraryId). 3-round review→fix→re-review cycle, final verdict NO FINDINGS. **DONE.** One honest caveat: the real-DB EXPLAIN/NULL-hash integration tests self-skip in this sandbox (no reachable MySQL) — structurally sound, correctness proven by layered unit tests, CI-green confirmation owed next session.
 - [x] SV-0.9  fix generateThumbnailBatch timestamp escaping ✅ (commit 1f4bfd3d) + COMPLETED 2026-07-13: batch command-shape half. Escaping fix (1f4bfd3d) had introduced a NEW defect: all per-timestamp `-ss`/`-vframes`/output groups bunched before one shared `-i` → malformed, rendered zero thumbnails for >1 timestamp (latent, no array caller in prod). Fixed via new `buildThumbnailBatchCommand()` builder: each timestamp gets its own `-ss <t> -i <input>` pair (fast input-side seek) + explicit `-map <index>:v:0` per output; also hardened the return value (empirically confirmed real ffmpeg exits 0 even when every seek is past EOF, so exit code alone can't signal success — now verifies ≥1 frame file was actually written). Real caller wiring evaluated (MediaAssetGenerationJob::generateChapterThumbnails loops N single calls) but deliberately left uncalled — see worklog entry for the 3 reasons (no test coverage on that class, modest win for widely-spaced chapters, per-chapter failure-isolation semantics need their own scoped change). Unit (6 tests, command-shape) + Integration (3 tests, real ffmpeg, distinct-frame-content) added — method had zero coverage before. phpstan/phpcs clean, full Unit suite 5138/0. Commit `d3062086`.
+  - SV-0.9 CLOSED 2026-07-13 — fix-pass re-review returned NO FINDINGS (commits 20dc2370/d8bac2c5).
 - [x] SV-1.1  memoize/precompute HDR tone-map decision ✅ (commit bbef742c)
 - [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
 - [x] SV-1.3  move chapter-thumbnail + trickplay to background job ✅ (commit 4317214b)
@@ -5218,3 +5219,63 @@ assertions)** (was 1088 pre-fix — 2 net new assertions); `tests/Unit/Webhooks/
 `phpstan analyse -c phpstan.neon.dist <both changed files> --memory-limit=512M` → **0 errors**.
 `phpcs --standard=PSR12 <both changed files>` → **0 errors** (exit 0). No production/source files
 touched — the two Low findings closed. **SV-4.4 test-rigor findings CLOSED.**
+
+## Implementer — SV-3.1 f-a (DB-backed timeshift session store + migration) — 2026-07-13
+
+First sub-step of SV-3.1 **f** (timeshift data plane). Builds the persistence layer ONLY —
+the ffmpeg rolling-buffer writer (f-b) and the `LiveTvStreamController` 501-stub replacement
+(f-c) consume this next and are out of scope here. No wiring into `Recorder` / the DI provider
+yet (deliberate — DI binding lands in f-b with a real consumer, to avoid the untested
+PHP-DI-skips-nullable-ctor-param landmine).
+
+**Architectural gap closed (foundation for):** timeshift state lived only in
+`Recorder::$activeTimeShifts` — a per-worker in-memory array — so a session started on worker N
+was invisible to a `/livetv/timeshift/{session}/stream` request routed to worker M (404). This
+gives every worker a shared, authoritative view (mirrors the project's `Db*StateStore` pattern).
+
+**Files added (commit `4f7d2c89`, pushed to master):**
+- `migrations/078_livetv_timeshift_sessions.sql` — new table `livetv_timeshift_sessions`.
+  Modelled VERBATIM on `livetv_recordings` (012a) conventions: `id CHAR(36)` PK, epoch
+  `INT UNSIGNED` time (`buffer_start_at`/`buffer_end_at`, matching Recorder.php's time()-based
+  `buffer_start`/`buffer_end`), `buffer_dir VARCHAR(512)`, nullable `pid INT`,
+  `window_seconds` (default 7200 = `Recorder::TIMESHIFT_BUFFER_SECONDS`), `cursor_position`
+  (int, default 0), `status VARCHAR(32)` default `'active'`, DATETIME `created_at`/`updated_at`
+  with `ON UPDATE`, `ENGINE=InnoDB … utf8mb4_unicode_ci`. Idempotent `CREATE TABLE IF NOT EXISTS`
+  (valid on MySQL 8 + MariaDB; no `IF NOT EXISTS` column/index clauses). No expected-migration-files
+  list exists in the repo (MigrationRunner globs the dir), so nothing to update there.
+- `src/LiveTv/TimeShift/TimeShiftSession.php` — immutable value object, modelled on
+  `Media\Library\BookProgress` (readonly promoted props + `toArray()`), plus `start()`
+  (fresh-session factory, cf. `BookProgress::fresh`) and `fromRow()` (RowMap-narrowing hydration).
+  Carries `session_id` in addition to the prompt's column list — it matches the existing
+  `$activeTimeShifts` sibling shape AND is the `/livetv/timeshift/{sessionId}/stream` URL key the
+  documented core bug turns on (see divergence note below).
+- `src/LiveTv/TimeShift/DbTimeShiftSessionStore.php` — CRUD-only store modelled on
+  `Media\Library\BookProgressStore` + `Auth\DbLoginRateLimitStore`: single injected
+  `Workerman\MySQL\Connection`, **positional `?` binds** (the sibling idiom; the project's
+  connection subclass re-keys them), no business logic. Methods: `save()` (INSERT … ON DUPLICATE
+  KEY UPDATE upsert, `updated_at` via the column default), `findById()`, `findBySessionId()`
+  (newest-first), `updateCursor()`, `updateBufferWindow()`, `updatePid()`, `updateStatus()`,
+  `delete()`, `listActive()`.
+- `tests/Unit/LiveTv/TimeShift/DbTimeShiftSessionStoreTest.php` — 16 tests modelled on
+  `BookProgressStoreTest` (mock `Connection`): create; save-upsert positional-param shape;
+  findById round-trip; findById→null on empty AND on `false`; findBySessionId ORDER/LIMIT;
+  updateCursor/BufferWindow/Pid(int)/Pid(null)/Status/delete param shapes; listActive hydrates +
+  binds `STATUS_ACTIVE`, and →[] on `false`; start() factory; fromRow() loose-type + NULL-pid.
+
+**Divergence from the brief (flagged per instruction):** the prompt's explicit column list did
+NOT include `session_id`, but I added it (indexed, non-unique) + a `findBySessionId()` because
+(a) it matches the existing `Recorder::$activeTimeShifts` data model, and (b) the URL route key
+in `startTimeShift()`'s `stream_url` is the playback session id, which f-c's cross-worker lookup
+needs. PK stays `id CHAR(36)` with `findById()` as the primary lookup, exactly as specified.
+
+**Verification (actual):** `phpunit tests/Unit/LiveTv/TimeShift/DbTimeShiftSessionStoreTest.php`
+→ **16/16 pass (53 assertions)**. Store + MigrationRunner tests together → **42/42 pass**.
+`phpstan analyse -c phpstan.neon.dist` on all 3 new PHP files → **0 errors** (L9). `phpcs
+--standard=PSR12` on all 3 → **0 errors**. Migration 078 parsed through the real
+`MigrationRunner::splitStatements()` → **1 clean CREATE TABLE statement** (comments stripped, no
+spurious semicolon split). Committed `4f7d2c89`, pushed to origin/master.
+
+**Next (out of scope here):** f-b spawns the detached ffmpeg rolling buffer into `buffer_dir`,
+persists the child `pid` via `updatePid()`, and advances `updateBufferWindow()`; then wires the
+store into the DI provider with the real consumer. f-c replaces the `LiveTvStreamController`
+501 stub, resolving a session (by session_id / id) and serving from `buffer_dir` via `withFile`/HLS.

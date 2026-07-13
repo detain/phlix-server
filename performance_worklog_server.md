@@ -62,7 +62,7 @@
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
 - [x] SV-0.8  fix path_hash reads + stop re-probing ✅ RE-COMPLETED 2026-07-13 (perf-7): earlier "DONE" (citing non-existent 510c8761, real prior commit 3bfa7d96) was INCOMPLETE — findPathsMap lacked library_id scoping (commit 46463be5 fixed that + a real cross-library correctness bug) but review found a HIGH severity gap: path_hash is NULL for non-deduped types (series/season/image/audiobook) so lookups always missed → duplicate rows every rescan. Fixed f31f34b5 (two-pass path_hash-then-raw-path fallback, every call site threaded with libraryId). 3-round review→fix→re-review cycle, final verdict NO FINDINGS. **DONE.** One honest caveat: the real-DB EXPLAIN/NULL-hash integration tests self-skip in this sandbox (no reachable MySQL) — structurally sound, correctness proven by layered unit tests, CI-green confirmation owed next session.
-- [x] SV-0.9  fix generateThumbnailBatch timestamp escaping ✅ (commit 1dbdf97c)
+- [x] SV-0.9  fix generateThumbnailBatch timestamp escaping ✅ (commit 1f4bfd3d) + COMPLETED 2026-07-13: batch command-shape half. Escaping fix (1f4bfd3d) had introduced a NEW defect: all per-timestamp `-ss`/`-vframes`/output groups bunched before one shared `-i` → malformed, rendered zero thumbnails for >1 timestamp (latent, no array caller in prod). Fixed via new `buildThumbnailBatchCommand()` builder: each timestamp gets its own `-ss <t> -i <input>` pair (fast input-side seek) + explicit `-map <index>:v:0` per output; also hardened the return value (empirically confirmed real ffmpeg exits 0 even when every seek is past EOF, so exit code alone can't signal success — now verifies ≥1 frame file was actually written). Real caller wiring evaluated (MediaAssetGenerationJob::generateChapterThumbnails loops N single calls) but deliberately left uncalled — see worklog entry for the 3 reasons (no test coverage on that class, modest win for widely-spaced chapters, per-chapter failure-isolation semantics need their own scoped change). Unit (6 tests, command-shape) + Integration (3 tests, real ffmpeg, distinct-frame-content) added — method had zero coverage before. phpstan/phpcs clean, full Unit suite 5138/0. Commit `d3062086`.
 - [x] SV-1.1  memoize/precompute HDR tone-map decision ✅ (commit bbef742c)
 - [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
 - [x] SV-1.3  move chapter-thumbnail + trickplay to background job ✅ (commit 4317214b)
@@ -4759,3 +4759,140 @@ phpstan.neon.dist` (L9) — no errors; `phpunit --filter
 "CatalogSourceResolver|PluginCatalogController|PluginAdminController|PluginAutoUpdateWorker|PluginUpdateService|PluginCatalogService|PluginInstallCommand"`
 — 99/99 passed, 310 assertions (all pick up the new pin value automatically via the constant reference).
 Commit: `plugins: bump OFFICIAL_PINNED_REF to phlix-plugins v2.1.5 (trakt/musicbrainz event-alias fixes)`.
+
+## Implementer — SV-0.9 (batch thumbnail malformed multi-timestamp command) — 2026-07-13
+
+Picked up right where the perf-5 re-audit (line ~2586 above) left off: the escaping half of
+S-F19 was already fixed (real commit `1f4bfd3d`, "SV-0.9 fix generateThumbnailBatch timestamp
+escaping + fast seeking" — the hash `1dbdf97c` cited in this session's brief doesn't exist in
+this repo's history, but `1f4bfd3d` is unambiguously the same fix: it touches exactly
+`FfmpegRunner.php:878-901`, replaces `escapeshellarg((string)$timestamp)` fed into `%d` with a
+plain `(int)` cast). That commit's OWN "fast seeking" half is what introduced today's defect,
+confirmed by reading the diff directly: it moved the per-timestamp `-ss`/`-vframes`/output
+groups to *before* the single shared `-i`, intending input-side seeking, but bundled the
+`-vframes`/output-path parts into that same pre-`-i` blob — which is invalid FFmpeg syntax
+(an output file token appearing before any `-i` has been declared). Confirmed via the audit's
+description AND by direct code inspection that this is exactly the shape at
+`src/Media/Transcoding/FfmpegRunner.php` (method `generateThumbnailBatch`, previously lines
+1054-1082): `ffmpeg -y -hide_banner -loglevel error -ss T1 -vframes 1 out1 -ss T2 -vframes 1
+out2 ... -i input`.
+
+**Command-shape decision — Option A (repeated `-ss <t> -i <input>` blocks), not Option B:**
+the plan's own SV-0.9 "Do" text is explicit ("move `-ss` to input-side (before `-i`) for fast
+seeking") and S-F19's stated Acceptance Criterion is "encode is fast (input-side seek)" — that
+rules out reverting to the pre-`1f4bfd3d` shape (single shared `-i`, per-output *output-side*
+`-ss` — valid FFmpeg syntax but the "slow" seek mode the finding explicitly flags). So the fix
+gives **each timestamp its own `-ss <timestamp> -i <inputPath>` pair** (same file re-opened N
+times, but all N `-i` occurrences + N outputs still run inside **one** FFmpeg process/one
+`exec()` call — FFmpeg natively supports repeated `-i` with distinct per-input options), with
+all inputs declared before any output group, and **each output explicitly pinned to its own
+input via `-map <index>:v:0`**. The `-map` is not optional here: without it, FFmpeg's default
+per-output stream auto-selection is free to bind any already-open input to a given output, and
+since every input in this command is literally the *same file* re-opened at a different `-ss`
+offset, an unmapped output could silently receive the wrong (or a duplicate) timestamp's frame
+— empirically confirmed this matters by testing the interspersed-input/output form
+(`-i in -vframes 1 out1 -ss T -i in -vframes 1 out2`, no `-map`) against a real multi-input
+FFmpeg invocation before settling on the always-`-map`'d shape below.
+
+**Refactor:** extracted the command construction into a new public
+`buildThumbnailBatchCommand(string $inputPath, array $timestamps, string $outputDir): string`,
+matching this file's established `buildCmafCommand()` / `buildSegmentCommand()` /
+`buildHwaccelSegmentCommand()` / `buildDetachedCommand()` builder convention (a pure
+string-returning method makes the shape directly unit-testable without invoking a real FFmpeg
+binary). `generateThumbnailBatch()` now just calls the builder then executes via the existing
+`runCoroutineAwareCommand()`.
+
+**Extra correctness hardening found while empirically verifying the fix (see box below):**
+tested the new command against a real `/usr/bin/ffmpeg` (available in this sandbox) with one
+and then *all* requested timestamps beyond the clip's duration. In both cases FFmpeg **exits 0**
+— an out-of-range `-map N:v:0 -vframes 1 <file>` just logs a non-fatal "Output file is empty,
+nothing was encoded" and skips that particular output, it does not fail the whole process. That
+means the pre-existing `return $exitCode === 0` contract silently reports "success" even when
+**zero** thumbnails were written — a different manifestation of the same underlying "batch call
+silently produces nothing" bug class this step is about. Hardened `generateThumbnailBatch()` to
+also verify at least one of the expected `frame_NNNNN.jpg` files actually exists and is
+non-empty before returning `true`; returns `false` if the process failed outright (exit ≠ 0)
+*or* if not a single requested frame materialized. Partial success (some timestamps in range,
+some not) still returns `true`, preserving the intended best-effort batch semantics.
+
+**Files changed:**
+- `src/Media/Transcoding/FfmpegRunner.php` — added `buildThumbnailBatchCommand()`; rewrote
+  `generateThumbnailBatch()` to call it + do the existence-check hardening described above;
+  updated both methods' docblocks with `@since SV-0.9` notes describing the defect and fix.
+- `tests/Unit/Media/Transcoding/FfmpegRunnerThumbnailBatchTest.php` (**new**) — pure
+  string-shape assertions on `buildThumbnailBatchCommand()`: each timestamp pairs with its own
+  `-ss <t> -i <input>` and its own `-map <index>:v:0 -vframes 1 <frame path>`; no
+  `escapeshellarg()` wrapping the numeric (`-ss 30` not `-ss '30'`); every `-i` occurs before the
+  first `-map` (the direct regression guard for the exact malformed-shape defect); exact
+  input/output counts for N timestamps; distinct non-zero timestamps preserved (not coerced to
+  0); non-sequential/associative input keys (`[7 => 20, 3 => 40]`) still re-index outputs to a
+  clean `frame_00000`/`frame_00001` run; empty-array short-circuit still returns `true`.
+- `tests/Integration/Media/Transcoding/FfmpegThumbnailBatchTest.php` (**new**, self-skips if
+  `ffmpeg` isn't installed, matching the existing `FfmpegHlsTranscodeTest` pattern) — generates a
+  real 5-second synthetic clip via `lavfi testsrc` and drives `generateThumbnailBatch()` against
+  the real binary: (1) two in-range timestamps produce two non-empty, **byte-distinct** frames
+  (the direct regression guard for "all frames at t=0"/"no thumbnails rendered at all"); (2) one
+  in-range + one out-of-range timestamp still returns `true` with only the in-range frame
+  written (partial-success tolerance); (3) *all* timestamps out-of-range returns `false` even
+  though FFmpeg itself exits 0 (the existence-check hardening's own regression guard). This
+  method had **zero** test coverage before this change, per the audit.
+
+**Wiring a real caller — evaluated, deliberately left uncalled (documented per plan §0.1's "if
+not, it's fine to leave it correctly-implemented-but-uncalled" escape hatch):** grepped every
+caller of `generateThumbnail`/`generateThumbnailBatch` in `src/`. The only production caller
+remains `MediaAssetGenerationJob::generateChapterThumbnails()` (`src/Media/MediaAsset/
+MediaAssetGenerationJob.php:93-149`), which loops over a video's chapters calling the *scalar*
+`generateThumbnail($path, $thumbPath, $startSeconds)` once per chapter — the one plausible
+"N separate single-timestamp calls that could become one batch call" candidate the task asked me
+to look for. Deliberately did **not** wire it this session, for three concrete reasons found
+during the evaluation:
+1. **No safety net.** `MediaAssetGenerationJob` has **zero** existing tests (confirmed via
+   `find tests -iname '*MediaAssetGenerationJob*'` → no results) — switching its chapter-thumbnail
+   path to the batch call would be an untested behavioral change to a live production job with no
+   regression coverage of its own, which is a materially bigger lift than "wire a call" (it would
+   need its own dedicated test suite built out first, not just a call-site edit).
+2. **Modest actual win.** Movie/episode chapters are typically spread across the *whole* runtime
+   (not clustered like trickplay's evenly-spaced grid, which already has its own efficient
+   single-decode-pass sprite-sheet method, `generateTrickplaySprites()` — confirmed by reading it,
+   this is NOT a candidate, it was never doing N separate calls). Because the Option A shape still
+   re-opens+re-seeks the same file once per chapter (just inside one process instead of N), the
+   real saving from switching would be N-1 fewer process spawns, not less decode work — a
+   legitimate but modest gain, not the clear multi-x win batch extraction gives for tightly-clustered
+   timestamps.
+3. **Semantics changed enough to need its own review.** The current per-chapter loop tolerates one
+   bad chapter without losing the others via a per-call `try`/`$anySuccess` flag. Wiring the batch
+   call safely would additionally require the caller to check each `frame_NNNNN.jpg`'s existence
+   itself (the aggregate `bool` doesn't tell you *which* timestamp(s) succeeded) — doable, but a
+   distinct, scoped change deserving its own test-covered step rather than being folded silently
+   into this command-shape fix.
+
+Recording this as an honest candidate for a future, separately-scoped step (something like
+"SV-0.9-followup: batch chapter-thumbnail extraction + build MediaAssetGenerationJob test
+coverage") rather than forcing it in here.
+
+**Verification:**
+- New Unit test: `phpunit --filter FfmpegRunnerThumbnailBatchTest` → **6/6 passed, 23 assertions**.
+- New Integration test (real `/usr/bin/ffmpeg` 6.1.1, present in this sandbox):
+  `phpunit --filter FfmpegThumbnailBatchTest --no-coverage` → **3/3 passed, 19 assertions**
+  (empirically confirmed: two in-range timestamps → two distinct non-empty frames; one
+  in-range + one OOB → `true` + only the in-range frame written; all-OOB → `false` even though
+  the underlying FFmpeg process itself exits 0).
+- `phpunit --filter FfmpegRunner --no-coverage` (broader regression net on the whole class) →
+  **61/61 passed, 255 assertions**.
+- `phpstan analyze -c phpstan.neon.dist` on `FfmpegRunner.php` + both new test files → **0 errors**.
+- `phpcs --standard=PSR12` on all three changed/new files → **0 errors**, 1 pre-existing 129-char
+  warning at line 956 (`buildDetachedCommand`'s signature — outside this diff's line range,
+  confirmed via `git diff` hunks all starting at line 1040+; unrelated pre-existing warning, not
+  introduced by this change).
+- `phpunit --testsuite Unit --no-coverage` (full suite) → **5138 tests, 39267 assertions, 0
+  failures, 5 skipped** (pre-existing skips).
+
+**Acceptance criteria met:** batch thumbnails now render at the requested (distinct) timestamps
+rather than none at all — proven against a real FFmpeg binary, not just string-matched; encode
+uses input-side (fast) seeking per timestamp via the repeated `-ss <t> -i <input>` shape; a
+dedicated command-shape test (+ real-FFmpeg integration test) now covers a method that
+previously had zero coverage.
+
+**Commit:** `d3062086` — `transcode: SV-0.9 fix generateThumbnailBatch malformed multi-timestamp
+command`. Pulled (`git pull --rebase origin master` — already up to date, no conflicts) and
+pushed directly to `master` per §F.

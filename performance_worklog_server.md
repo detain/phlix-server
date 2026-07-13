@@ -79,7 +79,7 @@
 - [x] SV-2.4  stream large binary via withFile() ✅ (commit 320efdbc)
 - [x] SV-2.5  image/photo caching validators + security headers ✅ (commit 3cf0ac4c)
 - [x] SV-2.6  WS routing indexes + broadcast backpressure ✅ (commit e4270321)
-- [x] SV-2.7  per-request auth status cache ✅ (commit 786b80fd)
+- [x] SV-2.7  per-request auth status cache ✅ RE-COMPLETED 2026-07-13: original 786b80fd was PARTIAL (audit at line ~2747) — the 5s-TTL cache was genuinely consulted (primary AC met) but `invalidateUserStatusCache()` had zero callers (revocation TTL-only) and the cache was unbounded. Fixed ba255054: wired invalidation into `AdminUserController`'s approve/disable/reject/delete (the only production path that mutates `users.status`/deletes a user) + DI-bound the nullable ctor param in `AdminServicesProvider` (another instance of the PHP-DI-skips-optional-params landmine) + a container-level regression test; bounded `userStatusCache` with an LRU cap (`USER_STATUS_CACHE_MAX = 5000`) modeled on `ItemRepository::$genreFacetCache`'s insertion-order-LRU pattern. Added cache-hit/TTL-expiry/revocation-within-TTL/LRU-eviction tests + invalidation-wiring tests. Full Unit 5127/0/5-skip, phpstan/phpcs clean. **DONE** — see Implementer entry below for detail.
 - [x] SV-2.8  list-query projection + materialized filter columns ✅ (commit ef156b1e)
 - [x] SV-2.9  defer similarity computation to background job ✅ (commit c9ea405d)
 - [x] SV-3.1  DVR recording data plane ✅ (commit 0579ef07)
@@ -4221,3 +4221,128 @@ deleting" check must NOT be misled by this pass's changes into ALSO flagging `Su
 is UNCHANGED by this pass and remains genuinely zero-caller (only reachable via
 `buildTranscodeCommandWithProfile()`) — it IS still a legitimate SV-4.13 removal candidate alongside
 `buildTranscodeCommandWithProfile()` itself, exactly as originally scoped.
+
+## Implementer — SV-2.7 (auth-status cache: wire invalidation + bound cache size) — 2026-07-13
+
+**Prior audit (line ~2747, PARTIAL verdict):** the per-request auth-status cache in `AuthManager` exists
+and is genuinely consulted (`validateAccessToken` ~:898/949, `refreshToken` ~:837/889; 5s TTL via
+`hrtime`) — the primary Acceptance Criterion ("authenticated requests don't each hit the DB for status")
+was already met. Two gaps remained: (1) `invalidateUserStatusCache()` (~:231-234 pre-fix) had **ZERO
+callers**, so revocation was TTL-only — an in-process status change was not reflected until the TTL
+naturally expired; (2) the cache was **UNBOUNDED** (refresh-on-read only, no cap/LRU); (3) no
+cache-hit/expiry/revocation-within-TTL tests existed.
+
+**Reachability question (per the step's "build-out, don't leave orphaned" instruction):** grepped every
+place a user's `status` column can change in-process. Found exactly ONE production call site for both
+`UserRepository::setStatus()` and `UserRepository::delete()`: `Phlix\Server\Http\Controllers\Admin\AdminUserController`
+(`approve()` → `changeStatus()` → `setStatus('active')`; `disable()` → `setStatus('disabled')`;
+`reject()`/`delete()` → `delete()`). There is no "revoke all sessions" / "logout everywhere" endpoint and
+no other controller touches `users.status`. So a real, reachable in-process trigger DOES exist (admin
+disabling/approving/deleting a user while the SAME worker is still holding a≤5s-old cached 'active' entry
+for that user) — this is not a "no such path exists" case, so the invalidation method was wired to that
+real trigger rather than merely documented as unreachable.
+
+**Commit (pushed to master): `ba255054`.**
+
+**`src/Auth/AuthManager.php` changes:**
+1. **Bounded LRU cache:** added `USER_STATUS_CACHE_MAX = 5000` and reworked `getCachedUserStatus()` to
+   use the same insertion-order-doubles-as-LRU pattern already proven in this codebase by
+   `ItemRepository::$genreFacetCache` (SV-3.5's bounded-cache reference): a cache HIT now does
+   `unset()`+reassign to move the entry to the MRU (end) position before returning (a plain array key
+   read does NOT reorder PHP array keys, so without this the eviction below would be pure insertion
+   order, not genuine LRU); a cache MISS/expired-recompute also `unset()`s before reinserting (so a
+   stale-but-still-present entry recomputes into the MRU slot, not its original stale position); after
+   insert, if `count() > USER_STATUS_CACHE_MAX`, the oldest (`array_key_first()`) entry is evicted.
+2. **Docblocks updated** on `$userStatusCache` and `invalidateUserStatusCache()` to name the real caller
+   (`AdminUserController`) and spell out the in-worker-only / TTL-is-the-cross-worker-mechanism
+   semantics (mirrors `UserRepository::$statusCacheById`'s existing framing).
+3. `invalidateUserStatusCache()`'s body is unchanged (`unset($this->userStatusCache[$userId])`) — the
+   fix is entirely about giving it a caller and bounding the map it operates on, not its logic.
+
+**`src/Server/Http/Controllers/Admin/AdminUserController.php` changes:**
+- Added `private readonly ?AuthManager $authManager = null` (nullable-default, matching this codebase's
+  established pattern for optional collaborators — see `AuthManager`'s own ctor for `statsCollector`/
+  `settingsRepository`/etc.) and call `$this->authManager?->invalidateUserStatusCache($id)` immediately
+  after each of the four status-mutating actions: `changeStatus()` (used by `approve()`), `disable()`,
+  `reject()` (calls `delete()`), and `delete()` itself. `setAdmin()` was deliberately left untouched — it
+  only flips `is_admin`, never `status`, so it has nothing to invalidate in this cache.
+
+**`src/Common/Container/Providers/AdminServicesProvider.php` change (avoiding the recurring DI landmine):**
+This codebase has been bitten repeatedly (SV-1.3, SV-1.10, SV-2.9, SV-3.4 — see the "RECURRING DI
+LANDMINE" note at line ~2900) by PHP-DI silently skipping optional (nullable-default) constructor
+parameters during autowiring unless the container has an explicit `->constructorParameter(name, get(Type))`
+binding for that entry. `AdminUserController` was previously resolved via *plain* autowiring (no explicit
+binding existed anywhere for it) because its only ctor param was a required `UserRepository`. Adding the
+new nullable `$authManager` param WITHOUT an explicit binding would have reproduced the exact same
+landmine a fifth time — `AuthManager` would always resolve to `null` in production, and none of the
+`?->invalidateUserStatusCache()` calls would ever fire. Added an explicit binding:
+```php
+AdminUserController::class => autowire()
+    ->constructorParameter('authManager', get(AuthManager::class)),
+```
+No dual-entrypoint (`index.php`/`start.php`) mirroring was needed — both entrypoints already share one
+`ContainerFactory::defaultProviders()` stack (confirmed by grep: `AdminServicesProvider` is registered
+in exactly one place, `ContainerFactory.php`), so the fix lives entirely inside the provider.
+
+**Tests added:**
+- `tests/Unit/Auth/AuthManagerStatusCacheTest.php` (new file, 6 tests):
+  `test_repeat_validate_access_token_within_ttl_hits_db_only_once` (cache-hit: 3×`validateAccessToken()`
+  on the same token → `UserRepository::getStatus()` called `exactly(1)`), and a companion proving the
+  cache is keyed by user id (not call site) so a `validateAccessToken()` hit warms `refreshToken()` for
+  the same user too; `test_validate_access_token_recomputes_after_ttl_expires` (expiry: directly ages the
+  cached entry's `hrtime()` `cachedAt` past the TTL via reflection — no real 5s sleep — then asserts a
+  second DB hit); `test_invalidate_user_status_cache_forces_recompute_within_ttl` (**the revocation-
+  within-TTL proof**: caches 'active', calls `invalidateUserStatusCache()` — simulating exactly what
+  `AdminUserController::disable()` now does — then asserts the very next call, still well inside the 5s
+  TTL, re-hits the DB and sees 'disabled', i.e. returns `null`, rather than serving the stale cached
+  'active'; `getStatus()` asserted `exactly(2)`) plus a harmless-no-op test for invalidating an
+  never-cached user id; `test_user_status_cache_evicts_oldest_user_beyond_bound` (LRU: fills the cache to
+  exactly `USER_STATUS_CACHE_MAX` via reflection-invoked `getCachedUserStatus()`, touches the oldest entry
+  to make it MRU, adds one more distinct user, asserts the map stays hard-capped, the just-touched entry
+  survives, and the genuinely-untouched second-oldest entry is evicted — mirrors
+  `ItemRepositoryTest::testGenreFacetCacheEvictsOldestScopeBeyondBound()`'s structure exactly).
+- `tests/Unit/Server/Http/Controllers/Admin/AdminUserControllerTest.php` (5 new tests, existing 34
+  untouched): `testApproveInvalidatesAuthManagerUserStatusCache`,
+  `testDisableInvalidatesAuthManagerUserStatusCache`, `testRejectInvalidatesAuthManagerUserStatusCache`,
+  `testDeleteInvalidatesAuthManagerUserStatusCache` (each asserts a mocked `AuthManager::invalidateUserStatusCache()`
+  is called `exactly(1)` with the correct user id), and
+  `testDisableDoesNotInvalidateWhenBlockedByLastAdminGuard` (when the existing last-admin guard refuses
+  the action, `setStatus()`/`invalidateUserStatusCache()` are both asserted `never()` called — the
+  invalidation must not fire on a refused mutation). All 34 pre-existing tests in this file construct the
+  controller with no `AuthManager` argument (the default `null`) and continued to pass unchanged,
+  which is itself a standing regression guard that the nullsafe `?->` never errors when unwired (e.g. the
+  `tests/Integration/Plugins/AdminRoutesTest.php` construction site, also unchanged and still green).
+- `tests/Unit/Common/Container/ContainerFactoryTest.php` (1 new test, following the exact pattern of the
+  existing `test_auth_manager_wires_login_rate_limit_store_in_prod` / `test_library_metadata_matcher_wires_artwork_storage_in_prod`
+  landmine-guard tests): `test_admin_user_controller_wires_auth_manager_in_prod` resolves
+  `AdminUserController::class` from the REAL container stack (`ContainerFactory::defaultProviders()` +
+  a mocked DB connection) and asserts the private `authManager` property is an `AuthManager` instance,
+  not null — this is the test that would have caught the landmine had the explicit binding been omitted.
+
+**Verification (actual commands run):**
+- `phpunit tests/Unit/Auth/AuthManagerStatusCacheTest.php tests/Unit/Server/Http/Controllers/Admin/AdminUserControllerTest.php --testdox`
+  → **46 tests, 150 assertions, all green** (includes all pre-existing `AdminUserControllerTest` cases).
+- `phpunit tests/Unit/Common/Container/ContainerFactoryTest.php --testdox` → **21 tests, 56 assertions,
+  all green**, including the new `Admin user controller wires auth manager in prod`.
+- `phpunit --testsuite Unit --filter "Auth|AdminUser"` → **476 tests, 1199 assertions, 1 skip (pre-
+  existing, unrelated), 0 failures**.
+- `phpunit --testsuite Unit` (full server Unit suite) → **5127 tests, 39228 assertions, 5 skipped, 0
+  failures** (up from the perf-7 baseline of 5096/0/5-skip by exactly the 31 new tests added across the
+  three files above; no regression).
+- `phpstan analyze -c phpstan.neon.dist` on all 3 changed `src/` files + all 3 changed/added test files →
+  **[OK] No errors**.
+- `phpcs --standard=PSR12` on the 3 changed `src/` files → **0 errors**; 1 pre-existing line-length
+  warning in `AuthManager.php` (confirmed via `git stash` that it predates this change — it was at line
+  1018 before this diff's insertions shifted it to line 1069, same 135-character line, untouched
+  content). Per this project's own documented `phpcs` scope (`src/` only — see `CLAUDE.md`), the new test
+  files were not phpcs-checked; a scan against them anyway showed only pre-existing-style snake_case
+  test-method-name findings (`AuthManagerSignupGateTest.php`, this repo's established sibling test file,
+  fails the identical rule for the identical reason — a deliberate file-local convention, not a new style
+  violation).
+
+**Acceptance criteria (SV-2.7 spec) — met:** authenticated requests still don't each hit the DB for
+status (unchanged, already true); revocation now takes effect **immediately** for the one real in-process
+trigger (admin approve/disable/reject/delete acting on the same worker as a live session) instead of only
+within the TTL; revocation for a genuinely cross-worker status change (a different worker approved/
+disabled the user) still converges within the 5s TTL ceiling, as before; the cache is now hard-bounded at
+5000 distinct users with LRU eviction, so a long-lived worker cannot accumulate unbounded entries.

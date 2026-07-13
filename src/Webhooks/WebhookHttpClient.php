@@ -29,21 +29,48 @@ class WebhookHttpClient
     /** Default timeout for webhook requests in seconds. */
     private const DEFAULT_TIMEOUT = 10;
 
+    /**
+     * Default TCP connect timeout in seconds (SV-4.4 / S-F10).
+     *
+     * Distinct from the total request timeout: a target that never completes
+     * a TCP handshake (firewalled/black-holed host) would otherwise hang for
+     * the full request timeout on every attempt. Kept shorter than
+     * {@see DEFAULT_TIMEOUT} so a dead connection fails fast while a slow-but-
+     * reachable server still gets the full request timeout to respond.
+     */
+    private const DEFAULT_CONNECT_TIMEOUT = 5;
+
     /** Maximum response body length to store (truncate if longer). */
     private const MAX_RESPONSE_BODY_LENGTH = 65535;
 
     /** @var int Request timeout in seconds */
     private int $timeout;
 
+    /** @var int TCP connect timeout in seconds */
+    private int $connectTimeout;
+
     /** @var Client|null Async HTTP client instance (lazy initialized) */
     private ?Client $asyncClient = null;
 
     /**
      * @param int $timeout Request timeout in seconds (default: 10)
+     * @param int $connectTimeout TCP connect timeout in seconds (default: 5)
      */
-    public function __construct(int $timeout = self::DEFAULT_TIMEOUT)
-    {
+    public function __construct(
+        int $timeout = self::DEFAULT_TIMEOUT,
+        int $connectTimeout = self::DEFAULT_CONNECT_TIMEOUT,
+    ) {
         $this->timeout = $timeout;
+        $this->connectTimeout = $connectTimeout;
+    }
+
+    /**
+     * The configured TCP connect timeout in seconds. Exposed for tests that
+     * verify the connect-timeout is threaded through construction correctly.
+     */
+    public function getConnectTimeout(): int
+    {
+        return $this->connectTimeout;
     }
 
     /**
@@ -66,6 +93,27 @@ class WebhookHttpClient
             'X-Phlix-Delivery' => $deliveryId,
         ];
 
+        return $this->postWithHeaders($url, $headers, $jsonPayload);
+    }
+
+    /**
+     * Performs an async POST request with caller-supplied headers and a raw
+     * (already-serialized) body.
+     *
+     * Generalized alongside {@see post()} for callers whose wire format
+     * doesn't match post()'s hardcoded X-Phlix-Event/X-Phlix-Delivery headers
+     * (e.g. a header-signed raw-body convention) while still going through
+     * the same connect-timeout-aware, coroutine/blocking-context-aware
+     * dispatch used everywhere else in this class.
+     *
+     * @param string $url Target URL
+     * @param array<string, string> $headers Request headers, sent verbatim
+     * @param string $body Raw request body, sent verbatim
+     *
+     * @return array{success: bool, response_code: int|null, response_body: string|null, error: string|null}
+     */
+    public function postWithHeaders(string $url, array $headers, string $body): array
+    {
         // SV-0.4: postAsync() waits on a Swoole\Coroutine\Channel, which is only
         // valid inside a coroutine (getCid() > 0); outside one Channel::pop()
         // returns false immediately = a false timeout. Webhooks are often
@@ -78,8 +126,8 @@ class WebhookHttpClient
             && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
 
         return $useAsync
-            ? $this->postAsync($url, $headers, $jsonPayload)
-            : $this->postCurl($url, $headers, $jsonPayload);
+            ? $this->postAsync($url, $headers, $body)
+            : $this->postCurl($url, $headers, $body);
     }
 
     /**
@@ -194,6 +242,10 @@ class WebhookHttpClient
         curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, $this->timeout);
+        // SV-4.4 / S-F10: bound the TCP handshake separately from the total
+        // request timeout so an unreachable/black-holed target fails fast
+        // instead of hanging for the full request timeout.
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $this->connectTimeout);
         curl_setopt($ch, CURLOPT_HTTPHEADER, $headerLines);
 
         $responseBody = curl_exec($ch);
@@ -226,6 +278,11 @@ class WebhookHttpClient
         if ($this->asyncClient === null) {
             $this->asyncClient = new Client([
                 'timeout' => $this->timeout,
+                // SV-4.4 / S-F10: workerman/http-client's ConnectionPool tracks
+                // 'connect_timeout' separately from 'timeout' — connections still
+                // pending after this many seconds are failed as a connect error
+                // rather than waiting the full request timeout.
+                'connect_timeout' => $this->connectTimeout,
             ]);
         }
         return $this->asyncClient;

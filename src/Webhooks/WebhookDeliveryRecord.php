@@ -54,6 +54,16 @@ final class WebhookDeliveryRecord implements JsonSerializable
     ];
 
     /**
+     * Jitter fraction applied to the fixed {@see RETRY_DELAYS} schedule
+     * (SV-4.4 / S-F10): many deliveries can fail around the same moment (a
+     * shared endpoint outage, a worker restart re-queuing a backlog), and a
+     * fixed schedule would retry all of them at the exact same instant. A
+     * uniformly-random +/-20% adjustment spreads that out without meaningfully
+     * changing the intended 30s/5min/30min cadence.
+     */
+    private const RETRY_JITTER_FRACTION = 0.2;
+
+    /**
      * @param int $id Delivery record ID
      * @param int $eventId Associated event ID
      * @param string $webhookUrl Target webhook URL
@@ -147,17 +157,51 @@ final class WebhookDeliveryRecord implements JsonSerializable
     }
 
     /**
-     * Calculate the next retry timestamp based on current attempt.
+     * Compute the jittered delay, in seconds, before the next retry attempt —
+     * or null once max attempts have been reached.
      *
-     * @param DateTimeImmutable|null $fromTime Base time for calculation (defaults to now)
+     * Base delay comes from the fixed {@see RETRY_DELAYS} schedule; a
+     * uniformly-random +/-{@see RETRY_JITTER_FRACTION} adjustment is applied
+     * (SV-4.4 / S-F10) so many simultaneously-failing deliveries don't all
+     * retry at the exact same instant (thundering herd).
+     *
+     * Callers that need both the persisted `next_retry_at` timestamp AND a
+     * matching retry Timer delay (see {@see WebhookService::handleFailedDelivery()})
+     * must call this ONCE and thread the same value through both, rather than
+     * calling this (or {@see calculateNextRetryAt()}) twice — each call draws
+     * a fresh random jitter, so two independent calls would drift apart.
      */
-    public function calculateNextRetryAt(?DateTimeImmutable $fromTime = null): ?DateTimeImmutable
+    public function calculateNextRetryDelaySeconds(): ?int
     {
         if ($this->attempt >= self::MAX_ATTEMPTS) {
             return null;
         }
 
-        $delaySeconds = self::RETRY_DELAYS[$this->attempt + 1] ?? self::RETRY_DELAYS[self::MAX_ATTEMPTS];
+        $baseDelay = self::RETRY_DELAYS[$this->attempt + 1] ?? self::RETRY_DELAYS[self::MAX_ATTEMPTS];
+        $jitterWindow = (int) round($baseDelay * self::RETRY_JITTER_FRACTION);
+        $jitter = $jitterWindow > 0 ? mt_rand(-$jitterWindow, $jitterWindow) : 0;
+
+        return max(1, $baseDelay + $jitter);
+    }
+
+    /**
+     * Calculate the next retry timestamp based on current attempt.
+     *
+     * @param DateTimeImmutable|null $fromTime Base time for calculation (defaults to now)
+     * @param int|null $delaySecondsOverride A precomputed delay (seconds) to use
+     *        instead of drawing a fresh jittered one — pass this when the same
+     *        delay must also be used to schedule a retry Timer so the DB
+     *        timestamp and the actual retry never drift apart.
+     */
+    public function calculateNextRetryAt(
+        ?DateTimeImmutable $fromTime = null,
+        ?int $delaySecondsOverride = null,
+    ): ?DateTimeImmutable {
+        $delaySeconds = $delaySecondsOverride ?? $this->calculateNextRetryDelaySeconds();
+        if ($delaySeconds === null) {
+            return null;
+        }
+
         $baseTime = $fromTime ?? new DateTimeImmutable();
 
         return $baseTime->modify("+{$delaySeconds} seconds");

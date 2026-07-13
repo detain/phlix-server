@@ -283,7 +283,15 @@ class WebhookService
         $nextAttempt = $delivery->attempt + 1;
 
         if ($delivery->canRetry()) {
-            $nextRetryAt = $delivery->calculateNextRetryAt();
+            // SV-4.4 / S-F10: compute the jittered delay ONCE and thread it
+            // through both the persisted `next_retry_at` timestamp and the
+            // retry Timer below, so they can never drift apart (each call to
+            // calculateNextRetryDelaySeconds()/calculateNextRetryAt() draws a
+            // fresh random jitter).
+            $delaySeconds = $delivery->calculateNextRetryDelaySeconds();
+            $nextRetryAt = $delaySeconds !== null
+                ? $delivery->calculateNextRetryAt(null, $delaySeconds)
+                : null;
 
             $this->db->query(
                 "UPDATE webhook_deliveries SET attempt = ?, response_code = ?, response_body = ?, " .
@@ -297,10 +305,10 @@ class WebhookService
                 ]
             );
 
-            // Schedule retry
-            if ($nextRetryAt !== null) {
-                $delaySeconds = $this->calculateDelaySeconds($delivery->attempt);
-                Timer::add($delaySeconds, function () use ($delivery): void {
+            // Schedule retry via a ONE-SHOT timer (the literal `false` 4th arg
+            // is what makes it one-shot — Workerman timers repeat by default).
+            if ($delaySeconds !== null) {
+                Timer::add((float) $delaySeconds, function () use ($delivery): void {
                     $this->retryDelivery($delivery->id);
                 }, [], false);
             }
@@ -387,19 +395,6 @@ class WebhookService
                 $this->handleFailedDelivery($updatedDelivery, $httpResponse);
             }
         }
-    }
-
-    /**
-     * Calculate delay in seconds for next retry attempt.
-     *
-     * @param int $currentAttempt Current attempt number
-     *
-     * @return int Delay in seconds
-     */
-    private function calculateDelaySeconds(int $currentAttempt): int
-    {
-        return WebhookDeliveryRecord::RETRY_DELAYS[$currentAttempt + 1]
-            ?? WebhookDeliveryRecord::RETRY_DELAYS[WebhookDeliveryRecord::MAX_ATTEMPTS];
     }
 
     /**

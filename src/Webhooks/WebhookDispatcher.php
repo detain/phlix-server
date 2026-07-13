@@ -298,7 +298,10 @@ class WebhookDispatcher
         if ($this->httpClient === null) {
             $config = $this->getConfig();
             $timeout = $this->intFromMixed($config['timeout'] ?? null, 5);
-            $this->httpClient = new WebhookHttpClient($timeout);
+            // SV-4.4 / S-F10: connect timeout, distinct from the total request
+            // timeout, so an unreachable target fails fast on every attempt.
+            $connectTimeout = $this->intFromMixed($config['connect_timeout'] ?? null, 5);
+            $this->httpClient = new WebhookHttpClient($timeout, $connectTimeout);
         }
         return $this->httpClient;
     }
@@ -369,62 +372,50 @@ class WebhookDispatcher
         $signature = $event->getSignature($secret);
 
         $config = $this->getConfig();
-        $timeout = $this->intFromMixed($config['timeout'] ?? null, 5);
         $maxRetries = $this->intFromMixed($config['max_retries'] ?? null, 2);
+
+        // SV-4.4 / S-F10: delegate through the shared, connect-timeout-aware
+        // WebhookHttpClient (the same async/blocking-cURL dispatch pattern used
+        // by the other HTTP clients) instead of a fresh, duplicated blocking
+        // cURL call. postWithHeaders() preserves this subsystem's header-signed
+        // raw-body wire format (X-Phlix-Signature header + raw event JSON body)
+        // rather than post()'s {payload,signature} envelope, so registered
+        // webhook receivers see no wire-format change.
+        $client = $this->getHttpClient();
+        $headers = [
+            'Content-Type' => 'application/json',
+            'X-Phlix-Signature' => $signature,
+        ];
 
         $retries = 0;
         $lastError = 'Unknown error';
         $responseCode = null;
-        $responseBody = null;
 
         do {
-            $responseCode = null;
-            $responseBody = null;
-            $requestError = null;
+            $result = $client->postWithHeaders($url, $headers, $payload);
 
-            $ch = curl_init();
-            if ($ch === false) {
-                $lastError = 'Failed to initialize cURL';
-                break;
-            }
-
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, [
-                'Content-Type: application/json',
-                'X-Phlix-Signature: ' . $signature,
-            ]);
-
-            $rawResponse = curl_exec($ch);
-            $responseCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            $requestError = curl_error($ch);
-            curl_close($ch);
-
-            if ($rawResponse === false) {
-                $lastError = $requestError !== '' ? $requestError : 'cURL request failed';
-                $retries++;
-                continue;
-            }
-
-            $responseBody = is_string($rawResponse) ? $rawResponse : '';
-
-            if ($responseCode >= 200 && $responseCode < 300) {
+            if ($result['success']) {
                 $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
                 $this->logDispatch(
                     $webhookId,
                     $event->eventType,
-                    $responseCode,
-                    $responseBody,
+                    $result['response_code'],
+                    $result['response_body'],
                     null
                 );
                 return ['success' => true];
             }
 
-            $lastError = "HTTP " . $responseCode;
+            $responseCode = $result['response_code'];
+            $lastError = $result['error'] ?? ('HTTP ' . ($responseCode ?? 'unknown'));
             $retries++;
+
+            // SV-4.4 / S-F10: jittered exponential backoff between synchronous
+            // retry attempts instead of hammering a failing endpoint back-to-back.
+            // Only sleep when another attempt will actually be made.
+            if ($retries <= $maxRetries) {
+                $this->sleepMilliseconds($this->computeBackoffDelayMs($retries - 1));
+            }
         } while ($retries <= $maxRetries);
 
         $webhookId = $this->stringFromMixed($webhook['id'] ?? null);
@@ -437,6 +428,26 @@ class WebhookDispatcher
         );
 
         return ['success' => false, 'error' => $lastError];
+    }
+
+    /**
+     * Sleep for the given number of milliseconds between synchronous retry
+     * attempts. Uses `usleep()`, which cooperatively yields to the event loop
+     * under the Swoole coroutine SLEEP hook (same idiom as
+     * {@see \Phlix\Media\Metadata\MetadataHttpClient::get()}'s retry loop)
+     * rather than busy-spinning.
+     *
+     * Protected so tests can substitute a no-op/spy without real wall-clock
+     * delay.
+     *
+     * @since SV-4.4
+     */
+    protected function sleepMilliseconds(int $milliseconds): void
+    {
+        if ($milliseconds <= 0) {
+            return;
+        }
+        usleep($milliseconds * 1_000);
     }
 
     private function logDispatch(
@@ -488,6 +499,7 @@ class WebhookDispatcher
         return [
             'enabled' => true,
             'timeout' => 5,
+            'connect_timeout' => 5,
             'max_retries' => 2,
             'parallel_dispatch' => true,
         ];

@@ -2038,3 +2038,67 @@ PRE-EXISTING (RowQuery/ResultSet, `@since Wave 5a`) and out of SV-3.1d's own sco
 SV-3.1d registration diff (`c8845464`/`0f20be7b`) is itself correct and complete. The
 RowQuery fix must be its own sub-step (it also fixes SV-3.1 a/b0/c/e inertness); finding #2
 (LOW) should fold into that fix.
+
+## Implementer — SV-3.1-rowquery (DVR read-path resurrection) — 2026-07-12
+
+Fixed the CONFIRMED BLOCKING landmine (finding #1) + folded in the LOW library-race
+(finding #2). Committed + pushed myself; tree clean, local==origin.
+
+**Part A — RowQuery consumes the plain-array shape production actually returns.**
+`src/LiveTv/Dto/RowQuery.php` — `rows()/firstRow()/hasRows()` no longer narrow ONLY on
+`instanceof ResultSet`. Each now handles BOTH shapes:
+- **Plain array (prod shape)** — `PhlixMySQLConnection::query("SELECT …")` → Workerman
+  `Connection::query()` → `fetchAll()` returns `array<int, array<string, mixed>>`.
+  `rows()` → new private `rowsFromArray()` returns the list (filtering non-array elements
+  for L9-safe typing); `firstRow()` → `$result[0]` when it is an array, else null;
+  `hasRows()` → `$result !== []`. An empty SELECT (`[]`) → `[]`/null/false (correct).
+- **ResultSet cursor (test-mock shape)** — the original `num_rows`/`fetch()` path is KEPT
+  verbatim, so all 6 existing LiveTv `ResultSet`-mock tests still pass. `ResultSet` is NOT
+  deleted (per §0.1). Any non-array / non-ResultSet (null, scalar, INSERT/UPDATE int) → no
+  rows, unchanged.
+Net: against a plain-array `query()` result, `Recorder::getRecording()` returns a real row,
+`getRecordingsDueToStop()`/`resumeActiveRecordings()` return real rows, and the SV-3.1d
+`onComplete` registrar can finally fire. This resurrects the whole DVR read path
+(SV-3.1 a/b0/c/d/e) that was silently inert vs a live DB.
+
+**REGRESSION GUARDS (the key deliverable) — drive the read path with the PROD plain-array shape:**
+- `tests/Unit/LiveTv/Dto/RowQueryTest.php` (+4) — `rows`/`firstRow`/`hasRows` fed plain
+  arrays directly (prod shape) + empty-result null.
+- `tests/Unit/LiveTv/RecorderPlainArrayReadPathTest.php` (NEW, 4) — a mocked
+  `Connection::query()` returns PLAIN ARRAYS (not a ResultSet); asserts
+  `getRecording()`→real row, empty→null, `getRecordingsDueToStop()`→`['rec-1','rec-2']`,
+  `resumeActiveRecordings()`→reads the interrupted row, reconciles to FAILED, fires onComplete.
+- PROOF they guard the landmine: with the src fixes stashed to HEAD (pre-fix
+  `instanceof ResultSet`-only RowQuery), these fail — plain-array `rows`→size 0,
+  `firstRow`→null, `hasRows`→false, `getRecording`→null, `getRecordingsDueToStop`→`[]`
+  (7 failures + 1 error). With the fix: green.
+
+**Part B — DVR library find-or-create race (finding #2).**
+`src/LiveTv/Recording/RecordingMediaRegistrar.php::ensureRecordingsLibrary` — chose the
+**migration-free re-SELECT convergence** (NOT a global UNIQUE(type,name) index — that could
+conflict with legitimate pre-existing duplicate library names on a live box, unverifiable
+here; §0.3-safe). New private `findRecordingsLibraryId()` selects with a DETERMINISTIC
+`ORDER BY created_at ASC, id ASC LIMIT 1` (not a bare `LIMIT 1`, whose row order is
+undefined). Flow: find → if absent, INSERT (wrapped in try/catch so a future dup-key can't
+propagate) → **re-SELECT the canonical id**. Under a concurrent double-INSERT every caller
+converges on the SAME single library (earliest-created, id-tiebreak), so recordings never
+split across duplicate DVR libraries; the method returns the one canonical id under
+concurrency. Forward-compatible: if a UNIQUE(type,name) index is ever added, the dup-key
+INSERT is swallowed and reconciled. Tests: `RecordingMediaRegistrarTest`
+`testConcurrentLibraryCreateConvergesOnCanonicalId` (racing re-SELECT returns a different
+'lib-canonical' → item registered there, deterministic ORDER BY asserted) +
+`testDuplicateKeyOnLibraryInsertReconcilesToCanonicalId` (INSERT throws → reconciled).
+
+**ResultSet status:** still referenced by RowQuery (both-shape support) AND by the 6
+LiveTv ResultSet-mock test files, so it is NOT fully unused — do NOT delete. Left in place
+per §0.1; no §6 removal-queue entry needed yet.
+
+**Verification:** phpstan L9 `-c phpstan.neon.dist` = **[OK] No errors** (647/647). phpcs
+PSR-12 on `RowQuery.php` + `RecordingMediaRegistrar.php` = **0 errors**. `phpunit --testsuite
+Unit` = **OK, 4953 tests, 38653 assertions, 5 skipped, 0 failures** (baseline ~4943 + 10 new).
+`--filter 'RowQuery|Recorder|RecordingScheduler|RecordingMediaRegistrar'` = 63/63 green.
+
+**On-box verify STILL OWED:** this makes the read path correct vs the prod plain-array shape
+and unit-guards it, but a live end-to-end DVR record→complete→playable check on the box
+(SELECT returns real rows → onComplete registrar inserts the media_item + persists the
+linkage → item playable) remains the final proof.

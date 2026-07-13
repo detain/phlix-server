@@ -16,15 +16,19 @@ use Workerman\MySQL\Connection;
 /**
  * Narrowing helpers around {@see Connection::query()} results.
  *
- * {@see Connection::query()} is typed `mixed`; the LiveTv module treats
- * the returned object as a row cursor with a `num_rows` property and a
- * `fetch()` method. These helpers centralise the `instanceof
- * \Phlix\LiveTv\Dto\ResultSet` narrowing so PHPStan can verify the
- * accesses without inline casts or ignore-pragma directives.
+ * {@see Connection::query()} is typed `mixed`. In production a SELECT returns a
+ * **plain `array<int, array<string, mixed>>`** (Workerman's
+ * `Connection::query()` → `PDOStatement::fetchAll()`), while the LiveTv unit
+ * tests historically hand these helpers a cursor object (`num_rows` + `fetch()`)
+ * modelled by the abstract {@see ResultSet}. These helpers accept BOTH shapes so
+ * the LiveTv module reads real rows against a live database (the prod plain-array
+ * shape) AND keeps the existing `ResultSet` mock path working.
  *
- * Test mocks `extends ResultSet`; production callers that hand us a
- * Workerman result that does not match the expected shape simply yield
- * no rows.
+ * Centralising the shape handling here lets PHPStan verify the row accesses
+ * without inline casts or ignore-pragma directives.
+ *
+ * Any other value (`null`, scalar, INSERT/UPDATE affected-row int, …) simply
+ * yields no rows.
  *
  * @since Wave 5a (post-O.7)
  */
@@ -37,11 +41,20 @@ final class RowQuery
     /**
      * Collect every row from a query result into a typed array.
      *
+     * Accepts the production plain-array shape (`array<int, array<string,
+     * mixed>>`) and the {@see ResultSet} cursor mock shape.
+     *
      * @param mixed $result Whatever {@see Connection::query()} returned.
      * @return array<int, array<string, mixed>>
      */
     public static function rows(mixed $result): array
     {
+        // Production shape: a plain list of associative row arrays.
+        if (is_array($result)) {
+            return self::rowsFromArray($result);
+        }
+
+        // Test-mock / cursor shape.
         if (!$result instanceof ResultSet) {
             return [];
         }
@@ -54,14 +67,24 @@ final class RowQuery
     }
 
     /**
-     * Fetch a single row from a query result, or null when the cursor is
-     * empty.
+     * Fetch a single row from a query result, or null when there are no rows.
      *
      * @param mixed $result Whatever {@see Connection::query()} returned.
      * @return array<string, mixed>|null
      */
     public static function firstRow(mixed $result): ?array
     {
+        // Production shape: first element of the plain row list.
+        if (is_array($result)) {
+            $first = $result[0] ?? null;
+            if (is_array($first)) {
+                /** @var array<string, mixed> $first */
+                return $first;
+            }
+            return null;
+        }
+
+        // Test-mock / cursor shape.
         if (!$result instanceof ResultSet) {
             return null;
         }
@@ -79,10 +102,34 @@ final class RowQuery
      */
     public static function hasRows(mixed $result): bool
     {
+        // Production shape: a non-empty plain list means rows are present.
+        if (is_array($result)) {
+            return $result !== [];
+        }
+
+        // Test-mock / cursor shape.
         if (!$result instanceof ResultSet) {
             return false;
         }
 
         return $result->num_rows > 0;
+    }
+
+    /**
+     * Normalise a plain array result into a list of associative row arrays.
+     *
+     * @param array<array-key, mixed> $result
+     * @return array<int, array<string, mixed>>
+     */
+    private static function rowsFromArray(array $result): array
+    {
+        $rows = [];
+        foreach ($result as $row) {
+            if (is_array($row)) {
+                /** @var array<string, mixed> $row */
+                $rows[] = $row;
+            }
+        }
+        return $rows;
     }
 }

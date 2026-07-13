@@ -5509,3 +5509,57 @@ LiveTvStreamControllerTest + LiveTvServicesProviderTest` → **374 / 956 / 0 fai
 coroutine/DB skips). phpstan L9 (`-c phpstan.neon.dist`) on `Recorder.php` + `DbTimeShiftSessionStore.php`
 → **0 errors**. phpcs PSR12 on all 4 changed src/test files → **0 errors**; the 2 remaining Recorder.php
 >120-char warnings (lines 233, 2037) are PRE-EXISTING on HEAD (confirmed via phpcs on `git show HEAD:`).
+
+### COMMIT 2 — `livetv: SV-3.1 f tests+docs: injection/path-jail guards + shape + route-order + comment`
+
+8. **Command-injection mutation guard (f-b MEDIUM test-rigor)** — new
+   `tests/Unit/LiveTv/RecorderTimeShiftSecurityTest.php`. Exercises the REAL
+   `spawnTimeShiftBuffer()` command builder (NOT stubbed) with 4 hostile URL/dir data sets
+   (`http://x/;touch /tmp/pwn`, `$(id)`, spaces/pipe/amp, backticks/quotes). To capture the emitted
+   command WITHOUT executing a shell, `Recorder::launchDetached()` was changed `private`→`protected`
+   (pure test seam, no behaviour change) and a test subclass overrides it to capture `$ffmpegCmd`.
+   Asserts every interpolated value (ffmpeg binary, tuner URL, segment pattern, playlist path) appears
+   ONLY in its `escapeshellarg`-quoted form + the raw `-i <url>` never appears unquoted.
+   **Mutation proof:** reverting line 1116 `escapeshellarg($streamUrl)` → raw `$streamUrl` flipped ALL
+   4 data sets RED (e.g. `... -i http://x/;touch /tmp/pwn -c copy ...` reached the command line);
+   restored → 4/4 green.
+9. **Path-jail negative test (f-b LOW)** — same file. Invokes the private `removeBufferDir()` via
+   reflection with (a) a plain out-of-jail absolute path (string-prefix guard) and (b) a traversal
+   `<root>/../victim` that string-prefixes the root but resolves outside it (realpath guard); asserts
+   an out-of-jail `secret.txt` survives both, and that a legitimate in-jail buffer dir IS removed
+   (proving the guard is not a blanket no-op). **Mutation proof:** neutering both jail early-returns
+   (`if (false)`) flipped the test RED (the out-of-jail victim's `secret.txt` was deleted); restored →
+   5/5 green.
+10. **Store test gaps (f-a LOW)** — `DbTimeShiftSessionStoreTest`: `findBySessionId` not-found→null
+    (landed in COMMIT 1 with the lookup simplification), `TimeShiftSession::toArray()` full-column
+    round-trip, and a non-null-pid `save()` bind-path test asserting `updated_at = CURRENT_TIMESTAMP`
+    is in the set-list, the PK `id` is NOT, and pid binds as an int.
+11. **f-c cosmetic** — `src/Server/Core/Application.php` (~:1464): reworded the comment that called the
+    parametric `/livetv/timeshift/{sessionId}/stream` route "static". Both timeshift routes carry
+    `{sessionId}` and are therefore matched by regex in REGISTRATION ORDER, not via the Router's O(1)
+    static-route map; the comment now says so.
+12. **Route-ordering test (f-c LOW)** — `RouterTest`: two Router-level tests prove `.../stream`
+    dispatches to the playlist handler and `.../seg_00001.ts` to the segment handler when registered in
+    the Application order (stream first). Guards against a future re-ordering regression. (phpcbf also
+    normalised 2 pre-existing `function(` whitespace errors + the EOF newline in that file → phpcs 0.)
+
+**Verification (COMMIT 2):** `phpunit RecorderTimeShiftSecurityTest + DbTimeShiftSessionStoreTest +
+RouterTest` → **32 / 105 / 0 fail**; full affected set `phpunit tests/Unit/LiveTv + RouterTest +
+LiveTvStreamControllerTest + LiveTvServicesProviderTest` → **387 / 1010 / 0 fail** (0 skip). phpstan L9
+(`-c phpstan.neon.dist`) on `Recorder.php` + `Application.php` + all 3 test files → **0 errors**. phpcs
+PSR12 on all 5 changed files → **0 errors** (the 4 remaining Application.php >120-char warnings are
+PRE-EXISTING on HEAD, none in the edited comment range). Both mutation-revert proofs (items 8 + 9)
+confirmed RED-on-revert, green-on-restore.
+
+**Cumulative-review notes (for the integration reviewer):**
+- `startTimeShift` still best-effort spawns even if the persist-first `save()` throws (DB down); the
+  running ffmpeg is then bounded only by the `timeout <transcode_timeout>` wrapper + the same-worker
+  in-memory reap. This is the deliberate failure-safe trade-off (no-throw contract); the crash-orphan
+  window the fix targets — a crash BETWEEN spawn and persist — is closed because the row now precedes
+  the process.
+- `getTimeShift`'s two paths now share KEYS; the `current_position` VALUE semantics still differ
+  (in-memory epoch seed vs store `cursor_position` buffer-offset) — that reconciliation was explicitly
+  deferred by f-b as an f-c concern and is unchanged here (f-c only reads `buffer_dir`).
+- Migration 078 is amended in place (UNIQUE constraint); it is not deployed anywhere, so no follow-up
+  ALTER is needed. On-box DVR end-to-end verification of the timeshift path remains owed (sandbox has
+  no tuner), consistent with the rest of the DVR stack's outstanding on-box verification.

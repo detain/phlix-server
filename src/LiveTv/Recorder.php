@@ -1147,6 +1147,10 @@ class Recorder
      * spawn is fire-and-return (the single Workerman worker is never blocked; the
      * PROC hook is excluded by design per §0.3).
      *
+     * `protected` (not `private`) so a test double can capture the fully-built,
+     * escaped command WITHOUT executing a shell — letting the command-injection
+     * guard assert the emitted string is properly `escapeshellarg`-quoted.
+     *
      * @param string $ffmpegCmd The fully-escaped ffmpeg command to run
      * @param string $logFile   Absolute path for the combined stdout/stderr log
      *
@@ -1154,7 +1158,7 @@ class Recorder
      *
      * @since SV-3.1 f-b
      */
-    private function launchDetached(string $ffmpegCmd, string $logFile): int
+    protected function launchDetached(string $ffmpegCmd, string $logFile): int
     {
         // SV-4.2: wrap in timeout to enforce transcode_timeout (7200s default) so
         // a never-stopped capture cannot hold a tuner / run unbounded.

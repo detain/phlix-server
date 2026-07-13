@@ -1462,10 +1462,13 @@ class Application
             $liveTvStreamController = $this->getLiveTvStreamController();
             $r->get('/livetv/recording/{id}/stream', [$liveTvStreamController, 'streamRecording']);
             // Timeshift rolling-HLS buffer: playlist first, then the segment route.
-            // The static `stream` route MUST be registered before the parametric
-            // {segment} route so a `.../stream` request matches the playlist handler
-            // (the Router iterates parametric routes in registration order — same
-            // ordering the /hls/{job}/playlist -> /hls/{job}/{file} pair relies on).
+            // BOTH routes are parametric (they carry {sessionId}), so neither lives
+            // in the Router's O(1) static-route map — they are matched by regex in
+            // REGISTRATION ORDER (first preg_match wins). The `.../stream` route MUST
+            // therefore be registered before the `.../{segment}` route so a
+            // `.../stream` request matches the playlist handler rather than being
+            // captured as a segment name (same ordering the /hls/{job}/playlist ->
+            // /hls/{job}/{file} pair relies on). Guarded by the route-ordering test.
             $r->get('/livetv/timeshift/{sessionId}/stream', [$liveTvStreamController, 'streamTimeShift']);
             $r->get('/livetv/timeshift/{sessionId}/{segment}', [$liveTvStreamController, 'streamTimeShiftSegment']);
         }, $middleware);

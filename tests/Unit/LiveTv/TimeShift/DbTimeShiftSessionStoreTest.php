@@ -90,6 +90,69 @@ class DbTimeShiftSessionStoreTest extends TestCase
         (new DbTimeShiftSessionStore($db))->save($session);
     }
 
+    public function testSaveBindsNonNullPidAndBumpsUpdatedAt(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('ON DUPLICATE KEY UPDATE'),
+                    // updated_at is bumped explicitly (not left to ON UPDATE alone)...
+                    $this->stringContains('updated_at = CURRENT_TIMESTAMP'),
+                    // ...and the PK `id` is never in the update set-list (so a
+                    // session_id collision overwrites the row, not its identity).
+                    $this->logicalNot($this->stringContains('id = VALUES(id)'))
+                ),
+                $this->callback(function ($params): bool {
+                    return is_array($params)
+                        && count($params) === 10
+                        && $params[0] === 'ts-9'
+                        && $params[4] === 5150      // pid bound as the real capture pid
+                        && is_int($params[4])
+                        && $params[9] === 'active';
+                })
+            );
+
+        $session = new TimeShiftSession(
+            id: 'ts-9',
+            session_id: 'sess-42',
+            channel_id: 'chan-1',
+            buffer_dir: '/buf/ts-9',
+            buffer_start_at: 1000,
+            buffer_end_at: 8200,
+            window_seconds: 7200,
+            cursor_position: 0,
+            pid: 5150,
+        );
+
+        (new DbTimeShiftSessionStore($db))->save($session);
+    }
+
+    public function testToArrayExposesEveryColumn(): void
+    {
+        $session = TimeShiftSession::fromRow($this->sampleRow());
+
+        $this->assertSame(
+            [
+                'id' => 'ts-1',
+                'session_id' => 'sess-9',
+                'channel_id' => 'chan-7',
+                'buffer_dir' => '/var/recordings/timeshift/ts-1',
+                'buffer_start_at' => 1_000_000,
+                'buffer_end_at' => 1_007_200,
+                'window_seconds' => 7200,
+                'cursor_position' => 120,
+                'pid' => 4242,
+                'status' => 'active',
+                'created_at' => '2026-07-13 10:00:00',
+                'updated_at' => '2026-07-13 10:05:00',
+            ],
+            $session->toArray()
+        );
+    }
+
     public function testFindByIdReturnsHydratedSessionWhenFound(): void
     {
         $db = $this->createMockConnection();

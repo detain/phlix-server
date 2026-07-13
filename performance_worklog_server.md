@@ -5118,3 +5118,103 @@ blocking cURL fallback otherwise) consistent with the other 4 clients from SV-0.
 **Commit:** `7f434d03` — `webhooks: SV-4.4 add connect-timeout + jittered one-shot backoff retry`.
 Pulled (`git pull --rebase origin master` — already up to date, no conflicts) and pushed directly
 to `master` per §F.
+
+## Reviewer (per-step) — 2026-07-13
+
+Scope: SV-4.4 code commit `7f434d03` (+ docs `ee0659a6`; HEAD `ee0659a6`). Verified against
+S-F10, the plan step, and the actual diff — not the handoff summary.
+
+**Production code: correct and complete.** All reachable delivery paths carry a connect-timeout,
+jitter bounds are sane, timers are genuinely one-shot, and no path retains the old
+zero-delay/no-connect-timeout behavior:
+- Connect-timeout on EVERY reachable path — `WebhookHttpClient` sets both `CURLOPT_CONNECTTIMEOUT`
+  (blocking, :248) and `'connect_timeout'` (async, :285); the async knob is genuinely honored by
+  `vendor/workerman/http-client/src/ConnectionPool.php:164-175` (not a no-op key). Both live
+  subsystems route through it: `WebhookService::processDelivery`/retry (`:209,:376` → `httpClient->post`)
+  and `WebhookDispatcher::sendToWebhook` (`:388` → `postWithHeaders`). The autowired
+  `WebhookHttpClient` (AdminServicesProvider:183) gets `DEFAULT_CONNECT_TIMEOUT=5` — config-driven
+  only on the Dispatcher path, default-driven on the Service path, but present on both.
+- Jitter bounds sane — `WebhookDeliveryRecord::calculateNextRetryDelaySeconds()` uses
+  `max(1, base+jitter)` with `mt_rand(-window,window)`, window=±20%; ranges [24,36]/[240,360]/
+  [1440,2160] never negative, never zero, non-overlapping. `computeBackoffDelayMs()` returns
+  [delay, 2*delay], never negative. `mt_rand` is pure/non-blocking — fine under the coroutine runtime.
+- One-shot timers — `WebhookService::handleFailedDelivery` schedules `Timer::add((float)$d, …, [], false)`;
+  proven one-shot by reading Workerman's own `Timer::$tasks[...][2]` persistent flag.
+- Single-source-of-truth — `$delaySeconds` computed once, threaded to both `next_retry_at`
+  (via the new `$delaySecondsOverride`) and the Timer; the dead `calculateDelaySeconds()` removed
+  with no stale references.
+- No blocking curl on the event-loop path — `postWithHeaders` gates the async branch on
+  `WorkerContext::isEventLoopRunning() && inCoroutine() && !EventLoopTls::requiresBlockingCurl()`.
+
+### Findings (2, both Low — test-rigor / mutation-testing gaps; no production defect)
+
+1. **Low — `tests/Unit/Webhooks/WebhookServiceTest.php:153-171`** (the drift / single-source-of-truth
+   guard). The assertion only checks the persisted `next_retry_at` delta falls within the jittered
+   window `[239,361]`; it never reads the timer's actual scheduled interval
+   (`Timer::$tasks[$runTime][$timerId][3]`, confirmed to hold `$timeInterval`) and compares it to
+   `$deltaSeconds`. Reverting the fix so `next_retry_at` and the Timer each draw an INDEPENDENT
+   jitter (the exact drift bug this refactor closes) leaves both values inside `[240,360]` → the
+   test stays GREEN. So the single-source-of-truth property the worklog claims this test "proves"
+   is not actually guarded. Why it matters: a future edit could silently reintroduce DB/Timer drift
+   with no red test. Fix: also read `[$timerId][3]` and assert it equals the `next_retry_at` delta
+   (derive both from one draw).
+
+2. **Low — `tests/Unit/Webhooks/WebhookHttpClientTest.php:97-110`**
+   (`testPostDelegatesToPostWithHeadersPreservingWireFormat`). Docblock claims a "pure regression
+   guard that the SV-4.4 refactor didn't change post()'s public contract [wire format]," but the
+   body only exercises the empty-URL short-circuit and asserts `error === 'Empty URL'` — functionally
+   identical to `testPostWithHeadersShortCircuitsOnEmptyUrlWithoutNetwork` (:112). It never inspects
+   the `X-Phlix-Event`/`X-Phlix-Delivery` headers or the `{payload,signature}`/JSON envelope that
+   `post()` builds. A regression in that envelope — which `WebhookService`'s LIVE delivery path
+   (`:209,:376`) depends on — would leave this test GREEN. Wire format is asserted nowhere. Fix:
+   capture the headers/body actually built (e.g. spy `postWithHeaders`, or a seam over `postCurl`)
+   and assert the envelope, or drop the misleading "wire format" claim.
+
+Note (not a finding, per task): the intentionally-retained dead
+`WebhookDispatcher::dispatchAsync()`/`sendToWebhookWithBackoff()` is a tracked §6 removal candidate,
+not a defect. The blocking-cURL `CURLOPT_CONNECTTIMEOUT` literal value is unasserted by documented
+codebase convention (no interception seam for the static C-extension call) — acceptable; the async
+side is fully proven.
+
+**Verdict: 2 findings (both Low, test-rigor only). Acceptance criteria and code are otherwise met.**
+
+## Fixer (test-rigor) — SV-4.4 review findings — 2026-07-13
+
+Both Low findings above were "decorative" tests (stayed GREEN when the SV-4.4 production fix was
+reverted). Both are now genuine mutation-guarding tests. No production code changed — test files only.
+**Commit `69135f02`** — `SV-4.4 tests: guard next_retry_at↔timer single-source + real post() wire-format`.
+
+- **Finding 1 (`WebhookServiceTest.php`)** — replaced the window-only assertion (which only checked
+  `next_retry_at`'s delta fell within `[239,361]`) with a direct single-source-of-truth guard: a new
+  `scheduledIntervalFor()` helper reads the interval Workerman actually registered the timer with
+  (`Timer::$tasks[$runTime][$timerId][3]`, verified against
+  `vendor/workerman/workerman/src/Timer.php:171` = `[$func, $args, $persistent, $timeInterval]`), and
+  the test now asserts the delay implied by the persisted `next_retry_at` **equals** that scheduled
+  interval (`assertEqualsWithDelta(..., 0.5)`), i.e. both derive from the ONE computed `$delaySeconds`.
+  Seeded (`mt_srand(20260713)`) so the invariant is deterministic (first two jitter draws = +5s / −13s).
+  It also now bounds the *scheduled interval itself* (not just `next_retry_at`) to the ±20% window
+  `[240,360]`.
+- **Finding 2 (`WebhookHttpClientTest.php`)** — `testPostDelegatesToPostWithHeadersPreservingWireFormat`
+  no longer duplicates the empty-URL short-circuit (the `:112` test). It now drives `post()` through a
+  partial mock (`onlyMethods(['postWithHeaders'])`) and asserts `post()` delegates through
+  `postWithHeaders()` exactly once, with the precise wire format — URL verbatim, the
+  `Content-Type`/`X-Phlix-Event`/`X-Phlix-Delivery` header envelope, and the JSON-encoded body — and
+  returns `postWithHeaders()`'s result verbatim.
+
+**Mutation-revert confirmation (both flip RED when the specific SV-4.4 hunk is reverted; reverts run
+uncommitted in the working tree, then `git checkout` restored the pristine source — never committed):**
+- Finding 1: reverted `WebhookService::handleFailedDelivery` to two independent jitter draws
+  (`$nextRetryAt = calculateNextRetryAt(); $delaySeconds = calculateNextRetryDelaySeconds();`) →
+  `testFailedDeliveryWithRetriesRemainingSchedulesAGenuineOneShotTimer` **FAILED**: "Failed asserting
+  that 305.0000159740448 matches expected 287.0" (next_retry_at from draw +5 = 305s vs Timer from draw
+  −13 = 287s — the drift the fix prevents).
+- Finding 2: reverted `post()` to bypass `postWithHeaders()` (call `postCurl()` directly) →
+  `testPostDelegatesToPostWithHeadersPreservingWireFormat` **FAILED**: the real cURL result
+  (example.com → 405) replaced the stubbed envelope, so `assertSame` mismatched. Restored to the
+  delegating form.
+
+**Verification (actual output):** webhook Unit subset `phpunit --filter Webhook` **82/82 pass (1090
+assertions)** (was 1088 pre-fix — 2 net new assertions); `tests/Unit/Webhooks/` dir 69/69.
+`phpstan analyse -c phpstan.neon.dist <both changed files> --memory-limit=512M` → **0 errors**.
+`phpcs --standard=PSR12 <both changed files>` → **0 errors** (exit 0). No production/source files
+touched — the two Low findings closed. **SV-4.4 test-rigor findings CLOSED.**

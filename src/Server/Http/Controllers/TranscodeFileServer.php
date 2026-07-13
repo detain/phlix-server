@@ -137,32 +137,10 @@ trait TranscodeFileServer
      */
     public static function parseRange(?string $rangeHeader, int $fileSize): ?array
     {
-        if (!is_string($rangeHeader)) {
-            return null;
-        }
-
-        if (preg_match('/^bytes=(\d+)-(\d*)$/', $rangeHeader, $rm) === 1) {
-            $start = (int) $rm[1];
-            $end = $rm[2] !== '' ? (int) $rm[2] : $fileSize - 1;
-            // RFC 7233 §2.1: an over-long last-byte-pos is clamped to the actual
-            // EOF and answered 206, not rejected with 416.
-            if ($end >= $fileSize) {
-                $end = $fileSize - 1;
-            }
-            $satisfiable = $fileSize > 0 && $start < $fileSize && $start <= $end;
-            return ['satisfiable' => $satisfiable, 'start' => $start, 'end' => $end];
-        }
-
-        if (preg_match('/^bytes=-(\d+)$/', $rangeHeader, $rm) === 1) {
-            // Suffix range: "the last N bytes" (RFC 7233 §2.1). A zero-length
-            // suffix or an empty file has nothing satisfiable to serve.
-            $suffixLength = (int) $rm[1];
-            $satisfiable = $fileSize > 0 && $suffixLength > 0;
-            $start = $satisfiable ? max(0, $fileSize - $suffixLength) : 0;
-            return ['satisfiable' => $satisfiable, 'start' => $start, 'end' => $fileSize - 1];
-        }
-
-        return null;
+        // Delegates to the standalone parser. External callers that don't use
+        // this trait should invoke ByteRangeParser::parse() directly (calling a
+        // static method on a trait is deprecated as of PHP 8.1).
+        return ByteRangeParser::parse($rangeHeader, $fileSize);
     }
 
     /**

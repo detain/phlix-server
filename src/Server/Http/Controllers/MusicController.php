@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers;
 
+use Phlix\Auth\SignedUrl;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\Response;
 use Phlix\Media\Library\MusicLibraryManager;
@@ -528,6 +529,16 @@ class MusicController
     {
         $metadata = is_array($track['metadata'] ?? null) ? $track['metadata'] : [];
 
+        // A music track row IS a media_items row, so its id is directly
+        // servable by the generic Range-safe GET /media/{id}/stream endpoint
+        // (HttpHandler::serveMediaStream). Mint a signed URL for direct-play,
+        // mirroring the AudiobookController convention.
+        $trackId = $this->toString($track['id'] ?? '');
+        $streamUrl = null;
+        if ($trackId !== '') {
+            $streamUrl = SignedUrl::fromEnv()->mint('/media/' . $trackId . '/stream');
+        }
+
         return [
             'id' => $track['id'] ?? null,
             'name' => $metadata['title'] ?? ($track['name'] ?? null),
@@ -541,6 +552,7 @@ class MusicController
             'duration_secs' => $metadata['duration_secs'] ?? null,
             'composer' => $metadata['composer'] ?? null,
             'path' => $track['path'] ?? null,
+            'stream_url' => $streamUrl,
         ];
     }
 }

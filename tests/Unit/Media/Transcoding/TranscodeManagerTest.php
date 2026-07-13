@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Phlix\Tests\Unit\Media\Transcoding;
 
+use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\SourceProfile;
@@ -81,9 +82,32 @@ class TranscodeManagerTest extends TestCase
         return $db;
     }
 
+    /**
+     * @param FfmpegRunner&MockObject $ff
+     */
     private function manager(Connection $db, FfmpegRunner $ff): TranscodeManager
     {
+        $this->stubColorMetadata($ff);
         return new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+    }
+
+    /**
+     * FfmpegRunner::extractColorMetadata() always returns a fully-populated
+     * shape in production, so computeHlsParams() reads its keys unguarded.
+     * A bare mock returns null → "Undefined array key" warnings; stub the
+     * default here so the mock honours the real contract.
+     *
+     * @param FfmpegRunner&MockObject $ff
+     */
+    private function stubColorMetadata(FfmpegRunner $ff): void
+    {
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt709',
+            'color_transfer' => 'bt709',
+            'color_primaries' => 'bt709',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
     }
 
     /**

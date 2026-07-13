@@ -17,6 +17,7 @@ use Phlix\Plugins\PluginLoader;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\Controllers\AuthController;
 use Phlix\Server\Http\Controllers\BookController;
+use Phlix\Server\Http\Controllers\ByteRangeParser;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
@@ -740,7 +741,7 @@ final class HttpHandler
         }
 
         $fileSize = (int) filesize($path);
-        $mime = self::videoMimeFor($path);
+        $mime = self::streamMimeFor($path);
 
         // HEAD requests: return headers only (no Range support, no body).
         if ($isHead) {
@@ -750,7 +751,7 @@ final class HttpHandler
         }
 
         $rangeHeader = $wr->header('range');
-        $range = TranscodeFileServer::parseRange(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
+        $range = ByteRangeParser::parse(is_string($rangeHeader) ? $rangeHeader : null, $fileSize);
         if ($range !== null) {
             if (!$range['satisfiable']) {
                 return new WorkermanResponse(416, [
@@ -924,16 +925,19 @@ final class HttpHandler
     }
 
     /**
-     * Content-Type for a video file we're about to direct-play.
+     * Content-Type for a media file we're about to direct-play.
      *
      * Extension-first so the browser gets a deterministic, playable MIME for
-     * the formats `<video>` understands; unknown extensions fall back to a
-     * binary default.
+     * the video/audio formats `<video>`/`<audio>` understand; unknown
+     * extensions fall back to a binary default. Audio mappings unblock music
+     * track direct-play over GET /media/{id}/stream (X8) — without them audio
+     * files were served as application/octet-stream and would not play.
      */
-    private static function videoMimeFor(string $path): string
+    private static function streamMimeFor(string $path): string
     {
         $ext = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
         return [
+            // Video
             'mp4'  => 'video/mp4',
             'm4v'  => 'video/mp4',
             'mov'  => 'video/mp4',
@@ -942,6 +946,15 @@ final class HttpHandler
             'mkv'  => 'video/x-matroska',
             'avi'  => 'video/x-msvideo',
             'ts'   => 'video/mp2t',
+            // Audio
+            'mp3'  => 'audio/mpeg',
+            'm4a'  => 'audio/mp4',
+            'aac'  => 'audio/aac',
+            'flac' => 'audio/flac',
+            'ogg'  => 'audio/ogg',
+            'oga'  => 'audio/ogg',
+            'opus' => 'audio/opus',
+            'wav'  => 'audio/wav',
         ][$ext] ?? 'application/octet-stream';
     }
 

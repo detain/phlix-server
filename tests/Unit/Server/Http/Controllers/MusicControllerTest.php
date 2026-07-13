@@ -10,6 +10,7 @@ use Phlix\Server\Http\Request;
 use Phlix\Media\Library\MusicLibraryManager;
 use Phlix\Media\Library\LibraryManager;
 use Phlix\Session\SessionManager;
+use Phlix\Auth\SignedUrl;
 use PHPUnit\Framework\MockObject\MockObject;
 
 /**
@@ -397,5 +398,67 @@ class MusicControllerTest extends TestCase
         $response = $this->controller->getTrack($request, []);
 
         $this->assertEquals(400, $response->statusCode);
+    }
+
+    /**
+     * X8: getTrack (via formatTrack) must mint a signed stream_url pointing at
+     * the generic Range-safe GET /media/{trackId}/stream endpoint, so the UI
+     * can direct-play music tracks (mirrors the AudiobookController convention).
+     *
+     * @test
+     */
+    public function testGetTrackEmitsSignedStreamUrl(): void
+    {
+        SignedUrl::resetSharedForTesting();
+
+        $request = new Request();
+
+        $this->libraryManager->method('getAllLibraries')->willReturn([
+            ['id' => 'lib-1', 'name' => 'Music', 'type' => 'music'],
+        ]);
+
+        $this->musicManager->method('getTracks')->willReturn([
+            [
+                'id' => 'track-42',
+                'name' => 'Signed Track',
+                'path' => '/music/signed.flac',
+                'metadata' => [
+                    'title' => 'Signed Track',
+                    'artist' => 'Signer',
+                    'duration_secs' => 240,
+                ],
+            ],
+        ]);
+
+        $response = $this->controller->getTrack($request, ['id' => 'track-42']);
+
+        $this->assertEquals(200, $response->statusCode);
+
+        /** @var array{track: array<string, mixed>} $body */
+        $body = json_decode($response->body, true);
+        $this->assertArrayHasKey('track', $body);
+        $this->assertArrayHasKey('stream_url', $body['track']);
+
+        $streamUrl = $body['track']['stream_url'];
+        $this->assertIsString($streamUrl);
+
+        // Path must target the generic media-stream endpoint for this track id.
+        $parts = parse_url($streamUrl);
+        $this->assertSame('/media/track-42/stream', $parts['path'] ?? null);
+
+        // The exp/sig token must verify against SignedUrl::fromEnv().
+        parse_str($parts['query'] ?? '', $query);
+        $this->assertArrayHasKey('exp', $query);
+        $this->assertArrayHasKey('sig', $query);
+        $this->assertTrue(
+            SignedUrl::fromEnv()->verify(
+                (string) ($parts['path'] ?? ''),
+                is_string($query['exp'] ?? null) ? $query['exp'] : null,
+                is_string($query['sig'] ?? null) ? $query['sig'] : null,
+            ),
+            'Minted music stream_url signature must verify',
+        );
+
+        SignedUrl::resetSharedForTesting();
     }
 }

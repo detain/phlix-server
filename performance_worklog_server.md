@@ -2738,7 +2738,7 @@ No errors · `phpcs --standard=PSR12` on both touched files clean. Both callers
 (`scripts/run-migrations.php`, `bin/phlix migrate`) unchanged.
 
 ## Orchestrator — SV-4.9 implemented (2026-07-13, perf-5)
-- [x] SV-4.9 ledger — impl 1788ad35; REVIEW 3 findings (deploy-safety SAFE); FIX pending. (see below)
+- [x] SV-4.9 ledger — impl 1788ad35; REVIEW 3 findings (deploy-safety SAFE); FIX e9a461fe (quiet deploy log + degrade/unrecorded tests + checksum normalize). 27/27 Migration, full Unit 5007/0. DONE.
 
 ## Re-audit (perf-5) — SV-2.2/2.3/2.7
 - SV-2.2 pool hygiene (PooledMySQLConnection) — **DONE (code, wired; pool_enabled default true).** (a) dirty-txn rollback on defer-release (txPending[cid] set/clear via *Trans(), rollBack before idle push); (b) idle->pop(10.0) timeout→"pool exhausted"; (c) created-- on dead conn (SELECT 1 fail + factory throw); (d) non-coroutine bounded while-poll (no recursion). GAP: 3 core behaviors coroutine-only → UNTESTED in CI (on-box owed). Minor: txPending only via *Trans() family (raw "BEGIN" SQL wouldn't flip — codebase uses *Trans, low risk).
@@ -2882,3 +2882,77 @@ Files changed (absolute):
 Verification: `phpunit --filter Migration` 27/27 · full `--testsuite Unit` 5007 tests / 38818 assertions /
 5 skipped / 0 failures · `phpstan analyze -c phpstan.neon.dist` (src paths) No errors + clean on both
 touched files · `phpcs --standard=PSR12` clean on both touched files.
+
+## Re-audit (perf-5) — SV-3.2/3.3/3.4
+- SV-3.2 book/audiobook backends — **DONE** (BookController readBook/progress/download real; AudiobookController streamAudiobook Range-safe 206/416 + signed stream_url; 19+ tests). ★ MUSIC STREAM (X8) = NOT-DONE = the UI-3.6 blocker.
+  X8 UNBLOCK (small, producer-first): (1) MusicController::formatTrack/getTrack must MINT a signed `/media/{id}/stream` URL (like AudiobookController:392 `SignedUrl::fromEnv()->mint`) — track row id IS the media_items id, and generic GET /media/{id}/stream (HttpHandler::serveMediaStream, wired :148, Range-safe + signed/session auth) already serves it. ~5 lines unblocks direct-play. (2) FIX audio MIME in HttpHandler::videoMimeFor (add mp3/flac/m4a/aac/ogg/opus/wav → currently octet-stream). (3) optional dedicated /api/v1/music/tracks/{id}/stream mirroring streamAudiobook. (4) GAPLESS INERT: FfmpegRunner::buildGaplessSegmentCommand:2518 + GaplessTranscoder:154 have ZERO callers — wire into a segmented audio path for crossfade/gapless acceptance (not needed for basic playback). (5) codec transcode fallback rides SV-3.3.
+- SV-3.3 capability negotiation + loudnorm — **PARTIAL (code DONE+wired, ZERO tests).** X-Phlix-Client-Capabilities→ClientCapabilities→QualitySelector.canDirectPlay default-deny undeclared codecs; loudnorm FfmpegRunner::buildLoudnormFilter wired. GAPS: no tests (negotiation + audio-filter mandated); confirm direct-play playback-info (MediaItemController/WebPortalRouter) also reads capabilities (only TranscodeController entry confirmed); single-audio-track selection only. → TEST + verify playback-info path.
+- SV-3.4 artwork cache — **DONE.** ArtworkStorage download+resize [185,342,500,780]+orig; HttpHandler::serveArtwork (route /api/v1/artwork/{itemId}?size=, signed/session, ETag+Cache-Control immutable, withFile); poster_srcset emitted (MediaItemShaper:68-91) + contract test. GAP: no ArtworkStorage download/resize unit test. NOTE: ArtworkController.php is dead/duplicate (unregistered) → §6 removal candidate. Minor: on-box confirm ArtworkStorage DI live.
+
+### Server queue reprioritized: SV-4.9-fix(running) → **X8 music-stream producer (SMALL, unblocks UI-3.6)** → SV-1.10(login store) → SV-0.8(findPathsMap) → SV-4.10 → SV-0.9 → SV-2.3 → SV-2.7 → SV-4.4 → SV-3.1 f/g/h → SV-3.6 → SV-4.13-finish → SV-4.2-disconnect → build-out completions (SV-3.2 gapless, SV-3.3 tests) → test top-ups. Audits owed: SV-1.1–1.6 (spawning 1.1-1.3).
+
+## Re-audit (perf-5) — SV-1.1/1.2/1.3
+- SV-1.1 HDR tone-map memoize — **PARTIAL.** Probe storm KILLED: FfmpegRunner::$probeMemo keyed path:mtime (≤1 probe/file/worker); decision resolved once in computeHlsParams (require_hdr_tone_map) threaded via segment_params. AC "≤1 probe" MET. GAPS: (1) mig 073 media_streams color cols are WRITE-ONLY — ensureHlsJob:367 ALWAYS live-probes, never reconstructs decision from persisted cols (so "0 probes if scanned" never achieved, always exactly 1). (2) buildSegmentCommand:1512-1518 re-derives via getToneMappingProfile→probe (relies on memo, not threaded flag+filter string). (3) no probe-count/session test. → LOWER PRIORITY completion (read from media_streams to reach 0 probes + thread filter string + probe-count test).
+- SV-1.2 non-probe ffmpeg coroutine — **DONE (minor).** thumbnails/subtitle/trickplay/hwaccel-probe route via runCoroutineAware{Command,ShellExec} (Coroutine\System::exec under cid). MINOR: detectLibplacebo:508 + getVersion:1071 still raw shell_exec (libplacebo reachable under segment coroutine, cached per-worker); wrapper coroutine-path test gap. → LOW top-up.
+- SV-1.3 chapter-thumb+trickplay background job — **NOT-DONE (INERT, PROD-BREAKING).** MediaAssetJobStore/MediaAssetWorker/config supervision all real, BUT MediaScanner autowire (MediaServicesProvider:287-302) doesn't name mediaAssetJobStore (param 11) → null → enqueue guard (MediaScanner:1340) never true → nothing enqueued. WORSE: inline generation DELETED → chapter thumbnails + trickplay NEVER generated in prod. → COMPLETE: ->constructorParameter('mediaAssetJobStore', get(MediaAssetJobStore::class)) + scanner enqueue test + prod-wiring test.
+
+### ⚠️ RECURRING DI LANDMINE (consolidate): PHP-DI skips optional defaulted ctor params unless NAMED. Produced 3 inert features: loginRateLimitStore (SV-1.10/AuthServicesProvider), mediaAssetJobStore (SV-1.3/MediaServicesProvider MediaScanner), similarityJobStore (SV-2.9/MediaServicesProvider MediaScanner param 12). → ONE consolidated "wire missing DI" fix agent: add ->constructorParameter for all three + audit every provider for other `?Type $x=null` params that should be live + prod-wiring tests. (High value: SV-1.3 no-thumbnails + SV-1.10 unbounded-login are prod-impacting.)
+### Audits owed (deferred, lower priority): SV-1.4/1.5/1.6 (tonemap graph zscale/libplacebo + subtitle burn-in — visual, on-box verify needed).
+
+## Implementer — X8 music-track stream producer (unblocks UI-3.6) — 2026-07-13
+**DONE ✅** (commit: music: X8 mint signed track stream_url + audio MIME).
+
+Files changed:
+- `src/Server/Http/Controllers/MusicController.php` — `formatTrack()` now mints a signed
+  `stream_url` = `SignedUrl::fromEnv()->mint('/media/' . $trackId . '/stream')` (added `use
+  Phlix\Auth\SignedUrl;`). The track row id IS the `media_items` id, so the generic Range-safe
+  `GET /media/{id}/stream` (`HttpHandler::serveMediaStream`) already serves it. `getTrack()` returns
+  `formatTrack()` output, so it inherits `stream_url` — no separate edit needed. Emitted shape:
+  `"stream_url": "/media/<trackId>/stream?exp=<unix>&sig=<base64url-hmac>"` (null when id is blank).
+  → **AC1 (unblock direct-play) MET.**
+- `src/Server/Workerman/HttpHandler.php` — renamed `videoMimeFor()` → `streamMimeFor()` (single call
+  site updated) and added audio types: mp3→audio/mpeg, m4a→audio/mp4, aac→audio/aac, flac→audio/flac,
+  ogg/oga→audio/ogg, opus→audio/opus, wav→audio/wav (video mappings retained). `serveMediaStream()`
+  uses it for the track Content-Type. → **AC2 (audio MIME) MET.** Audio previously served as
+  `application/octet-stream` (would not play).
+
+Warnings cleanup (per follow-up request — phpunit + phpcs, on THIS changeset):
+- Fixed pre-existing phpunit **PHP Warning** "Undefined array key color_space/color_transfer/
+  color_primaries" (TranscodeManager.php:2215-2218). Root cause = TEST mock artifact: bare
+  `FfmpegRunner` mock returns null for `extractColorMetadata()` (which in production always returns a
+  full shape). Fixed in `tests/Unit/Media/Transcoding/TranscodeManagerTest.php` `manager()` helper via
+  new `stubColorMetadata()` — NOT in production (phpstan proves the keys always exist; a prod `?? ''`
+  guard would be a phpstan error). Full Unit suite now emits 0 PHP warnings.
+- Fixed phpunit **deprecation** "Calling static trait method TranscodeFileServer::parseRange is
+  deprecated" (surfaced by the new serveMediaStream test). Extracted the pure range parser to a new
+  final class `src/Server/Http/Controllers/ByteRangeParser.php` (`::parse()`); the trait's
+  `parseRange()` now delegates to it (API preserved for mixing-in consumers); `HttpHandler` calls
+  `ByteRangeParser::parse()`. No external static-on-trait call remains.
+
+Tests added:
+- `MusicControllerTest::testGetTrackEmitsSignedStreamUrl` — asserts path `/media/track-42/stream` +
+  `exp`/`sig` that verify via `SignedUrl::fromEnv()`.
+- `HttpHandlerServeMediaStreamTest` (new) — serves a `type='track'` .flac media_item over a signed
+  URL: 200 + `Content-Type: audio/flac`, Range 206, unsatisfiable 416, + a data-provider MIME map test
+  over `streamMimeFor` (all 7 audio + retained video + unknown).
+- `ByteRangeParserTest` (new) — 9 cases incl. trait-delegation parity via `HlsController::parseRange`.
+
+Verification:
+- `phpunit` targeted (Music|MediaStream|ByteRangeParser|TranscodeManager|HlsController): 152 tests OK.
+- full `--testsuite Unit`: **5030 tests / 38855 assertions / 5 skipped / 0 failures / 0 errors /
+  0 PHP warnings / 0 deprecations**.
+- `phpstan analyze -c phpstan.neon.dist`: clean on all changed files (the 2 remaining errors in
+  TranscodeManagerTest at ~1576/1722 are PRE-EXISTING on HEAD — confirmed via stash — untouched by me).
+- `phpcs --standard=PSR12`: **clean (exit 0) on the entire X8 changeset.**
+
+**phlix-contracts:** NO repin needed. `stream_url` matches the existing AudiobookController convention;
+no contract test forced a schema change. (Follow-up flag: if a `phlix-contracts` track schema is later
+added, it should carry `stream_url` — do it in a dedicated repin.)
+
+**OUT OF SCOPE (flagged, NOT done):** the repo-wide `phpcs src/` run reports **202 pre-existing
+`Generic.Files.LineLength.TooLong` warnings across 82 unrelated files** — none in the X8 changeset.
+These are known/accepted style debt (CI "Server Component Tests" red via these → admin-merge pattern).
+Reformatting 82 unrelated files would bury the functional change in a risky, unreviewable diff →
+recommend a dedicated formatting-only commit rather than bundling into X8.
+Also out of scope per the step: gapless/crossfade wiring (`buildGaplessSegmentCommand` inert) and
+codec-transcode fallback (rides SV-3.3).

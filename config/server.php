@@ -66,6 +66,13 @@ return [
     // real enabled/source/cache_dir instead of bare defaults.
     'theme_music' => require __DIR__ . '/theme_music.php',
 
+    // Local artwork cache (SV-3.4) config. Sourced here so MediaServicesProvider
+    // constructs ArtworkStorage with the operator-configured `storage_path`
+    // (env ARTWORK_STORAGE_PATH) instead of the hard-coded /var/artwork default.
+    // Reaches BOTH entry points (public/index.php CGI path and the Workerman
+    // daemon in start.php), exactly like the ffmpeg/hub/relay/theme_music sub-arrays.
+    'artwork' => require __DIR__ . '/artwork.php',
+
     // Metrics / live-traffic telemetry config (Step S1). Sourced here so
     // MetricsServicesProvider (which reads $config['metrics']) constructs the
     // registry/collector/flush-service/repository with the real

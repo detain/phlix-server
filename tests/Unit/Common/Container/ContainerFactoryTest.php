@@ -10,7 +10,9 @@ use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
+use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\SimilarityJobStore;
+use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
@@ -454,6 +456,72 @@ final class ContainerFactoryTest extends TestCase
             $this->readPrivate($scanner, 'similarityJobStore'),
             'MediaScanner must resolve with a similarity job store so the '
             . 'similarity enqueue path is reachable in prod.'
+        );
+    }
+
+    /**
+     * SV-3.4: the local-artwork cache (ArtworkStorage) must be DI-injected into
+     * the production LibraryMetadataMatcher. The matcher's ctor takes
+     * `?ArtworkStorage $artworkStorage = null`; PHP-DI silently skips optional
+     * defaulted params unless named, so a missing
+     * `->constructorParameter('artworkStorage', …)` leaves the field null and
+     * `cacheArtworkLocally()` is a no-op — TMDB posters are never downloaded or
+     * resized locally and `poster_srcset` is never emitted. This asserts the
+     * real container wires the artwork store.
+     */
+    public function test_library_metadata_matcher_wires_artwork_storage_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var LibraryMetadataMatcher $matcher */
+        $matcher = $container->get(LibraryMetadataMatcher::class);
+
+        $this->assertInstanceOf(
+            ArtworkStorage::class,
+            $this->readPrivate($matcher, 'artworkStorage'),
+            'LibraryMetadataMatcher must resolve with an ArtworkStorage so posters '
+            . 'are cached locally and poster_srcset is populated.'
+        );
+    }
+
+    /**
+     * SV-3.4: the ArtworkStorage storage directory is config-driven. The
+     * `artwork.storage_path` app-config value must flow through to the resolved
+     * ArtworkStorage's private $storageDir (normalized with a trailing slash),
+     * so an operator can relocate the cache via config/env.
+     */
+    public function test_artwork_storage_dir_is_config_driven(): void
+    {
+        $customDir = $this->tempDir . '/artwork-cache';
+
+        $providers = ContainerFactory::defaultProviders();
+        $mockConnection = $this->createMock(Connection::class);
+        $providers[] = new class ($mockConnection) implements ServiceProviderInterface {
+            public function __construct(private Connection $connection)
+            {
+            }
+
+            public function register(ContainerBuilder $builder, array $appConfig): void
+            {
+                $connection = $this->connection;
+                $builder->addDefinitions([
+                    Connection::class => factory(static fn (): Connection => $connection),
+                ]);
+            }
+        };
+
+        $container = ContainerFactory::create([
+            'logger_config_path' => $this->loggerConfigPath,
+            'db_config_path' => null,
+            'artwork' => ['storage_path' => $customDir],
+        ], $providers);
+
+        /** @var ArtworkStorage $storage */
+        $storage = $container->get(ArtworkStorage::class);
+        $this->assertSame(
+            rtrim($customDir, '/') . '/',
+            $this->readPrivate($storage, 'storageDir'),
+            'ArtworkStorage must honour the configured artwork.storage_path.'
         );
     }
 

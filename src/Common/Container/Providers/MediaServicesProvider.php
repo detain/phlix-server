@@ -393,7 +393,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('themeMusic', get(ThemeMusicResolver::class))
                 // Fuzzy matching + manual override registry (P1-S5). Named because
                 // PHP-DI skips defaulted optional ctor params.
-                ->constructorParameter('fuzzyMatcher', get(FuzzyMatcher::class)),
+                ->constructorParameter('fuzzyMatcher', get(FuzzyMatcher::class))
+                // Local artwork cache (SV-3.4). Named because PHP-DI skips
+                // defaulted optional ctor params — WITHOUT this the field stayed
+                // null and cacheArtworkLocally() was a no-op, so TMDB posters were
+                // never downloaded/resized locally (poster_srcset never emitted).
+                // Safe to wire now that ArtworkStorage::downloadToTemp() is
+                // non-blocking under the event loop (SV-3.4 sub-step 1).
+                ->constructorParameter('artworkStorage', get(ArtworkStorage::class)),
 
             // Async scan worker (Step 1.1b). Its ctor deps — ScanJobRepository,
             // LibraryManager and the LibraryMetadataMatcher (for `metadata`
@@ -603,8 +610,33 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('itemRepository', get(ItemRepository::class))
                 ->constructorParameter('tmdbProvider', get(TmdbProvider::class)),
 
-            // SV-3.4: Local artwork cache with sized variants for offline/LAN installs
-            ArtworkStorage::class => autowire(),
+            // SV-3.4: effective local-artwork storage directory. Read ONCE when
+            // first built from the `artwork` app-config sub-array (sourced in
+            // config/server.php, operator-overridable via ARTWORK_STORAGE_PATH),
+            // with a defensive @include fallback + the historic /var/artwork
+            // default so an unreadable config never blanks the path. Mirrors the
+            // MarkerCandidateStore/MediaAssetJobStore config-read idiom.
+            'artwork.storage_path' => factory(static function (ContainerInterface $c): string {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $artworkCfg = $appConfig['artwork'] ?? null;
+                if (!is_array($artworkCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../../config/artwork.php';
+                    $artworkCfg = is_array($inc) ? $inc : [];
+                }
+                $path = $artworkCfg['storage_path'] ?? null;
+                return is_string($path) && $path !== '' ? $path : '/var/artwork';
+            }),
+
+            // SV-3.4: Local artwork cache with sized variants for offline/LAN
+            // installs. `storageDir` is config-driven (named because PHP-DI skips
+            // defaulted optional ctor params) — defaults to /var/artwork when the
+            // config value is unset.
+            ArtworkStorage::class => autowire()
+                ->constructorParameter('storageDir', get('artwork.storage_path')),
         ]);
     }
 

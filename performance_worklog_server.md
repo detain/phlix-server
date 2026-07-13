@@ -3134,3 +3134,22 @@ warnings on untouched lines).
   phpstan L (dist) 3 files = No errors; phpcs PSR12 3 files = clean.
 - Wiring note: ArtworkStorage stays `autowire()` in MediaServicesProvider (no ctor change) — next sub-step
   can wire LibraryMetadataMatcher::$artworkStorage without a blocking-I/O CARDINAL violation.
+
+## Implementer — 2026-07-13 — SV-3.4 sub-steps 2+3/7 (wire artworkStorage into matcher + config-drive storage dir)
+- SUB-STEP 2 (kill DI landmine): `MediaServicesProvider.php` LibraryMetadataMatcher autowire (~:397) +
+  `->constructorParameter('artworkStorage', get(ArtworkStorage::class))` — field was null (PHP-DI skips
+  `?ArtworkStorage=null`) so `cacheArtworkLocally()` was a no-op; now local artwork is downloaded/resized
+  + `poster_srcset`/local `poster_url` persisted. Safe post sub-step-1 (download now non-blocking).
+- SUB-STEP 3 (config-drive dir): new `config/artwork.php` (`storage_path`, env `ARTWORK_STORAGE_PATH`,
+  default `/var/artwork`) sourced in `config/server.php` (`'artwork' => require ...`); registered
+  `'artwork.storage_path'` factory (reads app.config + @include fallback, /var/artwork default) and
+  `ArtworkStorage::class => autowire()->constructorParameter('storageDir', get('artwork.storage_path'))`.
+  mkdir -p behavior already in `ensureItemDirExists()`.
+- Tests: ContainerFactoryTest +2 prod-wiring tests (matcher.artworkStorage is ArtworkStorage; storageDir
+  honours config); new LibraryMetadataMatcherArtworkTest (wired → LOCAL srcset/poster_url, not TMDB CDN;
+  unwired → TMDB url stays, no srcset). Dual entrypoints: both index.php + start.php build via
+  ContainerFactory::create() using the shared providers → change propagates to both (confirmed).
+- Verify: phpunit --filter "LibraryMetadataMatcher|ArtworkStorage|ContainerFactory" = 65/65 OK;
+  tests/Unit/Common/Container = 55/55 OK (real-container matcher resolve doesn't throw); phpstan L9 (dist)
+  5 files = No errors; phpcs PSR12 src+config+new test = clean (only pre-existing LineLength warns off my
+  lines + ContainerFactoryTest's file-wide test_snake_case convention my 2 methods follow).

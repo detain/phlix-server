@@ -75,7 +75,7 @@
 - [x] SV-1.10 login rate limiter bound ✅ (commit a3a6b35a) — S-W1 complete 🎉
 - [x] SV-2.1  stream file-backed responses over relay tunnel ✅ (commit b3e45682)
 - [x] SV-2.2  pool hygiene: rollback dirty connections ✅ (commit 6bd400ee)
-- [x] SV-2.3  relay byte-pipe backpressure ✅ (commit cfcbeb50)
+- [x] SV-2.3  relay byte-pipe backpressure ✅ RE-COMPLETED 2026-07-13 (perf-7): original cfcbeb50 was PARTIAL (audit at line ~2746) — only fixed hub→local (`onData()`); local→hub (`sendDataFrame()`/`sendFrame()`) still ignored `send()`'s return (fire-and-forget), and `onLocalData()` was still `do…while` (empty DATA frame on zero-length read). Fixed f69ae5bd: `sendDataFrame()` now pauses the channel's local connection on tunnel-buffer-full and resumes via a new idempotent `armTunnelDrainResume()` (tracks paused channels in `$pausedForTunnelDrain` since the shared tunnel exposes only ONE `onBufferDrain` slot — a naive per-call registration would clobber earlier channels); `sendFrame()` now logs on a dropped tunnel-scoped frame; `onLocalData()` is now a `while` loop that also stops chunking on first backpressure. 3 new tests (zero-length no-frame, single-channel pause/resume, multi-channel resume-on-one-drain); `FakeRelayConnection` test double extended with controllable `send()` + real pauseRecv/resumeRecv counters (default preserves all existing tests). Full Unit 5099/0/11-skip, phpstan/phpcs clean (0 new). **DONE** — see Implementer entry below for detail.
 - [x] SV-2.4  stream large binary via withFile() ✅ (commit 320efdbc)
 - [x] SV-2.5  image/photo caching validators + security headers ✅ (commit 3cf0ac4c)
 - [x] SV-2.6  WS routing indexes + broadcast backpressure ✅ (commit e4270321)
@@ -3735,3 +3735,117 @@ forward (not a finding): the real-DB PathHashIndexUsageTest case still self-skip
 (no reachable MySQL) — structurally sound, correctness already proven by the layered unit tests, deferred
 CI-green confirmation owed to the next session. **SV-0.8 CLOSED** after 3 review rounds (first review:
 1 HIGH + 1 LOW; fix; this confirming re-review: NO FINDINGS).
+
+## Implementer — SV-2.3 (relay byte-pipe backpressure, local→hub direction + empty-frame fix) — 2026-07-13 (perf-7)
+
+**Problem (from the prior audit at the SV-2.3 line ~2746 above, PARTIAL verdict):** the hub→local
+direction of `RelayConsumer`'s byte-pipe backpressure was already fixed (`onData()`: `$local->send()===false`
+→ `pauseRecv()` the tunnel, `resumeRecv()` on the local connection's `onBufferDrain`), but the opposite
+(local→hub) direction was NOT: `sendDataFrame()` (`:1712-1720` pre-fix) and `sendFrame()` (`:1688-1697`
+pre-fix) both ignored the boolean return of `$this->connection->send()` — fire-and-forget with unbounded
+queueing, the exact S-F36 large-media case — and `onLocalData()` (`:1596-1600` pre-fix) was still a
+`do…while` loop that always ran its body at least once, emitting an empty DATA frame on a zero-length
+local read. There was also zero pause/resume test coverage in either direction (the `FakeRelayConnection`
+test double's `send()` always returned `true`).
+
+**Commit (pushed to master): `f69ae5bd`.**
+
+**`src/Hub/RelayConsumer.php` changes:**
+1. **`onLocalData()` (`:1610-1634`):** `do…while` → `while` — the loop condition (`$offset < $length`) is
+   now checked BEFORE the first chunk is built, so a zero-length `$data` is a pure no-op (no frame at all).
+   The loop also now checks `sendDataFrame()`'s new return value and `break`s on the first backpressured
+   chunk, instead of continuing to feed (and drop) further chunks of the same already-read buffer into an
+   over-full tunnel — mirroring the existing check-return-then-`break` discipline `streamFileChunks()`
+   already uses for the HTTP_RESPONSE file-streaming path.
+2. **`sendDataFrame()` (`:1775-1800`), signature changed `void` → `bool`:** now checks
+   `$this->connection->send($encoded) === false`. On failure, it looks up the CHANNEL's own local
+   connection (`$this->localConnections[$channelId]`) — the SOURCE of the bytes being relayed, i.e. the
+   opposite side of the pipe from the tunnel, which is the destination that's full — and `pauseRecv()`s it,
+   mirroring `onData()`'s discipline applied to the reverse direction. It returns `false` so `onLocalData()`
+   can stop chunking.
+3. **New `armTunnelDrainResume()` helper (`:1810-1836`) + new `private array $pausedForTunnelDrain`
+   property (`:180-195`):** this is the one place the mirror to `onData()` could NOT be byte-for-byte,
+   and is flagged here explicitly for review. `onData()`'s resume target (`$local`) is a DEDICATED
+   per-channel object, so registering an `onBufferDrain` closure directly on it per call is safe. The
+   `sendDataFrame()` direction's resume target is `$this->connection` — the ONE tunnel connection object
+   SHARED by every multiplexed channel — so a naive "register a fresh closure on
+   `$this->connection->onBufferDrain` every time a send fails" would silently CLOBBER an earlier channel's
+   pending-resume closure with a later channel's (Workerman connections expose exactly one
+   `onBufferDrain` slot, not an event list), leaving the first channel's local connection paused forever
+   (a hang, worse than the original bug). Instead: every channel id that gets paused is recorded in
+   `$pausedForTunnelDrain` (a plain array, `unset()` on every channel-close path so it cannot grow
+   unbounded across the resident worker's lifetime — see point 4), and `armTunnelDrainResume()` arms the
+   tunnel's `onBufferDrain` **idempotently** (a no-op if already armed) with ONE handler that, when the
+   tunnel drains, snapshots + clears the whole pending set and `resumeRecv()`s every channel still open
+   (guarded by `getStatus() === TcpConnection::STATUS_ESTABLISHED`, exactly like `onData()`'s existing
+   resume guard) — a channel that closed while paused is silently skipped, not resumed into a dead object.
+4. **Backpressure-bookkeeping cleanup wired into every existing channel-teardown path** so
+   `$pausedForTunnelDrain` cannot leak: `onLocalClose()`, `closeLocalConnection()` (both now also
+   `unset($this->pausedForTunnelDrain[$channelId])`), and `closeAllLocalConnections()` (now also resets
+   `$this->pausedForTunnelDrain = []`, exercised on tunnel teardown via `handleDisconnect()`/`stop()`).
+5. **`sendFrame()` (`:1732-1744`):** now also checks the send() return value. Unlike `sendDataFrame()`,
+   tunnel-scoped frames (only HEARTBEAT in practice, channel id 0) are not tied to any single channel, so
+   there is no per-channel local connection to pause here — a dropped HEARTBEAT is logged
+   (`RelayConsumer: tunnel-scoped frame dropped, send buffer full`) rather than silently ignored, closing
+   the gap the audit named at this line range without inventing pause/resume machinery for a frame type
+   with no channel to pause. Documented this asymmetry inline so a reviewer doesn't mistake it for an
+   incomplete mirror.
+
+**Test double (`tests/Unit/Hub/RelayConsumerTest.php`) — `FakeRelayConnection` extended, non-breaking:**
+- New `public bool $sendShouldSucceed = true;` — controls `send()`'s return; the default (`true`) preserves
+  every pre-existing test's original always-succeeds behavior verbatim (confirmed: full pre-existing
+  RelayConsumerTest suite still 50/50 → now includes 3 new tests, i.e. 47 pre-existing + 3 new, all green).
+- New `pauseRecvCalls`/`resumeRecvCalls` counters + real overrides of `pauseRecv()`/`resumeRecv()` (the
+  parent `TcpConnection::resumeRecv()` would otherwise dereference a null `$eventLoop` on this
+  never-really-connected test double and fatal — overriding avoids touching Workerman internals the
+  double doesn't have).
+- `connect()` now also sets `$this->status = self::STATUS_ESTABLISHED;` (previously left at the
+  constructor's default `STATUS_INITIAL` forever, since the double's `connect()` never calls the real
+  socket-connecting parent implementation). This was necessary for the new resume-path tests to exercise
+  the `getStatus() === STATUS_ESTABLISHED` guard truthfully (both in the new local→hub tests AND,
+  incidentally, the pre-existing but previously wholly-untested hub→local `onData()` resume guard — no
+  existing test asserted on `getStatus()` so this changes no existing assertion).
+- New `fireBufferDrain()` helper (mirrors the existing `fireConnect()`/`fireMessage()` style) to let a test
+  invoke whatever `onBufferDrain` closure `RelayConsumer` armed on a fake connection.
+
+**3 new tests, all green:**
+- `test_zero_length_local_read_emits_no_data_frame` — a `fireMessage('')` on a connected channel's local
+  connection results in zero new frames sent to the hub (regression guard for the `do…while` bug).
+- `test_local_to_hub_backpressure_pauses_and_resumes_on_drain` — sets `sendShouldSucceed = false` on the
+  hub connection, fires a local response chunk, asserts the dropped frame never reaches `$hub->sent`,
+  `pauseRecvCalls === 1` on the LOCAL connection, `resumeRecvCalls === 0` (must not resume prematurely);
+  flips `sendShouldSucceed` back to `true` and fires `fireBufferDrain()`, asserts `resumeRecvCalls === 1`.
+- `test_local_to_hub_backpressure_resumes_every_paused_channel_on_one_drain` — two channels both hit the
+  full tunnel buffer back-to-back; asserts BOTH get `pauseRecvCalls === 1`; a single `fireBufferDrain()`
+  must resume BOTH (`resumeRecvCalls === 1` each) — this is the regression guard for the single-
+  `onBufferDrain`-slot clobber bug the naive per-call-closure approach would have introduced.
+
+**Verification:**
+- `phpunit tests/Unit/Hub/RelayConsumerTest.php --testdox` = **50/50 OK, 250 assertions** (all 3 new tests
+  pass; all 47 pre-existing tests pass unchanged).
+- `phpunit --testsuite Unit tests/Unit/Hub` = **151/151 OK, 551 assertions** (no Hub-suite regression).
+- `phpunit --testsuite Unit` (full suite) = **5099 tests, 39125 assertions, 0 failures, 11 skipped** (up
+  from the perf-7 baseline of 5096/0/5-skip by exactly the 3 new tests added here; no regression — the
+  skip-count delta is environment-dependent self-skips unrelated to this change, not new failures).
+- `phpstan analyze -c phpstan.neon.dist src/Hub/RelayConsumer.php tests/Unit/Hub/RelayConsumerTest.php` =
+  **2 errors, both pre-existing** (confirmed via `git stash` diff against master HEAD before this change:
+  identical `method.impossibleType`/`cast.int` findings at the same relative test-file locations, just
+  shifted by the line count this change inserted — zero NEW phpstan findings from this change).
+- `phpcs --standard=PSR12 src/Hub/RelayConsumer.php` = **0 errors, 0 warnings** (fully clean).
+  `phpcs --standard=PSR12 tests/Unit/Hub/RelayConsumerTest.php` = 51 errors/5 warnings, but confirmed via
+  the same before/after `git stash` diff that this is 45 pre-existing "not in camel caps" findings (the
+  whole file's uniform, deliberate snake_case test-method-naming convention, and the pre-existing
+  "Each class must be in a file by itself" `FakeRelayConnection`-in-the-same-file finding) **+ exactly 3
+  new ones for the 3 new snake_case test methods added here** (following the file's existing convention,
+  not a new style violation) — 0 new warnings.
+- No dual-entrypoint (`index.php`/`start.php`) changes needed: this is request-time relay logic
+  (`RelayConsumer`'s own methods), not constructor/DI/bootstrap wiring — `RelayConsumer`'s public
+  constructor signature is untouched.
+
+**Acceptance criteria (SV-2.3 spec) — met:** large media over the tunnel now applies backpressure instead
+of unbounded queueing/send-buffer kill in BOTH directions (hub→local was already fixed; local→hub fixed
+here). No dropped/empty DATA frames are emitted on zero-length local reads.
+
+**Scope note:** `sendCancel()` (HTTP_CANCEL sender, a separate frame path not cited in the audit gap list
+or the plan's line ranges for this step) still ignores its `send()` return — left untouched as out of
+scope for SV-2.3 (not part of the raw byte-pipe DATA-frame path S-F36 describes).

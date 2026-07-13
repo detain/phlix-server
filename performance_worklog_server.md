@@ -4871,14 +4871,17 @@ Recording this as an honest candidate for a future, separately-scoped step (some
 coverage") rather than forcing it in here.
 
 **Verification:**
-- New Unit test: `phpunit --filter FfmpegRunnerThumbnailBatchTest` → **6/6 passed, 23 assertions**.
+- New Unit test: `phpunit --filter FfmpegRunnerThumbnailBatchTest` → **5/5 passed, 22 assertions**
+  (corrected 2026-07-13 Fix pass; originally miscited here as 6/6, 23 — the file has exactly 5
+  test methods).
 - New Integration test (real `/usr/bin/ffmpeg` 6.1.1, present in this sandbox):
   `phpunit --filter FfmpegThumbnailBatchTest --no-coverage` → **3/3 passed, 19 assertions**
   (empirically confirmed: two in-range timestamps → two distinct non-empty frames; one
   in-range + one OOB → `true` + only the in-range frame written; all-OOB → `false` even though
   the underlying FFmpeg process itself exits 0).
 - `phpunit --filter FfmpegRunner --no-coverage` (broader regression net on the whole class) →
-  **61/61 passed, 255 assertions**.
+  **60/60 passed, 254 assertions** (corrected 2026-07-13 Fix pass; originally miscited here as
+  61/61, 255 — consistently reproduces as 60/60 across reruns).
 - `phpstan analyze -c phpstan.neon.dist` on `FfmpegRunner.php` + both new test files → **0 errors**.
 - `phpcs --standard=PSR12` on all three changed/new files → **0 errors**, 1 pre-existing 129-char
   warning at line 956 (`buildDetachedCommand`'s signature — outside this diff's line range,
@@ -4896,6 +4899,52 @@ previously had zero coverage.
 **Commit:** `d3062086` — `transcode: SV-0.9 fix generateThumbnailBatch malformed multi-timestamp
 command`. Pulled (`git pull --rebase origin master` — already up to date, no conflicts) and
 pushed directly to `master` per §F.
+
+### Fix pass — SV-0.9 review findings (2026-07-13, commit `20dc2370`)
+
+Three review findings from the SV-0.9 review, all docblock/comment/worklog-only (no behavioral
+change — the `d3062086` code fix itself is sound and unchanged):
+
+1. **[Medium] Overclaimed "rendered no thumbnails at all" defect narrative.** Verified against
+   this box's real ffmpeg 6.1.1: reverting to the pre-fix shape
+   (`ffmpeg ... -ss T1 -vframes 1 out0 -ss T2 -vframes 1 out1 -i input`, outputs bunched before the
+   single shared `-i`) actually produced **correct, distinct, non-empty frames** — byte-for-byte
+   identical md5s to the fixed shape's output. So the pre-fix shape did NOT render zero thumbnails;
+   ffmpeg tolerated the input-after-outputs ordering (an arrangement not guaranteed by its
+   documented option ordering) and used a slow output-side seek. Corrected the narrative in: the
+   Integration test class docblock + inline comment/assertion message (softened to describe a
+   positive end-to-end correctness check, explicitly noting it is NOT a shape regression guard —
+   only the Unit string-shape tests genuinely guard the shape change); the Unit test class docblock
+   + inline comment (kept the real shape-guard framing, dropped the false "renders no thumbnails"
+   consequence); and `generateThumbnailBatch()`'s `@since SV-0.9` docblock note in `FfmpegRunner.php`.
+   NOTE: the earlier `d3062086` commit message's "rendered no thumbnails at all" phrasing was an
+   **overclaim** — the *fix is still correct* (fast input-side seek + explicit `-map`, no reliance on
+   ffmpeg's lenient arg reordering), but the *narrative* about why it was needed was wrong. That
+   commit message is already on master and is **not** rewritten/force-pushed (§F); only the
+   code/test docblocks + this worklog are corrected.
+2. **[Low] `@return bool` didn't state partial-success inline.** Tightened `generateThumbnailBatch()`'s
+   `@return bool` line itself to state partial-success semantics (true if ≥1 requested timestamp
+   produced a non-empty frame, so a mix of in-range/out-of-range still returns true; false only on
+   ffmpeg exit != 0 or zero frames written) rather than leaving it implied only by the `@since` note.
+3. **[Informational] Worklog test count.** Corrected `phpunit --filter FfmpegRunner` count from the
+   miscited **61/61 → actual 60/60** (254 assertions), and the Unit-file count from **6/6 → actual
+   5/5** (22 assertions); both reproduce consistently.
+
+**Files changed:** `src/Media/Transcoding/FfmpegRunner.php` (generateThumbnailBatch docblock —
+`@return` + `@since SV-0.9` note); `tests/Integration/Media/Transcoding/FfmpegThumbnailBatchTest.php`
+(class docblock + distinct-frames comment/message); `tests/Unit/Media/Transcoding/FfmpegRunnerThumbnailBatchTest.php`
+(class docblock + inputs-before-outputs comment); this worklog.
+
+**Verification (docblock/comment-only, suite stays green):**
+- `phpunit --filter FfmpegRunner --no-coverage` → **60/60 passed, 254 assertions**.
+- `phpunit --filter 'FfmpegRunnerThumbnailBatchTest|FfmpegThumbnailBatchTest' --no-coverage` →
+  **8/8 passed, 41 assertions** (5 Unit + 3 Integration).
+- `phpstan analyse -c phpstan.neon.dist` on `FfmpegRunner.php` + both test files → **0 errors** (L9).
+- `phpcs --standard=PSR12` on all three files → **0 errors**; only the pre-existing 129-char warning
+  at `FfmpegRunner.php:956` (`buildDetachedCommand`, outside this diff) remains.
+
+**Result:** SV-0.9 review findings 1–3 resolved. Commit `20dc2370` —
+`thumbnails: SV-0.9 fix: correct overclaimed defect narrative + @return docblock`, pushed to master.
 
 ## Implementer — SV-4.4 (webhook connect-timeout + jittered one-shot backoff retry) — 2026-07-13
 

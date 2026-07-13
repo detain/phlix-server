@@ -2102,3 +2102,70 @@ Unit` = **OK, 4953 tests, 38653 assertions, 5 skipped, 0 failures** (baseline ~4
 and unit-guards it, but a live end-to-end DVR record→complete→playable check on the box
 (SELECT returns real rows → onComplete registrar inserts the media_item + persists the
 linkage → item playable) remains the final proof.
+
+## Reviewer (per-step) — SV-3.1-rowquery — 2026-07-12
+
+Reviewed `git diff eee0a33a..c63e7882` = `9b32e278` (Part A: RowQuery fix + tests) +
+`c63e7882` (Part B: library race + tests). Read-only gates this box: `phpstan analyse -c
+phpstan.neon.dist` = **[OK] No errors** (647/647); `phpunit --filter
+'RowQuery|Recorder|RecordingScheduler|RecordingMediaRegistrar'` = **63/63 green**; full
+`--testsuite Unit --no-coverage` = **4953 tests, 0 failures/errors** (4 pre-existing
+warnings + 5 skips — TranscodeManagerTest, not this diff). Scope confirmed: only
+`RowQuery.php` + `RecordingMediaRegistrar.php` + the 3 test files touched; `ResultSet.php`
+left in place (§0.1); no ctor/DI-signature change.
+
+**1. Landmine genuinely closed (CONFIRMED).** `RowQuery::rows/firstRow/hasRows`
+(`src/LiveTv/Dto/RowQuery.php:50-116`) now branch on `is_array($result)` FIRST: `rows()`
+→ `rowsFromArray()` (filters non-array elements, L9-safe, returns the row list);
+`firstRow()` → `$result[0]` when array else null (empty `[]` → `$result[0] ?? null` → null);
+`hasRows()` → `$result !== []`. The `ResultSet` cursor path (lines 58-66/88-97/111-115) is
+preserved VERBATIM below each new branch, so the 6 existing mock tests still pass. Against
+the prod plain-array shape `PhlixMySQLConnection::query()` returns, `Recorder::getRecording()`
+(`:359`), `getRecordingsDueToStop()` (`:983`) and `resumeActiveRecordings()` now return real
+rows. Typing is L9-clean (no mixed-narrowing errors; phpstan 0).
+
+**2. Sibling-landmine sweep — RowQuery is the ONLY inert chokepoint (CONFIRMED).**
+`grep instanceof.*ResultSet` + `->num_rows`/`->fetch()` across `src/` finds cursor-narrowing
+ONLY inside `RowQuery.php` (the preserved mock path). The other LiveTv reads already used the
+correct prod plain-array idiom and were NOT inert: `ChannelManager` reads via
+`RowMap::listFromMixed()` (`src/Common/Util/RowMap.php:61` — `is_array` + iterate, correct);
+`LiveTvManager::buildStreamUrlForChannel` (`:724-732`), `ComskipIntegration::getRecordingRow`
+(`:262-273`) and `ComskipLifecycleManager::getRecordingData` (`:259-275`) all guard with
+`is_array($result) && !empty($result)` + `is_array($result[0])`. `RowQuery` is used ONLY in
+`src/LiveTv/` (LiveTv-only; zero references elsewhere in `src/`), and `src/LiveTv/Epg/` issues
+no direct `db->query`. No sibling requires the same fix.
+
+**3. Regression tests genuine (CONFIRMED, not tautological).** `RowQueryTest` (+4) feeds
+plain arrays directly and asserts count/first/has. `RecorderPlainArrayReadPathTest` (NEW, 4)
+drives a mocked `Connection::query()` returning PLAIN ARRAYS (not a ResultSet) through the
+real `Recorder` and asserts `getRecording()`→real row, empty→null,
+`getRecordingsDueToStop()`→`['rec-1','rec-2']`, `resumeActiveRecordings()`→reconciles the
+interrupted row to FAILED and fires onComplete. The pre-fix diff shows `rows/firstRow/hasRows`
+had ONLY the `instanceof ResultSet` branch, so a plain array returned `[]`/null/false — these
+assertions provably FAIL pre-fix (the claimed 7 failures + 1 error), pass post-fix.
+
+**4. Part B — library race (CONFIRMED correct).** `findRecordingsLibraryId()`
+(`:318-333`) selects `ORDER BY created_at ASC, id ASC LIMIT 1` (deterministic, not bare
+LIMIT 1); `libraries` genuinely has `created_at` (migration 001:35) and `type='video'` is a
+valid ENUM value. `ensureRecordingsLibrary()` (`:250-304`) does find → INSERT-in-try/catch →
+re-SELECT the canonical id. Under a concurrent double-INSERT every caller re-SELECTs the SAME
+earliest-created/id-tiebroken row, so items always register under one canonical library — no
+split. Parameterized + colon-free (no injection). Migration-free re-SELECT chosen over a
+UNIQUE(type,name) index deliberately (would conflict with legit pre-existing dup names,
+unverifiable here; §0.3-safe) and is forward-compatible with such an index. Tests
+`testConcurrentLibraryCreateConvergesOnCanonicalId` (asserts the item uses 'lib-canonical',
+not the just-inserted id, and asserts the ORDER BY) + `testDuplicateKeyOnLibraryInsertReconcilesToCanonicalId`
+(INSERT throws → swallowed → reconciled) guard both paths.
+
+**5. No regression / scope (CONFIRMED).** phpstan L9 [OK] 0; Unit 4953/0 (baseline ~4943 +
+10 new); `ResultSet` retained; no entrypoint/DI mirror needed.
+
+**6. Build-out completeness (CONFIRMED at code level).** SELECT → RowQuery now yields real
+rows → `Recorder::stopRecording()`/`endRecording()`'s `getRecording()` gate passes → atomic
+CAS + `fireOnCompleteCallbacks()` runs → the SV-3.1d `RecordingMediaRegistrar::register`
+onComplete hook fires → reads the recording (plain-array idiom) → `ensureRecordingsLibrary`
+→ `upsertByPath` → linkage UPDATE. The DVR read path is code-sound end-to-end. The on-box
+live record→complete→playable verification remains OWED (as the implementer noted) but the
+CODE path is now correct against the prod shape.
+
+**Verdict: NO FINDINGS.**

@@ -4736,4 +4736,26 @@ subsystems diverge the moment an override is set. No code changed; `MetadataMana
 `phpstan analyze src/ -c phpstan.neon.dist` (L9) — no errors; `phpunit --filter MetadataManager` — 30/30 passed,
 21071 assertions (unchanged from the SV-4.10 Reviewer's reported baseline — confirms the doc-only edit didn't
 perturb behavior). Commit: `docs: SV-4.10 fix config/metadata.php docblock — PriorityConfig honors admin
-overrides, MetadataManager doesn't`.
+overrides, MetadataManager doesn't` (`a8a23bac`).
+
+## Implementer — plugin catalog pin bump to phlix-plugins v2.1.5 — 2026-07-13
+
+Bumped `CatalogSourceResolver::OFFICIAL_PINNED_REF` (`src/Plugins/Catalog/CatalogSourceResolver.php:70`) from
+`'v2.1.4'` to `'v2.1.5'` — the `phlix-plugins` catalog repo was retagged at commit `2c2bc05` to repin
+`phlix-plugin-trakt` and `phlix-plugin-musicbrainz` to fixed versions resolving two "unknown event alias"
+install-blocking bugs. Verified the current value before editing (was genuinely still `v2.1.4`). Grepped
+`tests/` for `OFFICIAL_PINNED_REF` (10 usages across `PluginCatalogControllerTest`, `PluginAdminControllerTest`,
+`PluginAutoUpdateWorkerTest`, `PluginUpdateServiceTest`, `PluginCatalogServiceTest` ×3, `CatalogSourceResolverTest`,
+`PluginInstallCommandTest`) and confirmed every one references the constant symbolically
+(`CatalogSourceResolver::OFFICIAL_PINNED_REF`), never a hardcoded `'v2.1.4'` literal — also grepped the whole
+repo (excluding `vendor/`/`node_modules/`) for the literal string `v2.1.4` and found only the one line just
+changed. So no test fixture needed a companion edit.
+
+**Change:** `src/Plugins/Catalog/CatalogSourceResolver.php` — one-line constant bump, no other code touched.
+Per the task scope, this does NOT deploy to any live box — that remains a separate, explicitly-confirmed step.
+
+**Verification:** `php -l` + `phpcs --standard=PSR12` clean on the changed file; `phpstan analyze src/ -c
+phpstan.neon.dist` (L9) — no errors; `phpunit --filter
+"CatalogSourceResolver|PluginCatalogController|PluginAdminController|PluginAutoUpdateWorker|PluginUpdateService|PluginCatalogService|PluginInstallCommand"`
+— 99/99 passed, 310 assertions (all pick up the new pin value automatically via the constant reference).
+Commit: `plugins: bump OFFICIAL_PINNED_REF to phlix-plugins v2.1.5 (trakt/musicbrainz event-alias fixes)`.

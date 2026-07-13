@@ -433,7 +433,17 @@ class TraktApi
                         'delay_ms' => $delayMs,
                         'error' => $e->getMessage(),
                     ]);
-                    usleep((int) ($delayMs * 1_000));
+                    // Coroutine-friendly sleep: \Co\sleep yields to the event
+                    // loop so the resident worker keeps serving other
+                    // connections during the backoff; usleep is the fallback for
+                    // non-Swoole contexts (unit tests / plain CLI). Mirrors the
+                    // idiom in refreshAfterAuthFailure() above.
+                    $delaySeconds = $delayMs / 1_000;
+                    if (function_exists('\Co\sleep')) {
+                        \Co\sleep($delaySeconds);
+                    } else {
+                        usleep((int) ($delayMs * 1_000));
+                    }
                     continue;
                 }
                 throw $e;

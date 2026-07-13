@@ -2103,8 +2103,12 @@ class FfmpegRunner
         $childPid = (int) trim($pid);
         if ($childPid > 0) {
             // The PID is the `setsid` group leader (PGID == PID), so the registry
-            // can signal the whole group and reach ffmpeg directly.
-            $this->segmentRegistry?->register($cancelKey ?? $outFile, $childPid, $cancelGroup);
+            // can signal the whole group and reach ffmpeg directly. Thread this
+            // launcher's OWN `.part-<hex>` temp so a kill/dead-release removes only
+            // this exact temp, never the whole `{$final}.part-*` family — a sibling
+            // worker's live temp for the same final path must survive (SV-4.2
+            // re-review Low).
+            $this->segmentRegistry?->register($cancelKey ?? $outFile, $childPid, $cancelGroup, $tmp);
         }
         return $childPid;
     }

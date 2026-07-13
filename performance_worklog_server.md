@@ -2495,3 +2495,70 @@ dead=clean), killGroup semantics + group-teardown-no-leak; FfmpegRunner command-
 TranscodeManager wait-timeout is release-only (never kills); RelayConsumer cancel via group +
 an end-to-end test that the dispatch publishes the cancel group and a later HTTP_CANCEL kills
 the encode launched during dispatch.
+
+## Reviewer (re-review per-step SV-4.2, after fix 3b6c6a3b) — 2026-07-12
+
+Re-reviewed the 4-finding fix by READING the code (not trusting green). Verification: `phpunit --filter 'SegmentProcessRegistry|FfmpegRunner|TranscodeManager|RelayConsumer|RequestContext'` = 197 OK (4 pre-existing `color_*` warnings, untouched); `phpstan -c phpstan.neon.dist` on all 5 touched src files = No errors.
+
+Prior findings — all CONFIRMED genuinely fixed:
+- **#3 (killGroup end-to-end, was the inert bug) — FIXED, traced link-by-link.** (a) `RelayConsumer::dispatchWithDeadline` publishes `(string)$requestId` into `RequestContext::setRelayCancelGroup` (coroutine-local `support\Context`), cleared in `finally`; (b) both `TranscodeManager::ensureSegment` launch sites pass `RequestContext::getRelayCancelGroup()` → `FfmpegRunner::startSegmentEncode`→`launchDetachedSegment`→`registry->register($final, $pid, $group)` — registration is synchronous within the same coroutine that set the group, so the value is visible; (c) `onHttpCancel` reads `$frame->channelId()` — the SAME field `onHttpRequest` uses for `$requestId` — and calls `killGroup((string)$channelId)`. Registry is ONE shared instance: `start.php` builds `RelayRequestDispatcher(new Application($container,…), $container)` and `$container->get(SegmentProcessRegistry::class)` for the consumer; `FfmpegRunner`'s factory resolves the SAME `$c->get(SegmentProcessRegistry::class)` — PHP-DI caches `factory()` entries as per-container singletons, so the relay fork's in-process dispatch and the consumer share the registry. Id spaces match; instance shared; cancel is no longer inert.
+- **#2 (release-only, don't kill live encode) — FIXED.** Both `finally` blocks call `releaseSegmentProcessAfterWaitTimeout($final)` (not `killSegmentProcess`) on the `!is_file($final)` branch. `releaseAfterWaitTimeout` probes `isAlive` per pid; if ANY alive it drops tracking only and does NOT signal and does NOT touch the temp; only when all dead does it clean the corpse `.part-*`. A signalled/`timeout`-killed encode is dead → temp cleaned; a live slow SW 4K/HEVC encode is left completely alone to publish for the retrying requester. Liveness check has no destructive race (it never acts on the live branch).
+- **#1 (killed encode leaked `.part-*`) — FIXED.** `kill()` runs `tempCleaner` (glob `{$key}.part-*` + `@unlink`) after signalling; docblocks corrected (the `|| rm` does NOT run when the chain is signalled). Cap/dedup globs no longer count a killed encode's corpse.
+- **#4 (SIGKILL hit the wrapper, not ffmpeg) — FIXED.** Launch is `nohup setsid timeout -k 10 -s TERM <n> sh -c '<encode && mv || rm>' … & echo $!`; `setsid` (invoked from a non-interactive `sh -c` background job, so not a group leader → no fork → PGID==PID==`$!`) makes the tracked pid the group leader; the default signal sender targets the GROUP (`posix_kill(-$pid,…)`) for BOTH SIGTERM and SIGKILL, reaching ffmpeg directly; `timeout -k … -s TERM` is a self-escalating backstop. `posix_kill` is non-blocking (coroutine-safe); the `kill --` shell fallback is guarded behind `!function_exists('posix_kill')`. No double-wrap.
+
+New findings from the fix (most-severe first):
+
+1. **[Low] The `.part-*` temp cleaner can delete a *sibling worker's* live temp for the same segment path, wasting that encode.** `SegmentProcessRegistry::defaultTempCleaner` (`SegmentProcessRegistry.php:414-427`) globs `{$final}.part-*` and `@unlink`s ALL matches. But `TranscodeManager` explicitly tolerates cross-worker duplicate encodes of the same `$final` within the reconcile window (`TranscodeManager.php:770-772`: "A sibling worker's view is eventually-consistent … a missed dedup merely costs one redundant duplicate encode"). Each worker writes a DISTINCT temp `{$final}.part-<random-hex>` (`FfmpegRunner::startSegmentEncode` `:2038`). Failure scenario: worker A (relay) encodes segment X into `X.part-aaa` and worker B (a direct-LAN HTTP worker) concurrently encodes the same X into `X.part-bbb`; client 1 abandons → `onHttpCancel`→`killGroup`→`kill(X)` globs `X.part-*` and unlinks BOTH — so B's still-running ffmpeg loses its output path and its final `mv -f X.part-bbb X` fails, wasting B's encode; client 2's poll then times out and must relaunch. Same collateral hit is possible from `releaseAfterWaitTimeout`'s dead-branch cleaner. Why it matters: the fix converts a previously-benign tolerated race ("one redundant duplicate encode") into one where the sibling's work is destroyed. Severity LOW: it is self-healing (the atomic-publish invariant still holds — the FINAL file is never globbed/deleted, only `.part-*` temps — and client 2 retries and succeeds once A's reservation/temps are gone), and it requires two clients encoding the exact same variant+index within the ~1s cross-worker window (uncommon; the scrub-storm itself is single-client via the one relay worker, where SV-4.1's per-worker reservation prevents same-`$final` duplication entirely). Optional hardening: have the launcher pass the exact `$tmp` path it created to the registry and clean only that specific temp on kill, rather than globbing the whole `{$final}.part-*` family.
+
+Deferred edge (criterion 7) — judged ACCEPTABLE per design, NOT a finding: if a client abandons AFTER the 30s poll wait-timeout has already released the key (encode still running), `killGroup` finds nothing and the still-running encode falls back to the `timeout <transcode_timeout>` backstop. This is the documented "wait-timeout is not abandonment" trade-off; the `timeout -k -s TERM` wrapper bounds the orphan CPU, and the common abandonment case (HTTP_CANCEL arriving while the request/poll is still in flight, key still registered) is killed promptly. Acceptable.
+
+Non-findings verified: RequestContext threading is leak-free (set/`finally`-clear, coroutine-local `support\Context`; concurrent relayed requests don't cross-contaminate; direct-LAN `index.php` never sets it → null group → path-only tracking, back-compat). Dual-entrypoint parity OK (RequestContext under `src/Server/Http` reaches both entrypoints; registry via the shared `TranscodeServicesProvider`; `RelayConsumer` is `start.php`-only). No SV-4.1 regression (reservation logic untouched). Hub/shared wire contracts untouched.
+
+Count: 1 finding (Low).
+
+## Implementer (re-review fix per-step SV-4.2 — precise-temp cleanup) — 2026-07-12
+
+Resolved the single Low re-review finding: the `.part-*` temp cleaner could delete a
+*sibling worker's* LIVE temp for the same final segment path. Now each launcher's OWN
+`.part-<hex>` temp is cleaned, never the `{$final}.part-*` family.
+
+Files changed (absolute):
+- `/home/sites/phlix/phlix-server/src/Media/Transcoding/SegmentProcessRegistry.php`
+  - Added `private array $tmpsByKey` (key => list of the exact `.part-<hex>` temps THIS
+    launcher created).
+  - `register()` gained an optional 4th param `?string $tmp`; a non-empty tmp is recorded
+    under the key. Back-compat: default null, existing 3-arg calls unaffected.
+  - `kill()` and `releaseAfterWaitTimeout()` now snapshot `$tmpsByKey[$key]` before `drop()`
+    and clean ONLY those specific temps (via new private `cleanTemps()`), instead of
+    `glob({$key}.part-*)`.
+  - `drop()` also unsets `$tmpsByKey[$key]`.
+  - `defaultTempCleaner` signature is now `fn(string $tmp): void` — `@unlink($tmp)` guarded
+    by `file_exists`, NO glob. (Dropped a redundant `is_string` guard the param type already
+    guarantees — phpstan `function.alreadyNarrowedType`.)
+  - Docblocks updated (class comment, tempCleaner property, register, kill).
+- `/home/sites/phlix/phlix-server/src/Media/Transcoding/FfmpegRunner.php`
+  - `launchDetachedSegment()` threads its `$tmp` into `register($cancelKey ?? $outFile,
+    $childPid, $cancelGroup, $tmp)`. `startSegmentEncode` already generated `$tmp` and passed
+    it down — no signature change needed there.
+- `/home/sites/phlix/phlix-server/tests/Unit/Media/Transcoding/SegmentProcessRegistryTest.php`
+  - Injected cleaner now records the tmp path (not the key); existing kill/release/killGroup
+    temp-cleanup tests register with an explicit `.part-<hex>` tmp and assert that exact path
+    is (or is not) cleaned.
+  - NEW `test_kill_with_default_cleaner_removes_only_own_temp_not_sibling`: creates two real
+    files `X.part-aaaaaaaa` (own) + `X.part-bbbbbbbb` (sibling's live temp) for the same
+    final `X`, registers only the own temp, kills, and asserts the own temp is removed, the
+    sibling temp SURVIVES, and the final `X` is never touched. Exercises the REAL default
+    cleaner.
+
+Kill semantics, keys, release-only wait-timeout, killGroup, setsid/`timeout -k`, atomic
+publish (from 3b6c6a3b) all unchanged. SV-4.1 reservation untouched. Hub/shared untouched.
+Register param is optional → no dual-entrypoint (index.php/start.php) divergence; registry
+still wired via the shared `TranscodeServicesProvider`.
+
+Verification:
+- `phpunit --filter 'SegmentProcessRegistry|FfmpegRunner|TranscodeManager|RelayConsumer'` →
+  198 OK (4 pre-existing risky warnings, untouched).
+- `phpunit --testsuite Unit` → 4983 tests, 38746 assertions, 5 skipped, 0 failures.
+- `phpstan analyze -c phpstan.neon.dist` on both touched src files → No errors.
+- `phpcs --standard=PSR12` → SegmentProcessRegistry.php clean; FfmpegRunner.php 1 pre-existing
+  120-char warning at line 838 (unrelated to this change).

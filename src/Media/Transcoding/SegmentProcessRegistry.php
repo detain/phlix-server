@@ -82,6 +82,18 @@ final class SegmentProcessRegistry
      */
     private array $groupOfKey = [];
 
+    /**
+     * Cancel key (segment path) => the exact `.part-<hex>` temp path(s) that THIS
+     * launcher created for that key. On kill / dead-release only these specific
+     * temps are removed — never the whole `{$final}.part-*` family — so a sibling
+     * worker's LIVE temp for the same final segment path is never destroyed
+     * (SV-4.2 re-review Low: `TranscodeManager` deliberately tolerates cross-worker
+     * duplicate encodes of the same `$final`, each writing a DISTINCT temp).
+     *
+     * @var array<string, array<int, string>>
+     */
+    private array $tmpsByKey = [];
+
     private LoggerInterface $logger;
 
     /**
@@ -102,11 +114,14 @@ final class SegmentProcessRegistry
     private $isAlive;
 
     /**
-     * Temp cleaner: fn(string $key): void. Removes the orphaned `.part-*`
-     * atomic-write temp(s) for a segment key after its encode was killed (or
-     * died without publishing), since a signalled encode never runs its own
-     * `|| rm` cleanup. Defaults to `glob("{$key}.part-*")` + `@unlink`.
-     * Overridable in tests.
+     * Temp cleaner: fn(string $tmp): void. Removes the ONE specific
+     * `.part-<hex>` atomic-write temp path that this launcher created, after its
+     * encode was killed (or died without publishing) — a signalled encode never
+     * runs its own `|| rm` cleanup. Defaults to `@unlink($tmp)` guarded by
+     * `is_string`/`file_exists`. It is passed the launcher's exact temp path (as
+     * recorded via {@see register()}), NOT the `{$final}.part-*` family, so a
+     * sibling worker's live temp for the same final segment is never destroyed
+     * (SV-4.2 re-review Low). Overridable in tests.
      *
      * @var callable(string): void
      */
@@ -148,13 +163,22 @@ final class SegmentProcessRegistry
      * @param string      $key   Opaque cancel key (segment path).
      * @param int         $pid   OS process-group-leader id; non-positive ignored.
      * @param string|null $group Optional cancel-group id (relay channel/request).
+     * @param string|null $tmp   The exact `.part-<hex>` temp path THIS launcher
+     *                           created for the encode. Recorded so kill /
+     *                           dead-release removes only this specific temp, not
+     *                           the whole `{$final}.part-*` family (SV-4.2
+     *                           re-review Low). Null/empty = nothing to clean.
      */
-    public function register(string $key, int $pid, ?string $group = null): void
+    public function register(string $key, int $pid, ?string $group = null, ?string $tmp = null): void
     {
         if ($key === '' || $pid <= 0) {
             return;
         }
         $this->pids[$key][] = $pid;
+
+        if ($tmp !== null && $tmp !== '') {
+            $this->tmpsByKey[$key][] = $tmp;
+        }
 
         if ($group !== null && $group !== '' && !isset($this->groupOfKey[$key])) {
             $this->keysByGroup[$group][] = $key;
@@ -187,6 +211,7 @@ final class SegmentProcessRegistry
     public function releaseAfterWaitTimeout(string $key): void
     {
         $pids = $this->pids[$key] ?? [];
+        $tmps = $this->tmpsByKey[$key] ?? [];
         $anyAlive = false;
         foreach ($pids as $pid) {
             if (($this->isAlive)($pid)) {
@@ -198,11 +223,13 @@ final class SegmentProcessRegistry
         $this->drop($key);
 
         if (!$anyAlive) {
-            // Dead (or never tracked) without publishing → clean the corpse temp.
-            // A naturally-exiting encode already ran its `|| rm`, so this is a
-            // harmless no-op then; the case that matters is the `timeout` backstop
-            // signalling it (which skips the `|| rm`).
-            ($this->tempCleaner)($key);
+            // Dead (or never tracked) without publishing → clean THIS launcher's
+            // own corpse temp only (never the `{$final}.part-*` family, so a
+            // sibling worker's live temp for the same final path is untouched —
+            // SV-4.2 re-review Low). A naturally-exiting encode already ran its
+            // `|| rm`, so this is a harmless no-op then; the case that matters is
+            // the `timeout` backstop signalling it (which skips the `|| rm`).
+            $this->cleanTemps($tmps);
         }
     }
 
@@ -219,6 +246,7 @@ final class SegmentProcessRegistry
     public function kill(string $key): int
     {
         $pids = $this->pids[$key] ?? [];
+        $tmps = $this->tmpsByKey[$key] ?? [];
         $this->drop($key);
         if ($pids === []) {
             return 0;
@@ -234,9 +262,11 @@ final class SegmentProcessRegistry
         }
 
         // SV-4.2 finding #1: a signalled encode never runs its atomic-publish
-        // `|| rm`, so remove the orphaned `.part-*` temp here — otherwise the
-        // cap/dedup globs count the dead encode as still in-flight.
-        ($this->tempCleaner)($key);
+        // `|| rm`, so remove the orphaned temp here — otherwise the cap/dedup
+        // globs count the dead encode as still in-flight. SV-4.2 re-review Low:
+        // clean ONLY this launcher's own `.part-<hex>` temp(s), never the whole
+        // `{$final}.part-*` family, so a sibling worker's live temp survives.
+        $this->cleanTemps($tmps);
 
         return count($pids);
     }
@@ -304,7 +334,7 @@ final class SegmentProcessRegistry
      */
     private function drop(string $key): void
     {
-        unset($this->pids[$key]);
+        unset($this->pids[$key], $this->tmpsByKey[$key]);
 
         $group = $this->groupOfKey[$key] ?? null;
         unset($this->groupOfKey[$key]);
@@ -407,22 +437,40 @@ final class SegmentProcessRegistry
     }
 
     /**
+     * Remove the specific launcher temp path(s) recorded for a killed / dead
+     * encode via the injectable {@see $tempCleaner}. Only the exact
+     * `.part-<hex>` paths THIS launcher created are removed — never a
+     * `{$final}.part-*` glob — so a sibling worker's live temp for the same
+     * final segment path is never destroyed (SV-4.2 re-review Low).
+     *
+     * @param array<int, string> $tmps The launcher's own temp paths for the key.
+     */
+    private function cleanTemps(array $tmps): void
+    {
+        foreach ($tmps as $tmp) {
+            if ($tmp === '') {
+                continue;
+            }
+            ($this->tempCleaner)($tmp);
+        }
+    }
+
+    /**
      * @return callable(string): void
      */
     private static function defaultTempCleaner(): callable
     {
-        return static function (string $key): void {
-            // The cancel key IS the final segment path; its atomic-write temps
-            // are `{$key}.part-<hex>`.
-            if ($key === '') {
+        return static function (string $tmp): void {
+            // Remove exactly the launcher's own `.part-<hex>` temp — NOT a
+            // `{$final}.part-*` glob — so a concurrent sibling worker's live temp
+            // for the same final segment path is left intact (SV-4.2 re-review
+            // Low). A signalled encode never ran its own `|| rm`, so this is the
+            // only cleanup for that one orphaned temp.
+            if ($tmp === '') {
                 return;
             }
-            $temps = glob($key . '.part-*');
-            if ($temps === false) {
-                return;
-            }
-            foreach ($temps as $temp) {
-                @unlink($temp);
+            if (file_exists($tmp)) {
+                @unlink($tmp);
             }
         };
     }

@@ -102,6 +102,7 @@
 - [x] SV-4.12 Extend stale-job reaper glob to {chunk-*.m4s,seg-*.ts} ✅ (commit c8f94c04)
 - [x] SV-4.13 Remove superseded whole-file command builders ✅ (commit c8f94c04)
 - [x] SV-4.14 Fix phantom self::transcode() docref ✅ (commit c8f94c04)
+- [ ] SV-4.15 port hub's per-surface rate-limiting framework to server's unprotected auth surfaces — QUEUED 2026-07-13 (perf-7, cross-repo consistency gap). Server only rate-limits `login` (DB-backed, DbLoginRateLimitStore); `register`/`refresh`/WebAuthn start+finish/public JWKS/WS-connect (:8097) have NO rate limiting, unlike hub's general `Common/RateLimit/` framework. Full spec in `/home/sites/phlix/performance_plan.md` §2 S-W4 SV-4.15. **⚠️ GATED (user direction 2026-07-13): do NOT start until hub's rate-limiting work is FULLY finished + reviewed + docs'd** — HB-4.6 Option B (DbRateLimiter + LOGIN repoint) was still in progress when this was drafted; re-audit the hub donor code fresh once it's settled (don't trust this spec's description of hub's shape as final). Also gated behind the rest of the server COMPLETE queue per the plan's existing ordering.
 
 ## Re-baseline — Claude Code orchestrator pass (2026-07-12)
 
@@ -3174,6 +3175,22 @@ INFORMATIONAL (no fix needed): TMDB https downloads still block via cURL under t
 identical to the sibling MetadataHttpClient already on the same match path). Not a regression.
 → Fix agent spawned for finding 1.
 
+## Fixer — SV-3.4 review finding — 2026-07-13 (perf-7)
+Fixed all 5 sites (18b9b659): 5×`../` → 4×`../` in `MediaServicesProvider.php` (:627 artwork.storage_path
++ pre-existing sibling copies :496/514/545/570 marker_detection/media_asset_jobs). Depth verified
+empirically via `php -r "realpath(...)"` against the known-good `theme_music` include (:129) as ground
+truth. Full Unit suite 5050/0 (no regression). phpstan/phpcs clean.
+
+## Reviewer (confirming re-review, SV-3.4 sub-1-3 fix) — 2026-07-13 (perf-7)
+**NO FINDINGS.** Confirmed commit 18b9b659: scope clean (only MediaServicesProvider.php + worklog); all
+5 sites now 4×`../`, independently reproduced via realpath (old 5× resolved to `false`, new 4× resolves
+to the real config files); targeted 28/28 + full Unit 5050/0 (matches Fixer's claim exactly).
+**SV-3.4 sub-steps 1-3 are CODE-COMPLETE + review-clean.** Remaining SV-3.4 work: sub-4 (SV-2.5
+conditional caching on HttpHandler::serveArtwork — If-None-Match→304 + Last-Modified), sub-6
+(phlix-contracts poster_srcset local-path doc/test), sub-7 (serveArtwork route test: signed-URL/session
+auth, ETag/304, 404, size-validation). sub-5 (dead ArtworkController.php) stays in the §6
+removal-confirmation queue, USER SIGN-OFF required, do NOT delete.
+
 ## Fixer — SV-3.4 review finding — 2026-07-13
 Fixed FINDING 1 (LOW): the `@include` config-fallback path depth in `MediaServicesProvider.php`.
 - Root cause: the `@include __DIR__ . '/.../config/*.php'` fallbacks used 5× `../`, which from
@@ -3194,3 +3211,48 @@ Fixed FINDING 1 (LOW): the `@include` config-fallback path depth in `MediaServic
   lines 537/562); `phpunit --filter "MediaServicesProvider|ContainerFactory" --testdox` = 28/28 OK
   (incl. "Artwork storage dir is config driven"); full `--testsuite Unit` = 5050 tests, 0 fail, 5 skip
   (up from the 5040 baseline by the SV-3.4 sub-step tests). No regression.
+
+## Implementer — SV-3.4 sub-4 (conditional caching on serveArtwork) — 2026-07-13
+Added the SV-2.5 conditional-GET pattern to `HttpHandler::serveArtwork` (`GET /api/v1/artwork/{id}?size=`),
+mirroring the reference implementation already in `MediaItemController::getChapterThumbnail` /
+`PhotoController::getFull` (ETag `md5(mtime.size)` there; here the EXISTING `"<size>-<mtime>"` hex tag is
+preserved — the task is additive, not a validator swap).
+
+Files changed:
+- `src/Server/Workerman/HttpHandler.php` (`serveArtwork`, ~:649):
+  * Now derives `$mtime`/`$lastModified` from the same `stat()` that builds the ETag, and emits a
+    `Last-Modified` header on the 200 response (previously only ETag + `Cache-Control: ...immutable`).
+  * Honors conditional GET: `If-None-Match` (authoritative; exact-string compare vs the existing ETag)
+    → 304; `If-Modified-Since` (fallback, only when no `If-None-Match`) → 304 when `strtotime(IMS) >=`
+    file mtime. The 304 carries the ETag + Last-Modified + the same immutable `Cache-Control` but NO body
+    (does NOT call `withFile()`), matching SV-2.5's 304 shape.
+  * ORDERING preserved exactly like SV-2.5's controllers: method-guard → route-match → `?size=`
+    validation → signed-URL/session auth gate → 404 existence check → THEN freshness. A stale/unsigned
+    request can never shortcut to a 304 (verified by tests below). Empty-ETag (stat failure) is guarded
+    so a `stat()` miss never produces a spurious 304.
+  * The existing ETag emission + immutable Cache-Control are unchanged on the 200 path (headers just
+    reorganized into an array so the validators can be shared with the 304 path).
+
+- `tests/Unit/Server/Workerman/HttpHandlerServeArtworkTest.php` (NEW, 8 tests, 39 assertions):
+  no conditional headers → 200 + file attached + ETag/Last-Modified/immutable Cache-Control present;
+  matching `If-None-Match` → 304 with `$resp->file === null` and empty `rawBody()`; stale `If-None-Match`
+  → 200 full body; up-to-date `If-Modified-Since` → 304 (fallback path); stale `If-Modified-Since` → 200;
+  `If-None-Match` mismatch beats a fresh `If-Modified-Since` (authoritative) → 200; unsigned request with
+  a would-be-matching validator → 401 (auth before freshness); missing variant file + conditional header
+  → 404 (existence before freshness). Harness mirrors `HttpHandlerServeMediaStreamTest` (mock container →
+  mock `ArtworkStorage::variantPath`, signed-URL mint, reflection-invoke the private method).
+
+Verification (at pre-rebase HEAD 18b9b659):
+- `phpunit --filter HttpHandlerServeArtwork --testdox` = 8/8 OK.
+- `phpunit --filter HttpHandler --testdox` = 90/90 OK.
+- `phpunit --testsuite Unit --no-coverage` = 5058 tests, 0 fail, 5 skip (5050 baseline + 8 new). No regression.
+- `phpstan analyze -c phpstan.neon.dist` on both changed files = No errors (L9).
+- `phpcs --standard=PSR12` on both changed files = clean (0 errors/0 warnings).
+
+Signed-URL note: the artwork auth gate signs the CANONICAL resource (`SignedUrl::signature()` →
+`canonicalResource()` strips the query), so the `?size=` variant does not affect verify — confirmed
+empirically; the new 304 branch sits after that gate and does not touch it.
+
+STILL OPEN for SV-3.4: sub-6 (phlix-contracts `poster_srcset` local-path doc/test) and sub-7 (a
+dedicated end-to-end `serveArtwork` route test covering signed-URL/session auth + size-validation + 404
+alongside the ETag/304 paths — this sub-4 test already covers the 304/auth-order/404-order slices).

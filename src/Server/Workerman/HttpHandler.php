@@ -646,15 +646,53 @@ final class HttpHandler
             );
         }
 
-        // Compute ETag for caching
+        // Compute the validators for conditional caching (SV-2.5 pattern).
+        // ETag is the existing "<size>-<mtime>" hex tag (immutable-cache is kept);
+        // Last-Modified is derived from the same stat so both stay consistent.
         $stat = stat($artworkPath);
+        $mtime = $stat !== false ? (int) $stat['mtime'] : 0;
         $etag = $stat !== false ? sprintf('"%x-%x"', $stat['size'], $stat['mtime']) : '';
+        $lastModified = $mtime > 0 ? gmdate('D, d M Y H:i:s', $mtime) . ' GMT' : '';
 
-        $resp = new WorkermanResponse(200, [
+        // Honor conditional GET AFTER auth + size validation + the 404 existence
+        // check above — freshness is only ever decided for a request that would
+        // otherwise be served. If-None-Match (ETag) is authoritative; If-Modified-Since
+        // (Last-Modified) is the fallback for clients that don't send an ETag.
+        $ifNoneMatch = $wr->header('if-none-match');
+        $ifModifiedSince = $wr->header('if-modified-since');
+        $etagMatch = $etag !== '' && $ifNoneMatch === $etag;
+        $imsTs = is_string($ifModifiedSince) && $ifModifiedSince !== ''
+            ? strtotime($ifModifiedSince)
+            : false;
+        $notModified = ($ifNoneMatch === null || $ifNoneMatch === '')
+            && $mtime > 0
+            && $imsTs !== false
+            && $imsTs >= $mtime;
+
+        if ($etagMatch || $notModified) {
+            $headers304 = ['Cache-Control' => 'public, max-age=31536000, immutable'];
+            if ($etag !== '') {
+                $headers304['ETag'] = $etag;
+            }
+            if ($lastModified !== '') {
+                $headers304['Last-Modified'] = $lastModified;
+            }
+            // 304 carries the validators but NO body (do not attach the file).
+            return new WorkermanResponse(304, $headers304);
+        }
+
+        $headers = [
             'Content-Type'  => 'image/jpeg',
             'Cache-Control' => 'public, max-age=31536000, immutable',
-            'ETag'          => $etag,
-        ]);
+        ];
+        if ($etag !== '') {
+            $headers['ETag'] = $etag;
+        }
+        if ($lastModified !== '') {
+            $headers['Last-Modified'] = $lastModified;
+        }
+
+        $resp = new WorkermanResponse(200, $headers);
         $resp->withFile($artworkPath);
         return $resp;
     }

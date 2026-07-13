@@ -1816,6 +1816,109 @@ NO FINDINGS
 
 ## ⏸ PERF-4 PAUSE STATE (2026-07-12) — server resume point
 - **SV-4.7** ✅ done (prior). **SV-3.1 foundation (a+b0+e)** ✅ review NO FINDINGS. **SV-3.1c** (scheduler Timer + timed-stop@end+padding + padding fix) ✅ FULLY DONE: impl `50d3e992`/`89f3f35f`, fix `ddd41106`/`a61f7782` (3 review findings: double-completion race→atomic CAS + scan-skips-timer-held; stop-timer leak→onStop hook; negative-padding clamp), **re-review NO FINDINGS** `6f8749ee`. Unit 4935/0.
-- **SV-3.1d (media-item registration + `livetv_recordings.media_item_id` linkage migration)** — a Complete agent was spawned but **DIED on a session API limit with NOTHING committed** (tree clean, no SV-3.1d commit). **RE-SPAWN from scratch** — scope: migration + register the completed `.ts` as a `media_items` row on the once-only `onComplete` (give `RecordingHooks::register` a caller / inline insert), persist `media_item_id`. **Comskip wiring is SPLIT OUT to SV-3.1d-comskip and DEFERRED until SV-4.3 (ComskipRunner non-blocking) is audited/fixed** — do NOT wire a blocking comskip into the worker-0 completion timer callback.
+- **SV-3.1d (media-item registration + `livetv_recordings.media_item_id` linkage migration)** — ✅ IMPL+TESTS DONE (pending review). Commits `c8845464` (impl+migration) + `0f20be7b` (tests), pushed; tree clean, local==origin. See "## Implementer — SV-3.1d" note below. Comskip STILL split out to SV-3.1d-comskip (deferred to SV-4.3) — NOT wired here.
 - **Server queue after SV-3.1d:** SV-4.3 (ComskipRunner non-blocking — audit+fix) → SV-3.1d-comskip (chapter markers → real media_item_id) → SV-3.1f (timeshift 501 stub @ `LiveTvStreamController.php:~129` → withFile/HLS + rolling buffer) → g (storage accounting) → h (LiveTvStreamController tests) → SV-3.6 (Trakt pull-sync) → SV-4.13-finish (remove `buildTranscodeCommandWithProfile` zero-callers + stale docrefs) → RE-AUDIT SV-0.6–0.9/1.x/2.2-2.3-2.7/3.3-3.4/4.1-4.6/4.8-4.12/4.14.
 - **NOTE:** external release-maintenance commits landed (Release v1.2.3, @phlix/ui v0.79→v0.80 bump, composer.lock) — HEAD `c9f1f26c`; all SV work preserved in ancestry.
+
+## Implementer — SV-3.1d (media-item registration + linkage migration) — 2026-07-12
+
+Registers a completed DVR recording's captured `.ts` as a playable `media_items`
+row on the once-only Recorder `onComplete` path and persists the resulting
+`media_items.id` back onto `livetv_recordings`. Comskip is NOT touched (that half
+is SV-3.1d-comskip, deferred to SV-4.3). Committed + pushed myself (`c8845464`
+impl+migration, `0f20be7b` tests). Tree clean, local==origin at `0f20be7b`.
+
+### Migration
+- NEW `migrations/077_livetv_recording_media_item_link.sql` — `ALTER TABLE
+  livetv_recordings ADD COLUMN media_item_id CHAR(36) NULL AFTER status` +
+  `ADD INDEX idx_media_item_id`. Matches `media_items.id` (CHAR(36) UUID PK).
+  One-ALTER-per-clause, NO `IF NOT EXISTS` (MySQL 8 rejects it on ADD COLUMN/INDEX;
+  the runner downgrades duplicate 1060/1061 on replay — same idiom as 022). No
+  migration-file test in the repo lists expected files (MigrationRunnerTest uses a
+  tmp dir), so nothing to update. NOT run here (no DB) — runs on deploy.
+
+### Registration (completion wiring)
+- NEW `src/LiveTv/Recording/RecordingMediaRegistrar.php` — `register(string
+  $recordingId, string $recordingPath): ?string`. Wired via
+  `$recorder->onComplete([$registrar, 'register'])` in `LiveTvServicesProvider`'s
+  Recorder factory (NOT via `RecordingHooks::register`, which is comskip-specific —
+  it takes a `ComskipPostProcessor`; media-item registration is a distinct concern,
+  so inline registration is the correct fit). The Recorder fires `onComplete`
+  EXACTLY once per completion (SV-3.1c atomic CAS), so registration runs once.
+- Guards (each returns null, inserts nothing): row not found; `status != 'completed'`
+  (onComplete ALSO fires for rows `resumeActiveRecordings()` marks FAILED —
+  those must never register); already-linked `media_item_id` (idempotent replay);
+  missing / zero-length capture file (never register a broken item).
+- Insert delegated to the canonical **`ItemRepository::upsertByPath`** (path-deduped)
+  — a retried completion returns the same id, no duplicate row. Columns populated:
+  `library_id`, `name`=recording `title` (from the EPG/programme stored on the
+  recording row), `type='video'` (valid `media_items.type` enum; the honest type
+  for a raw capture — MediaItemShaper coerces unknown-to-it types to 'movie' for the
+  API, harmless), `path`=the `.ts`, `metadata_json`={source:'livetv_dvr',
+  recording_id, channel_id, program_id, description, recorded_start/end,
+  duration_seconds}. `create()`'s only required keys are library_id/name/type/path;
+  all other media_items columns default.
+- **Library association:** find-or-create a dedicated `video`-type library by name
+  (config `dvr.library_name`, default 'DVR Recordings') via DIRECT SQL against
+  `libraries` (NOT LibraryManager) — deliberately NO FolderWatcher, so the storage
+  path is never scanned and cannot double-register the `.ts` files. INSERT mirrors
+  `LibraryManager::createLibrary`'s columns exactly (id, name, type, paths, options).
+- **Linkage persisted:** `UPDATE livetv_recordings SET media_item_id = ?, updated_at
+  = NOW() WHERE recording_id = ?` with the returned id — so SV-3.1d-comskip can
+  attach chapter markers to the real item.
+- **Reads use the plain-array media-layer convention** (like ItemRepository /
+  LibraryManager), NOT the LiveTv `RowQuery` cursor — see the risk note below.
+
+### Config + DI (no ctor/DI-signature change → no entrypoint mirror)
+- `config/livetv.php` — NEW `dvr.library_name` (default 'DVR Recordings').
+- `LiveTvServicesProvider` — registers `RecordingMediaRegistrar` as a per-worker
+  singleton (resolving `ItemRepository` from the container) and calls
+  `$recorder->onComplete(...)` in the Recorder factory. NO existing ctor/DI
+  signature changed → NO `public/index.php` / `start.php` mirror needed (both
+  entrypoints share this container; the wiring is a runtime callback registration).
+
+### Tests
+- NEW `tests/Unit/LiveTv/Recording/RecordingMediaRegistrarTest.php` (7): completed
+  recording → asserts upsertByPath data (library_id/name/type='video'/path/metadata
+  incl. duration_seconds) + the `UPDATE ... media_item_id` params `['media-1','rec-1']`;
+  missing file / zero-length file / status='failed' / already-linked / missing row all
+  assert `upsertByPath` is NEVER called; library find-or-create asserts a `libraries`
+  INSERT with the configured name + 'video' type and that the media item uses that
+  exact new library id.
+- `tests/Unit/Common/Container/Providers/LiveTvServicesProviderTest.php` (+1, updated):
+  Recorder now carries EXACTLY 2 onComplete hooks (comskip + registrar);
+  `RecordingMediaRegistrar` resolves as a shared singleton (added an `ItemRepository`
+  mock to the test container so the registrar factory resolves).
+
+### Verification (actual, this box)
+- `./vendor/bin/phpstan analyse -c phpstan.neon.dist` → **[OK] No errors** (647 files).
+- `./vendor/bin/phpunit --testsuite Unit --no-coverage` → **Tests: 4943, 0 failures /
+  0 errors** (4 warnings / 8 skipped — all pre-existing in TranscodeManagerTest,
+  unchanged from the SV-3.1c 4935 baseline; +8 = my new tests).
+  `--filter 'RecordingMediaRegistrar|LiveTvServicesProvider'` → 10 OK / 44 assertions.
+- `./vendor/bin/phpcs --standard=PSR12` on the 4 touched files → **0 errors**.
+
+### Seams left for later (NOT done here)
+- **SV-3.1d-comskip** (deferred, gated on SV-4.3): attach comskip EDL→chapter markers
+  to the real `media_item_id`. The `media_item_id` is now produced + persisted, so
+  that step has a real item to attach to. `RecordingHooks::register` still has no
+  caller (it wires a `ComskipPostProcessor`) — leave it for that step.
+- **RISK / on-box verify owed (pre-existing, NOT SV-3.1d scope):** the LiveTv read
+  path (`Recorder`/`RecordingScheduler` via `RowQuery`/`ResultSet`) narrows on
+  `$result instanceof \Phlix\LiveTv\Dto\ResultSet`, but production
+  `PhlixMySQLConnection::query("SELECT …")` returns a PLAIN ARRAY (`parent::query`
+  → `PDOStatement::fetchAll`, verified) — nothing in `src/` ever produces a
+  `ResultSet`. So `RowQuery::rows/firstRow` appear to yield `[]`/`null` for real
+  results, which would mean `Recorder::getRecording()`/`stopRecording()` (hence the
+  whole DVR completion → my `onComplete` hook) may not fire against a live DB. This
+  is the DVR stack's already-OWED on-box verification (SV-3.1 foundation/c notes), a
+  PRE-EXISTING concern I did NOT fix (out of SV-3.1d scope). My registrar itself uses
+  the plain-array media-layer convention that provably works in prod, so its own
+  logic is correct regardless; but end-to-end firing depends on that owed verify. A
+  future step should either confirm the connection returns ResultSet-shaped objects
+  in prod or fix `RowQuery` to accept plain arrays.
+- **On-box verify OWED for SV-3.1d itself** (migration + start.php outside CI): after
+  deploy, run `php scripts/run-migrations.php` (adds `media_item_id`), complete a
+  recording, confirm a `media_items` row exists for the `.ts` and
+  `livetv_recordings.media_item_id` is set; confirm a zero-length/failed capture
+  leaves `media_item_id` NULL.

@@ -1,0 +1,2 @@
+var e=new Map;function t(t){return e.get(t)}function n(e,t=Date.now()){return e!==void 0&&t-e.ts<6e4}function r(t,n,r=Date.now()){e.set(t,{item:n,ts:r})}export{r as n,t as r,n as t};
+//# sourceMappingURL=useMediaItemCache-BKCJnCbr-CtDoqeVW.js.map

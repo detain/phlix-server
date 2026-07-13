@@ -9,16 +9,21 @@ use Phlix\Media\Transcoding\FfmpegRunner;
 
 /**
  * Covers the command SHAPE built by {@see FfmpegRunner::buildThumbnailBatchCommand()}
- * / {@see FfmpegRunner::generateThumbnailBatch()} `[S-F19]`.
+ * / {@see FfmpegRunner::generateThumbnailBatch()} `[S-F19]`. These string-shape
+ * assertions are the tests that genuinely guard the SV-0.9 command-shape change
+ * (the real-ffmpeg integration tests are positive correctness checks, not shape
+ * guards — see FfmpegThumbnailBatchTest's docblock).
  *
  * Before SV-0.9's command-shape fix, every per-timestamp `-ss`/`-vframes`/output
  * group was concatenated BEFORE the single shared `-i <input>` — i.e.
- * `ffmpeg -ss T1 -vframes 1 out1 -ss T2 -vframes 1 out2 -i input`, which is
- * malformed (output groups appearing before any `-i` has been declared) and
- * renders no thumbnails at all whenever more than one timestamp is requested.
- * These tests assert the fixed shape: one `-ss <timestamp> -i <input>` pair per
- * timestamp (fast input-side seeking), all declared before any output group,
- * each output pinned back to its own input via an explicit `-map <index>:v:0`.
+ * `ffmpeg -ss T1 -vframes 1 out1 -ss T2 -vframes 1 out2 -i input`, declaring
+ * output groups before any `-i`. That worked only via ffmpeg's (undocumented)
+ * tolerance of an input specified after the outputs, plus a slow output-side
+ * seek; on this box's ffmpeg 6.1.1 it still produced correct frames, so the
+ * defect was a not-guaranteed-correct, slow arrangement — not "no thumbnails at
+ * all." These tests assert the fixed shape: one `-ss <timestamp> -i <input>`
+ * pair per timestamp (fast input-side seeking), all declared before any output
+ * group, each output pinned back to its own input via an explicit `-map <index>:v:0`.
  */
 class FfmpegRunnerThumbnailBatchTest extends TestCase
 {
@@ -51,11 +56,12 @@ class FfmpegRunnerThumbnailBatchTest extends TestCase
     {
         $cmd = $this->runner()->buildThumbnailBatchCommand('/in.mkv', [10, 20], '/out');
 
-        // Regression guard for the exact S-F19 defect: an output group
-        // (`-map`/`-vframes`/frame path) must never appear before the LAST
-        // `-i` in the command — that is precisely the malformed shape that
-        // rendered zero thumbnails. Assert every `-i` occurs before every
-        // `-map` occurrence.
+        // Regression guard for the exact S-F19 command-shape defect: an output
+        // group (`-map`/`-vframes`/frame path) must never appear before the LAST
+        // `-i` in the command — that outputs-before-input arrangement is the
+        // malformed shape the fix removed (it worked only via ffmpeg's lenient
+        // argument reordering + a slow output-side seek, not by documented
+        // guarantee). Assert every `-i` occurs before every `-map` occurrence.
         $lastInputPos = strrpos($cmd, ' -i ');
         $firstMapPos = strpos($cmd, ' -map ');
         $this->assertNotFalse($lastInputPos);

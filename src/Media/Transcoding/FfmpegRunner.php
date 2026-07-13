@@ -1103,16 +1103,24 @@ class FfmpegRunner
      * @param array<int> $timestamps Array of timestamps to capture
      * @param string $outputDir Directory for output images (images named frame_00000.jpg, frame_00001.jpg, etc.)
      *
-     * @return bool True if batch extraction succeeded
+     * @return bool Best-effort / partial-success: true if at least one requested
+     *              timestamp produced a non-empty frame file — so a batch mixing
+     *              in-range and out-of-range timestamps still returns true, with
+     *              only the reachable frames written. False only when the ffmpeg
+     *              process failed outright (exit != 0) or not a single requested
+     *              frame was written.
      *
      * @since 0.11.0
-     * @since SV-0.9 Fixed malformed multi-timestamp command shape (all seek/output
-     *        groups were previously bunched before one shared `-i`, producing no
-     *        thumbnails at all whenever more than one timestamp was requested).
-     *        Also verified at least one output file was actually written: FFmpeg
-     *        exits 0 even when every requested `-ss` lands past end-of-file (it
-     *        just logs "Output file is empty" and skips that output), so exit
-     *        code alone is not a reliable success signal for this command shape.
+     * @since SV-0.9 Fixed the multi-timestamp command shape (all seek/output
+     *        groups were previously bunched before one shared `-i`, which relied
+     *        on ffmpeg's lenient tolerance of an input declared after the outputs
+     *        plus a slow output-side seek — an arrangement not guaranteed correct
+     *        by ffmpeg's documented option ordering; it did still render frames on
+     *        ffmpeg 6.1.1, just via that non-guaranteed, slower path). Also
+     *        verified at least one output file was actually written: FFmpeg exits
+     *        0 even when every requested `-ss` lands past end-of-file (it just
+     *        logs "Output file is empty" and skips that output), so exit code
+     *        alone is not a reliable success signal for this command shape.
      */
     public function generateThumbnailBatch(string $inputPath, array $timestamps, string $outputDir): bool
     {

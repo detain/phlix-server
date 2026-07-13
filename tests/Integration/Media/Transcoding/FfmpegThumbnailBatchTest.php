@@ -14,10 +14,17 @@ use Phlix\Media\Transcoding\FfmpegRunner;
  * distinct, non-empty frames are actually produced. Skipped when ffmpeg is not
  * installed so the suite stays green on minimal CI images.
  *
- * Before the SV-0.9 command-shape fix this batch call rendered NO thumbnails
- * at all once more than one timestamp was requested (a malformed command with
- * every output group bunched before a single shared `-i`); these tests would
- * fail against that prior shape.
+ * Scope: these are POSITIVE end-to-end correctness checks of the *current*
+ * implementation (each frame lands at its own timestamp; the ">=1 frame written"
+ * return contract holds, including the all-out-of-range case where ffmpeg itself
+ * exits 0). They are NOT a regression guard for the SV-0.9 command-shape change:
+ * against this box's ffmpeg 6.1.1 the pre-fix shape (every output group bunched
+ * before a single shared `-i`) actually produced correct, distinct frames too —
+ * it relied on ffmpeg tolerating an input declared after the outputs and on a
+ * slow output-side seek, an arrangement not guaranteed correct by ffmpeg's
+ * documented option ordering, but it did NOT "render no thumbnails at all." The
+ * command-shape change itself is guarded by the string-shape unit tests in
+ * {@see \Phlix\Tests\Unit\Media\Transcoding\FfmpegRunnerThumbnailBatchTest}.
  */
 class FfmpegThumbnailBatchTest extends TestCase
 {
@@ -72,13 +79,15 @@ class FfmpegThumbnailBatchTest extends TestCase
         $this->assertGreaterThan(0, filesize($frame0));
         $this->assertGreaterThan(0, filesize($frame1));
 
-        // The two timestamps must yield DIFFERENT frames — this is exactly
-        // what the pre-fix malformed command failed to do (it rendered no
-        // thumbnails at all for a multi-timestamp request).
+        // The two timestamps must yield DIFFERENT frames — a positive check
+        // that each seek landed at its own timestamp (this guards the sibling
+        // escaping bug that coerced every `-ss` to 0). It does NOT reproduce the
+        // malformed-shape defect: that shape still produced correct, distinct
+        // frames on real ffmpeg (see the class docblock).
         $this->assertNotSame(
             md5_file($frame0),
             md5_file($frame1),
-            'frames at different timestamps must not be byte-identical (regression guard for "all frames at t=0")'
+            'frames at different timestamps must not be byte-identical (guards the "all frames at t=0" escaping bug)'
         );
     }
 

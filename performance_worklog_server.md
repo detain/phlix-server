@@ -61,7 +61,7 @@
 - [x] SV-0.5  fix WS reaper + heartbeat timer guards  RE-AUDIT 2026-07-12: PARTIAL — function_exists→class_exists fixed (3 sites); WS reaper arms (per-worker repeating); stream heartbeats one-shot (Timer::add(30,...,[],false), storm CAPPED). GAPS: (1) S-F28 WS app-level ping ABSENT (no pingInterval/pingNotResponseLimit, no ping timer → half-open sockets undetectable); (2) heartbeat NOT keyed-per-session/deduped/torn-down on stream end (each request re-registers → bounded accumulation, not the keyed+cancelled AC); (3) tests shallow (smoke test w/ stale comment; no leak test). COMPLETED 2026-07-12: (1) server-side ping timer + onWebSocketPong (Workerman 5.x has no pingInterval); (2) StreamSessionService keyed+deduped one-shot heartbeat timers torn down in releaseStream(), callers delegate; (3) reaper-registration + ping-reap + heartbeat one-shot/keyed/leak tests. phpstan 0, phpunit 85 green, phpcs no new. See Implementer note below. Pending review.
 - [x] SV-0.6  fix TMDB collections UUID-as-int bug ✅ (commit ad6d6d86)
 - [x] SV-0.7  supervise marker/intro-detection worker ✅ (commit 46c71440)
-- [x] SV-0.8  fix path_hash reads + stop re-probing ✅ (commit 510c8761)
+- [x] SV-0.8  fix path_hash reads + stop re-probing ✅ RE-COMPLETED 2026-07-13 (perf-7): earlier "DONE" (citing non-existent 510c8761, real prior commit 3bfa7d96) was INCOMPLETE — findPathsMap lacked library_id scoping (commit 46463be5 fixed that + a real cross-library correctness bug) but review found a HIGH severity gap: path_hash is NULL for non-deduped types (series/season/image/audiobook) so lookups always missed → duplicate rows every rescan. Fixed f31f34b5 (two-pass path_hash-then-raw-path fallback, every call site threaded with libraryId). 3-round review→fix→re-review cycle, final verdict NO FINDINGS. **DONE.** One honest caveat: the real-DB EXPLAIN/NULL-hash integration tests self-skip in this sandbox (no reachable MySQL) — structurally sound, correctness proven by layered unit tests, CI-green confirmation owed next session.
 - [x] SV-0.9  fix generateThumbnailBatch timestamp escaping ✅ (commit 1dbdf97c)
 - [x] SV-1.1  memoize/precompute HDR tone-map decision ✅ (commit bbef742c)
 - [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
@@ -3713,3 +3713,25 @@ Finding 2 (LOW): corrected the Implementer's SV-0.8 worklog citation — `510c87
 the real commit is `3bfa7d96` "media: SV-0.8 fix path_hash reads + stop re-probing known-absent files"
 (added an inline CORRECTION note rather than silently editing history). The lines 64/2585 `[x]`/audit
 citations of `510c8761` are left as-is historical (the correction note documents the right hash).
+
+## Reviewer (confirming re-review, SV-0.8, commit f31f34b5) — 2026-07-13 (perf-7) — 3rd review pass, CLOSES SV-0.8
+**NO FINDINGS.** Traced with full scrutiny given 2 prior findings on this step. Two-pass fallback verified
+genuinely correct/bounded/library-scoped by reading the actual SQL (Pass 1 indexed path_hash lookup;
+Pass 2 runs ONLY on a Pass-1 miss, scoped `library_id = ? AND path = ?`/`path IN (...)` on just the
+unresolved subset — not a full-table scan, not cross-library). Concrete season trace confirmed: NULL
+path_hash → Pass 1 silently misses (`NULL = <hash>` false) → Pass 2 resolves via raw path within the
+correct library. **Every findByPath/findPathsMap call site exhaustively grepped and confirmed updated**
+(10 findByPath + 2 upsertByPath + 1 findPathsMap site, all passing a real non-null libraryId) — no site
+left on the old signature (and even a hypothetically-missed caller would only degrade to unindexed
+correctness via Pass 2, never wrong results). No regression to the fast path: Pass 1 hit short-circuits
+before Pass 2 in both methods, asserted by a dedicated skip-fallback-when-resolved test. Test quality
+verified non-tautological (reverting the fallback flips the ItemRepositoryTest unit tests red; the
+MediaScanner season/image tests do a genuine REPEATED scan and assert no duplicate on the second pass —
+the actual acceptance bar). "No unique index catches NULL-hash duplicates" claim independently confirmed
+against the actual migration/cleanup SQL. Finding 2 citation correction verified present. Suites
+reconfirmed: 245/1249/4-skip filtered, full Unit 5096/0/5-skip, phpstan/phpcs clean (zero NEW phpcs
+issues — verified by diffing error/warning counts parent vs HEAD per file). Honest caveat carried
+forward (not a finding): the real-DB PathHashIndexUsageTest case still self-skips in this environment
+(no reachable MySQL) — structurally sound, correctness already proven by the layered unit tests, deferred
+CI-green confirmation owed to the next session. **SV-0.8 CLOSED** after 3 review rounds (first review:
+1 HIGH + 1 LOW; fix; this confirming re-review: NO FINDINGS).

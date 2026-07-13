@@ -1813,3 +1813,9 @@ Check-by-check:
    endRecording called by the scan respectively). They guard the exact seams.
 
 NO FINDINGS
+
+## ⏸ PERF-4 PAUSE STATE (2026-07-12) — server resume point
+- **SV-4.7** ✅ done (prior). **SV-3.1 foundation (a+b0+e)** ✅ review NO FINDINGS. **SV-3.1c** (scheduler Timer + timed-stop@end+padding + padding fix) ✅ FULLY DONE: impl `50d3e992`/`89f3f35f`, fix `ddd41106`/`a61f7782` (3 review findings: double-completion race→atomic CAS + scan-skips-timer-held; stop-timer leak→onStop hook; negative-padding clamp), **re-review NO FINDINGS** `6f8749ee`. Unit 4935/0.
+- **SV-3.1d (media-item registration + `livetv_recordings.media_item_id` linkage migration)** — a Complete agent was spawned but **DIED on a session API limit with NOTHING committed** (tree clean, no SV-3.1d commit). **RE-SPAWN from scratch** — scope: migration + register the completed `.ts` as a `media_items` row on the once-only `onComplete` (give `RecordingHooks::register` a caller / inline insert), persist `media_item_id`. **Comskip wiring is SPLIT OUT to SV-3.1d-comskip and DEFERRED until SV-4.3 (ComskipRunner non-blocking) is audited/fixed** — do NOT wire a blocking comskip into the worker-0 completion timer callback.
+- **Server queue after SV-3.1d:** SV-4.3 (ComskipRunner non-blocking — audit+fix) → SV-3.1d-comskip (chapter markers → real media_item_id) → SV-3.1f (timeshift 501 stub @ `LiveTvStreamController.php:~129` → withFile/HLS + rolling buffer) → g (storage accounting) → h (LiveTvStreamController tests) → SV-3.6 (Trakt pull-sync) → SV-4.13-finish (remove `buildTranscodeCommandWithProfile` zero-callers + stale docrefs) → RE-AUDIT SV-0.6–0.9/1.x/2.2-2.3-2.7/3.3-3.4/4.1-4.6/4.8-4.12/4.14.
+- **NOTE:** external release-maintenance commits landed (Release v1.2.3, @phlix/ui v0.79→v0.80 bump, composer.lock) — HEAD `c9f1f26c`; all SV work preserved in ancestry.

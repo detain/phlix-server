@@ -44,10 +44,17 @@ final class DbTimeShiftSessionStore
     }
 
     /**
-     * Insert a session, or update it in place if the id already exists.
+     * Insert a session, or update the existing row in place on a key collision.
      *
-     * `updated_at` is refreshed automatically by the column's
-     * `ON UPDATE CURRENT_TIMESTAMP` default; `created_at` is preserved.
+     * A genuine upsert keyed on BOTH unique keys: the PK `id` and the
+     * `UNIQUE (session_id)` constraint (migration 078). Re-saving a fresh row
+     * whose `session_id` already exists therefore overwrites that session's row
+     * (updating buffer_dir / pid / window / status / times) rather than leaking a
+     * second row that only dedupes on the random PK. The PK `id` is deliberately
+     * NOT in the update set-list (it identifies the row and must not be rewritten
+     * on a session_id collision); `updated_at` is bumped explicitly so it advances
+     * even when the column's `ON UPDATE CURRENT_TIMESTAMP` would not fire on an
+     * otherwise-identical row; `created_at` is preserved.
      *
      * @param TimeShiftSession $session The session to persist
      * @return void
@@ -61,7 +68,6 @@ final class DbTimeShiftSessionStore
                  cursor_position, status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
-                session_id = VALUES(session_id),
                 channel_id = VALUES(channel_id),
                 buffer_dir = VALUES(buffer_dir),
                 pid = VALUES(pid),
@@ -69,7 +75,8 @@ final class DbTimeShiftSessionStore
                 buffer_end_at = VALUES(buffer_end_at),
                 window_seconds = VALUES(window_seconds),
                 cursor_position = VALUES(cursor_position),
-                status = VALUES(status)",
+                status = VALUES(status),
+                updated_at = CURRENT_TIMESTAMP",
             [
                 $session->id,
                 $session->session_id,
@@ -102,8 +109,12 @@ final class DbTimeShiftSessionStore
     }
 
     /**
-     * Find the most recent session for a playback session id (the URL route
-     * key). Ordered newest-first so a re-started session wins over any stale row.
+     * Find the session for a playback session id (the URL route key).
+     *
+     * `session_id` is `UNIQUE` (migration 078), so this is a plain unique lookup —
+     * no `ORDER BY created_at DESC LIMIT 1` tie-break is needed (that ordering was
+     * unreliable anyway: two rows written in the same second could sort the older
+     * one first). At most one row can exist per session_id.
      *
      * @param string $sessionId The owning playback session id
      * @return TimeShiftSession|null The session, or null if none exists
@@ -111,14 +122,42 @@ final class DbTimeShiftSessionStore
     public function findBySessionId(string $sessionId): ?TimeShiftSession
     {
         $result = $this->db->query(
-            "SELECT * FROM livetv_timeshift_sessions
-             WHERE session_id = ?
-             ORDER BY created_at DESC, id DESC
-             LIMIT 1",
+            "SELECT * FROM livetv_timeshift_sessions WHERE session_id = ?",
             [$sessionId]
         );
 
         return $this->hydrateFirst($result);
+    }
+
+    /**
+     * Return ALL rows for a playback session id so the caller can fully tear a
+     * session down (terminate every capture pid + clean every buffer dir).
+     *
+     * With `UNIQUE (session_id)` this returns at most one row in normal operation,
+     * but it stays list-shaped as defence-in-depth: a legacy/pre-migration row set
+     * or a crash mid-write could leave more than one, and stopTimeShift must reap
+     * every one rather than only the newest (which could orphan a running ffmpeg).
+     *
+     * @param string $sessionId The owning playback session id
+     * @return list<TimeShiftSession> Every session row for this session_id (may be empty)
+     */
+    public function reapBySessionId(string $sessionId): array
+    {
+        $result = $this->db->query(
+            "SELECT * FROM livetv_timeshift_sessions WHERE session_id = ?",
+            [$sessionId]
+        );
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        $sessions = [];
+        foreach (RowMap::listFromMixed($result) as $row) {
+            $sessions[] = TimeShiftSession::fromRow($row);
+        }
+
+        return $sessions;
     }
 
     /**

@@ -143,17 +143,19 @@ class DbTimeShiftSessionStoreTest extends TestCase
         $this->assertNull((new DbTimeShiftSessionStore($db))->findById('ts-1'));
     }
 
-    public function testFindBySessionIdSelectsNewestFirst(): void
+    public function testFindBySessionIdIsAPlainUniqueLookup(): void
     {
         $db = $this->createMockConnection();
 
+        // session_id is UNIQUE (migration 078) so the lookup is a plain equality
+        // predicate — no unreliable ORDER BY created_at DESC / LIMIT 1 tie-break.
         $db->expects($this->once())
             ->method('query')
             ->with(
                 $this->logicalAnd(
                     $this->stringContains('WHERE session_id = ?'),
-                    $this->stringContains('ORDER BY created_at DESC'),
-                    $this->stringContains('LIMIT 1')
+                    $this->logicalNot($this->stringContains('ORDER BY')),
+                    $this->logicalNot($this->stringContains('LIMIT'))
                 ),
                 $this->callback(fn($p): bool => is_array($p) && $p[0] === 'sess-9')
             )
@@ -163,6 +165,59 @@ class DbTimeShiftSessionStoreTest extends TestCase
 
         $this->assertInstanceOf(TimeShiftSession::class, $session);
         $this->assertSame('sess-9', $session->session_id);
+    }
+
+    public function testFindBySessionIdReturnsNullWhenNotFound(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('WHERE session_id = ?'),
+                $this->callback(fn($p): bool => is_array($p) && $p[0] === 'ghost')
+            )
+            ->willReturn([]);
+
+        $this->assertNull((new DbTimeShiftSessionStore($db))->findBySessionId('ghost'));
+    }
+
+    public function testReapBySessionIdReturnsAllRowsForSession(): void
+    {
+        $db = $this->createMockConnection();
+        $rowA = $this->sampleRow();
+        $rowB = $this->sampleRow();
+        $rowB['id'] = 'ts-dup';
+        $rowB['pid'] = 9191;
+
+        // Reaps every row for the session_id (defence-in-depth: a crash/legacy set
+        // could leave more than one) so stopTimeShift can terminate every pid.
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('WHERE session_id = ?'),
+                $this->callback(fn($p): bool => is_array($p) && $p[0] === 'sess-9')
+            )
+            ->willReturn([$rowA, $rowB]);
+
+        $sessions = (new DbTimeShiftSessionStore($db))->reapBySessionId('sess-9');
+
+        $this->assertCount(2, $sessions);
+        $this->assertContainsOnlyInstancesOf(TimeShiftSession::class, $sessions);
+        $this->assertSame('ts-1', $sessions[0]->id);
+        $this->assertSame('ts-dup', $sessions[1]->id);
+        $this->assertSame(9191, $sessions[1]->pid);
+    }
+
+    public function testReapBySessionIdReturnsEmptyOnFalseResult(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturn(false);
+
+        $this->assertSame([], (new DbTimeShiftSessionStore($db))->reapBySessionId('sess-9'));
     }
 
     public function testUpdateCursorBindsIntCursorThenId(): void

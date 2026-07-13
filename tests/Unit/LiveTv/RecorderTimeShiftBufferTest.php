@@ -97,15 +97,18 @@ final class RecorderTimeShiftBufferTest extends TestCase
 
     /**
      * A mock db that round-trips one saved session: the INSERT params are echoed
-     * back by any subsequent SELECT (findBySessionId), so stop/getTimeShift can
-     * resolve the session cross-worker. DELETE/SELECT hits are recorded.
+     * back by any subsequent SELECT (findBySessionId / reapBySessionId), so
+     * stop/getTimeShift can resolve the session cross-worker. The two-phase write
+     * that closes the orphan window is modelled faithfully — the INSERT persists a
+     * NULL pid and the follow-up `UPDATE ... SET pid` records the real one, which
+     * is reflected into subsequent SELECTs. DELETE/SELECT/UPDATE hits are recorded.
      *
-     * @param array{insert: ?array<int,mixed>, deleted: bool} $state By-ref state bag
+     * @param array{insert: ?array<int,mixed>, pid_update: mixed, deleted: bool} $state By-ref state bag
      * @return Connection&MockObject
      */
     private function roundTripDb(array &$state): Connection
     {
-        $state = ['insert' => null, 'deleted' => false];
+        $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
 
         /** @var Connection&MockObject $db */
         $db = $this->createMock(Connection::class);
@@ -114,6 +117,11 @@ final class RecorderTimeShiftBufferTest extends TestCase
                 if (stripos($sql, 'INSERT') === 0) {
                     $state['insert'] = $params;
                     return null;
+                }
+                // updatePid: "UPDATE ... SET pid = ? WHERE id = ?" (params: [pid, id]).
+                if (stripos($sql, 'UPDATE') === 0 && stripos($sql, 'pid') !== false) {
+                    $state['pid_update'] = $params[0];
+                    return 1;
                 }
                 if (stripos($sql, 'SELECT') === 0) {
                     if ($state['insert'] === null) {
@@ -125,7 +133,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
                         'session_id'      => $p[1],
                         'channel_id'      => $p[2],
                         'buffer_dir'      => $p[3],
-                        'pid'             => $p[4],
+                        // Reflect the two-phase write: the recorded pid wins.
+                        'pid'             => $state['pid_update'] ?? $p[4],
                         'buffer_start_at' => $p[5],
                         'buffer_end_at'   => $p[6],
                         'window_seconds'  => $p[7],
@@ -154,8 +163,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
 
     public function testStartTimeShiftSpawnsCaptureAndPersistsSession(): void
     {
-        /** @var array{insert: ?array<int,mixed>, deleted: bool} $state */
-        $state = ['insert' => null, 'deleted' => false];
+        /** @var array{insert: ?array<int,mixed>, pid_update: mixed, deleted: bool} $state */
+        $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
         $db = $this->roundTripDb($state);
         $logger = $this->createMock(StructuredLogger::class);
         $store = new DbTimeShiftSessionStore($db);
@@ -177,8 +186,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
         // Buffer dir was created on disk.
         $this->assertDirectoryExists($spawnCalls[0]['dir']);
 
-        // The session was persisted with a buffer_dir, the real pid, and active
-        // status (positional store INSERT params: id, session_id, channel_id,
+        // The session was persisted with a buffer_dir and active status
+        // (positional store INSERT params: id, session_id, channel_id,
         // buffer_dir, pid, buffer_start_at, buffer_end_at, window_seconds,
         // cursor_position, status).
         $this->assertNotNull($state['insert']);
@@ -190,7 +199,10 @@ final class RecorderTimeShiftBufferTest extends TestCase
             $this->storagePath . '/timeshift/',
             is_string($insert[3]) ? $insert[3] : ''
         );
-        $this->assertSame($fakePid, $insert[4]);
+        // Orphan-window fix: the row is persisted FIRST with a NULL pid, then the
+        // real capture pid is recorded via a follow-up updatePid() write.
+        $this->assertNull($insert[4], 'persist-first: INSERT records a NULL pid before the spawn');
+        $this->assertSame($fakePid, $state['pid_update'], 'real pid recorded via a follow-up updatePid()');
         $this->assertSame(Recorder::TIMESHIFT_BUFFER_SECONDS, $insert[7]);
         $this->assertSame(TimeShiftSession::STATUS_ACTIVE, $insert[9]);
 
@@ -206,8 +218,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
 
     public function testStartTimeShiftWithoutTunerPersistsNullPidAndDoesNotSpawn(): void
     {
-        /** @var array{insert: ?array<int,mixed>, deleted: bool} $state */
-        $state = ['insert' => null, 'deleted' => false];
+        /** @var array{insert: ?array<int,mixed>, pid_update: mixed, deleted: bool} $state */
+        $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
         $db = $this->roundTripDb($state);
         $logger = $this->createMock(StructuredLogger::class);
         $store = new DbTimeShiftSessionStore($db);
@@ -222,14 +234,15 @@ final class RecorderTimeShiftBufferTest extends TestCase
         $this->assertSame([], $spawnCalls, 'no tuner => no spawn');
         $this->assertNotNull($state['insert']);
         $this->assertNull($state['insert'][4], 'pid persisted as NULL when no capture');
+        $this->assertNull($state['pid_update'], 'no updatePid() when nothing was spawned');
         $this->assertCount(4, $result);
         $this->assertSame(1, $recorder->getActiveTimeShiftCount());
     }
 
     public function testStopTimeShiftTerminatesCleansAndDeletesStore(): void
     {
-        /** @var array{insert: ?array<int,mixed>, deleted: bool} $state */
-        $state = ['insert' => null, 'deleted' => false];
+        /** @var array{insert: ?array<int,mixed>, pid_update: mixed, deleted: bool} $state */
+        $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
         $db = $this->roundTripDb($state);
         $logger = $this->createMock(StructuredLogger::class);
         $store = new DbTimeShiftSessionStore($db);
@@ -255,8 +268,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
 
     public function testStopTimeShiftIsFailureSafeWhenBufferDirAlreadyGone(): void
     {
-        /** @var array{insert: ?array<int,mixed>, deleted: bool} $state */
-        $state = ['insert' => null, 'deleted' => false];
+        /** @var array{insert: ?array<int,mixed>, pid_update: mixed, deleted: bool} $state */
+        $state = ['insert' => null, 'pid_update' => null, 'deleted' => false];
         $db = $this->roundTripDb($state);
         $logger = $this->createMock(StructuredLogger::class);
         $store = new DbTimeShiftSessionStore($db);

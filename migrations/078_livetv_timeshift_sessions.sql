@@ -37,7 +37,12 @@ CREATE TABLE IF NOT EXISTS livetv_timeshift_sessions (
     updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    INDEX idx_session_id (session_id),
+    -- session_id is the URL route key and must be a genuine upsert key: a
+    -- re-started time-shift for the same playback session overwrites the prior
+    -- row (ON DUPLICATE KEY UPDATE on this UNIQUE constraint) instead of leaving
+    -- a second row that only dedupes on the random PK `id`. Also serves as the
+    -- lookup index for findBySessionId / reapBySessionId.
+    UNIQUE KEY uq_session_id (session_id),
     INDEX idx_channel_id (channel_id),
     INDEX idx_status     (status),
     INDEX idx_pid        (pid)

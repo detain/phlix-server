@@ -1724,6 +1724,34 @@ class Recorder
             @mkdir($bufferDir, 0755, true);
         }
 
+        // Persist the session row FIRST — with a NULL pid, BEFORE the capture is
+        // spawned. This closes the crash-orphan window: if the worker dies between
+        // the ffmpeg spawn and the DB write, a running capture would otherwise have
+        // no row and could never be reaped. Persisting first guarantees every
+        // spawned capture is preceded by a durable, reapable record. Failure-safe.
+        $session = new TimeShiftSession(
+            id: $timeShiftId,
+            session_id: $sessionId,
+            channel_id: $channelId,
+            buffer_dir: $bufferDir,
+            buffer_start_at: $now,
+            buffer_end_at: $now,
+            window_seconds: self::TIMESHIFT_BUFFER_SECONDS,
+            cursor_position: 0,
+            pid: null,
+            status: TimeShiftSession::STATUS_ACTIVE,
+        );
+        $persisted = false;
+        try {
+            $this->timeShiftStore->save($session);
+            $persisted = true;
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to persist time-shift session', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         // Resolve the tuner stream URL and spawn the rolling-buffer capture.
         $streamUrl = $this->resolveTunerStreamUrl($channelId);
         $pid = null;
@@ -1744,29 +1772,21 @@ class Recorder
             ]);
         }
 
-        // Persist to the cross-worker store (authoritative) — failure-safe.
-        $session = new TimeShiftSession(
-            id: $timeShiftId,
-            session_id: $sessionId,
-            channel_id: $channelId,
-            buffer_dir: $bufferDir,
-            buffer_start_at: $now,
-            buffer_end_at: $now,
-            window_seconds: self::TIMESHIFT_BUFFER_SECONDS,
-            cursor_position: 0,
-            pid: $pid,
-            status: TimeShiftSession::STATUS_ACTIVE,
-        );
-        try {
-            $this->timeShiftStore->save($session);
-        } catch (\Throwable $e) {
-            $this->logger->error('Failed to persist time-shift session', [
-                'session_id' => $sessionId,
-                'error' => $e->getMessage(),
-            ]);
+        // Record the real capture pid onto the already-persisted row (the second
+        // half of the two-phase write that closes the orphan window). Failure-safe.
+        if ($pid !== null && $persisted) {
+            try {
+                $this->timeShiftStore->updatePid($timeShiftId, $pid);
+            } catch (\Throwable $e) {
+                $this->logger->error('Failed to record time-shift capture pid', [
+                    'session_id' => $sessionId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
-        // Same-worker fast path.
+        // Same-worker fast path (mirrors getTimeShift()'s store-fallback shape,
+        // including current_position, so both paths return the same keys).
         $this->activeTimeShifts[$sessionId] = [
             'id' => $timeShiftId,
             'session_id' => $sessionId,
@@ -1776,6 +1796,7 @@ class Recorder
             'buffer_end' => $now,
             'buffer_dir' => $bufferDir,
             'pid' => $pid,
+            'current_position' => $now,
         ];
 
         $this->logger->info('Time-shift started', [
@@ -1796,11 +1817,14 @@ class Recorder
     /**
      * Stop time-shifting for a session.
      *
-     * Terminates the detached capture process (via {@see terminateRecording()},
-     * which works cross-process on the same host), deletes the on-disk rolling
-     * buffer directory, and removes the store session so a stale row can never
-     * be resolved after teardown. Resolves the pid / buffer_dir from the store
-     * (cross-worker) when they are not present in this worker's in-memory map.
+     * Reaps EVERY store row for the session_id (not just the newest): terminates
+     * each detached capture pid (via {@see terminateRecording()}, which works
+     * cross-process on the same host), deletes each on-disk rolling buffer
+     * directory, and deletes each row so no worker can resolve a torn-down
+     * session. Reaping all rows — rather than only the newest — guarantees a
+     * crash-left or legacy duplicate row cannot orphan a still-running ffmpeg.
+     * Falls back to this worker's in-memory entry when the store has no row for
+     * the session (e.g. a persist failure left only the same-worker fast path).
      *
      * Failure-safe: a missing pid, an already-gone buffer directory, or a store
      * error never throws.
@@ -1812,52 +1836,50 @@ class Recorder
     {
         $inMemory = $this->activeTimeShifts[$sessionId] ?? null;
 
-        $stored = null;
+        $stored = [];
         try {
-            $stored = $this->timeShiftStore->findBySessionId($sessionId);
+            $stored = $this->timeShiftStore->reapBySessionId($sessionId);
         } catch (\Throwable $e) {
-            $this->logger->warning('Failed to resolve time-shift session for stop', [
+            $this->logger->warning('Failed to resolve time-shift sessions for stop', [
                 'session_id' => $sessionId,
                 'error' => $e->getMessage(),
             ]);
         }
 
-        if ($inMemory === null && $stored === null) {
+        if ($inMemory === null && $stored === []) {
             return false;
         }
 
-        // Terminate the detached capture (same-host cross-process kill by pid).
-        // Prefer the store (authoritative, cross-worker) then the in-memory entry.
-        $pid = null;
-        if ($stored !== null) {
-            $pid = $stored->pid;
-        } elseif (isset($inMemory['pid']) && is_int($inMemory['pid'])) {
-            $pid = $inMemory['pid'];
-        }
-        if (is_int($pid) && $pid > 0) {
-            $this->terminateRecording($pid);
-        }
-
-        // Remove the rolling buffer directory (jailed under the DVR storage path).
-        $bufferDir = null;
-        if ($stored !== null) {
-            $bufferDir = $stored->buffer_dir;
-        } elseif (isset($inMemory['buffer_dir']) && is_string($inMemory['buffer_dir'])) {
-            $bufferDir = $inMemory['buffer_dir'];
-        }
-        if (is_string($bufferDir) && $bufferDir !== '') {
-            $this->removeBufferDir($bufferDir);
-        }
-
-        // Remove the store session so no worker resolves a torn-down session.
-        if ($stored !== null) {
+        // Reap EVERY store row: terminate its capture, clean its buffer dir, then
+        // delete it. terminateRecording()/removeBufferDir() are both idempotent
+        // (a dead pid / missing dir is a fast no-op) so this is safe to repeat.
+        foreach ($stored as $session) {
+            if (is_int($session->pid) && $session->pid > 0) {
+                $this->terminateRecording($session->pid);
+            }
+            if ($session->buffer_dir !== '') {
+                $this->removeBufferDir($session->buffer_dir);
+            }
             try {
-                $this->timeShiftStore->delete($stored->id);
+                $this->timeShiftStore->delete($session->id);
             } catch (\Throwable $e) {
                 $this->logger->warning('Failed to delete time-shift session row', [
                     'session_id' => $sessionId,
                     'error' => $e->getMessage(),
                 ]);
+            }
+        }
+
+        // Persist-failure edge: the store had no row but the same-worker fast path
+        // does — reap it directly so its capture/buffer are not left behind.
+        if ($stored === [] && $inMemory !== null) {
+            $memPid = $inMemory['pid'] ?? null;
+            if (is_int($memPid) && $memPid > 0) {
+                $this->terminateRecording($memPid);
+            }
+            $memDir = $inMemory['buffer_dir'] ?? null;
+            if (is_string($memDir) && $memDir !== '') {
+                $this->removeBufferDir($memDir);
             }
         }
 
@@ -1873,8 +1895,11 @@ class Recorder
      *
      * Prefers this worker's in-memory entry (fast path); when absent, falls back
      * to the cross-worker store so a session started on another worker is still
-     * resolvable (SV-3.1 f-b). The returned array mirrors the in-memory shape so
-     * existing consumers keep working.
+     * resolvable (SV-3.1 f-b). Both paths return the SAME keys — id, session_id,
+     * channel_id, started_at, buffer_start, buffer_end, buffer_dir, pid and
+     * current_position — so a consumer resolving a same-worker vs cross-worker
+     * session sees an identical shape (the in-memory fast path seeds
+     * current_position in startTimeShift(); the store path maps cursor_position).
      *
      * @param string $sessionId The session identifier
      * @return array<string, mixed>|null Time-shift data or null

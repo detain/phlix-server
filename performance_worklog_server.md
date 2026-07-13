@@ -5459,3 +5459,53 @@ review. In-browser hls.js is unaffected (it attaches the Bearer token per segmen
 3. **Git NOT committed/pushed** by this Implementer per the CARDINAL RULE that the Phase Coordinator owns
    the git cycle. Working tree carries all 5 files. Intended commit message:
    `livetv: SV-3.1 f-c serve timeshift HLS buffer + segment route + fix recording-stream Range`
+
+## Fixer — SV-3.1 f (close ALL f-a/f-b/f-c review findings) — 2026-07-13
+
+Audit-and-complete pass over the landed f-a/f-b/f-c work (commits `4f7d2c89`/`b4afe671`/`5761e7e5`).
+Two logical commits. This section = COMMIT 1 (the MEDIUM cluster: schema / upsert-key / orphan window).
+
+### COMMIT 1 — `livetv: SV-3.1 f fix: UNIQUE(session_id) + upsert-on-session_id + close orphan window`
+
+1. **Migration 078 (`migrations/078_livetv_timeshift_sessions.sql`)** — replaced the plain
+   `INDEX idx_session_id (session_id)` with `UNIQUE KEY uq_session_id (session_id)`. 078 is brand-new
+   and NOT deployed anywhere (verified against the SV-4.9 migration ledger / no prod), so amended in
+   place rather than a follow-up ALTER. No migration-list test asserts 078's columns
+   (`MigrationRunnerTest` globs a tmpdir; no hard-coded 078 expectations) → still green.
+2. **Store `save()` (`DbTimeShiftSessionStore.php`)** — now a genuine upsert keyed on BOTH unique keys
+   (PK `id` + `UNIQUE(session_id)`). Dropped `session_id = VALUES(session_id)` from the SET-list (a
+   no-op on a session_id collision), left `id` OUT of the SET-list (must never be rewritten on a
+   session_id collision — that is what makes a restart overwrite the row instead of leaking a second
+   PK-only-deduped row), and ADDED `updated_at = CURRENT_TIMESTAMP` so the timestamp advances even when
+   `ON UPDATE CURRENT_TIMESTAMP` would not fire on an otherwise-identical row. 10 positional binds
+   unchanged.
+3. **Store `reapBySessionId(string): list<TimeShiftSession>`** — NEW. Returns EVERY row for a
+   session_id (at most one under the UNIQUE constraint, but list-shaped as defence-in-depth for a
+   crash/legacy duplicate set) so the caller can terminate every pid. `findById` kept.
+4. **Store `findBySessionId()`** — simplified from `ORDER BY created_at DESC, id DESC LIMIT 1` (which
+   could return the older of two same-second rows) to a plain `WHERE session_id = ?` unique lookup.
+5. **Recorder `startTimeShift()` (`Recorder.php`)** — reordered to close the crash-orphan window:
+   (a) `stopTimeShift()` tears down any prior session (now reaps ALL rows), (b) create buffer dir,
+   (c) **persist the row with a NULL pid FIRST**, (d) spawn the detached ffmpeg, (e) `updatePid(id, pid)`.
+   A crash between spawn and persist can no longer leave a running ffmpeg with no reapable DB record.
+   In-memory fast path + `{time_shift_id, stream_url, buffer_start, buffer_end}` return contract
+   unchanged; still failure-safe (no-tuner ⇒ null pid, no throw; a persist failure still best-effort
+   spawns, bounded by the `timeout <transcode_timeout>` wrapper + the same-worker in-memory reap).
+6. **Recorder `stopTimeShift()`** — now reaps ALL rows via `reapBySessionId()` (terminate each pid,
+   clean each buffer dir, delete each row), with a persist-failure edge that reaps the same-worker
+   in-memory entry when the store has no row. `terminateRecording`/`removeBufferDir` are idempotent.
+7. **Recorder `getTimeShift()` shape drift (f-b finding 3)** — added `current_position` to the
+   in-memory fast-path shape (seeded to `$now` in `startTimeShift`) so it and the store-fallback path
+   now return the SAME keys; docblock updated to state the shapes match (was overclaiming a mirror).
+
+**Tests updated:** `DbTimeShiftSessionStoreTest` — `findBySessionId` now asserts NO `ORDER BY`/`LIMIT`
++ a not-found→null case; new `reapBySessionId` all-rows + false-result cases. `RecorderTimeShiftBufferTest`
+— round-trip mock now models the two-phase write (INSERT null pid → `UPDATE SET pid`), assertions prove
+persist-first (INSERT pid null, real pid via updatePid) and no-updatePid when nothing spawned.
+
+**Verification (COMMIT 1):** `phpunit DbTimeShiftSessionStoreTest + RecorderTimeShiftBufferTest +
+RecorderTest` → **42 tests / 131 assertions / 0 failures**; broader `phpunit tests/Unit/LiveTv +
+LiveTvStreamControllerTest + LiveTvServicesProviderTest` → **374 / 956 / 0 fail / 6 skip** (pre-existing
+coroutine/DB skips). phpstan L9 (`-c phpstan.neon.dist`) on `Recorder.php` + `DbTimeShiftSessionStore.php`
+→ **0 errors**. phpcs PSR12 on all 4 changed src/test files → **0 errors**; the 2 remaining Recorder.php
+>120-char warnings (lines 233, 2037) are PRE-EXISTING on HEAD (confirmed via phpcs on `git show HEAD:`).

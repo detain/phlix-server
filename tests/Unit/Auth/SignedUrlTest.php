@@ -162,6 +162,21 @@ final class SignedUrlTest extends TestCase
         $this->assertFalse($signer->verify('/dash/jobY/0/segment_00001.m4s', '5000', $sig, 1000));
     }
 
+    public function testTimeshiftTokenIsPrefixScopedAcrossTheSessionDirectory(): void
+    {
+        // SV-3.1 f-c: the DVR timeshift buffer fans a signed playlist URL out into
+        // seg_NNNNN.ts segment requests, so one signature on the playlist must
+        // authorise every segment under the same session prefix (mirroring HLS).
+        $signer = new SignedUrl(self::SECRET);
+        $sig = $signer->signature('/livetv/timeshift/sess123/stream', 5000);
+
+        $this->assertTrue($signer->verify('/livetv/timeshift/sess123/stream', '5000', $sig, 1000));
+        $this->assertTrue($signer->verify('/livetv/timeshift/sess123/seg_00001.ts', '5000', $sig, 1000));
+        // ...but not a different session, and not a DVR recording path (exact-bound).
+        $this->assertFalse($signer->verify('/livetv/timeshift/OTHER/seg_00001.ts', '5000', $sig, 1000));
+        $this->assertFalse($signer->verify('/livetv/recording/sess123/stream', '5000', $sig, 1000));
+    }
+
     public function testCanonicalResourceStripsQueryAndScopesStreaming(): void
     {
         $signer = new SignedUrl(self::SECRET);
@@ -169,6 +184,15 @@ final class SignedUrlTest extends TestCase
         $this->assertSame('/media/abc/stream', $signer->canonicalResource('/media/abc/stream?exp=1&sig=2'));
         $this->assertSame('/hls/job123', $signer->canonicalResource('/hls/job123/master.m3u8'));
         $this->assertSame('/dash/jobX', $signer->canonicalResource('/dash/jobX/0/segment_1.m4s'));
+        // Timeshift collapses to the per-session prefix; recording stays exact.
+        $this->assertSame(
+            '/livetv/timeshift/sess123',
+            $signer->canonicalResource('/livetv/timeshift/sess123/seg_00042.ts')
+        );
+        $this->assertSame(
+            '/livetv/recording/rec1/stream',
+            $signer->canonicalResource('/livetv/recording/rec1/stream')
+        );
         $this->assertSame('/api/v1/books/b1/cover', $signer->canonicalResource('/api/v1/books/b1/cover'));
     }
 

@@ -5365,3 +5365,97 @@ session cross-worker (via the store / `getTimeShift()` which now falls back to i
 `buffer_dir/buffer.m3u8` + segments (define the seek/cursor semantics against the store's
 `cursor_position` — left untouched here). A no-tuner session has a NULL pid and empty buffer dir,
 so f-c must handle a not-yet-populated playlist gracefully.
+
+## Implementer — SV-3.1 f-c (serve timeshift HLS buffer + segment route + fix recording-stream Range) — 2026-07-13
+
+Final sub-step of SV-3.1 **f**. Replaces the `LiveTvStreamController::streamTimeShift()` 501 stub with
+real HLS serving of f-b's rolling buffer, adds the segment route, and fixes the recording-stream Range
+gap. Touched the controller + routes only (Recorder/store/migration untouched — f-a/f-b own those).
+
+**How `streamTimeShift()` serves now:** resolves the session **cross-worker** via
+`Recorder::getTimeShift($sessionId)` (which falls back to the DB-backed store, so a session started on
+any worker resolves) → pulls `buffer_dir` from the returned row → if the session is null/stopped or
+`buffer_dir` is blank → **404** → if the session is valid but `buffer.m3u8` hasn't been written yet
+(no-tuner NULL-pid/empty dir, or ffmpeg is still starting) → **503 + `Retry-After: 2`** "buffer not
+ready" (never a 500 on the missing file) → otherwise delegates to the existing
+`TranscodeFileServer::serveJobFile()` trait, which streams `buffer.m3u8` via `withFile()` with
+`Content-Type: application/vnd.apple.mpegurl` + `Cache-Control: no-cache`. The rolling HLS window IS the
+seekable timeshift buffer (client-side HLS seeking); **no server-side cursor seek was built** (out of
+scope; f-b left `seekTimeShift`/`getTimeShiftPosition` on the in-memory model deliberately).
+
+**Segment route + path-jail:** new handler `streamTimeShiftSegment()` on route
+`GET /livetv/timeshift/{sessionId}/{segment}`. **SECURITY — the segment name is path-jailed with a
+strict allow-list regex `/^seg_\d+\.ts$/D` (the `D`/PCRE_DOLLAR_ENDONLY modifier is deliberate — without
+it `$` also matches before a trailing `\n`, so `"seg_1.ts\n"` would slip through).** The jail runs FIRST,
+before the session is even resolved and before any name touches the filesystem — traversal (`../`),
+absolute paths, the playlist itself, wrong extensions, prefix/suffix junk, and a trailing newline are all
+rejected with 404. Only a name ffmpeg actually emits reaches `serveJobFile()`, which then applies a
+SECOND-layer `isSafeFilename()` check and streams the segment via `withFile()` with `video/mp2t` +
+immutable caching + HTTP Range (206/416). A validly-named-but-aged-out segment (pruned by ffmpeg's
+`delete_segments`) resolves to a missing file → 404.
+
+**Route ordering (Router correctness):** registered `/livetv/timeshift/{sessionId}/stream` BEFORE
+`/livetv/timeshift/{sessionId}/{segment}` in the same `loadStreamingRoutes()` group. Both are parametric
+(they carry `{sessionId}`), so the Router matches them by registration order (first `preg_match` wins) —
+the exact ordering the existing `/hls/{job}/playlist` → `/hls/{job}/{file}` pair already relies on. A
+`.../stream` request therefore always hits the playlist handler, never the segment handler.
+
+**`streamRecording()` Range fix:** the old code did `->status(200)->withFile($path)` with NO Range
+parsing, so a ranged seek got a full-file 200 on the CGI/`index.php` emit path. Added `serveRecordingFile()`
+mirroring the AudiobookController/ThemeMediaStreamController idiom: `ByteRangeParser::parse()` → 206 +
+`Content-Range` (`withFile($path,$start,$len)`) / 416 / full 200. Deliberately set NO immutable cache
+header (an `status='recording'` `.ts` is still growing — must not be cached hard), so I hand-rolled the
+range path here instead of reusing `serveJobFile()`'s immutable-segment caching.
+
+**Signed-URL prefix authorization (necessary for the segment route to actually work for signed-URL
+clients):** `SignedUrl::canonicalResource()` only prefix-collapsed `/hls/**` and `/dash/**`, so a signed
+`/livetv/timeshift/{id}/stream` URL authorised ONLY the exact playlist path — every `seg_NNNNN.ts` request
+from a headerless/native/casting player (the exact class `SignedUrlMiddleware` exists for) would 401.
+Timeshift fans a playlist URL into segment requests exactly like HLS/DASH, so I extended the prefix regex
+to also collapse `/livetv/timeshift/[^/]+` → one signed playlist token now authorises all segments under
+that session. **The single-file recording stream `/livetv/recording/{id}/stream` stays exact-path-bound
+(no sub-segments).** This is the one change outside "controller + routes" — flagged for the cumulative
+review. In-browser hls.js is unaffected (it attaches the Bearer token per segment XHR — mechanism 1).
+
+**Files changed:**
+- `src/Server/Http/Controllers/LiveTvStreamController.php` — `use TranscodeFileServer` trait;
+  `SEGMENT_NAME_PATTERN` const; rewrote `streamTimeShift()`; new `streamTimeShiftSegment()`,
+  `resolveTimeShiftBufferDir()`, `serveRecordingFile()`; `streamRecording()` now Range-honoring.
+- `src/Server/Core/Application.php` — registered the segment route in `loadStreamingRoutes()` (same
+  `SignedUrlMiddleware`+`StreamLimitMiddleware` group, after the `/stream` route).
+- `src/Auth/SignedUrl.php` — `canonicalResource()` prefix-collapses `/livetv/timeshift/{id}` (+ docblock).
+- `tests/Unit/Server/Http/Controllers/LiveTvStreamControllerTest.php` — NEW: 26 tests (streamRecording
+  200/206/416/400/404×3; streamTimeShift playlist-served/400/404-not-found/503-not-ready/404-blank-dir;
+  segment full-200/206-range/404-aged-out/404-session-missing + an 11-case unsafe-name dataProvider
+  proving the jail rejects BEFORE resolving the session).
+- `tests/Unit/Auth/SignedUrlTest.php` — +2 tests (timeshift prefix-scoping verify; canonicalResource
+  timeshift-collapse + recording-exact).
+
+**Verification (actual):**
+- `phpunit LiveTvStreamControllerTest + SignedUrlTest` → **43 tests / 113 assertions / 0 failures**.
+- Broader regression `phpunit tests/Unit/LiveTv tests/Unit/Server/Http tests/Unit/Auth/SignedUrlTest.php`
+  → **1105 tests / 3464 assertions / 0 failures / 6 skipped** (pre-existing coroutine/DB skips).
+- phpstan L9 (`-c phpstan.neon.dist`) on all 5 changed files → **0 errors**.
+- phpcs PSR12 → new controller + its test + `SignedUrl.php` **0/0**; the 4 `Application.php` + 1
+  `SignedUrlTest.php` >120-char warnings are **PRE-EXISTING on HEAD** (confirmed via phpcs on
+  `git show HEAD:` — same warnings, only line numbers shifted by my inserts).
+
+**ACCEPTANCE mapping:**
+- Timeshift 501 stub → real HLS serving of the rolling buffer, cross-worker session resolution, 404
+  not-found, 503 not-ready. ✅
+- Segment route + handler, path-jailed (`^seg_\d+\.ts$/D`, jail-before-fs), Range-honoring. ✅
+- `streamRecording()` Range gap fixed (206 + Content-Range for ranged; 200 for full). ✅
+- Routes registered in the `SignedUrlMiddleware`(+`StreamLimit`) group; both entrypoints share the
+  `Application` router; Response emit paths (Workerman native + CGI `finalizeFileHeaders`) both honor Range.✅
+- Tests (SV-3.1 h): `LiveTvStreamControllerTest` created. ✅
+
+**FLAG for h-tests / cumulative review:**
+1. **The segment path-jail** — `/^seg_\d+\.ts$/D` with the trailing-newline `D` guard is the primary
+   defense; `serveJobFile()`'s `isSafeFilename()` is the second layer. Double-check both hold and that no
+   caller reaches the filesystem with an unvalidated name.
+2. **The `SignedUrl::canonicalResource()` change** is the one edit outside "controller + routes" — it's a
+   direct mirror of the existing HLS/DASH prefix logic and is required for signed-URL native/casting
+   clients to fetch timeshift segments; confirm it doesn't over-broaden (recording stays exact-path).
+3. **Git NOT committed/pushed** by this Implementer per the CARDINAL RULE that the Phase Coordinator owns
+   the git cycle. Working tree carries all 5 files. Intended commit message:
+   `livetv: SV-3.1 f-c serve timeshift HLS buffer + segment route + fix recording-stream Range`

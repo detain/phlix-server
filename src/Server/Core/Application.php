@@ -1461,7 +1461,13 @@ class Application
             // Same auth middleware (SignedUrl + optional StreamLimit) as HLS/DASH.
             $liveTvStreamController = $this->getLiveTvStreamController();
             $r->get('/livetv/recording/{id}/stream', [$liveTvStreamController, 'streamRecording']);
+            // Timeshift rolling-HLS buffer: playlist first, then the segment route.
+            // The static `stream` route MUST be registered before the parametric
+            // {segment} route so a `.../stream` request matches the playlist handler
+            // (the Router iterates parametric routes in registration order — same
+            // ordering the /hls/{job}/playlist -> /hls/{job}/{file} pair relies on).
             $r->get('/livetv/timeshift/{sessionId}/stream', [$liveTvStreamController, 'streamTimeShift']);
+            $r->get('/livetv/timeshift/{sessionId}/{segment}', [$liveTvStreamController, 'streamTimeShiftSegment']);
         }, $middleware);
     }
 

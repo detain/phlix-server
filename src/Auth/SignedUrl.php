@@ -124,7 +124,13 @@ final class SignedUrl
      * requests (master playlist → variant playlists → segments), so the token
      * is scoped to the per-job directory: every path under `/hls/{job}` or
      * `/dash/{job}` collapses to that prefix and verifies against one signature.
-     * Every other endpoint is bound to its exact path.
+     * The DVR timeshift buffer (SV-3.1 f) is the same shape — one `buffer.m3u8`
+     * playlist plus `seg_NNNNN.ts` segments under `/livetv/timeshift/{session}`,
+     * so it collapses to that per-session prefix too, letting one signed playlist
+     * URL authorise every segment request beneath it. (The single-file DVR
+     * recording stream `/livetv/recording/{id}/stream` has no sub-segments and
+     * stays bound to its exact path.) Every other endpoint is bound to its exact
+     * path.
      *
      * @param string $path Request path (no query string).
      */
@@ -136,7 +142,7 @@ final class SignedUrl
         // sides computing the HMAC over the same string.
         $path = explode('?', $path, 2)[0];
 
-        if (preg_match('#^(/(?:hls|dash)/[^/]+)(?:/.*)?$#', $path, $m) === 1) {
+        if (preg_match('#^(/(?:hls|dash)/[^/]+|/livetv/timeshift/[^/]+)(?:/.*)?$#', $path, $m) === 1) {
             return $m[1];
         }
 

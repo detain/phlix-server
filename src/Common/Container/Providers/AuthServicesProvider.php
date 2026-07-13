@@ -15,6 +15,7 @@ use DI\ContainerBuilder;
 use Phlix\Admin\SettingsRepository;
 use Phlix\Auth\AuthManager;
 use Phlix\Auth\AuthProviderRegistry;
+use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
 use Phlix\Auth\ProviderManager;
 use Phlix\Auth\UserProfileManager;
@@ -172,7 +173,14 @@ final class AuthServicesProvider implements ServiceProviderInterface
                 // Wired so register() honours the `auth.signup_mode` setting
                 // (open|approval|disabled). PHP-DI skips optional ctor params
                 // with defaults during autowiring, so it must be named.
-                ->constructorParameter('settingsRepository', get(SettingsRepository::class)),
+                ->constructorParameter('settingsRepository', get(SettingsRepository::class))
+                // SV-1.10: the central DB-backed login rate-limit store. Named
+                // for the same PHP-DI reason — without it, AuthManager falls back
+                // to the UNBOUNDED per-worker static array (no sweep/LRU/cap, and
+                // ×workers), leaving brute-force protection weak and leaky. With
+                // it wired, the brute-force budget is unified across workers and
+                // bounded by TTL cleanup (login_rate_limit table, migration 074).
+                ->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class)),
 
             // WebAuthn — rpId/rpName/rpOrigin come from $appConfig['webauthn'].
             // Without this factory, php-di would try to autowire string scalars

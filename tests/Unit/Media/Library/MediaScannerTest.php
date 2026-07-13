@@ -7,6 +7,8 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Library\SeriesContainerNaming;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\MediaAsset\MediaAssetJobStore;
+use Phlix\Media\SimilarityJobStore;
 use Phlix\Common\Logger\LoggerFactory;
 use Workerman\MySQL\Connection;
 
@@ -2815,6 +2817,99 @@ class MediaScannerTest extends TestCase
             }
         }
         rmdir($dir);
+    }
+
+    /**
+     * SV-1.3 / SV-2.9 behaviour: when the media-asset and similarity job stores
+     * are wired (as they now are in prod via MediaServicesProvider), a scan
+     * enqueues a media-asset job once per NEW chapter-capable file (mkv/mp4/webm)
+     * and a similarity job once per NEW media item.
+     *
+     * The `.avi` file is a processed media file that is NOT chapter-capable, so
+     * it must be excluded from the media-asset queue but still enqueue a
+     * similarity job — proving the two guards are independent and correct.
+     */
+    public function testScanEnqueuesBackgroundJobsWhenStoresWired(): void
+    {
+        $assetQueue = sys_get_temp_dir() . '/phlix_asset_q_' . uniqid();
+        $simQueue   = sys_get_temp_dir() . '/phlix_sim_q_' . uniqid();
+        $assetStore = new MediaAssetJobStore($assetQueue);
+        $simStore   = new SimilarityJobStore($simQueue);
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,   // logger
+            null,   // eventDispatcher
+            null,   // trailerFinder
+            $this->createMock(FfmpegRunner::class), // ffmpeg — required for the asset enqueue guard
+            null,   // noiseSuffixes
+            null,   // maxConcurrentScanProbes
+            null,   // similarityService
+            null,   // collectionService
+            $assetStore,
+            $simStore
+        );
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'A (2020).mkv', // chapter-capable → asset + similarity
+            'B (2021).avi', // processed, NOT chapter-capable → similarity only
+        ]);
+
+        try {
+            $scanner->scan('lib-1', $this->tmpDir, 'movie');
+
+            $this->assertSame(
+                1,
+                $assetStore->queueSize(),
+                'Exactly one media-asset job should be enqueued — only the '
+                . 'chapter-capable .mkv file, never the .avi.'
+            );
+            $this->assertSame(
+                2,
+                $simStore->queueSize(),
+                'A similarity job should be enqueued once per new media item '
+                . '(both the .mkv and the .avi).'
+            );
+        } finally {
+            $this->removeDir($assetQueue);
+            $this->removeDir($simQueue);
+        }
+    }
+
+    /**
+     * Guard-negative: with NO job stores wired (the legacy / test shape), a scan
+     * must not attempt to enqueue anything and must complete cleanly — proving
+     * the enqueue is strictly gated on the injected stores.
+     */
+    public function testScanDoesNotEnqueueWhenStoresUnwired(): void
+    {
+        $assetQueue = sys_get_temp_dir() . '/phlix_asset_q_' . uniqid();
+        $assetStore = new MediaAssetJobStore($assetQueue);
+
+        $scanner = new MediaScanner(
+            $this->createMock(Connection::class),
+            $this->makeFakeRepo(),
+            null,
+            null,
+            null,
+            $this->createMock(FfmpegRunner::class),
+            null,
+            null,
+            null,
+            null,
+            null, // mediaAssetJobStore unwired
+            null  // similarityJobStore unwired
+        );
+
+        $this->tmpDir = $this->makeTempDirWith(['A (2020).mkv']);
+
+        try {
+            $scanner->scan('lib-1', $this->tmpDir, 'movie');
+            $this->assertSame(0, $assetStore->queueSize());
+        } finally {
+            $this->removeDir($assetQueue);
+        }
     }
 }
 

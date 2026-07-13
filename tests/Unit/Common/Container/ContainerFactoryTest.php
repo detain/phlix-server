@@ -6,7 +6,11 @@ namespace Phlix\Tests\Unit\Common\Container;
 
 use DI\ContainerBuilder;
 use Phlix\Auth\AuthManager;
+use Phlix\Auth\DbLoginRateLimitStore;
 use Phlix\Auth\JwtHandler;
+use Phlix\Media\Library\MediaScanner;
+use Phlix\Media\MediaAsset\MediaAssetJobStore;
+use Phlix\Media\SimilarityJobStore;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
 use Phlix\Common\Container\Providers\AuthServicesProvider;
@@ -388,6 +392,69 @@ final class ContainerFactoryTest extends TestCase
         } finally {
             putenv('PHLIX_CONTAINER_COMPILE');
         }
+    }
+
+    /**
+     * SV-1.10: the DB-backed login rate-limit store must be DI-injected into
+     * the production AuthManager. PHP-DI silently skips optional defaulted ctor
+     * params unless named, so a missing `->constructorParameter('loginRateLimitStore', …)`
+     * leaves the field null and the server falls back to the unbounded per-worker
+     * static array. This asserts the real container wires the DB store.
+     */
+    public function test_auth_manager_wires_login_rate_limit_store_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var AuthManager $manager */
+        $manager = $container->get(AuthManager::class);
+
+        $this->assertInstanceOf(
+            DbLoginRateLimitStore::class,
+            $this->readPrivate($manager, 'loginRateLimitStore'),
+            'AuthManager must resolve with a DB-backed login rate-limit store, '
+            . 'not the unbounded static fallback.'
+        );
+    }
+
+    /**
+     * SV-1.3: the media-asset (chapter-thumbnail + trickplay) job store must be
+     * DI-injected into the production MediaScanner. Without the named ctor param
+     * the store stays null, the scanner's enqueue guard is never true, and those
+     * assets are never generated in prod (inline generation was removed).
+     */
+    public function test_media_scanner_wires_media_asset_job_store_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var MediaScanner $scanner */
+        $scanner = $container->get(MediaScanner::class);
+
+        $this->assertInstanceOf(
+            MediaAssetJobStore::class,
+            $this->readPrivate($scanner, 'mediaAssetJobStore'),
+            'MediaScanner must resolve with a media-asset job store so chapter '
+            . 'thumbnails + trickplay are enqueued.'
+        );
+    }
+
+    /**
+     * SV-2.9: the similarity job store must be DI-injected into the production
+     * MediaScanner so per-item similarity is deferred to a background job rather
+     * than run inline (O(N²)) — or silently skipped when unwired.
+     */
+    public function test_media_scanner_wires_similarity_job_store_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var MediaScanner $scanner */
+        $scanner = $container->get(MediaScanner::class);
+
+        $this->assertInstanceOf(
+            SimilarityJobStore::class,
+            $this->readPrivate($scanner, 'similarityJobStore'),
+            'MediaScanner must resolve with a similarity job store so the '
+            . 'similarity enqueue path is reachable in prod.'
+        );
     }
 
     /**

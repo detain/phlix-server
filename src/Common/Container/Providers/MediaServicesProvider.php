@@ -299,7 +299,25 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 // the same reason (PHP-DI skips defaulted optional params).
                 ->constructorParameter('maxConcurrentScanProbes', $maxConcurrentScanProbes)
                 // P4-S3: TMDB box-set collection sync
-                ->constructorParameter('collectionService', get(CollectionService::class)),
+                ->constructorParameter('collectionService', get(CollectionService::class))
+                // SV-1.3: chapter-thumbnail + trickplay generation job store. Named
+                // because PHP-DI skips defaulted optional ctor params during
+                // autowiring — without it the store stays null, the enqueue guard
+                // (MediaScanner::indexFile) is never true, and chapter thumbnails +
+                // trickplay are NEVER generated in prod (inline generation was
+                // removed). The MediaAssetWorker (also wired here) drains the queue.
+                ->constructorParameter(
+                    'mediaAssetJobStore',
+                    get(\Phlix\Media\MediaAsset\MediaAssetJobStore::class)
+                )
+                // SV-2.9: similarity computation job store. Named for the same
+                // PHP-DI reason — without it the scan falls back to the inline
+                // O(N²) similarity path (or nothing). With it wired the per-item
+                // similarity computation is deferred to a background job.
+                ->constructorParameter(
+                    'similarityJobStore',
+                    get(\Phlix\Media\SimilarityJobStore::class)
+                ),
 
             LibraryManager::class => autowire()
                 ->constructorParameter('logger', get('logger.media')),
@@ -562,6 +580,14 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // P4-S1: similar items engine
             \Phlix\Media\SimilarityService::class => autowire()
                 ->constructorParameter('itemRepository', get(ItemRepository::class)),
+
+            // SV-2.9: file-based similarity job queue (keyed by media item ID).
+            // Its only ctor dependency is an optional queue directory, which
+            // defaults to the class constant — autowire leaves it at the default.
+            // Registered explicitly so the MediaScanner wiring above resolves a
+            // shared instance (rather than PHP-DI silently declining to build an
+            // unregistered class via a named constructorParameter).
+            \Phlix\Media\SimilarityJobStore::class => autowire(),
 
             // P4-S2: because-you-watched recommendations engine
             \Phlix\Media\RecommendationService::class => autowire()

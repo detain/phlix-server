@@ -46,6 +46,17 @@ class AuthManager
     private const RATE_LIMIT_WINDOW_SECONDS = 900; // 15 minutes
 
     /**
+     * Hard cap on the number of IPs held in the static in-memory fallback
+     * store. The fallback is only reachable when no DbLoginRateLimitStore is
+     * injected (tests / legacy callers) — production wires the DB store via
+     * AuthServicesProvider (SV-1.10) — but we still bound it so the process
+     * memory cannot grow without limit if the fallback is ever exercised in a
+     * resident worker. When the cap is reached, expired entries are swept and,
+     * if still full, the oldest window is evicted.
+     */
+    private const RATE_LIMIT_FALLBACK_MAX_IPS = 10000;
+
+    /**
      * Central login rate limit store.
      *
      * When a DbLoginRateLimitStore is injected, the rate limit is shared
@@ -388,6 +399,7 @@ class AuthManager
         $now = time();
 
         if (!isset(self::$rateLimitStore[$ip])) {
+            $this->boundFallbackStore($now);
             self::$rateLimitStore[$ip] = [
                 'attempts' => 0,
                 'reset_at' => $now + self::RATE_LIMIT_WINDOW_SECONDS,
@@ -405,6 +417,46 @@ class AuthManager
         }
 
         $record['attempts']++;
+    }
+
+    /**
+     * Bound the static in-memory fallback store before inserting a new IP.
+     *
+     * Sweeps expired windows first; if the store is still at the hard cap
+     * ({@see self::RATE_LIMIT_FALLBACK_MAX_IPS}), evicts the entry with the
+     * earliest reset time (closest to expiry) so a single resident worker can
+     * never accumulate unbounded IP records. Only reachable when no
+     * DbLoginRateLimitStore is injected (tests / legacy).
+     *
+     * @param int $now Current Unix timestamp.
+     */
+    private function boundFallbackStore(int $now): void
+    {
+        if (count(self::$rateLimitStore) < self::RATE_LIMIT_FALLBACK_MAX_IPS) {
+            return;
+        }
+
+        foreach (self::$rateLimitStore as $key => $record) {
+            if ($record['reset_at'] <= $now) {
+                unset(self::$rateLimitStore[$key]);
+            }
+        }
+
+        if (count(self::$rateLimitStore) < self::RATE_LIMIT_FALLBACK_MAX_IPS) {
+            return;
+        }
+
+        $oldestKey = null;
+        $oldestReset = PHP_INT_MAX;
+        foreach (self::$rateLimitStore as $key => $record) {
+            if ($record['reset_at'] < $oldestReset) {
+                $oldestReset = $record['reset_at'];
+                $oldestKey = $key;
+            }
+        }
+        if ($oldestKey !== null) {
+            unset(self::$rateLimitStore[$oldestKey]);
+        }
     }
 
     /**

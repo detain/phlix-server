@@ -2956,3 +2956,119 @@ Reformatting 82 unrelated files would bury the functional change in a risky, unr
 recommend a dedicated formatting-only commit rather than bundling into X8.
 Also out of scope per the step: gapless/crossfade wiring (`buildGaplessSegmentCommand` inert) and
 codec-transcode fallback (rides SV-3.3).
+
+## Orchestrator — X8 music-stream producer DONE (2026-07-13, perf-5)
+- [x] X8 producer — 1b760ad7. REVIEW NO FINDINGS (signed-URL contract verified: same signer/path/exp both sides, correct media_items id, MIME rename complete, ByteRangeParser behavior-preserving; 147/147). DONE. MusicController::formatTrack mints signed stream_url `/media/{trackId}/stream?exp&sig` (getTrack/listTracks/nowPlaying inherit); HttpHandler videoMimeFor→streamMimeFor + audio MIME (mp3/m4a/aac/flac/ogg/opus/wav). Bonus: fixed color_space test-mock warnings, extracted ByteRangeParser (killed parseRange deprecation) → full Unit 5030/0, 0 warnings/deprecations. phlix-contracts repin NOT needed (stream_url matches audiobook convention). REVIEW pending. UNBLOCKS UI-3.6.
+- NOTE: 2 pre-existing phpstan errors in TranscodeManagerTest ~1576/1722 (on HEAD, not from X8); 202 pre-existing repo-wide phpcs LineLength warnings (82 files) — dedicated formatting commit candidate, not folded into functional work.
+
+## Reviewer (per-step, X8 music-stream producer, commit 1b760ad7) — 2026-07-13
+
+NO FINDINGS
+
+Verified (read-only):
+- CONTRACT: `formatTrack` mints `SignedUrl::fromEnv()->mint('/media/'.$trackId.'/stream')` →
+  `/media/{id}/stream?exp&sig`. `serveMediaStream` matches `^/media/(?P<id>[^/]+)/stream$` on
+  `$wr->path()` (query-less) and `isMediaStreamAuthorized` verifies with the SAME signer over the
+  SAME path via `SignedUrl::verify($wr->path(), exp, sig)`. `canonicalResource('/media/{id}/stream')`
+  returns the exact path (only /hls|/dash collapse), so both sides HMAC the identical
+  `VERSION\n{path}\n{exp}` message. No path/scheme/exp mismatch → music plays will NOT 401.
+- ID CORRECTNESS: track rows come from `MusicLibraryManager::getTracks` → `ItemRepository::getByType`
+  → `SELECT * FROM media_items WHERE type='track'`; `track['id']` IS the media_items PK, so
+  `findById($m['id'])` in serveMediaStream resolves. Not a music-domain id.
+- AUTH/SECURITY: signed URL is bound to the exact per-track path + bounded exp (TTL from
+  PHLIX_SIGNED_URL_TTL, default 6h); authorizes only that id, no over-grant; no secret/token leakage;
+  JSON music endpoints (mint site) are behind the auth group, so only authed users obtain the URL —
+  matches the AudiobookController convention.
+- MIME: `streamMimeFor` returns correct `audio/*` for mp3/m4a/aac/flac/ogg/oga/opus/wav; retained
+  video mappings; sane `application/octet-stream` fallback. Rename `videoMimeFor`→`streamMimeFor` is
+  complete — `grep -rn videoMimeFor src/ tests/` finds ZERO stale callers.
+- ByteRangeParser EXTRACTION: `parse()` body is a verbatim move of the old trait logic;
+  `TranscodeFileServer::parseRange` now delegates (API preserved for trait consumers like
+  HlsController); 206/416/suffix/over-long-clamp semantics unchanged. ByteRangeParserTest asserts
+  trait-delegation parity.
+- NO REGRESSION: `formatTrack` ADDS `stream_url` (null when id blank) without dropping/renaming other
+  fields; `serveMediaStream` unchanged except the MIME helper name + `ByteRangeParser::parse` call.
+- TESTS genuinely exercise the contract: MusicControllerTest::testGetTrackEmitsSignedStreamUrl does a
+  real mint→`SignedUrl::fromEnv()->verify()` round-trip on `/media/track-42/stream`;
+  HttpHandlerServeMediaStreamTest drives the actual `serveMediaStream` via the signed-URL (userId=null)
+  auth path → 200 audio/flac, 206 Range, 416 unsatisfiable, + a 10-case MIME data-provider.
+- Suite: `phpunit --filter 'Music|MediaStream|ByteRangeParser'` = 147 tests / 362 assertions OK;
+  phpstan L9 on all 4 changed src files = No errors.
+
+## Implementer — DI landmine consolidation (SV-1.10 + SV-1.3 + SV-2.9 wiring) — 2026-07-13
+Root cause (per the RECURRING DI LANDMINE note): PHP-DI skips optional defaulted ctor params during
+autowiring unless NAMED via `->constructorParameter(...)`. Three green-tested features were INERT in
+prod because their store dependency defaulted to null. All three wired; a provider-wide sweep run.
+
+Files changed:
+- `src/Common/Container/Providers/AuthServicesProvider.php` — SV-1.10: import `DbLoginRateLimitStore`;
+  added `->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class))` to the
+  `AuthManager` autowire (~:176). Store is autowirable (ctor = `Connection $db` [bound in
+  CoreServicesProvider] + defaulted `int $windowSeconds`). Prod now uses the shared bounded DB store
+  (login_rate_limit table, migration 074 — confirmed present in `migrations/074_login_rate_limit.sql`)
+  instead of the unbounded per-worker static array.
+- `src/Common/Container/Providers/MediaServicesProvider.php` — SV-1.3 + SV-2.9: added
+  `->constructorParameter('mediaAssetJobStore', get(MediaAssetJobStore::class))` and
+  `->constructorParameter('similarityJobStore', get(SimilarityJobStore::class))` to the `MediaScanner`
+  autowire (~:303-321). MediaAssetJobStore was already registered (factory, config queue dir);
+  registered `SimilarityJobStore::class => autowire()` (~:590) since it had NO binding — its enqueue
+  in MediaScanner was therefore doubly dead (null + unregistered).
+- `src/Auth/AuthManager.php` — bounded the static in-memory FALLBACK store (only reachable when no DB
+  store is injected, i.e. tests/legacy): new const `RATE_LIMIT_FALLBACK_MAX_IPS = 10000` + private
+  `boundFallbackStore()` (sweep-expired-then-evict-oldest) called before inserting a new IP in
+  `recordFailedAttempt()`. Prevents unbounded growth if the fallback is ever exercised in a resident
+  worker. No change to the store-wired path.
+
+Dual entrypoints: both `public/index.php` and `start.php` build via `ContainerFactory::create()` using
+`defaultProviders()`, so the provider edits cover FPM/CI + Swoole. Confirmed.
+
+Tests added (all green):
+- `tests/Unit/Common/Container/ContainerFactoryTest.php` — 3 PROD-WIRING tests resolving the consuming
+  class from the REAL container (`containerWithMockedDb()`): AuthManager.loginRateLimitStore is a
+  DbLoginRateLimitStore; MediaScanner.mediaAssetJobStore is a MediaAssetJobStore; MediaScanner
+  .similarityJobStore is a SimilarityJobStore. These FAIL without the constructorParameter wiring.
+- `tests/Unit/Media/Library/MediaScannerTest.php` — behaviour: a scan with both stores wired enqueues
+  1 media-asset job (only the chapter-capable .mkv, not the .avi) + 2 similarity jobs (per new item);
+  negative test: unwired stores enqueue nothing.
+- `tests/Unit/Auth/DbLoginRateLimitStoreTest.php` (new) — behaviour: allow-when-no-record;
+  throw-when-over-limit; sweep-expired-on-check; recordFailedAttempt upsert + bounded LIMITed sweep;
+  clear deletes the row.
+
+Sweep of all 14 providers (script reflected every `autowire()` class ctor for `?ObjectType $x = null`
+params not named). OTHER unwired optional deps found — NONE wired here (see "SV-2.9 remaining" + report):
+- Logger-typed params (`?LoggerInterface`/`?StructuredLogger`) across BackupManager, WebhookService,
+  WebAuthnManager, FuzzyMatcher, LibraryMetadataMatcher, LibraryScanWorker, MediaAssetGenerationJob,
+  BackgroundDetectorWorker, Movie/SeriesMetadataResolver, ThemeMusicResolver — NOT bugs (each
+  self-defaults to a NullLogger or a channel logger internally).
+- Fine (intentional/default-constructed): Movie/SeriesMetadataResolver `$fieldResolver`
+  (PriorityFieldResolver default-constructed by design, per existing comment).
+- FLAGGED as genuine additional instances of the SAME landmine but NOT fixed (out of this step's tight
+  scope / not clearly-safe — each needs its own audit/cycle):
+  * `LibraryMetadataMatcher::$artworkStorage` (SV-3.4) — local artwork caching is INERT (null-gated
+    no-op at `cacheArtworkLocally`). NOT wired: `ArtworkStorage::downloadAndStore()` uses BLOCKING
+    `curl_*`, and the matcher is reachable from the interactive HTTP `MediaMatchController` → wiring it
+    would put blocking I/O on an HTTP handler (CARDINAL rule). Belongs in SV-3.4's cycle (move the
+    download off the hot path / confirm Swoole curl hook).
+  * `AuthManager::$providerManager` — external-provider login (`loginWithProvider`) always throws
+    "ProviderManager is not configured", BUT `loginWithProvider` has ZERO callers in src/ (the real SSO
+    flow goes through AuthProviderController→ProviderManager directly), so it is dead-from-AuthManager,
+    not a prod-impacting inert feature. Flag only.
+  * `WatchHistory::$recommendationService` — "because-you-watched" recompute on watch-completion is
+    inert. NOT wired: markComplete runs in the HTTP watch path → inline O(N) recommendation compute
+    would violate the no-heavy-inline rule; the correct fix is a background job (like SV-2.9). Flag.
+  * `MediaScanner::$trailerFinder` — local-trailer discovery inert. NOT wired: TrailerFinder has NO DI
+    binding anywhere (needs registering first); scan-only. Flag.
+  * Lower-impact flags: `PlaybackController::$playToManager` (DLNA play-to), `HubClient::
+    $portForwardService` (NAT), `SmartPlaylistRefreshHandler::$collectionManager/$collectionRepo`,
+    `BackupManager::$auditLogger` — each inert when null; own-cycle candidates.
+
+SV-2.9 remaining beyond wiring: the store is now live and the enqueue fires, BUT there is NO consumer —
+no SimilarityWorker/queue-drain process and no `config/similarity_jobs.php` (unlike SV-1.3 which has
+MediaAssetWorker + config + supervision). So jobs accumulate in `/tmp/phlix_similarity_jobs` undrained.
+A follow-up must add a SimilarityWorker (mirroring MediaAssetWorker) + config + worker supervision, or
+the enqueue is a leak. Flagged for SV-2.9's build-out cycle.
+
+Verification: `phpunit tests/Unit/Auth/DbLoginRateLimitStoreTest.php ContainerFactoryTest MediaScannerTest`
+= 104/911 OK; full `--testsuite Unit` = 5040 tests, 0 fail (5 skip); phpstan L9 on all changed src +
+test files = No errors; `phpcs --standard=PSR12 src/<changed>` = 0 errors (only pre-existing LineLength
+warnings on untouched lines).

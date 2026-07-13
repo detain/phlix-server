@@ -680,6 +680,51 @@ class PluginLoader
     }
 
     /**
+     * Instantiate a plugin's entry class without calling onEnable().
+     *
+     * This is used by the admin API to access plugin methods like
+     * `testCredentials()` without fully enabling the plugin (which
+     * would subscribe event listeners and potentially perform I/O).
+     *
+     * The entry instance will have its `configure()` called with
+     * the persisted settings so it can validate credentials.
+     *
+     * @param string $name Manifest name (e.g. `phlix-plugin-trakt`).
+     *
+     * @return object|null The entry instance, or null if the plugin
+     *                    could not be instantiated.
+     *
+     * @throws PluginNotFoundException When no installed plugin matches the name.
+     *
+     * @since 0.18.0
+     */
+    public function getEntryInstance(string $name): ?object
+    {
+        $installed = $this->repository->findByName($name);
+
+        $autoload = $installed->directory . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
+        if (is_file($autoload)) {
+            require_once $autoload;
+        }
+
+        $entryFqcn = $installed->manifest->entry;
+        if (!class_exists($entryFqcn)) {
+            $this->logger()->warning('plugin entry class does not exist', [
+                'plugin' => $name,
+                'entry' => $entryFqcn,
+            ]);
+            return null;
+        }
+
+        $instance = $this->instantiateEntry($installed, $entryFqcn);
+
+        // Deliver settings so the plugin can use them for credential testing
+        $this->applyPersistedSettings($instance, $installed, $name);
+
+        return $instance;
+    }
+
+    /**
      * Re-attach every persisted-as-enabled plugin to the dispatcher.
      * Called by the {@see \Phlix\Common\Container\Providers\PluginsProvider}
      * after the container is built so server restarts pick up plugins

@@ -18,6 +18,7 @@ use Phlix\Common\Logger\LoggerFactory;
 use Phlix\Common\Logger\LogChannels;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Common\Logger\AuditLogger;
+use Psr\Log\LoggerInterface;
 use Workerman\MySQL\Connection;
 
 use function DI\factory;
@@ -108,6 +109,9 @@ final class CoreServicesProvider implements ServiceProviderInterface
             }
             return LoggerFactory::get(LogChannels::APPLICATION);
         });
+
+        // Plugin-safe alias so $container->get(LoggerInterface::class) resolves correctly.
+        $definitions[LoggerInterface::class] = $definitions[StructuredLogger::class];
 
         $definitions[AuditLogger::class] = factory(static function () use ($loggerConfigPath): AuditLogger {
             if (is_string($loggerConfigPath) && $loggerConfigPath !== '') {

@@ -132,7 +132,7 @@ final class PluginAdminController
             return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
         }
 
-        return (new Response())->json(['plugin' => $this->serializeDetail($plugin)]);
+        return (new Response())->json(['plugin' => $this->serializeDetail($plugin, $request)]);
     }
 
     /**
@@ -240,7 +240,7 @@ final class PluginAdminController
         );
 
         $refreshed = $this->loader->getInstalled($name);
-        return (new Response())->json(['plugin' => $this->serializeDetail($refreshed)]);
+        return (new Response())->json(['plugin' => $this->serializeDetail($refreshed, $request)]);
     }
 
     /**
@@ -457,6 +457,100 @@ final class PluginAdminController
     }
 
     /**
+     * Test a plugin's credentials by calling its `testCredentials()` method.
+     *
+     * `POST /api/v1/admin/plugins/{name}/test` body `{"settings": {...}}` →
+     * `200 {"success": bool, "message": string}`.
+     *
+     * If the plugin entry class does not implement a `testCredentials()`
+     * method, returns 501 with `plugin.test_not_supported`.
+     *
+     * @param Request              $request The HTTP request (`body.settings`).
+     * @param array<string,string> $params  Path parameters; `name` is the manifest name.
+     *
+     * @return Response 200 on success, 400 if name missing, 404 if not found,
+     *                  501 if plugin does not support credential testing.
+     *
+     * @since 0.18.0
+     */
+    public function testCredentials(Request $request, array $params): Response
+    {
+        $name = self::pluginName($params);
+        if ($name === null) {
+            return $this->jsonError(400, 'plugin.name.required', 'A "name" path parameter is required.');
+        }
+
+        try {
+            $plugin = $this->loader->getInstalled($name);
+        } catch (PluginNotFoundException $e) {
+            return $this->jsonError(404, 'plugin.not_found', $e->getMessage());
+        }
+
+        $submitted = $request->input('settings');
+        if (!is_array($submitted)) {
+            return $this->jsonError(
+                400,
+                'plugin.settings.invalid',
+                'Body must contain a "settings" object.',
+                ['settings'],
+            );
+        }
+
+        // Instantiate the plugin entry to call testCredentials().
+        // We need to load the plugin's autoloader and create the entry instance.
+        $entryInstance = $this->loader->getEntryInstance($name);
+        if ($entryInstance === null) {
+            return $this->jsonError(404, 'plugin.not_found', 'Plugin entry class could not be instantiated.');
+        }
+
+        if (!method_exists($entryInstance, 'testCredentials')) {
+            return $this->jsonError(
+                501,
+                'plugin.test_not_supported',
+                'This plugin does not support credential testing.',
+            );
+        }
+
+        try {
+            /** @var mixed $result */
+            $result = $entryInstance->testCredentials($submitted);
+            if (is_array($result)) {
+                // Allow plugin to return structured result with 'success' and 'message' keys
+                $success = isset($result['success']) && is_bool($result['success']) ? $result['success'] : true;
+                $message = isset($result['message']) && is_string($result['message']) ? $result['message'] : 'OK';
+                return (new Response())->json([
+                    'success' => $success,
+                    'message' => $message,
+                ]);
+            }
+            // Boolean return: true = success, false = failure
+            if (is_bool($result)) {
+                return (new Response())->json([
+                    'success' => $result,
+                    'message' => $result ? 'Credentials are valid.' : 'Credentials are invalid.',
+                ]);
+            }
+            // String return is treated as an error message
+            if (is_string($result)) {
+                return (new Response())->json([
+                    'success' => false,
+                    'message' => $result,
+                ]);
+            }
+            // Default: assume success with no message
+            return (new Response())->json([
+                'success' => true,
+                'message' => 'Credentials validated successfully.',
+            ]);
+        } catch (\Throwable $e) {
+            return (new Response())->json([
+                'success' => false,
+                'message' => 'Credential test failed: ' . $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
      * Serialise an {@see InstalledPlugin} to its JSON-API shape.
      *
      * @return array<string, mixed>
@@ -484,7 +578,7 @@ final class PluginAdminController
      *
      * @since 0.12.0 (S6 — plugin configure endpoint)
      */
-    private function serializeDetail(InstalledPlugin $plugin): array
+    private function serializeDetail(InstalledPlugin $plugin, Request $request): array
     {
         return [
             'name'            => $plugin->manifest->name,
@@ -504,7 +598,37 @@ final class PluginAdminController
             // an unset one (both mask identically in `settings`). Never carries
             // the secret value itself.
             'secret_status'   => SettingsMasker::secretStatus($plugin),
+            // OAuth redirect URL for plugins that support it (scrobblers).
+            // Constructed from the request host so the URL is absolute.
+            'redirect_url'    => $this->buildOAuthRedirectUrl($plugin, $request),
         ];
+    }
+
+    /**
+     * Build an absolute OAuth callback URL for plugins that support OAuth.
+     *
+     * Scrobbler-type plugins use OAuth, so the redirect URL follows the
+     * pattern `/api/v1/oauth/{plugin_name}/callback`.
+     *
+     * @return string|null The absolute URL, or null if the plugin type
+     *                     does not support OAuth.
+     */
+    private function buildOAuthRedirectUrl(InstalledPlugin $plugin, Request $request): ?string
+    {
+        // Only scrobblers currently support OAuth in this codebase.
+        // The manifest type is kebab-case (e.g. "scrobbler").
+        if ($plugin->manifest->manifestType() !== \Phlix\Shared\Plugin\ManifestType::Scrobbler) {
+            return null;
+        }
+
+        $host = $request->getHeader('Host') ?? 'localhost';
+        $scheme = $request->getHeader('X-Forwarded-Proto') ?? 'https';
+        $pluginName = strtolower($plugin->manifest->name);
+
+        // Strip the phlix-plugin- prefix if present to get the OAuth route name
+        $oauthName = preg_replace('/^phlix-plugin-/', '', $pluginName);
+
+        return sprintf('%s://%s/api/v1/oauth/%s/callback', $scheme, $host, $oauthName);
     }
 
     /**

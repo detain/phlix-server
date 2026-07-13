@@ -66,9 +66,9 @@
 - [x] SV-1.1  memoize/precompute HDR tone-map decision ✅ (commit bbef742c)
 - [x] SV-1.2  make non-probe ffmpeg calls coroutine-friendly ✅ (commit 6da7dc41)
 - [x] SV-1.3  move chapter-thumbnail + trickplay to background job ✅ (commit 4317214b)
-- [x] SV-1.4  correct zscale tone-map graph ✅ (commit 7c7156dc)
-- [x] SV-1.5  implement real libplacebo tone-map mode ✅ (commit abad4b46)
-- [x] SV-1.6  fix subtitle burn-in escaping + VAAPI overlay ✅ (commit 7a248f40)
+- [x] SV-1.4  correct zscale tone-map graph ✅ RE-AUDITED 2026-07-13: graph was already correct (opencode's `7c7156dc` verdict held); only gap was a missing direct test — added `FfmpegRunnerToneMappingTest` (commit `6a6e5005`).
+- [x] SV-1.5  implement real libplacebo tone-map mode ✅ RE-AUDITED+FIXED 2026-07-13: opencode's `abad4b46` was WRONG — emitted `peak=`/`input_color_space=`/`input_primaries=`/`input_trc=`/`output_color_space=`/`output_primaries=`/`output_trc=`, none of which exist on the real `libplacebo` ffmpeg filter (confirmed live: `Error applying option 'peak' to filter 'libplacebo': Option not found`). Rewrote using only real options (`tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv`), verified by actually running it through ffmpeg with a synthetic HDR source (exit 0). Commit `9ce4db5f`.
+- [x] SV-1.6  fix subtitle burn-in escaping + VAAPI overlay ✅ RE-AUDITED+FIXED 2026-07-13: opencode's `7a248f40` was PARTIAL — colon left unescaped in `filtergraphEscape()` (and a single escape round proved insufficient; needed DOUBLE application — verified against real ffmpeg), VAAPI filter order was `hwupload,subtitles=...` (backwards — hwupload before the software filter), and `SubtitleBurner` had zero production callers (only reachable via the zero-caller `buildTranscodeCommandWithProfile()`, SV-4.13's removal target). Fixed all three + wired subtitle burn-in into the LIVE per-segment pipeline (`FfmpegRunner::buildSegmentCommand()`/`buildHwaccelSegmentCommand()` + `TranscodeManager::ensureHlsJob()`'s new `subtitle_burn_in_index` option). Commit `a0803f7d`.
 - [x] SV-1.7  range parser reuse on direct-play ✅ (commit 1862fafb)
 - [x] SV-1.8  CSRF Origin exact-match ✅ (commit ba3096ba)
 - [x] SV-1.9  ENOSPC guard on segment cache ✅ (commit 70d99f4e)
@@ -3909,3 +3909,315 @@ a203070)`. Pushed to `origin/master` (rebased first; no new commits had landed i
 concurrent read-only review agent working elsewhere in this repo made no pushes, as expected).
 
 **Server-twin FD-churn fix item is CLOSED** — both server and hub now carry the matching remediation.
+
+## Implementer — SV-1.4 / SV-1.5 / SV-1.6 fresh-audit fix pass — 2026-07-13
+
+A fresh audit (independent of the earlier opencode `[x]` marks and independent of the "Audits owed
+(deferred, lower priority)" note at line 2901) re-examined all three tonemap/subtitle-burn-in steps
+against the current code and against a REAL ffmpeg on this box (`ffmpeg version 6.1.1-3ubuntu5`, built
+with `--enable-libx264 --enable-libx265 --enable-libzimg --enable-libplacebo --enable-libass` among
+others — confirmed via `ffmpeg -version`). Verdicts: SV-1.4 DONE (test-only gap), SV-1.5 NOT-DONE
+(critical: non-existent ffmpeg options), SV-1.6 PARTIAL (3 gaps). All three fixed this pass, one commit
+each, full Unit suite green throughout (5115/0/5-skip at final HEAD), `phpstan analyze src/ -c
+phpstan.neon.dist` (level 9) clean at every checkpoint, `phpcs --standard=PSR12` 0 errors / 0 new
+warnings on every changed file (pre-existing warnings on lines this diff didn't touch were independently
+confirmed via `git stash`/diff, not introduced here).
+
+### SV-1.4 — correct `zscale` tone-map graph (test-only gap) — commit `6a6e5005`
+
+**Re-audit verdict: DONE, missing test only.** `FfmpegRunner::buildZscaleToneMapFilter()`
+(`src/Media/Transcoding/FfmpegRunner.php`, private method — moved slightly over time, currently
+sits right before `buildLibplaceboToneMapFilter()`) already emitted, byte-for-byte, the canonical
+HDR→SDR tone-map graph:
+```
+zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p
+```
+Verified this is genuinely correct (not just "looks plausible") by running it directly against real
+ffmpeg with a synthetic BT.2020/PQ-tagged source:
+```
+ffmpeg -f lavfi -i "testsrc=size=320x240:rate=25:duration=1,format=yuv420p,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc" \
+  -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p" \
+  -f null -
+```
+→ exit 0, real tone-mapped output (this graph doesn't need a GPU/Vulkan device — pure software zimg +
+zscale/tonemap, unlike SV-1.5's libplacebo path below).
+
+The ONLY real gap: no test ever called `buildZscaleToneMapFilter()` directly. `FfmpegRunnerHwaccelTest`
+(`tests/Unit/Media/Transcoding/FfmpegRunnerHwaccelTest.php:250-254`,
+`test_hdr_tonemap_nvenc_segment_has_no_hw_surface_collision`) stubs `getToneMappingProfile()` wholesale
+with an anonymous `extends FfmpegRunner` class, which bypasses the real builder entirely — a
+zscale-graph regression (e.g. a typo in `tonemap=hable`) would never be caught.
+
+**Fix:** added `tests/Unit/Media/Transcoding/FfmpegRunnerToneMappingTest.php` (new file), using
+`ReflectionMethod` to invoke the private `buildZscaleToneMapFilter()` directly:
+- `testBuildZscaleToneMapFilterEmitsCanonicalGraph()` — `assertSame()` against the exact literal
+  string above (a golden-value test, not a substring/regex check — any drift fails it).
+- `testBuildZscaleToneMapFilterIgnoresColorMetaContent()` — confirms the graph is a FIXED
+  BT.2020→BT.709 conversion regardless of the probed `color_transfer`/`color_primaries`/`color_space`
+  values (the `$colorMeta` param is currently unused by this builder — documents that this is
+  intentional, not an oversight, and guards against someone later interpolating it in a way that
+  silently changes the graph without the test catching it).
+
+**Verification:** `phpunit tests/Unit/Media/Transcoding/FfmpegRunnerToneMappingTest.php` → 2/2 green
+(later extended to 4/4 by the SV-1.5 commit, see below). `phpstan`/`phpcs` clean on the new file.
+
+### SV-1.5 — implement real `libplacebo` tone-map mode — commit `9ce4db5f`
+
+**Re-audit verdict: NOT-DONE, critical bug (confirmed the audit's claim, did not just trust it).**
+`FfmpegRunner::buildLibplaceboToneMapFilter()` emitted:
+```
+libplacebo=tonemapping=hable:peak=43.0:input_color_space=bt2020nc:input_primaries=bt2020:input_trc=bt2020-10:output_color_space=bt709:output_primaries=bt709:output_trc=bt709,format=yuv420p
+```
+Ran `ffmpeg -hide_banner -h filter=libplacebo` on this box (do NOT assume option names — read the actual
+help text) and confirmed the real `libplacebo` filter's AVOptions are: `colorspace`, `color_primaries`,
+`color_trc`, `range` (selecting the OUTPUT color tagging — the filter reads the INPUT's own tags
+directly off the decoded frame, no `input_*` split at all), `tonemapping` (curve select, includes
+`hable`), and `peak_detect` (boolean, default `true` — automatic HDR peak-luminance detection; there is
+NO settable `peak=` option anywhere in the filter). None of `peak=`/`input_color_space=`/
+`input_primaries=`/`input_trc=`/`output_color_space=`/`output_primaries=`/`output_trc=` exist.
+
+Confirmed the OLD graph genuinely fails (not just theoretically wrong) by constructing a real command
+and running it:
+```
+ffmpeg -f lavfi -i "testsrc=size=320x240:rate=25:duration=1,format=yuv420p,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc" \
+  -vf "libplacebo=tonemapping=hable:peak=43.0:input_color_space=bt2020nc:input_primaries=bt2020:input_trc=bt2020-10:output_color_space=bt709:output_primaries=bt709:output_trc=bt709,format=yuv420p" \
+  -f null -
+```
+→ `Error applying option 'peak' to filter 'libplacebo': Option not found` / `Error initializing a
+simple filtergraph` — fails immediately, exactly as the audit described.
+
+**Fix:** rewrote `buildLibplaceboToneMapFilter()` (`src/Media/Transcoding/FfmpegRunner.php`) to emit
+only genuinely-existing options:
+```
+libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p
+```
+`tonemapping=hable` is kept (the same filmic curve the zscale path uses via `tonemap=hable`);
+`colorspace=`/`color_primaries=`/`color_trc=bt709` select the desired BT.709 SDR output tagging
+(mirroring `zscale=t=bt709:m=bt709`); `range=tv` requests legal/limited output range (mirroring the
+zscale graph's trailing `r=tv`); peak luminance is left to the filter's own automatic `peak_detect`
+(default on) since there is no way to set it manually. The `$colorMeta` parameter is now unused inside
+this method (kept for signature parity with `buildZscaleToneMapFilter()`; the OLD code's read of
+`$colorMeta['color_transfer']`/etc. into local `$inputTransfer`/`$inputPrimaries`/`$inputSpace`
+variables was itself dead — those locals were computed then silently discarded, never actually used in
+the returned string, in the pre-fix code).
+
+**Verified end-to-end, not just option-parsing, per the task's explicit instruction** ("confirm it
+succeeds, not just that it parses"). This required extra care: on THIS sandbox box there is no real
+GPU, only a software Vulkan device (`llvmpipe`, via the `lvp` ICD, confirmed present:
+`/usr/share/vulkan/icd.d/lvp_icd.json`, `libvulkan_lvp.so` resolvable via `ldconfig -p`). Running the
+CORRECTED filter string with NO explicit device init failed differently — not a parse error, but:
+```
+[libplacebo @ ...] GPU 0: llvmpipe (LLVM 20.1.2, 256 bits) v1.4.318 (software)
+[libplacebo @ ...]     -> excluding due to !params->allow_software
+[libplacebo @ ...] Found no suitable device, giving up.
+```
+i.e. libplacebo's own internal auto-probe (used when no explicit `-init_hw_device` is supplied)
+deliberately excludes software Vulkan devices by default (`allow_software=false` in its own
+auto-detection). This is an ENVIRONMENTAL limitation of this specific sandbox (no real GPU), not a bug
+in the filter string — a production box with a real GPU (or even a properly-configured software
+fallback) would auto-probe successfully with no extra flags. To prove the FILTER STRING ITSELF is
+correct despite this environmental gap, explicitly initialized a Vulkan device and pointed the filter
+at it (bypassing the `allow_software` auto-exclusion, which only applies to the filter's OWN internal
+auto-probe path, not to an already-initialized device handed to it):
+```
+ffmpeg -hide_banner -init_hw_device vulkan=vk -filter_hw_device vk \
+  -f lavfi -i "testsrc=size=320x240:rate=25:duration=1,format=yuv420p,setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc" \
+  -vf "libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p" \
+  -f null -
+```
+→ **exit 0**, `Stream #0:0: Video: wrapped_avframe, yuv420p(tv, bt709, progressive), ...` — a genuine,
+successful HDR→SDR tone-map (25 frames processed, real output tagged exactly as requested), not merely
+a parseable command line. This is the same verification technique the audit specified (construct a real
+command, run it, confirm success not just parsing).
+
+**Fix + tests landed together in one commit** (the file-splitting for separate SV-1.4/1.5/1.6 commits
+was done by resetting `FfmpegRunner.php` to HEAD after the SV-1.4 test-only commit and re-applying just
+the libplacebo method rewrite, so this commit's diff to `FfmpegRunner.php` is scoped to exactly the
+libplacebo fix): extended `FfmpegRunnerToneMappingTest.php` with:
+- `testBuildLibplaceboToneMapFilterFallsBackToZscaleWhenUnavailable()` — forces the cached
+  `hasLibplacebo` property (via `ReflectionProperty`) to `false` and asserts the fallback returns the
+  EXACT same string as `buildZscaleToneMapFilter()` (no partial/broken libplacebo fragment leaks
+  through the fallback branch).
+- `testBuildLibplaceboToneMapFilterEmitsRealFfmpegOptionsWhenAvailable()` — forces `hasLibplacebo` to
+  `true`, asserts the exact corrected literal string via `assertSame()`, AND explicitly asserts every
+  one of the 7 non-existent old option names (`peak=`, `input_color_space=`, `input_primaries=`,
+  `input_trc=`, `output_color_space=`, `output_primaries=`, `output_trc=`) is ABSENT — a deliberate
+  regression guard so a future edit can't silently reintroduce any of them.
+
+**Verification:** `phpunit tests/Unit/Media/Transcoding/FfmpegRunnerToneMappingTest.php
+FfmpegRunnerHwaccelTest.php FfmpegRunnerTest.php FfmpegRunnerHlsTest.php` → 50/50 green.
+`phpstan analyze src/Media/Transcoding/FfmpegRunner.php tests/.../FfmpegRunnerToneMappingTest.php` →
+0 errors. `phpcs --standard=PSR12` on both → 0 errors, 1 PRE-EXISTING warning (unrelated line, confirmed
+via `git diff` that it predates this change) on `FfmpegRunner.php`, 0 on the test file.
+
+### SV-1.6 — fix subtitle burn-in escaping + real VAAPI overlay — commit `a0803f7d`
+
+**Re-audit verdict: PARTIAL, 3 gaps** (file is actually
+`src/Media/Transcoding/Subtitles/SubtitleBurner.php` — the plan's stated path omits the `Subtitles/`
+segment).
+
+**Gap 1 — colon not escaped (and, discovered during verification, a single escape round is NOT
+enough).** `filtergraphEscape()` (`SubtitleBurner.php`, was ~lines 138-148) escaped `\` and `'` but left
+`:` bare. Per FFmpeg's filtergraph escaping rules a bare `:` is the option separator, so any
+colon-bearing path corrupts the filter. The audit's suggested fix (escape `:` too, single application)
+turned out to be INSUFFICIENT — verified by actually building and running real commands, per the task's
+instruction to verify with a real colon-bearing path rather than assuming:
+- Naive single-escape colon fix (`str_replace(':', '\\:', $path)` after the existing `\`/`'` escapes),
+  run via `shell_exec()` (the SAME execution path `FfmpegRunner`/`TranscodeManager` actually use — this
+  distinction mattered: an earlier check via `proc_open` with a raw argv array, bypassing any shell,
+  gave a MISLEADINGLY passing result for a 2-backslash form that a real shell's own double-quote
+  backslash-collapsing would have mangled before ffmpeg ever saw it) against a real colon-bearing
+  subtitle path still failed:
+  `Unable to parse option value "dir/movie.srt" as image size` / `Error applying option 'original_size'
+  to filter 'subtitles': Invalid argument` — ffmpeg's `subtitles`/`ass` filters parse their `filename`
+  argument TWICE: once by the general filtergraph option-value tokenizer, and a SECOND time internally
+  by the filter's own suboption parser (the same one used for `original_size`/`fontsdir`/`force_style`,
+  which ALSO splits on `:`). A value escaped only once survives the first pass but gets re-split by the
+  second.
+- Fix: apply the same `\`/`'`/`:` escape a SECOND time (i.e. `filtergraphEscape()` now composes a new
+  private `filtergraphEscapeOnce()` helper with itself: `filtergraphEscapeOnce(filtergraphEscapeOnce($path))`).
+  Verified this round-trips correctly THROUGH a real shell (`shell_exec()`) for: (a) a plain
+  colon-bearing Linux path (`.../colon:dir/sub-0.vtt`) — `ffmpeg -vf "subtitles=<double-escaped
+  path>" -f null -` exits 0 and actually produces output; (b) a full end-to-end
+  `FfmpegRunner::buildSegmentCommand()`-generated command (the REAL production code path — built the
+  actual command string, wrote it to a shell script, ran it exactly as `launchDetachedSegment()`'s
+  `shell_exec($full)` would) with a colon-bearing subtitle sidecar path — produced a real, playable
+  `.ts` segment; (c) a Windows-style path with BOTH backslashes and a colon (`C:\Users\Test\
+  subtitles\movie.srt`) — the double-escaped form (`C` + 3 backslashes + `:` + 4 backslashes before
+  each path segment) round-trips through ffmpeg to the EXACT original path (confirmed via the terminal
+  error changing from a parse error to `Unable to open C:\Users\Test\ subtitles\movie.srt` — i.e.
+  parsing succeeded, only the file-open legitimately failed since the path doesn't exist on this Linux
+  box); (d) an apostrophe-bearing path, same double-escape treatment, same successful round-trip.
+- Updated the existing "Windows-style path" test (`SubtitleBurnerTest.php`, was ~lines 306-324,
+  `test_filtergraph_escaping_backslashes`) to assert the EXACT double-escaped output via `assertSame()`
+  (built programmatically with `str_repeat('\\', N)` rather than hand-counted backslash literals, to
+  keep the arithmetic auditable) instead of only checking backslash-doubling and leaving the colon bare
+  — per the task's explicit instruction, did NOT just weaken the test to dodge the fix. Switched this
+  test's subtitle format from SRT to VTT so `getBurnInFilter()` doesn't append an unrelated
+  `:force_style='...'` suffix that would otherwise complicate an exact-match assertion. Added a new
+  `test_filtergraph_escaping_colon_only_path` test (a bare-colon path with NO backslashes at all, e.g. a
+  Linux directory literally named `colon:dir`) as a second, independent regression case.
+
+**Gap 2 — VAAPI filter order wrong.** The VAAPI branch (`getBurnInArgs()`, was ~lines 244-250) emitted
+`hwupload,subtitles=%s,format=nv12` — running `hwupload` BEFORE the software `subtitles`/libass filter
+is backwards; a VAAPI hardware surface cannot be processed by a software filter. Compared to the
+correctly-ordered `nvenc` branch two lines below (`subtitles=%s,hwupload=extra_hw_frames=4`) and fixed
+VAAPI to match: `subtitles=%s,format=nv12,hwupload` (software filter first, `format=nv12` normalizes the
+software-decoded frame to the pixel format VAAPI expects, THEN `hwupload` moves it to the hardware
+surface — mirrors the exact `format=nv12,hwupload` sequence `FfmpegRunner::hwaccelUploadFilter()` already
+uses independently for the live segment pipeline's own VAAPI upload, so both code paths now agree).
+Updated `test_get_burn_in_args_vaapi` (was substring-presence-only) to assert ORDER via `strpos()`
+comparisons (`subtitles=` before `format=nv12` before `hwupload`), not just that all three substrings
+exist somewhere in the arg — a pure substring check would have passed on the OLD, wrong order too.
+
+**Gap 3 — `SubtitleBurner` unreachable from real playback.** Confirmed via exhaustive grep:
+`HwaccelCommandBuilder` (`src/Media/Transcoding/Hwaccel/HwaccelCommandBuilder.php`) is the only consumer
+of `SubtitleBurner`, and `HwaccelCommandBuilder` is only constructed inside
+`FfmpegRunner::buildTranscodeCommandWithProfile()` (`~line 1245`), which itself has ZERO callers anywhere
+in `src/` (grepped `buildTranscodeCommandWithProfile(` across the whole tree — only its own definition
+and its own dedicated (now-orphaned) test hits). This is precisely the "superseded whole-file command
+builder" SV-4.13 is queued to delete. Per the task's explicit instruction, did NOT touch
+`buildTranscodeCommandWithProfile()` itself (left entirely for SV-4.13) — instead wired subtitle burn-in
+into the REAL, LIVE per-segment pipeline independently:
+- `FfmpegRunner::buildSegmentCommand()` / `buildHwaccelSegmentCommand()` — the actual per-segment
+  builders `startSegmentEncode()` calls (confirmed these are the real production path: `TranscodeManager::produceSegment()`
+  → `FfmpegRunner::startSegmentEncode()` → one of these two, selected by hwaccel availability) — gained
+  a new `$params['subtitle_burn_in']` key (shape `['path' => string, 'format' => ?string, 'style' =>
+  ?array]`), resolved by a new private `resolveSubtitleBurnInFilter()` helper that lazily builds a
+  `SubtitleBurner` (`new SubtitleBurner($this)` — no circular-construction issue since `SubtitleBurner`'s
+  only dependency on `FfmpegRunner`, `extractSubtitle()`, is unused by the filter-building path consumed
+  here) and calls the now-fixed `getBurnInFilter()`. Spliced into the filter chain BEFORE the scale
+  filter (matching `HwaccelCommandBuilder`'s existing convention) and, for the hwaccel builder, BEFORE
+  the `hwaccelUploadFilter()` call (same software-before-hwupload principle as gap #2, reapplied here).
+  Gracefully no-ops (returns `null`, filter chain unchanged) when the path is missing/not a real file —
+  the subtitle sidecar is extracted asynchronously in the background, so a very-early segment request
+  may race ahead of extraction; this degrades to "no burn-in yet" rather than emitting a filter argument
+  pointing at a nonexistent file.
+- `TranscodeManager::ensureHlsJob()` gained a `subtitle_burn_in_index`/`force_subtitle_burn_in` option
+  (added to its existing `$options` array, mirroring the already-established `client_capabilities`
+  option convention) — deliberately shaped to match
+  `StreamManager::getSubtitleBurnInConfig()`'s return keys 1:1 (`subtitle_burn_in_index`,
+  `force_subtitle_burn_in`) so a future caller holding a live `StreamManager`-tracked stream could spread
+  that config directly into `$options` with no further changes needed here. Persisted into the job's
+  base `segment_params` (via `computeSegmentParams()`'s two new parameters) at job-creation time.
+  `TranscodeManager::ensureSegment()` resolves this per segment via a new private
+  `applySubtitleBurnIn()` helper — reading the index from the ROW's persisted `segment_params` JSON
+  (not from the segment-specific `$segParams` array) because the multi-variant/ABR path's
+  `segmentParamsForRendition()` rebuilds `$segParams` FRESH per-rendition from the ABR ladder and does
+  NOT itself carry job-level keys; without this the toggle would silently work for legacy
+  single-variant jobs but do nothing for the (much more common in practice) multi-variant ABR path.
+  Resolves the index to the real, already-extracted `sub-{index}.vtt` sidecar (the SAME per-type
+  ordinal `SubtitleExtractor::detectTextTracks()`/`buildExtractCommand()` already use to name the VTT
+  sidecar files written into the job's `hls_dir`) — checked with `is_file()` before use, degrading
+  silently when not (yet) present.
+
+**Honest, explicitly-documented remaining gap (not overclaimed as done):** `StreamManager::setSubtitleBurnIn()`/
+`getSubtitleBurnInConfig()` themselves STILL have zero real callers in production. Traced why: their only
+possible caller would need a live `StreamManager`-tracked stream, but `StreamManager::createStream()` —
+the ONLY method that ever populates `$activeStreams` — itself has ZERO callers anywhere in `src/`
+(confirmed by grep). This means the entire `StreamManager` active-stream-tracking subsystem is dead code
+in production, independent of and pre-dating this subtitle-burn-in fix (it also means the admin
+dashboard's "active streams" widget, which reads `StreamManager` via `DashboardService`, is fed from an
+always-empty registry — a separate, out-of-scope finding worth flagging for a future audit). Bridging
+`StreamManager`'s per-session config into `TranscodeManager`'s per-job pipeline for real would require
+inventing a NEW session/stream-tracking integration spanning the auth/session layer, `StreamManager`, and
+`TranscodeManager` (there is currently no shared identifier connecting a `StreamManager` `streamId` to a
+`TranscodeManager` `jobId` anywhere in the codebase) — this is materially larger than a subtitle-burn-in
+bug fix and would be inventing new architecture beyond this step's scope, so it was deliberately NOT
+attempted. What WAS done: `TranscodeManager::ensureHlsJob()`'s new option is shaped identically to
+`StreamManager::getSubtitleBurnInConfig()`'s return value specifically so that IF a future step revives
+`StreamManager` (wires a real caller to `createStream()`), threading its config into `ensureHlsJob()`
+would need zero further changes to this pipeline — the real per-segment ffmpeg wiring (the part actually
+named in the audit's file list) is genuinely live and tested end-to-end; only the StreamManager-specific
+last mile remains, and it remains for a documented, traced reason rather than being silently dropped.
+
+**Tests added/updated:**
+- `SubtitleBurnerTest.php`: `test_filtergraph_escaping_backslashes` (rewritten, exact-match, VTT format),
+  `test_filtergraph_escaping_colon_only_path` (new), `test_get_burn_in_args_vaapi` (rewritten to assert
+  order). 17 tests, 50 assertions, all green.
+- `FfmpegRunnerSubtitleBurnInTest.php` (new file): `testBuildSegmentCommandOmitsSubtitleFilterWhenNotConfigured`,
+  `testBuildSegmentCommandIncludesSubtitleFilterWhenEnabled` (asserts the filter appears AND precedes the
+  scale filter), `testBuildSegmentCommandSkipsSubtitleFilterWhenFileMissing`,
+  `testBuildHwaccelSegmentCommandIncludesSubtitleFilterBeforeHwupload` (VAAPI capability, asserts order),
+  `testBuildHwaccelSegmentCommandOmitsSubtitleFilterWhenNotConfigured`. 5 tests, 16 assertions.
+- `TranscodeManagerTest.php`: `testEnsureHlsJobPersistsSubtitleBurnInOptions`,
+  `testEnsureHlsJobDefaultsSubtitleBurnInToDisabled`, `testEnsureSegmentResolvesSubtitleBurnInForLegacyJob`,
+  `testEnsureSegmentSkipsSubtitleBurnInWhenSidecarMissing`,
+  `testEnsureSegmentResolvesSubtitleBurnInForMultiVariantJob` (the last of these specifically exercises
+  the legacy-vs-multi-variant merge gap described above — builds a real `AbrLadder`-derived multi-variant
+  job row and proves the job-level index still reaches the per-rendition segment command). 90 tests
+  total in this file, all green.
+
+**Verification (actual commands run):**
+- `phpunit tests/Unit/Media/Transcoding/` (whole directory) → **338 tests, 1160 assertions, all green**.
+- `phpunit --testsuite Unit --no-coverage` (full server Unit suite, run at final HEAD after all three
+  commits) → **5115 tests, 39190 assertions, 5 skipped, 0 failures**.
+- `phpstan analyze src/ -c phpstan.neon.dist` (full configured path, level 9) → **[OK] No errors**, run
+  fresh at final HEAD.
+- `phpcs --standard=PSR12` on every changed `src/` file → 0 errors; pre-existing line-length warnings on
+  lines this diff did not touch (independently confirmed via `git stash`/`git diff` that they predate
+  this change, e.g. `TranscodeManager.php:411/473/1738/...`) are unchanged in count/location.
+  `SubtitleBurnerTest.php` shows 17 pre-existing snake_case method-name errors (confirmed via `git stash`
+  that 16 of the 17 existed before this change — the whole file uses snake_case test method names as its
+  established convention; the new `test_filtergraph_escaping_colon_only_path` follows the same
+  file-local convention rather than introducing an inconsistent style).
+
+### Commits (3, one per step, `git pull --rebase origin master` before each, pushed after each)
+
+1. `6a6e5005` — `transcode: SV-1.4 add zscale filter-string test` (test-only; no `src/` behavior change).
+2. `9ce4db5f` — `transcode: SV-1.5 fix libplacebo filter uses non-existent ffmpeg options`.
+3. `a0803f7d` — `transcode: SV-1.6 fix colon escaping + VAAPI filter order + wire subtitle burn-in into per-segment pipeline`.
+
+All three pushed cleanly to `origin/master` (no conflicts — confirmed sole-writer status held for the
+whole pass via successive `git pull --rebase origin master` no-ops between commits).
+
+**SV-1.4 / SV-1.5 / SV-1.6 are all CLOSED** as of this pass. Cross-step note for whoever picks up
+**SV-4.13** (removal of `buildTranscodeCommandWithProfile()`): its own "confirm zero callers before
+deleting" check must NOT be misled by this pass's changes into ALSO flagging `SubtitleBurner`/
+`HwaccelCommandBuilder`/`StreamManager::setSubtitleBurnIn()` as removal candidates just because they were
+"recently touched" — `SubtitleBurner` now has REAL callers (`FfmpegRunner::buildSegmentCommand()`/
+`buildHwaccelSegmentCommand()`, via the new `resolveSubtitleBurnInFilter()`), so it and its supporting
+`SubtitleFormat`/`SubtitleTrack` value objects are NOT removal candidates. `HwaccelCommandBuilder` itself
+is UNCHANGED by this pass and remains genuinely zero-caller (only reachable via
+`buildTranscodeCommandWithProfile()`) — it IS still a legitimate SV-4.13 removal candidate alongside
+`buildTranscodeCommandWithProfile()` itself, exactly as originally scoped.

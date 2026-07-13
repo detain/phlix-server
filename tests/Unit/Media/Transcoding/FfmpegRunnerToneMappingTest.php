@@ -7,24 +7,40 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use PHPUnit\Framework\TestCase;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use ReflectionMethod;
+use ReflectionProperty;
 
 /**
- * SV-1.4: directly exercises {@see FfmpegRunner::buildZscaleToneMapFilter()}
- * via reflection.
+ * SV-1.4 / SV-1.5: directly exercises the private tone-map filter-string
+ * builders on {@see FfmpegRunner} via reflection.
  *
  * Prior coverage (in {@see FfmpegRunnerHwaccelTest}) only ever stubbed
- * {@see FfmpegRunner::getToneMappingProfile()} wholesale, so this private
- * builder was never actually invoked by a test even though the audit
- * confirmed its output is the correct HDR→SDR tone-map graph. This test
- * closes that gap and pins the exact filter string, which was verified
- * against a real, on-box ffmpeg (6.1.1, built with --enable-libzimg) as part
- * of the SV-1.4/SV-1.5 pass:
+ * {@see FfmpegRunner::getToneMappingProfile()} wholesale, so neither
+ * {@see FfmpegRunner::buildZscaleToneMapFilter()} nor
+ * {@see FfmpegRunner::buildLibplaceboToneMapFilter()} was ever actually
+ * invoked by a test. These tests close that gap and pin the exact filter
+ * strings, both of which were verified against a real, on-box ffmpeg
+ * (6.1.1, built with --enable-libplacebo / --enable-libzimg) as part of the
+ * SV-1.4/SV-1.5 fix:
  *
  *  - zscale graph: `ffmpeg -f lavfi -i testsrc,setparams=... -vf
  *    "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,
  *    tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
- *    -f null -` exits 0 (a real, successful HDR→SDR tone-map, not merely a
- *    parseable command line).
+ *    -f null -` exits 0.
+ *  - libplacebo graph: the OLD graph (`peak=`/`input_color_space=`/etc.)
+ *    failed immediately with `Error applying option 'peak' to filter
+ *    'libplacebo': Option not found` (confirmed live on this box — those
+ *    options do not exist on the real filter, per `ffmpeg -h
+ *    filter=libplacebo`). The NEW graph
+ *    (`tonemapping=hable:colorspace=bt709:color_primaries=bt709:
+ *    color_trc=bt709:range=tv,format=yuv420p`) was run against a synthetic
+ *    BT.2020/PQ-tagged source with an explicit Vulkan device
+ *    (`-init_hw_device vulkan=vk -filter_hw_device vk` — required on this
+ *    sandbox because it has no real GPU, only a software `llvmpipe` Vulkan
+ *    device that libplacebo's OWN auto-probe excludes via
+ *    `!params->allow_software`; a real GPU box would auto-probe
+ *    successfully with no extra flags) and exited 0, producing
+ *    `yuv420p(tv, bt709, progressive)` output — a genuine successful
+ *    tone-map, not merely a parseable command line.
  *
  * @covers \Phlix\Media\Transcoding\FfmpegRunner
  */
@@ -45,6 +61,29 @@ final class FfmpegRunnerToneMappingTest extends TestCase
         /** @var string $result */
         $result = $method->invoke($runner, $colorMeta);
         return $result;
+    }
+
+    /**
+     * @param array<string, mixed> $colorMeta
+     */
+    private function invokeLibplacebo(FfmpegRunner $runner, array $colorMeta = []): string
+    {
+        $method = new ReflectionMethod(FfmpegRunner::class, 'buildLibplaceboToneMapFilter');
+        $method->setAccessible(true);
+        /** @var string $result */
+        $result = $method->invoke($runner, $colorMeta);
+        return $result;
+    }
+
+    /**
+     * Forces the cached libplacebo-detection result so the test is
+     * deterministic and never depends on the box's actual ffmpeg build.
+     */
+    private function forceLibplaceboDetected(FfmpegRunner $runner, bool $available): void
+    {
+        $prop = new ReflectionProperty(FfmpegRunner::class, 'hasLibplacebo');
+        $prop->setAccessible(true);
+        $prop->setValue($runner, $available);
     }
 
     /**
@@ -83,5 +122,64 @@ final class FfmpegRunnerToneMappingTest extends TestCase
         $withEmptyMeta = $this->invokeZscale($runner, []);
 
         $this->assertSame($withHlgMeta, $withEmptyMeta);
+    }
+
+    /**
+     * SV-1.5: when ffmpeg lacks libplacebo, falls back to the exact same
+     * zscale graph as SV-1.4 (no partial/broken libplacebo fragment leaks
+     * through).
+     */
+    public function testBuildLibplaceboToneMapFilterFallsBackToZscaleWhenUnavailable(): void
+    {
+        $runner = $this->runner();
+        $this->forceLibplaceboDetected($runner, false);
+
+        $filter = $this->invokeLibplacebo($runner, [
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'color_space' => 'bt2020nc',
+        ]);
+
+        $this->assertSame($this->invokeZscale($runner), $filter);
+    }
+
+    /**
+     * SV-1.5 (the core fix): when libplacebo IS available, emits the
+     * corrected filter graph using ONLY option names that genuinely exist on
+     * the real `libplacebo` ffmpeg filter (verified via `ffmpeg -h
+     * filter=libplacebo` and by actually running this exact string through
+     * ffmpeg — see class docblock). Critically, this must NOT regress to the
+     * old, non-existent `peak=`/`input_color_space=`/`input_primaries=`/
+     * `input_trc=`/`output_color_space=`/`output_primaries=`/`output_trc=`
+     * options, which fail immediately with "Option not found".
+     */
+    public function testBuildLibplaceboToneMapFilterEmitsRealFfmpegOptionsWhenAvailable(): void
+    {
+        $runner = $this->runner();
+        $this->forceLibplaceboDetected($runner, true);
+
+        $filter = $this->invokeLibplacebo($runner, [
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'color_space' => 'bt2020nc',
+        ]);
+
+        $this->assertSame(
+            'libplacebo=tonemapping=hable:colorspace=bt709:'
+                . 'color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p',
+            $filter
+        );
+
+        // The non-existent options from the pre-fix graph must never reappear.
+        $this->assertStringNotContainsString('peak=', $filter);
+        $this->assertStringNotContainsString('input_color_space=', $filter);
+        $this->assertStringNotContainsString('input_primaries=', $filter);
+        $this->assertStringNotContainsString('input_trc=', $filter);
+        $this->assertStringNotContainsString('output_color_space=', $filter);
+        $this->assertStringNotContainsString('output_primaries=', $filter);
+        $this->assertStringNotContainsString('output_trc=', $filter);
+
+        // The tone-mapping curve/mode is preserved.
+        $this->assertStringContainsString('tonemapping=hable', $filter);
     }
 }

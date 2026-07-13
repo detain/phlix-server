@@ -549,7 +549,43 @@ class FfmpegRunner
      * HDR→SDR tone mapping. When libplacebo is not available, falls back to
      * the zscale+tonemap software filter chain from SV-1.4.
      *
+     * SV-1.5 fix: the previous graph used `peak=`/`input_color_space=`/
+     * `input_primaries=`/`input_trc=`/`output_color_space=`/
+     * `output_primaries=`/`output_trc=` — NONE of these option names exist on
+     * the real `libplacebo` filter (confirmed on this box by running
+     * `ffmpeg -h filter=libplacebo` and by actually executing the old filter
+     * against a synthetic HDR-tagged input, which failed immediately with
+     * `Error applying option 'peak' to filter 'libplacebo': Option not
+     * found`). The real filter:
+     *  - has NO `input_*`/`output_*` split — it reads the input color tags
+     *    (space/primaries/transfer) directly off the decoded frame, and the
+     *    `colorspace=`/`color_primaries=`/`color_trc=` options instead select
+     *    the DESIRED OUTPUT tagging (mirroring what {@see buildZscaleToneMapFilter()}
+     *    achieves with `zscale=t=bt709:m=bt709`), plus `range=` for the
+     *    output color range (`tv` = legal/limited range, matching the zscale
+     *    graph's trailing `r=tv`);
+     *  - does NOT support manually setting a `peak` luminance value at all —
+     *    peak detection is automatic via the (default-on) `peak_detect`
+     *    option, so no peak option is emitted here.
+     * `tonemapping=hable` is kept (the same filmic tone-mapping curve
+     * {@see buildZscaleToneMapFilter()} uses via `tonemap=hable`).
+     *
+     * Verified end-to-end (not just option parsing) by constructing a
+     * synthetic BT.2020/PQ-tagged test source and running this exact filter
+     * string through real ffmpeg with a Vulkan device available
+     * (`ffmpeg -f lavfi -i "testsrc,setparams=color_primaries=bt2020:
+     * color_trc=smpte2084:colorspace=bt2020nc" -vf "<this filter>" -f null -`):
+     * it exits 0 and produces `yuv420p(tv, bt709, progressive)` output — a
+     * real, successful HDR→SDR tone-map, not merely a parseable command line.
+     *
      * @param array<string, mixed> $colorMeta Color metadata from extractColorMetadata()
+     *                                        (unused here — the real filter reads
+     *                                        the input's own color tags from the
+     *                                        frame rather than a manually-supplied
+     *                                        input_* option; kept for signature
+     *                                        parity with the zscale builder and
+     *                                        potential future use, e.g. a
+     *                                        source-primaries-aware output choice).
      *
      * @return string FFmpeg filter chain for libplacebo tone mapping (or zscale fallback)
      *
@@ -563,20 +599,12 @@ class FfmpegRunner
             return $this->buildZscaleToneMapFilter($colorMeta);
         }
 
-        // Real libplacebo tone mapping graph:
-        // - tonemapping=hable: high-quality filmic tonemap curve
-        // - gamut_warning: flag clipped pixels for visual debugging if needed
-        // - input_/output_color_space/primaries/transfer: explicit HDR→SDR conversion
-        //   Use the probed color metadata when available, with bt2020/nc defaults.
-        $inputTransfer = $colorMeta['color_transfer'] ?: 'bt2020-10';
-        $inputPrimaries = $colorMeta['color_primaries'] ?: 'bt2020';
-        $inputSpace = $colorMeta['color_space'] ?: 'bt2020nc';
-
-        // libplacebo always outputs to the target color space; we target BT.709 SD.
-        // Use peak=43.0 which is a typical HDR10 display brightness (cd/m²).
-        return "libplacebo=tonemapping=hable:peak=43.0:"
-            . "input_color_space=bt2020nc:input_primaries=bt2020:input_trc=bt2020-10:"
-            . "output_color_space=bt709:output_primaries=bt709:output_trc=bt709,format=yuv420p";
+        // Real, verified libplacebo tone-mapping graph: `tonemapping=hable`
+        // selects the tone-map curve; `colorspace=`/`color_primaries=`/
+        // `color_trc=bt709` + `range=tv` request BT.709 SDR legal-range
+        // output (peak luminance is auto-detected — no `peak` option exists).
+        return 'libplacebo=tonemapping=hable:colorspace=bt709:'
+            . 'color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p';
     }
 
     /**

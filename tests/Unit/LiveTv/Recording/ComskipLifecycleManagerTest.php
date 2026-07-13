@@ -213,4 +213,156 @@ class ComskipLifecycleManagerTest extends TestCase
         // Initially 0
         $this->assertEquals(0, $this->manager->getRunningCount());
     }
+
+    /**
+     * SV-3.1d-comskip: a comskip failure/timeout must NOT bubble out of the
+     * completion path — the recording stays playable, just without markers.
+     */
+    public function testComskipFailureDoesNotEscapeEnqueue(): void
+    {
+        $recordingId = 'rec-fail';
+        $filePath = '/var/recordings/rec-fail.ts';
+
+        $this->mockDb->method('query')->willReturnCallback(
+            function ($sql, $params) use ($recordingId, $filePath) {
+                if (strpos($sql, 'SELECT commercial_processed_at') !== false) {
+                    return []; // not processed
+                }
+                return [[
+                    'recording_id' => $recordingId,
+                    'storage_path' => $filePath,
+                    'commercial_processed_at' => null,
+                ]];
+            }
+        );
+
+        $this->mockIntegration
+            ->method('processRecording')
+            ->willThrowException(new \RuntimeException('comskip boom'));
+
+        // Must not throw despite the underlying comskip failure.
+        $this->manager->enqueue($recordingId, $filePath);
+
+        // runningCount released even though processing threw.
+        $this->assertSame(0, $this->manager->getRunningCount());
+    }
+
+    /**
+     * SV-3.1d-comskip: in a running-worker environment, enqueue() must DEFER the
+     * (up-to-300s) comskip run to a one-shot timer rather than processing it
+     * inline on the hot completion path. The item stays queued until the drain
+     * fires. Uses a testable subclass because a unit test cannot spin a real
+     * Workerman worker (Timer::add refuses to run otherwise).
+     */
+    public function testEnqueueDefersToTimerAndDoesNotProcessInline(): void
+    {
+        $recordingId = 'rec-defer';
+        $filePath = '/var/recordings/rec-defer.ts';
+
+        $this->mockDb->method('query')->willReturnCallback(
+            function ($sql, $params) use ($recordingId, $filePath) {
+                if (strpos($sql, 'SELECT commercial_processed_at') !== false) {
+                    return [];
+                }
+                return [[
+                    'recording_id' => $recordingId,
+                    'storage_path' => $filePath,
+                    'commercial_processed_at' => null,
+                ]];
+            }
+        );
+
+        // Testable subclass: force the deferred path (as if a real Workerman
+        // worker were running) and record timer arming without touching
+        // Workerman\Timer (which refuses to run outside a live worker).
+        $manager = new class (
+            $this->mockIntegration,
+            $this->mockDb,
+            new NullLogger(),
+            true,
+            2
+        ) extends ComskipLifecycleManager {
+            /** @var int Number of times the drain timer was armed. */
+            public int $armCount = 0;
+
+            protected function shouldDeferDrain(): bool
+            {
+                return true;
+            }
+
+            protected function armDrainTimer(): void
+            {
+                $this->armCount++;
+            }
+        };
+
+        $manager->enqueue($recordingId, $filePath);
+
+        // Deferred: queued + a timer armed, but NOT processed inline.
+        $this->assertSame(1, $manager->getPendingCount(), 'enqueue must defer off the hot path');
+        $this->assertSame(1, $manager->armCount, 'a drain timer must be armed');
+
+        // Now the drain runs (as the timer would): the item is processed once.
+        $this->mockIntegration
+            ->expects($this->once())
+            ->method('processRecording')
+            ->with($recordingId, $filePath);
+
+        $manager->drainQueue();
+
+        $this->assertSame(0, $manager->getPendingCount());
+    }
+
+    /**
+     * SV-3.1d-comskip: when the deferred one-shot timer fires, the queue drains
+     * and the recording is processed exactly once.
+     */
+    public function testDeferredTimerFiringDrainsQueue(): void
+    {
+        $recordingId = 'rec-fire';
+        $filePath = '/var/recordings/rec-fire.ts';
+
+        $this->mockDb->method('query')->willReturnCallback(
+            function ($sql, $params) use ($recordingId, $filePath) {
+                if (strpos($sql, 'SELECT commercial_processed_at') !== false) {
+                    return [];
+                }
+                return [[
+                    'recording_id' => $recordingId,
+                    'storage_path' => $filePath,
+                    'commercial_processed_at' => null,
+                ]];
+            }
+        );
+
+        $this->mockIntegration
+            ->expects($this->once())
+            ->method('processRecording')
+            ->with($recordingId, $filePath);
+
+        // Testable subclass whose armed "timer" fires synchronously — simulating
+        // the one-shot drain timer going off on a live event loop.
+        $manager = new class (
+            $this->mockIntegration,
+            $this->mockDb,
+            new NullLogger(),
+            true,
+            2
+        ) extends ComskipLifecycleManager {
+            protected function shouldDeferDrain(): bool
+            {
+                return true;
+            }
+
+            protected function armDrainTimer(): void
+            {
+                $this->onDrainTimer();
+            }
+        };
+
+        $manager->enqueue($recordingId, $filePath);
+
+        // Timer fired → queue drained → processed.
+        $this->assertSame(0, $manager->getPendingCount());
+    }
 }

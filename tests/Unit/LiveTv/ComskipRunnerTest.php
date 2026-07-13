@@ -144,4 +144,41 @@ SCRIPT;
         $this->expectExceptionMessage('Comskip is not available');
         $runner->run('/tmp/test.ts');
     }
+
+    /**
+     * SV-4.3 / SV-3.1d-comskip: a wedged comskip that never exits is SIGKILLed
+     * at the configured timeout, and the run reports a bounded timeout error
+     * rather than blocking forever. Uses a 1-second timeout override so the test
+     * does not have to wait the production 300s.
+     */
+    public function testRunTimesOutAndKillsWedgedProcess(): void
+    {
+        // A fake comskip that sleeps far longer than the timeout, holding its
+        // stdout/stderr pipes open with no output — the classic wedged process.
+        $tempScript = '/tmp/comskip_wedged_' . uniqid() . '.sh';
+        file_put_contents($tempScript, "#!/bin/bash\nsleep 30\n");
+        chmod($tempScript, 0755);
+
+        // 1-second timeout so the poll loop reaches its deadline quickly.
+        $runner = new ComskipRunner($tempScript, null, 1);
+        $recordingPath = '/tmp/test_recording_' . uniqid() . '.ts';
+        touch($recordingPath);
+
+        $start = hrtime(true);
+        try {
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Comskip timed out after 1 seconds');
+            $runner->run($recordingPath);
+        } finally {
+            $elapsedSeconds = (hrtime(true) - $start) / 1_000_000_000.0;
+            // Must give up promptly (well under the wedged process's 30s sleep),
+            // proving the timeout is reachable and the process was terminated.
+            $this->assertLessThan(10.0, $elapsedSeconds);
+            @unlink($recordingPath);
+            @unlink(substr($recordingPath, 0, -3) . '.edl');
+            if (file_exists($tempScript)) {
+                unlink($tempScript);
+            }
+        }
+    }
 }

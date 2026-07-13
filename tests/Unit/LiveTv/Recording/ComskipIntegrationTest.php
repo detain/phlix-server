@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\LiveTv\Recording;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\ComskipEdlParser;
 use Phlix\LiveTv\ComskipRunner;
+use Phlix\LiveTv\Recording\ChapterMarkerService;
 use Phlix\LiveTv\Recording\ComskipIntegration;
 use Phlix\Media\Markers\ChapterMarker;
 use PHPUnit\Framework\MockObject\MockObject;
@@ -231,5 +232,93 @@ class ComskipIntegrationTest extends TestCase
         $this->expectExceptionMessage('Recording file not found');
 
         $this->integration->processRecording($recordingId, $recordingPath);
+    }
+
+    /**
+     * SV-3.1d-comskip: when wired with a ChapterMarkerService AND the recording
+     * is linked to a real media item, the parsed EDL segments are attached as
+     * chapter markers on THAT media item.
+     */
+    public function testProcessRecordingAttachesChaptersToLinkedMediaItem(): void
+    {
+        $recordingId = 'rec-1';
+        $recordingPath = $this->tempDir . '/rec1.ts';
+        $edlPath = $this->tempDir . '/rec1.edl';
+        file_put_contents($recordingPath, 'fake video content');
+        file_put_contents($edlPath, "0.0\t30.0\t3\n");
+
+        $this->mockRunner->method('isAvailable')->willReturn(true);
+        $this->mockRunner->expects($this->once())->method('run')->with($recordingPath)->willReturn($edlPath);
+
+        $chapters = [new ChapterMarker(0, 30, 'Commercial @ 00:00:00 (30s)')];
+        $this->mockParser->method('parse')->with($edlPath)->willReturn($chapters);
+
+        // SELECT media_item_id → 'media-1'; UPDATE stats → 1.
+        $this->mockDb->method('query')->willReturnCallback(function ($sql, $params) {
+            if (strpos($sql, 'SELECT media_item_id') !== false) {
+                return [['media_item_id' => 'media-1']];
+            }
+            return 1;
+        });
+
+        /** @var ChapterMarkerService&MockObject $chapterService */
+        $chapterService = $this->createMock(ChapterMarkerService::class);
+        $chapterService->expects($this->once())
+            ->method('persistChapters')
+            ->with('media-1', $chapters);
+
+        $integration = new ComskipIntegration(
+            $this->mockRunner,
+            $this->mockParser,
+            $this->mockDb,
+            new NullLogger(),
+            $chapterService,
+        );
+
+        $result = $integration->processRecording($recordingId, $recordingPath);
+
+        $this->assertSame($edlPath, $result['edl_path']);
+        $this->assertSame(1, $result['segments']);
+    }
+
+    /**
+     * SV-3.1d-comskip: a recording with NO linked media item is skipped WITHOUT
+     * spending a comskip run and without attaching any markers — there is nothing
+     * to attach to (e.g. a failed / empty capture that was never registered).
+     */
+    public function testProcessRecordingSkipsWhenNoLinkedMediaItem(): void
+    {
+        $recordingId = 'rec-2';
+        $recordingPath = $this->tempDir . '/rec2.ts';
+        file_put_contents($recordingPath, 'fake video content');
+
+        $this->mockRunner->method('isAvailable')->willReturn(true);
+        // Comskip must NOT run when there is no media item to attach to.
+        $this->mockRunner->expects($this->never())->method('run');
+
+        // SELECT media_item_id → null (unlinked recording).
+        $this->mockDb->method('query')->willReturnCallback(function ($sql, $params) {
+            if (strpos($sql, 'SELECT media_item_id') !== false) {
+                return [['media_item_id' => null]];
+            }
+            return 1;
+        });
+
+        /** @var ChapterMarkerService&MockObject $chapterService */
+        $chapterService = $this->createMock(ChapterMarkerService::class);
+        $chapterService->expects($this->never())->method('persistChapters');
+
+        $integration = new ComskipIntegration(
+            $this->mockRunner,
+            $this->mockParser,
+            $this->mockDb,
+            new NullLogger(),
+            $chapterService,
+        );
+
+        $result = $integration->processRecording($recordingId, $recordingPath);
+
+        $this->assertSame('', $result['edl_path']);
+        $this->assertSame(0, $result['segments']);
     }
 }

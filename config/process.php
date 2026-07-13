@@ -66,4 +66,15 @@ return [
         'count'        => 1,
         'poll_seconds' => 30,   // matches config/media_asset_jobs.php worker_interval
     ],
+
+    // SV-2.9: similarity computation worker. Drains the file-based job queue
+    // (similarity_jobs.job_queue_dir) of media items awaiting item-similarity
+    // computation. Without this consumer the scanner's per-item enqueue would
+    // accumulate undrained in /tmp (disk leak). Bounded concurrency
+    // (max_concurrent) limits parallel per-library candidate scans.
+    'similarity' => [
+        'enabled'      => true,
+        'count'        => 1,
+        'poll_seconds' => 30,   // matches config/similarity_jobs.php worker_interval
+    ],
 ];

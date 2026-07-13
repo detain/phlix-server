@@ -589,12 +589,53 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 ->constructorParameter('itemRepository', get(ItemRepository::class)),
 
             // SV-2.9: file-based similarity job queue (keyed by media item ID).
-            // Its only ctor dependency is an optional queue directory, which
-            // defaults to the class constant — autowire leaves it at the default.
-            // Registered explicitly so the MediaScanner wiring above resolves a
-            // shared instance (rather than PHP-DI silently declining to build an
-            // unregistered class via a named constructorParameter).
-            \Phlix\Media\SimilarityJobStore::class => autowire(),
+            // Config-driven (similarity_jobs.job_queue_dir) via a factory that
+            // mirrors the MediaAssetJobStore idiom, so the scanner (producer) and
+            // the SimilarityWorker (consumer) resolve the SAME queue directory
+            // even when an operator overrides it. Registered explicitly so the
+            // MediaScanner wiring above resolves a shared instance.
+            \Phlix\Media\SimilarityJobStore::class => factory(static function (ContainerInterface $c): \Phlix\Media\SimilarityJobStore {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $simCfg = $appConfig['similarity_jobs'] ?? null;
+                if (!is_array($simCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../config/similarity_jobs.php';
+                    $simCfg = is_array($inc) ? $inc : [];
+                }
+                $queueDir = is_string(($simCfg['job_queue_dir'] ?? null))
+                    ? $simCfg['job_queue_dir']
+                    : '/tmp/phlix_similarity_jobs';
+                return new \Phlix\Media\SimilarityJobStore($queueDir);
+            }),
+
+            // SV-2.9: similarity worker — the CONSUMER that drains the queue the
+            // scanner enqueues into. Without it the enqueued jobs accumulate
+            // undrained on disk (leak). Autowires the SimilarityJobStore + the
+            // SimilarityService above; max_concurrent is read from config. Spawned
+            // as a managed worker by start.php (config/managed_workers.php).
+            \Phlix\Media\SimilarityWorker::class => factory(static function (ContainerInterface $c): \Phlix\Media\SimilarityWorker {
+                $appConfig = $c->get('app.config');
+                if (!is_array($appConfig)) {
+                    $appConfig = [];
+                }
+                $simCfg = $appConfig['similarity_jobs'] ?? null;
+                if (!is_array($simCfg)) {
+                    /** @var mixed $inc */
+                    $inc = @include __DIR__ . '/../../../../config/similarity_jobs.php';
+                    $simCfg = is_array($inc) ? $inc : [];
+                }
+                $maxConcurrent = is_int(($simCfg['max_concurrent'] ?? null))
+                    ? $simCfg['max_concurrent']
+                    : 2;
+                /** @var \Phlix\Media\SimilarityJobStore */
+                $store = $c->get(\Phlix\Media\SimilarityJobStore::class);
+                /** @var \Phlix\Media\SimilarityService */
+                $service = $c->get(\Phlix\Media\SimilarityService::class);
+                return new \Phlix\Media\SimilarityWorker($store, $service, null, $maxConcurrent);
+            }),
 
             // P4-S2: because-you-watched recommendations engine
             \Phlix\Media\RecommendationService::class => autowire()

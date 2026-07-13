@@ -1629,6 +1629,80 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame($maxrate * 2, $captParams['bufsize']);
     }
 
+    /**
+     * SV-4.2 ([S-F23]): when a launched segment encode never publishes within the
+     * poll window (the client abandoned the seek, or the encode hung), the poll
+     * loop's finally KILLS the tracked ffmpeg PID rather than leaving it to run to
+     * completion burning CPU. The registry entry is dropped by the kill (no leak).
+     */
+    public function testEnsureSegmentKillsAbandonedEncodeOnWaitTimeout(): void
+    {
+        $dir = $this->segmentDir . '/mv-timeout';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+
+        $final = "{$dir}/seg-v480p-00002.ts";
+        $ff = $this->createMock(FfmpegRunner::class);
+        // Launch "succeeds" (returns a PID) but the segment file is NEVER created,
+        // so the poll times out.
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturn(4321);
+        // The abandoned encode must be killed via the cancel key ($final), and the
+        // completion (release) path must NOT run.
+        $ff->expects($this->once())->method('killSegmentProcess')->with($final);
+        $ff->expects($this->never())->method('releaseSegmentProcess');
+
+        // Short poll ceiling (200ms) so the timeout path is fast.
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6, null, null, null, null, null, null, 200);
+        $path = $manager->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNull($path, 'a timed-out segment resolves to null (503 upstream)');
+    }
+
+    /**
+     * SV-4.2: the happy path — when the encode publishes the segment, the finally
+     * RELEASES the registry entry (drops it without killing) so the map never
+     * leaks, and does NOT kill the (already-exited) process.
+     */
+    public function testEnsureSegmentReleasesRegistryOnCompletion(): void
+    {
+        $dir = $this->segmentDir . '/mv-release';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+
+        $final = "{$dir}/seg-v480p-00002.ts";
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use (&$captOut): int {
+                file_put_contents($out, 'encoded');
+                return 4321;
+            }
+        );
+        $ff->expects($this->once())->method('releaseSegmentProcess')->with($final);
+        $ff->expects($this->never())->method('killSegmentProcess');
+
+        $path = $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertSame($final, $path);
+    }
+
     public function testEnsureSegmentResolvesCopyOriginalVariant(): void
     {
         // The copy "original" (H.264 + AAC source) resolves to a genuine -c copy

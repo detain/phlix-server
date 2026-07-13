@@ -1069,6 +1069,42 @@ class RelayConsumerTest extends TestCase
     }
 
     /**
+     * SV-4.2 ([S-F23], X1 server half): an HTTP_CANCEL frame kills any on-demand
+     * ffmpeg encode tracked for that request id in the segment-process registry,
+     * so an abandoned scrub-storm segment stops burning CPU immediately. The
+     * registry's signal sender is injected so no real process is touched.
+     */
+    public function test_http_cancel_kills_tracked_segment_encode(): void
+    {
+        $dispatcher = static fn (\Phlix\Server\Http\Request $req): \Phlix\Server\Http\Response
+            => new \Phlix\Server\Http\Response();
+        $consumer = $this->createConsumer(null, $dispatcher);
+
+        $signalled = [];
+        $registry = new \Phlix\Media\Transcoding\SegmentProcessRegistry(
+            null,
+            static function (int $pid, int $signal) use (&$signalled): void {
+                $signalled[] = $pid;
+            },
+            static fn (int $pid): bool => false,
+            0.01,
+        );
+        $consumer->setSegmentProcessRegistry($registry);
+        $this->activate($consumer);
+
+        $requestId = 77;
+        // An on-demand encode is tracked under the request id.
+        $registry->register((string) $requestId, 9090);
+        $this->assertSame(1, $registry->registeredKeyCount());
+
+        // The hub cancels the request.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, ''));
+
+        $this->assertSame([9090], $signalled, 'HTTP_CANCEL must signal the tracked PID');
+        $this->assertSame(0, $registry->registeredKeyCount(), 'kill must drop the entry — no leak');
+    }
+
+    /**
      * Read the number of in-flight chunked-request accumulators via reflection.
      */
     private function pendingAccumulatorCount(RelayConsumer $consumer): int

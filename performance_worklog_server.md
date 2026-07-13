@@ -97,7 +97,7 @@
 - [ ] SV-4.7  WS auth enforcement
 - [x] SV-4.8  Router static-path fast map + DI for string handlers ✅ (commit c8f94c04)
 - [x] SV-4.9  Migration ledger + document rewrite-class migrations ✅ (commit c8f94c04)
-- [x] SV-4.10 Provider-priority config single source of truth ✅ (commit c8f94c04)
+- [x] SV-4.10 Provider-priority config single source of truth ✅ RE-COMPLETED 2026-07-13 — the `c8f94c04` reference above is stale audit-trail from the original opencode pass (that commit does not touch any SV-4.10 file); the 2026-07-12 Claude Code re-audit at line ~2575 below correctly found the provider-priority half NOT-DONE (hrtime half was genuinely done). Real fix: see the "Implementer — SV-4.10" entry near the end of this file for the actual commit hash + full verification.
 - [x] SV-4.11 Fix PluginCatalogService blocking curl + wrong docblock ✅ (commit c8f94c04)
 - [x] SV-4.12 Extend stale-job reaper glob to {chunk-*.m4s,seg-*.ts} ✅ (commit c8f94c04)
 - [x] SV-4.13 Remove superseded whole-file command builders ✅ (commit c8f94c04)
@@ -4346,3 +4346,276 @@ trigger (admin approve/disable/reject/delete acting on the same worker as a live
 within the TTL; revocation for a genuinely cross-worker status change (a different worker approved/
 disabled the user) still converges within the 5s TTL ceiling, as before; the cache is now hard-bounded at
 5000 distinct users with LRU eviction, so a long-lived worker cannot accumulate unbounded entries.
+
+## Reviewer (per-step: SV-1.4 / SV-1.5 / SV-1.6) — 2026-07-13
+
+Reviewed commits `6a6e5005` (SV-1.4 test), `9ce4db5f` (SV-1.5 libplacebo fix), `a0803f7d` (SV-1.6
+colon-escape + VAAPI order + per-segment wiring), and `a060efa9` (worklog). Independently re-ran every
+verification the Implementer claimed (did not take any of them on faith), plus additional adversarial
+tests of my own. Full server Unit suite reproduced green (5127 tests / 0 fail / 5 skip), `phpstan analyze
+src/ -c phpstan.neon.dist` level 9 clean, `phpcs --standard=PSR12` clean on every changed file (only
+pre-existing warnings/snake_case errors, confirmed via `git show <parent>:<file> | phpcs` diffing against
+each commit's parent — counts and locations match the Implementer's claims almost exactly, e.g.
+`TranscodeManager.php` 11→10 warnings after the diff, i.e. zero new ones).
+
+**SV-1.4 and SV-1.5: fully verified correct, no findings.** Independently ran `ffmpeg -h filter=libplacebo`
+on this box and confirmed every option name used in the new graph (`tonemapping`, `colorspace`,
+`color_primaries`, `color_trc`, `range`) genuinely exists, and that no `peak=`/`input_*`/`output_*` option
+exists. Reproduced both failure modes from scratch: the OLD graph
+(`libplacebo=tonemapping=hable:peak=43.0:input_color_space=...`) fails immediately with `Error applying
+option 'peak' to filter 'libplacebo': Option not found` (exit 8); the NEW graph
+(`libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p`)
+run against a synthetic BT.2020/PQ testsrc with an explicit `-init_hw_device vulkan=vk -filter_hw_device vk`
+(this sandbox has no real GPU, same environmental workaround the Implementer describic) exits 0 and
+produces `yuv420p(tv, bt709, progressive)` output. Also reproduced the SV-1.4 zscale graph end-to-end
+(exit 0, correct output tagging). The claims in `performance_worklog_server.md`'s Implementer entry and in
+`FfmpegRunner.php:544-622` are accurate.
+
+**SV-1.6: the core colon-escaping fix is genuinely correct (verified with a real, fully unmodified
+production run), but two findings:**
+
+1. **[MEDIUM] Overclaimed verification narrative for backslash-bearing subtitle paths — the
+   "double-escape round-trips to the EXACT original path" claim does not hold for paths containing a
+   literal `\` character, only for paths containing a bare `:` with no backslashes.**
+   `src/Media/Transcoding/Subtitles/SubtitleBurner.php:142-163` (docblock) and the `a0803f7d` commit
+   message both assert this was "confirmed via the terminal error changing from a parse error to `Unable
+   to open C:\Users\Test\ subtitles\movie.srt`" — i.e. the exact original Windows path, backslashes
+   intact, reached ffmpeg unmangled through `shell_exec()`.
+   I reproduced this end-to-end with **zero modifications to production code**: created a real file on
+   disk at the literal path `C:\Users\Test\ subtitles\movie.vtt` (backslash/colon are legal POSIX
+   filename bytes, so `is_file()` in `FfmpegRunner::resolveSubtitleBurnInFilter()` passes), then called
+   the real, unmodified `FfmpegRunner::buildSegmentCommand()` → `buildDetachedSegmentCommand()` →
+   `shell_exec()` chain exactly as `startSegmentEncode()` does. The result is **not** the claimed output —
+   ffmpeg's actual error is:
+   `Unable to open .../C:UsersTest subtitlesmovie.vtt` — every backslash has been silently stripped (not
+   just reduced), concatenating the path segments together, and the segment encode **fails outright**
+   (fatal filtergraph error, exit 8, no `.ts` produced) rather than gracefully degrading to "no burn-in."
+   I confirmed this multiple ways (real `shell_exec()` single-shell-layer test, the full nested
+   `sh -c`-in-`sh -c` production wrapper via a fake-ffmpeg argv-dumping script, and isolated `proc_open`
+   parameter sweeps at 1/2/3/4 raw backslash counts) — the double-escape is calibrated for the *colon*
+   case specifically (2 or 3 backslashes before a bare `:` do correctly collapse/reconstruct through the
+   shell + ffmpeg's two internal parse passes — I verified this works, matching the commit's core claim
+   for **colon-only** paths) but is not correct for backslash characters themselves, both before and
+   after this fix (I also confirmed the *pre-fix* single-escape function mangles a plain backslash-only
+   path identically — `back\up` → `backup` — so this is not a regression introduced by `a0803f7d`, it's a
+   pre-existing gap in the escaping scheme that the fix's own docblock/commit message inaccurately claims
+   to have closed for the backslash case specifically).
+   In practice this is low-severity for *this* codebase (subtitle sidecars are always named
+   `sub-{index}.vtt` under a server-controlled `hls_dir`, and literal backslash characters in real Linux
+   media-library paths are very rare), and the actually-targeted finding (S-F21's colon-escaping bug) is
+   genuinely fixed and verified. But the specific claim as written is factually wrong and not
+   reproducible via the documented method, and no test in `SubtitleBurnerTest.php` executes real ffmpeg
+   for the backslash case (`test_filtergraph_escaping_backslashes` only pins the escaped **string** via
+   `assertSame` — it would not catch this). Recommend correcting the docblock/worklog narrative (or
+   scoping the claim to "colon-only paths", which is what's actually verified) and, if backslash-bearing
+   paths are a plausible real input, adding a real-execution regression test similar to the manual
+   verification described.
+
+2. **[MEDIUM] `subtitle_burn_in_index`/`force_subtitle_burn_in` are not part of the job reuse key, so two
+   requests for the same (media, profile) that disagree on subtitle burn-in will silently share one job.**
+   `src/Media/Transcoding/TranscodeManager.php:333`: `$keyHash = sha1($mediaItemId . '|' . $profileName .
+   '|' . self::JOB_KEY_VERSION)` — no burn-in state is folded in. `findReusableJob()`
+   (`TranscodeManager.php:2415-2438`) matches purely on this hash. Since `subtitle_burn_in_index` is
+   fixed into a job's persisted `segment_params` **once**, at whichever `ensureHlsJob()` call actually
+   creates the job (`TranscodeManager.php:412-424`), the very next caller for the same media+profile that
+   passes a *different* `subtitle_burn_in_index` (or none) via `$options` gets the **first caller's**
+   burn-in setting silently applied to every segment it fetches — not its own. This is exactly the
+   "known landmine" class the review brief called out, and this specific case is materially more visible
+   than the codebase's one existing precedent: `client_capabilities` (`TranscodeManager.php:410-411`) has
+   the identical gap already (also excluded from the key), but that only nudges an audio-codec choice,
+   whereas subtitle burn-in silently forces (or withholds) a visible on-screen subtitle overlay a viewer
+   did not ask for. Today this is **dormant** — `subtitle_burn_in_index` has no real caller yet (confirmed
+   accurate per finding below), so the gap cannot currently be hit in production — but it is undocumented:
+   the commit/worklog's "honest gap" section discusses only the `StreamManager`-caller gap, never this
+   reuse-key interaction, even though the fix explicitly says it shaped the option "so a future bridge…
+   needs no further changes here" — implying this code path is expected to go live via a future caller,
+   at which point this gap becomes a real, user-visible cross-request bug. No test in
+   `TranscodeManagerTest.php` exercises two `ensureHlsJob()` calls with differing burn-in options against
+   the same media/profile. Recommend either folding `subtitle_burn_in_index`/`force_subtitle_burn_in` into
+   the job key hash (accepting one more job/segment-set fan-out per distinct burn-in choice) or explicitly
+   documenting this as a known limitation alongside the `StreamManager` gap.
+
+**Confirmed accurate (independently verified, not just trusted):**
+- SV-1.6 gap 3's "honest gap" claim — `StreamManager::createStream()` truly has zero real callers anywhere
+  in `src/` (only doc examples), confirmed by grep; `StreamManager` itself is never `new`'d in production
+  code at all. The gap is accurately described and does not hide anything bigger.
+- Per-segment wiring completeness — `startSegmentEncode()` (`FfmpegRunner.php:2172-2208`) is confirmed to
+  be the *only* real call site of `buildSegmentCommand()`/`buildHwaccelSegmentCommand()`; the audio-only
+  branch correctly uses the (video-less, subtitle-irrelevant) `buildAudioSegmentCommand()` instead; the
+  separate `FfmpegRunner::buildGaplessSegmentCommand()` (distinct from `GaplessTranscoder`'s own
+  same-named method) was independently re-confirmed to still have zero callers anywhere (a pre-existing,
+  correctly-out-of-scope dead builder per S-F25), so its exclusion from this fix is correct, not a missed
+  call site.
+- The VAAPI filter-order fix (`subtitles=%s,format=nv12,hwupload`) is correct by inspection (matches the
+  already-correct nvenc branch's software-then-hwupload ordering); could not be executed end-to-end in
+  this sandbox (no VAAPI render node), consistent with the plan's own note that this step may need to stay
+  partially on-box-verify-only.
+
+**Net assessment:** SV-1.4 and SV-1.5 are clean, fully verified, no findings. SV-1.6's core fix (colon
+escaping, VAAPI order, per-segment/ABR wiring) is real and correctly implemented and tested where it
+matters most (the actually-targeted colon case) — but the commit/worklog overclaims a broader "round-trips
+for any escaped character" guarantee that a rigorous, from-scratch reproduction shows is false for
+literal-backslash paths, and the new job-level toggle has a latent (currently unreachable) cross-request
+reuse-key gap that isn't documented. **2 findings, both MEDIUM, neither blocking on the actual production
+behavior today** (both concern currently-dormant/edge-case paths), but both are worth a Fixer pass:
+narrow/correct the SV-1.6 verification claim (or fix the underlying escaping for backslashes if judged
+worth doing), and either fold the burn-in option into the job key or explicitly document the reuse-key
+limitation next to the existing `StreamManager` honest-gap note.
+
+## Implementer — SV-4.10 (provider-priority config single source of truth) — 2026-07-13
+
+**Handoff note:** this step's implementation was already sitting **uncommitted** in the working tree when
+this pass started (a prior agent had been interrupted mid-task by an orchestration issue, not a work
+problem). Per the "Implementer may defer git" pattern, I read the diff critically rather than trusting it,
+verified it against the prior audit (line ~2575: hrtime half DONE, provider-priority half NOT-DONE —
+`MetadataManager.php:61-68` hardcoded `movie=>[tmdb,local]`/`series=>[tvdb,fanart,local]`, diverging from
+`config/metadata.php:33-37`'s `movie=>[tmdb,imdb]`/`series=>[tmdb,imdb]`), ran the full verification matrix
+myself, added one more DI-wiring test the diff was missing, and committed/pushed it.
+
+**Commit (pushed to master): `174b283d`.**
+
+**What the pre-existing diff did (verified correct, not just trusted):**
+1. **`src/Media/Metadata/MetadataManager.php`** — removed the hardcoded `$providerPriority` literal;
+   `$providerPriority` is now typed (no default value) and set in the constructor from a new optional
+   `?array $providerPriority = null` ctor param: `$this->providerPriority = $providerPriority ??
+   self::defaultProviderPriority();`. New `public static function defaultProviderPriority(?string
+   $configPath = null): array` reads `config/metadata.php`'s `provider_priority` array directly (plain
+   `@include`, defensively falls back to an in-code literal — `movie=>[tmdb,imdb]`, `series=>[tmdb,imdb]`,
+   plus `episode`/`anime`/`artist`/`album`/`track` for the media types the config file's schema doesn't
+   cover — if the file is missing/unreadable), merging the config's values OVER the fallback (config wins
+   for any type it names). Two small private sanitizer helpers (`sanitizePriorityMap`/`sanitizeStringList`)
+   coerce the raw config array into a clean `array<string, list<string>>`, deliberately duplicated from
+   (rather than sharing code with) `MediaServicesProvider::priorityMap()`/`stringList()` so this class's
+   only coupling to the config file stays a plain file include, not a dependency on the DI provider class.
+   `$configPath` is test-only (a real fixture-tracking proof, never the shared `config/metadata.php`, so
+   concurrent agents reading that file mid-test are unaffected).
+2. **`src/Common/Container/Providers/MediaServicesProvider.php`** — `MetadataManager::class`'s DI
+   definition explicitly names the new optional `providerPriority` ctor param via
+   `->constructorParameter('providerPriority', factory(static fn(): array =>
+   MetadataManager::defaultProviderPriority()))`, following this codebase's now-standard convention for
+   the recurring "PHP-DI skips defaulted optional ctor params unless named" landmine (SV-1.3/1.10/2.9/3.4/
+   2.7 all hit this same class of bug).
+3. **`config/metadata.php`** — docblock addition explaining that `MetadataManager` now reads this same
+   file's `provider_priority` as its own default (see the 3rd-subsystem discussion below).
+4. **Tests** — `MetadataManagerTest.php` gained 4 new tests: the default genuinely mirrors the live
+   `config/metadata.php` content (read dynamically, not a copy-pasted snapshot — so it stays honest if the
+   file ever changes), the legacy no-args ctor path resolves `imdb` (present in the config default, absent
+   from the OLD hardcoded literal — proving the default really changed), an explicit ctor override still
+   wins over the config default, and a fixture-file round-trip proving `defaultProviderPriority()` actually
+   loads whatever file it's pointed at (not a baked-in literal) plus a missing-file fallback test. Also
+   incidentally stripped ~11 pre-existing trailing-whitespace phpcs errors from that file (confirmed via
+   `git show HEAD:… | phpcs` diff against the parent — a genuine cleanup, not a new violation).
+   `MetadataManagerAnimeIntegrationTest.php`'s `testAnimeProvidersCoexistWithSeriesProviders` was updated
+   to register `tmdb` (not the old `tvdb`) for `series`, matching the new config-derived default order
+   (`config/metadata.php` deliberately omits `tvdb` from `series` — "no TVDB provider is wired for series
+   matching").
+
+**Independent verification I performed (did not take the diff on faith):**
+- Read every changed line of the diff against the current `MetadataManager.php`/`MediaServicesProvider.php`
+  to confirm the merge/sanitize logic is correct and `getProvidersForType()`/`refreshItemMetadata()` are
+  unaffected other than consuming the now-correctly-sourced `$providerPriority` map.
+- **DI-wiring landmine check (task requirement 1):** confirmed the `providerPriority` ctor param is
+  optional/nullable and IS explicitly bound via `->constructorParameter(...)` (not left to be silently
+  skipped) — satisfies the letter of the landmine rule. **However**, I found by mutation-testing (temporarily
+  removed the `->constructorParameter('providerPriority', …)` binding, re-ran the new DI test, confirmed it
+  still passed, then restored the binding) that this particular binding is **not actually load-bearing**:
+  because the ctor's own default (`$providerPriority ?? self::defaultProviderPriority()`) already resolves
+  to the identical value PHP-DI would otherwise silently skip to, the classic "DI skip ⇒ inert feature"
+  failure mode (the one that bit SV-1.3/1.10/2.9/3.4) **cannot actually occur here** — S-F48's fix lives at
+  the constructor-default level, not the DI-binding level. The explicit binding is honest, documented
+  belt-and-suspenders (the docblock added to `MediaServicesProvider.php` says exactly this: "this binding
+  is not strictly required for correctness, but naming it here makes the single config source explicit at
+  the wiring site"), not a bug — I verified the claim is accurate rather than assuming it. Added a permanent
+  regression test anyway (below) proving the real container resolves the correct value end-to-end.
+- **Dual-entrypoint check (task requirement 1):** confirmed `MediaServicesProvider` is registered in exactly
+  one place, `Phlix\Common\Container\ContainerFactory` (`src/Common/Container/ContainerFactory.php`), and
+  both `public/index.php:72` and `start.php` (5 call sites, all `ContainerFactory::create($config)`) share
+  that single factory — no per-entrypoint mirroring was needed, and none was done (correctly).
+- **Added `tests/Unit/Common/Container/ContainerFactoryTest.php::test_metadata_manager_wires_provider_priority_in_prod`**
+  (the diff had no real-container DI-wiring proof for this step, unlike the established pattern used for
+  SV-3.4's `artworkStorage`/SV-2.9's `SimilarityWorker`/SV-2.7's `authManager`): builds a real container via
+  `containerWithMockedDb()`, resolves `MetadataManager::class`, and asserts (via the existing `readPrivate()`
+  reflection helper) the resolved instance's private `$providerPriority` equals
+  `MetadataManager::defaultProviderPriority()`. Confirmed via mutation testing (see above) that this test
+  passes both with and without the explicit binding — an honest result given point 2 above, not a defect in
+  the test itself; it still closes the "does the real container actually resolve this to the config-derived
+  value, end-to-end" verification gap the diff otherwise left untested.
+- Ran the relevant filtered suites, the full `--testsuite Unit` suite, `phpstan analyze src/ -c
+  phpstan.neon.dist` (level 9), and `phpcs --standard=PSR12` on every changed file, diffing warning/error
+  counts against each file's pre-change `git show HEAD:…` state to confirm zero new classes of finding (see
+  Verification below).
+
+**Decision on the 3rd config subsystem (`PriorityConfig`/`SourceRegistry`, task requirement 2):** the
+pre-existing diff's `config/metadata.php` docblock already documents a reasoned decision (not left silent),
+but I independently re-derived and verified it rather than taking it on faith, and it holds up:
+- **`PriorityConfig`** (`src/Media/Metadata/Resolution/PriorityConfig.php`, built in
+  `MediaServicesProvider.php:189-232` via `SettingsRepository::getDefault('metadata.provider_priority')` +
+  `getOverride(...)`, admin-editable via `AdminMetadataSourceController`/a settings endpoint) drives
+  `PriorityFieldResolver`'s **per-FIELD** source blending inside `MovieMetadataResolver`/
+  `SeriesMetadataResolver`/`LibraryMetadataMatcher` (with `LibraryPriorityResolver` layering a per-library
+  override on top) — genuinely different consumers than `MetadataManager` and a genuinely different
+  algorithm (blend per-field across all configured sources vs. `MetadataManager`'s cascade that stops at the
+  first provider returning a full details blob).
+- **`SourceRegistry`** (`src/Media/Metadata/Resolution/SourceRegistry.php`) is the Step-3.5 plugin-source
+  registration point (`PluginLoader.php:319-329`: an enabled plugin implementing `MetadataSourceInterface`
+  is registered here) that feeds `AdminMetadataSourceController`'s "available sources" list — it does not
+  feed `MetadataManager` at all (confirmed by grep: zero references to `SourceRegistry` anywhere in
+  `MetadataManager.php`).
+- **Verdict: genuinely separate concerns, correctly NOT unified**, for the same reason the config docblock
+  gives — both trace back to the same `config/metadata.php` `provider_priority` values now (closing the
+  S-F48 divergence), but they drive two structurally different algorithms consumed by two disjoint sets of
+  call sites. Unifying them into one class would conflate "which single provider answers this API call"
+  with "how do I blend N sources' fields together", which is a materially larger redesign than this step's
+  declared **Effort: S** scope in `performance_plan.md` §2 — out of scope here, and not requested by S-F48's
+  finding text ("Load the map from config in `MetadataManager`", nothing about `PriorityConfig`).
+- **New observation surfaced by this verification (not previously documented anywhere in this worklog or
+  the plan — flagging for a future audit pass, deliberately NOT fixed here as it is a materially bigger,
+  separate gap than S-F48's declared scope):** `MetadataManager::registerProvider()` — the method that
+  populates `$providersByType`/`$providers`, which is what the now-fixed `$providerPriority` map actually
+  orders — has **zero production call sites anywhere in `src/`** (grepped the entire tree; only
+  `MetadataManagerTest.php`/`MetadataManagerAnimeIntegrationTest.php` call it). Concretely: `musicbrainz`/
+  `audiodb` providers are never registered onto the DI-container-resolved `MetadataManager` instance
+  (`MusicLibraryManager::refreshItemMetadata()` calls `$this->metadata->refreshItemMetadata($itemId)`,
+  which is genuinely live/reachable code, but against an empty provider registry, so it is currently a
+  no-op); the legacy `Application::getMusicController()` call site (`Application.php:3390`) constructs
+  `new MetadataManager($itemRepo)` with zero providers registered either. Movie/series/anime matching does
+  NOT go through `MetadataManager::registerProvider()`/`getProvidersForType()` at all — it uses the entirely
+  separate `MovieMetadataResolver`/`SeriesMetadataResolver`/`LibraryMetadataMatcher` + `PriorityConfig`/
+  `SourceRegistry` path (anidb/myanimelist plugins register into `SourceRegistry` per the Step-3.5 rework
+  documented at `PluginLoader.php:319-321`, explicitly replacing an OLDER pattern where plugins used to
+  sniff for `MetadataManager::registerProvider`). Net effect: fixing S-F48's config divergence is correct
+  and exactly what the finding asked for, but the priority map it fixes currently governs a dormant
+  provider-cascade mechanism with no real registered providers in production — this is a distinct,
+  larger gap (something should call `registerProvider()` for musicbrainz/audiodb, or the whole cascade
+  mechanism should be reconsidered) that deserves its own future finding/step rather than being folded into
+  this S-effort fix.
+
+**Verification:**
+- `./vendor/bin/phpunit --filter MetadataManager` — 30/30 pass.
+- `./vendor/bin/phpunit --filter MusicLibraryManager` — 11/11 pass.
+- `./vendor/bin/phpunit tests/Integration/Media/Metadata/MetadataManagerAnimeIntegrationTest.php` — 5/5 pass.
+- `./vendor/bin/phpunit tests/Unit/Common/Container/ContainerFactoryTest.php` — 22/22 pass (incl. the new
+  `test_metadata_manager_wires_provider_priority_in_prod`).
+- `./vendor/bin/phpunit --testsuite Integration --filter Metadata` — 7/7 pass.
+- **Full `./vendor/bin/phpunit --testsuite Unit`: 5133 tests / 39245 assertions / 0 failures / 5 skipped
+  (green at HEAD).**
+- `./vendor/bin/phpstan analyze src/ -c phpstan.neon.dist` (level 9, whole `src/`): **no errors.**
+- `./vendor/bin/phpcs --standard=PSR12` on every changed file: `MetadataManager.php` and
+  `config/metadata.php` clean (0 findings); `MediaServicesProvider.php` 4 pre-existing long-line warnings
+  (identical count/nature before and after, confirmed via `git show HEAD~1:… | phpcs` on the pre-diff
+  version — the diff added comment lines that happen to sit near, not on, the existing long lines);
+  `MetadataManagerTest.php` went from 11 errors + 1 warning (pre-existing trailing whitespace + one
+  long-line) down to 0 errors + 1 warning (the diff's whitespace cleanup, a genuine improvement, confirmed
+  by diffing against `git show HEAD~1`); `ContainerFactoryTest.php` went from 21 to 22 snake_case
+  method-name errors (+1, exactly my one new test method, following the file's own pre-existing
+  `test_snake_case_name` convention used by every other method in it — not a new class of violation).
+
+**Acceptance criteria (SV-4.10 provider-priority half) — met:** `MetadataManager` no longer hardcodes a
+provider-priority literal that can silently diverge from `config/metadata.php`; both the ctor-default path
+(legacy/test construction) and the DI-wired path (production, both entrypoints) resolve to the same
+config-derived value; an explicit override still works for tests/future callers; the 3rd config subsystem
+(`PriorityConfig`/`SourceRegistry`) was independently confirmed to be a genuinely separate concern, correctly
+left unmerged, with the reasoning now verified (not just asserted) in this entry; no contradictory hardcoded
+priority list remains live anywhere in `src/`. The hrtime half of SV-4.10 was already confirmed done in the
+2026-07-12 audit (line ~2575) and re-confirmed untouched by this pass (no `microtime` calls reintroduced;
+not in this step's file scope). **SV-4.10 is entirely DONE.**

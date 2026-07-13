@@ -5563,3 +5563,137 @@ confirmed RED-on-revert, green-on-restore.
 - Migration 078 is amended in place (UNIQUE constraint); it is not deployed anywhere, so no follow-up
   ALTER is needed. On-box DVR end-to-end verification of the timeshift path remains owed (sandbox has
   no tuner), consistent with the rest of the DVR stack's outstanding on-box verification.
+
+## Reviewer (cumulative) — SV-3.1 f (store + buffer-writer + controller + fix, as one system) — 2026-07-13
+
+Integration-level review of the whole timeshift feature (commits `4f7d2c89` / `b4afe671` /
+`5761e7e5` / `3b5c0c6f` / `f6133701`) against HEAD. Focus = SEAMS across the four pieces, not
+per-piece re-litigation. **2 findings.**
+
+### Field-shape / path seams — verified clean
+- Store→getTimeShift→controller `buffer_dir` hop lines up: `startTimeShift` writes the SAME
+  `$bufferDir` into both the store row and the in-memory entry; `getTimeShift` returns it under
+  `buffer_dir` on both paths; the controller reads only `buffer_dir`. The playlist/segment names the
+  writer emits (`Recorder::TIMESHIFT_PLAYLIST_NAME` `buffer.m3u8`, `seg_%05d.ts`) are exactly what
+  `streamTimeShift`/`streamTimeShiftSegment` check (`Recorder::TIMESHIFT_PLAYLIST_NAME`,
+  `SEGMENT_NAME_PATTERN=/^seg_\d+\.ts$/D`) — no constant drift.
+- Windowing is internally consistent: `TIMESHIFT_BUFFER_SECONDS=7200`, `TIMESHIFT_SEGMENT_SECONDS=6`,
+  `hls_list_size=ceil(7200/6)=1200`, `1200*6≈7200s`; migration `window_seconds` DEFAULT 7200 and the
+  `TimeShiftSession(window_seconds: TIMESHIFT_BUFFER_SECONDS)` construction all agree. No off-by-one.
+- Segment path-jail is layered and jails BEFORE the fs (regex → `serveJobFile`'s `isSafeFilename` →
+  `is_file`); `$dir` (buffer_dir) is server-authored (never user input — the URL only supplies the
+  DB-lookup key `sessionId` and the jailed `segment`), so `serveJobFile` not re-jailing `$dir` is safe.
+- `SignedUrl::canonicalResource` prefix-collapse `/livetv/timeshift/[^/]+` scopes one signed token to
+  exactly one session's playlist+segments, and leaves `/livetv/recording/{id}/stream` exact-path-bound.
+  Route order (`/stream` before `/{segment}`, both parametric, first-match-wins) is correct + tested.
+
+### Fixer-flagged items — adjudicated
+- **(a) DB-down best-effort spawn:** ACCEPTABLE. If `save()` throws, the spawned ffmpeg is bounded by
+  the `timeout <transcode_timeout>` wrapper and is reapable via the same-worker in-memory entry; this
+  is strictly no worse than the pre-f state (timeshift was a 501 stub with zero persistence). Not a
+  finding on its own — but see Finding 1, which is a DIFFERENT persist-path defect.
+- **(b) `current_position` value semantics differ (epoch seed vs `cursor_position` offset):** DORMANT
+  / not a live bug. No current consumer reads the store-path `current_position`: the controller reads
+  only `buffer_dir`; `getTimeShiftPosition()`/`seekTimeShift()` touch ONLY the in-memory array. Safe
+  while server-side seek is deferred; a future cross-worker seek consumer would need to reconcile it.
+- **(c) on-box e2e:** genuinely owed (no tuner in sandbox); note only.
+
+### FINDINGS
+
+1. **[High — resource leak, concurrency-gated] `Recorder::startTimeShift()` (`src/LiveTv/Recorder.php`
+   ~1748-1790) + `DbTimeShiftSessionStore::save()` (~62-93): the two-phase persist and the
+   `UNIQUE(session_id)` upsert collide — under two concurrent same-`session_id` starts the fresh
+   caller's `updatePid()` targets a row id the upsert discarded, orphaning a tuner-holding ffmpeg and
+   leaking its buffer dir.**
+   - The seam: `save()` is `INSERT … ON DUPLICATE KEY UPDATE` and deliberately keeps `id` OUT of the
+     SET-list, so on a `session_id` collision the PRE-EXISTING row's `id` survives. But
+     `startTimeShift` persists with a fresh `$timeShiftId`, then does the second-phase
+     `updatePid($timeShiftId, $pid)` keyed on that SAME fresh id. When the fresh caller's `save()` was
+     the one that collided (the other start inserted first), the surviving row carries the OTHER
+     start's id, so `updatePid($timeShiftId)` matches ZERO rows and the real capture pid is never
+     persisted.
+   - Concrete failure (two workers, same session A, `stopTimeShift` reap-all runs on both before
+     either `save()`): W1 `save(idW1,dirW1)` INSERTs; W2 `save(idW2,dirW2)` collides→upsert leaves row
+     `idW1 / dirW2 / pid null`; W1 `updatePid(idW1,pidW1)`→row `idW1/dirW2/pidW1`; W2
+     `updatePid(idW2,pidW2)`→0 rows. Now pidW2 (writing dirW2) has no DB record. A later
+     `stopTimeShift(A)` reaps only `idW1` → kills pidW1, `removeBufferDir(dirW2)`, deletes the row —
+     leaving **pidW2 running to `transcode_timeout` (up to 2h) holding a scarce tuner and writing an
+     unlinked (dirW2 deleted) file that pins disk**, plus **dirW1 never cleaned** (the row's
+     `buffer_dir` was overwritten to dirW2, so dirW1's id was never persisted as its own reapable row).
+   - Why it matters: this is exactly the "leak an ffmpeg process, a buffer dir, or a DB row" the
+     cross-worker machinery is supposed to prevent — and that machinery (persist-first, cross-worker
+     store, `UNIQUE(session_id)`) exists precisely because same-session requests DO land on different
+     workers/coroutines, so the race is reachable (double-tap, client retry, reconnect, or coroutine
+     interleaving at the `save()` I/O yield on a single worker). The sequential restart path is safe
+     (`stopTimeShift` DELETEs the old row first, so `save()` is a clean INSERT and `updatePid` matches)
+     — the defect is strictly the concurrent interleaving. Suggested direction: after `save()`,
+     re-resolve the surviving row's id by `session_id` before `updatePid` (or make `updatePid` key on
+     `session_id`, or fold the pid into the initial upsert once known) so the second phase always
+     targets the row that actually survived the upsert.
+
+2. **[Medium — cross-worker correctness seam] `Recorder::getTimeShift()` (`src/LiveTv/Recorder.php`
+   ~1911-1915): the in-memory fast path is preferred unconditionally and is never invalidated
+   cross-worker, so a stale entry on the originating worker shadows the authoritative store after a
+   cross-worker restart → persistent 503/404 for that session on that worker.**
+   - The seam: `getTimeShift` returns `$this->activeTimeShifts[$sessionId]` whenever present, WITHOUT
+     revalidating the buffer_dir/pid against the store. A timeshift restart that lands on a DIFFERENT
+     worker (W2) deletes the original row + dir1 and creates dir2, but never touches W1's in-memory
+     entry (W1 gets no `stopTimeShift(A)`). W1's entry still points at the deleted dir1.
+   - Concrete failure: after such a restart, any `/livetv/timeshift/A/stream` request routed to W1
+     resolves `buffer_dir=dir1` (gone) → `is_file(dir1/buffer.m3u8)` false → 503 `Retry-After:2`
+     forever on W1 (segment requests → 404), while W2/other workers (store fallback → dir2) serve the
+     live buffer. Playback becomes flaky/broken on 1-of-N workers for that session. No resource leak
+     (the restart's `stopTimeShift` correctly reaped dir1/pid via the store), purely a stale-read
+     correctness issue. Partially mitigated by HTTP keep-alive pinning a browser's requests to one
+     worker, but native/casting clients and connection churn defeat that — and cross-worker resolution
+     is the feature's whole premise. Suggested direction: have the in-memory fast path revalidate
+     (e.g. drop/ignore the entry when its `buffer_dir` no longer exists on disk, or fall through to the
+     store) so a superseded same-worker cache cannot mask the authoritative row.
+
+### Informational (not a defect — consistent with the established pattern)
+- Auth is id-as-capability: the SignedUrlMiddleware session-cookie branch authorizes ANY logged-in
+  user who presents a valid `sessionId` (no per-user ownership check on the timeshift session), exactly
+  as `/hls/{job}` and `/dash/{job}` already work (unguessable UUID = capability). Not introduced or
+  regressed by SV-3.1 f; flagged only so the whole-feature gate is aware the timeshift `session_id`
+  must remain unguessable to preserve that equivalence.
+
+## TestEngineer — SV-3.1 h2 (storage accounting) — 2026-07-13
+
+Closed the SV-3.1 **g** gap: storage accounting was functionally DONE but had **zero** test
+coverage. New file `tests/Unit/LiveTv/RecorderStorageAccountingTest.php` (commit **`6de8d089`**),
+no `src/` change (no test seam needed — the accounting surface was already unit-testable via a
+mocked `Connection` + reflection for the private helpers). DB mocked with the **production
+plain-array** shape `RowQuery` actually receives (not the `ResultSet` cursor), plus real temp dirs
+so `disk_free_space()` returns real values.
+
+**Covered (7 methods):** `hasRealDiskSpace()` (5% margin pass/fail + fail-open when
+`disk_free_space()` returns false — the intended, code-verified behavior),
+`estimateRecordingSize()` (exact ~2 MB/min math: 1min→2 MiB, 30min→60 MiB, 60min→120 MiB, 0→0),
+`getUsedStorageBytes()` (asserts `SUM(storage_size)` SQL + `status=completed` param; NULL total
+and empty result → 0; models MySQL SUM's numeric-STRING return), `getAvailableStorageBytes()`
+(PHP_INT_MAX when unlimited + never-queries guard; max−used; clamp-to-zero over budget),
+`getStorageStats()` (available == max−used invariant, GROUP BY status counts), and the
+`startRecording()` storage gate (refused → FAILED 'Insufficient storage space', **no** status→
+recording transition i.e. no ffmpeg spawn; + a counterpart that proves the gate PASSES when space
+is available, failing downstream at the tuner with 'No tuner available').
+
+**Verification (actual output):**
+- New file: `phpunit RecorderStorageAccountingTest` → **OK (15 tests, 39 assertions)**.
+- Broader LiveTv subset: `phpunit tests/Unit/LiveTv/` → **OK, 365 tests, 939 assertions, 6 skipped
+  (pre-existing), 0 failures** — no regression.
+- `phpstan analyze -c phpstan.neon.dist` (L9, src) → **[OK] No errors**; phpstan L9 on the new test
+  file → **[OK] No errors**.
+- `phpcs --standard=PSR12 tests/Unit/LiveTv/RecorderStorageAccountingTest.php` → **clean (exit 0)**.
+
+**Mutation-revert confirmations (2 highest-value guards — actually reverted, ran, reverted back):**
+- **5% margin:** changing `$usableSpace = (int)($freeSpace * 0.95)` → `* 1.0` in
+  `Recorder::hasRealDiskSpace()` flips `testHasRealDiskSpaceReservesFivePercentMargin` **RED**
+  ("Failed asserting that true is false"). Restored to `* 0.95` → green.
+- **startRecording gate:** neutralizing `if (!$this->hasStorageSpace(...))` → `if (false)` flips
+  `testStartRecordingRefusedWhenStorageInsufficient` **RED** ("Failed asserting that an array
+  contains 'Insufficient storage space'" — falls through to the tuner path). Restored → green.
+
+Result: **GREEN.** Note carried along in this worklog: the pre-existing uncommitted **Reviewer
+(cumulative) — SV-3.1 f** entry above (2 findings, stable ~4 min, complete) was swept into the
+worklog commit per the documented orchestrator-sweep pattern; it is unrelated to these tests and
+still owed a Fixer pass.

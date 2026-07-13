@@ -172,9 +172,11 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
 
             // SV-3.1d: registers a completed recording's .ts as a playable
             // media_items row + persists the media_item_id linkage. Wired below
-            // as a Recorder onComplete hook. (Comskip chapter-marker attachment
-            // to the real media item is the SEPARATE, deferred SV-3.1d-comskip
-            // sub-step, gated on SV-4.3 — NOT wired here.)
+            // as a Recorder onComplete hook. (Comskip → EDL → chapter-marker
+            // attachment to the real media item IS now wired, via
+            // ComskipIntegration + ChapterMarkerService above; the scan is
+            // enqueued off the hot path by ComskipLifecycleManager. SV-3.1d-comskip
+            // is complete.)
             RecordingMediaRegistrar::class => factory(static function (ContainerInterface $c): RecordingMediaRegistrar {
                 $livetv = self::livetvConfig($c);
                 /** @var array<string, mixed> $dvr */

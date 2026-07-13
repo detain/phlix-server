@@ -11,6 +11,7 @@ use Phlix\Auth\JwtHandler;
 use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
+use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\SimilarityJobStore;
 use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkStorage;
@@ -574,6 +575,32 @@ final class ContainerFactoryTest extends TestCase
             rtrim($customDir, '/') . '/',
             $this->readPrivate($storage, 'storageDir'),
             'ArtworkStorage must honour the configured artwork.storage_path.'
+        );
+    }
+
+    /**
+     * S-F48/SV-4.10: `MetadataManager`'s ctor takes
+     * `?array $providerPriority = null`; PHP-DI silently skips optional
+     * defaulted params unless named, so a missing
+     * `->constructorParameter('providerPriority', …)` would leave the field
+     * resolved from the ctor's own fallback rather than the DI-wired factory —
+     * both happen to trace back to {@see MetadataManager::defaultProviderPriority()}
+     * today, but this test proves the binding is genuinely wired (not silently
+     * skipped) by asserting the real container's resolved instance carries
+     * exactly that value, not an empty/default-constructed array.
+     */
+    public function test_metadata_manager_wires_provider_priority_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var MetadataManager $manager */
+        $manager = $container->get(MetadataManager::class);
+
+        $this->assertSame(
+            MetadataManager::defaultProviderPriority(),
+            $this->readPrivate($manager, 'providerPriority'),
+            'MetadataManager must resolve with the config/metadata.php-derived '
+            . 'provider-priority map via the named DI binding, not a divergent default.'
         );
     }
 

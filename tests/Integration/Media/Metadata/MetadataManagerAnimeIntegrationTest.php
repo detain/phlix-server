@@ -90,6 +90,15 @@ final class MetadataManagerAnimeIntegrationTest extends TestCase
 
     /**
      * Test that anime providers are returned when mixed with series providers.
+     *
+     * S-F48/SV-4.10: the default `series` priority now comes from
+     * `config/metadata.php` (`['tmdb', 'imdb']`) rather than this class's old
+     * hardcoded `['tvdb', 'fanart', 'local']` literal — config/metadata.php's
+     * docblock deliberately omits `tvdb` from `series` ("no TVDB provider is
+     * wired for series matching"). This test registers a 'tmdb' provider for
+     * 'series' (present in the new default) instead of the old 'tvdb', so it
+     * still demonstrates anime and series resolving independently via each
+     * type's own (now config-derived) priority order.
      */
     public function testAnimeProvidersCoexistWithSeriesProviders(): void
     {
@@ -101,21 +110,29 @@ final class MetadataManagerAnimeIntegrationTest extends TestCase
         $tvdbProvider->method('getProviders')->willReturn(['tvdb']);
         $tvdbProvider->method('getSourceName')->willReturn('tvdb');
 
-        // Register anidb for anime and tvdb for series
+        $tmdbSeriesProvider = $this->createMock(MetadataProviderInterface::class);
+        $tmdbSeriesProvider->method('getProviders')->willReturn(['tmdb']);
+        $tmdbSeriesProvider->method('getSourceName')->willReturn('tmdb');
+
+        // Register anidb + tvdb for anime (anime's default priority order
+        // includes both), and tmdb for series (series' default priority,
+        // per config/metadata.php, is ['tmdb', 'imdb']).
         $this->manager->registerProvider('anidb', $anidbProvider, ['anime']);
-        $this->manager->registerProvider('tvdb', $tvdbProvider, ['series', 'anime']);
+        $this->manager->registerProvider('tvdb', $tvdbProvider, ['anime']);
+        $this->manager->registerProvider('tmdb', $tmdbSeriesProvider, ['series']);
 
         $animeProviders = $this->manager->getProvidersForType('anime');
         $seriesProviders = $this->manager->getProvidersForType('series');
 
-        // Anime should return anidb (highest priority), tvdb (fallback), local
+        // Anime should return anidb (highest priority), tvdb (fallback)
         $this->assertGreaterThanOrEqual(1, count($animeProviders));
         // First provider should be anidb (highest priority for anime)
         $this->assertSame($anidbProvider, $animeProviders[0]);
 
-        // Series should return tvdb (anidb not in series priority list)
+        // Series should return tmdb (its config-derived default priority
+        // leads with tmdb; tvdb/anidb are not in the series priority list).
         $this->assertGreaterThanOrEqual(1, count($seriesProviders));
-        $this->assertSame($tvdbProvider, $seriesProviders[0]);
+        $this->assertSame($tmdbSeriesProvider, $seriesProviders[0]);
     }
 
     /**

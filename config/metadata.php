@@ -24,6 +24,19 @@
  * matching; honoring the 3.3a carry-forward warning). Anime mirrors
  * {@see \Phlix\Media\Metadata\MetadataManager} (`['anidb','myanimelist','tvdb','fanart','local']`).
  *
+ * S-F48/SV-4.10: {@see \Phlix\Media\Metadata\MetadataManager} also reads this
+ * file's `provider_priority` as the default for its OWN (distinct) per-type
+ * priority map — the ordered provider cascade `refreshItemMetadata()` walks,
+ * stopping at the first provider that returns a full details blob. That is a
+ * genuinely different concern from this file's primary consumer
+ * (`PriorityFieldResolver`'s PER-FIELD source blending during matching), but
+ * both now trace back to these SAME values rather than MetadataManager
+ * hand-maintaining its own competing literal (which had silently diverged:
+ * `movie => ['tmdb','local']` / `series => ['tvdb','fanart','local']` prior to
+ * this fix). MetadataManager additionally defaults `episode`/`artist`/`album`/
+ * `track` (media types this file's schema does not cover) from its own
+ * fallback — see `MetadataManager::defaultProviderPriority()`.
+ *
  * @since 0.22.0
  */
 

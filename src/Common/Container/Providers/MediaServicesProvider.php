@@ -414,9 +414,21 @@ final class MediaServicesProvider implements ServiceProviderInterface
             // results are filtered to the library's enabled `options.image_types`
             // (M5) before being stored in metadata_json.images.{provider}.
             // RatingService is injected so TMDB vote data can be captured (P1-S1).
+            // providerPriority (S-F48/SV-4.10) is named for the same PHP-DI
+            // reason — without it MetadataManager would fall back to its own
+            // ctor default (which ALSO now reads config/metadata.php, so this
+            // binding is not strictly required for correctness, but naming it
+            // here makes the single config source explicit at the wiring site
+            // and keeps this provider the one place that resolves it).
             MetadataManager::class => autowire()
                 ->constructorParameter('libraries', get(LibraryManager::class))
-                ->constructorParameter('ratingService', get(RatingService::class)),
+                ->constructorParameter('ratingService', get(RatingService::class))
+                ->constructorParameter(
+                    'providerPriority',
+                    factory(static function (): array {
+                        return MetadataManager::defaultProviderPriority();
+                    })
+                ),
 
             // Rating persistence: stores TMDB/IMDb/user scores and aggregates them.
             // The service takes only the Workerman MySQL Connection (autowirable).

@@ -57,16 +57,17 @@ class MetadataManager
     /** @var array<string, array<string, MetadataProviderInterface>> Provider type => [name => provider] */
     private array $providersByType = [];
 
-    /** @var array<string, array<int, string>> Media type => Provider types in priority order */
-    private array $providerPriority = [
-        'movie' => ['tmdb', 'local'],
-        'series' => ['tvdb', 'fanart', 'local'],
-        'episode' => ['tvdb', 'local'],
-        'anime' => ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
-        'artist' => ['musicbrainz', 'audiodb', 'local'],
-        'album' => ['musicbrainz', 'audiodb', 'local'],
-        'track' => ['musicbrainz', 'audiodb', 'local'],
-    ];
+    /**
+     * Media type => Provider names in priority order.
+     *
+     * Set at construction from {@see defaultProviderPriority()} (which
+     * reads `config/metadata.php` — see that method's docblock for the S-F48
+     * single-source-of-truth rationale) and mutable afterwards only via
+     * {@see setProviderPriority()}.
+     *
+     * @var array<string, array<int, string>>
+     */
+    private array $providerPriority;
 
     /** @var array<string, MetadataProviderInterface> Flat provider lookup by name */
     private array $providers = [];
@@ -102,16 +103,169 @@ class MetadataManager
      *     image sets are stored unfiltered (back-compat).
      * @param RatingService|null $ratingService Rating persistence; when null
      *     (legacy / unit tests) rating capture is skipped silently.
+     * @param array<string, list<string>>|null $providerPriority Media type =>
+     *     ordered provider-name list (S-F48/SV-4.10). When null (legacy
+     *     construction / unit tests / the non-DI `Application::getMusicController()`
+     *     call site), the default is loaded from `config/metadata.php` via
+     *     {@see defaultProviderPriority()} so there is exactly ONE static
+     *     config source instead of a hand-maintained literal that can drift
+     *     from it. DI wiring is bound explicitly in
+     *     {@see \Phlix\Common\Container\Providers\MediaServicesProvider}
+     *     (PHP-DI skips defaulted optional ctor params during autowiring
+     *     unless named — the same landmine documented on `libraries`/
+     *     `ratingService` above).
      */
     public function __construct(
         ItemRepository $itemRepository,
         ?LibraryManager $libraries = null,
         ?RatingService $ratingService = null,
+        ?array $providerPriority = null,
     ) {
         $this->itemRepository = $itemRepository;
         $this->libraries = $libraries;
         $this->ratingService = $ratingService;
+        $this->providerPriority = $providerPriority ?? self::defaultProviderPriority();
         $this->logger = LoggerFactory::get(LogChannels::MEDIA);
+    }
+
+    /**
+     * Default per-media-type provider-priority map (S-F48 / SV-4.10).
+     *
+     * Reads `config/metadata.php`'s `provider_priority` array so this class no
+     * longer hand-maintains its own competing literal. Prior to this fix the
+     * class hardcoded `movie => ['tmdb','local']` / `series =>
+     * ['tvdb','fanart','local']`, which had silently DIVERGED from
+     * `config/metadata.php`'s `movie => ['tmdb','imdb']` /
+     * `series => ['tmdb','imdb']` — the config file's values now win for any
+     * media type it defines (`movie`, `series`, `anime` as of this writing).
+     *
+     * `config/metadata.php` is scoped to the media types Feature 3's admin
+     * editor manages (movie/series/anime — see
+     * {@see \Phlix\Media\Metadata\Resolution\PriorityConfig} and
+     * `AdminMetadataSourceController`); it intentionally does not cover
+     * `episode`/`artist`/`album`/`track`, which this class also refreshes
+     * (music library scans — see `MusicLibraryManager::refreshItemMetadata()`
+     * callers). Those extra types are merged in from the fallback below so
+     * every media type this class handles still has a sane default; the
+     * config file remains authoritative for every type it does define.
+     *
+     * The fallback array is also used verbatim when `config/metadata.php` is
+     * missing/unreadable (defensive; mirrors the `matching.noise_suffixes`
+     * fallback pattern in
+     * {@see \Phlix\Common\Container\Providers\MediaServicesProvider}).
+     *
+     * Public (not just an internal ctor default) so
+     * {@see \Phlix\Common\Container\Providers\MediaServicesProvider} can bind
+     * it explicitly as the named `providerPriority` constructor parameter —
+     * the same one-static-source value the no-args-passed ctor default also
+     * resolves to, so the DI-built instance and any legacy `new
+     * MetadataManager(...)` call site (e.g.
+     * `Application::getMusicController()`) never disagree.
+     *
+     * @param string|null $configPath Overrides the config file path; only
+     *     ever passed by tests (to prove the result really tracks the file's
+     *     content rather than a hardcoded literal, without mutating the real
+     *     `config/metadata.php`). Production call sites always omit it and
+     *     get the real `config/metadata.php`.
+     *
+     * @return array<string, list<string>> Media type => provider names, priority order.
+     */
+    public static function defaultProviderPriority(?string $configPath = null): array
+    {
+        $fallback = [
+            'movie' => ['tmdb', 'imdb'],
+            'series' => ['tmdb', 'imdb'],
+            'episode' => ['tvdb', 'local'],
+            'anime' => ['anidb', 'myanimelist', 'tvdb', 'fanart', 'local'],
+            'artist' => ['musicbrainz', 'audiodb', 'local'],
+            'album' => ['musicbrainz', 'audiodb', 'local'],
+            'track' => ['musicbrainz', 'audiodb', 'local'],
+        ];
+
+        $path = $configPath ?? (__DIR__ . '/../../../config/metadata.php');
+
+        /** @psalm-suppress UnresolvableInclude resolved config path, no user input */
+        $loaded = @include $path;
+        if (!is_array($loaded)) {
+            return $fallback;
+        }
+
+        $configured = self::sanitizePriorityMap($loaded['provider_priority'] ?? null);
+        if ($configured === []) {
+            return $fallback;
+        }
+
+        // config/metadata.php is authoritative for any type it names (movie/
+        // series/anime today); this class's own extra types (episode/artist/
+        // album/track — outside Feature 3's schema) fill the remaining gaps.
+        return array_merge($fallback, $configured);
+    }
+
+    /**
+     * Coerce a raw config value into a clean per-media-type provider-order map
+     * (`array<string, list<string>>`). Mirrors
+     * {@see \Phlix\Common\Container\Providers\MediaServicesProvider::priorityMap()}
+     * (kept as a private duplicate rather than a shared dependency so this
+     * class's only coupling to `config/metadata.php` stays a plain file
+     * `include`, not a dependency on the DI provider). A media type whose
+     * cleaned order is empty is dropped entirely (falls through to the
+     * fallback default rather than being recorded as an empty list).
+     *
+     * @param mixed $value Raw `provider_priority` value from the config file.
+     *
+     * @return array<string, list<string>>
+     */
+    private static function sanitizePriorityMap(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $order */
+        foreach ($value as $type => $order) {
+            if (!is_string($type) || $type === '') {
+                continue;
+            }
+            $clean = self::sanitizeStringList($order);
+            if ($clean === []) {
+                continue;
+            }
+            $out[$type] = $clean;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Coerce a raw value into a clean `list<string>` (trimmed, non-empty
+     * entries only). Mirrors
+     * {@see \Phlix\Common\Container\Providers\MediaServicesProvider::stringList()}.
+     *
+     * @param mixed $value Raw list value.
+     *
+     * @return list<string>
+     */
+    private static function sanitizeStringList(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $out = [];
+        /** @var mixed $entry */
+        foreach ($value as $entry) {
+            if (!is_string($entry)) {
+                continue;
+            }
+            $trimmed = trim($entry);
+            if ($trimmed === '') {
+                continue;
+            }
+            $out[] = $trimmed;
+        }
+
+        return $out;
     }
 
     /**

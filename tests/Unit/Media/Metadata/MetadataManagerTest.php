@@ -20,13 +20,13 @@ class MetadataManagerTest extends TestCase
     protected function setUp(): void
     {
         LoggerFactory::init(__DIR__ . '/../../../../config/logger.php');
-        
+
         // Create mock DB and item repository
         $mockDb = $this->createMock(\Workerman\MySQL\Connection::class);
         $mockItemRepo = $this->createMock(ItemRepository::class);
-        
+
         $this->manager = new MetadataManager($mockItemRepo);
-        
+
         // Create mock provider
         $this->mockProvider = $this->createMock(MetadataProviderInterface::class);
     }
@@ -39,7 +39,7 @@ class MetadataManagerTest extends TestCase
     public function testRegisterProvider(): void
     {
         $this->manager->registerProvider('test', $this->mockProvider, ['movie', 'series']);
-        
+
         $this->assertTrue($this->manager->hasProvider('test'));
         $this->assertSame($this->mockProvider, $this->manager->getProvider('test'));
     }
@@ -58,9 +58,9 @@ class MetadataManagerTest extends TestCase
     {
         $this->manager->registerProvider('test1', $this->mockProvider, ['movie']);
         $this->manager->registerProvider('test2', $this->mockProvider, ['series']);
-        
+
         $providers = $this->manager->getRegisteredProviders();
-        
+
         $this->assertContains('test1', $providers);
         $this->assertContains('test2', $providers);
     }
@@ -80,9 +80,9 @@ class MetadataManagerTest extends TestCase
     {
         $this->manager->registerProvider('local', $this->mockProvider, ['movie']);
         $this->manager->registerProvider('tmdb', $this->mockProvider, ['movie']);
-        
+
         $providers = $this->manager->getProvidersForType('movie');
-        
+
         $this->assertNotEmpty($providers);
     }
 
@@ -91,9 +91,9 @@ class MetadataManagerTest extends TestCase
         $this->manager->registerProvider('local', $this->mockProvider, ['movie']);
         $this->manager->registerProvider('tmdb', $this->mockProvider, ['movie']);
         $this->manager->setProviderPriority('movie', ['local', 'tmdb']);
-        
+
         $providers = $this->manager->getProvidersForType('movie');
-        
+
         $this->assertCount(2, $providers);
     }
 
@@ -106,10 +106,146 @@ class MetadataManagerTest extends TestCase
         $this->assertEmpty($providers);
     }
 
+    /**
+     * S-F48/SV-4.10: `defaultProviderPriority()`'s `movie`/`series` entries
+     * must come from the REAL `config/metadata.php` file, not a hardcoded
+     * literal reintroduced in this class. The config file is read directly
+     * here (dynamically, not copy-pasted) so this assertion tracks whatever
+     * the config file actually says rather than duplicating a snapshot of it.
+     */
+    public function testDefaultProviderPriorityMirrorsConfigMetadataFile(): void
+    {
+        $configPath = dirname(__DIR__, 4) . '/config/metadata.php';
+        $config = include $configPath;
+        $this->assertIsArray($config);
+        $this->assertIsArray($config['provider_priority'] ?? null);
+
+        $resolved = MetadataManager::defaultProviderPriority();
+
+        foreach (['movie', 'series', 'anime'] as $type) {
+            $this->assertSame(
+                $config['provider_priority'][$type],
+                $resolved[$type],
+                "defaultProviderPriority()['{$type}'] must mirror config/metadata.php, not a divergent literal."
+            );
+        }
+    }
+
+    /**
+     * S-F48/SV-4.10: prior to this fix, MetadataManager hardcoded its own
+     * `movie => ['tmdb','local']` literal, independent of
+     * `config/metadata.php`'s `movie => ['tmdb','imdb']`. Constructing with NO
+     * explicit `$providerPriority` (the legacy/back-compat path used by
+     * `Application::getMusicController()`) must now resolve the CONFIG file's
+     * order: registering only 'imdb' (present in the config default, absent
+     * from the old hardcoded literal) must resolve, proving the default
+     * genuinely changed to track the config file rather than the old literal.
+     */
+    public function testConstructorDefaultPriorityForMovieMatchesConfigNotOldHardcodedLiteral(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $manager = new MetadataManager($itemRepo);
+
+        $imdbProvider = $this->createMock(MetadataProviderInterface::class);
+        $manager->registerProvider('imdb', $imdbProvider, ['movie']);
+
+        $providers = $manager->getProvidersForType('movie');
+
+        // Only resolves if the default priority list for 'movie' contains
+        // 'imdb' — true for config/metadata.php's ['tmdb','imdb'], false for
+        // the old hardcoded ['tmdb','local'].
+        $this->assertCount(1, $providers);
+        $this->assertSame($imdbProvider, $providers[0]);
+    }
+
+    /**
+     * S-F48/SV-4.10: an explicit `$providerPriority` constructor argument
+     * (as DI wiring in `MediaServicesProvider` passes) must win over the
+     * config-file-derived default.
+     */
+    public function testConstructorHonorsExplicitProviderPriorityOverride(): void
+    {
+        $itemRepo = $this->createMock(ItemRepository::class);
+        $manager = new MetadataManager($itemRepo, null, null, [
+            'movie' => ['fanart'],
+        ]);
+
+        $fanartProvider = $this->createMock(MetadataProviderInterface::class);
+        $manager->registerProvider('fanart', $fanartProvider, ['movie']);
+        $tmdbProvider = $this->createMock(MetadataProviderInterface::class);
+        $manager->registerProvider('tmdb', $tmdbProvider, ['movie']);
+
+        $providers = $manager->getProvidersForType('movie');
+
+        // Only 'fanart' resolves: the explicit override replaced the whole
+        // 'movie' list (tmdb is registered but not in the override's order).
+        $this->assertCount(1, $providers);
+        $this->assertSame($fanartProvider, $providers[0]);
+    }
+
+    /**
+     * S-F48/SV-4.10: `defaultProviderPriority()` genuinely reads whatever
+     * config file it is pointed at — proven here by pointing it at a
+     * throwaway fixture (under the OS temp dir, never the shared repo
+     * working tree) with deliberately different values and confirming the
+     * resolved map reflects THAT fixture, not a value baked into this class.
+     * This is the "changing the config changes the resolved order" proof the
+     * step brief asks for, without mutating the real `config/metadata.php`
+     * (which other concurrent agents in this shared working tree may read).
+     */
+    public function testDefaultProviderPriorityTracksArbitraryConfigFileContent(): void
+    {
+        $fixturePath = tempnam(sys_get_temp_dir(), 'phlix_metadata_config_test_') . '.php';
+        $fixtureContent = <<<'PHP'
+<?php
+return [
+    'provider_priority' => [
+        'movie' => ['fanart', 'local'],
+        'series' => ['fanart'],
+    ],
+    'genres_mode' => 'union',
+];
+PHP;
+        file_put_contents($fixturePath, $fixtureContent);
+
+        try {
+            $resolved = MetadataManager::defaultProviderPriority($fixturePath);
+
+            // The fixture's own (deliberately unusual) values won, proving
+            // dynamic loading rather than a fixed literal.
+            $this->assertSame(['fanart', 'local'], $resolved['movie']);
+            $this->assertSame(['fanart'], $resolved['series']);
+
+            // Types the fixture doesn't define (e.g. episode/artist/album/
+            // track — outside Feature 3's schema) still fall back to this
+            // class's own additional defaults, unaffected by the fixture.
+            $this->assertSame(['tvdb', 'local'], $resolved['episode']);
+            $this->assertSame(['musicbrainz', 'audiodb', 'local'], $resolved['artist']);
+        } finally {
+            @unlink($fixturePath);
+        }
+    }
+
+    /**
+     * `defaultProviderPriority()` falls back to its own in-code defaults when
+     * the config file path does not resolve to anything readable (defensive;
+     * mirrors the `matching.noise_suffixes` fallback pattern elsewhere).
+     */
+    public function testDefaultProviderPriorityFallsBackWhenConfigFileMissing(): void
+    {
+        $missingPath = sys_get_temp_dir() . '/phlix_metadata_config_does_not_exist_' . uniqid() . '.php';
+
+        $resolved = MetadataManager::defaultProviderPriority($missingPath);
+
+        $this->assertSame(['tmdb', 'imdb'], $resolved['movie']);
+        $this->assertSame(['tmdb', 'imdb'], $resolved['series']);
+        $this->assertSame(['tvdb', 'local'], $resolved['episode']);
+    }
+
     public function testRegisterProviderWithEmptySupportedTypes(): void
     {
         $this->manager->registerProvider('standalone', $this->mockProvider, []);
-        
+
         $this->assertTrue($this->manager->hasProvider('standalone'));
     }
 

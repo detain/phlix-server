@@ -1630,12 +1630,16 @@ class TranscodeManagerTest extends TestCase
     }
 
     /**
-     * SV-4.2 ([S-F23]): when a launched segment encode never publishes within the
-     * poll window (the client abandoned the seek, or the encode hung), the poll
-     * loop's finally KILLS the tracked ffmpeg PID rather than leaving it to run to
-     * completion burning CPU. The registry entry is dropped by the kill (no leak).
+     * SV-4.2 ([S-F23]) fix (findings #1/#2): when a launched segment encode never
+     * publishes within THIS request's poll window, that is a WAIT-TIMEOUT, not
+     * abandonment. The poll loop's finally must NOT kill the encode — a
+     * slow-but-wanted software 4K/HEVC transcode has to finish and publish for the
+     * retrying requester. It only RELEASES tracking (via
+     * releaseSegmentProcessAfterWaitTimeout), which also cleans the temp iff the
+     * encode is already dead. Genuine abandonment kills via
+     * RelayConsumer::onHttpCancel; `timeout <n>` is the stuck-encode backstop.
      */
-    public function testEnsureSegmentKillsAbandonedEncodeOnWaitTimeout(): void
+    public function testEnsureSegmentDoesNotKillEncodeOnWaitTimeoutOnlyReleases(): void
     {
         $dir = $this->segmentDir . '/mv-timeout';
         mkdir($dir, 0755, true);
@@ -1655,9 +1659,10 @@ class TranscodeManagerTest extends TestCase
         // Launch "succeeds" (returns a PID) but the segment file is NEVER created,
         // so the poll times out.
         $ff->expects($this->once())->method('startSegmentEncode')->willReturn(4321);
-        // The abandoned encode must be killed via the cancel key ($final), and the
-        // completion (release) path must NOT run.
-        $ff->expects($this->once())->method('killSegmentProcess')->with($final);
+        // Release-only on wait-timeout — the still-running encode must NOT be
+        // killed, and the plain (completion) release path must NOT run.
+        $ff->expects($this->once())->method('releaseSegmentProcessAfterWaitTimeout')->with($final);
+        $ff->expects($this->never())->method('killSegmentProcess');
         $ff->expects($this->never())->method('releaseSegmentProcess');
 
         // Short poll ceiling (200ms) so the timeout path is fast.

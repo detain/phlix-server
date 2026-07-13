@@ -178,8 +178,11 @@ class FfmpegRunnerTest extends TestCase
 
     /**
      * The detached on-demand segment command wraps the atomic-publish chain in
-     * `timeout <n>` when a positive timeout is configured, so an abandoned
-     * scrub-storm encode is force-killed instead of running to completion.
+     * `timeout -k <grace> -s TERM <n>` when a positive timeout is configured, so
+     * a hung/abandoned encode is TERM'd then force-KILLed by `timeout` itself
+     * (SV-4.2 finding #4 — the wrapper self-escalates, not relying on an external
+     * SIGKILL reaching only the wrapper). The whole chain runs under `setsid` so
+     * it is its own process group and a cancel can group-signal ffmpeg directly.
      */
     public function testBuildDetachedSegmentCommandWrapsInTimeout(): void
     {
@@ -192,19 +195,20 @@ class FfmpegRunnerTest extends TestCase
             7200,
         );
 
-        // timeout wrapper with the configured seconds.
-        $this->assertStringContainsString('timeout 7200 sh -c ', $cmd);
+        // timeout wrapper with self-escalation (-k grace) and the configured secs.
+        $this->assertMatchesRegularExpression('/timeout -k \d+ -s TERM 7200 sh -c /', $cmd);
+        // Launched in its own process group so a cancel can group-signal ffmpeg.
+        $this->assertStringContainsString('nohup setsid ', $cmd);
         // Atomic publish tail preserved (mv on success, rm on failure).
         $this->assertStringContainsString('mv -f', $cmd);
         $this->assertStringContainsString('rm -f', $cmd);
         // Backgrounded, prints the child PID.
-        $this->assertStringContainsString('nohup ', $cmd);
         $this->assertStringContainsString('& echo $!', $cmd);
     }
 
     /**
-     * With a zero (disabled) timeout the command still launches via `sh -c` but
-     * without a `timeout` prefix.
+     * With a zero (disabled) timeout the command still launches via `setsid sh -c`
+     * but without a `timeout` prefix.
      */
     public function testBuildDetachedSegmentCommandOmitsTimeoutWhenZero(): void
     {
@@ -218,13 +222,14 @@ class FfmpegRunnerTest extends TestCase
         );
 
         $this->assertStringNotContainsString('timeout ', $cmd);
-        $this->assertStringContainsString('sh -c ', $cmd);
+        $this->assertStringContainsString('setsid sh -c ', $cmd);
     }
 
     /**
-     * killSegmentProcess / releaseSegmentProcess delegate to the wired registry:
+     * kill / release / releaseAfterWaitTimeout delegate to the wired registry:
      * kill signals the tracked PID and drops the entry; release drops it without
-     * signalling. No-op (returns 0) when no registry is wired.
+     * signalling; releaseAfterWaitTimeout drops it without signalling a live
+     * encode. No-op (returns 0) when no registry is wired.
      */
     public function testSegmentProcessLifecycleDelegatesToRegistry(): void
     {
@@ -236,6 +241,9 @@ class FfmpegRunnerTest extends TestCase
             },
             static fn (int $pid): bool => false,
             0.01,
+            // No-op temp cleaner so the test touches no real files.
+            static function (string $key): void {
+            },
         );
 
         $runner = new FfmpegRunner('/usr/bin/ffmpeg', '/usr/bin/ffprobe', '/tmp');
@@ -250,6 +258,12 @@ class FfmpegRunnerTest extends TestCase
         $runner->releaseSegmentProcess('seg-release');
         $this->assertSame(0, $registry->registeredKeyCount());
         $this->assertSame([], $signals);
+
+        // Wait-timeout release path: entry dropped, still nothing signalled.
+        $registry->register('seg-wait', 4321);
+        $runner->releaseSegmentProcessAfterWaitTimeout('seg-wait');
+        $this->assertSame(0, $registry->registeredKeyCount());
+        $this->assertSame([], $signals, 'wait-timeout release must never signal');
 
         // Kill path: entry signalled + dropped.
         $registry->register('seg-kill', 5678);

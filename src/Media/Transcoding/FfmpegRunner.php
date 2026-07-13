@@ -33,6 +33,14 @@ use Psr\Log\NullLogger;
  */
 class FfmpegRunner
 {
+    /**
+     * Grace (seconds) `timeout` waits after its initial SIGTERM before it
+     * escalates to SIGKILL of the encode's process group (SV-4.2 finding #4:
+     * `timeout -k <grace> -s TERM`). Short — a stuck segment encode is
+     * disposable and should die quickly once the transcode timeout fires.
+     */
+    private const TIMEOUT_KILL_GRACE_SECONDS = 10;
+
     /** @var string Path to FFmpeg binary */
     private string $ffmpegPath;
 
@@ -142,10 +150,27 @@ class FfmpegRunner
     }
 
     /**
-     * Kill the detached ffmpeg process(es) tracked for a cancel key (SIGTERM →
-     * SIGKILL, coroutine-safe) and drop the entry. Used by the transcode poll
-     * loop on wait-timeout and by cancel/disconnect hooks. No-op when no
-     * registry is wired or the key is unknown.
+     * Wait-timeout release for the transcode poll loop: stop tracking the encode
+     * WE launched but do NOT kill it — a single request's poll wait timing out is
+     * not abandonment, so a slow-but-wanted encode is left to finish and publish
+     * for a retrying requester (SV-4.2 finding #2). If the encode already died
+     * without publishing, its orphaned `.part-*` temp is cleaned (finding #1).
+     * No-op when no registry is wired.
+     *
+     * @param string $cancelKey The key passed to {@see startSegmentEncode()}.
+     *
+     * @since SV-4.2
+     */
+    public function releaseSegmentProcessAfterWaitTimeout(string $cancelKey): void
+    {
+        $this->segmentRegistry?->releaseAfterWaitTimeout($cancelKey);
+    }
+
+    /**
+     * Kill the detached ffmpeg process group(s) tracked for a cancel key
+     * (SIGTERM → SIGKILL to the group, coroutine-safe), remove the orphaned
+     * `.part-*` temp, and drop the entry. Used by cancel/disconnect hooks on
+     * genuine abandonment. No-op when no registry is wired or the key is unknown.
      *
      * @param string $cancelKey The key passed to {@see startSegmentEncode()}.
      *
@@ -1990,13 +2015,19 @@ class FfmpegRunner
      * @param string|null          $cancelKey Optional cancel key: when a segment
      *                                         registry is wired, the spawned PID is
      *                                         tracked under this key so the encode
-     *                                         can be killed on wait-timeout / cancel
-     *                                         (SV-4.2). Defaults to $outFile.
+     *                                         can be released on wait-timeout and
+     *                                         killed on cancel (SV-4.2). Defaults
+     *                                         to $outFile.
+     * @param string|null          $cancelGroup Optional cancel-group id (the relay
+     *                                         channel/request id) so an HTTP_CANCEL
+     *                                         can kill the encode by channel id
+     *                                         (SV-4.2 / X1). Null for direct-LAN
+     *                                         requests.
      *
      * @return int OS process id of the launched job (0 if launch failed).
      *
-     * @since SV-4.2 Wraps the encode in `timeout <transcode_timeout>` and tracks
-     *        the PID for cancellation.
+     * @since SV-4.2 Wraps the encode in `timeout <transcode_timeout>` (launched
+     *        under setsid) and tracks the process-group PID for cancellation.
      */
     public function startSegmentEncode(
         string $inputPath,
@@ -2004,7 +2035,8 @@ class FfmpegRunner
         float $start,
         float $duration,
         array $params,
-        ?string $cancelKey = null
+        ?string $cancelKey = null,
+        ?string $cancelGroup = null
     ): int {
         $tmp = $outFile . '.part-' . bin2hex(random_bytes(4));
         $cancelKey ??= $outFile;
@@ -2013,7 +2045,7 @@ class FfmpegRunner
         // pipeline (no hwaccel, no -c:v) — it is a cheap -vn AAC extract/encode.
         if (($params['audio_only'] ?? false) === true) {
             $encode = $this->buildAudioSegmentCommand($inputPath, $tmp, $start, $duration, $params);
-            return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey);
+            return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup);
         }
 
         // Try hardware acceleration first if enabled AND preferred in config.
@@ -2032,7 +2064,7 @@ class FfmpegRunner
             $encode = $this->buildSegmentCommand($inputPath, $tmp, $start, $duration, $params);
         }
 
-        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey);
+        return $this->launchDetachedSegment($encode, $tmp, $outFile, $cancelKey, $cancelGroup);
     }
 
     /**
@@ -2045,10 +2077,11 @@ class FfmpegRunner
      * poll loop / a cancel hook can kill it early. Without a wired registry the
      * `timeout` wrapper alone still bounds the encode.
      *
-     * @param string      $encode    The complete FFmpeg command writing to `$tmp`.
-     * @param string      $tmp       The `.part-*` temp path the command writes.
-     * @param string      $outFile   The final segment path published on success.
-     * @param string|null $cancelKey Key to track the PID under (null = $outFile).
+     * @param string      $encode      The complete FFmpeg command writing to `$tmp`.
+     * @param string      $tmp         The `.part-*` temp path the command writes.
+     * @param string      $outFile     The final segment path published on success.
+     * @param string|null $cancelKey   Key to track the PID under (null = $outFile).
+     * @param string|null $cancelGroup Cancel-group id (relay channel/request id).
      *
      * @return int OS process id of the launched job (0 if launch failed).
      */
@@ -2056,7 +2089,8 @@ class FfmpegRunner
         string $encode,
         string $tmp,
         string $outFile,
-        ?string $cancelKey = null
+        ?string $cancelKey = null,
+        ?string $cancelGroup = null
     ): int {
         $full = $this->buildDetachedSegmentCommand($encode, $tmp, $outFile, $this->getTranscodeTimeout());
 
@@ -2068,7 +2102,9 @@ class FfmpegRunner
 
         $childPid = (int) trim($pid);
         if ($childPid > 0) {
-            $this->segmentRegistry?->register($cancelKey ?? $outFile, $childPid);
+            // The PID is the `setsid` group leader (PGID == PID), so the registry
+            // can signal the whole group and reach ffmpeg directly.
+            $this->segmentRegistry?->register($cancelKey ?? $outFile, $childPid, $cancelGroup);
         }
         return $childPid;
     }
@@ -2079,17 +2115,31 @@ class FfmpegRunner
      * be asserted in tests without spawning a process (SV-4.2).
      *
      * The atomic-publish chain (`encode && mv || rm`) runs inside a single
-     * `sh -c`; that whole `sh -c` is wrapped in `timeout <seconds>` when a
-     * positive timeout is configured, so a hung/abandoned encode is force-killed
-     * (which also removes the `.part-*` temp via the trailing `rm`). The launch
-     * itself is `nohup ... & echo $!`, so the worker never blocks on the encode.
+     * `sh -c`; that whole `sh -c` is wrapped in `timeout -k <grace> -s TERM
+     * <seconds>` when a positive timeout is configured, so a hung/abandoned
+     * encode is TERM'd and then force-KILLed by `timeout` itself after the grace
+     * (SV-4.2 finding #4 — `timeout` self-escalates rather than relying on an
+     * external SIGKILL reaching only the wrapper).
+     *
+     * The whole command runs under `setsid` so it becomes its own process-group
+     * leader (PGID == the returned PID). This lets a cancel/disconnect signal the
+     * whole group (negative PID) and reach the ffmpeg grandchild directly, not
+     * just the `timeout`/`sh` wrapper. The launch itself is `nohup ... & echo $!`,
+     * so the worker never blocks on the encode.
+     *
+     * NOTE: when `timeout` (or an external signal) terminates the chain, the
+     * trailing `|| rm` does NOT run — the shell is killed mid-flight — so the
+     * `.part-*` temp survives. Callers clean it explicitly on kill / dead release
+     * (see {@see SegmentProcessRegistry::kill()} /
+     * {@see SegmentProcessRegistry::releaseAfterWaitTimeout()}). The `|| rm` only
+     * fires when ffmpeg exits nonzero on its own.
      *
      * @param string $encode      The FFmpeg command writing to `$tmp`.
      * @param string $tmp         The `.part-*` temp path.
      * @param string $outFile     The final published segment path.
      * @param int    $timeoutSecs Timeout in seconds (0 = no timeout wrapper).
      *
-     * @return string The full `nohup ... & echo $!` launch string.
+     * @return string The full `nohup setsid ... & echo $!` launch string.
      *
      * @since SV-4.2
      */
@@ -2106,14 +2156,18 @@ class FfmpegRunner
 
         // SV-4.2: wrap in timeout to enforce transcode_timeout for on-demand
         // segment encodes (previously only whole-file/CMAF/recording paths did).
+        // `-k <grace> -s TERM` makes timeout escalate to SIGKILL of its own child
+        // group if the encode ignores the TERM (finding #4 backstop).
         if ($timeoutSecs > 0) {
-            $launched = 'timeout ' . $timeoutSecs . ' sh -c ' . escapeshellarg($inner);
+            $launched = 'timeout -k ' . self::TIMEOUT_KILL_GRACE_SECONDS . ' -s TERM '
+                . $timeoutSecs . ' sh -c ' . escapeshellarg($inner);
         } else {
             $launched = 'sh -c ' . escapeshellarg($inner);
         }
 
         $log = dirname($outFile) . '/ffmpeg-segments.log';
-        return sprintf('nohup %s >> %s 2>&1 & echo $!', $launched, escapeshellarg($log));
+        // `setsid` → own process group so a cancel can group-signal ffmpeg directly.
+        return sprintf('nohup setsid %s >> %s 2>&1 & echo $!', $launched, escapeshellarg($log));
     }
 
     /**

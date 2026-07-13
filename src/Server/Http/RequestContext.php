@@ -71,6 +71,23 @@ final class RequestContext
     public const KEY_PROFILE_ID = 'phlix.profileId';
 
     /**
+     * Namespaced context key for the relay cancel group of the current
+     * request. When a request is being serviced on behalf of a relayed
+     * hub connection ({@see \Phlix\Hub\RelayConsumer}), this carries the
+     * hub-allocated channel/request id so any on-demand ffmpeg segment
+     * encode launched during the dispatch can be registered under it in the
+     * {@see \Phlix\Media\Transcoding\SegmentProcessRegistry}. That lets an
+     * HTTP_CANCEL frame (SV-4.2 / X1) find and kill the encode by channel id
+     * even though the encode itself is tracked by its segment path.
+     *
+     * Unset (null) for direct-LAN HTTP requests — those carry no relay
+     * channel, so encodes are tracked by segment path only.
+     *
+     * @var string
+     */
+    public const KEY_RELAY_CANCEL_GROUP = 'phlix.relayCancelGroup';
+
+    /**
      * Static-only helper — instantiation is intentionally forbidden.
      */
     private function __construct()
@@ -188,5 +205,43 @@ final class RequestContext
     public static function clearProfileId(): void
     {
         Context::set(self::KEY_PROFILE_ID, null);
+    }
+
+    /**
+     * Store the relay cancel group (hub-allocated channel/request id) of the
+     * current request. Set by {@see \Phlix\Hub\RelayConsumer} while dispatching
+     * a relayed request so an on-demand segment encode launched during the
+     * dispatch can be tracked under this id for HTTP_CANCEL-driven kill
+     * (SV-4.2 / X1).
+     *
+     * @param string|null $group Relay channel/request id, or null to clear.
+     *
+     * @return void
+     */
+    public static function setRelayCancelGroup(?string $group): void
+    {
+        Context::set(self::KEY_RELAY_CANCEL_GROUP, $group);
+    }
+
+    /**
+     * Read the relay cancel group of the current request, or null when the
+     * request is not being serviced on behalf of a relayed hub connection.
+     *
+     * @return string|null Relay channel/request id, or null if unset/empty.
+     */
+    public static function getRelayCancelGroup(): ?string
+    {
+        $value = Context::get(self::KEY_RELAY_CANCEL_GROUP);
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * Drop the relay cancel group from the current coroutine's context.
+     *
+     * @return void
+     */
+    public static function clearRelayCancelGroup(): void
+    {
+        Context::set(self::KEY_RELAY_CANCEL_GROUP, null);
     }
 }

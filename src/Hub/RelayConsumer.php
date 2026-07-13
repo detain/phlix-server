@@ -13,6 +13,7 @@ namespace Phlix\Hub;
 
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Server\Http\Request as ServerRequest;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response as ServerResponse;
 use Phlix\Shared\Relay\RelayFrame;
 use Phlix\Shared\Relay\RelayFrameType;
@@ -220,13 +221,15 @@ final class RelayConsumer
      * (SV-4.2 [S-F23], the server half of the X1 HTTP_CANCEL chain). Null unless
      * wired via {@see setSegmentProcessRegistry()}.
      *
-     * NOTE: the RelayConsumer runs in the relay-tunnel worker, a separate process
-     * from the HTTP workers that launch segment encodes; that per-process registry
-     * is therefore empty for cross-process relay traffic, so the *effective* abort
-     * for proxied requests is {@see closeLocalConnection()} (which tears down the
-     * forwarded request in the HTTP worker, whose own poll-loop wait-timeout then
-     * kills the encode). This registry kill additionally covers the case where the
-     * relay and encode share a worker and is the request-keyed cancellation hook.
+     * The relay fork dispatches proxied HTTP_REQUEST frames IN THIS PROCESS (via
+     * its own {@see \Phlix\Hub\RelayRequestDispatcher}), so an on-demand encode a
+     * relayed segment request launches registers into this same per-worker
+     * registry singleton. The encode is grouped under the hub channel/request id
+     * (published into {@see RequestContext} during dispatch), so
+     * {@see onHttpCancel()} kills it directly by channel id via
+     * {@see \Phlix\Media\Transcoding\SegmentProcessRegistry::killGroup()}.
+     * {@see closeLocalConnection()} remains the belt-and-braces teardown of the
+     * forwarded request.
      *
      * @var \Phlix\Media\Transcoding\SegmentProcessRegistry|null
      */
@@ -1064,6 +1067,31 @@ final class RelayConsumer
      */
     private function dispatchWithDeadline(int $requestId, RelayHttpRequest $envelope): ?ServerResponse
     {
+        // SV-4.2 / X1: publish the hub channel/request id as the relay cancel
+        // group for the duration of this dispatch, so any on-demand segment
+        // encode launched by the dispatcher (in THIS process) is registered under
+        // it — letting onHttpCancel($requestId) kill the encode by channel id.
+        // Cleared in a finally so it never leaks into the next request handled on
+        // the same coroutine.
+        RequestContext::setRelayCancelGroup((string) $requestId);
+        try {
+            return $this->dispatchWithDeadlineInner($requestId, $envelope);
+        } finally {
+            RequestContext::clearRelayCancelGroup();
+        }
+    }
+
+    /**
+     * The deadline-enforcing dispatch body (SV-4.2 extracted the relay-cancel-group
+     * bracketing into {@see dispatchWithDeadline()}).
+     *
+     * @param int              $requestId Hub-allocated request id (for error logging).
+     * @param RelayHttpRequest $envelope  Decoded request envelope.
+     *
+     * @return ServerResponse|null The response on success, or null on timeout.
+     */
+    private function dispatchWithDeadlineInner(int $requestId, RelayHttpRequest $envelope): ?ServerResponse
+    {
         $deadline = self::DISPATCH_DEADLINE_SECONDS;
         $request = $this->buildRequest($envelope);
 
@@ -1484,13 +1512,14 @@ final class RelayConsumer
         // request in mid-upload cannot leave a dangling accumulator.
         $this->discardRequestAccumulator($channelId);
 
-        // SV-4.2 ([S-F23], X1 server half): kill any on-demand ffmpeg encode
-        // tracked for this request so an abandoned scrub-storm segment stops
-        // burning CPU immediately rather than running to completion. Keyed by the
-        // request id; a no-op when nothing is tracked (see the $segmentRegistry
-        // docblock on the cross-process caveat — closeLocalConnection below is the
-        // effective abort for proxied traffic).
-        $killed = $this->segmentRegistry?->kill((string) $channelId) ?? 0;
+        // SV-4.2 ([S-F23], X1 server half): kill any on-demand ffmpeg encode this
+        // relayed request launched so an abandoned scrub-storm segment stops
+        // burning CPU immediately rather than running to completion. The encode is
+        // tracked in the registry by its segment path but grouped under this
+        // channel/request id (the group is published into RequestContext during
+        // dispatch — see dispatchWithDeadline), so a group kill finds it by
+        // channel id. A no-op when nothing is tracked for this channel.
+        $killed = $this->segmentRegistry?->killGroup((string) $channelId) ?? 0;
         if ($killed > 0) {
             $this->logger->info('RelayConsumer: killed abandoned encode(s) on HTTP_CANCEL', [
                 'request_id' => $channelId,

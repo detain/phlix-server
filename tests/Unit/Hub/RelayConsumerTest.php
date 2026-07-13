@@ -1088,20 +1088,97 @@ class RelayConsumerTest extends TestCase
             },
             static fn (int $pid): bool => false,
             0.01,
+            // No-op temp cleaner so the test touches no real files.
+            static function (string $key): void {
+            },
         );
         $consumer->setSegmentProcessRegistry($registry);
         $this->activate($consumer);
 
         $requestId = 77;
-        // An on-demand encode is tracked under the request id.
-        $registry->register((string) $requestId, 9090);
+        // An on-demand encode is tracked by its SEGMENT PATH but grouped under the
+        // hub channel/request id (as the live dispatch path does), so a cancel that
+        // arrives with only the channel id can still find and kill it — this is the
+        // finding-#3 fix (the old code keyed the kill on the channel id directly,
+        // which never matched the segment-path key → an inert 0-op).
+        $registry->register('/tmp/hls/job/seg-00007.ts', 9090, (string) $requestId);
         $this->assertSame(1, $registry->registeredKeyCount());
+        $this->assertSame(1, $registry->registeredGroupCount());
 
         // The hub cancels the request.
         $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, ''));
 
-        $this->assertSame([9090], $signalled, 'HTTP_CANCEL must signal the tracked PID');
+        $this->assertSame([9090], $signalled, 'HTTP_CANCEL must signal the tracked PID (not a 0-op)');
         $this->assertSame(0, $registry->registeredKeyCount(), 'kill must drop the entry — no leak');
+        $this->assertSame(0, $registry->registeredGroupCount(), 'group torn down — no leak');
+    }
+
+    /**
+     * SV-4.2 ([S-F23], X1): the relay dispatch publishes the hub channel/request
+     * id as the relay cancel group into {@see \Phlix\Server\Http\RequestContext}
+     * for the duration of the dispatch, so an on-demand encode the dispatcher
+     * launches in-process registers under it and a later HTTP_CANCEL kills it by
+     * channel id. This exercises the end-to-end threading (not a hand-registered
+     * fixture): the dispatcher reads the group from RequestContext exactly as
+     * TranscodeManager does.
+     */
+    public function test_relay_dispatch_publishes_cancel_group_so_cancel_finds_the_encode(): void
+    {
+        $signalled = [];
+        $registry = new \Phlix\Media\Transcoding\SegmentProcessRegistry(
+            null,
+            static function (int $pid, int $signal) use (&$signalled): void {
+                $signalled[] = $pid;
+            },
+            static fn (int $pid): bool => false,
+            0.01,
+            static function (string $key): void {
+            },
+        );
+
+        // The dispatcher stands in for the app: it registers a segment encode
+        // under the cancel group it reads from RequestContext (exactly as
+        // TranscodeManager does when it launches an encode).
+        $capturedGroup = null;
+        $dispatcher = static function (\Phlix\Server\Http\Request $req) use (
+            $registry,
+            &$capturedGroup
+        ): \Phlix\Server\Http\Response {
+            $capturedGroup = \Phlix\Server\Http\RequestContext::getRelayCancelGroup();
+            if ($capturedGroup !== null) {
+                $registry->register('/tmp/hls/job/seg-00042.ts', 1212, $capturedGroup);
+            }
+            return new \Phlix\Server\Http\Response();
+        };
+
+        $consumer = $this->createConsumer(null, $dispatcher);
+        $consumer->setSegmentProcessRegistry($registry);
+        $this->activate($consumer);
+
+        $requestId = 42;
+        $envelope = new \Phlix\Shared\Relay\RelayHttpRequest(
+            'GET',
+            '/hls/job/seg-00042.ts',
+            '',
+            [],
+            '',
+        );
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::HTTP_REQUEST,
+            $requestId,
+            $envelope->toJson(),
+        ));
+
+        $this->assertSame((string) $requestId, $capturedGroup, 'dispatch must publish the channel id as the cancel group');
+        $this->assertSame(1, $registry->registeredGroupCount(), 'encode registered under the channel group');
+        // After the dispatch the context must be cleared (no leak into the next request).
+        $this->assertNull(\Phlix\Server\Http\RequestContext::getRelayCancelGroup(), 'cancel group cleared after dispatch');
+
+        // Now the client abandons: HTTP_CANCEL with only the channel id kills it.
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::HTTP_CANCEL, $requestId, ''));
+
+        $this->assertSame([1212], $signalled, 'HTTP_CANCEL kills the encode launched during dispatch');
+        $this->assertSame(0, $registry->registeredGroupCount(), 'group torn down — no leak');
     }
 
     /**

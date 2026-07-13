@@ -17,6 +17,7 @@ use Phlix\Media\Streaming\AbrLadder;
 use Phlix\Media\Streaming\Rendition;
 use Phlix\Media\Streaming\SourceProfile;
 use Phlix\Media\Transcoding\Subtitles\SubtitleExtractor;
+use Phlix\Server\Http\RequestContext;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Workerman\MySQL\Connection;
@@ -810,8 +811,18 @@ class TranscodeManager
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
                 // SV-4.2: pass $final as the cancel key so the spawned ffmpeg PID
-                // is tracked and can be killed on wait-timeout / cancel.
-                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams, $final);
+                // is tracked, and the relay cancel group (the hub channel/request
+                // id, when this dispatch is servicing a relayed request) so an
+                // HTTP_CANCEL can kill the encode by channel id (X1).
+                $this->ffmpeg->startSegmentEncode(
+                    $inputPath,
+                    $final,
+                    $start,
+                    $segLen,
+                    $segParams,
+                    $final,
+                    RequestContext::getRelayCancelGroup(),
+                );
             }
 
             // Poll using non-blocking sleep when in Swoole coroutine context.
@@ -841,17 +852,23 @@ class TranscodeManager
             // e.g. a hard coroutine kill).
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
-                // SV-4.2 ([S-F23]): the detached encode WE launched must not leak a
-                // registry entry, and — if it never published within the poll window
-                // (client abandoned the seek, or it is hung) — must be killed rather
-                // than left to run to completion burning CPU. `is_file($final)` true
-                // means the encode already renamed + exited, so we only release; false
-                // means still running/failed, so kill (SIGTERM→SIGKILL) which also
-                // drops the entry. `timeout <n>` on the child is the outer backstop.
+                // SV-4.2 ([S-F23]): stop tracking the encode WE launched so the
+                // registry never leaks. This is a WAIT RELEASE, not a cancel — a
+                // single request's poll wait timing out is NOT abandonment, so we
+                // must NOT kill a still-running encode: a slow-but-wanted software
+                // 4K/HEVC transcode has to finish and publish for the retrying
+                // requester (the on-demand-seek design). `timeout <n>` is the
+                // backstop for a genuinely stuck encode; genuine abandonment
+                // (client cancel / disconnect) kills promptly via
+                // RelayConsumer::onHttpCancel. `is_file($final)` true means the
+                // encode already renamed + exited → plain release; false means the
+                // poll gave up → release-and-clean-temp-only-if-the-encode-is-dead
+                // (a live encode + its live `.part-*` are left untouched;
+                // finding #1/#2).
                 if (is_file($final)) {
                     $this->ffmpeg->releaseSegmentProcess($final);
                 } else {
-                    $this->ffmpeg->killSegmentProcess($final);
+                    $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
                 }
             }
         }
@@ -1009,8 +1026,18 @@ class TranscodeManager
                 // Throws SegmentCacheFullException if below threshold; the HLS
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
-                // SV-4.2: track the spawned PID under $final for cancel/timeout.
-                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams, $final);
+                // SV-4.2: track the spawned PID under $final, plus the relay cancel
+                // group (hub channel/request id) so an HTTP_CANCEL kills by channel
+                // id (X1).
+                $this->ffmpeg->startSegmentEncode(
+                    $inputPath,
+                    $final,
+                    $start,
+                    $segLen,
+                    $segParams,
+                    $final,
+                    RequestContext::getRelayCancelGroup(),
+                );
             }
 
             $waited = 0;
@@ -1025,17 +1052,17 @@ class TranscodeManager
         } finally {
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
-                // SV-4.2 ([S-F23]): the detached encode WE launched must not leak a
-                // registry entry, and — if it never published within the poll window
-                // (client abandoned the seek, or it is hung) — must be killed rather
-                // than left to run to completion burning CPU. `is_file($final)` true
-                // means the encode already renamed + exited, so we only release; false
-                // means still running/failed, so kill (SIGTERM→SIGKILL) which also
-                // drops the entry. `timeout <n>` on the child is the outer backstop.
+                // SV-4.2 ([S-F23]): WAIT RELEASE, not cancel — see the identical
+                // block in the multi-variant path above. Do NOT kill a still-running
+                // encode on a poll wait-timeout (a slow-but-wanted encode must
+                // publish for the retrying requester); only stop tracking it and, if
+                // it already died without publishing, clean the orphaned `.part-*`
+                // temp. Genuine abandonment kills via RelayConsumer::onHttpCancel;
+                // `timeout <n>` is the stuck-encode backstop (findings #1/#2).
                 if (is_file($final)) {
                     $this->ffmpeg->releaseSegmentProcess($final);
                 } else {
-                    $this->ffmpeg->killSegmentProcess($final);
+                    $this->ffmpeg->releaseSegmentProcessAfterWaitTimeout($final);
                 }
             }
         }

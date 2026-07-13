@@ -8,44 +8,86 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
 /**
- * Per-worker registry of detached on-demand ffmpeg segment-encode PIDs, keyed by
- * an opaque cancel key (typically the final segment path, but any stable
- * request/segment/job identifier works).
+ * Per-worker registry of detached on-demand ffmpeg segment-encode process
+ * groups, keyed by an opaque cancel key (the final segment path) and optionally
+ * grouped under a cancel-group id (the relay channel/request id).
  *
  * SV-4.2 ([S-F23]): the scrub-storm orphan-CPU problem. On-demand segment
  * encodes are launched detached and previously ran to completion even after the
  * client abandoned the request (a frantic seek launches — and abandons — many
- * segment encodes). This registry lets the transcode poll loop kill the encode
- * it launched when the wait times out, and lets a cancel/disconnect hook kill by
- * request key, so abandoned encodes stop burning CPU instead of running to the
- * end.
+ * segment encodes). This registry lets a cancel/disconnect hook kill the encode
+ * a specific relayed request launched ({@see killGroup()}), so an ABANDONED
+ * encode stops burning CPU immediately instead of running to the end.
  *
- * Resident-memory discipline (this is Workerman, NOT php-fpm): the map is bounded
- * — every caller MUST {@see release()} or {@see kill()} its key (the transcode
- * path does so in a `finally`). {@see registeredKeyCount()} is exposed so leaks
- * are observable in tests.
+ * Two-level keying (SV-4.2 fix):
+ *   - The PRIMARY key is the final segment path ($final). The transcode poll
+ *     loop that launched the encode manages this key in a `finally`
+ *     ({@see release()} on publish, {@see releaseAfterWaitTimeout()} otherwise).
+ *   - An optional GROUP id (the relay channel/request id, threaded via
+ *     {@see \Phlix\Server\Http\RequestContext::getRelayCancelGroup()}) maps that
+ *     channel to the segment key(s) it launched, so
+ *     {@see \Phlix\Hub\RelayConsumer::onHttpCancel()} can kill by channel id.
+ *
+ * Kill semantics (SV-4.2 findings #1 & #4):
+ *   - Segment encodes are launched under `setsid`, so the tracked PID is a
+ *     process-GROUP leader (PGID == PID). The default signal sender targets the
+ *     whole group (negative PID), reaching the ffmpeg grandchild directly rather
+ *     than only the `timeout`/`sh` wrapper.
+ *   - A signalled encode cannot run its own atomic-publish `|| rm` cleanup, so
+ *     on any kill the orphaned `.part-*` temp is removed (via the temp cleaner)
+ *     — otherwise the cap/dedup globs would count a dead encode as in-flight.
+ *
+ * Wait-timeout semantics (SV-4.2 finding #2): a single request's poll wait
+ * timing out is NOT abandonment. {@see releaseAfterWaitTimeout()} therefore only
+ * stops tracking the encode (and cleans the temp IFF the encode is already dead)
+ * — it never kills a still-running encode, so a slow-but-wanted software 4K/HEVC
+ * transcode is left to finish and publish for the retrying requester. The
+ * `timeout <transcode_timeout>` wrapper is the backstop for a genuinely stuck
+ * encode; genuine abandonment kills promptly via the cancel path.
+ *
+ * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
+ * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
+ * {@see kill()} or {@see killGroup()} its key (the transcode path does so in a
+ * `finally`). {@see registeredKeyCount()} is exposed so leaks are observable in
+ * tests, and dropping a key always tears down its group links.
  *
  * Coroutine-safety: killing waits between SIGTERM and SIGKILL using a
  * coroutine-yielding sleep when inside a Swoole coroutine (`getCid() > 0`) and a
  * short blocking sleep otherwise, so it never blocks the event loop. The signal
- * send and liveness probe are injectable for tests (no real processes spawned).
+ * send, liveness probe, and temp cleaner are injectable for tests (no real
+ * processes spawned, no real files removed).
  *
  * @since SV-4.2
  */
 final class SegmentProcessRegistry
 {
     /**
-     * Cancel key => list of tracked OS PIDs.
+     * Cancel key (segment path) => list of tracked OS process-group-leader PIDs.
      *
      * @var array<string, array<int, int>>
      */
     private array $pids = [];
 
+    /**
+     * Cancel-group id (relay channel/request id) => list of cancel keys it owns.
+     *
+     * @var array<string, array<int, string>>
+     */
+    private array $keysByGroup = [];
+
+    /**
+     * Reverse index: cancel key => its cancel-group id (for O(1) teardown).
+     *
+     * @var array<string, string>
+     */
+    private array $groupOfKey = [];
+
     private LoggerInterface $logger;
 
     /**
-     * Signal sender: fn(int $pid, int $signal): void. Defaults to posix_kill /
-     * `kill` fallback. Overridable in tests so no real signals are sent.
+     * Signal sender: fn(int $pid, int $signal): void. Defaults to signalling the
+     * process GROUP (negative PID) via posix_kill / `kill` fallback. Overridable
+     * in tests so no real signals are sent.
      *
      * @var callable(int, int): void
      */
@@ -53,11 +95,22 @@ final class SegmentProcessRegistry
 
     /**
      * Liveness probe: fn(int $pid): bool. Defaults to posix_kill($pid, 0) /
-     * /proc probe. Overridable in tests.
+     * /proc probe against the group-leader PID. Overridable in tests.
      *
      * @var callable(int): bool
      */
     private $isAlive;
+
+    /**
+     * Temp cleaner: fn(string $key): void. Removes the orphaned `.part-*`
+     * atomic-write temp(s) for a segment key after its encode was killed (or
+     * died without publishing), since a signalled encode never runs its own
+     * `|| rm` cleanup. Defaults to `glob("{$key}.part-*")` + `@unlink`.
+     * Overridable in tests.
+     *
+     * @var callable(string): void
+     */
+    private $tempCleaner;
 
     /**
      * Seconds to wait for graceful SIGTERM exit before escalating to SIGKILL.
@@ -68,61 +121,105 @@ final class SegmentProcessRegistry
     /**
      * @param callable(int, int): void|null $signalSender
      * @param callable(int): bool|null      $isAlive
+     * @param callable(string): void|null   $tempCleaner
      */
     public function __construct(
         ?LoggerInterface $logger = null,
         ?callable $signalSender = null,
         ?callable $isAlive = null,
-        float $gracePeriodSeconds = 0.5
+        float $gracePeriodSeconds = 0.5,
+        ?callable $tempCleaner = null
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->signalSender = $signalSender ?? self::defaultSignalSender();
         $this->isAlive = $isAlive ?? self::defaultLivenessProbe();
+        $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
     }
 
     /**
-     * Track a launched detached encode PID under the given cancel key.
+     * Track a launched detached encode PID under the given cancel key, and
+     * (optionally) record that key under a cancel group so a group kill can
+     * find it.
      *
      * A key may accumulate more than one PID (e.g. an audio + video rendition
      * for the same logical request); all are killed together.
      *
-     * @param string $key Opaque cancel key (segment path / request id).
-     * @param int    $pid OS process id; non-positive pids are ignored.
+     * @param string      $key   Opaque cancel key (segment path).
+     * @param int         $pid   OS process-group-leader id; non-positive ignored.
+     * @param string|null $group Optional cancel-group id (relay channel/request).
      */
-    public function register(string $key, int $pid): void
+    public function register(string $key, int $pid, ?string $group = null): void
     {
         if ($key === '' || $pid <= 0) {
             return;
         }
         $this->pids[$key][] = $pid;
+
+        if ($group !== null && $group !== '' && !isset($this->groupOfKey[$key])) {
+            $this->keysByGroup[$group][] = $key;
+            $this->groupOfKey[$key] = $group;
+        }
     }
 
     /**
      * Drop the tracked PIDs for a key WITHOUT killing them (the encode finished
-     * on its own). Prevents the map from leaking. Safe for unknown keys.
+     * on its own and published). Tears down group links. Safe for unknown keys.
      *
      * @param string $key Cancel key to forget.
      */
     public function release(string $key): void
     {
-        unset($this->pids[$key]);
+        $this->drop($key);
     }
 
     /**
-     * Kill every tracked PID for a key (SIGTERM, then SIGKILL after the grace
-     * period if still alive) and drop the entry. Safe (no-op) for unknown or
-     * already-cleared keys, so it can be called defensively from cancel /
-     * disconnect / wait-timeout paths.
+     * Wait-timeout release for the request that launched the encode: stop
+     * tracking it but do NOT kill it — a single request's poll wait timing out
+     * is not abandonment, and a slow-but-wanted encode must be left to finish
+     * and publish for a retrying requester (SV-4.2 finding #2). If the encode
+     * already DIED without publishing, remove its orphaned `.part-*` temp so the
+     * cap/dedup globs don't count a corpse (SV-4.2 finding #1); a still-running
+     * encode is left completely alone (its live temp must not be deleted).
      *
-     * @param string $key Cancel key whose encodes should be aborted.
+     * @param string $key Cancel key (segment path) to release.
+     */
+    public function releaseAfterWaitTimeout(string $key): void
+    {
+        $pids = $this->pids[$key] ?? [];
+        $anyAlive = false;
+        foreach ($pids as $pid) {
+            if (($this->isAlive)($pid)) {
+                $anyAlive = true;
+                break;
+            }
+        }
+
+        $this->drop($key);
+
+        if (!$anyAlive) {
+            // Dead (or never tracked) without publishing → clean the corpse temp.
+            // A naturally-exiting encode already ran its `|| rm`, so this is a
+            // harmless no-op then; the case that matters is the `timeout` backstop
+            // signalling it (which skips the `|| rm`).
+            ($this->tempCleaner)($key);
+        }
+    }
+
+    /**
+     * Kill every tracked PID for a key (SIGTERM to the process group, then
+     * SIGKILL after the grace period if still alive), remove the orphaned
+     * `.part-*` temp, and drop the entry. Safe (no-op) for unknown or
+     * already-cleared keys.
+     *
+     * @param string $key Cancel key whose encode(s) should be aborted.
      *
      * @return int Number of PIDs that were signalled.
      */
     public function kill(string $key): int
     {
         $pids = $this->pids[$key] ?? [];
-        unset($this->pids[$key]);
+        $this->drop($key);
         if ($pids === []) {
             return 0;
         }
@@ -135,7 +232,38 @@ final class SegmentProcessRegistry
         foreach ($pids as $pid) {
             $this->terminate($pid);
         }
+
+        // SV-4.2 finding #1: a signalled encode never runs its atomic-publish
+        // `|| rm`, so remove the orphaned `.part-*` temp here — otherwise the
+        // cap/dedup globs count the dead encode as still in-flight.
+        ($this->tempCleaner)($key);
+
         return count($pids);
+    }
+
+    /**
+     * Kill every encode registered under a cancel group (the relay
+     * channel/request id) — the HTTP_CANCEL / disconnect path (SV-4.2 / X1).
+     * Each owned key is killed via {@see kill()} (group leader signalled + temp
+     * cleaned + entry dropped). Safe (returns 0) for unknown groups.
+     *
+     * @param string $group Cancel-group id (relay channel/request id).
+     *
+     * @return int Total number of PIDs signalled across the group's keys.
+     */
+    public function killGroup(string $group): int
+    {
+        // Snapshot: kill() mutates $this->keysByGroup via drop().
+        $keys = $this->keysByGroup[$group] ?? [];
+        if ($keys === []) {
+            return 0;
+        }
+
+        $total = 0;
+        foreach ($keys as $key) {
+            $total += $this->kill($key);
+        }
+        return $total;
     }
 
     /**
@@ -146,6 +274,15 @@ final class SegmentProcessRegistry
     public function registeredKeyCount(): int
     {
         return count($this->pids);
+    }
+
+    /**
+     * The number of cancel groups currently tracked. Exposed for leak assertions
+     * in tests; should return to 0 once all keys have been released or killed.
+     */
+    public function registeredGroupCount(): int
+    {
+        return count($this->keysByGroup);
     }
 
     /**
@@ -161,9 +298,38 @@ final class SegmentProcessRegistry
     }
 
     /**
-     * Graceful-then-forced kill of a single PID, coroutine-safe.
+     * Remove a key's PID entry and tear down its group links (no signalling).
      *
-     * @param int $pid Process id to terminate.
+     * @param string $key Cancel key to drop.
+     */
+    private function drop(string $key): void
+    {
+        unset($this->pids[$key]);
+
+        $group = $this->groupOfKey[$key] ?? null;
+        unset($this->groupOfKey[$key]);
+        if ($group === null || !isset($this->keysByGroup[$group])) {
+            return;
+        }
+
+        $remaining = array_values(array_filter(
+            $this->keysByGroup[$group],
+            static fn (string $k): bool => $k !== $key
+        ));
+        if ($remaining === []) {
+            unset($this->keysByGroup[$group]);
+        } else {
+            $this->keysByGroup[$group] = $remaining;
+        }
+    }
+
+    /**
+     * Graceful-then-forced kill of a single detached encode process group,
+     * coroutine-safe. The signal sender targets the whole group (negative PID),
+     * so both the SIGTERM and the SIGKILL escalation reach the ffmpeg grandchild
+     * directly, not just the `timeout`/`sh` wrapper (SV-4.2 finding #4).
+     *
+     * @param int $pid Process-group-leader id to terminate.
      */
     private function terminate(int $pid): void
     {
@@ -208,12 +374,19 @@ final class SegmentProcessRegistry
     private static function defaultSignalSender(): callable
     {
         return static function (int $pid, int $signal): void {
-            if (function_exists('posix_kill')) {
-                @posix_kill($pid, $signal);
+            if ($pid <= 0) {
                 return;
             }
-            $flag = $signal === self::sigKill() ? '-KILL' : '-TERM';
-            @shell_exec(sprintf('kill %s %d 2>/dev/null', $flag, $pid));
+            // Signal the whole process GROUP (negative PID): the detached encode
+            // is launched under `setsid`, so its PGID == $pid. This reaches the
+            // ffmpeg grandchild directly rather than only the `timeout`/`sh`
+            // wrapper (SV-4.2 finding #4).
+            if (function_exists('posix_kill')) {
+                @posix_kill(-$pid, $signal);
+                return;
+            }
+            $name = $signal === self::sigKill() ? 'KILL' : 'TERM';
+            @shell_exec(sprintf('kill -%s -- -%d 2>/dev/null', $name, $pid));
         };
     }
 
@@ -230,6 +403,27 @@ final class SegmentProcessRegistry
                 return @posix_kill($pid, 0);
             }
             return is_dir('/proc/' . $pid);
+        };
+    }
+
+    /**
+     * @return callable(string): void
+     */
+    private static function defaultTempCleaner(): callable
+    {
+        return static function (string $key): void {
+            // The cancel key IS the final segment path; its atomic-write temps
+            // are `{$key}.part-<hex>`.
+            if ($key === '') {
+                return;
+            }
+            $temps = glob($key . '.part-*');
+            if ($temps === false) {
+                return;
+            }
+            foreach ($temps as $temp) {
+                @unlink($temp);
+            }
         };
     }
 

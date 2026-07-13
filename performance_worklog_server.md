@@ -2408,3 +2408,90 @@ were already done in the earlier SV-4.2 pass and are untouched.
 - `phpcs --standard=PSR12` src: 0 errors (11 pre-existing line-length warnings in
   TranscodeManager, none on added lines). Test snake_case method-name errors are the
   per-file existing convention and tests are outside the phpcs gate (`phpcs src/`).
+
+## Reviewer (per-step SV-4.2) — 2026-07-12
+
+Scope confirmed in-bounds (SegmentProcessRegistry, FfmpegRunner, TranscodeManager, RelayConsumer, TranscodeServicesProvider, start.php). Verification: `phpunit --filter 'SegmentProcessRegistry|FfmpegRunner|TranscodeManager|RelayConsumer'` = 188 tests OK (4 pre-existing `color_*` warnings, untouched); `phpstan -c phpstan.neon.dist` on all 5 touched src files = No errors. Cancel-key match, `timeout` wrapping, and registry semantics were read directly (tests alone do not settle these).
+
+Findings (most-severe first):
+
+1. **[Medium] Killed segment encode leaks its `.part-*` temp, which then corrupts cap + dedup accounting and can livelock playback.** `TranscodeManager.php:854` / `:1024` call `killSegmentProcess($final)` on wait-timeout, which SIGTERM/SIGKILLs the tracked `timeout` process (group). That terminates the `sh -c 'ffmpeg && mv -f tmp final || rm -f tmp'` chain mid-flight, so the `|| rm -f <tmp>` cleanup NEVER runs when the shell is signalled — the `.part-*` temp survives on disk. Both the global cap (`countInFlightSegmentEncodes()` `TranscodeManager.php:1234`, globs `seg-*.ts.part-*`) and the dedup snapshot (`reconcileInFlightSegments()` `:1273`, same glob) then treat the DEAD encode as still in-flight. Failure scenario: a scrub-storm's killed encodes each leave a corpse `.part-*` that counts against `maxConcurrentSegments` until the LRU sweep (`sweepSegmentCache`/`removeJobDir` `:1467`) evicts the whole job dir — i.e. LONGER than if the encode had run to natural completion — causing spurious 503 (`SegmentBusyException`) for legitimate playback; and a retry for the same `$final` sees the corpse as "in-flight," piggybacks on it, times out doing nothing, and can livelock until eviction. Why it matters: this partially inverts S-F23 (CPU is freed but cap occupancy gets WORSE) and can make a segment permanently unservable in that job dir. Fix: after `killSegmentProcess($final)`, `glob("{$final}.part-*")` + `@unlink()` the orphaned temp(s). Also the `buildDetachedSegmentCommand` docblock (`FfmpegRunner.php:2048-2050`) and the TranscodeManager finally comments (`:850`, `:1023`) claim the `timeout` kill "also removes the .part-* temp via the trailing rm" — that is incorrect; the `rm` only runs when ffmpeg exits nonzero on its own, not when the shell/group is signalled.
+
+2. **[Medium] Wait-timeout kill cannot distinguish an abandoned seek from a slow-but-wanted encode; for encodes slower than `segmentMaxWaitMs` (30 s) it converts "eventually plays" into "killed + restarted."** `TranscodeManager.php:820`/`:854`: the poll loop waits `SEGMENT_MAX_WAIT_MS = 30000` (`:542`, not overridden in the provider) then unconditionally kills the encode if the segment has not published. There is no client-disconnect signal (the implementer's own deferred note), so a segment the client is STILL waiting on — a heavy software 4K/HEVC transcode on a GPU-less box (MEMORY confirms such boxes exist, "no GPU → SW transcode") can exceed 30 s — is killed at 30 s. Pre-SV-4.2 the encode was left running so the client's retry piggybacked on it (via the `.part-*` dedup) and it published progressively. Failure scenario: for a >30 s segment the first call kills at 30 s, the retry re-launches fresh (or, per finding 1, piggybacks on the corpse), and the segment either never completes or burns more aggregate CPU than before. The AC does say "kill tracked PIDs on wait-timeout," so the kill itself is AC-compliant — but combined with finding 1 the interaction is harmful; worth a guard (e.g. only kill when the client is known gone, or clean the temp so a fresh relaunch is possible) or at least an explicit documented risk. Note either way as required by the step brief.
+
+3. **[Low] `RelayConsumer::onHttpCancel` registry kill is keyed on the wrong namespace and is inert (confirmed).** `RelayConsumer.php:1490` calls `registry?->kill((string) $channelId)`, but encodes are registered under the segment path `$final` (`TranscodeManager.php:814`/`:1010` → `FfmpegRunner::launchDetachedSegment` registers under `$cancelKey ?? $outFile` = `$final`). `$channelId` is the relay routing id, never a segment path, so the two key spaces never intersect: `onHttpCancel`'s kill always returns 0 and the `if ($killed > 0)` log never fires. This is the "green but inert" case for criterion 1 — however the implementer explicitly documents it (`RelayConsumer.php:222-229`, worklog "Deferred") and the EFFECTIVE relay abort is `closeLocalConnection()` → the HTTP worker's poll-loop wait-timeout kill, which IS keyed by `$final` and does match. Per the step's criterion-6 guidance (only a finding if the relay cancel path itself is incomplete) this is an acknowledged deferred follow-up, not a hard AC gap: the relay STOP path works via the wait-timeout kill. Flagged so the coordinator/future maintainer knows the `onHttpCancel` registry-kill line is presently dead code and its cancellation effectiveness is entirely coupled to finding 2's wait-timeout path (i.e. bounded by 30 s, not immediate).
+
+4. **[Low] SIGKILL escalation targets the `timeout` wrapper, not ffmpeg; if SIGTERM forwarding fails ffmpeg is orphaned.** The registered PID is the `timeout` process (`nohup` execs `timeout`; `$!` in `buildDetachedSegmentCommand` `FfmpegRunner.php:2117` is that PID). `SegmentProcessRegistry::terminate()` sends SIGTERM to it — GNU coreutils `timeout` forwards that to the child process group, reaching ffmpeg (OK in the normal case). But the SIGKILL escalation (`SegmentProcessRegistry.php:186`) sends SIGKILL to `timeout`, which cannot be caught, so `timeout` dies WITHOUT forwarding and ffmpeg is left orphaned in a now-parentless group with no timer to reap it — it runs to completion. Failure scenario: any case where the graceful SIGTERM did not propagate within the 0.5 s grace, the "forced" kill does not actually reach ffmpeg. Low severity (SIGTERM forwarding normally works). Consider signalling the process group (negative PID) or launching with `timeout -k <grace> -s TERM` so `timeout` self-escalates to the child.
+
+Non-findings verified: dual-entrypoint OK (FfmpegRunner registry wired via the shared `TranscodeServicesProvider` consumed by both `public/index.php` and `start.php`; `RelayConsumer` runs only in `start.php`, so no index.php divergence). Async/resident-memory discipline OK (`SegmentProcessRegistry::cooperativeSleep` guards `getCid()>0`; no blocking `sleep`; posix_kill non-blocking; registry bounded by release/kill-in-`finally`; no request state in static/global — `getTranscodeTimeout`'s `static` caches only immutable config). `timeout` quoting OK (structure identical to the pre-existing `nohup sh -c '<inner>'`, just inserts `timeout <n>`; nested `escapeshellarg` handled correctly). SV-4.1 reservation serializes per-worker launches so the registry key `$final` does not double-register within a worker.
+
+## Fixer (per-step SV-4.2) — 2026-07-12
+
+Fixed ALL 4 reviewer findings coherently. The unifying redesign: the per-request 30 s
+poll wait-timeout is NOT abandonment, so it must RELEASE (stop tracking) rather than KILL;
+the real kill fires only on genuine abandonment (HTTP_CANCEL), now wired to actually find
+the encode. Files changed (absolute):
+
+- **`src/Media/Transcoding/SegmentProcessRegistry.php`** — two-level keying: primary key =
+  segment path (`$final`), optional GROUP = relay channel/request id, with reverse links so a
+  drop always tears down the group (no leak). New `killGroup($group)` (kills every key a
+  channel launched), `releaseAfterWaitTimeout($key)` (release-only; cleans the `.part-*` temp
+  IFF the encode is already dead — never kills or touches a live encode's temp), and an
+  injectable **temp cleaner** invoked on every `kill()` (globs `{$key}.part-*` + `@unlink`).
+  The default signal sender now targets the process **GROUP** (`posix_kill(-$pid,$sig)`), and
+  liveness still probes the leader. `registeredGroupCount()` added for leak assertions.
+  → **finding #1** (temp cleaned on kill; docblock corrected), **#3** (group kill), **#4**
+  (group-signal reaches ffmpeg, not just the wrapper).
+- **`src/Media/Transcoding/FfmpegRunner.php`** — `buildDetachedSegmentCommand` now emits
+  `nohup setsid timeout -k <grace> -s TERM <n> sh -c '<encode && mv || rm>' … & echo $!`.
+  `setsid` makes the launched PID a process-group leader (PGID==PID, verified on-box) so a
+  cancel can group-signal ffmpeg directly; `timeout -k <grace> -s TERM` makes `timeout`
+  self-escalate to SIGKILL of its child group (backstop). New const
+  `TIMEOUT_KILL_GRACE_SECONDS`. `startSegmentEncode`/`launchDetachedSegment` gained an optional
+  `$cancelGroup` (registered alongside the segment key). New
+  `releaseSegmentProcessAfterWaitTimeout()` delegator. Docblock corrected (the `|| rm` does
+  NOT run when the chain is signalled). → **findings #4 & #1**.
+- **`src/Media/Transcoding/TranscodeManager.php`** — both `ensureSegment` finally blocks now,
+  on wait-timeout (`!is_file($final)`), call `releaseSegmentProcessAfterWaitTimeout($final)`
+  instead of `killSegmentProcess($final)` — a slow-but-wanted SW 4K/HEVC encode is left to
+  finish and publish for the retrying requester. Both launch sites pass
+  `RequestContext::getRelayCancelGroup()` as the cancel group. → **findings #1 & #2**.
+- **`src/Server/Http/RequestContext.php`** — new `KEY_RELAY_CANCEL_GROUP` +
+  set/get/clearRelayCancelGroup (canonical per-coroutine store; works in both entrypoints).
+- **`src/Hub/RelayConsumer.php`** — `dispatchWithDeadline` now publishes the channel/request
+  id as the relay cancel group into `RequestContext` for the dispatch duration (cleared in a
+  `finally`; dispatch body extracted to `dispatchWithDeadlineInner`). `onHttpCancel` calls
+  `killGroup((string)$channelId)` (was an inert `kill($channelId)`). Property docblock
+  rewritten — the relay fork dispatches in-process, so encodes register into the same
+  registry singleton and a cancel now finds them by channel id. → **finding #3**.
+
+**Channel→segment key mapping (how resolved):** threaded via `RequestContext` (the plan's
+preferred "register under both keys", implemented as a leak-free group index). The relay fork
+dispatches HTTP_REQUEST frames IN-PROCESS via its own `RelayRequestDispatcher` sharing the
+container's `SegmentProcessRegistry` singleton, so the encode a relayed segment request
+launches registers under both `$final` (primary) and the channel id (group). `onHttpCancel`
+→ `killGroup(channelId)` → finds + kills + cleans temp. No `RequestContext` threading is
+needed in `public/index.php` (direct-LAN requests carry no relay group → group is null →
+encode tracked by path only, backward-compatible).
+
+**AC reconciliation:** the AC says "kill on wait-timeout / client disconnect." "Wait-timeout"
+is satisfied by the `timeout <transcode_timeout>` encode backstop (which now self-escalates
+via `-k`), NOT by the per-request 30 s poll wait (killing there murdered slow-but-wanted SW
+encodes — finding #2 — so that path is release-only). "Client disconnect/cancel" is satisfied
+by the now-working `onHttpCancel`→`killGroup` path (finding #3).
+
+**Verification:**
+- `phpunit --filter 'SegmentProcessRegistry|FfmpegRunner|TranscodeManager|RelayConsumer|RequestContext'`
+  = 197 tests, 0 fail (4 pre-existing `color_*` warnings, untouched code).
+- Full `--testsuite Unit` = 4982 tests, 0 failures/errors, 5 pre-existing skips.
+- `phpstan -c phpstan.neon.dist` on all 5 touched src files = No errors.
+- `phpcs --standard=PSR12` = 0 errors (only pre-existing line-length warnings; none on my lines).
+- On-box `nohup setsid timeout … & echo $!` confirmed to yield a group-leader PID whose whole
+  group (timeout→sh→child) is killed by `kill -TERM -$PID`.
+
+New/updated tests: registry temp-cleanup-on-kill, releaseAfterWaitTimeout (alive=no-kill/no-clean,
+dead=clean), killGroup semantics + group-teardown-no-leak; FfmpegRunner command-shape
+(`setsid` + `timeout -k -s TERM`) + `releaseSegmentProcessAfterWaitTimeout` delegation;
+TranscodeManager wait-timeout is release-only (never kills); RelayConsumer cancel via group +
+an end-to-end test that the dispatch publishes the cancel group and a later HTTP_CANCEL kills
+the encode launched during dispatch.

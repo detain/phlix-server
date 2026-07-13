@@ -1,0 +1,21 @@
+-- Step SV-3.1d: link a completed DVR recording to its registered media item.
+--
+-- When a Live TV recording completes, the captured .ts file is registered as a
+-- playable `media_items` row (see \Phlix\LiveTv\Recording\RecordingMediaRegistrar,
+-- wired as a Recorder onComplete hook by LiveTvServicesProvider). This column
+-- stores the resulting `media_items.id` back on the recording so that:
+--   * the deferred comskip sub-step (SV-3.1d-comskip / SV-4.3) can attach chapter
+--     markers to the REAL media item, and
+--   * the DVR UI can deep-link a recording to its library entry.
+--
+-- `media_items.id` is CHAR(36) (a UUID), so the linkage column matches that type.
+-- Nullable: a recording has no media item until it completes AND registers a
+-- non-empty capture file (a failed / missing / zero-length capture leaves this
+-- NULL — RecordingMediaRegistrar deliberately never registers a broken item).
+--
+-- One ALTER per clause and NO `IF NOT EXISTS` (MySQL 8 rejects `IF NOT EXISTS`
+-- on ADD COLUMN / ADD INDEX; only MariaDB accepts it): on a replay each clause
+-- fails independently with a duplicate-column (1060) / duplicate-key (1061)
+-- error, which the migration runner downgrades to a note (see MigrationRunner).
+ALTER TABLE livetv_recordings ADD COLUMN media_item_id CHAR(36) NULL AFTER status;
+ALTER TABLE livetv_recordings ADD INDEX idx_media_item_id (media_item_id);

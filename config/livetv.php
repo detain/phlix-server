@@ -383,6 +383,18 @@ return [
          * @default 30
          */
         'scheduler_interval_seconds' => 30,
+
+        /**
+         * Name of the library completed recordings are registered under (SV-3.1d).
+         *
+         * When a recording completes, its captured .ts file is registered as a
+         * playable `media_items` row (RecordingMediaRegistrar) in a dedicated
+         * `video`-type library, find-or-created by this name so recordings are
+         * browsable/playable alongside the rest of the library.
+         *
+         * @default 'DVR Recordings'
+         */
+        'library_name' => 'DVR Recordings',
     ],
 
     /**

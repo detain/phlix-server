@@ -22,7 +22,9 @@ use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
 use Phlix\LiveTv\Recording\ComskipIntegration;
 use Phlix\LiveTv\Recording\ComskipLifecycleManager;
+use Phlix\LiveTv\Recording\RecordingMediaRegistrar;
 use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\Media\Library\ItemRepository;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunTunerDriver;
@@ -153,6 +155,29 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 );
             }),
 
+            // SV-3.1d: registers a completed recording's .ts as a playable
+            // media_items row + persists the media_item_id linkage. Wired below
+            // as a Recorder onComplete hook. (Comskip chapter-marker attachment
+            // to the real media item is the SEPARATE, deferred SV-3.1d-comskip
+            // sub-step, gated on SV-4.3 — NOT wired here.)
+            RecordingMediaRegistrar::class => factory(static function (ContainerInterface $c): RecordingMediaRegistrar {
+                $livetv = self::livetvConfig($c);
+                /** @var array<string, mixed> $dvr */
+                $dvr = is_array($livetv['dvr'] ?? null) ? $livetv['dvr'] : [];
+                $nameRaw = $dvr['library_name'] ?? 'DVR Recordings';
+                $libraryName = is_string($nameRaw) && $nameRaw !== '' ? $nameRaw : 'DVR Recordings';
+
+                /** @var ItemRepository $items */
+                $items = $c->get(ItemRepository::class);
+
+                return new RecordingMediaRegistrar(
+                    self::db($c),
+                    $items,
+                    $libraryName,
+                    self::livetvLogger($c),
+                );
+            }),
+
             // Fully-wired Recorder. Built WITHOUT a LiveTvManager here to break
             // the Recorder↔LiveTvManager cycle — the LiveTvManager factory below
             // calls Recorder::setLiveTvManager() on this same singleton so
@@ -165,7 +190,7 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 /** @var ComskipLifecycleManager $comskip */
                 $comskip = $c->get(ComskipLifecycleManager::class);
 
-                return new Recorder(
+                $recorder = new Recorder(
                     self::db($c),
                     $storagePath,
                     $maxStorageBytes,
@@ -174,6 +199,17 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                     self::ffmpegPath($c, $livetv),
                     null,
                 );
+
+                // SV-3.1d: register the completed .ts as a media_items row on the
+                // once-only onComplete path (Recorder fires onComplete exactly
+                // once per completion via its atomic CAS, SV-3.1c). The registrar
+                // itself guards status/file so a FAILED or empty capture is never
+                // registered.
+                /** @var RecordingMediaRegistrar $registrar */
+                $registrar = $c->get(RecordingMediaRegistrar::class);
+                $recorder->onComplete([$registrar, 'register']);
+
+                return $recorder;
             }),
 
             LiveTvManager::class => factory(static function (ContainerInterface $c): LiveTvManager {

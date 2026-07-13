@@ -3307,3 +3307,50 @@ caching on `serveArtwork`, review-clean), and **sub-6 (this)** all DONE. **sub-7
 end-to-end `serveArtwork` route test covering signed-URL/session auth + size-validation + 404 alongside
 the ETag/304 paths) is the LAST remaining SV-3.4 sub-step. (sub-5 = dead duplicate `ArtworkController.php`
 stays in the §6 removal queue pending USER sign-off — do NOT delete.)
+
+## TestEngineer — SV-3.4 sub-7 (dedicated serveArtwork route test) — 2026-07-13
+**GREEN. This closes the LAST remaining SV-3.4 sub-step — all 7 (sub-1…sub-7) are now code-complete +
+reviewed/tested.** SV-3.4 as a whole step is complete pending only a final cumulative review if the
+orchestrator wants one.
+
+Scope: sub-7 is a TEST-ONLY change (no production code touched). Extended the existing
+`tests/Unit/Server/Workerman/HttpHandlerServeArtworkTest.php` (rather than fragmenting the route's
+coverage into a second file) so it is now THE authoritative end-to-end route test for
+`GET /api/v1/artwork/{id}?size=`. Added **14 tests** (8 → 22; 39 → 102 assertions) that exhaustively pin
+the route contract sub-4 only touched incidentally, and updated the class docblock to describe the two
+blocks (sub-4 conditional-caching + sub-7 comprehensive contract). Verified the handler's REAL behavior
+by reading `serveArtwork` (`HttpHandler.php:596`) + `SignedUrl` before asserting — no assumptions.
+
+New tests (all against the real evaluation order size-validation → auth → 404 → freshness):
+- **Signed-URL auth:** valid signature → 200 serving the requested variant file (distinct file-per-size
+  mock proves the RIGHT variant is chosen, not just "some 200"); **missing** exp/sig → 401
+  `Unauthorized` (text/plain); **tampered** signature (flip first sig char) → 401 (confirms
+  `hash_equals` constant-time reject, no prefix/substring bypass); **expired** signature (minted with a
+  past `now` so `exp` is already elapsed) → 401.
+- **Session auth** (confirmed supported — `serveArtwork:622` gates the signed-URL check on
+  `$userId === null || $userId === ''`): a resolved non-empty `userId` serves 200 WITHOUT any signature;
+  an empty-string `userId` falls back to (and fails, 401) the signed-URL gate.
+- **Size validation:** each real supported size (`w185/w342/w500/w780` per `ArtworkStorage::WIDTHS` +
+  `original`) serves its own variant; an **omitted** `?size=` defaults to `original`; an **unsupported**
+  size → clean **400** `{"error":"Invalid size parameter"}` (json) — NOT a 500 and NOT a silent default;
+  plus an ordering guard proving size validation runs **BEFORE** the auth gate (unsigned + bad size → 400,
+  not 401 — so the size check can never become an auth oracle).
+- **404:** an uncached item (`variantPath` → null) → 404 `{"error":"Artwork not found"}` (json), never an
+  empty 200; a resolved-but-missing variant file → 404 json (plain-request body shape; the sub-4 block
+  already covers the 404-WITH-conditional-header ordering slice, so this is not a re-test).
+- **Router passthrough** (added to reach 100% method coverage + document the contract): a non-GET verb and
+  a non-artwork path both return `null` (fall through to the router) rather than 401/404-ing.
+
+Explicitly did NOT duplicate sub-4's ETag/304/If-None-Match/If-Modified-Since coverage (8 tests retained,
+untouched). No sub-4 gap found needing an extra auth+conditional-header interaction test — the ordering is
+already locked by sub-4's `testConditionalCheckRunsAfterAuthGate` / `…AfterExistenceCheck`.
+
+Verification (at HEAD `fee166c5`, changed file only + full-suite regression):
+- `phpunit --filter HttpHandlerServeArtwork --testdox` = **22/22 OK** (102 assertions).
+- `phpunit --testsuite Unit --no-coverage` = **5072 tests, 0 failures, 8 skipped** (5058 sub-4 baseline
+  + 14 new). No regression.
+- New-code coverage: `serveArtwork` + `isValidArtworkSize` (HttpHandler.php:596-717) =
+  **70/70 statement lines, 100.0%** (Clover, `--coverage-filter src/Server/Workerman/HttpHandler.php`).
+- `phpstan analyze tests/Unit/Server/Workerman/HttpHandlerServeArtworkTest.php -c phpstan.neon.dist
+  --level=9` = **No errors**.
+- `phpcs --standard=PSR12` on the changed file = **clean** (0 errors/0 warnings).

@@ -12,9 +12,12 @@ use Workerman\MySQL\Connection;
  * Unit coverage for the parts of {@see PooledMySQLConnection} that DON'T need a
  * live coroutine scheduler: the non-coroutine (CLI) lease path, delegation of
  * every public method to the leased connection, and the injected raw-connection
- * factory seam. The in-coroutine pool path (idle channel, per-coroutine lease,
- * defer-release) requires the Swoole runtime and is validated separately on a
- * live restart — see the class docblock.
+ * factory seam. Most of the in-coroutine pool path (idle channel, per-coroutine
+ * lease, defer-release) requires the Swoole runtime and is validated separately
+ * on a live restart — see the class docblock — except for the dead-idle-
+ * connection eviction path covered below, which runs real coroutines in-process
+ * ({@see \Swoole\Coroutine\go()} + {@see \Swoole\Event::wait()}), mirroring the
+ * pattern used by {@see PhlixMySQLConnectionTest::testConcurrentTransactionsDoNotInterleave()}.
  */
 final class PooledMySQLConnectionTest extends TestCase
 {
@@ -125,5 +128,99 @@ final class PooledMySQLConnectionTest extends TestCase
         // front MUST satisfy that hint.
         $pool = $this->pool(fn (): Connection => $this->createMock(Connection::class));
         $this->assertInstanceOf(Connection::class, $pool);
+    }
+
+    /**
+     * Dead-idle-connection FD-churn regression (mirrors phlix-hub commit
+     * a203070 — the identical twin class there had the same gap).
+     *
+     * When {@see PooledMySQLConnection::acquire()}'s `SELECT 1` liveness probe
+     * finds an idle connection dead, it must call {@see Connection::closeConnection()}
+     * on it BEFORE discarding it and opening a replacement — otherwise the
+     * (possibly not-fully-dead) socket file descriptor lingers until GC instead
+     * of being released immediately, churning FDs under connection drop bursts
+     * (idle timeout / failover).
+     *
+     * Coroutine A leases the only connection (maxSize=1), then ends — its
+     * lease is returned to the idle pool via `Coroutine::defer`. The test then
+     * marks that connection dead (simulating the DB having dropped it while
+     * idle) and runs coroutine B, which must: evict + close() the dead
+     * connection, then open and use a brand-new one.
+     *
+     * @requires extension swoole
+     */
+    public function testDeadIdleConnectionIsClosedBeforeEviction(): void
+    {
+        if (!extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required');
+        }
+
+        /** @var list<object{alive: bool, closes: int}> $created */
+        $created = [];
+        $factory = static function () use (&$created): Connection {
+            $conn = new class extends Connection {
+                public bool $alive = true;
+                public int $closes = 0;
+
+                public function __construct()
+                {
+                    // Deliberately NOT calling parent::__construct() — no
+                    // real socket, mirroring PooledMySQLConnection itself.
+                }
+
+                /**
+                 * @param string                        $query
+                 * @param array<int|string, mixed>|null  $params
+                 * @param int                            $fetchmode
+                 * @return mixed
+                 */
+                public function query($query = '', $params = null, $fetchmode = \PDO::FETCH_ASSOC)
+                {
+                    if ($query === 'SELECT 1') {
+                        if (!$this->alive) {
+                            throw new \RuntimeException('server has gone away');
+                        }
+                        return [['1' => 1]];
+                    }
+                    return [];
+                }
+
+                public function closeConnection(): void
+                {
+                    $this->closes++;
+                }
+            };
+            $created[] = $conn;
+            return $conn;
+        };
+
+        $pool = $this->pool($factory, 1);
+
+        // Coroutine A leases the only connection and immediately ends; its
+        // lease is returned to idle via Coroutine::defer.
+        \Swoole\Coroutine\go(static function () use ($pool): void {
+            $pool->query('SELECT A');
+        });
+        \Swoole\Event::wait();
+
+        self::assertCount(1, $created, 'coroutine A must have opened exactly one connection');
+
+        // Simulate the DB dropping the now-idle connection.
+        $created[0]->alive = false;
+
+        // Coroutine B must evict the dead idle connection (closing it) and
+        // open a fresh replacement to serve its query.
+        \Swoole\Coroutine\go(static function () use ($pool): void {
+            $pool->query('SELECT B');
+        });
+        \Swoole\Event::wait();
+
+        self::assertCount(2, $created, 'a replacement connection must be opened for coroutine B');
+        self::assertSame(
+            1,
+            $created[0]->closes,
+            'the evicted dead connection must be closeConnection()\'d, not merely dropped (FD-churn fix)'
+        );
+        self::assertSame(0, $created[1]->closes, 'the fresh connection must not itself be closed');
     }
 }

@@ -317,7 +317,11 @@ final class PooledMySQLConnection extends Connection
             /** @var Connection $conn */
             $conn = $this->idle->pop();
             if (!$this->isConnectionAlive($conn)) {
-                // Dead connection removed from pool — not added back.
+                // Dead connection removed from pool — not added back. Close it
+                // first so its (possibly not-fully-dead) socket FD is released
+                // immediately instead of lingering until GC; otherwise a burst
+                // of DB-side connection drops (idle timeout/failover) churns FDs.
+                $conn->closeConnection();
                 $this->created--;
                 return $this->acquire();
             }

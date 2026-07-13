@@ -984,8 +984,12 @@ class AudiobookScanner extends BookScanner
                 continue;
             }
 
-            // Check if already exists in repository
-            $existing = $this->itemRepository->findByPath($file->getPathname());
+            // Check if already exists in repository. Scope to the library: an
+            // audiobook row is a NON-deduped type (NULL path_hash), so findByPath's
+            // fast path_hash pass always misses it — passing libraryId keeps the
+            // raw-path fallback an index range, not a full-table scan, and (without
+            // it) every rescan would re-create every audiobook as a duplicate.
+            $existing = $this->itemRepository->findByPath($file->getPathname(), $libraryId);
             if ($existing !== null) {
                 continue;
             }

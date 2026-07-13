@@ -3528,7 +3528,9 @@ style — not a real gap). **SV-2.9 CODE-COMPLETE + review-clean.** Remaining: d
 Cleared the perf-5 PARTIAL verdict ("`findPathsMap` omits library_id → full-scan"). The single-row
 `findByPath` (library_id+path_hash+path tiebreak) and the batch-proved-absence threading
 (`processScanBatch`→`findPathsMap` once→`processFile(..., callerConfirmedAbsent=true)`, no per-file
-re-probe) were already DONE in 510c8761; the remaining defect was the batched read + missing real-DB
+re-probe) were already DONE in 510c8761 [CORRECTION (Fixer, SV-0.8 HIGH): that hash does not exist in
+git; the real commit is `3bfa7d96` "media: SV-0.8 fix path_hash reads + stop re-probing known-absent
+files"]; the remaining defect was the batched read + missing real-DB
 index proof. Both closed here.
 
 **Source changes:**
@@ -3591,3 +3593,123 @@ mock-verified locally, but the actual `EXPLAIN` green run remains to be confirme
 commit (or an on-box run) — flagging so the next session/reviewer confirms the CI Integration job went
 green rather than assuming it. The test creates the index itself so CI's column-only schema is
 sufficient.
+
+## Reviewer (per-step, SV-0.8, commit 46463be5) — 2026-07-13 (perf-7)
+**3 findings (1 HIGH, 1 LOW, 1 INFO).** Confirmed VALID: the library-scoping correctness fix (foreign-
+library row could win the path→row map before this commit) is real; binding order for the `IN(...)`
+batch form is correct; the raw-path tiebreak is correctly strictly-better than the old hash-only tiebreak.
+🔴 **FINDING 1 [HIGH]: `path_hash` is NULL for every NON-deduped type** (migration 072 computes SHA1
+ONLY for `type IN ('episode','movie','audio','book')`; series/season/image/audiobook containers all have
+NULL `path_hash`). `findByPath`/`findPathsMap` REQUIRE the `path_hash` predicate in EVERY branch —
+`NULL = <hash>` / `NULL IN (...)` are never true in SQL — so lookups for these types silently ALWAYS
+miss, `upsertByPath`'s 1062-catch can't compensate (no unique constraint on raw `(library_id, path)`),
+and find-or-create degrades to always-CREATE. **Concrete reachable breakage:** season containers get a
+NEW DUPLICATE on every rescan (no canonical_key fallback for non-top-level containers, only series has
+one); photo libraries (`type='image'`) and audiobook libraries (`type='audiobook'`) get a FULL DUPLICATE
+item set on every rescan. Root cause predates THIS commit (introduced in the sibling `3bfa7d96`), but
+`46463be5` doesn't fix it and its docblock reinforces the path_hash-only lookup — SV-0.8 is not correct
+while this stands. Invisible to unit tests because they mock `Connection::query` (same "mock-DB hid it"
+pattern as prior incidents). Fix: the non-deduped types need a raw-path fallback predicate (e.g.
+`WHERE library_id=? AND path=?` or `OR path_hash IS NULL` combined with raw equality) — path_hash should
+accelerate the deduped types only, never be the SOLE predicate.
+FINDING 2 [LOW]: Implementer's worklog cites commit `510c8761` for the pre-existing `callerConfirmedAbsent`
+mechanism — that hash doesn't exist in git. The real commit is `3bfa7d96` (which is also the origin of
+Finding 1). Substantive claim (pre-existing, untouched here) is true; just fix the audit-trail citation.
+FINDING 3 [INFO]: `PathHashIndexUsageTest` is structurally sound (real EXPLAIN/possible_keys/FORCE INDEX
+assertions, not tautological; self-provisions the index) but only seeds `type='movie'` rows — would NOT
+have caught Finding 1, and gives false confidence the hash-input match holds universally when it only
+holds for deduped types. Add a series/season/image seed case once Finding 1 is fixed, to pin the fix.
+Verify reran clean: full Unit 5090/39097/5skip; phpstan/phpcs clean (5 pre-existing LineLength warnings
+outside this commit's hunks). DB still unreachable here — PathHashIndexUsageTest self-skipped again.
+→ Fix agent spawned for Finding 1 (HIGH, urgent) + Finding 2 (LOW, audit-trail correction).
+
+## Fixer — SV-0.8 HIGH finding (NULL path_hash fallback for non-deduped types) — 2026-07-13 (perf-7)
+Fixed Reviewer Finding 1 (HIGH) + Finding 2 (LOW). Confirmed the root cause against the actual schema:
+`migrations/072_media_items_path_hash.sql` computes `path_hash = SHA1(path)` ONLY for
+`type IN ('episode','movie','audio','book')` — every OTHER type (series, season, image, audiobook,
+track, and any container) gets `path_hash = NULL`. `cleanup_072.php`'s unique index is
+`(library_id, path_hash)`, and in MySQL NULLs never collide in a unique index (verified — the finalizer
+even comments this is why the constraint is "scoped" to the deduped types), so repeated NULL-hash inserts
+are NOT caught at the DB level. The fix therefore had to be at the lookup layer, exactly as the task
+required — no migration change.
+
+**Concrete duplicate-row scenarios this closes (all were silent-miss → always-create → duplicate on
+every rescan before the fix):**
+- **Season containers** (`type='season'`, `parent_id != null`): `MediaScanner::findOrCreateContainer()`
+  resolves them via `findByPath()` on the synthetic season path. The old `path_hash = SHA1(?)` predicate
+  never matched their NULL hash, and seasons have NO `findTopLevelByCanonical` rescue (that fallback is
+  gated on `parent_id === null`, series-only) → a NEW empty duplicate season on every rescan.
+- **Photo libraries** (`type='image'`), **audiobook libraries** (`type='audiobook'`), **music tracks**
+  (`type='track'`): resolved via `findPathsMap()` (batch, `processScanBatch`) and/or `findByPath()`
+  (PhotoLibraryManager/AudiobookScanner/AudiobookLibraryManager/MusicLibraryManager). `path_hash IN (…)`
+  / `path_hash = ?` never matched their NULL hash → the whole item set re-created as duplicates on every
+  rescan.
+
+**Source changes:**
+- `src/Media/Library/ItemRepository.php`
+  - `findByPath()` — now TWO passes. Pass 1 = the existing fast, indexed
+    `library_id = ? AND path_hash = ? AND path = ?` (deduped types, point lookup on the
+    `(library_id, path_hash)` index). Pass 2 (only on a Pass-1 miss) = raw `library_id = ? AND path = ?`
+    fallback that resolves the NULL-hash types. `path_hash` is now an ACCELERATOR, never the sole
+    predicate. The fallback is anchored to `library_id` (an index range on the composite index's leading
+    column, not a full-table scan). The no-libraryId branch mirrors the two passes (its Pass-2 is an
+    unindexed `path = ?` last resort — see caller threading below).
+  - `findPathsMap()` — Pass 1 = the existing `library_id = ? AND path_hash IN (…)` fast batch. Pass 2
+    (only for the input paths NOT resolved by Pass 1) = a raw `library_id = ? AND path IN (…)` query,
+    bounded to the unresolved subset and library-scoped — never a full-library scan per path. When Pass 1
+    resolves everything (the deduped-type rescan hot path) Pass 2 is skipped, so the single-query fast
+    path is preserved. The Pass-2 rows are still verified for exact raw-path membership.
+- **Caller threading (so the fallback stays an index range, not a full-table scan):** every `findByPath()`
+  call site now passes its `libraryId` — `MediaScanner::findOrCreateContainer` (season/series containers),
+  `AudiobookScanner`, `BookScanner`, `PhotoLibraryManager` (×2), `MusicLibraryManager` (×2),
+  `AudiobookLibraryManager`, `BookLibraryManager`. Each had `libraryId` already in scope; scoping a path
+  lookup to its library is also strictly MORE correct (the same absolute path can legitimately exist in
+  two libraries — the unique index is composite). `MediaScanner::processFile`'s call already passed it.
+  No migration touched; no DB-level catch relied upon.
+
+**Tests (Reviewer Finding 3 pinned):**
+- `tests/Unit/Media/Library/ItemRepositoryTest.php` — NEW: `testFindByPathFallsBackToRawPathForNullHashRow`
+  (Pass-1 hash miss → Pass-2 raw-path hit resolves a `type='season'` row; asserts the fallback SQL is
+  `library_id = ? AND path = ?` with no `path_hash`, binds `[libId, path]`),
+  `testFindByPathSkipsFallbackWhenFastPassResolves` (deduped hit = exactly one indexed query),
+  `testFindPathsMapFallsBackToRawPathForNullHashRows` (image rows resolved via the second
+  `library_id = ? AND path IN (…)` pass), `testFindPathsMapFallbackReProbesOnlyUnresolvedPaths` (mixed
+  batch — the fallback binds ONLY the unresolved path, never the already-resolved deduped one). Updated the
+  3 existing query-shape tests (`testFindByPathUsesLibraryScopedPathHashIndexQuery`,
+  `testFindPathsMapIssuesExactlyOneQueryWith…`, `testFindPathsMapScopesToLibraryAndUsesPathHashIndex`) to
+  return a matching row from the fast pass so they still assert the single-query fast-path shape (the
+  fallback only runs on a miss). The `upsertByPath` race/exists tests were unaffected (verified: a hit in
+  Pass 1 short-circuits, a miss falls through to create()).
+- `tests/Unit/Media/Library/MediaScannerTest.php` — NEW end-to-end-ish scanner tests:
+  `testSeasonContainersAreReusedNotDuplicatedOnRescan` (scan series → rescan with a fresh scanner → SAME
+  season row ids, no duplicate series/season) and `testImageLibraryRescanDoesNotDuplicateItems` (image
+  library rescan adds nothing). These mirror the deduped-type rescan cases already in the file.
+- `tests/Integration/Media/PathHashIndexUsageTest.php` — NEW
+  `testFindByPathAndFindPathsMapResolveNullHashTypesByRawPath`: seeds a real series+season+image, asserts
+  the generated `path_hash` column is genuinely NULL for season/image, then that BOTH `findByPath` and a
+  mixed-batch `findPathsMap` resolve them by raw path (the deduped movie via the fast pass). This is the
+  real-DB proof the reviewer asked for (Finding 3) — a deduped-only fixture set could not have caught the
+  bug.
+
+**Verification:**
+- `phpunit --filter "ItemRepository|MediaScanner|PathHashIndexUsage" --testdox` → 245 OK, 1249 assertions,
+  4 skipped (the PathHashIndexUsage integration tests — no MySQL here).
+- Full `--testsuite Unit --no-coverage` → **5096 tests, 0 failures, 5 skipped** (was 5090; +6 new unit/
+  scanner tests, all green).
+- phpstan L9 (`-c phpstan.neon.dist`) on all 8 changed src files + 3 changed test files → **No errors**.
+- phpcs PSR12: 0 NEW issues from this change. All reported items are pre-existing — line-length warnings
+  on untouched `willReturnCallback`/long-metadata lines, and the long-standing "Each class must be in a
+  file by itself" ERROR from the pre-existing `InMemoryScannerRepo` second class in `MediaScannerTest.php`
+  (not introduced here). None of the added lines exceed 120 chars.
+- **DB-backed integration run: STILL A GAP (honest).** No MySQL is reachable in this environment (no
+  mysqld process; 127.0.0.1:3306 refuses; probed directly, not assumed), so
+  `PathHashIndexUsageTest::testFindByPathAndFindPathsMapResolveNullHashTypesByRawPath` self-skipped like
+  its siblings. It WILL run in CI (phpunit.yml provisions MySQL + applies migrations) / on-box. The unit +
+  scanner tests prove the two-pass fallback logic against a mocked Connection (Pass-1 miss → Pass-2 hit),
+  so correctness is verified locally; the real generated-column NULL-ness proof awaits the CI Integration
+  job or an on-box run — flagging for the next session/reviewer to confirm it went green.
+
+Finding 2 (LOW): corrected the Implementer's SV-0.8 worklog citation — `510c8761` does not exist in git;
+the real commit is `3bfa7d96` "media: SV-0.8 fix path_hash reads + stop re-probing known-absent files"
+(added an inline CORRECTION note rather than silently editing history). The lines 64/2585 `[x]`/audit
+citations of `510c8761` are left as-is historical (the correction note documents the right hash).

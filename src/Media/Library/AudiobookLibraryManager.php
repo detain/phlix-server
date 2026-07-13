@@ -145,8 +145,11 @@ class AudiobookLibraryManager extends LibraryManager
      */
     public function upsertAudiobook(string $libraryId, string $path): ?array
     {
-        // Check if already exists
-        $existing = $this->itemRepo->findByPath($path);
+        // Check if already exists. Audiobooks (type='audiobook') are a NON-deduped
+        // type (NULL path_hash) — scope to the library so findByPath resolves the
+        // existing row via its raw-path fallback rather than always missing and
+        // creating a duplicate on every rescan.
+        $existing = $this->itemRepo->findByPath($path, $libraryId);
 
         // Determine file extension and harvest metadata + chapters
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));

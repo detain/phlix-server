@@ -269,6 +269,82 @@ final class PathHashIndexUsageTest extends TestCase
     }
 
     /**
+     * SV-0.8 HIGH-finding regression against the REAL generated column: a
+     * NON-deduped type (season/image) has a NULL `path_hash` — verify that
+     * directly, then confirm BOTH {@see ItemRepository::findByPath()} and
+     * {@see ItemRepository::findPathsMap()} still resolve the row by its raw path
+     * (the fast `path_hash = SHA1(?)` pass cannot see a NULL hash). Before the
+     * raw-path fallback these lookups silently missed every non-deduped row and
+     * the scanner forked a fresh DUPLICATE (a new empty season, or a full photo/
+     * audiobook set) on every rescan. Pins Finding 3's recommendation to seed a
+     * series/season/image case, which the deduped-only fixtures could not catch.
+     */
+    public function testFindByPathAndFindPathsMapResolveNullHashTypesByRawPath(): void
+    {
+        $repo = new ItemRepository($this->db());
+
+        // A series container + a season under it (parent_id != null) + a photo —
+        // all NON-deduped types whose generated path_hash is NULL.
+        $seriesPath = self::PATH_PREFIX . 'series:' . $this->libraryId . ':null-hash-show';
+        $seasonPath = self::PATH_PREFIX . 'season:' . $this->libraryId . ':null-hash-show:1';
+        $imagePath = self::PATH_PREFIX . 'gallery/photo-' . md5('null-hash') . '.jpg';
+
+        $seriesId = $repo->create([
+            'library_id' => $this->libraryId,
+            'name' => 'Null Hash Show',
+            'type' => 'series',
+            'path' => $seriesPath,
+            'metadata_json' => [],
+        ]);
+        $seasonId = $repo->create([
+            'library_id' => $this->libraryId,
+            'parent_id' => $seriesId,
+            'name' => 'Season 1',
+            'type' => 'season',
+            'path' => $seasonPath,
+            'metadata_json' => ['season' => 1],
+        ]);
+        $imageId = $repo->create([
+            'library_id' => $this->libraryId,
+            'name' => 'Null Hash Photo',
+            'type' => 'image',
+            'path' => $imagePath,
+            'metadata_json' => [],
+        ]);
+
+        // 1. The generated column really IS NULL for these types (the root cause).
+        foreach ([$seasonId, $imageId] as $id) {
+            $row = $this->db()->row('SELECT path_hash FROM media_items WHERE id = ?', [$id]);
+            $this->assertIsArray($row);
+            $this->assertArrayHasKey('path_hash', $row);
+            $this->assertNull(
+                $row['path_hash'],
+                'non-deduped types (season/image) must have a NULL generated path_hash',
+            );
+        }
+
+        // 2. findByPath resolves them despite the NULL hash (raw-path fallback) —
+        //    NOT a silent miss that would fork a duplicate on rescan.
+        $foundSeason = $repo->findByPath($seasonPath, $this->libraryId);
+        $this->assertIsArray($foundSeason, 'NULL-hash season must be resolved by findByPath, not silently missed');
+        $this->assertSame($seasonId, $foundSeason['id']);
+
+        $foundImage = $repo->findByPath($imagePath, $this->libraryId);
+        $this->assertIsArray($foundImage, 'NULL-hash image must be resolved by findByPath, not silently missed');
+        $this->assertSame($imageId, $foundImage['id']);
+
+        // 3. findPathsMap resolves them in one batch via its raw-path fallback
+        //    pass — mixed with a deduped movie that resolves in the fast pass.
+        $dedupedMoviePath = $this->seededPaths[0];
+        $map = $repo->findPathsMap([$dedupedMoviePath, $seasonPath, $imagePath], $this->libraryId);
+        $this->assertArrayHasKey($dedupedMoviePath, $map, 'the deduped movie resolves via the fast path_hash pass');
+        $this->assertArrayHasKey($seasonPath, $map, 'NULL-hash season must appear in the batch map (fallback pass)');
+        $this->assertArrayHasKey($imagePath, $map, 'NULL-hash image must appear in the batch map (fallback pass)');
+        $this->assertSame($seasonId, $map[$seasonPath]['id']);
+        $this->assertSame($imageId, $map[$imagePath]['id']);
+    }
+
+    /**
      * Ensure the `(library_id, path_hash)` unique index exists for the duration
      * of this test. Mirrors cleanup_072.php's statement. Self-skips when
      * pre-existing data would violate uniqueness (index-usage is unprovable

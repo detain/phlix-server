@@ -205,30 +205,77 @@ class ItemRepository
     /**
      * Finds a media item by its filesystem path.
      *
-     * Uses the `(library_id, path_hash)` unique index when libraryId is
-     * provided, falling back to a path-only scan for non-deduped types
-     * (where path_hash is NULL and the index cannot be used). The SHA1
-     * collision risk is mitigated by verifying the raw path as a tiebreak.
+     * Two passes so the lookup is correct for EVERY type while staying indexed
+     * for the common case:
+     *  1. Fast, indexed `path_hash = SHA1(path)` lookup through the
+     *     `(library_id, path_hash)` unique index (migration 072). This resolves
+     *     the DEDUPED types (episode/movie/audio/book) whose generated path_hash
+     *     is non-NULL, with the raw `path = ?` guarding a SHA1 collision.
+     *  2. If Pass 1 misses, a raw `path = ?` fallback. The NON-deduped types
+     *     (series/season/image/audiobook/track) have a NULL path_hash, and
+     *     `NULL = <hash>` is never true in SQL, so Pass 1 can never see them —
+     *     without this fallback find-or-create would create an endless stream of
+     *     duplicate rows for those types on every rescan. When `$libraryId` is
+     *     supplied the fallback is anchored to it (an index range on the composite
+     *     index's leading column); callers without one incur an unindexed scan, so
+     *     every in-tree scanner/manager caller passes its libraryId.
      *
      * @param string      $path     The absolute filesystem path to the media file
-     * @param string|null $libraryId Optional library scope for index optimization.
-     *                               When provided, enables use of the path_hash index.
+     * @param string|null $libraryId Optional library scope. When provided, the fast
+     *                               pass uses the composite index and the fallback
+     *                               stays an index range on library_id.
      * @return array<string, mixed>|null The hydrated media item array or null if not found
      */
     public function findByPath(string $path, ?string $libraryId = null): ?array
     {
         $hash = sha1($path);
+
+        // Pass 1 — the fast, indexed lookup. `path_hash` (migration 072) is the
+        // STORED SHA1 of the path but ONLY for the deduped types
+        // (episode/movie/audio/book); every other type (series/season/image/
+        // audiobook/track) hashes to NULL. So this pass resolves the deduped
+        // types through the `(library_id, path_hash)` unique index as a point
+        // lookup, with the raw `path = ?` guarding an (astronomically rare) SHA1
+        // collision so a foreign path can never win.
         if ($libraryId !== null) {
-            // Use the indexed (library_id, path_hash) lookup with path tiebreak
             $result = $this->db->query(
                 "SELECT * FROM media_items WHERE library_id = ? AND path_hash = ? AND path = ?",
                 [$libraryId, $hash, $path]
             );
         } else {
-            // Fall back to path-only lookup for callers without library context
             $result = $this->db->query(
                 "SELECT * FROM media_items WHERE path_hash = ? AND path = ?",
                 [$hash, $path]
+            );
+        }
+
+        $row = $this->firstRow($result);
+        if ($row !== null) {
+            return $this->hydrateItem($row);
+        }
+
+        // Pass 2 — raw-path fallback for the NON-deduped types. Their generated
+        // `path_hash` is NULL, and in SQL `NULL = <hash>` is never true, so Pass 1
+        // silently misses them EVERY time. Without this fallback the scanner's
+        // find-or-create degrades to always-create for those types (season
+        // containers, photos, audiobooks, music tracks), forking a fresh DUPLICATE
+        // row on every rescan — and no unique constraint catches it, because a
+        // NULL `path_hash` never collides with another NULL in a unique index.
+        // `path_hash` is therefore an ACCELERATOR for the deduped types, never the
+        // sole predicate. Anchoring to `library_id` keeps this an index range on
+        // the composite index's leading column, not a full-table scan. (Callers
+        // without a libraryId fall through to an unindexed `path = ?` scan; every
+        // in-tree scanner/manager caller passes its libraryId, so that branch is a
+        // rarely-hit last resort.)
+        if ($libraryId !== null) {
+            $result = $this->db->query(
+                "SELECT * FROM media_items WHERE library_id = ? AND path = ?",
+                [$libraryId, $path]
+            );
+        } else {
+            $result = $this->db->query(
+                "SELECT * FROM media_items WHERE path = ?",
+                [$path]
             );
         }
 
@@ -327,6 +374,16 @@ class ItemRepository
      * list, so a hypothetical SHA1 collision (a different path hashing to the
      * same value) can never leak a foreign row into the map.
      *
+     * TWO PASSES for correctness: `path_hash` is non-NULL ONLY for the deduped
+     * types (episode/movie/audio/book); the NON-deduped types (series/season/
+     * image/audiobook/track) hash to NULL and `NULL IN (...)` is never true, so
+     * Pass 1 can never see them. A second `WHERE library_id = ? AND path IN (...)`
+     * pass — over only the paths NOT resolved by Pass 1, so bounded by the batch
+     * size and scoped to the library — resolves the NULL-hash rows by exact path.
+     * Without it the scanner would create a full duplicate set for those types on
+     * every rescan. Pass 2 is skipped entirely when Pass 1 resolves everything
+     * (the deduped-type rescan hot path stays a single query).
+     *
      * Used by {@see MediaScanner::scanFlat()} (S8) to determine, for a whole
      * batch of scan candidates at once, which ones are already indexed
      * (rescan → backfill only) versus brand new (probe + create), avoiding an
@@ -352,34 +409,81 @@ class ItemRepository
             return [];
         }
 
-        // Compute SHA1 hashes in PHP for use with the indexed path_hash column
+        // Set of requested raw paths for O(1) exact-membership verification —
+        // the true raw-path tiebreak against an astronomically rare SHA1
+        // collision (a foreign path that hashed into our IN-set), and the scope
+        // for the raw-path fallback pass below.
+        $pathSet = array_flip($paths);
+
+        // Pass 1 — the fast, indexed batch lookup over path_hash. Resolves the
+        // DEDUPED types (episode/movie/audio/book) whose STORED path_hash is
+        // non-NULL, through the `(library_id, path_hash)` index (leading with
+        // library_id when supplied so the composite index is used left-prefix
+        // first, an index scan rather than a full table scan).
         $hashes = array_map('sha1', $paths);
         $placeholders = implode(',', array_fill(0, count($hashes), '?'));
 
         if ($libraryId !== null) {
-            // Lead with library_id so the (library_id, path_hash) index is used.
             $results = $this->db->query(
                 "SELECT * FROM media_items WHERE library_id = ? AND path_hash IN ({$placeholders})",
                 array_merge([$libraryId], $hashes)
             );
         } else {
-            // Fall back to a path_hash-only lookup for callers without a library.
             $results = $this->db->query(
                 "SELECT * FROM media_items WHERE path_hash IN ({$placeholders})",
                 $hashes
             );
         }
 
-        // Set of requested raw paths for O(1) exact-membership verification —
-        // the true raw-path tiebreak against an astronomically rare SHA1
-        // collision (a foreign path that hashed into our IN-set).
-        $pathSet = array_flip($paths);
-
         $map = [];
         foreach ($this->hydrateRows($results) as $row) {
             $path = $row['path'] ?? null;
             if (is_string($path) && $path !== '' && isset($pathSet[$path])) {
                 $map[$path] = $row;
+            }
+        }
+
+        // Pass 2 — raw-path fallback for the NON-deduped types whose path_hash is
+        // NULL (series/season/image/audiobook/track). `NULL IN (...)` is never
+        // true, so Pass 1 cannot see them and every such row would be reported
+        // "absent" → the scanner would create a FULL DUPLICATE item set on every
+        // rescan (no unique constraint catches a NULL-hash path). Only the input
+        // paths NOT already resolved by Pass 1 are re-probed, so this is bounded
+        // by the batch size and scoped to `library_id` (an index range on the
+        // composite index's leading column) — never a full-library scan per path.
+        // On a deduped-type rescan (the hot path) every path resolves in Pass 1,
+        // so `$unresolved` is empty and Pass 2 never runs — the single-query fast
+        // path is preserved.
+        $unresolved = [];
+        foreach ($paths as $path) {
+            if (!isset($map[$path])) {
+                $unresolved[$path] = true;
+            }
+        }
+
+        if ($unresolved !== []) {
+            $unresolvedPaths = array_keys($unresolved);
+            $rawPlaceholders = implode(',', array_fill(0, count($unresolvedPaths), '?'));
+
+            if ($libraryId !== null) {
+                $rawResults = $this->db->query(
+                    "SELECT * FROM media_items WHERE library_id = ? AND path IN ({$rawPlaceholders})",
+                    array_merge([$libraryId], $unresolvedPaths)
+                );
+            } else {
+                $rawResults = $this->db->query(
+                    "SELECT * FROM media_items WHERE path IN ({$rawPlaceholders})",
+                    $unresolvedPaths
+                );
+            }
+
+            foreach ($this->hydrateRows($rawResults) as $row) {
+                $path = $row['path'] ?? null;
+                // Accept only a requested-and-still-unresolved raw path (the hash
+                // pass wins on any overlap; the fallback never clobbers it).
+                if (is_string($path) && $path !== '' && isset($unresolved[$path]) && !isset($map[$path])) {
+                    $map[$path] = $row;
+                }
             }
         }
 

@@ -218,12 +218,20 @@ class ItemRepositoryTest extends TestCase
         $capturedParams = null;
 
         $db = $this->createMock(Connection::class);
+        // Return a matching row from the fast path_hash pass so the raw-path
+        // fallback pass is skipped and exactly ONE query is issued on a hit.
         $db->expects($this->once())
             ->method('query')
             ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
                 $capturedSql = $sql;
                 $capturedParams = $params;
-                return [];
+                return [[
+                    'id' => 'movie-1',
+                    'path' => '/movies/test.mkv',
+                    'type' => 'movie',
+                    'library_id' => 'lib-1',
+                    'metadata_json' => '{}',
+                ]];
             });
 
         $repo = new ItemRepository($db);
@@ -239,6 +247,80 @@ class ItemRepositoryTest extends TestCase
             $capturedParams,
             'binds library id, then SHA1(path), then the raw path tiebreak'
         );
+    }
+
+    /**
+     * SV-0.8 HIGH-finding regression: a NON-deduped type (series/season/image/
+     * audiobook/track) has a NULL generated `path_hash`, so `path_hash = SHA1(?)`
+     * NEVER matches it (`NULL = <hash>` is never true in SQL). findByPath MUST
+     * fall back to a raw `path = ?` lookup so those rows are still found — before
+     * this fix the fast pass silently missed them and the scanner forked a fresh
+     * DUPLICATE container/item on every rescan (no unique constraint catches a
+     * NULL-hash path, since NULLs never collide in a unique index).
+     */
+    public function testFindByPathFallsBackToRawPathForNullHashRow(): void
+    {
+        $queries = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$queries) {
+            $queries[] = ['sql' => $sql, 'params' => $params];
+            // Fast path_hash pass finds nothing — a NULL-hash row is invisible to it.
+            if (str_contains($sql, 'path_hash')) {
+                return [];
+            }
+            // Raw-path fallback pass resolves the season container by exact path.
+            return [[
+                'id' => 'season-1',
+                'path' => 'season:lib-1:some-show:1',
+                'type' => 'season',
+                'library_id' => 'lib-1',
+                'parent_id' => 'series-1',
+                'metadata_json' => '{"season": 1}',
+            ]];
+        });
+
+        $repo = new ItemRepository($db);
+        $result = $repo->findByPath('season:lib-1:some-show:1', 'lib-1');
+
+        $this->assertIsArray($result, 'a NULL-path_hash row must be resolved via the raw-path fallback');
+        $this->assertSame('season-1', $result['id']);
+        $this->assertCount(2, $queries, 'fast path_hash pass, then the raw-path fallback pass');
+        $this->assertStringContainsString('path_hash = ?', $queries[0]['sql'], 'pass 1 is the indexed hash lookup');
+        $this->assertStringNotContainsString('path_hash', $queries[1]['sql'], 'pass 2 is a raw-path lookup');
+        $this->assertStringContainsString(
+            'WHERE library_id = ? AND path = ?',
+            $queries[1]['sql'],
+            'the fallback stays scoped to library_id (an index range, not a full scan)'
+        );
+        $this->assertSame(['lib-1', 'season:lib-1:some-show:1'], $queries[1]['params']);
+    }
+
+    /**
+     * SV-0.8: the fast pass short-circuits — when the indexed `path_hash` lookup
+     * resolves the row (a deduped type), the raw-path fallback pass must NOT run,
+     * so the common case stays a single indexed query.
+     */
+    public function testFindByPathSkipsFallbackWhenFastPassResolves(): void
+    {
+        $queryCount = 0;
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql) use (&$queryCount) {
+            $queryCount++;
+            return [[
+                'id' => 'movie-1',
+                'path' => '/movies/test.mkv',
+                'type' => 'movie',
+                'library_id' => 'lib-1',
+                'metadata_json' => '{}',
+            ]];
+        });
+
+        $repo = new ItemRepository($db);
+        $repo->findByPath('/movies/test.mkv', 'lib-1');
+
+        $this->assertSame(1, $queryCount, 'a deduped-type hit must issue exactly one (indexed) query');
     }
 
     /**
@@ -267,13 +349,19 @@ class ItemRepositoryTest extends TestCase
         $callCount = 0;
 
         $db = $this->createMock(Connection::class);
+        // Resolve every path in the fast path_hash pass so the raw-path fallback
+        // pass never runs — the batch stays a single query for N deduped paths.
         $db->expects($this->once())
             ->method('query')
             ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams, &$callCount) {
                 $callCount++;
                 $capturedSql = $sql;
                 $capturedParams = $params;
-                return [];
+                return [
+                    ['id' => 'a', 'path' => '/a.mkv', 'type' => 'movie', 'metadata_json' => '{}'],
+                    ['id' => 'b', 'path' => '/b.mkv', 'type' => 'movie', 'metadata_json' => '{}'],
+                    ['id' => 'c', 'path' => '/c.mkv', 'type' => 'movie', 'metadata_json' => '{}'],
+                ];
             });
 
         $repo = new ItemRepository($db);
@@ -297,12 +385,17 @@ class ItemRepositoryTest extends TestCase
         $capturedParams = null;
 
         $db = $this->createMock(Connection::class);
+        // Resolve both paths in the fast pass so the fallback pass is skipped and
+        // exactly one (library-scoped, indexed) query is issued.
         $db->expects($this->once())
             ->method('query')
             ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
                 $capturedSql = $sql;
                 $capturedParams = $params;
-                return [];
+                return [
+                    ['id' => 'a', 'path' => '/a.mkv', 'type' => 'movie', 'metadata_json' => '{}'],
+                    ['id' => 'b', 'path' => '/b.mkv', 'type' => 'movie', 'metadata_json' => '{}'],
+                ];
             });
 
         $repo = new ItemRepository($db);
@@ -344,6 +437,78 @@ class ItemRepositoryTest extends TestCase
         $map = $repo->findPathsMap(['/a.mkv', '/b.mkv'], 'lib-1');
 
         $this->assertSame([], $map, 'a row whose raw path was not requested must be dropped');
+    }
+
+    /**
+     * SV-0.8 HIGH-finding regression (batch path): findPathsMap must resolve
+     * NON-deduped rows (NULL `path_hash`) via a second raw-path pass over the
+     * paths the hash pass did not resolve — otherwise a photo/audiobook/music
+     * library gets a FULL DUPLICATE item set on every rescan (the batch reports
+     * every existing NULL-hash row as "absent" and the scanner re-creates it).
+     */
+    public function testFindPathsMapFallsBackToRawPathForNullHashRows(): void
+    {
+        $queries = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$queries) {
+            $queries[] = ['sql' => $sql, 'params' => $params];
+            // Fast path_hash IN pass sees nothing — image rows hash to NULL.
+            if (str_contains($sql, 'path_hash')) {
+                return [];
+            }
+            // Raw-path fallback resolves the existing image rows by exact path.
+            return [
+                ['id' => 'img-a', 'path' => '/photos/a.jpg', 'type' => 'image', 'metadata_json' => '{}'],
+                ['id' => 'img-b', 'path' => '/photos/b.jpg', 'type' => 'image', 'metadata_json' => '{}'],
+            ];
+        });
+
+        $repo = new ItemRepository($db);
+        $map = $repo->findPathsMap(['/photos/a.jpg', '/photos/b.jpg'], 'lib-img');
+
+        $this->assertCount(2, $map, 'both NULL-hash rows resolved via the raw-path fallback pass');
+        $this->assertArrayHasKey('/photos/a.jpg', $map);
+        $this->assertArrayHasKey('/photos/b.jpg', $map);
+        $this->assertCount(2, $queries, 'fast path_hash pass, then the raw-path fallback pass');
+        $this->assertStringContainsString(
+            'WHERE library_id = ? AND path IN (?,?)',
+            $queries[1]['sql'],
+            'the fallback re-probes only unresolved paths, scoped to the library'
+        );
+        $this->assertSame(['lib-img', '/photos/a.jpg', '/photos/b.jpg'], $queries[1]['params']);
+    }
+
+    /**
+     * SV-0.8: the fallback pass must re-probe ONLY the paths the hash pass left
+     * unresolved (a mixed batch of a deduped movie + a NULL-hash image) — the
+     * deduped row is already in the map, so the second query is bounded to the
+     * remainder and never re-fetches an already-resolved path.
+     */
+    public function testFindPathsMapFallbackReProbesOnlyUnresolvedPaths(): void
+    {
+        $queries = [];
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(function (string $sql, $params = []) use (&$queries) {
+            $queries[] = ['sql' => $sql, 'params' => $params];
+            if (str_contains($sql, 'path_hash')) {
+                // The deduped movie resolves in the fast pass.
+                return [['id' => 'mov', 'path' => '/movies/m.mkv', 'type' => 'movie', 'metadata_json' => '{}']];
+            }
+            // Only the NULL-hash image is left for the fallback pass.
+            return [['id' => 'img', 'path' => '/photos/p.jpg', 'type' => 'image', 'metadata_json' => '{}']];
+        });
+
+        $repo = new ItemRepository($db);
+        $map = $repo->findPathsMap(['/movies/m.mkv', '/photos/p.jpg'], 'lib-1');
+
+        $this->assertCount(2, $map);
+        $this->assertArrayHasKey('/movies/m.mkv', $map);
+        $this->assertArrayHasKey('/photos/p.jpg', $map);
+        // The fallback pass binds ONLY the unresolved image path, not the movie.
+        $this->assertSame(['lib-1', '/photos/p.jpg'], $queries[1]['params']);
+        $this->assertStringContainsString('path IN (?)', $queries[1]['sql']);
     }
 
     /**

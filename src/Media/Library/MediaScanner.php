@@ -2073,7 +2073,10 @@ class MediaScanner
             return $this->containerCache[$syntheticPath];
         }
 
-        $existing = $this->itemRepository->findByPath($syntheticPath);
+        // Scope to the library so the raw-path fallback in findByPath (containers
+        // are a NON-deduped type → NULL path_hash → the fast path_hash pass always
+        // misses them) is an index range on library_id, not a full-table scan.
+        $existing = $this->itemRepository->findByPath($syntheticPath, $libraryId);
         if (is_array($existing) && isset($existing['id']) && is_string($existing['id'])) {
             $this->containerCache[$syntheticPath] = $existing['id'];
             // Idempotency (series-per-directory activation): the synthetic series

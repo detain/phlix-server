@@ -146,7 +146,12 @@ class MusicLibraryManager
                 $result->scanned++;
 
                 $itemPath = is_string($itemData['path'] ?? null) ? $itemData['path'] : '';
-                $existing = $this->item_repo->findByPath($itemPath);
+                // Music tracks are type='track' — a NON-deduped type (NULL
+                // path_hash) — so scope to the library: findByPath's fast path_hash
+                // pass always misses a track, and its raw-path fallback needs
+                // library_id to be an index range (and to avoid re-creating every
+                // track as a duplicate on each rescan).
+                $existing = $this->item_repo->findByPath($itemPath, $libraryId);
                 if ($existing) {
                     $existingId = is_string($existing['id'] ?? null) ? $existing['id'] : '';
                     // Update existing item with new tag data
@@ -210,8 +215,10 @@ class MusicLibraryManager
         // Build metadata array
         $metadata = $this->buildMetadataFromTags($tags, $path);
 
-        // Check for existing item
-        $existing = $this->item_repo->findByPath($path);
+        // Check for existing item. Tracks (type='track') are a NON-deduped type
+        // (NULL path_hash) — scope to the library so findByPath's raw-path fallback
+        // finds the existing row instead of always missing and duplicating it.
+        $existing = $this->item_repo->findByPath($path, $libraryId);
 
         if ($existing) {
             $existingId = is_string($existing['id'] ?? null) ? $existing['id'] : '';

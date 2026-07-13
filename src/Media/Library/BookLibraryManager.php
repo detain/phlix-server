@@ -157,8 +157,10 @@ class BookLibraryManager
      */
     public function upsertBook(string $libraryId, string $path): ?array
     {
-        // Check if already exists
-        $existing = $this->itemRepo->findByPath($path);
+        // Check if already exists. 'book' is a deduped type (non-NULL path_hash),
+        // so the fast pass resolves it; passing libraryId still scopes the lookup
+        // correctly when the same path exists in another library.
+        $existing = $this->itemRepo->findByPath($path, $libraryId);
 
         // Determine file extension and harvest metadata
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));

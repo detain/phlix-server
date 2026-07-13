@@ -534,8 +534,12 @@ class BookScanner extends MediaScanner
                 continue;
             }
 
-            // Check if already exists in repository
-            $existing = $this->itemRepository->findByPath($file->getPathname());
+            // Check if already exists in repository. 'book' is a deduped type
+            // (non-NULL path_hash), so the fast pass resolves it; passing libraryId
+            // still scopes the lookup to this library (correct when the same path
+            // exists in another library) and uses the composite index's leading
+            // column for the fallback.
+            $existing = $this->itemRepository->findByPath($file->getPathname(), $libraryId);
             if ($existing !== null) {
                 continue;
             }

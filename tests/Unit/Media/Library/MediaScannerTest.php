@@ -902,6 +902,91 @@ class MediaScannerTest extends TestCase
         }
     }
 
+    /**
+     * SV-0.8 HIGH-finding regression (scanner level): a SEASON container is a
+     * NON-deduped type (type='season', parent_id != null), so its generated
+     * `path_hash` is NULL. On a rescan {@see MediaScanner::findOrCreateContainer()}
+     * resolves it via {@see ItemRepository::findByPath()} on the stable synthetic
+     * season path — which, before the NULL-hash raw-path fallback, ALWAYS missed
+     * (`path_hash = SHA1(?)` never matches NULL) and forked a NEW, empty duplicate
+     * season on every scan (series has a canonical_key rescue; seasons do not).
+     * A second scan must reuse the SAME series/season rows, never duplicate them.
+     */
+    public function testSeasonContainersAreReusedNotDuplicatedOnRescan(): void
+    {
+        $repo = $this->makeFakeRepo();
+
+        $this->tmpDir = $this->makeTempDirWith([
+            'The Wire S01E01.mkv',
+            'The Wire S01E02.mkv',
+            'The Wire S02E01.mkv',
+        ]);
+
+        // First scan builds the series → season → episode hierarchy.
+        (new MediaScanner($this->createMock(Connection::class), $repo))
+            ->scan('lib-1', $this->tmpDir, 'series');
+
+        $seriesAfterFirst = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $seasonsAfterFirst = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'season'));
+        $this->assertCount(1, $seriesAfterFirst, 'one series container after the first scan');
+        $this->assertCount(2, $seasonsAfterFirst, 'two season containers after the first scan');
+
+        $seasonIdsFirst = array_map(fn ($s) => $s['id'], $seasonsAfterFirst);
+        sort($seasonIdsFirst);
+
+        // Rescan with a FRESH scanner (empty containerCache) so the resolve goes
+        // through findByPath() on the synthetic season paths, exactly as a real
+        // second scan of the library would.
+        (new MediaScanner($this->createMock(Connection::class), $repo))
+            ->scan('lib-1', $this->tmpDir, 'series');
+
+        $seriesAfterRescan = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'series'));
+        $seasonsAfterRescan = array_values(array_filter($repo->items(), fn ($i) => $i['type'] === 'season'));
+
+        $this->assertCount(1, $seriesAfterRescan, 'rescan must NOT fork a duplicate series container');
+        $this->assertCount(2, $seasonsAfterRescan, 'rescan must NOT fork duplicate season containers');
+
+        $seasonIdsRescan = array_map(fn ($s) => $s['id'], $seasonsAfterRescan);
+        sort($seasonIdsRescan);
+        $this->assertSame($seasonIdsFirst, $seasonIdsRescan, 'the exact same season rows are reused on rescan');
+    }
+
+    /**
+     * SV-0.8 HIGH-finding regression (scanner level, batch path): an image library
+     * item is a NON-deduped type (type='image', NULL `path_hash`) resolved on
+     * rescan via {@see ItemRepository::findPathsMap()}. Before the raw-path
+     * fallback pass the batch reported every existing photo as "absent" and the
+     * scanner re-created a FULL DUPLICATE set on each rescan. A second scan of the
+     * same library must add nothing.
+     */
+    public function testImageLibraryRescanDoesNotDuplicateItems(): void
+    {
+        $repo = $this->makeFakeRepo();
+        $ffmpeg = $this->createMock(FfmpegRunner::class);
+        $ffmpeg->expects($this->never())->method('probe');
+
+        $this->tmpDir = $this->makeTempDirWith(['One.jpg', 'Two.png', 'Three.gif']);
+
+        $makeScanner = fn (): MediaScanner => new MediaScanner(
+            $this->createMock(Connection::class),
+            $repo,
+            null,
+            null,
+            null,
+            $ffmpeg
+        );
+
+        $makeScanner()->scan('lib-img', $this->tmpDir, 'image');
+        $this->assertCount(3, $repo->items(), 'three image items after the first scan');
+
+        $makeScanner()->scan('lib-img', $this->tmpDir, 'image');
+        $this->assertCount(
+            3,
+            $repo->items(),
+            'rescan must NOT duplicate the image items (NULL path_hash resolved by raw path)'
+        );
+    }
+
     public function testProbeReturningNullLeavesNoDurationAndDoesNotAbort(): void
     {
         $repo = $this->makeFakeRepo();

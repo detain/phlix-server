@@ -126,7 +126,11 @@ class PhotoLibraryManager
             foreach ($this->scanner->scanPhotoLibrary($libraryPath, $libraryId) as $item) {
                 /** @var string */
                 $path = $item['path'];
-                $existingItem = $this->itemRepo->findByPath($path);
+                // Photos are a NON-deduped type (NULL path_hash) — scope to the
+                // library so findByPath resolves them via its raw-path fallback
+                // (index range on library_id). Without libraryId the fast pass
+                // always misses and every rescan would duplicate every photo.
+                $existingItem = $this->itemRepo->findByPath($path, $libraryId);
 
                 if ($existingItem !== null) {
                     // Update existing item
@@ -196,7 +200,10 @@ class PhotoLibraryManager
         $exif = $this->scanner->harvestExif($path);
         $name = pathinfo($path, PATHINFO_FILENAME);
 
-        $existingItem = $this->itemRepo->findByPath($path);
+        // Photos are a NON-deduped type (NULL path_hash) — scope to the library so
+        // findByPath resolves the existing row via its raw-path fallback instead
+        // of always missing and creating a duplicate.
+        $existingItem = $this->itemRepo->findByPath($path, $libraryId);
 
         if ($existingItem !== null) {
             /** @var string */

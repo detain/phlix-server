@@ -133,19 +133,23 @@ class AudioDbProviderTest extends TestCase
 
     public function test_rate_limit_applied(): void
     {
+        // SV-4.5 / S-F16: the limiter is now static-per-host (shared across
+        // instances) rather than a per-object property. Reset the static map,
+        // run a request, and assert the theaudiodb.com host bucket was set.
+        $reflection = new \ReflectionClass(AudioDbProvider::class);
+        $stateProp = $reflection->getProperty('hostLastRequestTime');
+        $stateProp->setAccessible(true);
+        $stateProp->setValue(null, []);
+
         $provider = new AudioDbProvider($this->httpClient, 'test-api-key');
 
-        // Use reflection to check lastRequestTime
-        $reflection = new \ReflectionClass($provider);
-        $property = $reflection->getProperty('lastRequestTime');
-        $property->setAccessible(true);
-
-        // First call should set lastRequestTime
         $startTime = microtime(true);
         $provider->search('test');
 
-        // After search, lastRequestTime should be set
-        $this->assertGreaterThanOrEqual($startTime, $property->getValue($provider));
+        /** @var array<string, float> $state */
+        $state = $stateProp->getValue();
+        $this->assertArrayHasKey('theaudiodb.com', $state);
+        $this->assertGreaterThanOrEqual($startTime, $state['theaudiodb.com']);
     }
 
     public function test_get_source_name(): void

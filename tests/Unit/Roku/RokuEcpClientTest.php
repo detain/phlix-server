@@ -92,4 +92,102 @@ class RokuEcpClientTest extends TestCase
         $this->assertStringContainsString('title=' . urlencode($title), $expectedFormData);
         $this->assertStringContainsString('thumbnail=' . urlencode($thumbnail), $expectedFormData);
     }
+
+    /**
+     * SV-4.5 / S-F15: outside a running worker + coroutine the client must
+     * choose the BLOCKING stream path (never a Channel wait out of a coroutine).
+     */
+    public function testPreferAsyncHttpIsFalseOutsideCoroutine(): void
+    {
+        $client = new RokuEcpClient('192.168.1.100', 8060);
+
+        $method = new \ReflectionMethod($client, 'preferAsyncHttp');
+        $method->setAccessible(true);
+
+        $this->assertFalse(
+            $method->invoke($client),
+            'Outside a worker/coroutine the blocking path must be chosen.'
+        );
+    }
+
+    /**
+     * SV-4.5 / S-F15: when the async decision is active the request must go
+     * through the async coroutine client, NOT the blocking file_get_contents
+     * path. Proven by a seam subclass that forces the async branch and records
+     * which transport ran.
+     */
+    public function testFetchRoutesThroughAsyncClientWhenPreferred(): void
+    {
+        $client = new class ('192.168.1.100', 8060) extends RokuEcpClient {
+            public bool $asyncCalled = false;
+            public bool $blockingCalled = false;
+
+            protected function preferAsyncHttp(): bool
+            {
+                return true;
+            }
+
+            protected function fetchAsync(string $method, string $url, ?string $body): ?string
+            {
+                $this->asyncCalled = true;
+                return '';
+            }
+
+            protected function fetchBlocking(string $method, string $url, ?string $body): ?string
+            {
+                $this->blockingCalled = true;
+                return '';
+            }
+        };
+
+        $result = $client->sendKeypress('Play');
+
+        $this->assertTrue($result['success']);
+        $this->assertTrue($client->asyncCalled, 'async coroutine transport must be used in-coroutine');
+        $this->assertFalse($client->blockingCalled, 'blocking file_get_contents must NOT be used in-coroutine');
+    }
+
+    /**
+     * SV-4.5 / S-F15: the channel-launch delay must yield the event loop when
+     * inside a Swoole coroutine (cooperative Coroutine::sleep) rather than
+     * blocking with usleep. Proven behaviorally by sibling-coroutine interleave.
+     *
+     * @requires extension swoole
+     */
+    public function testCoroutineAwareSleepYieldsInsideCoroutine(): void
+    {
+        if (! extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required.');
+        }
+
+        $client = new RokuEcpClient('192.168.1.100', 8060);
+        $sleep = new \ReflectionMethod($client, 'coroutineAwareSleep');
+        $sleep->setAccessible(true);
+
+        $order = [];
+        \Swoole\Coroutine\run(function () use (&$order, $sleep, $client): void {
+            $chan = new \Swoole\Coroutine\Channel(2);
+
+            \Swoole\Coroutine\go(function () use (&$order, $chan, $sleep, $client): void {
+                $order[] = 'sleep-start';
+                $sleep->invoke($client, 0.2);
+                $order[] = 'sleep-end';
+                $chan->push(true);
+            });
+            \Swoole\Coroutine\go(function () use (&$order, $chan): void {
+                \Swoole\Coroutine::sleep(0.02);
+                $order[] = 'sibling-ran';
+                $chan->push(true);
+            });
+
+            $chan->pop(2.0);
+            $chan->pop(2.0);
+        });
+
+        $this->assertLessThan(
+            array_search('sleep-end', $order, true),
+            array_search('sibling-ran', $order, true),
+            'sibling must run during the cooperative sleep (Coroutine::sleep, not usleep).'
+        );
+    }
 }

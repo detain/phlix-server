@@ -11,7 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Roku;
 
+use Phlix\Common\Runtime\WorkerContext;
 use Phlix\Hub\RelayConsumer;
+use Workerman\Http\Client as AsyncHttpClient;
 
 /**
  * Roku control via relay tunnel.
@@ -140,37 +142,18 @@ class RemoteRokuClient
                     if (class_exists('\Workerman\Timer')) {
                         // Non-blocking: defer the play command by 500ms using Workerman Timer
                         \Workerman\Timer::add(0.5, function () use ($url, $body): void {
-                            $context = stream_context_create([
-                                'http' => [
-                                    'method' => 'POST',
-                                    'timeout' => 10,
-                                    'content' => $body,
-                                    'ignore_errors' => true,
-                                    'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
-                                ],
-                            ]);
-                            @file_get_contents($url, false, $context);
+                            $this->httpPost($url, $body);
                         }, [], false);
                         // Return immediately without waiting for the timer
                         return null;
                     }
 
-                    // Fallback: blocking sleep if Timer not available
-                    usleep(500000);
+                    // Fallback: no Timer (e.g. CLI). Wait coroutine-aware so we
+                    // yield the event loop instead of stalling the worker.
+                    $this->coroutineAwareSleep(0.5);
                 }
 
-                $context = stream_context_create([
-                    'http' => [
-                        'method' => 'POST',
-                        'timeout' => 10,
-                        'content' => $body,
-                        'ignore_errors' => true,
-                        'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
-                    ],
-                ]);
-
-                $response = @file_get_contents($url, false, $context);
-                return $response !== false ? $response : null;
+                return $this->httpPost($url, $body);
             }
 
             return null;
@@ -200,14 +183,124 @@ class RemoteRokuClient
     {
         $url = sprintf('http://%s:%d/launch/%s', $this->deviceHost, $this->devicePort, $channelId);
 
+        $this->httpPost($url, '');
+    }
+
+    /**
+     * POST to a Roku ECP endpoint, non-blocking when possible.
+     *
+     * Inside a live Swoole coroutine the request goes through the async
+     * {@see \Workerman\Http\Client} with a cooperative Channel wait (yields the
+     * event loop, so a powered-off Roku can no longer stall the worker for the
+     * full timeout). Outside a coroutine (CLI/tests, or a plain Workerman Timer
+     * callback) it falls back to the blocking stream fetch. Same
+     * coroutine-vs-blocking decision ({@see WorkerContext}) the other async
+     * clients use (SV-4.5 / S-F15).
+     *
+     * @param string $url Absolute ECP URL.
+     * @param string $body Form-encoded request body.
+     *
+     * @return string|null Response body, or null on failure.
+     */
+    private function httpPost(string $url, string $body): ?string
+    {
+        if ($this->preferAsyncHttp()) {
+            return $this->httpPostAsync($url, $body);
+        }
+
+        return $this->httpPostBlocking($url, $body);
+    }
+
+    /**
+     * Whether the async (coroutine) HTTP path should be used.
+     *
+     * True only inside a running Workerman worker AND a live Swoole coroutine —
+     * the same coroutine-vs-blocking decision ({@see WorkerContext}) every async
+     * client here shares. Outside that (CLI/tests, or a plain Timer callback)
+     * the blocking stream path is used. Protected so tests can drive both branches.
+     *
+     * @return bool
+     */
+    protected function preferAsyncHttp(): bool
+    {
+        return WorkerContext::isEventLoopRunning() && WorkerContext::inCoroutine();
+    }
+
+    /**
+     * Async POST via workerman/http-client + Swoole Channel cooperative wait.
+     *
+     * @param string $url Absolute URL.
+     * @param string $body Form-encoded request body.
+     *
+     * @return string|null Response body, or null on error/timeout.
+     */
+    protected function httpPostAsync(string $url, string $body): ?string
+    {
+        $client = new AsyncHttpClient(['timeout' => 10]);
+
+        $channel = new \Swoole\Coroutine\Channel(1);
+        $state = ['body' => null];
+
+        $client->request($url, [
+            'method' => 'POST',
+            'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
+            'data' => $body,
+            'success' => function ($response) use (&$state, $channel): void {
+                $state['body'] = (string) $response->getBody();
+                $channel->push(true);
+            },
+            'error' => function ($error) use ($channel): void {
+                $channel->push(true);
+            },
+        ]);
+
+        $channel->pop(10.0);
+
+        return $state['body'];
+    }
+
+    /**
+     * Blocking stream POST for CLI/testing contexts (no event loop).
+     *
+     * @param string $url Absolute URL.
+     * @param string $body Form-encoded request body.
+     *
+     * @return string|null Response body, or null on failure.
+     */
+    protected function httpPostBlocking(string $url, string $body): ?string
+    {
         $context = stream_context_create([
             'http' => [
                 'method' => 'POST',
                 'timeout' => 10,
+                'content' => $body,
                 'ignore_errors' => true,
+                'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
             ],
         ]);
 
-        @file_get_contents($url, false, $context);
+        $response = @file_get_contents($url, false, $context);
+
+        return $response === false ? null : $response;
+    }
+
+    /**
+     * Sleep without blocking the Workerman/Swoole event loop.
+     *
+     * Uses the shared {@see WorkerContext::inCoroutine()} guard: inside a live
+     * coroutine it uses the cooperative {@see \Swoole\Coroutine::sleep()};
+     * outside a coroutine it falls back to blocking usleep.
+     *
+     * @param float $seconds Sleep duration in seconds.
+     * @return void
+     */
+    private function coroutineAwareSleep(float $seconds): void
+    {
+        if (WorkerContext::inCoroutine()) {
+            \Swoole\Coroutine::sleep($seconds);
+            return;
+        }
+
+        usleep((int) ($seconds * 1_000_000));
     }
 }

@@ -2562,3 +2562,86 @@ Verification:
 - `phpstan analyze -c phpstan.neon.dist` on both touched src files → No errors.
 - `phpcs --standard=PSR12` → SegmentProcessRegistry.php clean; FfmpegRunner.php 1 pre-existing
   120-char warning at line 838 (unrelated to this change).
+
+## Orchestrator — SV-4.2 DONE (2026-07-12, perf-5)
+- [x] SV-4.2 detached-ffmpeg cancellation + transcode_timeout COMPLETE. impl 470111ad + tests 9fa01804; REVIEW (4 findings: 2 Med temp-leak/kill-slow-wanted, 2 Low) → FIX 3b6c6a3b (release-only wait-timeout, real killGroup via RequestContext, temp cleanup, setsid+`timeout -k -s TERM`); RE-REVIEW (1 Low: family-glob temp cleaner) → FIX 3c73fe0a (unlink only launcher's own .part). Full Unit 4983/0, phpstan L9 clean.
+- X1 chain code-complete: UI-0.3 (prior) + SV-4.2 (server STOP) + HB-4.9 (hub cancel metric + shared doc). OWED: on-box scrub→HTTP_CANCEL→ffmpeg-killed round-trip verify.
+- Server next: SV-4.5 (Roku/HdHomeRun/MusicBrainz blocking-I/O → async) IN PROGRESS.
+
+## Re-audit (perf-5) — SV-4.8–4.12/4.14 (all committed together in 015ea7a7; worklog's c8f94c04 hash was WRONG/not in history)
+- SV-4.8 Router static-path fast map + DI — **DONE** (real O(1) $staticRoutes map consulted before regex; string handlers resolved via container->get, index.php path only registers instances so never hits `new $class()`). GAP: DI-resolution branch + static-map-served assertion untested.
+- SV-4.9 Migration ledger — **NOT-DONE (INERT).** `migrations/076_schema_migrations.sql` creates the table but `grep schema_migrations src/ scripts/ bin/` = ZERO hits; MigrationRunner still applies EVERY .sql every boot (its own docblock says "no migration-tracking table"). 076 header falsely claims run-migrations.php consults it. → COMPLETE: write+consult ledger (INSERT ON DUP KEY after clean apply; skip name+checksum match; log checksum divergence; bootstrap-create/order 076 first; keep error-squelch as safety net).
+- SV-4.10 provider-priority single-source + hrtime — **PARTIAL.** hrtime DONE (MediaScanner:420/432, no microtime left). Provider-priority NOT attempted: MetadataManager.php:61-68 hardcodes providerPriority (movie=[tmdb,local]/series=[tvdb,fanart,local]) DIVERGING from config/metadata.php:33-37 (movie=[tmdb,imdb]/series=[tmdb,imdb]); ctor never loads config; LIVE via getProvidersForType→refreshItemMetadata (MusicLibraryManager:291). (A 3rd config subsystem PriorityConfig/SourceRegistry exists for LibraryMetadataMatcher but doesn't unify MetadataManager.) → COMPLETE: load priority from config/metadata.php as single source.
+- SV-4.11 PluginCatalogService async+docblock+adjacent — **PARTIAL.** docblock DONE (:414-417/:457-458 correct); asyncFetch wired. ADJACENT SV-0.4-CLASS BUG PRESENT: defaultFetcher() (:436-446) gates on `WorkerContext::isEventLoopRunning()` NOT `inCoroutine()`; asyncFetch does `new Swoole\Coroutine\Channel` + pop() with no getCid guard → when loop running but caller not in coroutine (getCid==0, the common plugin-auto-update-worker case) pop() returns false immediately → spurious "async fetch timed out". → COMPLETE: change gate to `WorkerContext::inCoroutine()`; add coroutine wake+timeout test; delete stale SWOOLE_HOOK_NATIVE_CURL test comment.
+- SV-4.12 stale-job reaper glob — **DONE** (reapStaleRunningJobs :2913-2916 merges chunk-*.m4s + seg-*.ts). GAP: seg-*.ts keep-branch untested.
+- SV-4.14 phantom self::transcode() docref — **DONE** (now self::probe() @:735; encoder-map hevc_cl/h264_d3d11va/h264_dxva2 KEPT per plan). NOTE: a NEW stale docref `self::buildHlsCommand()` survives at FfmpegRunner.php:594 (buildHlsCommand was removed by SV-4.13) → fold into SV-4.13-finish.
+
+### Server COMPLETE queue (post SV-4.5): SV-4.9 (ledger, inert-highest) → SV-4.11 (Channel gate fix) → SV-4.10 (provider-priority config) → SV-4.4 (webhook reconcile) → SV-3.1 f/g/h → SV-3.6 (Trakt) → SV-4.13-finish (+ the :594 docref) → SV-4.8/4.12 test-gap top-ups. Plus W0/W1/W2 re-audits pending.
+
+## Re-audit (perf-5) — SV-0.6–0.9
+- SV-0.6 TMDB collections UUID-as-int (ad6d6d86) — **DONE (code).** syncCollectionForMovie(string)/removeCollectionMembership(string); MediaScanner:1383 (int) cast GONE; other (int) casts are on real tmdb_id/part.id (correct). GAP: NO tests at all (no CollectionServiceTest; plan-mandated UUID-not-"0" unit + membership integration missing).
+- SV-0.7 marker worker supervision (46c71440) — **DONE.** config/process.php:54-58 marker-detection enabled count=1 poll=30; start.php:606/610-649 launches BackgroundDetectorWorker under runAll; ::start arms Timer→runOnce→dequeueShow. GAP: no config test + no enqueue-smoke test.
+- SV-0.8 path_hash reads + stop re-probing (510c8761) — **PARTIAL.** findByPath single-row DONE (library_id+path_hash+path tiebreak, index-friendly). Batch-reprobe threading DONE (processScanBatch→findPathsMap once→processFile callerConfirmedAbsent=true, no per-file re-probe). DEFECT: `findPathsMap` (ItemRepository:342-344) `WHERE path_hash IN (...)` OMITS library_id → composite idx (library_id,path_hash) leftmost-prefix can't be used → hot batch path likely FULL-SCANS. + no real-MySQL/EXPLAIN coverage (BrowseIndexUsageTest never checks path_hash). → COMPLETE: add library_id=? to findPathsMap (or standalone path_hash index) + query-plan integration test.
+- SV-0.9 generateThumbnailBatch escaping (1dbdf97c) — **PARTIAL.** Escaping DONE (-ss %d (int), no escapeshellarg on numeric). DEFECT: batch builds `ffmpeg {seekArgs} -i input` with all `-vframes/output` groups BEFORE `-i` → malformed (outputs before inputs) → renders NO thumbnails. LATENT (only caller MediaAssetGenerationJob:124 passes scalar, never array) but broken if wired. No test touches the batch method. → COMPLETE: fix to per-output `-ss` output-side OR repeated `-ss N -i input` blocks + command-shape test.
+
+### Updated server COMPLETE queue: SV-4.9 (ledger) → SV-4.11 (Channel gate) → SV-0.8 (findPathsMap library_id) → SV-4.10 (provider-priority) → SV-0.9 (batch cmd) → SV-4.4 (webhook) → SV-3.1 f/g/h → SV-3.6 (Trakt) → SV-4.13-finish(+:594 docref) → TEST top-ups (SV-0.6/0.7/4.8/4.12). W1/W2/W3.3-3.4 re-audits still pending.
+
+## Implementer — SV-4.5 (Roku/HdHomeRun/MusicBrainz blocking-I/O → coroutine-aware async) — 2026-07-13
+
+NOT-DONE verdict cleared. All four audited targets converted; reused the shared
+`Phlix\Common\Runtime\WorkerContext` guard (`isEventLoopRunning()` + `inCoroutine()`)
+— the SAME coroutine-vs-blocking decision every async client here uses — so no new
+inconsistent (always-false) guard was introduced.
+
+Files changed (src):
+- `src/Media/Metadata/Provider/MusicMetadataProviderTrait.php` — `rateLimit()` rewritten
+  from a PER-INSTANCE `$lastRequestTime` to a **static-per-host** limiter:
+  `private static array $hostLastRequestTime` keyed by the provider's `BASE_URL` host
+  (derived via new `rateLimitBucket()` — `parse_url(...HOST)`, lower-cased; falls back to
+  class name). SHARED across instances of a provider (trait-statics are per-using-class,
+  so all MusicBrainzProvider instances share one bucket; keyed-by-host so distinct APIs
+  stay independent). **BOUNDED**: `RATE_LIMIT_HOST_CAP = 64` with unset+reassign LRU touch
+  + `array_key_first` eviction of the oldest host once the map exceeds the cap. The wait is
+  coroutine-aware via new `rateLimitSleep()` (`WorkerContext::inCoroutine()` →
+  `\Swoole\Coroutine::sleep()`, else blocking `usleep`).
+- `src/Roku/RokuEcpClient.php` — `usleep(500000)` (channel-launch fallback) → `coroutineAwareSleep(0.5)`;
+  `get()`/`post()` now route through a new `fetch()` that chooses `fetchAsync()`
+  (workerman/http-client + `Swoole\Coroutine\Channel` cooperative wait) vs `fetchBlocking()`
+  (stream `file_get_contents`) via new protected `preferAsyncHttp()` seam.
+- `src/Roku/RemoteRokuClient.php` — the `usleep(500000)` no-Timer fallback → `coroutineAwareSleep(0.5)`;
+  the three `file_get_contents` sites (deferred-play, direct POST, `relayLaunchChannel`)
+  collapsed into `httpPost()` → `httpPostAsync()` / `httpPostBlocking()` chosen via
+  protected `preferAsyncHttp()`.
+- `src/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriver.php` — `scanChannels()` `usleep(500000)`
+  → new `coroutineAwareSleep(0.5)`.
+
+Tests (added/updated):
+- NEW `tests/Unit/Media/Metadata/Provider/MusicMetadataRateLimitTest.php` (+ fixture
+  `RateLimitTraitFixture.php`): bucket-key = host; **state SHARED across two instances**
+  for the same host (second instance waits out the window); first-request no-wait; **map
+  BOUNDED** (prefill cap, one add → one LRU eviction of the oldest, count stays at cap);
+  in-coroutine wait **yields** the loop (sibling coroutine interleaves during the wait →
+  proves `Coroutine::sleep`, not blocking `usleep`).
+- NEW `tests/Unit/Roku/RemoteRokuClientTest.php` (+ seam `RemoteRokuClientAsyncSeamStub.php`):
+  `preferAsyncHttp()` false outside a coroutine (blocking chosen); `httpPost()` routes to
+  the async transport when the async decision is active (blocking NOT called); coroutine
+  sleep yields.
+- `tests/Unit/Roku/RokuEcpClientTest.php` — added the same three assertions (blocking-outside-coroutine,
+  async-routing-when-preferred, cooperative sleep).
+- `tests/Unit/LiveTv/Tuners/HdHomeRun/HdHomeRunTunerDriverTest.php` — added the cooperative-sleep yield test.
+- Updated `MusicBrainzProviderTest`/`AudioDbProviderTest` rate-limit tests: reflect the new
+  static `hostLastRequestTime` (musicbrainz.org / theaudiodb.com buckets) instead of the
+  removed per-instance property.
+
+Verification: relevant dirs green (87/87); full `--testsuite Unit` **4995 tests, 0 errors /
+0 failures** (4 pre-existing TranscodeManager color-key warnings + 5 skips are environmental);
+`phpstan -c phpstan.neon.dist` **0 errors**; `phpcs --standard=PSR12` clean on all changed files
+(pre-existing snake_case method-name warnings in the two provider tests are unrelated/note-and-continue).
+
+Deferral note: RokuEcpClient/RemoteRokuClient async transport only activates under a live
+worker+coroutine (`WorkerContext::isEventLoopRunning()` gate) exactly like MetadataHttpClient/
+WebhookHttpClient; the blocking stream path remains for CLI/tests. The MB limiter's trait-static
+is per-using-class (shared across instances of a provider, keyed by host) — a single provider
+class per remote host, so this fully addresses the "concurrent instances collectively violate"
+finding; a truly cross-class global map was intentionally not added (would need a new shared file,
+out of the 4-file scope).

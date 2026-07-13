@@ -12,6 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Roku;
 
 use Phlix\Common\Logger\StructuredLogger;
+use Phlix\Common\Runtime\WorkerContext;
+use Workerman\Http\Client as AsyncHttpClient;
 
 /**
  * HTTP ECP client for Roku device control.
@@ -122,8 +124,9 @@ class RokuEcpClient
             return ['success' => true, 'response' => ''];
         }
 
-        // Fallback: blocking sleep if Timer not available (e.g., outside Workerman)
-        usleep(500000);
+        // Fallback: no Workerman Timer (e.g. CLI). Wait coroutine-aware so we
+        // yield the event loop instead of stalling the worker (SV-4.5/S-F15).
+        $this->coroutineAwareSleep(0.5);
         return $this->post('/media/play', $formData);
     }
 
@@ -203,17 +206,9 @@ class RokuEcpClient
 
         $this->log('debug', 'ECP GET: {url}', ['url' => $url]);
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'timeout' => $this->timeout,
-                'ignore_errors' => true,
-            ],
-        ]);
+        $response = $this->fetch('GET', $url, null);
 
-        $response = @file_get_contents($url, false, $context);
-
-        if ($response === false) {
+        if ($response === null) {
             throw new \RuntimeException('Failed to connect to Roku device at ' . $url);
         }
 
@@ -241,19 +236,9 @@ class RokuEcpClient
             'body' => substr($body, 0, 200),
         ]);
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'timeout' => $this->timeout,
-                'content' => $body,
-                'ignore_errors' => true,
-                'header' => "Content-Type: application/x-www-form-urlencoded\r\n",
-            ],
-        ]);
+        $response = $this->fetch('POST', $url, $body);
 
-        $response = @file_get_contents($url, false, $context);
-
-        if ($response === false) {
+        if ($response === null) {
             throw new \RuntimeException('Failed to connect to Roku device at ' . $url);
         }
 
@@ -343,6 +328,131 @@ class RokuEcpClient
         }
 
         return $result;
+    }
+
+    /**
+     * Perform an HTTP request to the ECP device, non-blocking when possible.
+     *
+     * Inside a live Swoole coroutine the request goes through the async
+     * {@see \Workerman\Http\Client} with a cooperative Channel wait (yields the
+     * event loop, so a powered-off Roku can no longer stall the worker for the
+     * full timeout). Outside a coroutine (CLI/tests) it falls back to the
+     * blocking stream fetch. This is the same coroutine-vs-blocking decision
+     * ({@see WorkerContext}) the other async clients use (SV-4.5 / S-F15).
+     *
+     * @param string $method HTTP method (GET or POST).
+     * @param string $url Absolute ECP URL.
+     * @param string|null $body Request body for POST, or null for GET.
+     *
+     * @return string|null Response body, or null on failure.
+     */
+    private function fetch(string $method, string $url, ?string $body): ?string
+    {
+        if ($this->preferAsyncHttp()) {
+            return $this->fetchAsync($method, $url, $body);
+        }
+
+        return $this->fetchBlocking($method, $url, $body);
+    }
+
+    /**
+     * Whether the async (coroutine) HTTP path should be used.
+     *
+     * True only inside a running Workerman worker AND a live Swoole coroutine —
+     * the same coroutine-vs-blocking decision ({@see WorkerContext}) every async
+     * client here shares. Outside that (CLI/tests) the blocking stream path is
+     * used. Protected so tests can drive both branches.
+     *
+     * @return bool
+     */
+    protected function preferAsyncHttp(): bool
+    {
+        return WorkerContext::isEventLoopRunning() && WorkerContext::inCoroutine();
+    }
+
+    /**
+     * Async request via workerman/http-client + Swoole Channel cooperative wait.
+     *
+     * @param string $method HTTP method.
+     * @param string $url Absolute URL.
+     * @param string|null $body Request body for POST.
+     *
+     * @return string|null Response body, or null on error/timeout.
+     */
+    protected function fetchAsync(string $method, string $url, ?string $body): ?string
+    {
+        $client = new AsyncHttpClient(['timeout' => $this->timeout]);
+
+        $options = [
+            'method' => $method,
+            'headers' => ['Content-Type' => 'application/x-www-form-urlencoded'],
+        ];
+        if ($body !== null) {
+            $options['data'] = $body;
+        }
+
+        $channel = new \Swoole\Coroutine\Channel(1);
+        $state = ['body' => null];
+
+        $options['success'] = function ($response) use (&$state, $channel): void {
+            $state['body'] = (string) $response->getBody();
+            $channel->push(true);
+        };
+        $options['error'] = function ($error) use ($channel): void {
+            $channel->push(true);
+        };
+
+        $client->request($url, $options);
+        $channel->pop((float) $this->timeout);
+
+        return $state['body'];
+    }
+
+    /**
+     * Blocking stream fetch for CLI/testing contexts (no event loop).
+     *
+     * @param string $method HTTP method.
+     * @param string $url Absolute URL.
+     * @param string|null $body Request body for POST.
+     *
+     * @return string|null Response body, or null on failure.
+     */
+    protected function fetchBlocking(string $method, string $url, ?string $body): ?string
+    {
+        $http = [
+            'method' => $method,
+            'timeout' => $this->timeout,
+            'ignore_errors' => true,
+        ];
+        if ($body !== null) {
+            $http['content'] = $body;
+            $http['header'] = "Content-Type: application/x-www-form-urlencoded\r\n";
+        }
+
+        $context = stream_context_create(['http' => $http]);
+        $response = @file_get_contents($url, false, $context);
+
+        return $response === false ? null : $response;
+    }
+
+    /**
+     * Sleep without blocking the Workerman/Swoole event loop.
+     *
+     * Uses the shared {@see WorkerContext::inCoroutine()} guard: inside a live
+     * coroutine it uses the cooperative {@see \Swoole\Coroutine::sleep()};
+     * outside a coroutine it falls back to blocking usleep.
+     *
+     * @param float $seconds Sleep duration in seconds.
+     * @return void
+     */
+    private function coroutineAwareSleep(float $seconds): void
+    {
+        if (WorkerContext::inCoroutine()) {
+            \Swoole\Coroutine::sleep($seconds);
+            return;
+        }
+
+        usleep((int) ($seconds * 1_000_000));
     }
 
     /**

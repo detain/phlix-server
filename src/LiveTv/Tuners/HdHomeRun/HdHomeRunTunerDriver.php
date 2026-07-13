@@ -124,11 +124,33 @@ class HdHomeRunTunerDriver implements TunerDriverInterface
 
         $this->apiClient->triggerScan();
 
-        // After triggering scan, get updated lineup
-        // Small delay to allow scan to start
-        usleep(500000); // 500ms
+        // After triggering scan, get updated lineup.
+        // Small delay to allow scan to start — coroutine-aware so it yields the
+        // event loop instead of stalling the worker (SV-4.5 / S-F15).
+        $this->coroutineAwareSleep(0.5);
 
         return $this->apiClient->getChannelLineup();
+    }
+
+    /**
+     * Sleep without blocking the Workerman/Swoole event loop.
+     *
+     * Uses the shared {@see \Phlix\Common\Runtime\WorkerContext::inCoroutine()}
+     * guard: inside a live Swoole coroutine it uses the cooperative
+     * {@see \Swoole\Coroutine::sleep()} (which yields to the scheduler);
+     * outside a coroutine (CLI/tests) it falls back to blocking usleep.
+     *
+     * @param float $seconds Sleep duration in seconds.
+     * @return void
+     */
+    private function coroutineAwareSleep(float $seconds): void
+    {
+        if (\Phlix\Common\Runtime\WorkerContext::inCoroutine()) {
+            \Swoole\Coroutine::sleep($seconds);
+            return;
+        }
+
+        usleep((int) ($seconds * 1_000_000));
     }
 
     /**

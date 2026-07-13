@@ -135,4 +135,52 @@ class HdHomeRunTunerDriverTest extends TestCase
 
         $this->assertEquals($expectedLineup, $lineup);
     }
+
+    /**
+     * SV-4.5 / S-F15: the post-scan settle delay must yield the event loop when
+     * inside a Swoole coroutine (cooperative Coroutine::sleep) rather than
+     * blocking the worker with usleep. Proven behaviorally: a sibling coroutine
+     * started alongside the sleep must interleave DURING it.
+     *
+     * @requires extension swoole
+     */
+    public function testScanDelayYieldsEventLoopInsideCoroutine(): void
+    {
+        if (! extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required.');
+        }
+
+        $discovery = new HdHomeRunDiscovery(null, 1);
+        $apiClient = $this->createMock(HdHomeRunApiClient::class);
+        $driver = new HdHomeRunTunerDriver($discovery, $apiClient);
+
+        $sleep = new \ReflectionMethod($driver, 'coroutineAwareSleep');
+        $sleep->setAccessible(true);
+
+        $order = [];
+        \Swoole\Coroutine\run(function () use (&$order, $sleep, $driver): void {
+            $chan = new \Swoole\Coroutine\Channel(2);
+
+            \Swoole\Coroutine\go(function () use (&$order, $chan, $sleep, $driver): void {
+                $order[] = 'sleep-start';
+                $sleep->invoke($driver, 0.2);
+                $order[] = 'sleep-end';
+                $chan->push(true);
+            });
+            \Swoole\Coroutine\go(function () use (&$order, $chan): void {
+                \Swoole\Coroutine::sleep(0.02);
+                $order[] = 'sibling-ran';
+                $chan->push(true);
+            });
+
+            $chan->pop(2.0);
+            $chan->pop(2.0);
+        });
+
+        $this->assertLessThan(
+            array_search('sleep-end', $order, true),
+            array_search('sibling-ran', $order, true),
+            'sibling must run during the cooperative sleep (Coroutine::sleep, not usleep).'
+        );
+    }
 }

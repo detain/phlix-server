@@ -5657,6 +5657,48 @@ per-piece re-litigation. **2 findings.**
   regressed by SV-3.1 f; flagged only so the whole-feature gate is aware the timeshift `session_id`
   must remain unguessable to preserve that equivalence.
 
+### Fixer (RECOVERY of an interrupted fix) — SV-3.1 f cumulative findings CLOSED — commit `46710df4` — 2026-07-13
+
+Recovered a predecessor's fix that died mid-mutation-proof (session limit), leaving the work
+uncommitted. **On audit the on-disk tree was already correct and GREEN** — the predecessor had in
+fact restored the mutation-1b revert (session_id-keyed pid write) before dying; the LiveTv suite was
+already passing, so no un-restored mutation remained. Re-verified BOTH findings end-to-end against
+the live code rather than trusting the diff:
+
+- **Finding 1 [HIGH] — CLOSED.** (a) `Recorder::startTimeShift()` records the capture pid via the new
+  `DbTimeShiftSessionStore::updatePidBySessionId($sessionId, $pid)` (WHERE `session_id = ?`), so it
+  always lands on the row `findBySessionId()`/`getTimeShift()` resolve — never zero rows. (b) The
+  pre-spawn write is now the new collision-detecting `claim()` (plain INSERT, not the silent `save()`
+  upsert); backed by migration 078 `UNIQUE KEY uq_session_id`. A racing loser (`$claimed === false`)
+  returns `existingTimeShiftResponse()` BEFORE the `mkdir` + spawn — no orphaned ffmpeg, no leaked
+  buffer dir. `save()`/`updatePid()` are no longer called from `src/` (kept as tested store methods).
+- **Finding 2 [MEDIUM] — CLOSED.** `getTimeShift()` self-validates the in-memory fast path with
+  `is_dir($bufferDir)`; a reclaimed/missing dir `unset()`s the entry and falls through to the store,
+  so a cross-worker restart no longer shadows the authoritative row (no persistent 503/404 on 1-of-N
+  workers). A valid cached dir still returns from memory with no DB read.
+
+Return contract `{time_shift_id, stream_url, buffer_start, buffer_end}` and failure-safe
+best-effort-spawn (genuine DB error still spawns) preserved. §0.3 conventions honored (positional
+binds, SELECT-first re-resolve in `claim()`, no loop-blocking — single cheap `is_dir()` stat).
+
+**Mutation-revert proofs (each reverted uncommitted → RED → restored → green):**
+1. session_id-keyed pid write: `updatePidBySessionId($sessionId,$pid)` → id-keyed
+   `updatePid($timeShiftId,$pid)` ⇒ `testCapturePidRecordedOnSessionIdKeyedRow` **RED**
+   ("'UPDATE … WHERE id = ?' … does not contain 'session_id = ?'").
+2. lost-claim abort: `if (!$claimed)` → `if (false)` ⇒
+   `testConcurrentDuplicateStartLosesClaimAndDoesNotSpawn` **RED** (loser spawned a second ffmpeg —
+   `$spawnCalls` non-empty).
+3. `is_dir` invalidation: dropped `&& is_dir($bufferDir)` ⇒
+   `testGetTimeShiftInvalidatesStaleInMemoryEntryAndFallsThroughToStore` **RED** (returned the stale
+   `gone-dir1` instead of the live `live-dir2`).
+
+**Verification (actual):** `phpunit tests/Unit/LiveTv/ --no-coverage` → **OK — 374 tests, 972
+assertions, 6 skipped (pre-existing), 0 failures**. `phpstan analyze -c phpstan.neon.dist` (L9) on
+all 4 changed files → **[OK] No errors** (removed one redundant `assertIsArray` that tripped
+`method.alreadyNarrowedType` after an `assertNotNull` — non-load-bearing test cleanup). `phpcs
+--standard=PSR12` on all 4 changed files → **clean** (the 2 pre-existing >120-char warnings in
+`Recorder.php` at lines 233/2131 are outside the changed hunks). Fix committed `46710df4`.
+
 ## TestEngineer — SV-3.1 h2 (storage accounting) — 2026-07-13
 
 Closed the SV-3.1 **g** gap: storage accounting was functionally DONE but had **zero** test

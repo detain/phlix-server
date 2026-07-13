@@ -3072,3 +3072,50 @@ Verification: `phpunit tests/Unit/Auth/DbLoginRateLimitStoreTest.php ContainerFa
 = 104/911 OK; full `--testsuite Unit` = 5040 tests, 0 fail (5 skip); phpstan L9 on all changed src +
 test files = No errors; `phpcs --standard=PSR12 src/<changed>` = 0 errors (only pre-existing LineLength
 warnings on untouched lines).
+
+## Orchestrator — DI-wiring consolidated fix (2026-07-13, perf-5): 3f56a7b7
+- [~] Wired loginRateLimitStore (AuthServicesProvider:176), mediaAssetJobStore + similarityJobStore (MediaServicesProvider:303/318) + registered SimilarityJobStore binding (:590); bounded static login fallback (RATE_LIMIT_FALLBACK_MAX_IPS=10000). Dual-entrypoint confirmed. Prod-wiring tests (real container) + behavior tests. Full Unit 5040/0, phpstan clean. REVIEW pending (verify: login now does a DB call → coroutine-safe/no blocking/latency? scan enqueue no regression?).
+### ⚠️ DI-landmine is BROADER (sweep across 14 providers) — more inert features from `?Type $x=null` unnamed:
+- SV-2.9 similarityJobStore now enqueues but NO consumer (no SimilarityWorker/config/supervision) → /tmp/phlix_similarity_jobs accumulates undrained (DISK LEAK). → SV-2.9 needs worker+config+supervision (mirror MediaAssetWorker).
+- ★ SV-3.4 artwork cache likely INERT: LibraryMetadataMatcher::$artworkStorage nullable-defaulted → PHP-DI skips → cacheArtworkLocally no-op → local artwork NEVER downloaded (contradicts earlier SV-3.4 DONE). NOT wired b/c ArtworkStorage::downloadAndStore uses BLOCKING curl on an HTTP-reachable matcher. → SV-3.4 completion: make artwork download coroutine-aware/async THEN wire. (VERIFY poster_srcset isn't pointing at never-generated variants.)
+- Dead/low: AuthManager::$providerManager (loginWithProvider 0 callers), WatchHistory::$recommendationService (needs bg job not inline), MediaScanner::$trailerFinder (TrailerFinder has NO binding), PlaybackController::$playToManager, HubClient::$portForwardService, SmartPlaylistRefreshHandler::$collection*, BackupManager::$auditLogger. Logger params self-default (NOT bugs).
+
+## Reviewer (per-step, DI-wiring fix, commit 3f56a7b7) — 2026-07-13
+
+1. src/Auth/DbLoginRateLimitStore.php:166-169 (`cleanupExpiredEntries()`) —
+   `DELETE FROM login_rate_limit WHERE reset_at <= ? LIMIT ?` binds BOTH params as
+   STRINGS: `[(string) time(), (string) self::CLEANUP_BATCH_SIZE]`. The project DB layer
+   (`PhlixMySQLConnection`/`PooledMySQLConnection`) uses EMULATED prepares with type-aware
+   binding: `pdoParamType()` maps a PHP string to `PDO::PARAM_STR`, which PDO QUOTES →
+   the SQL becomes `LIMIT '100'` → MySQL error 1064 (syntax error). This is the exact
+   failure the `PhlixMySQLConnection` binding override was written to prevent ("integers
+   stay unquoted so LIMIT ?/OFFSET ? work" — every other live `LIMIT ?` call in src/ passes
+   an INT, e.g. Recorder.php:399, SimilarityService.php:147, MetricsRepository.php:312).
+   WHY IT MATTERS: this commit is the FIRST time the store runs live — it wires
+   `loginRateLimitStore` onto the login path (AuthManager::recordFailedAttempt →
+   store->recordFailedAttempt → cleanupExpiredEntries). `cleanupExpiredEntries()` fires on
+   EVERY failed login. The thrown `PDOException` is not caught → it propagates out of
+   `AuthManager::login()`, turning every failed-credential attempt into a 500 instead of a
+   clean auth failure, AND expired rows are never swept (table bloat). The store was inert
+   before this commit so the latent bug was dormant; wiring it activates it.
+   The new `DbLoginRateLimitStoreTest` does NOT catch this because it `createMock`s the
+   Connection and stubs `query()` — the real emulated-prepare binding is never exercised
+   (the recurring "green mocked test hides broken DB SQL" landmine).
+   FIX: pass the LIMIT (and ideally the timestamp) as INTEGERS, not strings —
+   `[time(), self::CLEANUP_BATCH_SIZE]` — so `pdoParamType()` binds them PARAM_INT and the
+   LIMIT stays unquoted. (The `reset_at <= ?` string alone would coerce fine numerically,
+   but the `LIMIT` string is a hard 1064.) Add a non-mocked/integration assertion that the
+   store's cleanup runs against the real connection binding, or at least assert the params
+   passed to `query()` for the LIMIT slot are int.
+
+## Fixer — SV-DI LIMIT-bind bug (2026-07-13): FIXED
+- src/Auth/DbLoginRateLimitStore.php cleanupExpiredEntries(): removed the `(string)` casts →
+  `[time(), self::CLEANUP_BATCH_SIZE]` (both int). Was `LIMIT '100'` under emulated prepares → MySQL
+  1064 on EVERY failed login (recordFailedAttempt→cleanup). reset_at is INT UNSIGNED (mig 074) so both
+  params are correctly int. Full-file audit: no other numeric-param-as-string sites (all other calls
+  pass $ip=string [VARCHAR] and $resetAt/$now=int correctly).
+- Regression guard: added test_cleanup_sweep_binds_numeric_params_as_int — captures the DELETE...LIMIT
+  params and asserts is_int() on both (LIMIT slot + reset_at threshold); a re-introduced (string) cast
+  goes red despite the DB mock. phpunit --filter DbLoginRateLimitStore = 6/6 OK. phpstan L9 (dist) on
+  both changed files = No errors. phpcs src = clean (test file has pre-existing test_snake_case names,
+  file-wide convention).

@@ -163,9 +163,14 @@ final class DbLoginRateLimitStore
      */
     private function cleanupExpiredEntries(): void
     {
+        // Bind BOTH params as integers. The project DB layer
+        // (PhlixMySQLConnection/PooledMySQLConnection) uses emulated prepares with
+        // type-aware binding: a PHP string maps to PDO::PARAM_STR, which PDO QUOTES,
+        // so a stringified LIMIT would render `LIMIT '100'` → MySQL error 1064.
+        // `reset_at` is INT UNSIGNED (migration 074), so time() is the correct type too.
         $this->db->query(
             'DELETE FROM login_rate_limit WHERE reset_at <= ? LIMIT ?',
-            [(string) time(), (string) self::CLEANUP_BATCH_SIZE]
+            [time(), self::CLEANUP_BATCH_SIZE]
         );
     }
 }

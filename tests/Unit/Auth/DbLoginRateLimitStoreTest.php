@@ -119,6 +119,52 @@ final class DbLoginRateLimitStoreTest extends TestCase
     }
 
     /**
+     * The bounded sweep (`DELETE ... WHERE reset_at <= ? LIMIT ?`) MUST bind its
+     * numeric params as INTEGERS, not strings.
+     *
+     * Regression guard for the 1064 bug: the project DB layer
+     * (PhlixMySQLConnection/PooledMySQLConnection) uses emulated prepares with
+     * type-aware binding — a PHP string maps to PDO::PARAM_STR, which PDO QUOTES,
+     * so a stringified LIMIT renders `LIMIT '100'` → MySQL error 1064 on EVERY
+     * failed login. This mock can't exercise the real prepare, so we assert the
+     * argument TYPES the store passes for the sweep are int. A future re-introduction
+     * of a `(string)` cast on the LIMIT (or the timestamp) turns this red.
+     */
+    public function test_cleanup_sweep_binds_numeric_params_as_int(): void
+    {
+        $sweepParams = null;
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$sweepParams): array {
+                if (str_contains($sql, 'DELETE') && str_contains($sql, 'LIMIT')) {
+                    $sweepParams = $params;
+                }
+                return [];
+            }
+        );
+
+        $store = new DbLoginRateLimitStore($db);
+        $store->recordFailedAttempt('1.2.3.4');
+
+        $this->assertNotNull($sweepParams, 'Expected a bounded DELETE ... LIMIT sweep.');
+        $this->assertCount(2, $sweepParams, 'Sweep should bind [reset_at threshold, LIMIT].');
+
+        // The LIMIT param (positional index 1) MUST be an int — a string here
+        // produces `LIMIT '100'` under emulated prepares → MySQL 1064.
+        $this->assertIsInt(
+            $sweepParams[1],
+            'The LIMIT param must be bound as int, not string (PARAM_STR would quote it → 1064).'
+        );
+
+        // The reset_at threshold (index 0) is compared against an INT UNSIGNED
+        // column and should likewise be an int.
+        $this->assertIsInt(
+            $sweepParams[0],
+            'The reset_at threshold must be bound as int (reset_at is INT UNSIGNED).'
+        );
+    }
+
+    /**
      * clear() removes the IP's row after a successful auth.
      */
     public function test_clear_deletes_row(): void

@@ -108,6 +108,31 @@ class WebhookServiceTest extends TestCase
         return null;
     }
 
+    /**
+     * Reads the interval (4th tuple element, index [3]) Workerman actually
+     * registered a given timer id with — i.e. the concrete delay
+     * {@see Timer::add()} was invoked with. This is what lets a test compare
+     * the SCHEDULED retry delay against the persisted `next_retry_at`, proving
+     * both were derived from the ONE computed `$delaySeconds` (SV-4.4's
+     * single-source-of-truth guarantee) rather than two independent jitter
+     * draws. Returns null if the timer id isn't in Workerman's task table.
+     */
+    private function scheduledIntervalFor(int $timerId): ?float
+    {
+        $tasksProp = new ReflectionProperty(Timer::class, 'tasks');
+        $tasksProp->setAccessible(true);
+        /** @var array<int, array<int, array{0: callable, 1: array<mixed>, 2: bool, 3: float}>> $tasks */
+        $tasks = $tasksProp->getValue();
+
+        foreach ($tasks as $taskGroup) {
+            if (array_key_exists($timerId, $taskGroup)) {
+                return (float) $taskGroup[$timerId][3];
+            }
+        }
+
+        return null;
+    }
+
     public function testFailedDeliveryWithRetriesRemainingSchedulesAGenuineOneShotTimer(): void
     {
         $capturedParams = null;
@@ -128,6 +153,14 @@ class WebhookServiceTest extends TestCase
         $service = new WebhookService($db, $httpClient);
 
         $delivery = $this->delivery(attempt: 1);
+
+        // Deterministic jitter so the single-source-of-truth invariant below is
+        // exactly checkable: with a fixed seed the ONE jitter draw that feeds
+        // both next_retry_at and the retry Timer is reproducible, and reverting
+        // SV-4.4 to two INDEPENDENT draws makes them diverge by a fixed, non-zero
+        // amount (this seed's first two draws are +5s then -13s), flipping the
+        // interval-equality assertion below RED.
+        mt_srand(20260713);
 
         $timerIdBefore = $this->currentTimerId();
         $before = new DateTimeImmutable();
@@ -150,24 +183,49 @@ class WebhookServiceTest extends TestCase
             'the retry timer must be one-shot (persistent=false), never repeating'
         );
 
-        // The persisted next_retry_at must be derived from the SAME jittered
-        // delay used for the Timer (not a second, independently-drawn one) —
-        // base delay for attempt=1 is RETRY_DELAYS[2]=300s, jittered +/-20%.
+        // Single source of truth: the persisted next_retry_at and the actual
+        // scheduled retry Timer must BOTH derive from the ONE computed
+        // $delaySeconds — never two independent jitter draws. Read the interval
+        // Workerman actually registered the timer with (Timer::$tasks index [3])
+        // and assert the delay implied by next_retry_at EQUALS it. Reverting
+        // SV-4.4 so next_retry_at and the Timer each draw their own jitter makes
+        // these two diverge (drift bug) — and this assertion goes RED.
         $this->assertIsArray($capturedParams);
         $nextRetryAtRaw = $capturedParams[3];
         $this->assertIsString($nextRetryAtRaw);
         $nextRetryAt = new DateTimeImmutable($nextRetryAtRaw);
-        $deltaSeconds = $nextRetryAt->getTimestamp() - $before->getTimestamp();
 
+        $scheduledInterval = $this->scheduledIntervalFor($timerIdAfter);
+        $this->assertNotNull(
+            $scheduledInterval,
+            "the retry timer's interval must be registered in Workerman's task table",
+        );
+
+        // Delay implied by the persisted next_retry_at, at microsecond precision:
+        // next_retry_at = <base captured inside the call> + $delaySeconds, and
+        // $before was captured just before the call, so the difference is that
+        // delay plus a sub-millisecond capture gap.
+        $impliedDelay = (float) $nextRetryAt->format('U.u') - (float) $before->format('U.u');
+
+        $this->assertEqualsWithDelta(
+            $scheduledInterval,
+            $impliedDelay,
+            0.5,
+            'next_retry_at and the scheduled retry Timer must derive from the ONE computed '
+            . 'delay — the persisted timestamp and the actual retry must never drift apart',
+        );
+
+        // That single shared delay is the attempt-1 base (RETRY_DELAYS[2]=300s)
+        // with the documented +/-20% jitter applied.
         $this->assertGreaterThanOrEqual(
-            239,
-            $deltaSeconds,
-            'jittered delay must stay within the documented +/-20% window (lower bound, +1s test slack)',
+            240,
+            $scheduledInterval,
+            'scheduled retry interval must stay within the documented +/-20% jitter window (lower bound)',
         );
         $this->assertLessThanOrEqual(
-            361,
-            $deltaSeconds,
-            'jittered delay must stay within the documented +/-20% window (upper bound, +1s test slack)',
+            360,
+            $scheduledInterval,
+            'scheduled retry interval must stay within the documented +/-20% jitter window (upper bound)',
         );
 
         // attempt was bumped to 2 (nextAttempt = attempt + 1).

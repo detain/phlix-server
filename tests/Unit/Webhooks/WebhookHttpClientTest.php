@@ -88,25 +88,52 @@ class WebhookHttpClientTest extends TestCase
     }
 
     /**
-     * post() must still produce its documented wire format (JSON-wrapped
-     * {payload, signature-less} envelope with X-Phlix-Event/X-Phlix-Delivery
-     * headers) after being refactored to delegate through postWithHeaders() —
-     * a pure regression guard that the SV-4.4 refactor didn't change post()'s
-     * public contract for its existing callers (WebhookDispatcher::dispatchAsync).
+     * post() must delegate to postWithHeaders() with the exact wire format its
+     * callers (WebhookService's LIVE delivery path) depend on: the target URL
+     * verbatim, the Content-Type + X-Phlix-Event + X-Phlix-Delivery header
+     * envelope, and a JSON-encoded body — and must return postWithHeaders()'s
+     * result unchanged. This genuinely guards the SV-4.4 refactor: if post()
+     * ever stops routing through postWithHeaders() (e.g. reverting to a direct
+     * postAsync/postCurl call), or changes the header/JSON envelope, the
+     * expectation below fails. postWithHeaders() is stubbed so no network is
+     * touched and the request shape is inspected directly.
      */
     public function testPostDelegatesToPostWithHeadersPreservingWireFormat(): void
     {
-        $client = new WebhookHttpClient(timeout: 1, connectTimeout: 1);
+        $client = $this->getMockBuilder(WebhookHttpClient::class)
+            ->setConstructorArgs([1, 1])
+            ->onlyMethods(['postWithHeaders'])
+            ->getMock();
 
-        // No live worker/coroutine, so post() takes the blocking cURL fallback
-        // against an address that fails fast (no network needed to prove the
-        // request shape — postCurl() only reaches curl once headers/body are
-        // built). We use an empty URL, which postCurl() short-circuits on
-        // before touching the network, to keep this test fast and offline.
-        $result = $client->post('', 'media.added', 'delivery-1', ['foo' => 'bar']);
+        $expected = [
+            'success' => true,
+            'response_code' => 202,
+            'response_body' => 'accepted',
+            'error' => null,
+        ];
 
-        $this->assertFalse($result['success']);
-        $this->assertSame('Empty URL', $result['error']);
+        $client->expects($this->once())
+            ->method('postWithHeaders')
+            ->with(
+                'https://example.com/hook',
+                [
+                    'Content-Type' => 'application/json',
+                    'X-Phlix-Event' => 'media.added',
+                    'X-Phlix-Delivery' => 'delivery-1',
+                ],
+                '{"foo":"bar","n":42}',
+            )
+            ->willReturn($expected);
+
+        $result = $client->post(
+            'https://example.com/hook',
+            'media.added',
+            'delivery-1',
+            ['foo' => 'bar', 'n' => 42],
+        );
+
+        // post() returns postWithHeaders()'s result verbatim (no re-wrapping).
+        $this->assertSame($expected, $result);
     }
 
     public function testPostWithHeadersShortCircuitsOnEmptyUrlWithoutNetwork(): void

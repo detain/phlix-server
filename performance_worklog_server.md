@@ -6068,3 +6068,137 @@ plugin builds a fresh `TraktHistorySync` per sync (exactly as the push path alre
 - Trakt→local mapping depends on `media_items.metadata_json` carrying `{tmdb_id,tvdb_id,imdb_id}`
   (`findMediaItemIdByExternalId` JSON_EXTRACTs `$.<type>_id`). Did NOT audit the scanner's population
   of those here (mapping is inside the already-built sync, not wiring).
+
+## Reviewer (cumulative) — 2026-07-13
+
+Cumulative integration review of SV-3.6 (Trakt history PULL sync) across the 4 commits
+`51e6a16e` (3.6b) · `c7a0094c` (3.6a) · `d7ca10c1` (3.6c) · `21b04510` (3.6d), base `edda2ce1`.
+Scope confined to `src/Plugins/Scrobbler/Trakt/**` + `start.php` — no out-of-scope files touched.
+End-to-end wiring traced: Timer (start.php:288-291, worker-0-gated, repeating, try/catch, container
+captured as a per-worker local) → `TraktPlugin::syncHistoryFromTrakt` → `getEntryInstance`+`onEnable`
+self-wire (verified independent of the never-called `bootstrapEnabled`) → `syncTraktToPhlix` →
+`getWatchedHistory`/`getPlaybackProgress` → `HttpClient::requestWithHeaders` → reconcile →
+`WatchHistory::updateProgress`. Transport/backoff/coroutine rules, exception hierarchy (all three
+Trakt exceptions extend `TraktApiException`, so the reconcilers' single catch covers 401/429/4xx),
+return-shape threading (`getWatchedHistory` `{items,pageCount}` — only caller is `TraktHistorySync`;
+`getWithHeaders` implemented by both the real client and the test `MockHttpClient`; `Phlix\Hub\HttpClient`
+implements a *different* interface, unaffected), pagination termination (header-bound + short-page
+fallback + `MAX_HISTORY_PAGES` cap + per-page-failure preserves prior writes), last-write-wins /
+never-downgrade-completed / no-duration-skip guards, and TZ handling in `traktSupersedes` were all
+checked and are correct. No token leakage in logs; no `exit`/`die`; no blocking `sleep` on the loop.
+
+### Findings
+
+1. **[HIGH — AC-blocking]** `TraktApi.php:410-413` (`getWatchedHistory` headers) & `TraktApi.php:528-531`
+   (`getPlaybackProgress` headers); root cause at `HttpClient.php:143-147` (base header assembly).
+   **CONFIRMED**: the Trakt client sends NO `trakt-api-key` (client id) and NO `trakt-api-version: 2`
+   header on any request. `requestWithHeaders()` seeds only `User-Agent`/`Content-Type`/`Accept` and
+   merges the caller's headers; the two API methods add only `Authorization: Bearer`. A repo-wide grep
+   for `trakt-api-key`/`trakt-api-version` returns nothing. Trakt MANDATES both headers on every API
+   call (v2), so `/users/{u}/watched` and `/sync/playback` return 403 → both reconcilers catch, log, and
+   contribute 0 → **the sync remains a no-op against live Trakt, so the AC ("watched history is reflected
+   locally after a sync run") is NOT met** regardless of the (correct) wiring/pagination/resume logic.
+   The `clientId` is already on `TraktApi`'s ctor (`$this->clientId`). Fix (in-scope per §0.1): inject
+   `trakt-api-key: <clientId>` + `trakt-api-version: 2` into the request headers for the API (non-OAuth)
+   calls — a shared private header-builder applied to `getWatchedHistory`/`getPlaybackProgress` (and, for
+   completeness, `scrobble`/`addToHistory`). The `/oauth/token` calls (`exchangeCode`/`refreshAccessToken`)
+   do NOT need them (client_id is in the body), so scope the builder to the API surface.
+
+2. **[MEDIUM — test gap]** The reconciliation core — `TraktHistorySync::syncTraktToPhlix` /
+   `reconcileWatchedHistory` (the page loop) / `reconcilePlaybackProgress` (resume positions) — has ZERO
+   test coverage. `TraktApiTest` covers `getWatchedHistory` shape/endpoint only; `TraktHistorySyncTest`
+   tests settings flags only (its own docblock admits it). The multi-page loop, last-write-wins skip,
+   don't-downgrade-completed skip, no-duration skip, and the resume-position math are all unexercised.
+   A `syncTraktToPhlix` integration test asserting the OUTGOING request headers would have caught
+   finding #1. 3.6e is the designated home, but the feature currently ships its AC-critical logic
+   untested — recommend 3.6e land with (and before closing) this feature, including a header assertion.
+
+3. **[LOW]** `TraktHistorySync.php:266-273` — the completed path passes `extractDurationTicks($itemMap)`
+   as BOTH position and duration to `updateProgress(..., STATUS_COMPLETED)`. Because `/watched` omits
+   `runtime` (no `extended=full`), `extractDurationTicks` returns 0 (see #note), so this writes
+   `duration_ticks = 0`, **clobbering a previously-known `duration_ticks`** when upgrading an existing
+   in-progress row to completed (`updateProgress` uses `COALESCE(?, duration_ticks)`, and 0 is not NULL,
+   so it overwrites). Prefer passing `null` for the duration on the completed path (matching
+   `WatchHistory::markCompleted`, which preserves the stored duration and yields the same
+   status='completed'/progress=0 "watched" shape the app already uses), or resolve a local duration via
+   the existing `resolvePlaybackDurationTicks`. *Note:* `extractDurationTicks` (`:762-782`) also carries a
+   latent minutes-as-seconds bug (Trakt `runtime` is MINUTES; treated as seconds) — dormant today because
+   `runtime` is absent, but it would corrupt completed-row durations the moment `extended=full` is added.
+   Documented already by the 3.6c implementer; not AC-blocking (resume positions use
+   `resolvePlaybackDurationTicks`, not this method).
+
+4. **[INFO]** Arm/tick gate asymmetry (`start.php:~283` vs `TraktPlugin::isConfigured`). The timer arms on
+   the `plugins.enabled` column + `sync_enabled` + interval>0, but each tick's `isConfigured()`
+   additionally requires the manifest master setting `enabled` (persisted in `settings_json`,
+   `plugin.json` default **false**). This dual gate is by design (a "Master on/off for Trakt" switch,
+   default off) and is NOT a correctness bug — but it means a merely catalog-enabled + authorized
+   ("connected") Trakt account still syncs nothing until the operator turns the master switch on, and in
+   that state the resident timer arms and no-ops every interval. Consider also gating the arm on the
+   master `enabled` setting (avoid a perpetually-no-op timer) and/or documenting the two-switch
+   requirement so "I connected Trakt but nothing syncs" is expected, not a bug report.
+
+**Verdict: 1 HIGH (AC-blocking) + 1 MEDIUM + 1 LOW + 1 INFO. Loop back to the Fixer for #1 (and #2/#3).**
+
+## Fixer — SV-3.6 cumulative-review findings #1/#3/#4 — 2026-07-13
+
+Fixed findings #1 (HIGH), #3 (LOW), #4 (INFO). Finding #2 (reconciliation test coverage) is left for
+the later Test agent (3.6e) — I only kept the existing Trakt suite green, added no new test files.
+
+**Files changed (4):** `src/Plugins/Scrobbler/Trakt/TraktApi.php`,
+`src/Plugins/Scrobbler/Trakt/TraktHistorySync.php`, `start.php`, this worklog.
+
+### Finding #1 — mandatory Trakt API headers (HIGH, AC-blocking)
+- Added a single shared private builder `TraktApi::apiHeaders(?string $bearer = null): array` — the
+  ONE source of `trakt-api-key: <clientId>` + `trakt-api-version: 2`, plus an optional
+  `Authorization: Bearer <token>` when a non-empty access token is supplied.
+- Routed EVERY data-API request-issuing method in the class through it: `scrobble()` (used by
+  `scrobbleStart/Pause/Stop`), `getWatchedHistory()`, `getPlaybackProgress()`, and `addToHistory()`.
+  These replace the old `['Authorization' => 'Bearer …']`-only / conditional-Authorization header
+  arrays, so no call site can omit the mandatory pair. (No `/search` or other data-API calls exist in
+  this class — verified by grepping `$this->http->` : lines 104/140 are the two `/oauth/token` posts,
+  the other four are the data-API sites now routed.)
+- **/oauth EXCLUDED:** `exchangeCode()` and `refreshAccessToken()` (the only `/oauth/token` callers;
+  `refreshAfterAuthFailure()` delegates to the latter) post with client_id/secret in the BODY and are
+  left untouched — they do NOT go through `apiHeaders()`, matching Trakt's documented OAuth contract.
+  Token-refresh path confirmed still working (its `TraktApiTest` cases pass).
+- **clientId sourcing / can-it-be-empty:** traced `TraktPlugin::initApi()` (:511-526) — it reads
+  `config/scrobblers/trakt.php` `client_id`/`client_secret` and **only constructs `TraktApi` when BOTH
+  are non-empty**; otherwise `$this->api` stays null → `TraktPlugin::isConfigured()` (:533-538) is
+  false → `syncHistoryFromTrakt()` returns 0 (skips). So in the resident server the ctor `clientId`
+  is guaranteed non-empty whenever a request is issued — an empty key is structurally unreachable and
+  the sync already fails-fast/skips at the plugin layer. As defense-in-depth I still guard inside
+  `apiHeaders()`: if `clientId === ''` it logs `"Trakt client_id not configured; skipping API request"`
+  and throws `TraktApiException` (so we NEVER send an empty `trakt-api-key`; the reconcilers' existing
+  `TraktApiException` catch logs it and contributes 0). All existing tests construct with a non-empty
+  `test-client-id`, so none hits this branch.
+
+### Finding #3 — duration_ticks=0 clobber (LOW)
+- `TraktHistorySync::reconcileWatchedPage()` completed path: now computes
+  `$knownDuration = $durationTicks > 0 ? $durationTicks : null` and passes `$knownDuration` as the
+  duration (and `$knownDuration ?? 0` as position). When `/watched` omits `runtime`
+  (`extractDurationTicks` → 0), we now pass `null`, so `updateProgress`'s
+  `duration_ticks = COALESCE(?, duration_ticks)` PRESERVES the previously-known duration on an
+  in-progress→completed upgrade (a `0` would have satisfied COALESCE as a real value and overwritten
+  it). This matches `WatchHistory::markCompleted()` (position 0, duration null → status=completed,
+  progress=0). Confirmed against `WatchHistory::updateProgress` (:335-421): the UPDATE binds the
+  nullable `$durationTicks` into `COALESCE(?, duration_ticks)` → NULL is the "don't change" sentinel.
+  A present `runtime` still uses it as both position and duration (100% shape) unchanged.
+
+### Finding #4 — arm/tick gate asymmetry (INFO→align)
+- `start.php` now derives `$traktMasterEnabled = ($installedTrakt->settings['enabled'] ?? false) === true`
+  (the manifest master switch, `settings_json.enabled`, default false — the SAME flag
+  `TraktPlugin::configure()` reads into `$this->enabled` and `isConfigured()` requires each tick) and
+  ANDs it into the arm condition alongside `$installedTrakt->enabled` (catalog column), `syncEnabled`,
+  and `interval > 0`. So the timer only arms when a tick would actually do work; a catalog-enabled +
+  connected account with the master switch OFF no longer arms a perpetually-no-op timer. Added the
+  master flag to the "not armed" debug log. Left a brief comment noting the pre-existing boot-time
+  limitation (arming runs once at `onWorkerStart`, so toggling the master ON after boot won't arm
+  until restart) — NOT fixed, as instructed.
+
+### Verification (verbatim)
+- `php -l start.php` → `No syntax errors detected in start.php`.
+- `phpstan analyse -c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress` (full `src`) →
+  `[OK] No errors`. (Also ran scoped to `src/Plugins/Scrobbler/Trakt/` → `[OK] No errors`.)
+- `phpcs --standard=PSR12 src/Plugins/Scrobbler/Trakt/` → **0 ERRORS** (4 pre-existing line-length
+  WARNINGs only: TraktApi:408/722, TraktPlugin:470, TraktHistorySync:420 — none introduced here).
+- `phpunit --filter Trakt --no-coverage` → **OK (64 tests, 133 assertions)**.

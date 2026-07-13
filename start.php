@@ -308,11 +308,30 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
             );
             $traktIntervalMinutes = $traktSettings->syncIntervalMinutes;
 
-            // Respect a disabled config: only arm when the plugin is enabled,
-            // two-way sync is on, and the interval is a positive number of minutes.
-            // Per-tick gating (tokens/username present) is enforced inside
-            // syncHistoryFromTrakt(), so a stale-but-armed timer safely no-ops.
-            if ($installedTrakt->enabled && $traktSettings->syncEnabled && $traktIntervalMinutes > 0) {
+            // Manifest "master" on/off switch, persisted in settings_json (default
+            // false in plugin.json). It is SEPARATE from the catalog-level
+            // plugins.enabled column ($installedTrakt->enabled): each tick's
+            // TraktPlugin::isConfigured() also requires this master flag (read from
+            // $settings['enabled'] in TraktPlugin::configure()). We mirror that same
+            // check here so we only ARM when a tick would actually do work — a
+            // catalog-enabled + connected account with the master switch OFF no
+            // longer arms a perpetually-no-op timer.
+            $traktMasterEnabled = ($installedTrakt->settings['enabled'] ?? false) === true;
+
+            // Respect a disabled config: only arm when the plugin is catalog-enabled,
+            // the master switch is on, two-way sync is on, and the interval is a
+            // positive number of minutes — the same effective condition each tick
+            // requires (per-tick token/username gating is still enforced inside
+            // syncHistoryFromTrakt(), so a stale-but-armed timer safely no-ops).
+            // Limitation (pre-existing, same as the rest of the plugin system):
+            // arming runs once at onWorkerStart, so toggling the master switch ON
+            // after boot won't arm until the next server restart.
+            if (
+                $installedTrakt->enabled
+                && $traktMasterEnabled
+                && $traktSettings->syncEnabled
+                && $traktIntervalMinutes > 0
+            ) {
                 \Workerman\Timer::add(
                     $traktIntervalMinutes * 60,
                     static function () use ($pluginLoader, $container, $traktPluginName): void {
@@ -340,9 +359,10 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
                 );
             } else {
                 LoggerFactory::get(LogChannels::PLUGINS)->debug(
-                    'Trakt pull-sync timer not armed (plugin disabled, sync off, or interval <= 0)',
+                    'Trakt pull-sync timer not armed (plugin disabled, master off, sync off, or interval <= 0)',
                     [
                         'enabled'          => $installedTrakt->enabled,
+                        'master_enabled'   => $traktMasterEnabled,
                         'sync_enabled'     => $traktSettings->syncEnabled,
                         'interval_minutes' => $traktIntervalMinutes,
                     ],

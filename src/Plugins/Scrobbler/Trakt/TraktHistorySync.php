@@ -263,12 +263,23 @@ class TraktHistorySync
                 continue;
             }
 
+            // Trakt's /watched response omits `runtime` (no extended=full), so
+            // the duration is usually unknown here. Pass null (not 0) for an
+            // unknown duration so updateProgress's `COALESCE(?, duration_ticks)`
+            // PRESERVES any previously-known duration when upgrading an
+            // in-progress row to completed — matching WatchHistory::markCompleted()
+            // (position 0, duration null → status='completed'/progress=0, the
+            // "watched" shape the app already uses). A 0 would satisfy COALESCE
+            // as a real value and clobber the stored duration. When a runtime IS
+            // present it is used as both position and duration (a fully-watched
+            // 100% shape).
             $durationTicks = $this->extractDurationTicks($itemMap);
+            $knownDuration = $durationTicks > 0 ? $durationTicks : null;
             $this->watchHistory->updateProgress(
                 $profileId,
                 $mediaItemId,
-                $durationTicks,
-                $durationTicks,
+                $knownDuration ?? 0,
+                $knownDuration,
                 WatchHistory::STATUS_COMPLETED
             );
 

@@ -360,7 +360,7 @@ class TraktApi
             $response = $this->http->post(
                 self::BASE_URL . '/scrobble/' . ($movie !== null ? 'movie' : 'episode'),
                 $payload,
-                ['Authorization' => 'Bearer ' . $accessToken]
+                $this->apiHeaders($accessToken)
             );
 
             $this->logger->debug('Trakt scrobble response', [
@@ -407,10 +407,7 @@ class TraktApi
      */
     public function getWatchedHistory(string $username, int $page = 1, int $limit = 100, string $accessToken = ''): array
     {
-        $headers = [];
-        if ($accessToken !== '') {
-            $headers['Authorization'] = 'Bearer ' . $accessToken;
-        }
+        $headers = $this->apiHeaders($accessToken);
 
         $params = [
             'page' => $page,
@@ -525,10 +522,7 @@ class TraktApi
      */
     public function getPlaybackProgress(string $accessToken = '', ?string $type = null, int $limit = 100): array
     {
-        $headers = [];
-        if ($accessToken !== '') {
-            $headers['Authorization'] = 'Bearer ' . $accessToken;
-        }
+        $headers = $this->apiHeaders($accessToken);
 
         $params = [
             'limit' => min($limit, 1000),
@@ -634,7 +628,7 @@ class TraktApi
         $response = $this->http->post(
             self::BASE_URL . '/sync/history',
             $payload,
-            ['Authorization' => 'Bearer ' . $accessToken]
+            $this->apiHeaders($accessToken)
         );
 
         $this->logger->debug('Trakt add to history response', [
@@ -664,6 +658,56 @@ class TraktApi
         // Uniform jitter in [0, delay].
         $jitter = mt_rand(0, (int) $delay);
         return (float) ($delay + $jitter);
+    }
+
+    /**
+     * Build the mandatory Trakt v2 API headers for a data-API request.
+     *
+     * Every Trakt data-API endpoint (`/users`, `/sync`, `/scrobble`, `/search`,
+     * …) REQUIRES `trakt-api-key` (the OAuth application client id) and
+     * `trakt-api-version: 2` on the request; without both, Trakt rejects the
+     * call with 403. This is the single source of those two headers, applied by
+     * every data-API call site in this class ({@see self::scrobble()},
+     * {@see self::getWatchedHistory()}, {@see self::getPlaybackProgress()},
+     * {@see self::addToHistory()}), so no call site can silently omit them.
+     *
+     * The OAuth token-exchange endpoints (`/oauth/token`) are deliberately NOT
+     * routed through this builder: per Trakt's OAuth contract they authenticate
+     * with `client_id`/`client_secret` in the request BODY and do not use the
+     * api-key header, so {@see self::exchangeCode()} /
+     * {@see self::refreshAccessToken()} post without it.
+     *
+     * @param string|null $bearer Optional OAuth access token; when non-empty an
+     *     `Authorization: Bearer <token>` header is added.
+     *
+     * @return array<string, string> Header map for the HTTP client.
+     *
+     * @throws TraktApiException When no client id is configured (see below).
+     */
+    private function apiHeaders(?string $bearer = null): array
+    {
+        // Defense-in-depth: TraktPlugin::initApi() only constructs this client
+        // once a non-empty client_id is configured (otherwise the plugin's api
+        // stays null → isConfigured() is false → the sync skips before reaching
+        // here), so an empty client id is unreachable in the resident server.
+        // If it ever is empty we must NOT send an empty `trakt-api-key` (Trakt
+        // would 403 the request anyway) — fail fast with a clear message so the
+        // caller's TraktApiException catch logs it and the run skips cleanly.
+        if ($this->clientId === '') {
+            $this->logger->warning('Trakt client_id not configured; skipping API request');
+            throw new TraktApiException('Trakt client_id not configured');
+        }
+
+        $headers = [
+            'trakt-api-key' => $this->clientId,
+            'trakt-api-version' => '2',
+        ];
+
+        if ($bearer !== null && $bearer !== '') {
+            $headers['Authorization'] = 'Bearer ' . $bearer;
+        }
+
+        return $headers;
     }
 
     /**

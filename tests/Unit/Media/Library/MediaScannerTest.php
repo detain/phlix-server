@@ -3020,7 +3020,7 @@ class InMemoryScannerRepo extends ItemRepository
              * @param array<int, string> $paths
              * @return array<string, array<string, mixed>>
              */
-    public function findPathsMap(array $paths): array
+    public function findPathsMap(array $paths, ?string $libraryId = null): array
     {
         $this->findPathsMapCallSizes[] = count($paths);
         $wanted = array_flip($paths);
@@ -3028,6 +3028,12 @@ class InMemoryScannerRepo extends ItemRepository
         foreach ($this->store as $item) {
             $path = $item['path'] ?? null;
             if (!is_string($path) || !isset($wanted[$path])) {
+                continue;
+            }
+            // Mirror the real ItemRepository::findPathsMap() library scoping:
+            // when a libraryId is supplied, a same-path row in another library
+            // must NOT be treated as already-scanned in this one.
+            if ($libraryId !== null && ($item['library_id'] ?? null) !== $libraryId) {
                 continue;
             }
             $row = $item;

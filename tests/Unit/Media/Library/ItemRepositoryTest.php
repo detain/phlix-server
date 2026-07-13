@@ -205,6 +205,43 @@ class ItemRepositoryTest extends TestCase
     }
 
     /**
+     * SV-0.8: the single-row {@see ItemRepository::findByPath()} must issue an
+     * index-friendly `library_id = ? AND path_hash = ? AND path = ?` query when
+     * a libraryId is supplied — leading with library_id so the composite
+     * `(library_id, path_hash)` unique index is usable, and keeping the raw
+     * `path` as a collision tiebreak. The SHA1 of the path is bound, not the
+     * raw path, for the hash column.
+     */
+    public function testFindByPathUsesLibraryScopedPathHashIndexQuery(): void
+    {
+        $capturedSql = '';
+        $capturedParams = null;
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return [];
+            });
+
+        $repo = new ItemRepository($db);
+        $repo->findByPath('/movies/test.mkv', 'lib-1');
+
+        $this->assertStringContainsString(
+            'WHERE library_id = ? AND path_hash = ? AND path = ?',
+            $capturedSql,
+            'library-scoped findByPath must lead with library_id so the composite index is usable'
+        );
+        $this->assertSame(
+            ['lib-1', sha1('/movies/test.mkv'), '/movies/test.mkv'],
+            $capturedParams,
+            'binds library id, then SHA1(path), then the raw path tiebreak'
+        );
+    }
+
+    /**
      * S8: an empty path list must never reach the database — a malformed
      * `IN ()` clause would otherwise be sent to MySQL.
      */
@@ -245,6 +282,68 @@ class ItemRepositoryTest extends TestCase
         $this->assertSame(1, $callCount, 'exactly one query for N paths, not N queries');
         $this->assertStringContainsString('WHERE path_hash IN (?,?,?)', $capturedSql);
         $this->assertSame([sha1('/a.mkv'), sha1('/b.mkv'), sha1('/c.mkv')], $capturedParams);
+    }
+
+    /**
+     * SV-0.8: when a libraryId is supplied the predicate must lead with
+     * `library_id = ?` so the composite `(library_id, path_hash)` unique index
+     * (migration 072) is used left-prefix-first — an index scan, not a full
+     * table scan. The library id is bound FIRST, ahead of the SHA1 hashes, in
+     * the repo's positional-parameter convention.
+     */
+    public function testFindPathsMapScopesToLibraryAndUsesPathHashIndex(): void
+    {
+        $capturedSql = '';
+        $capturedParams = null;
+
+        $db = $this->createMock(Connection::class);
+        $db->expects($this->once())
+            ->method('query')
+            ->willReturnCallback(function (string $sql, $params = []) use (&$capturedSql, &$capturedParams) {
+                $capturedSql = $sql;
+                $capturedParams = $params;
+                return [];
+            });
+
+        $repo = new ItemRepository($db);
+        $repo->findPathsMap(['/a.mkv', '/b.mkv'], 'lib-1');
+
+        // library_id leads the predicate, path_hash IN (...) follows.
+        $this->assertStringContainsString(
+            'WHERE library_id = ? AND path_hash IN (?,?)',
+            $capturedSql,
+            'library-scoped lookup must lead with library_id so the composite index is usable'
+        );
+        $this->assertSame(
+            ['lib-1', sha1('/a.mkv'), sha1('/b.mkv')],
+            $capturedParams,
+            'library id binds first, then one SHA1 per path, positionally'
+        );
+    }
+
+    /**
+     * SV-0.8: the raw-path equality tiebreak. A row returned by the hash
+     * predicate whose actual `path` is NOT in the requested input list (the
+     * astronomically rare SHA1 collision, or a scoping artifact) must be
+     * excluded from the map — hash membership alone is not trusted.
+     */
+    public function testFindPathsMapExcludesRowsWhoseRawPathIsNotRequested(): void
+    {
+        $db = $this->createMock(Connection::class);
+        // The DB (hypothetically) returns a row for a path we did NOT ask for.
+        $db->method('query')->willReturn([
+            [
+                'id' => 'collision',
+                'path' => '/some/other/path.mkv',
+                'type' => 'movie',
+                'metadata_json' => '{}',
+            ],
+        ]);
+
+        $repo = new ItemRepository($db);
+        $map = $repo->findPathsMap(['/a.mkv', '/b.mkv'], 'lib-1');
+
+        $this->assertSame([], $map, 'a row whose raw path was not requested must be dropped');
     }
 
     /**

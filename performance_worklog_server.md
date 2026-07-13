@@ -3504,3 +3504,90 @@ queue leaked). Fixed here as a one-line map entry because it is the identical di
 new "every enabled process entry has a spawner" regression test would otherwise fail. No other SV-1.3
 behaviour touched. `SimilarityService`/`SimilarityJobStore` still have no dedicated unit test files of
 their own (only covered transitively) — a future test-top-up candidate, not required by SV-2.9.
+
+## Reviewer (per-step, SV-2.9 SimilarityWorker, commits 70fbc60d..3b4b1fa5) — 2026-07-13 (perf-7)
+**NO FINDINGS.** Coroutine/Swoole conventions genuinely respected (real Swoole Channel semaphore
+push/pop bounded-concurrency gate, not just claimed; repeating Timer::add intentional, matches
+MediaAssetWorker exactly). Bounded candidate set is the ACTUAL point of SV-2.9 and verified reaching the
+DB: `fetchItemsWithCompleteMetadata` appends a real `AND library_id = ?` + bound param (confirmed by
+reading the SQL, not just the test); call site passes the item's OWN library id end-to-end
+(MediaScanner enqueue → SimilarityJob::fromArray throws on empty library_id, dropping malformed jobs
+rather than silently regressing to full-table); library_id is index-assisted (migration 072). Job-failure
+handling verified: try/catch logs diagnostic + always drains (dequeue unlinks at pickup time regardless
+of outcome) — never stuck/retried forever. Dual-entrypoint correct: background workers are start.php-only
+by design (index.php has zero worker references), matching the existing MediaAssetWorker pattern.
+**Incidental SV-1.3 fix independently verified CORRECT, not overclaimed**: confirmed at parent commit
+79bb46e1 that `media-asset` was genuinely `enabled:true` in config/process.php with NO spawner in
+start.php's inline worker list — a real disk-leak twin of the SV-2.9 bug, cleanly fixed as a one-line
+managed_workers.php map entry, nothing else touched. The new "every enabled process entry has a spawner"
+regression test is real and would have caught the pre-fix omission. Full Unit 5087/0 reconfirmed,
+phpstan/phpcs clean (one cosmetic phpcs LineLength warning on 2 new lines mirroring pre-existing house
+style — not a real gap). **SV-2.9 CODE-COMPLETE + review-clean.** Remaining: docs.
+
+## Implementer — SV-0.8 (findPathsMap library_id + batch-proved-absence thread) — 2026-07-13 (perf-7)
+Cleared the perf-5 PARTIAL verdict ("`findPathsMap` omits library_id → full-scan"). The single-row
+`findByPath` (library_id+path_hash+path tiebreak) and the batch-proved-absence threading
+(`processScanBatch`→`findPathsMap` once→`processFile(..., callerConfirmedAbsent=true)`, no per-file
+re-probe) were already DONE in 510c8761; the remaining defect was the batched read + missing real-DB
+index proof. Both closed here.
+
+**Source changes:**
+- `src/Media/Library/ItemRepository.php` — `findPathsMap(array $paths, ?string $libraryId = null)`:
+  when a libraryId is supplied the query now leads with `WHERE library_id = ? AND path_hash IN (?,?,…)`
+  (params `array_merge([$libraryId], $hashes)`, positional convention) so the migration-072
+  `(library_id, path_hash)` unique index is usable left-prefix-first — the batched hot path no longer
+  full-scans `media_items`. The no-libraryId branch is retained as a fallback (mirrors `findByPath`),
+  preserving the existing unit test. Also strengthened the collision tiebreak to a TRUE raw-path
+  equality check (`isset($pathSet[$path])`) instead of the prior re-hash check — a foreign path that
+  SHA1-collides into the IN-set can no longer leak a row into the map. This is ALSO a correctness win:
+  the same absolute path can legitimately exist in two libraries (the unique index is composite), and
+  the old unscoped query would wrongly report a different-library row as "already present in this one".
+- `src/Media/Library/MediaScanner.php` — `processScanBatch` now passes its `$libraryId` into
+  `findPathsMap($paths, $libraryId)` (the batch is always scoped to one library). The
+  batch-proved-absence thread into `processFile(..., callerConfirmedAbsent=true)` +
+  `upsertByPath(..., $callerConfirmedAbsent=true)` + the 1062 duplicate-key catch was already in place
+  (untouched); confirmed it still holds.
+
+**Tests:**
+- `tests/Unit/Media/Library/ItemRepositoryTest.php` — added: (1)
+  `testFindByPathUsesLibraryScopedPathHashIndexQuery` (query shape `library_id = ? AND path_hash = ?
+  AND path = ?`, binds `[libId, sha1(path), path]`); (2)
+  `testFindPathsMapScopesToLibraryAndUsesPathHashIndex` (asserts `WHERE library_id = ? AND path_hash IN
+  (?,?)`, binds `[libId, sha1…]` — the AC "query uses path_hash"); (3)
+  `testFindPathsMapExcludesRowsWhoseRawPathIsNotRequested` (raw-path tiebreak). The pre-existing
+  no-libraryId query test still passes (fallback branch unchanged).
+- `tests/Unit/Media/Library/MediaScannerTest.php` — updated the in-memory repo spy's `findPathsMap`
+  signature to `(array $paths, ?string $libraryId = null)` and made it honor library scoping (mirrors
+  the real method: a same-path row in another library is not treated as already-scanned). The existing
+  `findByPathCalls === []` assertion (findByPath NOT called per-file when the batch proved absence) is
+  unchanged and still passes.
+- `tests/Integration/Media/PathHashIndexUsageTest.php` — NEW real-MySQL `EXPLAIN` test modeled on
+  `BrowseIndexUsageTest`. Seeds 300 movie rows, ensures the `(library_id, path_hash)` unique index
+  exists (creates it if absent — cleanup_072.php is NOT run by `run-migrations.php`, so CI has the
+  column but not the index; drops it in tearDown only if it created it), then asserts via `EXPLAIN`
+  that BOTH `findPathsMap`'s `library_id = ? AND path_hash IN (…)` and `findByPath`'s
+  `library_id = ? AND path_hash = ? AND path = ?` (a) list `idx_media_items_library_path_hash` in
+  `possible_keys` and (b) when forced yield that key with `type != ALL` (no full scan). A third test
+  proves library-scoping correctness against the real generated hash column (same path in a 2nd library
+  is excluded). Self-skips when no MySQL / migration 072 absent / pre-existing dup data blocks the
+  unique index.
+
+**Verification:**
+- `phpunit --filter "ItemRepository|MediaScanner" --testdox` → **235 tests OK** (1222 assertions).
+- Full `--testsuite Unit --no-coverage` → **5090 tests, 0 failures, 8 skipped** (was 5087; +3 new
+  unit tests).
+- `phpunit --filter PathHashIndexUsage` → 3 SKIPPED here (no MySQL in this env — probes 127.0.0.1:3306,
+  nothing listening; no mysqld running).
+- phpstan L9 (`-c phpstan.neon.dist`) on both src files + the new integration test → **No errors**.
+- phpcs PSR12: src files 0 errors (only pre-existing >120-char warnings outside the edited regions);
+  new integration test clean after wrapping two long lines.
+
+**EXPLAIN / index-usage proof status — HONEST NOTE:** the genuine `EXPLAIN`-based index-usage assertion
+is now LANDED as a runnable test (`PathHashIndexUsageTest`) that WILL execute in CI (phpunit.yml
+provisions a MySQL service + applies migrations) and on-box. It was NOT executed in THIS session's
+environment because no MySQL server is reachable here (self-skips cleanly, like the existing
+`BrowseIndexUsageTest`/`SortTitleOrderingTest`). So the index-usage proof is written and correctness is
+mock-verified locally, but the actual `EXPLAIN` green run remains to be confirmed by the CI run of this
+commit (or an on-box run) — flagging so the next session/reviewer confirms the CI Integration job went
+green rather than assuming it. The test creates the index itself so CI's column-only schema is
+sufficient.

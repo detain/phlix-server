@@ -309,12 +309,23 @@ class ItemRepository
 
     /**
      * Batch lookup of media items by filesystem path — a single
-     * `WHERE path_hash IN (SHA1(?), ...)` query rather than one
-     * {@see findByPath()} call per candidate.
+     * `WHERE library_id = ? AND path_hash IN (SHA1(?), ...)` query rather than
+     * one {@see findByPath()} call per candidate.
      *
-     * Uses the indexed `path_hash` column (SHA1 of path) for fast lookups.
-     * Each result's actual path is verified against the input list to guard
-     * against the astronomically rare SHA1 collision.
+     * When `$libraryId` is supplied the predicate leads with `library_id = ?`
+     * so the `(library_id, path_hash)` unique index from migration 072 is used
+     * left-prefix-first (an index scan, not a table scan). Omitting the
+     * `library_id` — the pre-fix behaviour — left the composite index's leading
+     * column unbound, so MySQL could not use it and the hot batch path
+     * full-scanned `media_items` on every scan/rescan. The scanner always scans
+     * one library at a time and passes its id (see {@see MediaScanner::processScanBatch()}).
+     * The optional fallback (no `$libraryId`) mirrors {@see findByPath()} and is
+     * retained for callers without library context.
+     *
+     * The indexed `path_hash` column is the STORED SHA1 of the path. Each
+     * returned row's *raw* path is verified for exact membership in the input
+     * list, so a hypothetical SHA1 collision (a different path hashing to the
+     * same value) can never leak a foreign row into the map.
      *
      * Used by {@see MediaScanner::scanFlat()} (S8) to determine, for a whole
      * batch of scan candidates at once, which ones are already indexed
@@ -324,13 +335,18 @@ class ItemRepository
      * @param array<int, string> $paths Absolute filesystem paths to look up.
      *                                  Duplicates are harmless (the map is
      *                                  keyed by path, so a repeat collapses).
+     * @param string|null $libraryId Optional library scope. When provided,
+     *                               enables use of the `(library_id, path_hash)`
+     *                               index and scopes the result to that library
+     *                               (a path that also exists in a *different*
+     *                               library is correctly excluded).
      * @return array<string, array<string, mixed>> Hydrated media item rows
      *         keyed by their `path` column. Paths with no matching row are
      *         simply absent from the map (never a null entry). Empty input
      *         short-circuits to `[]` without querying (a malformed
      *         `IN ()` would otherwise be sent to MySQL).
      */
-    public function findPathsMap(array $paths): array
+    public function findPathsMap(array $paths, ?string $libraryId = null): array
     {
         if ($paths === []) {
             return [];
@@ -339,22 +355,31 @@ class ItemRepository
         // Compute SHA1 hashes in PHP for use with the indexed path_hash column
         $hashes = array_map('sha1', $paths);
         $placeholders = implode(',', array_fill(0, count($hashes), '?'));
-        $results = $this->db->query(
-            "SELECT * FROM media_items WHERE path_hash IN ({$placeholders})",
-            $hashes
-        );
 
-        // Build a set of expected hashes for O(1) lookup during row verification
-        $hashSet = array_flip($hashes);
+        if ($libraryId !== null) {
+            // Lead with library_id so the (library_id, path_hash) index is used.
+            $results = $this->db->query(
+                "SELECT * FROM media_items WHERE library_id = ? AND path_hash IN ({$placeholders})",
+                array_merge([$libraryId], $hashes)
+            );
+        } else {
+            // Fall back to a path_hash-only lookup for callers without a library.
+            $results = $this->db->query(
+                "SELECT * FROM media_items WHERE path_hash IN ({$placeholders})",
+                $hashes
+            );
+        }
+
+        // Set of requested raw paths for O(1) exact-membership verification —
+        // the true raw-path tiebreak against an astronomically rare SHA1
+        // collision (a foreign path that hashed into our IN-set).
+        $pathSet = array_flip($paths);
 
         $map = [];
         foreach ($this->hydrateRows($results) as $row) {
             $path = $row['path'] ?? null;
-            if (is_string($path) && $path !== '') {
-                // Verify the SHA1 tiebreak guards against path_hash collision
-                if (isset($hashSet[sha1($path)])) {
-                    $map[$path] = $row;
-                }
+            if (is_string($path) && $path !== '' && isset($pathSet[$path])) {
+                $map[$path] = $row;
             }
         }
 

@@ -625,7 +625,9 @@ class MediaScanner
             $paths[] = $file->getPathname();
         }
 
-        $existingByPath = $this->itemRepository->findPathsMap($paths);
+        // Scope the batch lookup to this library so the (library_id, path_hash)
+        // index is used (left-prefix-first) instead of a full media_items scan.
+        $existingByPath = $this->itemRepository->findPathsMap($paths, $libraryId);
         $probeEligible = $this->isProbeEligibleLibraryType($type);
 
         $newPaths = [];

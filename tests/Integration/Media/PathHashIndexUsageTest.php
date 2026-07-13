@@ -1,0 +1,400 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Phlix\Tests\Integration\Media;
+
+use Phlix\Common\Database\ConnectionPool;
+use Phlix\Media\Library\ItemRepository;
+use PHPUnit\Framework\TestCase;
+use Throwable;
+use Workerman\MySQL\Connection;
+
+/**
+ * SV-0.8 real-DB proof that the scanner's path lookups
+ * ({@see ItemRepository::findByPath()} / {@see ItemRepository::findPathsMap()})
+ * actually resolve through the `(library_id, path_hash)` unique index (migration
+ * 072 + `cleanup_072.php`) instead of full-scanning `media_items` on every scan
+ * / rescan. A mocked connection cannot exercise the optimizer, so this runs
+ * `EXPLAIN` against the queries those methods emit and asserts the composite
+ * index is applicable and — when forced — provides a non-full-scan access path.
+ *
+ * The bug this guards against: before SV-0.8, `findPathsMap` bound only
+ * `path_hash IN (...)` and omitted `library_id`. The migration-072 index leads
+ * with `library_id`, so a predicate that does not bind the leading column
+ * cannot use the index left-prefix-first — the hot batch path full-scanned
+ * `media_items` (type=ALL) for every scan batch. SV-0.8 leads the predicate
+ * with `library_id = ?`, restoring index use.
+ *
+ * INDEX AVAILABILITY: `run-migrations.php` (what CI applies) adds only the
+ * `path_hash` *column* (migration 072's `.sql`); the UNIQUE INDEX itself is
+ * created post-migration by `migrations/cleanup_072.php` (kept out of a plain
+ * migration because a DB with pre-existing duplicate paths would make an inline
+ * `ADD UNIQUE INDEX` fail with 1062 — see 072's header). So this test creates
+ * the index itself when absent (idempotently, on its own freshly-seeded rows)
+ * and drops it again in tearDown only if it was the creator, leaving the schema
+ * as it found it. If pre-existing data prevents the unique index, the test
+ * self-skips rather than failing — the index-usage claim is unprovable without
+ * the index, but that is an environment gap, not a code defect.
+ *
+ * Like {@see BrowseIndexUsageTest}, with no reachable MySQL the test self-skips.
+ *
+ * @covers \Phlix\Media\Library\ItemRepository
+ */
+final class PathHashIndexUsageTest extends TestCase
+{
+    private const PATH_HASH_INDEX = 'idx_media_items_library_path_hash';
+
+    /** Rows to seed — enough to give a full scan a real cost to beat. */
+    private const ROW_COUNT = 300;
+
+    private const PATH_PREFIX = '/tmp/phlix-path-hash-index-test/';
+
+    private ?Connection $db = null;
+
+    private string $libraryId = '';
+
+    /** True only when THIS test created the unique index (so tearDown drops it). */
+    private bool $createdIndex = false;
+
+    /** @var list<string> the absolute paths this test seeded, for the IN(...) probe */
+    private array $seededPaths = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $host = getenv('DB_HOST') ?: '127.0.0.1';
+        $port = (int) (getenv('DB_PORT') ?: 3306);
+
+        if (!$this->isMysqlReachable($host, $port)) {
+            $this->markTestSkipped(sprintf(
+                'No MySQL on %s:%d — skipping path_hash index-usage EXPLAIN test. Runs in CI / docker-compose.',
+                $host,
+                $port,
+            ));
+        }
+
+        try {
+            ConnectionPool::init(dirname(__DIR__, 3) . '/config/database.php');
+            $this->db = ConnectionPool::getConnection('mysql');
+        } catch (Throwable $e) {
+            $this->markTestSkipped('Could not connect to MySQL: ' . $e->getMessage());
+        }
+
+        // Migration 072 adds the path_hash generated column; without it there is
+        // nothing to index. Self-skip rather than error on a stale schema.
+        if (!$this->hasPathHashColumn()) {
+            $this->markTestSkipped(
+                'media_items.path_hash absent — migration 072 not applied; skipping index-usage test.',
+            );
+        }
+
+        $db = $this->db();
+        $this->libraryId = $this->uuid();
+        $db->query(
+            'INSERT INTO libraries (id, name, type, paths) VALUES (?, ?, ?, ?)',
+            [$this->libraryId, 'Path Hash Index Usage Lib', 'movie', json_encode([rtrim(self::PATH_PREFIX, '/')])],
+        );
+
+        $repo = new ItemRepository($db);
+        for ($i = 0; $i < self::ROW_COUNT; $i++) {
+            $name = sprintf('Path Hash Fixture %03d', $i);
+            // A real, non-empty path of a deduped type (movie) → the generated
+            // path_hash column is non-NULL and therefore covered by the index.
+            $path = self::PATH_PREFIX . md5($name) . '.mkv';
+            $this->seededPaths[] = $path;
+            $repo->create([
+                'library_id' => $this->libraryId,
+                'name' => $name,
+                'type' => 'movie',
+                'path' => $path,
+                'metadata_json' => ['year' => 2000 + ($i % 25)],
+            ]);
+        }
+
+        // The unique index is normally added by cleanup_072.php (not the base
+        // migration). Ensure it exists so the optimizer actually has it to use;
+        // self-skip if pre-existing data prevents a unique constraint.
+        $this->ensurePathHashIndex();
+
+        // Fresh, deterministic index statistics for the cost-based optimizer.
+        $db->query('ANALYZE TABLE media_items');
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->db !== null) {
+            if ($this->createdIndex) {
+                // Restore the schema to how we found it (the index is a
+                // post-migration artifact, not part of run-migrations.php).
+                try {
+                    $this->db->query('ALTER TABLE media_items DROP INDEX ' . self::PATH_HASH_INDEX);
+                } catch (Throwable) {
+                    // Best-effort cleanup; a leftover index is harmless (it is
+                    // exactly what production carries).
+                }
+            }
+            if ($this->libraryId !== '') {
+                // ON DELETE CASCADE removes the seeded media_items rows.
+                $this->db->query('DELETE FROM libraries WHERE id = ?', [$this->libraryId]);
+            }
+        }
+        parent::tearDown();
+    }
+
+    /**
+     * The batched scanner lookup ({@see ItemRepository::findPathsMap()}:
+     * `library_id = ? AND path_hash IN (...)`) must resolve through the
+     * `(library_id, path_hash)` index — NOT a full table scan. This is the hot
+     * path SV-0.8 fixed: without the leading `library_id`, the composite index
+     * is unusable and the batch full-scans `media_items`.
+     */
+    public function testFindPathsMapUsesLibraryPathHashIndexNotFullScan(): void
+    {
+        $probePaths = array_slice($this->seededPaths, 0, 5);
+        $hashes = array_map('sha1', $probePaths);
+        $placeholders = implode(',', array_fill(0, count($hashes), '?'));
+
+        $sql = "SELECT * FROM media_items WHERE library_id = ? AND path_hash IN ({$placeholders})";
+        $params = array_merge([$this->libraryId], $hashes);
+
+        // The index must be APPLICABLE to the batched lookup (in possible_keys).
+        $natural = $this->explain($sql, $params);
+        $this->assertStringContainsString(
+            self::PATH_HASH_INDEX,
+            $this->planStr($natural, 'possible_keys'),
+            'The (library_id, path_hash) index must be APPLICABLE to the batched findPathsMap lookup '
+            . '(present in possible_keys). Plan: ' . $this->planJson($natural),
+        );
+
+        // Structural proof: forcing the index makes it the chosen key and yields
+        // a non-full-scan (range) access path — never type=ALL.
+        $forced = $this->explain(
+            "SELECT * FROM media_items FORCE INDEX (" . self::PATH_HASH_INDEX . ") "
+            . "WHERE library_id = ? AND path_hash IN ({$placeholders})",
+            $params,
+        );
+        $this->assertSame(
+            self::PATH_HASH_INDEX,
+            $this->planStr($forced, 'key'),
+            'Forcing the composite index must make it the chosen key. Plan: ' . $this->planJson($forced),
+        );
+        $this->assertNotSame(
+            'ALL',
+            $this->planStr($forced, 'type'),
+            'The batched path lookup must NOT be a full table scan (type=ALL) — it is a range scan on the '
+            . 'composite index. Plan: ' . $this->planJson($forced),
+        );
+    }
+
+    /**
+     * The single-row lookup ({@see ItemRepository::findByPath()}:
+     * `library_id = ? AND path_hash = ? AND path = ?`) must resolve through the
+     * same index as a point/ref lookup — not a full scan.
+     */
+    public function testFindByPathUsesLibraryPathHashIndexNotFullScan(): void
+    {
+        $path = $this->seededPaths[0];
+        $sql = 'SELECT * FROM media_items WHERE library_id = ? AND path_hash = ? AND path = ?';
+        $params = [$this->libraryId, sha1($path), $path];
+
+        $natural = $this->explain($sql, $params);
+        $this->assertStringContainsString(
+            self::PATH_HASH_INDEX,
+            $this->planStr($natural, 'possible_keys'),
+            'The (library_id, path_hash) index must be APPLICABLE to findByPath (present in possible_keys). '
+            . 'Plan: ' . $this->planJson($natural),
+        );
+
+        $forced = $this->explain(
+            'SELECT * FROM media_items FORCE INDEX (' . self::PATH_HASH_INDEX . ') '
+            . 'WHERE library_id = ? AND path_hash = ? AND path = ?',
+            $params,
+        );
+        $this->assertSame(
+            self::PATH_HASH_INDEX,
+            $this->planStr($forced, 'key'),
+            'Forcing the composite index must make it the chosen key for findByPath. Plan: ' . $this->planJson($forced),
+        );
+        $this->assertNotSame(
+            'ALL',
+            $this->planStr($forced, 'type'),
+            'findByPath must NOT be a full table scan (type=ALL). Plan: ' . $this->planJson($forced),
+        );
+    }
+
+    /**
+     * Correctness with the real generated column: a seeded row is found by its
+     * hash, and a path that also exists in a DIFFERENT library is NOT returned
+     * for this library (the SV-0.8 library-scoping correctness win, not just a
+     * performance one).
+     */
+    public function testFindPathsMapScopesToLibraryAgainstRealHashColumn(): void
+    {
+        $repo = new ItemRepository($this->db());
+
+        // Same absolute path, but created in a SECOND library.
+        $otherLibraryId = $this->uuid();
+        $sharedPath = self::PATH_PREFIX . 'shared-across-libraries.mkv';
+        $this->db()->query(
+            'INSERT INTO libraries (id, name, type, paths) VALUES (?, ?, ?, ?)',
+            [$otherLibraryId, 'Other Lib', 'movie', json_encode([rtrim(self::PATH_PREFIX, '/')])],
+        );
+        try {
+            $repo->create([
+                'library_id' => $otherLibraryId,
+                'name' => 'Shared Path Movie',
+                'type' => 'movie',
+                'path' => $sharedPath,
+                'metadata_json' => [],
+            ]);
+
+            // Ask for the shared path scoped to OUR library — it belongs to the
+            // other library, so it must be absent from the map.
+            $map = $repo->findPathsMap([$sharedPath], $this->libraryId);
+            $this->assertArrayNotHasKey(
+                $sharedPath,
+                $map,
+                'a path that exists only in a different library must not be reported as present in this one',
+            );
+
+            // A genuinely-seeded path in OUR library IS found.
+            $ourPath = $this->seededPaths[0];
+            $mapOurs = $repo->findPathsMap([$ourPath], $this->libraryId);
+            $this->assertArrayHasKey($ourPath, $mapOurs, 'a real path in this library must be found via its hash');
+        } finally {
+            $this->db()->query('DELETE FROM libraries WHERE id = ?', [$otherLibraryId]);
+        }
+    }
+
+    /**
+     * Ensure the `(library_id, path_hash)` unique index exists for the duration
+     * of this test. Mirrors cleanup_072.php's statement. Self-skips when
+     * pre-existing data would violate uniqueness (index-usage is unprovable
+     * without the index, but that is an environment gap).
+     */
+    private function ensurePathHashIndex(): void
+    {
+        if ($this->hasPathHashIndex()) {
+            return; // Already created (cleanup_072.php was run on this DB).
+        }
+
+        try {
+            $this->db()->query(
+                'ALTER TABLE media_items ADD UNIQUE INDEX ' . self::PATH_HASH_INDEX . ' (library_id, path_hash)',
+            );
+            $this->createdIndex = true;
+        } catch (Throwable $e) {
+            $msg = $e->getMessage();
+            if (str_contains($msg, 'Duplicate key name')) {
+                // Raced/already present — fine, and we are NOT the creator.
+                return;
+            }
+            $this->markTestSkipped(
+                'Could not create the (library_id, path_hash) unique index on this DB (pre-existing '
+                . 'duplicate paths?) — index-usage unprovable here: ' . $msg,
+            );
+        }
+    }
+
+    private function hasPathHashIndex(): bool
+    {
+        try {
+            $rows = $this->db()->query(
+                "SHOW INDEX FROM media_items WHERE Key_name = ?",
+                [self::PATH_HASH_INDEX],
+            );
+
+            return is_array($rows) && $rows !== [];
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Run EXPLAIN and return the first (driving-table) plan row.
+     *
+     * `Connection::query()` only returns rows when the statement's leading
+     * keyword is `select`/`show`; `EXPLAIN` falls through to `return null`. So
+     * use `Connection::row()`, which always fetches (see the documented
+     * `$db->query() must start with SELECT` gotcha) — same primitive
+     * {@see BrowseIndexUsageTest} uses.
+     *
+     * @param list<mixed> $params
+     * @return array<string, mixed>
+     */
+    private function explain(string $sql, array $params): array
+    {
+        $row = $this->db()->row('EXPLAIN ' . $sql, $params);
+        $this->assertIsArray($row, 'EXPLAIN returned no plan row for: ' . $sql);
+
+        /** @var array<string, mixed> $row */
+        return $row;
+    }
+
+    /**
+     * @param array<string, mixed> $plan
+     */
+    private function planStr(array $plan, string $key): string
+    {
+        $value = $plan[$key] ?? '';
+
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    /**
+     * @param array<string, mixed> $plan
+     */
+    private function planJson(array $plan): string
+    {
+        $json = json_encode($plan);
+
+        return $json === false ? '<unencodable plan>' : $json;
+    }
+
+    /** The connection, guaranteed non-null (setUp skips the test otherwise). */
+    private function db(): Connection
+    {
+        $this->assertInstanceOf(Connection::class, $this->db);
+
+        return $this->db;
+    }
+
+    private function hasPathHashColumn(): bool
+    {
+        try {
+            $rows = $this->db()->query("SHOW COLUMNS FROM media_items LIKE 'path_hash'");
+
+            return is_array($rows) && $rows !== [];
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    private function isMysqlReachable(string $host, int $port): bool
+    {
+        $sock = @fsockopen($host, $port, $errno, $errstr, 1.0);
+        if ($sock === false) {
+            return false;
+        }
+        fclose($sock);
+
+        return true;
+    }
+
+    private function uuid(): string
+    {
+        return sprintf(
+            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0x0fff) | 0x4000,
+            mt_rand(0, 0x3fff) | 0x8000,
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff),
+            mt_rand(0, 0xffff)
+        );
+    }
+}

@@ -2736,3 +2736,107 @@ Verification: `phpunit --filter Migration` 22/22 · full `--testsuite Unit` 5000
 assertions, 5 skipped, 0 failures · `phpstan analyze -c phpstan.neon.dist src/Common/Database/MigrationRunner.php`
 No errors · `phpcs --standard=PSR12` on both touched files clean. Both callers
 (`scripts/run-migrations.php`, `bin/phlix migrate`) unchanged.
+
+## Orchestrator — SV-4.9 implemented (2026-07-13, perf-5)
+- [~] SV-4.9 ledger — impl 1788ad35 (ensureLedgerTable bootstrap before first read; loadLedger consult; md5 checksum; skip-when-recorded-and-match; record after clean apply via INSERT ON DUP KEY positional ?; failed migration left UNRECORDED = re-run safe; checksum-divergence warn+re-apply+refresh; empty-ledger transition re-applies-once-then-records; ledger errors swallowed→degrade to historical path; kept isAlreadyAppliedNote squelch). Fixed 076 header + class docblock. 22/22 Migration + full Unit 5000/0, phpstan clean. REVIEW pending.
+
+## Re-audit (perf-5) — SV-2.2/2.3/2.7
+- SV-2.2 pool hygiene (PooledMySQLConnection) — **DONE (code, wired; pool_enabled default true).** (a) dirty-txn rollback on defer-release (txPending[cid] set/clear via *Trans(), rollBack before idle push); (b) idle->pop(10.0) timeout→"pool exhausted"; (c) created-- on dead conn (SELECT 1 fail + factory throw); (d) non-coroutine bounded while-poll (no recursion). GAP: 3 core behaviors coroutine-only → UNTESTED in CI (on-box owed). Minor: txPending only via *Trans() family (raw "BEGIN" SQL wouldn't flip — codebase uses *Trans, low risk).
+- SV-2.3 relay backpressure (RelayConsumer) — **PARTIAL.** DONE: hub→local onData (send()===false→pauseRecv+drain→resumeRecv) + HTTP_RESPONSE withFile path (proper while loop). NOT DONE: local→hub direction — sendDataFrame:1712-1720 / sendFrame:1688-1697 IGNORE send() return (fire-and-forget, unbounded queueing = the exact S-F36 large-media case); AND onLocalData:1596-1600 still `do…while` (emits empty DATA frame on zero-length read). No pause/resume test (MockConnection::send always true). → COMPLETE: check send() in sendDataFrame/sendFrame→pauseRecv localConnections[$channelId]+resumeRecv on drain; do…while→while; slow-reader local→client test.
+- SV-2.7 auth status cache (AuthManager) — **PARTIAL.** Cache exists + genuinely consulted (validateAccessToken:898, refreshTokens:837; 5s TTL hrtime) — primary AC met. NOT DONE: invalidateUserStatusCache():231-234 has ZERO callers (revocation = TTL-only; in-worker status change not reflected until TTL); cache UNBOUNDED (refresh-on-read only, no cap/LRU); no cache/revocation tests. → COMPLETE: call invalidate from in-process status-change paths (or document TTL-only + remove dead method); bound/LRU cache; cache-hit/expiry + revocation-within-TTL tests.
+
+### Server queue += SV-2.3(backpressure local→hub), SV-2.7(invalidate+bound). Audits still owed: SV-1.1–1.6 (transcoding), SV-3.3/3.4 (build-outs).
+
+## Reviewer (per-step: SV-4.9) — 2026-07-13
+
+Verified against commit `1788ad35`. Migration suite 22/22 green; phpstan L9 (`-c phpstan.neon.dist`)
+clean on `MigrationRunner.php`. Both callers wire correctly: `scripts/run-migrations.php:21-22` and
+`bin/phlix:97` construct the runner with `ConnectionPool::getConnection('mysql')` → the re-keying
+`PhlixMySQLConnection` subclass, so the positional `[$name, time(), $checksum]` binding in
+`recordMigration()` is the safe idiom (sequential list + `?` placeholders, no raw PDO/mysqli).
+`MigrateCommand`'s exit code keys off `errors`, not `applied`, so the changed `applied` semantics
+(ledger-skipped files no longer listed) do not break the exit contract.
+
+**Deploy-safety verdict on the empty-ledger transition: SAFE.** I audited every DML/rewrite statement
+in `migrations/*.sql` for re-run safety under the first-post-deploy apply-all:
+- `004_admin_user_flag.sql:28` UPDATE users — guarded by `AND NOT EXISTS (... is_admin=1)`, no-op on replay.
+- `043_media_items_canonical_key.sql:51` / `050_media_items_sort_indexes.sql:125,129` UPDATE — WHERE
+  `... IS NULL` + re-derive identical values; idempotent.
+- `051_media_item_genres_join_table.sql:116` INSERT IGNORE — PK-guarded.
+- `068_metadata_ratings_source_enum.sql` — the `source='user'` UPDATE is a no-op on replay; the
+  DROP INDEX → MODIFY → re-ADD UNIQUE sequence net-nulls cleanly within the migration (or is squelched);
+  the aggregate backfill re-derives identical values.
+Critically, this transition path is byte-identical to the pre-SV-4.9 every-boot apply-all these
+migrations already survived — it introduces no NEW re-run risk, then records + skips thereafter. No
+migration is unsafe to re-run. The runner's bootstrap CREATE matches `076`'s table definition exactly
+(name/applied_at/checksum, PK name, InnoDB utf8mb4) — no schema drift. Degrade path is genuine:
+`ensureLedgerTable` swallow → `loadLedger` catch → empty map → apply-all; `recordMigration` failures
+swallowed per-file; `076` itself creates the table in the file loop. No crash, no skipped migration.
+
+Findings:
+
+1. **[MEDIUM — deploy-log noise regression, contradicts the documented design intent]**
+   `src/Common/Database/MigrationRunner.php:176` pushes a per-file note
+   `"<name> already applied (ledger), skipping"` into `notes[]` for EVERY ledger-skipped file, but
+   `isAlreadyAppliedNote()` (`:326-332`) recognises only `'Duplicate column name'` / `'Duplicate key
+   name'` / `'check that column/key exists'` / `'already exists'` — it does NOT match the string
+   `"already applied"`. Both callers print any note that fails `isAlreadyAppliedNote` IN FULL
+   (`scripts/run-migrations.php:37-39`, `src/Console/Commands/MigrateCommand.php:59-61`). Net effect:
+   once the ledger is populated (steady state — i.e. every deploy after the first), the migration run
+   prints ~79 lines `note: NNN_xxx.sql already applied (ledger), skipping` in full AND the
+   `"N statement(s) skipped (already applied)"` summary line. This is exactly the per-deploy echo the
+   `skipped_count` collapse — documented at `:108-115` ("render a single '...skipped...' summary line
+   instead of echoing each on every deploy") — was designed to prevent. Fix: either do not add the
+   per-file note to `notes[]` for a ledger skip (rely on `skipped_count` alone), or make the ledger-skip
+   note recognised by `isAlreadyAppliedNote()` so the callers collapse it. Not deploy-unsafe, but it
+   defeats the stated purpose of the skip-count mechanism and makes every steady-state deploy log read
+   as if 79 things happened.
+
+2. **[LOW — test gap vs review criterion 2/7]** The 5 new tests cover record-after-apply, skip-on-match,
+   divergence-warn+reapply, empty-ledger transition, and bootstrap-before-select. But NO test asserts
+   that a migration raising a GENUINE (non-idempotent) error is left UNRECORDED so it re-runs next boot
+   (`if (!$fileHadGenuineError)` at `:227`), nor that a ledger READ failure degrades to apply-all
+   (`loadLedger` catch at `:274-279`). Both behaviours are correct by inspection, but the "partially
+   applied then errored → unrecorded / re-run safe" contract (criterion 2) and the degrade path are
+   unverified by tests.
+
+3. **[LOW — observation, self-healing]** The checksum is `md5()` over the ENTIRE file including header
+   comments (`:170`). The `076` rewrite-class protocol explicitly instructs operators to "Document the
+   rewrite in this header." Editing a migration's documentation header AFTER it was applied diverges the
+   checksum → triggers a WARNING + one re-apply on the next boot (`:185-189`). Harmless (migrations are
+   re-run safe) and self-heals (the new checksum is recorded, so it re-applies exactly once), but a mild
+   surprise worth a one-line note in the 076 header (e.g. "editing any byte of an applied migration —
+   including comments — will trigger a one-time re-apply").
+
+## Orchestrator — SV-4.9 REVIEW (2026-07-13, perf-5): 3 findings (deploy-safety SAFE — empty-ledger re-apply byte-identical to pre-existing apply-all; all migrations re-run-safe, verified)
+1. MEDIUM — deploy-log noise: MigrationRunner:176 adds per-file "already applied (ledger), skipping" note but isAlreadyAppliedNote() (:326-332) doesn't match "already applied" → both callers print ~79 full lines every steady-state deploy (defeats note-collapse). Fix: drop the per-file ledger-skip note OR make it match isAlreadyAppliedNote().
+2. LOW — test gaps: genuine-error-left-unrecorded + ledger-read-failure degrade path unverified.
+3. LOW — md5 over whole file incl comments → a doc/comment edit triggers a one-time re-apply (benign but avoidable; normalize hash to SQL-only or document).
+→ FIX all 3 (server writer) AFTER SV-4.11 finishes (one writer per repo).
+
+## Implementer — SV-4.11 (2026-07-13): Channel-gate fix LANDED ✅
+The adjacent SV-0.4-class bug is fixed. `defaultFetcher()` async branch now gates on
+`WorkerContext::isEventLoopRunning() && WorkerContext::inCoroutine() && !EventLoopTls::requiresBlockingCurl($url)`
+(mirrors SV-4.5/S3Client `:284-286`) — was `isEventLoopRunning()` ALONE. Outside a coroutine
+(getCid()==0: plugin auto-update worker / plain HTTP handler) it now takes `curlFetch()`, so the
+`Swoole\Coroutine\Channel` in `asyncFetch()` is only ever constructed/`pop()`ed with getCid()>0 —
+killing the spurious immediate-false "async fetch timed out".
+
+Files changed (absolute):
+- `/home/sites/phlix/phlix-server/src/Plugins/Catalog/PluginCatalogService.php` — gate in `defaultFetcher()`
+  (renamed local to `$useAsync`, added `inCoroutine()` conjunct + S-F12/SV-0.4 comment); async-routing
+  docblock (:407-…) updated to state the mandatory coroutine gate. `asyncFetch`/`curlFetch` bodies untouched.
+- `/home/sites/phlix/phlix-server/tests/Unit/Plugins/Catalog/PluginCatalogServiceTest.php` — deleted the stale
+  "coroutine-safe (cURL under SWOOLE_HOOK_NATIVE_CURL)" comment; added 3 tests:
+  (1) `test_default_fetcher_uses_blocking_curl_branch_outside_coroutine` (@group network) — asserts inCoroutine()
+  false on main stack and the error is a cURL-path RuntimeException (NOT "async fetch"), proving no Channel;
+  (2) `test_async_fetch_wakes_on_success_callback_inside_coroutine` — inside `Swoole\Coroutine\run`, reflection-invoke
+  `asyncFetch` with a mock Workerman client firing `success` → returns the body;
+  (3) `test_async_fetch_times_out_cleanly_inside_coroutine` — in-coroutine, no callback → RuntimeException
+  "async fetch timed out" AFTER actually waiting ≥900ms (clean timeout, not the immediate false-timeout bug).
+
+Verification: `phpunit --filter PluginCatalog` = 31 tests / 87 assertions OK (timeout test waited full 1s via
+Swoole Timer). Full `--testsuite Unit` = 5002 tests OK (4 warnings / 5 skipped all pre-existing TranscodeManager).
+`phpstan analyze -c phpstan.neon.dist` clean on both files. `phpcs --standard=PSR12 src/...PluginCatalogService.php`
+clean; the test-file phpcs "not in camel caps" + one fixture line-length are the file's pre-existing snake_case
+convention (new methods follow it). SV-4.11 Acceptance met.

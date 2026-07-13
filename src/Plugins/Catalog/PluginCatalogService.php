@@ -404,12 +404,19 @@ final class PluginCatalogService
      * catalog fetch — including the always-present default catalog, blanking
      * the Plugins listings.
      *
-     * **Async routing (SV-4.11):** When a Swoole event loop is running and the
-     * URL does not require blocking curl (per {@see EventLoopTls}), the fetch
-     * is routed through `Workerman\Http\Client` via a Channel-based cooperative
-     * wait, keeping the worker responsive. When no event loop is active or
-     * blocking curl is required (e.g. HTTPS + Swoole TLS read stall), native
-     * cURL is used as a synchronous fallback.
+     * **Async routing (SV-4.11):** When a worker event loop is running AND the
+     * caller is inside a Swoole coroutine (`getCid() > 0`) AND the URL does not
+     * require blocking curl (per {@see EventLoopTls}), the fetch is routed
+     * through `Workerman\Http\Client` via a Channel-based cooperative wait,
+     * keeping the worker responsive. The coroutine gate is mandatory: the
+     * `Swoole\Coroutine\Channel` in {@see asyncFetch()} is only valid inside a
+     * coroutine, so outside one (`getCid() == 0`, e.g. the plugin auto-update
+     * worker or a plain HTTP handler) `Channel::pop()` would return false
+     * immediately and raise a spurious "async fetch timed out" while the
+     * callback is still pending (S-F12 / SV-0.4). When no event loop is active,
+     * the caller is not in a coroutine, or blocking curl is required (e.g.
+     * HTTPS + Swoole TLS read stall), native cURL is used as a synchronous
+     * fallback.
      *
      * Note: `SWOOLE_HOOK_NATIVE_CURL` is deliberately excluded from the
      * runtime hook mask (see AGENTS.md "Coroutine/Swoole hooks"); native cURL
@@ -432,12 +439,19 @@ final class PluginCatalogService
                 return self::streamFetch($url, $timeout);
             }
 
-            // SV-4.11: async routing when event loop is active and no TLS stall.
-            $isEventLoop = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning();
-            $needsBlocking = !$isEventLoop
-                || \Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
+            // SV-4.11: async routing only when a worker event loop is running
+            // AND the caller is inside a Swoole coroutine (getCid() > 0), and
+            // the URL does not require blocking curl (Swoole TLS read stall).
+            // asyncFetch() waits on a Swoole\Coroutine\Channel, which is ONLY
+            // valid inside a coroutine; outside one Channel::pop() returns false
+            // immediately = a spurious "async fetch timed out" while the async
+            // callback is still pending (S-F12 / SV-0.4). Gate on inCoroutine()
+            // (not isEventLoopRunning() alone) and fall back to blocking cURL.
+            $useAsync = \Phlix\Common\Runtime\WorkerContext::isEventLoopRunning()
+                && \Phlix\Common\Runtime\WorkerContext::inCoroutine()
+                && !\Phlix\Common\Http\EventLoopTls::requiresBlockingCurl($url);
 
-            if ($isEventLoop && !$needsBlocking) {
+            if ($useAsync) {
                 // Lazy-init shared async client (same timeout as cURL path).
                 if ($asyncClient === null) {
                     $asyncClient = new \Workerman\Http\Client(['timeout' => $timeout]);

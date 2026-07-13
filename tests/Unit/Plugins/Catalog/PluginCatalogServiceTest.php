@@ -371,22 +371,125 @@ final class PluginCatalogServiceTest extends TestCase
 
     public function test_default_fetcher_returns_a_callable(): void
     {
-        // The default fetcher is coroutine-safe (cURL under Swoole's
-        // SWOOLE_HOOK_NATIVE_CURL); we assert only that the factory yields the
-        // expected callable signature. Its network behaviour is exercised by
-        // the @group network test below, which the default suite excludes.
+        // The default fetcher routes through the async Workerman client only
+        // inside a Swoole coroutine (getCid() > 0), and falls back to blocking
+        // native cURL otherwise (SWOOLE_HOOK_NATIVE_CURL is excluded from the
+        // runtime hook mask, so cURL is used only as a synchronous fallback).
+        // Here we assert only that the factory yields the expected callable
+        // signature. Its network behaviour is exercised by the @group network
+        // test below, which the default suite excludes.
         self::assertInstanceOf(\Closure::class, PluginCatalogService::defaultFetcher());
     }
 
     /**
+     * SV-4.11: outside a Swoole coroutine (getCid() == 0 — the common case for
+     * the plugin auto-update worker or a plain HTTP handler) defaultFetcher must
+     * take the synchronous curlFetch branch and NEVER construct a
+     * Swoole\Coroutine\Channel. Proven by the error shape: a cURL transport
+     * error, NOT the async "async fetch timed out" that a false Channel::pop()
+     * would raise (the S-F12 / SV-0.4 defect this step fixes).
+     *
      * @group network
      */
-    public function test_default_fetcher_throws_runtime_exception_on_bogus_host(): void
+    public function test_default_fetcher_uses_blocking_curl_branch_outside_coroutine(): void
     {
+        self::assertFalse(
+            \Phlix\Common\Runtime\WorkerContext::inCoroutine(),
+            'the test main stack must not be inside a coroutine',
+        );
+
         $fetcher = PluginCatalogService::defaultFetcher();
-        $this->expectException(\RuntimeException::class);
-        // Unroutable TEST-NET-1 host; short timeout keeps it bounded. Excluded
-        // from the default suite via @group network in phpunit.xml.
-        $fetcher('https://192.0.2.1/plugins.json', 1);
+        try {
+            // Unroutable TEST-NET-1 host; short timeout keeps it bounded.
+            // Excluded from the default suite via @group network in phpunit.xml.
+            $fetcher('https://192.0.2.1/plugins.json', 1);
+            self::fail('expected a RuntimeException from the blocking cURL branch');
+        } catch (\RuntimeException $e) {
+            self::assertStringNotContainsString(
+                'async fetch',
+                $e->getMessage(),
+                'outside a coroutine the async Channel path must not be taken',
+            );
+        }
+    }
+
+    /**
+     * SV-4.11: inside a Swoole coroutine (getCid() > 0) asyncFetch() waits on a
+     * Swoole\Coroutine\Channel that is woken by the client's async success
+     * callback, returning the response body. Mirrors the production callback:
+     * `$channel->push(true)` on completion, `$channel->pop($timeout)` to wait.
+     *
+     * @requires extension swoole
+     */
+    public function test_async_fetch_wakes_on_success_callback_inside_coroutine(): void
+    {
+        if (! \extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension required for the coroutine async-fetch test.');
+        }
+
+        $client = $this->createMock(\Workerman\Http\Client::class);
+        $client->method('request')->willReturnCallback(
+            static function (string $url, array $options): void {
+                // Fire the async success handler synchronously from within the
+                // coroutine, exactly as the event loop would on response.
+                $options['success'](new \Workerman\Psr7\Response(200, [], 'PLUGINS-OK'));
+            },
+        );
+
+        $body = null;
+        $error = null;
+        \Swoole\Coroutine\run(static function () use ($client, &$body, &$error): void {
+            $method = new \ReflectionMethod(PluginCatalogService::class, 'asyncFetch');
+            $method->setAccessible(true);
+            try {
+                $body = $method->invoke(null, $client, 'https://example.com/plugins.json', 2);
+            } catch (\Throwable $e) {
+                $error = $e;
+            }
+        });
+
+        self::assertNull($error, 'async fetch must not error when the success callback fires');
+        self::assertSame('PLUGINS-OK', $body, 'async fetch must return the pushed response body');
+    }
+
+    /**
+     * SV-4.11: inside a coroutine, when no callback ever fires, asyncFetch()
+     * yields a CLEAN timeout — it actually waits the timeout window and then
+     * throws "async fetch timed out", as opposed to the spurious IMMEDIATE
+     * false a Channel::pop() outside a coroutine would return (S-F12 / SV-0.4).
+     *
+     * @requires extension swoole
+     */
+    public function test_async_fetch_times_out_cleanly_inside_coroutine(): void
+    {
+        if (! \extension_loaded('swoole')) {
+            self::markTestSkipped('Swoole extension required for the coroutine async-fetch test.');
+        }
+
+        // Default mock: request() fires no callback, so the Channel is never pushed.
+        $client = $this->createMock(\Workerman\Http\Client::class);
+
+        $error = null;
+        $elapsedMs = null;
+        \Swoole\Coroutine\run(static function () use ($client, &$error, &$elapsedMs): void {
+            $method = new \ReflectionMethod(PluginCatalogService::class, 'asyncFetch');
+            $method->setAccessible(true);
+            $start = hrtime(true);
+            try {
+                $method->invoke(null, $client, 'https://example.com/plugins.json', 1);
+            } catch (\Throwable $e) {
+                $error = $e;
+            }
+            $elapsedMs = (hrtime(true) - $start) / 1_000_000.0;
+        });
+
+        self::assertInstanceOf(\RuntimeException::class, $error);
+        self::assertStringContainsString('async fetch timed out', $error->getMessage());
+        self::assertNotNull($elapsedMs);
+        self::assertGreaterThanOrEqual(
+            900.0,
+            $elapsedMs,
+            'a clean in-coroutine timeout must wait the window, not return immediately (the false-timeout bug).',
+        );
     }
 }

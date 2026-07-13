@@ -271,6 +271,98 @@ $httpWorker->onWorkerStart = static function (Worker $w) use ($config, $publicRo
         }
     }
 
+    // SV-3.6a: Trakt → Phlix watched-history pull-sync. The Trakt scrobbler
+    // plugin wires only the PUSH direction inline (PlaybackStopped → Trakt); the
+    // PULL direction (TraktHistorySync::syncTraktToPhlix) was fully built but had
+    // no scheduler, so a connected Trakt account's watched history never flowed
+    // back into local WatchHistory. Plugins expose NO scheduling hook
+    // (LifecycleInterface has none), so the periodic pull Timer must live here in
+    // the resident HTTP worker — worker-0-gated (mirroring the DVR boot-recovery /
+    // scheduler gates above) so 14 HTTP workers don't each run the sync, and it is
+    // NOT mirrored in public/index.php (the single-shot CGI path runs no timers).
+    //
+    // Like the DVR scheduler above, the Workerman Swoole event adapter wraps every
+    // Timer callback in Coroutine::create() (safeCall), so the pull's de-blocked
+    // HTTP client (SV-3.6b) + its \Co\sleep 429-backoff yield to the event loop
+    // inside the tick; the body is additionally wrapped in try/catch so a sync
+    // failure can never bubble out and kill the worker or cancel the timer. The
+    // https transport still takes the accepted blocking-curl branch (EventLoopTls),
+    // so the work is deliberately kept on worker 0 only (the gate) with no extra
+    // concurrency.
+    //
+    // The tick resolves a FRESH entry instance each fire via
+    // PluginLoader::getEntryInstance() (which applies the DB-persisted settings so
+    // runtime enable/token changes are picked up) — the resident server does not
+    // bootstrapEnabled() plugins at boot, so we cannot rely on a live enabled
+    // instance existing in this worker process.
+    if ((int) $w->id === 0) {
+        try {
+            /** @var \Phlix\Plugins\PluginLoader $pluginLoader */
+            $pluginLoader = $container->get(\Phlix\Plugins\PluginLoader::class);
+
+            // Manifest name of the Trakt scrobbler (phlix-plugin-trakt/plugin.json).
+            $traktPluginName = 'phlix-plugin-trakt';
+            $installedTrakt = $pluginLoader->getInstalled($traktPluginName);
+            $traktSettings = \Phlix\Plugins\Scrobbler\Trakt\TraktSettings::fromArray(
+                $installedTrakt->settings,
+            );
+            $traktIntervalMinutes = $traktSettings->syncIntervalMinutes;
+
+            // Respect a disabled config: only arm when the plugin is enabled,
+            // two-way sync is on, and the interval is a positive number of minutes.
+            // Per-tick gating (tokens/username present) is enforced inside
+            // syncHistoryFromTrakt(), so a stale-but-armed timer safely no-ops.
+            if ($installedTrakt->enabled && $traktSettings->syncEnabled && $traktIntervalMinutes > 0) {
+                \Workerman\Timer::add(
+                    $traktIntervalMinutes * 60,
+                    static function () use ($pluginLoader, $container, $traktPluginName): void {
+                        try {
+                            $plugin = $pluginLoader->getEntryInstance($traktPluginName);
+                            if ($plugin instanceof \Phlix\Plugins\Scrobbler\Trakt\TraktPlugin) {
+                                $written = $plugin->syncHistoryFromTrakt($container);
+                                LoggerFactory::get(LogChannels::PLUGINS)->info(
+                                    'Trakt pull-sync tick complete',
+                                    ['items_written' => $written],
+                                );
+                            }
+                        } catch (\Throwable $e) {
+                            LoggerFactory::get(LogChannels::PLUGINS)->error(
+                                'Trakt pull-sync tick failed',
+                                ['error' => $e->getMessage()],
+                            );
+                        }
+                    },
+                );
+
+                LoggerFactory::get(LogChannels::PLUGINS)->info(
+                    'Trakt pull-sync timer armed',
+                    ['interval_minutes' => $traktIntervalMinutes],
+                );
+            } else {
+                LoggerFactory::get(LogChannels::PLUGINS)->debug(
+                    'Trakt pull-sync timer not armed (plugin disabled, sync off, or interval <= 0)',
+                    [
+                        'enabled'          => $installedTrakt->enabled,
+                        'sync_enabled'     => $traktSettings->syncEnabled,
+                        'interval_minutes' => $traktIntervalMinutes,
+                    ],
+                );
+            }
+        } catch (\Phlix\Plugins\Exception\PluginNotFoundException) {
+            // Trakt plugin not installed — nothing to sync. Not an error.
+            LoggerFactory::get(LogChannels::PLUGINS)->debug(
+                'Trakt plugin not installed; pull-sync timer not armed',
+            );
+        } catch (\Throwable $e) {
+            // A pull-sync wiring failure must never stop the HTTP worker from
+            // serving. Log and continue.
+            LoggerFactory::get(LogChannels::PLUGINS)->error(
+                'Trakt pull-sync timer wiring failed',
+                ['error' => $e->getMessage()],
+            );
+        }
+    }
+
     /** @var MetricsCollector $metricsCollector */
     $metricsCollector = $container->get(MetricsCollector::class);
 

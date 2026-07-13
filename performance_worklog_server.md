@@ -5805,3 +5805,87 @@ transport selection AND `\Co\sleep` gate fall back to blocking cURL / `usleep`. 
   the upstream Swoole-TLS stall is fixed (EventLoopTls flips to false). The genuine de-block that
   matters right now on the loop is the sleep conversion; the transport now matches the rest of the
   repo instead of being an unconditional blocking outlier.
+
+## Implementer — SV-3.6a (wire worker-0-gated periodic Trakt pull-sync Timer) — 2026-07-13
+
+**Scope (exactly this, nothing else):** arm the periodic Trakt→Phlix PULL timer in `start.php` and
+resolve the profileId inconsistency. Did NOT touch reconciliation/resume/pagination inside
+`syncTraktToPhlix` (3.6c/3.6d), the HTTP path (3.6b, already landed), or tests (3.6e).
+
+**Files changed (2):**
+- `start.php` — added a worker-0-gated (`(int) $w->id === 0`) block in the HTTP worker's
+  `onWorkerStart`, placed right after the SV-3.1c DVR scheduler block and mirroring its exact idiom
+  (worker-0 gate + arm-time try/catch + a `Workerman\Timer::add` whose callback is try/catch-wrapped
+  and relies on the Swoole event adapter's `Coroutine::create`/safeCall wrap — NO manual
+  `Coroutine::create`, same as the DVR scheduler / metrics-flush timers). At arm time it resolves
+  `PluginLoader` from the container, reads the installed `phlix-plugin-trakt` settings via
+  `getInstalled()`, and arms `Timer::add($syncIntervalMinutes * 60, …)` ONLY when
+  `installed.enabled && settings.sync_enabled && interval > 0` (respects a disabled config — logs a
+  debug line and does not arm otherwise; `PluginNotFoundException` → debug "not installed", any other
+  throwable → logged error, never crashes the worker). Each tick resolves a FRESH entry instance via
+  `PluginLoader::getEntryInstance()` (re-reads DB-persisted settings so runtime enable/token changes
+  are picked up) and calls the new `TraktPlugin::syncHistoryFromTrakt($container)`. Logs via
+  `LogChannels::PLUGINS`.
+- `src/Plugins/Scrobbler/Trakt/TraktPlugin.php` — added:
+  - `public const DEFAULT_PROFILE_ID = 'default'` (single source of truth for the scrobbler profile;
+    updated the push path `syncToTrakt()`'s previously-hardcoded `getForMediaItem('default', …)` at
+    old line 501 to use it). Left `TraktHistorySync.php:174`'s `'default'` literal untouched (inside
+    `syncPhlixToTrakt`, out of 3.6a scope — noted below).
+  - `public function syncHistoryFromTrakt(ContainerInterface $container, string $profileId =
+    self::DEFAULT_PROFILE_ID): int` — thin wiring entry point mirroring the private push wrapper
+    `syncToTrakt()`: self-wires runtime collaborators via `onEnable($container)` when missing (the
+    resident server never calls `bootstrapEnabled()` — see finding — and `getEntryInstance()` applies
+    settings but not `onEnable()`), gates on `isConfigured() && settings->syncEnabled`, then builds a
+    `TraktHistorySync` from current settings and delegates to `syncTraktToPhlix($profileId)`. Adds NO
+    reconciliation logic.
+
+**profileId decision — SINGLE-profile → use `'default'`.** Trakt is one-account-per-server today: a
+single `TraktSettings::$username`, no per-Phlix-profile Trakt mapping, and the push path already
+hardcodes `'default'` (`TraktPlugin.php:501`, `TraktHistorySync.php:174`). The pull now mirrors that
+via the new `DEFAULT_PROFILE_ID` const. Multi-profile (a Trakt account per Phlix profile, one sync
+per profile) is documented in the const + method docblocks as a future extension (callers would loop
+over configured profiles). No multi-profile config exists in the code — did NOT invent one.
+
+**TraktSettings interval field:** `syncIntervalMinutes` (int, MINUTES, default 30, from
+`sync_interval_minutes` in the plugin `settings_json`). Converted minutes→seconds (`* 60`) for
+`Timer::add`. Disabled-config behavior: timer is NOT armed when the plugin is disabled, `sync_enabled`
+is false, or the interval ≤ 0.
+
+**DI binding added: NONE.** `TraktHistorySync` and its deps (`TraktApi`, `TraktSettings`) are
+intentionally NOT registered in the container — a static PHP-DI singleton binding would freeze the
+plugin's settings (OAuth tokens, username, interval, enable flag) at container-build time, which is
+wrong because those are dynamic (re-auth / enable toggles persist to the `plugins.settings_json`
+column at runtime). The correct resolution path is the plugin itself: `PluginLoader` (already
+container-registered) → `getEntryInstance()` re-reads the live persisted settings each tick, and the
+plugin builds a fresh `TraktHistorySync` per sync (exactly as the push path already does on-demand).
+
+**Verification (verbatim):**
+- `php -l start.php` → `No syntax errors detected in start.php`; `php -l …/TraktPlugin.php` → clean.
+- `phpstan analyse -c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress` (full `src`) →
+  `[OK] No errors`. (`start.php` is outside phpstan's `paths: [src]`, so it is `php -l`-only;
+  correctness reasoned against the neighboring DVR scheduler / metrics timers it mirrors.)
+- `phpcs --standard=PSR12 start.php` → 0 errors. `phpcs …/TraktPlugin.php` → 0 ERRORS, 1 pre-existing
+  line-length WARNING at line 470 (inside `ensureFreshToken`, not mine — noted already in SV-3.6b).
+- `phpunit --filter Trakt --no-coverage` → **OK (63 tests, 131 assertions)**.
+- `phpunit PluginLoaderTest + ContainerFactoryTest + HttpHandlerWiringTest` → **OK (69 tests)**.
+
+**Findings noted (NOT fixed here — out of 3.6a scope):**
+- **`PluginLoader::bootstrapEnabled()` is never called in any production boot path** (`start.php`,
+  `public/index.php`, `Application.php`, `ContainerFactory` — grep confirms only tests call it). So
+  enabled plugins are NOT re-attached after a restart, and `enable()` only ever runs in the single
+  HTTP worker that served an admin toggle. This is why 3.6a resolves the plugin fresh + self-wires
+  via `onEnable()` rather than trusting a live enabled instance. Broader plugin prod-inertness gap —
+  likely worth its own step; affects PUSH scrobbling across restarts too.
+- **Token-refresh is not persisted:** `TraktPlugin::setAccessToken/setRefreshToken` mutate only
+  in-memory settings; refreshed tokens are never written back to `plugins.settings_json`. The PULL
+  path never triggers a refresh (`syncTraktToPhlix` catches the 401 `TraktApiException` and returns
+  0), so this doesn't break the pull, but an expired access token silently no-ops the sync until
+  re-auth. Pre-existing; out of scope.
+- **3.6c (resume positions):** `syncTraktToPhlix` (`TraktHistorySync.php:93-137`) still force-writes
+  `STATUS_COMPLETED` (full duration ticks) and parses `watched_at` at :121 only to log it — the
+  parsed timestamp is discarded rather than used for last-write-wins. Untouched.
+- **3.6d (pagination):** `getWatchedHistory` is still called with hardcoded `page=1, limit=100`
+  (`TraktHistorySync.php:80-85`); no page loop honoring `X-Pagination-Page-Count`. Untouched.
+- Trakt→local mapping depends on `media_items.metadata_json` carrying `{tmdb_id,tvdb_id,imdb_id}`
+  (`findMediaItemIdByExternalId` JSON_EXTRACTs `$.<type>_id`). Did NOT audit the scanner's population
+  of those here (mapping is inside the already-built sync, not wiring).

@@ -42,6 +42,19 @@ final class TraktPlugin implements LifecycleInterface
      */
     public const PLUGIN_TYPE = 'scrobbler';
 
+    /**
+     * Profile the scrobbler reconciles watch history into.
+     *
+     * Trakt is single-profile today: one connected Trakt account (one
+     * {@see TraktSettings::$username}) with no per-Phlix-profile mapping, so
+     * BOTH sync directions use this identifier — the push path
+     * ({@see self::syncToTrakt()}) and the SV-3.6a pull path
+     * ({@see self::syncHistoryFromTrakt()}). Multi-profile (a Trakt account per
+     * Phlix profile, one sync per profile) is a future extension; when it lands,
+     * the callers iterate over configured profiles instead of this constant.
+     */
+    public const DEFAULT_PROFILE_ID = 'default';
+
     private ?ItemRepository $itemRepository = null;
     private ?WatchHistory $watchHistory = null;
     private ?LoggerInterface $logger = null;
@@ -120,6 +133,67 @@ final class TraktPlugin implements LifecycleInterface
         $this->itemRepository = null;
         $this->watchHistory = null;
         $this->db = null;
+    }
+
+    /**
+     * Run a Trakt → Phlix watched-history pull for the given profile.
+     *
+     * Thin wiring entry point for the resident-worker pull-sync Timer
+     * (SV-3.6a, armed worker-0-gated in `start.php`). It mirrors the push path
+     * {@see self::syncToTrakt()}: it builds a {@see TraktHistorySync} from the
+     * plugin's current (DB-persisted) settings + collaborators and delegates the
+     * actual reconciliation to {@see TraktHistorySync::syncTraktToPhlix()} — this
+     * method adds NO reconciliation logic of its own (resume positions and
+     * pagination live inside the sync, sub-steps 3.6c/3.6d).
+     *
+     * The resident server does not call {@see PluginLoader::bootstrapEnabled()}
+     * at boot, so the Timer resolves a fresh entry instance each tick via
+     * {@see PluginLoader::getEntryInstance()} — which applies the persisted
+     * settings (so runtime enable/token changes are picked up) but does NOT call
+     * {@see self::onEnable()}. This method therefore wires its runtime
+     * collaborators itself (idempotently) when they are missing; `onEnable()` only
+     * resolves container services + builds the API client (no I/O, no listener
+     * subscriptions — that happens in {@see PluginLoader::enable()}), so it is
+     * safe to call here on the sync cadence.
+     *
+     * @param ContainerInterface $container Host container for collaborator lookup.
+     * @param string $profileId Profile to reconcile history into. Defaults to the
+     *     single-profile {@see self::DEFAULT_PROFILE_ID}, consistent with the push
+     *     path; multi-profile is a future extension.
+     *
+     * @return int Number of local history entries written (0 when not
+     *     configured/enabled or two-way sync is disabled).
+     *
+     * @since 1.2.2 (SV-3.6a)
+     */
+    public function syncHistoryFromTrakt(
+        ContainerInterface $container,
+        string $profileId = self::DEFAULT_PROFILE_ID,
+    ): int {
+        if ($this->api === null || $this->watchHistory === null || $this->db === null) {
+            $this->onEnable($container);
+        }
+
+        if (!$this->isConfigured() || !$this->settings->syncEnabled) {
+            return 0;
+        }
+
+        // Defensive: onEnable() leaves these null when operator credentials are
+        // absent (initApi() no-ops) or a container binding is missing. Without
+        // them a TraktHistorySync cannot be built, so skip this cycle.
+        if ($this->api === null || $this->watchHistory === null || $this->db === null) {
+            return 0;
+        }
+
+        $sync = new TraktHistorySync(
+            $this->api,
+            $this->watchHistory,
+            $this->settings,
+            $this->db,
+            $this->logger,
+        );
+
+        return $sync->syncTraktToPhlix($profileId);
     }
 
     /**
@@ -498,7 +572,7 @@ final class TraktPlugin implements LifecycleInterface
             return;
         }
 
-        $entry = $this->watchHistory->getForMediaItem('default', $mediaItemId);
+        $entry = $this->watchHistory->getForMediaItem(self::DEFAULT_PROFILE_ID, $mediaItemId);
         $progress = $entry['progress_percent'] ?? 0;
         if ($entry === null || !is_numeric($progress) || (float) $progress < 90.0) {
             return;

@@ -5742,6 +5742,102 @@ still owed a Fixer pass.
 
 ---
 
+## Implementer — SV-3.6c (reconcile Trakt resume positions + last-write-wins) — 2026-07-13
+
+**Scope (exactly this, nothing else):** stop force-writing `STATUS_COMPLETED` for every reconciled
+Trakt item; pull in-progress playback from Trakt and reconcile it into local resume positions; use
+`parseWatchedAt()`/`paused_at` for last-write-wins. Did NOT touch pagination (3.6d — `getWatchedHistory`
+is still hardcoded `page=1,limit=100`), the HTTP transport (3.6b), the Timer wiring (3.6a), or tests
+(3.6e). No new tests added here.
+
+**Local watch-state/progress model (for the reviewer):** `Phlix\Auth\WatchHistory` →
+`watch_history` table (mig 002). Per (profile_id, media_item_id) row:
+`position_ticks` (int), `duration_ticks` (int|null), `progress_percent` (float 0-100),
+`playback_status` ENUM(playing/paused/stopped/completed), `last_watched_at` (TIMESTAMP — the
+comparable "last updated" field), `completed_at`. Tick scale: **10000 ticks = 1s**
+(`TICKS_PER_SECOND`). `updateProgress($profile,$item,$posTicks,$durTicks,$status)` DERIVES
+`progress_percent` from position/duration and auto-promotes to COMPLETED at ≥90%; it **always** stamps
+`last_watched_at = date('Y-m-d H:i:s')` (now, PHP default TZ) and does NOT accept an external event
+time. This is the model I reconcile INTO — I did not invent a parallel store. Duration for an item
+lives in `watch_history.duration_ticks` (once played) or `media_items.metadata_json.duration_seconds`
+(ffprobe container duration, seconds — persisted by the scanner, read by `MediaItemShaper`);
+`media_items` has NO duration column.
+
+**Files changed (2):**
+- `src/Plugins/Scrobbler/Trakt/TraktApi.php` — added `getPlaybackProgress(string $accessToken = '',
+  ?string $type = null, int $limit = 100): array`, mirroring `getWatchedHistory()` VERBATIM (same
+  Bearer auth via `$http->get`, same coroutine-safe client, same 429/5xx retry loop with jittered
+  backoff + `\Co\sleep`/usleep-fallback, same exception handling). Endpoint `GET /sync/playback`
+  (+ optional `/movies`|`/episodes`; other `$type` values ignored → all). It is OAuth-user-scoped (no
+  username segment) and not paginated, so one request returns the full in-progress set — NOT a
+  pagination loop.
+- `src/Plugins/Scrobbler/Trakt/TraktHistorySync.php` — split `syncTraktToPhlix()` into two
+  fault-isolated reconcilers (each own try/catch, each returns its own count; a failure in one no
+  longer zeroes the other — the old code returned 0 on any history-fetch error):
+  - `reconcileWatchedHistory()` — fully-watched → `updateProgress(..., STATUS_COMPLETED)` **as before**
+    but now GUARDED: skip if `isLocallyCompleted()` (idempotent) and skip if `!traktSupersedes()`
+    (local `last_watched_at` newer than Trakt `watched_at`). `parseWatchedAt()` is now actually USED
+    (was computed-then-discarded).
+  - `reconcilePlaybackProgress()` — NEW: for each in-progress item, resolve local id via the SAME
+    `findMediaItemId`/`findMediaItemIdByExternalId` path; extract `progress` (0-100, clamped); skip if
+    `isLocallyCompleted()` (never downgrade completed→in-progress); apply last-write-wins on
+    `paused_at`; resolve an absolute duration (local `duration_ticks` → metadata `duration_seconds`);
+    write `updateProgress(profile,id, round(dur*pct/100), dur, STATUS_PAUSED)` — the model then derives
+    the percent. NOT a forced 100%.
+  - New helpers: `stringKeyedMap`, `parsePausedAt`, `parseTraktTimestamp` (parseWatchedAt now
+    delegates to it), `traktSupersedes`, `parseLocalTimestamp`, `isLocallyCompleted`,
+    `extractProgressPercent`, `resolvePlaybackDurationTicks`, `lookupDurationTicksFromMetadata`.
+  Return-value semantics intact: still `int` = total items written (completions + resumes); the 3.6a
+  timer logs it.
+
+**How last-write-wins is enforced:** `traktSupersedes($traktTs, $existing)` returns true only when the
+Trakt event time (`watched_at`/`paused_at`) is strictly newer than the existing local
+`last_watched_at`; both are parsed to absolute instants (`new \DateTimeImmutable` — Trakt strings carry
+a UTC offset; the local naive DATETIME is interpreted in PHP's default TZ, the same TZ `date()` wrote
+it in, so both are correct provided the process default TZ is stable within a deployment). If
+`$existing` is null (no local row) or has no comparable timestamp, the guard returns true but the
+separate `isLocallyCompleted()` status guard still prevents downgrading a completed item — so the
+fallback stays defensively correct.
+
+**Limitations (reported, not shipped-wrong):**
+1. **Duration for resume positions is LOCAL-sourced.** Trakt's `/sync/playback` (and `/watched`) omit
+   `runtime` unless `extended=full` is requested (this pull mirrors getWatchedHistory and does not).
+   So a resume position is written only when a local duration is known (a prior local play, or the
+   scanner's `duration_seconds`); an in-progress Trakt item whose local media item has never been
+   played AND has no scanned duration is SKIPPED (logged debug) rather than persisting a wrong seek.
+   The common last-write-wins case (Trakt vs a locally-known position) works. This also sidesteps the
+   pre-existing `extractDurationTicks()` runtime-unit bug (Trakt runtime is MINUTES; that method treats
+   it as seconds — harmless for the completed path where position==duration==X ⇒ any X gives the same
+   status, but it would be wrong for a resume position, so the playback path does NOT use it).
+2. **`updateProgress()` re-stamps `last_watched_at = now()`**, so after a reconcile the persisted local
+   timestamp is "now", not the Trakt event time. The guard compares the INCOMING Trakt timestamp vs the
+   EXISTING local one (correct for preventing rollback); on the next sync the same Trakt entry (older
+   than the now-stamped local) is skipped (idempotent). I did NOT change `updateProgress`'s signature
+   (out of scope + shared with the player's progress path).
+
+**Existing tests:** none asserted the old force-100 behavior — `TraktHistorySyncTest` only tests
+`TraktSettings` flags (its own docblock admits it does not test the sync), and `TraktApiTest` tests
+`getWatchedHistory` fetch/endpoint only. So NO existing test expectation needed updating.
+
+**Verification (verbatim):**
+- `phpstan analyse -c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress` (full src) → **[OK] No errors**.
+- `phpcs --standard=PSR12 src/Plugins/Scrobbler/Trakt/` → **0 ERRORS** (only pre-existing + a few new
+  line-length WARNINGS, allowed).
+- `phpunit --filter Trakt --no-coverage` → **OK (63 tests, 131 assertions)**.
+
+**Notes for 3.6d (pagination) / 3.6e (tests) — NOT implemented:**
+- 3.6d: `reconcileWatchedHistory` still calls `getWatchedHistory($user,1,100,$token)` — the page loop
+  (honor `X-Pagination-Page-Count`, `\Co\sleep` between pages) goes here. `getPlaybackProgress` is NOT
+  paginated by Trakt, so leave it single-shot.
+- 3.6e: reconciliation is now testable via a mocked `TraktApi` (feed `getWatchedHistory` +
+  `getPlaybackProgress` fixtures) + a mocked `WatchHistory`/`Connection`. Use the `_resolved_media_item_id`
+  test seam in `findMediaItemId` to bypass DB id resolution. Key cases to cover: watched→completed;
+  playback→resume position (position = dur*pct/100, status PAUSED); last-write-wins skip (local
+  `last_watched_at` newer than Trakt ts); don't-downgrade-completed skip; no-duration skip;
+  `getPlaybackProgress` 429/backoff. `MockHttpClient` already records `lastMethod`/`lastUrl` for an
+  endpoint assertion (`/sync/playback`). Pre-existing observation (affects getWatchedHistory too, not
+  fixed here): the Trakt client sends no `trakt-api-key`/`trakt-api-version` headers — out of 3.6c scope.
+
 ## Implementer — SV-3.6b (de-block Trakt HTTP path) — 2026-07-13 — ✅ DONE (commit `51e6a16e`, pushed origin/master)
 
 **Scope (exactly this, nothing else):** de-block the Trakt PULL-sync HTTP path so it can later be

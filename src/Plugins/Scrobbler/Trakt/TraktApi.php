@@ -462,6 +462,94 @@ class TraktApi
     }
 
     /**
+     * Get in-progress playback items for the authenticated user
+     * (for Trakt → Phlix resume-position sync).
+     *
+     * Calls Trakt's `GET /sync/playback[/{type}]` endpoint, which returns the
+     * user's currently in-progress items — each carrying a `progress` float
+     * (0-100), a `paused_at` ISO-8601 timestamp, and the movie/episode
+     * identifiers (trakt/tmdb/tvdb/imdb) under the same `movie`/`episode`.`ids`
+     * shape the watched-history endpoint uses. Unlike watched history this is
+     * scoped to the OAuth user (no username path segment) and is not paginated,
+     * so a single request returns the full in-progress set.
+     *
+     * Implements the same retry-with-jittered-backoff loop as
+     * {@see self::getWatchedHistory()} for 429/5xx responses (SV-3.5 pattern).
+     *
+     * @param string $accessToken OAuth access token
+     * @param string|null $type Optional type filter: 'movies' or 'episodes'
+     *   (null = both). Any other value is ignored and all types are fetched.
+     * @param int $limit Items to request (Trakt caps this server-side)
+     *
+     * @return array<mixed> In-progress playback items
+     *
+     * @throws TraktApiException|TraktAuthenticationException On API error
+     * @since 1.2.3 (SV-3.6c)
+     */
+    public function getPlaybackProgress(string $accessToken = '', ?string $type = null, int $limit = 100): array
+    {
+        $headers = [];
+        if ($accessToken !== '') {
+            $headers['Authorization'] = 'Bearer ' . $accessToken;
+        }
+
+        $params = [
+            'limit' => min($limit, 1000),
+        ];
+
+        $url = self::BASE_URL . '/sync/playback';
+        if ($type === 'movies' || $type === 'episodes') {
+            $url .= '/' . $type;
+        }
+
+        // Retry loop with jittered exponential backoff for rate-limit/server errors (SV-3.5 pattern)
+        $lastException = null;
+        for ($attempt = 0; $attempt <= self::RETRY_MAX_ATTEMPTS; $attempt++) {
+            try {
+                $response = $this->http->get($url, $params, $headers);
+
+                $this->logger->debug('Trakt playback progress response', [
+                    'type' => $type ?? 'all',
+                    'count' => count($response),
+                ]);
+
+                return $response;
+            } catch (TraktRateLimitException $e) {
+                $lastException = $e;
+                if ($attempt < self::RETRY_MAX_ATTEMPTS) {
+                    $delayMs = $this->computeBackoffDelayMs($attempt);
+                    $this->logger->info('Trakt rate-limited on playback, backing off before retry', [
+                        'attempt' => $attempt + 1,
+                        'delay_ms' => $delayMs,
+                        'error' => $e->getMessage(),
+                    ]);
+                    // Coroutine-friendly sleep mirroring getWatchedHistory(): \Co\sleep
+                    // yields to the event loop so the resident worker keeps serving other
+                    // connections during the backoff; usleep is the non-Swoole fallback.
+                    $delaySeconds = $delayMs / 1_000;
+                    if (function_exists('\Co\sleep')) {
+                        \Co\sleep($delaySeconds);
+                    } else {
+                        usleep((int) ($delayMs * 1_000));
+                    }
+                    continue;
+                }
+                throw $e;
+            } catch (TraktApiException $e) {
+                // Non-rate-limit API exception: re-throw immediately
+                throw $e;
+            }
+        }
+
+        // Should not reach here, but if it does, throw the last exception
+        if ($lastException !== null) {
+            throw $lastException;
+        }
+
+        return [];
+    }
+
+    /**
      * Add a media item to Trakt watched history (for Phlix → Trakt sync).
      *
      * @param MediaItem $item Media item that was watched

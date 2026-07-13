@@ -50,17 +50,29 @@ class TraktHistorySync
     }
 
     /**
-     * Sync Trakt watched history → Phlix local history.
+     * Sync Trakt watched history + in-progress playback → Phlix local history.
      *
-     * Pulls the user's watched history from Trakt and compares against
-     * local WatchHistory entries. For items watched on Trakt but not yet
-     * ≥ 90% complete in Phlix, writes a local entry.
+     * Reconciles two Trakt sources into the local {@see WatchHistory} model:
      *
-     * Uses last-write-wins based on watchedAt timestamp.
+     *  1. Watched history (`/users/{user}/watched`) → fully-watched entries are
+     *     marked completed locally.
+     *  2. Playback progress (`/sync/playback`) → in-progress entries write a
+     *     resume position (position/duration ticks + the model's derived
+     *     percent), NOT a forced 100%.
+     *
+     * Both sources are guarded by last-write-wins: a Trakt entry only overwrites
+     * the local record when the Trakt timestamp (`watched_at` / `paused_at`) is
+     * newer than the local `last_watched_at`, so a periodic pull can never roll
+     * back a fresher local resume position. A locally-completed item is never
+     * downgraded to in-progress.
+     *
+     * Each source fetch is independently fault-tolerant: a failure fetching one
+     * source (or exhausting its rate-limit backoff) is logged and contributes 0,
+     * without discarding the other source's writes.
      *
      * @param string $profileId Profile ID to sync history for
      *
-     * @return int Number of new entries written
+     * @return int Number of local entries written (completions + resumes)
      *
      * @since 0.14.0
      */
@@ -76,6 +88,31 @@ class TraktHistorySync
             return 0;
         }
 
+        $written = $this->reconcileWatchedHistory($profileId)
+            + $this->reconcilePlaybackProgress($profileId);
+
+        $this->logger->info('TraktHistorySync: completed Trakt→Phlix sync', [
+            'profile_id' => $profileId,
+            'items_written' => $written,
+        ]);
+
+        return $written;
+    }
+
+    /**
+     * Reconcile Trakt fully-watched history into local completions.
+     *
+     * For each Trakt watched item that maps to a local media item and is not
+     * already completed locally, marks the local entry completed — guarded by
+     * last-write-wins so an older Trakt watch never clobbers a fresher local
+     * in-progress position.
+     *
+     * @param string $profileId Profile to reconcile into.
+     *
+     * @return int Number of entries marked completed.
+     */
+    private function reconcileWatchedHistory(string $profileId): int
+    {
         try {
             $history = $this->api->getWatchedHistory(
                 $this->settings->username,
@@ -84,7 +121,7 @@ class TraktHistorySync
                 $this->settings->accessToken ?? ''
             );
         } catch (TraktApiException $e) {
-            $this->logger->warning('TraktHistorySync: failed to fetch Trakt history', [
+            $this->logger->warning('TraktHistorySync: failed to fetch Trakt watched history', [
                 'error' => $e->getMessage(),
             ]);
             return 0;
@@ -101,26 +138,25 @@ class TraktHistorySync
                 continue;
             }
 
-            $itemMap = [];
-            foreach ($item as $iKey => $iValue) {
-                if (is_string($iKey)) {
-                    $itemMap[$iKey] = $iValue;
-                }
-            }
-
+            $itemMap = $this->stringKeyedMap($item);
             $existing = $this->watchHistory->getForMediaItem($profileId, $mediaItemId);
 
-            if ($existing !== null && $existing['progress_percent'] >= WatchHistory::COMPLETED_THRESHOLD) {
-                $this->logger->debug('TraktHistorySync: item already at 90%+, skipping', [
+            // Idempotent: already completed locally — nothing to upgrade.
+            if ($existing !== null && $this->isLocallyCompleted($existing)) {
+                continue;
+            }
+
+            // Last-write-wins: do not clobber a fresher local (in-progress)
+            // position with an older Trakt "watched" event.
+            $watchedAt = $this->parseWatchedAt($itemMap);
+            if (!$this->traktSupersedes($watchedAt, $existing)) {
+                $this->logger->debug('TraktHistorySync: local record newer than Trakt watch, skipping', [
                     'media_item_id' => $mediaItemId,
-                    'progress' => $existing['progress_percent'],
                 ]);
                 continue;
             }
 
-            $watchedAt = $this->parseWatchedAt($itemMap);
             $durationTicks = $this->extractDurationTicks($itemMap);
-
             $this->watchHistory->updateProgress(
                 $profileId,
                 $mediaItemId,
@@ -130,16 +166,102 @@ class TraktHistorySync
             );
 
             $written++;
-            $this->logger->debug('TraktHistorySync: wrote entry from Trakt', [
+            $this->logger->debug('TraktHistorySync: marked completed from Trakt history', [
                 'media_item_id' => $mediaItemId,
                 'watched_at' => $watchedAt->format('c'),
             ]);
         }
 
-        $this->logger->info('TraktHistorySync: completed Trakt→Phlix sync', [
-            'profile_id' => $profileId,
-            'items_written' => $written,
-        ]);
+        return $written;
+    }
+
+    /**
+     * Reconcile Trakt in-progress playback into local resume positions.
+     *
+     * Writes the resume position (position/duration ticks) for items Trakt
+     * reports as in-progress rather than a forced completion. Guarded by
+     * last-write-wins and never downgrades a locally-completed item.
+     *
+     * A resume position is only meaningful with a known absolute duration.
+     * Trakt's playback response omits runtime unless `extended=full` is
+     * requested (this pull does not request it, mirroring getWatchedHistory),
+     * so the duration is taken from a locally-known source (a prior local play's
+     * `duration_ticks`, or the scanner's `metadata_json.duration_seconds`).
+     * When no local duration is available the item is skipped rather than
+     * persisting a bogus seek position.
+     *
+     * @param string $profileId Profile to reconcile into.
+     *
+     * @return int Number of resume positions written.
+     */
+    private function reconcilePlaybackProgress(string $profileId): int
+    {
+        try {
+            $playback = $this->api->getPlaybackProgress($this->settings->accessToken ?? '');
+        } catch (TraktApiException $e) {
+            $this->logger->warning('TraktHistorySync: failed to fetch Trakt playback progress', [
+                'error' => $e->getMessage(),
+            ]);
+            return 0;
+        }
+
+        $written = 0;
+
+        foreach ($playback as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $mediaItemId = $this->findMediaItemId($item);
+            if ($mediaItemId === null) {
+                continue;
+            }
+
+            $itemMap = $this->stringKeyedMap($item);
+
+            $progressPercent = $this->extractProgressPercent($itemMap);
+            if ($progressPercent === null || $progressPercent <= 0.0) {
+                continue;
+            }
+
+            $existing = $this->watchHistory->getForMediaItem($profileId, $mediaItemId);
+
+            // Never downgrade a locally-completed item back to in-progress.
+            if ($existing !== null && $this->isLocallyCompleted($existing)) {
+                continue;
+            }
+
+            // Last-write-wins: do not overwrite a fresher local position with an
+            // older Trakt paused_at.
+            $pausedAt = $this->parsePausedAt($itemMap);
+            if (!$this->traktSupersedes($pausedAt, $existing)) {
+                continue;
+            }
+
+            $durationTicks = $this->resolvePlaybackDurationTicks($mediaItemId, $existing);
+            if ($durationTicks <= 0) {
+                $this->logger->debug('TraktHistorySync: no known duration, skipping resume position', [
+                    'media_item_id' => $mediaItemId,
+                    'trakt_progress' => $progressPercent,
+                ]);
+                continue;
+            }
+
+            $positionTicks = (int) round($durationTicks * ($progressPercent / 100.0));
+            $this->watchHistory->updateProgress(
+                $profileId,
+                $mediaItemId,
+                $positionTicks,
+                $durationTicks,
+                WatchHistory::STATUS_PAUSED
+            );
+
+            $written++;
+            $this->logger->debug('TraktHistorySync: wrote resume position from Trakt', [
+                'media_item_id' => $mediaItemId,
+                'progress_percent' => $progressPercent,
+                'paused_at' => $pausedAt->format('c'),
+            ]);
+        }
 
         return $written;
     }
@@ -291,7 +413,25 @@ class TraktHistorySync
     }
 
     /**
-     * Parse watched_at timestamp from a Trakt history item.
+     * Narrow a raw Trakt item to a string-keyed map for timestamp/field parsing.
+     *
+     * @param array<mixed, mixed> $item Raw Trakt item (may carry int keys).
+     *
+     * @return array<string, mixed>
+     */
+    private function stringKeyedMap(array $item): array
+    {
+        $map = [];
+        foreach ($item as $key => $value) {
+            if (is_string($key)) {
+                $map[$key] = $value;
+            }
+        }
+        return $map;
+    }
+
+    /**
+     * Parse the `watched_at` timestamp from a Trakt history item.
      *
      * @param array<string, mixed> $item Trakt history item
      *
@@ -299,14 +439,192 @@ class TraktHistorySync
      */
     private function parseWatchedAt(array $item): \DateTimeImmutable
     {
-        $watchedAt = $item['watched_at'] ?? null;
-        if ($watchedAt !== null && is_string($watchedAt)) {
+        return $this->parseTraktTimestamp($item, 'watched_at');
+    }
+
+    /**
+     * Parse the `paused_at` timestamp from a Trakt playback item.
+     *
+     * @param array<string, mixed> $item Trakt playback item
+     *
+     * @return \DateTimeImmutable
+     */
+    private function parsePausedAt(array $item): \DateTimeImmutable
+    {
+        return $this->parseTraktTimestamp($item, 'paused_at');
+    }
+
+    /**
+     * Parse an ISO-8601 timestamp field from a Trakt item.
+     *
+     * Falls back to "now" for a missing/invalid value, preserving the prior
+     * defensive-write behavior: a malformed Trakt timestamp is treated as the
+     * newest, so the item is not silently dropped by last-write-wins.
+     *
+     * @param array<string, mixed> $item Trakt item
+     * @param string $field Field name (`watched_at` or `paused_at`)
+     *
+     * @return \DateTimeImmutable
+     */
+    private function parseTraktTimestamp(array $item, string $field): \DateTimeImmutable
+    {
+        $value = $item[$field] ?? null;
+        if (is_string($value) && $value !== '') {
             try {
-                return new \DateTimeImmutable($watchedAt);
+                return new \DateTimeImmutable($value);
             } catch (\Exception) {
             }
         }
         return new \DateTimeImmutable();
+    }
+
+    /**
+     * Whether a Trakt event should overwrite the local record (last-write-wins).
+     *
+     * Only overwrites when the Trakt timestamp is strictly newer than the local
+     * `last_watched_at`, so a periodic pull never rolls back a fresher local
+     * resume position.
+     *
+     * Limitation: the local `last_watched_at` is a naive DATETIME written by
+     * {@see WatchHistory::updateProgress()} via `date()` in PHP's default
+     * timezone, while Trakt timestamps carry an explicit UTC offset; both parse
+     * to correct absolute instants as long as the process default timezone is
+     * stable between the local write and this read (it is within a deployment).
+     * If the local model has no comparable timestamp the guard defers to the
+     * caller's status guards (which already refuse to downgrade a completed
+     * item), so the fallback stays defensively correct.
+     *
+     * @param \DateTimeImmutable $traktTs Trakt event timestamp.
+     * @param array<string, mixed>|null $existing Local watch-history entry, if any.
+     *
+     * @return bool True when the Trakt event supersedes the local record.
+     */
+    private function traktSupersedes(\DateTimeImmutable $traktTs, ?array $existing): bool
+    {
+        if ($existing === null) {
+            return true;
+        }
+        $localTs = $this->parseLocalTimestamp($existing);
+        if ($localTs === null) {
+            return true;
+        }
+        return $traktTs > $localTs;
+    }
+
+    /**
+     * Parse the local `last_watched_at` timestamp from a watch-history entry.
+     *
+     * @param array<string, mixed> $existing Local watch-history entry.
+     *
+     * @return \DateTimeImmutable|null Parsed timestamp, or null when absent/invalid.
+     */
+    private function parseLocalTimestamp(array $existing): ?\DateTimeImmutable
+    {
+        $raw = $existing['last_watched_at'] ?? null;
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        try {
+            return new \DateTimeImmutable($raw);
+        } catch (\Exception) {
+            return null;
+        }
+    }
+
+    /**
+     * Whether a local watch-history entry is already completed.
+     *
+     * Checks the explicit completed status (covers manual "mark watched", which
+     * carries progress_percent 0) as well as the progress threshold.
+     *
+     * @param array<string, mixed> $existing Local watch-history entry.
+     *
+     * @return bool
+     */
+    private function isLocallyCompleted(array $existing): bool
+    {
+        $status = $existing['playback_status'] ?? null;
+        if (is_string($status) && $status === WatchHistory::STATUS_COMPLETED) {
+            return true;
+        }
+        $progress = $existing['progress_percent'] ?? null;
+        return is_numeric($progress) && (float) $progress >= WatchHistory::COMPLETED_THRESHOLD;
+    }
+
+    /**
+     * Extract the in-progress percent (0-100) from a Trakt playback item.
+     *
+     * @param array<string, mixed> $item Trakt playback item.
+     *
+     * @return float|null Clamped percent, or null when absent/invalid.
+     */
+    private function extractProgressPercent(array $item): ?float
+    {
+        $raw = $item['progress'] ?? null;
+        if (!is_numeric($raw)) {
+            return null;
+        }
+        $percent = (float) $raw;
+        if ($percent < 0.0) {
+            return null;
+        }
+        return min($percent, 100.0);
+    }
+
+    /**
+     * Resolve an absolute duration (ticks) for a resume-position computation.
+     *
+     * Priority: the local entry's stored `duration_ticks` (from a prior play),
+     * then the scanner's `media_items.metadata_json.duration_seconds`. Returns 0
+     * when no local duration is known (the caller then skips the item).
+     *
+     * @param string $mediaItemId Resolved local media item id.
+     * @param array<string, mixed>|null $existing Local watch-history entry, if any.
+     *
+     * @return int Duration in ticks (0 when unknown).
+     */
+    private function resolvePlaybackDurationTicks(string $mediaItemId, ?array $existing): int
+    {
+        if ($existing !== null) {
+            $stored = $existing['duration_ticks'] ?? null;
+            if (is_numeric($stored) && (int) $stored > 0) {
+                return (int) $stored;
+            }
+        }
+        return $this->lookupDurationTicksFromMetadata($mediaItemId);
+    }
+
+    /**
+     * Look up a media item's duration (ticks) from its scanned metadata.
+     *
+     * Reads `metadata_json.$.duration_seconds` (populated by the scanner from the
+     * ffprobe container duration) and converts seconds → ticks.
+     *
+     * @param string $mediaItemId Local media_items.id.
+     *
+     * @return int Duration in ticks (0 when unknown).
+     */
+    private function lookupDurationTicksFromMetadata(string $mediaItemId): int
+    {
+        $result = $this->db->query(
+            "SELECT JSON_EXTRACT(metadata_json, '$.duration_seconds') AS dur
+             FROM media_items WHERE id = ? LIMIT 1",
+            [$mediaItemId]
+        );
+
+        if (!is_array($result)) {
+            return 0;
+        }
+        $row = $result[0] ?? null;
+        if (!is_array($row)) {
+            return 0;
+        }
+        $dur = $row['dur'] ?? null;
+        if (!is_numeric($dur)) {
+            return 0;
+        }
+        $seconds = (int) $dur;
+        return $seconds > 0 ? $seconds * WatchHistory::TICKS_PER_SECOND : 0;
     }
 
     /**

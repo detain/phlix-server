@@ -18,7 +18,11 @@
 --   2. Before BEGIN, verify the precondition:
 --        - Check the target column/table does NOT exist
 --        - OR check schema_migrations does NOT have this migration recorded
---   3. After COMMIT, INSERT INTO schema_migrations VALUES ('name', UNIX_TIMESTAMP(), MD5(...))
+--   3. The runner AUTOMATICALLY records the file in schema_migrations after a
+--      clean apply (INSERT ... ON DUPLICATE KEY UPDATE with the file's MD5), so
+--      a migration does not need to INSERT its own row. If it does (e.g. to gate
+--      a precondition), the runner's own record — keyed on the file's checksum —
+--      wins via ON DUPLICATE KEY UPDATE.
 --   4. Document the rewrite in this header so future operators understand
 --      what state the migration assumes.
 --
@@ -32,9 +36,14 @@
 --   divergence should be visible.
 --
 -- No `down` column — downgrades are new forward-only migration files that
--- reverse the change (e.g. 077_undo_076_*.sql), each inserting its own row.
+-- reverse the change (e.g. 077_undo_076_*.sql), each recorded by the runner.
 --
--- @see scripts/run-migrations.php The runner that consults this table.
+-- @see \Phlix\Common\Database\MigrationRunner::run() consults AND records this
+--      table (skips a recorded+checksum-matching file, warns + re-applies on a
+--      checksum divergence, records each cleanly-applied file). The runner
+--      also bootstrap-creates this table before its first read, so it does not
+--      rely on `076` running first. Invoked by both scripts/run-migrations.php
+--      and `bin/phlix migrate`.
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     name        VARCHAR(255) NOT NULL,

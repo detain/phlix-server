@@ -26,8 +26,14 @@ use Workerman\MySQL\Connection;
  *
  *   - All `*.sql` files in the migrations directory are discovered with
  *     `glob()` and `sort()`ed (lexicographic order, same as the script).
- *   - Every file is applied on every run — there is **no** migration-tracking
- *     table. The apply-all-every-time idempotent contract is preserved.
+ *   - An applied-migrations ledger (`schema_migrations`, SV-4.9) is consulted
+ *     and recorded: a file whose name is recorded AND whose checksum still
+ *     matches is SKIPPED (not re-executed); an un-recorded file is applied and
+ *     then recorded. A recorded file whose checksum has DIVERGED (the `.sql`
+ *     was edited since it was applied) is re-applied — matching the project's
+ *     "re-run safe" contract — with a WARNING, and its recorded checksum is
+ *     refreshed. The historical apply-every-file behaviour therefore only
+ *     survives as the ledger's transition/fallback path (see {@see run()}).
  *   - Each file is split into individual statements (comments stripped) and
  *     every statement is run via {@see Connection::query()}.
  *   - Statement-level exceptions whose message matches a known
@@ -46,6 +52,14 @@ use Workerman\MySQL\Connection;
  */
 final class MigrationRunner
 {
+    /**
+     * Name of the applied-migrations ledger table (SV-4.9). Kept in sync with
+     * `migrations/076_schema_migrations.sql`. The runner bootstrap-creates it
+     * (idempotently) before the first read so the ledger is available even on a
+     * fresh database where `076` has not yet been reached in sort order.
+     */
+    private const LEDGER_TABLE = 'schema_migrations';
+
     /** @var callable(): Connection */
     private $connectionProvider;
 
@@ -79,21 +93,26 @@ final class MigrationRunner
      * statement of each `*.sql` file. The return value lets a caller render a
      * human summary and decide on an exit code:
      *
-     *   - `applied`: basenames of every migration file that was processed
-     *     (one entry per file, in execution order).
+     *   - `applied`: basenames of every migration file whose statements were
+     *     EXECUTED this run (one entry per file, in execution order). A file
+     *     skipped because the ledger already records it with a matching
+     *     checksum is NOT listed here — see `skipped_count`/`notes`.
      *   - `notes`:   human-readable messages for idempotent errors that were
-     *     downgraded (e.g. "duplicate column" on a replay).
+     *     downgraded (e.g. "duplicate column" on a replay), plus one
+     *     "<file> already applied (ledger), skipping" line per ledger-skipped
+     *     file.
      *   - `errors`:  human-readable messages for genuine, non-idempotent
      *     statement failures. A non-empty list signals a failure to the
      *     caller, but — exactly like the original script — does NOT abort the
      *     run: every remaining statement and file is still attempted.
-     *   - `skipped_count`: how many of the `notes` entries are of the
-     *     "already applied" class (duplicate column / duplicate key /
-     *     table-or-index already exists — see
-     *     {@see isAlreadyAppliedNote()}). Callers can render a single
-     *     "N statements skipped (already applied)" summary line instead of
-     *     echoing each duplicate note on every deploy, while still printing
-     *     any note that falls outside that class in full.
+     *   - `skipped_count`: how many statements/files were skipped as "already
+     *     applied" — both the idempotent-error class (duplicate column /
+     *     duplicate key / table-or-index already exists — see
+     *     {@see isAlreadyAppliedNote()}) AND files skipped up front because the
+     *     ledger already records them with a matching checksum. Callers can
+     *     render a single "N skipped (already applied)" summary line instead of
+     *     echoing each on every deploy, while still printing any note that
+     *     falls outside that class in full.
      *
      * A failure to obtain the connection (provider throwing) or to read the
      * filesystem propagates as an uncaught exception, mirroring the script's
@@ -112,12 +131,68 @@ final class MigrationRunner
 
         $connection = ($this->connectionProvider)();
 
+        // No files → no ledger work and no queries at all (mirrors the empty /
+        // absent migrations directory yielding no work). The connection is
+        // still resolved above, exactly as the original script obtained `$db`
+        // up front.
+        if ($files === []) {
+            return [
+                'applied' => $applied,
+                'notes' => $notes,
+                'errors' => $errors,
+                'skipped_count' => $skippedCount,
+            ];
+        }
+
+        // SV-4.9 — bootstrap the ledger table before the first read. This is
+        // idempotent (`CREATE TABLE IF NOT EXISTS`) and mirrors
+        // `migrations/076_schema_migrations.sql`; doing it here guarantees the
+        // ledger exists even on a fresh DB where `076` has not yet been reached
+        // in sort order.
+        $this->ensureLedgerTable($connection);
+
+        // Read the applied-migrations ledger (name => checksum).
+        //
+        // TRANSITION SAFETY: on a box that already has every migration applied
+        // but an EMPTY ledger — the current live state, where `076` created the
+        // table yet nothing ever populated it — this SELECT returns no rows, so
+        // every file is treated as un-recorded and re-applied. That is safe
+        // because each migration's own `IF NOT EXISTS` / the duplicate-error
+        // squelch below tolerates the replay, and each file is then RECORDED.
+        // On subsequent runs the ledger is populated and unchanged files are
+        // skipped without executing. A failure to read the ledger degrades to
+        // the same "empty ledger" path (apply-all), never a hard failure.
+        $ledger = $this->loadLedger($connection);
+
         foreach ($files as $file) {
             $name = basename($file);
+            $sql = (string) file_get_contents($file);
+            $checksum = md5($sql);
+
+            if (isset($ledger[$name])) {
+                if ($ledger[$name] === $checksum) {
+                    // Recorded and unchanged — skip WITHOUT executing.
+                    $skippedCount++;
+                    $notes[] = sprintf('%s already applied (ledger), skipping', $name);
+                    $this->logger?->info('Migration skipped (ledger)', ['file' => $name]);
+                    continue;
+                }
+
+                // Recorded but the file content changed since it was applied
+                // (a hotfix / rewrite-class edit). Matching the "re-run safe"
+                // contract we do NOT hard-fail: log a warning and re-apply, then
+                // refresh the recorded checksum after a clean apply below.
+                $this->logger?->warning('Migration checksum diverged; re-applying', [
+                    'file' => $name,
+                    'recorded_checksum' => $ledger[$name],
+                    'current_checksum' => $checksum,
+                ]);
+            }
+
             $applied[] = $name;
             $this->logger?->info('Running migration', ['file' => $name]);
 
-            $sql = (string) file_get_contents($file);
+            $fileHadGenuineError = false;
 
             foreach (self::splitStatements($sql) as $statement) {
                 try {
@@ -133,6 +208,7 @@ final class MigrationRunner
                             'message' => $e->getMessage(),
                         ]);
                     } else {
+                        $fileHadGenuineError = true;
                         $errors[] = $e->getMessage();
                         $this->logger?->error('Migration error', [
                             'file' => $name,
@@ -140,6 +216,16 @@ final class MigrationRunner
                         ]);
                     }
                 }
+            }
+
+            // Record (or refresh) the ledger row only after a clean apply.
+            // A file that raised a genuine (non-idempotent) error is left
+            // UNRECORDED so it is re-attempted next run — honouring the
+            // project's "a failed migration is not recorded / re-run safe"
+            // contract. Idempotent "already applied" notes are NOT failures, so
+            // a legitimately-replayed file is still recorded.
+            if (!$fileHadGenuineError) {
+                $this->recordMigration($connection, $name, $checksum);
             }
         }
 
@@ -149,6 +235,84 @@ final class MigrationRunner
             'errors' => $errors,
             'skipped_count' => $skippedCount,
         ];
+    }
+
+    /**
+     * Bootstrap the ledger table (idempotent). Never aborts a run: if the
+     * table cannot be created/verified we fall back to the historical
+     * apply-every-file behaviour, which the duplicate-error squelch keeps safe.
+     */
+    private function ensureLedgerTable(Connection $connection): void
+    {
+        try {
+            $connection->query(
+                'CREATE TABLE IF NOT EXISTS ' . self::LEDGER_TABLE . ' ('
+                . 'name VARCHAR(255) NOT NULL, '
+                . 'applied_at INT UNSIGNED NOT NULL, '
+                . 'checksum CHAR(32) NOT NULL, '
+                . 'PRIMARY KEY (name)'
+                . ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+            );
+        } catch (Throwable $e) {
+            $this->logger?->warning('Could not ensure migration ledger table', [
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Read the applied-migrations ledger as a `name => checksum` map. Any read
+     * failure degrades to an empty map (treat every file as un-recorded), never
+     * a hard failure — see the transition-safety note in {@see run()}.
+     *
+     * @return array<string, string>
+     */
+    private function loadLedger(Connection $connection): array
+    {
+        try {
+            $rows = $connection->query('SELECT name, checksum FROM ' . self::LEDGER_TABLE);
+        } catch (Throwable $e) {
+            $this->logger?->warning('Could not read migration ledger; treating as empty', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+
+        $ledger = [];
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                if (is_array($row) && isset($row['name'], $row['checksum'])) {
+                    $ledger[(string) $row['name']] = (string) $row['checksum'];
+                }
+            }
+        }
+
+        return $ledger;
+    }
+
+    /**
+     * Record (INSERT ... ON DUPLICATE KEY UPDATE) a cleanly-applied migration
+     * in the ledger. Parameterised via `?` placeholders (the safe
+     * {@see Connection::query()} idiom — no raw PDO/mysqli). A write failure is
+     * logged and swallowed: the migration itself already applied; a missing
+     * ledger row only means it is re-applied (safely) next run.
+     */
+    private function recordMigration(Connection $connection, string $name, string $checksum): void
+    {
+        try {
+            $connection->query(
+                'INSERT INTO ' . self::LEDGER_TABLE . ' (name, applied_at, checksum) '
+                . 'VALUES (?, ?, ?) '
+                . 'ON DUPLICATE KEY UPDATE applied_at = VALUES(applied_at), checksum = VALUES(checksum)',
+                [$name, time(), $checksum]
+            );
+        } catch (Throwable $e) {
+            $this->logger?->warning('Could not record migration in ledger', [
+                'file' => $name,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

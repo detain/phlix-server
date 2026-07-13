@@ -2645,3 +2645,94 @@ is per-using-class (shared across instances of a provider, keyed by host) — a 
 class per remote host, so this fully addresses the "concurrent instances collectively violate"
 finding; a truly cross-class global map was intentionally not added (would need a new shared file,
 out of the 4-file scope).
+
+## Orchestrator — SV-4.5 implemented (2026-07-12/13, perf-5)
+- [x] SV-4.5 async I/O — impl f1576377, REVIEW NO FINDINGS (Channel gated on isEventLoopRunning()&&inCoroutine(); MB static-per-host LRU cap64; swoole-ON coroutine tests execute). Full Unit 4995/0. DONE (docs batched).
+
+## Reviewer (per-step SV-4.5) — 2026-07-13
+
+Reviewed commit `f1576377` against the S-F15/S-F16 findings, the SV-4.5 acceptance,
+and the highest-priority Channel-gate bug class (SV-0.4/SV-4.11). Read the actual
+gates (not just green tests); ran the targeted suite (98/98, swoole ON so the
+coroutine-yield tests genuinely execute, not skip) + phpstan (0 in-context).
+
+Criterion-by-criterion:
+1. **Channel gate — CORRECT.** `RokuEcpClient::preferAsyncHttp()` (:368-371) and
+   `RemoteRokuClient::preferAsyncHttp()` (:224-227) both return
+   `WorkerContext::isEventLoopRunning() && WorkerContext::inCoroutine()`. The
+   `Swoole\Coroutine\Channel::pop()` async path (`fetchAsync`/`httpPostAsync`) is
+   reachable ONLY when `getCid()>0`. NOT the isEventLoopRunning()-alone defect.
+2. **coroutineAwareSleep / rateLimitSleep — CORRECT.** All three sleeps
+   (RokuEcpClient:448, RemoteRokuClient:297, HdHomeRunTunerDriver:coroutineAwareSleep,
+   trait rateLimitSleep:128) gate `Swoole\Coroutine::sleep()` on `inCoroutine()`,
+   blocking `usleep` only outside a coroutine — never a blocking usleep in-coroutine.
+3. **MB static-per-host limiter — CORRECT.** `private static array $hostLastRequestTime`
+   shared across instances of a using-class (proven by testStateIsSharedAcrossInstances);
+   keyed by lower-cased `BASE_URL` host; LRU-bounded at cap 64 with unset+reassign touch
+   + array_key_first eviction (testHostMapIsBoundedWithLruEviction proves count stays at
+   cap and the oldest host is evicted). Two using-classes (MusicBrainzProvider→musicbrainz.org,
+   AudioDbProvider→theaudiodb.com) hit DISTINCT hosts, so the PHP per-using-class trait-static
+   causes no double-spend — acceptable per the finding's guidance.
+4. **Blocking path preserved — CORRECT.** fetchBlocking/httpPostBlocking retained and
+   selected outside a coroutine (testPreferAsyncHttpIsFalseOutsideCoroutine).
+5. **No new loop-blocking calls; workerman/http-client usage matches the sibling async
+   clients' Channel(1)+push-on-success/error+pop(timeout) pattern.** No exit/die, no
+   request state in statics beyond the bounded host map.
+6. **Tests exercise the coroutine branch** (swoole present → the yield tests run and pass)
+   and the shared-limiter + bounded-map behaviors.
+
+NO FINDINGS
+
+## ON-BOX VERIFY (perf-5, 2026-07-13) — server @3c73fe0a (pre SV-4.5/4.9)
+PASS: migrations 077 applied; SV-4.7 WS auth on :8097 (token-less rejected / valid JWT accepted); SV-0.5 WS ping/reaper (pinged ~30s, reaped at t+77s per limit); >64KB bodied-relay round-trip.
+CANNOT-VERIFY: DVR end-to-end (livetv_tuners 0 rows, no tuner/hardware); QSV hwupload (box is a QEMU VM, bochs-drm, not Intel HW — boot probe chose software/libx264, VAAPI/NVENC correct).
+⚠️ X1 direct-path FAIL: direct (non-relay) transcode client killed mid-encode → ffmpeg alive 7.4s+ (only `timeout 7200` backstop). ROOT CAUSE: `FfmpegRunner::killSegmentProcess()` has NO caller anywhere; only `killGroup()` (relay HTTP_CANCEL via RelayConsumer) is wired. Direct-LAN disconnects get no cancellation. → FOLLOW-UP SV-4.2-disconnect: wire killSegmentProcess to a direct-connection disconnect/abort hook (was the deferred piece; on-box proves real orphan-CPU impact).
+
+## Re-audit (perf-5) — SV-1.7–1.10
+- SV-1.7 range parser reuse — **DONE.** HttpHandler:752-766 uses TranscodeFileServer::parseRange (anchored, over-long clamp→206, suffix bytes=-N). Covered via HlsControllerTest/ThemeMediaStreamControllerTest (shared parser). Minor: direct serveMediaStream path itself untested (same static method).
+- SV-1.8 CSRF Origin exact-match (SECURITY) — **DONE (code).** RequestAuthenticator:223-244 hostsMatch exact compare, no str_ends_with; host:port handled; gate HttpHandler:126-140 (cookie-auth POST/PUT/DELETE/PATCH → 403 csrf.invalid_origin). GAP: ZERO CSRF tests (no RequestAuthenticatorTest) — plan mandated suffix-attack-rejected/port-accepted/cross-origin-rejected. → TEST. (Minor: no configured trusted-origins list, only own Host — fine for same-origin.)
+- SV-1.9 ENOSPC guard — **DONE (code+wired).** TranscodeManager:1461-1484 ensureDiskSpace (disk_free_space vs minDiskSpaceBytes default 500MiB) called before startSegmentEncode @812/@1032; HlsController:147-156 catches SegmentCacheFullException→sweep+503+Retry-After. GAPS: ZERO ENOSPC tests; threshold NOT surfaced in config (TranscodeServicesProvider doesn't pass minDiskSpaceBytes; hardcoded default). → TEST + optional config key.
+- SV-1.10 login rate limiter bound — **NOT-DONE (INERT).** DbLoginRateLimitStore.php (bounded, DELETE LIMIT 100 sweep) + migration 074 exist but store NEVER injected: AuthServicesProvider:167-175 autowires AuthManager naming logger/eventDispatcher/db/statsCollector/settingsRepository but NOT loginRateLimitStore → stays null → prod uses UNBOUNDED per-worker static $rateLimitStore (no sweep/LRU/cap; still ×workers). grep: zero DbLoginRateLimitStore refs outside AuthManager+its own file. Tests only hit the static fallback. → COMPLETE: add ->constructorParameter('loginRateLimitStore', get(DbLoginRateLimitStore::class)) in AuthServicesProvider; confirm mig 074 deploy; bound-or-test-restrict the static fallback; add DbLoginRateLimitStore bound/sweep test + prod-wiring test. (Parallels hub HB-4.6 login per-worker weakening — this DB store IS the shared/bounded fix on the server side.)
+
+### Server queue refined: SV-4.9(running) → SV-4.11(Channel gate) → SV-1.10(wire DB login store, inert-security) → SV-0.8(findPathsMap library_id) → SV-4.10(provider-priority) → SV-0.9(batch cmd) → SV-4.4(webhook) → SV-3.1 f/g/h → SV-3.6(Trakt) → SV-4.13-finish(+:594) → SV-4.2-disconnect(wire killSegmentProcess) → TEST top-ups (SV-0.6/0.7/1.8-CSRF/1.9-ENOSPC/4.8/4.12). Audits still owed: SV-1.1–1.6, SV-2.2/2.3/2.7(spawning), SV-3.3/3.4.
+
+## Implementer — SV-4.9 (wire schema_migrations ledger) — 2026-07-13
+Verdict was NOT-DONE (INERT): `migrations/076_schema_migrations.sql` created the table but nothing
+read/wrote it; `MigrationRunner` re-applied every `.sql` every boot. Now wired.
+
+Files changed:
+- `src/Common/Database/MigrationRunner.php` — ledger consult + record:
+  - `run()`: after resolving the connection (and early-returning if there are no files, so the
+    empty-dir test still issues zero queries), bootstrap `CREATE TABLE IF NOT EXISTS schema_migrations`
+    (new `ensureLedgerTable()`), then `loadLedger()` (`SELECT name, checksum`). Per file: compute
+    `md5($contents)`; if recorded+checksum-match → SKIP without executing (bump `skipped_count`, add a
+    "<file> already applied (ledger), skipping" note); if recorded+checksum-DIVERGED → log WARNING and
+    re-apply (honours the re-run-safe contract, does NOT hard-fail); un-recorded → apply as before.
+    After a CLEAN apply (`$fileHadGenuineError` false — idempotent notes are NOT failures) call
+    `recordMigration()` = `INSERT ... ON DUPLICATE KEY UPDATE` with `[name, time(), checksum]`
+    (positional `?` binding, Workerman\MySQL Connection — no raw PDO). A file with a genuine error is
+    left UNRECORDED so it re-runs next boot.
+  - New private helpers `ensureLedgerTable()`, `loadLedger()`, `recordMigration()` each swallow their
+    OWN exceptions (log-and-continue) so a ledger failure degrades to the historical apply-every-file
+    path, never aborts a run. `isAlreadyAppliedNote()` error-squelch KEPT as the secondary safety net.
+  - Class docblock corrected (removed the false "no migration-tracking table" claim).
+- `migrations/076_schema_migrations.sql` — header corrected: `@see` now points at
+  `MigrationRunner::run()` (consults AND records, bootstrap-creates, warns+re-applies on divergence),
+  and the rewrite-class guidance now states the runner auto-records (manual INSERT optional).
+- `tests/Unit/Common/Database/MigrationRunnerTest.php` — added `connectionWithLedger()` helper that
+  handles the new bookkeeping queries inertly; updated the 4 capture/count tests to route through it;
+  added 5 ledger tests: (a) clean apply records row w/ name+md5; (b) recorded+match SKIPPED, not
+  executed; (c) divergence WARNS + re-applies + refreshes checksum; (d) empty-ledger-but-applied
+  transition re-applies safely (idempotent note) + backfills; (e) bootstrap CREATE precedes the read.
+  NB: mock callbacks use `$params = null` (not `array`) because Workerman `Connection::query(...)`'s
+  2nd arg default is `null` — a typed `array` param throws TypeError under PHPUnit ReturnCallback.
+
+Transition safety (documented in a code comment in `run()`): on the current live boxes the table
+exists but the ledger is EMPTY; the SELECT returns no rows → every file treated as un-recorded →
+re-applied (safe via each migration's `IF NOT EXISTS` + the duplicate-error squelch) → then recorded.
+Subsequent boots skip unchanged files. Divergence = WARN + re-apply + refresh (never hard-fail).
+
+Verification: `phpunit --filter Migration` 22/22 · full `--testsuite Unit` 5000 tests, 38795
+assertions, 5 skipped, 0 failures · `phpstan analyze -c phpstan.neon.dist src/Common/Database/MigrationRunner.php`
+No errors · `phpcs --standard=PSR12` on both touched files clean. Both callers
+(`scripts/run-migrations.php`, `bin/phlix migrate`) unchanged.

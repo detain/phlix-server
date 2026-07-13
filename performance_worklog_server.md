@@ -3256,3 +3256,54 @@ empirically; the new 304 branch sits after that gate and does not touch it.
 STILL OPEN for SV-3.4: sub-6 (phlix-contracts `poster_srcset` local-path doc/test) and sub-7 (a
 dedicated end-to-end `serveArtwork` route test covering signed-URL/session auth + size-validation + 404
 alongside the ETag/304 paths — this sub-4 test already covers the 304/auth-order/404-order slices).
+
+## Reviewer (per-step, SV-3.4 sub-4, commit 3f6c3cc1) — 2026-07-13 (perf-7)
+**NO FINDINGS.** Ordering verified security-safe by reading top-to-bottom: method-guard → route-match →
+size validation → signed-URL/session auth → 404 existence → THEN 304 freshness — a 304 can never act as
+an existence/authorization oracle (directly tested: unsigned+matching-validator → 401 not 304;
+missing-variant+conditional-header → 404 not 304). ETag compare is strict `===` (no substring/prefix
+bug class). `strtotime()` on attacker-controlled If-Modified-Since degrades safely to 200 on parse
+failure. 304 has no body (`file===null`, empty rawBody). Cache-Control consistent 200/304 (actually
+tighter than the SV-2.5 reference, which diverges public/private). Empty-ETag/stat-failure guarded.
+Signed-URL canonicalization claim independently verified in `SignedUrl::canonicalResource()` (query
+stripped before HMAC — `?size=` correctly excluded, pre-existing behavior, untouched by this commit).
+8/8 + 90/90 + full Unit 5058/0 reconfirmed; phpstan/phpcs clean. **SV-3.4 sub-4 CODE-COMPLETE +
+review-clean.** Non-blocking notes (not findings): weak-validator `W/` prefix / `If-None-Match: *` not
+special-cased (safe direction — never a false 304 — and matches the SV-2.5 reference this mirrors);
+dedicated tampered-signature auth test deferred to sub-7 per plan. Remaining: sub-6 (contracts doc/test)
+→ sub-7 (dedicated route test).
+
+## Implementer — SV-3.4 sub-6 (phlix-contracts poster_srcset local-artwork docs/fixtures) — 2026-07-13
+Updated **phlix-contracts** so the `poster_srcset` contract accurately documents what the server NOW
+emits after the SV-3.4 DI-landmine fix (sub-1–4): a LOCAL sized-variant srcset pointing at the server's
+own `/api/v1/artwork/{id}?size=…` route (widths 185/342/500/780 + `original`, served with cache headers
+per SV-2.5) once artwork is downloaded/resized on match, with a fallback to the `image.tmdb.org` CDN
+width-swap srcset (or `null`) when no local variant is cached. Producer-side (server) contract catching
+up so the UI consumer (U-N7) builds against the real shape. Verified against the current server source:
+`ArtworkStorage::srcset()` (builds the local srcset from `relativePath()` → unsigned
+`/api/v1/artwork/{id}?size=<size> <width>w` entries), `ArtworkStorage::WIDTHS = [185,342,500,780]`
++ `ORIGINAL`, `LibraryMetadataMatcher::cacheArtworkLocally()` (writes `poster_srcset`; signs the `w500`
+`poster_url` via `ArtworkStorage::url()`), and `MediaItemShaper::shape()` (emits the stored
+`poster_srcset` when present, else `PosterSrcset::forPosterUrl()`).
+
+phlix-contracts commit **4b7ffd2** (`contracts: SV-3.4 sub-6 update poster_srcset docs/fixtures for local
+artwork URLs (was TMDB CDN)`), pushed to master. Files changed there:
+- `src/media.ts` — corrected the `MediaItem.poster_srcset` JSDoc (was "TMDB width variants /
+  `PosterSrcset::forPosterUrl(...)`") to describe both shapes: preferred local artwork srcset (with a
+  real `/api/v1/artwork/{id}?size=w185 185w, …w342, …w500, …w780` example + note that srcset entries are
+  unsigned relative paths while `poster_url` carries the signed `w500`) and the TMDB CDN fallback. Type
+  unchanged (`string | null`).
+- `test/types.test.ts` — replaced the stale `https://img/p_w342.jpg 342w, …` TMDB-style fixture with a
+  local `/api/v1/artwork/a1?size=…` srcset; added `expect(...).toContain('/api/v1/artwork/')` to lock in
+  the local shape (existing `toContain('342w')` still holds).
+- `CHANGELOG.md` — new `[Unreleased] → Changed` entry recording the doc/fixture correction.
+- `dist/media.d.ts` — regenerated via `npm run build` so the published `.d.ts` JSDoc matches (runtime
+  bundles unchanged — build diff was `dist/media.d.ts` only).
+Verification: `npm run typecheck` clean; `npm run test:run` = 5 files / 49 tests pass; `npm run build`
+succeeds (only `dist/media.d.ts` changed).
+
+**SV-3.4 status:** sub-1/2/3 (async download + DI wiring + config-driven storage), sub-4 (304 conditional
+caching on `serveArtwork`, review-clean), and **sub-6 (this)** all DONE. **sub-7** (a dedicated
+end-to-end `serveArtwork` route test covering signed-URL/session auth + size-validation + 404 alongside
+the ETag/304 paths) is the LAST remaining SV-3.4 sub-step. (sub-5 = dead duplicate `ArtworkController.php`
+stays in the §6 removal queue pending USER sign-off — do NOT delete.)

@@ -9,7 +9,9 @@ use Phlix\Common\Container\Providers\LiveTvServicesProvider;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\Recording\RecordingMediaRegistrar;
 use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\Media\Library\ItemRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
 
@@ -37,6 +39,8 @@ final class LiveTvServicesProviderTest extends TestCase
         // Satisfy the dependencies the provider resolves from the container.
         $builder->addDefinitions([
             Connection::class => $this->createMock(Connection::class),
+            // SV-3.1d: the RecordingMediaRegistrar factory resolves ItemRepository.
+            ItemRepository::class => $this->createMock(ItemRepository::class),
             'logger.livetv'   => new StructuredLogger('livetv', []),
             'app.config'      => [
                 'ffmpeg' => ['ffmpeg_path' => '/opt/custom/ffmpeg'],
@@ -87,11 +91,24 @@ final class LiveTvServicesProviderTest extends TestCase
         $this->assertSame('/srv/dvr', $this->readPrivate($recorder, 'storagePath'));
         $this->assertSame(1024, $this->readPrivate($recorder, 'maxStorageBytes'));
 
-        // A comskip onComplete hook was registered (the constructor pushes one
-        // when a ComskipLifecycleManager is supplied).
+        // Two onComplete hooks are registered: the comskip lifecycle hook
+        // (pushed by the Recorder constructor when a ComskipLifecycleManager is
+        // supplied) and the SV-3.1d media-item registrar hook (wired by the
+        // provider's Recorder factory).
         $callbacks = $this->readPrivate($recorder, 'onCompleteCallbacks');
         $this->assertIsArray($callbacks);
-        $this->assertNotEmpty($callbacks, 'comskip lifecycle hook must be wired');
+        $this->assertCount(2, $callbacks, 'comskip + media-item registrar hooks must be wired');
+    }
+
+    public function testRecordingMediaRegistrarIsWiredAsSharedSingleton(): void
+    {
+        $container = $this->buildContainer();
+
+        /** @var RecordingMediaRegistrar $registrar */
+        $registrar = $container->get(RecordingMediaRegistrar::class);
+        $this->assertInstanceOf(RecordingMediaRegistrar::class, $registrar);
+        // Per-worker singleton (PHP-DI caches the factory result).
+        $this->assertSame($registrar, $container->get(RecordingMediaRegistrar::class));
     }
 
     public function testStackIsSharedSingletons(): void

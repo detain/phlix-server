@@ -1724,15 +1724,19 @@ class Recorder
         $bufferDir = $this->timeShiftBufferDir($timeShiftId);
         $now = time();
 
-        if (!is_dir($bufferDir)) {
-            @mkdir($bufferDir, 0755, true);
-        }
-
-        // Persist the session row FIRST — with a NULL pid, BEFORE the capture is
-        // spawned. This closes the crash-orphan window: if the worker dies between
-        // the ffmpeg spawn and the DB write, a running capture would otherwise have
-        // no row and could never be reaped. Persisting first guarantees every
-        // spawned capture is preceded by a durable, reapable record. Failure-safe.
+        // CLAIM the session_id FIRST — persist a NULL-pid row via a plain INSERT
+        // (an EXCLUSIVE claim, not the silent save() upsert), BEFORE the capture is
+        // spawned. This does two things at once:
+        //  1. Closes the crash-orphan window: a running capture is always preceded
+        //     by a durable, reapable record (worker death between spawn and persist
+        //     can no longer leak an untracked ffmpeg).
+        //  2. Closes the concurrent-duplicate window: exactly one caller can win
+        //     the UNIQUE(session_id) INSERT; a racing loser aborts WITHOUT spawning
+        //     (below), so two same-session starts can never leave two live ffmpeg
+        //     processes / two untracked buffer dirs. The dir is created only AFTER
+        //     a won claim, so a loser leaves nothing behind.
+        // Failure-safe: a genuine DB error (not a collision) still best-effort
+        // spawns (bounded by the timeout wrapper + same-worker in-memory reap).
         $session = new TimeShiftSession(
             id: $timeShiftId,
             session_id: $sessionId,
@@ -1745,15 +1749,37 @@ class Recorder
             pid: null,
             status: TimeShiftSession::STATUS_ACTIVE,
         );
+        // Default true so a DB-down error (claim() re-throws) still best-effort
+        // spawns; only a genuine, detected collision sets this false.
+        $claimed = true;
         $persisted = false;
         try {
-            $this->timeShiftStore->save($session);
-            $persisted = true;
+            $claimed = $this->timeShiftStore->claim($session);
+            $persisted = $claimed;
         } catch (\Throwable $e) {
             $this->logger->error('Failed to persist time-shift session', [
                 'session_id' => $sessionId,
                 'error' => $e->getMessage(),
             ]);
+        }
+
+        if (!$claimed) {
+            // Lost the race to a concurrent start for the same playback session.
+            // Do NOT spawn a second capture and do NOT create a buffer dir — return
+            // the session the winner already claimed so this caller still points at
+            // the live buffer. No resource is leaked (nothing was spawned/created).
+            $this->logger->info('Time-shift start superseded by an existing session', [
+                'session_id' => $sessionId,
+                'channel_id' => $channelId,
+            ]);
+
+            return $this->existingTimeShiftResponse($sessionId, $now);
+        }
+
+        // Won the claim (or a DB error left us best-effort): create the buffer dir
+        // now, then spawn the capture into it.
+        if (!is_dir($bufferDir)) {
+            @mkdir($bufferDir, 0755, true);
         }
 
         // Resolve the tuner stream URL and spawn the rolling-buffer capture.
@@ -1776,11 +1802,16 @@ class Recorder
             ]);
         }
 
-        // Record the real capture pid onto the already-persisted row (the second
-        // half of the two-phase write that closes the orphan window). Failure-safe.
+        // Record the real capture pid onto the surviving row — keyed on SESSION_ID
+        // (not the transient $timeShiftId). The row that won the UNIQUE(session_id)
+        // claim/upsert may carry a different id than the fresh one this caller
+        // generated; keying on session_id guarantees the pid lands on the row
+        // findBySessionId()/getTimeShift() will return, never matching zero rows.
+        // Second half of the two-phase write that closes the orphan window.
+        // Failure-safe.
         if ($pid !== null && $persisted) {
             try {
-                $this->timeShiftStore->updatePid($timeShiftId, $pid);
+                $this->timeShiftStore->updatePidBySessionId($sessionId, $pid);
             } catch (\Throwable $e) {
                 $this->logger->error('Failed to record time-shift capture pid', [
                     'session_id' => $sessionId,
@@ -1815,6 +1846,47 @@ class Recorder
             'stream_url' => "/livetv/timeshift/$sessionId/stream",
             'buffer_start' => $now,
             'buffer_end' => $now,
+        ];
+    }
+
+    /**
+     * Build the start-response for a caller that LOST the exclusive claim race —
+     * resolve the session a concurrent start already claimed so the caller still
+     * points at the live rolling buffer, without having spawned a duplicate
+     * capture. Falls back to the caller's own time as a safe default if the
+     * winning row can no longer be resolved.
+     *
+     * @param string $sessionId   The owning playback session id (URL route key)
+     * @param int    $fallbackNow Epoch to use if the winner's row is unresolvable
+     * @return array{time_shift_id:string, stream_url:string, buffer_start:int, buffer_end:int}
+     *
+     * @since SV-3.1 f
+     */
+    private function existingTimeShiftResponse(string $sessionId, int $fallbackNow): array
+    {
+        $timeShiftId = $sessionId;
+        $bufferStart = $fallbackNow;
+        $bufferEnd = $fallbackNow;
+
+        try {
+            $existing = $this->timeShiftStore->findBySessionId($sessionId);
+            if ($existing !== null) {
+                $timeShiftId = $existing->id;
+                $bufferStart = $existing->buffer_start_at;
+                $bufferEnd = $existing->buffer_end_at;
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to resolve superseding time-shift session', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return [
+            'time_shift_id' => $timeShiftId,
+            'stream_url' => "/livetv/timeshift/$sessionId/stream",
+            'buffer_start' => $bufferStart,
+            'buffer_end' => $bufferEnd,
         ];
     }
 
@@ -1897,9 +1969,18 @@ class Recorder
     /**
      * Get time-shift info for a session.
      *
-     * Prefers this worker's in-memory entry (fast path); when absent, falls back
-     * to the cross-worker store so a session started on another worker is still
-     * resolvable (SV-3.1 f-b). Both paths return the SAME keys — id, session_id,
+     * Prefers this worker's in-memory entry (fast path) — but SELF-VALIDATES it
+     * first: a time-shift restart handled on ANOTHER worker deletes this session's
+     * original buffer_dir (and its row) and creates a fresh dir under a new row,
+     * without ever touching THIS worker's in-memory entry. An unconditional
+     * fast-path read would then shadow the authoritative store forever, serving a
+     * deleted dir → a persistent 503/404 on this worker only. So if the cached
+     * buffer_dir no longer exists on disk the entry is stale: drop it and fall
+     * through to the cross-worker store (the source of truth). A single is_dir()
+     * stat is cheap and does not block the event loop; the common valid case still
+     * returns from memory without a DB read per segment.
+     *
+     * When the store is used, both paths return the SAME keys — id, session_id,
      * channel_id, started_at, buffer_start, buffer_end, buffer_dir, pid and
      * current_position — so a consumer resolving a same-worker vs cross-worker
      * session sees an identical shape (the in-memory fast path seeds
@@ -1910,8 +1991,17 @@ class Recorder
      */
     public function getTimeShift(string $sessionId): ?array
     {
-        if (isset($this->activeTimeShifts[$sessionId])) {
-            return $this->activeTimeShifts[$sessionId];
+        $inMemory = $this->activeTimeShifts[$sessionId] ?? null;
+        if ($inMemory !== null) {
+            $bufferDir = $inMemory['buffer_dir'] ?? null;
+            // Valid fast path: the cached buffer dir still exists on disk.
+            if (is_string($bufferDir) && $bufferDir !== '' && is_dir($bufferDir)) {
+                return $inMemory;
+            }
+            // Stale (or malformed) fast-path entry — a cross-worker restart
+            // reclaimed this dir. Invalidate so it cannot mask the live store row,
+            // then fall through to the authoritative cross-worker lookup.
+            unset($this->activeTimeShifts[$sessionId]);
         }
 
         try {

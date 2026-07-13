@@ -462,4 +462,156 @@ class DbTimeShiftSessionStoreTest extends TestCase
         $this->assertSame(0, $session->cursor_position);
         $this->assertNull($session->created_at);
     }
+
+    /**
+     * claim() is an EXCLUSIVE claim — a PLAIN INSERT (no ON DUPLICATE KEY UPDATE),
+     * so a concurrent second start for the same session_id collides rather than
+     * silently overwriting the winner's row.
+     */
+    public function testClaimUsesPlainInsertAndReturnsTrueOnFreshRow(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('INSERT INTO livetv_timeshift_sessions'),
+                    // Must NOT be an upsert — a silent overwrite is the bug.
+                    $this->logicalNot($this->stringContains('ON DUPLICATE KEY UPDATE'))
+                ),
+                $this->callback(function ($params): bool {
+                    return is_array($params)
+                        && count($params) === 10
+                        && $params[0] === 'ts-1'
+                        && $params[1] === 'sess-9'
+                        && $params[4] === null;   // claim persists a NULL pid first
+                })
+            )
+            ->willReturn(null);
+
+        $session = new TimeShiftSession(
+            id: 'ts-1',
+            session_id: 'sess-9',
+            channel_id: 'chan-7',
+            buffer_dir: '/buf/ts-1',
+            buffer_start_at: 1000,
+            buffer_end_at: 8200,
+            window_seconds: 7200,
+        );
+
+        $this->assertTrue((new DbTimeShiftSessionStore($db))->claim($session));
+    }
+
+    /**
+     * A duplicate-key collision (another caller already claimed the session_id) is
+     * reported as a LOST race (false), not surfaced as an error, so the caller
+     * aborts without spawning a second capture.
+     */
+    public function testClaimReturnsFalseWhenSessionIdAlreadyClaimed(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) {
+                if (stripos($sql, 'INSERT') === 0) {
+                    throw new \RuntimeException(
+                        "Duplicate entry 'sess-9' for key 'uq_session_id'"
+                    );
+                }
+                // The re-resolve inside claim() finds the winner's row.
+                return [[
+                    'id' => 'winner', 'session_id' => 'sess-9', 'channel_id' => 'c',
+                    'buffer_dir' => '/buf/winner', 'pid' => 1234,
+                    'buffer_start_at' => 1, 'buffer_end_at' => 2,
+                    'window_seconds' => 7200, 'cursor_position' => 0, 'status' => 'active',
+                ]];
+            }
+        );
+
+        $session = new TimeShiftSession(
+            id: 'loser',
+            session_id: 'sess-9',
+            channel_id: 'c',
+            buffer_dir: '/buf/loser',
+            buffer_start_at: 1,
+            buffer_end_at: 2,
+            window_seconds: 7200,
+        );
+
+        $this->assertFalse((new DbTimeShiftSessionStore($db))->claim($session));
+    }
+
+    /**
+     * A genuine DB error (the INSERT failed but NO row appeared — not a collision)
+     * is re-thrown so the caller's failure-safe path can best-effort spawn.
+     */
+    public function testClaimRethrowsGenuineErrorWhenNoRowAppeared(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) {
+                if (stripos($sql, 'INSERT') === 0) {
+                    throw new \RuntimeException('Connection lost');
+                }
+                // Re-resolve finds nothing → not a collision → re-throw.
+                return [];
+            }
+        );
+
+        $session = new TimeShiftSession(
+            id: 'ts-x',
+            session_id: 'sess-x',
+            channel_id: 'c',
+            buffer_dir: '/buf/x',
+            buffer_start_at: 1,
+            buffer_end_at: 2,
+            window_seconds: 7200,
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Connection lost');
+        (new DbTimeShiftSessionStore($db))->claim($session);
+    }
+
+    /**
+     * updatePidBySessionId() keys the pid write on the UNIQUE(session_id) — NOT a
+     * transient row id — so the pid always lands on the row findBySessionId returns.
+     */
+    public function testUpdatePidBySessionIdKeysOnSessionId(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->logicalAnd(
+                    $this->stringContains('SET pid = ? WHERE session_id = ?'),
+                    $this->logicalNot($this->stringContains('WHERE id = ?'))
+                ),
+                $this->callback(function ($params): bool {
+                    return is_array($params)
+                        && $params[0] === 5150
+                        && is_int($params[0])
+                        && $params[1] === 'sess-9';   // WHERE key is the session_id
+                })
+            );
+
+        (new DbTimeShiftSessionStore($db))->updatePidBySessionId('sess-9', 5150);
+    }
+
+    public function testUpdatePidBySessionIdCanClearPidToNull(): void
+    {
+        $db = $this->createMockConnection();
+
+        $db->expects($this->once())
+            ->method('query')
+            ->with(
+                $this->stringContains('SET pid = ? WHERE session_id = ?'),
+                $this->callback(fn($p): bool => is_array($p) && $p[0] === null && $p[1] === 'sess-9')
+            );
+
+        (new DbTimeShiftSessionStore($db))->updatePidBySessionId('sess-9', null);
+    }
 }

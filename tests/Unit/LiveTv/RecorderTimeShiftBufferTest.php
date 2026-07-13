@@ -118,7 +118,8 @@ final class RecorderTimeShiftBufferTest extends TestCase
                     $state['insert'] = $params;
                     return null;
                 }
-                // updatePid: "UPDATE ... SET pid = ? WHERE id = ?" (params: [pid, id]).
+                // updatePidBySessionId: "UPDATE ... SET pid = ? WHERE session_id = ?"
+                // (params: [pid, sessionId]) — the pid is always params[0].
                 if (stripos($sql, 'UPDATE') === 0 && stripos($sql, 'pid') !== false) {
                     $state['pid_update'] = $params[0];
                     return 1;
@@ -371,5 +372,273 @@ final class RecorderTimeShiftBufferTest extends TestCase
         $recorder = $this->makeRecorder($db, $store, $logger, 0, $spawnCalls);
 
         $this->assertNull($recorder->getTimeShift('sess-stopped'));
+    }
+
+    /**
+     * FINDING 1 (concurrency, goal b): two concurrent starts for one session_id
+     * must NOT leave two live captures. The loser of the exclusive UNIQUE(session_id)
+     * claim must abort WITHOUT spawning a second ffmpeg (and without creating a
+     * second untracked buffer dir).
+     *
+     * Modelled at the store seam: the reap SELECT at the top of startTimeShift sees
+     * nothing (the winner had not claimed yet at reap time — the reachable
+     * "both reap first, then race the claim" interleaving), then the loser's plain
+     * INSERT collides on the UNIQUE(session_id) (the winner claimed in between) so
+     * the driver raises a duplicate-key error and every subsequent lookup resolves
+     * the winner's row.
+     *
+     * MUTATION GUARD: reverting startTimeShift's claim() back to the silent save()
+     * upsert (+ always-spawn) makes the loser spawn a second capture — flipping the
+     * `$spawnCalls === []` assertion RED.
+     */
+    public function testConcurrentDuplicateStartLosesClaimAndDoesNotSpawn(): void
+    {
+        $winnerRow = [
+            'id'              => 'winner-id',
+            'session_id'      => 'sess-race',
+            'channel_id'      => 'ch-race',
+            'buffer_dir'      => $this->storagePath . '/timeshift/winner-id',
+            'pid'             => 9999,
+            'buffer_start_at' => 1_700_000_000,
+            'buffer_end_at'   => 1_700_000_050,
+            'window_seconds'  => Recorder::TIMESHIFT_BUFFER_SECONDS,
+            'cursor_position' => 0,
+            'status'          => TimeShiftSession::STATUS_ACTIVE,
+        ];
+
+        $winnerVisible = false;
+
+        /** @var Connection&MockObject $db */
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$winnerVisible, $winnerRow) {
+                if (stripos($sql, 'INSERT') === 0) {
+                    // A concurrent worker won the UNIQUE(session_id) claim first.
+                    $winnerVisible = true;
+                    throw new \RuntimeException(
+                        "Duplicate entry 'sess-race' for key 'uq_session_id'"
+                    );
+                }
+                if (stripos($sql, 'SELECT') === 0) {
+                    // Reap (pre-INSERT) sees nothing; post-collision lookups resolve
+                    // the winner.
+                    return $winnerVisible ? [$winnerRow] : [];
+                }
+                // No DELETE/UPDATE should fire on the loser path; return benign.
+                return 1;
+            }
+        );
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $store = new DbTimeShiftSessionStore($db);
+
+        /** @var list<array{url:string, dir:string}> $spawnCalls */
+        $spawnCalls = [];
+        $recorder = $this->makeRecorder($db, $store, $logger, 4242, $spawnCalls);
+        $recorder->setLiveTvManager($this->managerReturning('http://tuner.local/race'));
+
+        $result = $recorder->startTimeShift('sess-race', 'ch-race');
+
+        // Goal (b): the loser did NOT spawn a second capture...
+        $this->assertSame([], $spawnCalls, 'lost claim must not spawn a second ffmpeg');
+        // ...nor create a second untracked buffer dir (mkdir is after a won claim)...
+        $this->assertDirectoryDoesNotExist(
+            $this->storagePath . '/timeshift',
+            'lost claim must not create a buffer dir'
+        );
+        // ...nor add an in-memory fast-path entry on this worker.
+        $this->assertSame(0, $recorder->getActiveTimeShiftCount());
+
+        // The caller still gets a usable response pointing at the winner's session.
+        $this->assertSame('/livetv/timeshift/sess-race/stream', $result['stream_url']);
+        $this->assertSame('winner-id', $result['time_shift_id']);
+        $this->assertSame(1_700_000_000, $result['buffer_start']);
+        $this->assertSame(1_700_000_050, $result['buffer_end']);
+    }
+
+    /**
+     * FINDING 1 (persist correctness, goal a): the real capture pid is recorded on
+     * the row keyed by SESSION_ID, so it always lands on the row
+     * findBySessionId()/getTimeShift() returns — never on a transient row id the
+     * upsert may have discarded (which would match zero rows and orphan the tuner).
+     *
+     * MUTATION GUARD: reverting updatePidBySessionId($sessionId,$pid) back to the
+     * id-keyed updatePid($timeShiftId,$pid) changes the WHERE clause to `id = ?`
+     * and binds the fresh time-shift id — flipping the assertions below RED.
+     */
+    public function testCapturePidRecordedOnSessionIdKeyedRow(): void
+    {
+        $insertParams = null;
+        $pidUpdateSql = null;
+        $pidUpdateParams = null;
+
+        /** @var Connection&MockObject $db */
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use (&$insertParams, &$pidUpdateSql, &$pidUpdateParams) {
+                if (stripos($sql, 'INSERT') === 0) {
+                    $insertParams = $params;
+                    return null;
+                }
+                if (stripos($sql, 'UPDATE') === 0 && stripos($sql, 'pid') !== false) {
+                    $pidUpdateSql = $sql;
+                    $pidUpdateParams = $params;
+                    return 1;
+                }
+                if (stripos($sql, 'SELECT') === 0) {
+                    return $insertParams === null ? [] : [];
+                }
+                return null;
+            }
+        );
+
+        $logger = $this->createMock(StructuredLogger::class);
+        $store = new DbTimeShiftSessionStore($db);
+
+        /** @var list<array{url:string, dir:string}> $spawnCalls */
+        $spawnCalls = [];
+        $fakePid = 1_234_567;
+        $recorder = $this->makeRecorder($db, $store, $logger, $fakePid, $spawnCalls);
+        $recorder->setLiveTvManager($this->managerReturning('http://tuner.local/pid'));
+
+        $recorder->startTimeShift('sess-pid', 'ch-pid');
+
+        $this->assertCount(1, $spawnCalls, 'winner spawns exactly one capture');
+        $this->assertNotNull($pidUpdateParams, 'the capture pid IS persisted');
+        $this->assertIsString($pidUpdateSql);
+
+        // The pid write is keyed on session_id, not the transient row id.
+        $this->assertStringContainsString('session_id = ?', (string) $pidUpdateSql);
+        $this->assertStringNotContainsString('WHERE id = ?', (string) $pidUpdateSql);
+
+        // params: [pid, sessionId] — the WHERE key is the SESSION id ('sess-pid'),
+        // NOT the fresh time-shift row id the INSERT generated. ($pidUpdateParams is
+        // already proven a non-null array by assertNotNull above.)
+        $this->assertSame($fakePid, $pidUpdateParams[0]);
+        $this->assertSame('sess-pid', $pidUpdateParams[1], 'pid write keyed on session_id');
+        $this->assertIsArray($insertParams);
+        $this->assertNotSame(
+            $insertParams[0],
+            $pidUpdateParams[1],
+            'pid write must NOT key on the transient row id'
+        );
+    }
+
+    /**
+     * FINDING 2 (cross-worker stale read): an in-memory fast-path entry whose
+     * buffer_dir has been reclaimed by a restart on another worker must be
+     * invalidated so getTimeShift() falls through to the authoritative store's live
+     * entry — rather than serving the deleted dir forever on this worker.
+     *
+     * MUTATION GUARD: reverting the is_dir() self-validation (unconditional
+     * fast-path return) makes getTimeShift return the stale in-memory dir1 —
+     * flipping the buffer_dir assertion RED.
+     */
+    public function testGetTimeShiftInvalidatesStaleInMemoryEntryAndFallsThroughToStore(): void
+    {
+        $staleDir = $this->storagePath . '/timeshift/gone-dir1';   // never created
+        $liveDir  = $this->storagePath . '/timeshift/live-dir2';
+        @mkdir($liveDir, 0755, true);
+
+        /** @var Connection&MockObject $db */
+        $db = $this->createMock(Connection::class);
+        // The store (source of truth) resolves the restarted session at dir2.
+        $db->method('query')->willReturn([[
+            'id'              => 'live-2',
+            'session_id'      => 'sess-restart',
+            'channel_id'      => 'ch-r',
+            'buffer_dir'      => $liveDir,
+            'pid'             => 7000,
+            'buffer_start_at' => 1_700_000_500,
+            'buffer_end_at'   => 1_700_000_600,
+            'window_seconds'  => Recorder::TIMESHIFT_BUFFER_SECONDS,
+            'cursor_position' => 10,
+            'status'          => TimeShiftSession::STATUS_ACTIVE,
+        ]]);
+        $logger = $this->createMock(StructuredLogger::class);
+        $store = new DbTimeShiftSessionStore($db);
+
+        /** @var list<array{url:string, dir:string}> $spawnCalls */
+        $spawnCalls = [];
+        $recorder = $this->makeRecorder($db, $store, $logger, 0, $spawnCalls);
+
+        // Seed a STALE in-memory entry pointing at the now-deleted dir1.
+        $this->injectInMemory($recorder, 'sess-restart', [
+            'id'               => 'stale-1',
+            'session_id'       => 'sess-restart',
+            'channel_id'       => 'ch-r',
+            'started_at'       => 1_700_000_000,
+            'buffer_start'     => 1_700_000_000,
+            'buffer_end'       => 1_700_000_000,
+            'buffer_dir'       => $staleDir,
+            'pid'              => 6000,
+            'current_position' => 1_700_000_000,
+        ]);
+
+        $timeShift = $recorder->getTimeShift('sess-restart');
+
+        $this->assertIsArray($timeShift);
+        // Fell through to the live store entry (dir2), NOT the stale in-memory dir1.
+        $this->assertSame($liveDir, $timeShift['buffer_dir']);
+        $this->assertSame('live-2', $timeShift['id']);
+        $this->assertSame(7000, $timeShift['pid']);
+        // The stale entry was invalidated.
+        $this->assertSame(0, $recorder->getActiveTimeShiftCount());
+    }
+
+    /**
+     * FINDING 2 (fast-path preserved): a VALID in-memory entry (its buffer_dir
+     * still exists) is served from memory WITHOUT a store/DB read — so the common
+     * case does not incur a DB query per segment.
+     */
+    public function testGetTimeShiftPrefersValidInMemoryFastPathWithoutHittingStore(): void
+    {
+        $liveDir = $this->storagePath . '/timeshift/fresh-dir';
+        @mkdir($liveDir, 0755, true);
+
+        /** @var Connection&MockObject $db */
+        $db = $this->createMock(Connection::class);
+        // The fast path must not query the store when the in-memory dir is valid.
+        $db->expects($this->never())->method('query');
+        $logger = $this->createMock(StructuredLogger::class);
+        $store = new DbTimeShiftSessionStore($db);
+
+        /** @var list<array{url:string, dir:string}> $spawnCalls */
+        $spawnCalls = [];
+        $recorder = $this->makeRecorder($db, $store, $logger, 0, $spawnCalls);
+
+        $this->injectInMemory($recorder, 'sess-fast', [
+            'id'               => 'fast-1',
+            'session_id'       => 'sess-fast',
+            'channel_id'       => 'ch-f',
+            'started_at'       => 1_700_000_000,
+            'buffer_start'     => 1_700_000_000,
+            'buffer_end'       => 1_700_000_000,
+            'buffer_dir'       => $liveDir,
+            'pid'              => 8000,
+            'current_position' => 1_700_000_000,
+        ]);
+
+        $timeShift = $recorder->getTimeShift('sess-fast');
+
+        $this->assertIsArray($timeShift);
+        $this->assertSame($liveDir, $timeShift['buffer_dir']);
+        $this->assertSame('fast-1', $timeShift['id']);
+        $this->assertSame(1, $recorder->getActiveTimeShiftCount());
+    }
+
+    /**
+     * Seed a Recorder's private $activeTimeShifts fast-path map for a session.
+     *
+     * @param array<string, mixed> $entry
+     */
+    private function injectInMemory(Recorder $recorder, string $sessionId, array $entry): void
+    {
+        $ref = new \ReflectionProperty(Recorder::class, 'activeTimeShifts');
+        $ref->setAccessible(true);
+        /** @var array<string, array<string, mixed>> $current */
+        $current = $ref->getValue($recorder);
+        $current[$sessionId] = $entry;
+        $ref->setValue($recorder, $current);
     }
 }

@@ -93,6 +93,65 @@ final class DbTimeShiftSessionStore
     }
 
     /**
+     * Atomically CLAIM a session_id by inserting a fresh null-pid row.
+     *
+     * Unlike {@see save()} — an upsert that silently overwrites a colliding row —
+     * this is a PLAIN `INSERT`, so a second concurrent `startTimeShift()` for the
+     * SAME session_id can be DETECTED rather than clobbering the winner's row.
+     * Exactly one caller can win the `UNIQUE (session_id)` INSERT (migration 078);
+     * every other caller sees the collision and MUST abort without spawning a
+     * second capture. This closes the two-live-ffmpeg / orphaned-pid window that a
+     * silent upsert (which hands the surviving row a different `id` than the fresh
+     * caller then tries to `updatePid()`) would otherwise leave.
+     *
+     * On a duplicate-key collision the driver raises an exception; we re-resolve by
+     * session_id and, if a row now exists, report the loss (`false`) rather than
+     * surfacing the error. Any OTHER failure (no row appeared → not a collision) is
+     * re-thrown so the caller's failure-safe path can best-effort spawn.
+     *
+     * @param TimeShiftSession $session The fresh null-pid claim row to insert
+     * @return bool True if THIS caller inserted the row (won the claim); false if a
+     *              row for the session_id already existed (lost the race)
+     * @throws \Throwable On any DB error that is NOT a duplicate-key collision
+     */
+    public function claim(TimeShiftSession $session): bool
+    {
+        try {
+            $this->db->query(
+                "INSERT INTO livetv_timeshift_sessions
+                    (id, session_id, channel_id, buffer_dir, pid,
+                     buffer_start_at, buffer_end_at, window_seconds,
+                     cursor_position, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    $session->id,
+                    $session->session_id,
+                    $session->channel_id,
+                    $session->buffer_dir,
+                    $session->pid,
+                    $session->buffer_start_at,
+                    $session->buffer_end_at,
+                    $session->window_seconds,
+                    $session->cursor_position,
+                    $session->status,
+                ]
+            );
+
+            return true;
+        } catch (\Throwable $e) {
+            // Either a UNIQUE(session_id) collision (we lost the race) or a genuine
+            // DB error. Re-resolve: if a row now exists for the session_id another
+            // caller won the claim first — report the loss. Otherwise re-throw so
+            // the caller treats it as a persist failure (best-effort spawn).
+            if ($this->findBySessionId($session->session_id) !== null) {
+                return false;
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
      * Find a session by its primary id.
      *
      * @param string $id The time-shift session id
@@ -205,6 +264,31 @@ final class DbTimeShiftSessionStore
         $this->db->query(
             "UPDATE livetv_timeshift_sessions SET pid = ? WHERE id = ?",
             [$pid, $id]
+        );
+    }
+
+    /**
+     * Record (or clear) the capture PID on the row that ACTUALLY survives for a
+     * session_id — keyed on the `UNIQUE (session_id)` constraint, NOT a transient
+     * row id.
+     *
+     * The two-phase persist (claim a null-pid row → spawn → record the pid) must
+     * land the pid on the row that findBySessionId / getTimeShift will return. That
+     * row is keyed on session_id, whose surviving `id` can differ from the fresh id
+     * a caller generated (a colliding upsert keeps the pre-existing row's id).
+     * Keying the pid write on session_id therefore guarantees it hits the resolved
+     * row regardless of which id won, instead of matching zero rows and leaving the
+     * real capture pid unpersisted (an unreapable tuner-holding orphan).
+     *
+     * @param string   $sessionId The owning playback session id (the upsert key)
+     * @param int|null $pid       The ffmpeg child PID, or null to clear it
+     * @return void
+     */
+    public function updatePidBySessionId(string $sessionId, ?int $pid): void
+    {
+        $this->db->query(
+            "UPDATE livetv_timeshift_sessions SET pid = ? WHERE session_id = ?",
+            [$pid, $sessionId]
         );
     }
 

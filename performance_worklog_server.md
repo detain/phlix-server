@@ -85,7 +85,7 @@
 - [x] SV-3.1  DVR recording data plane ✅ (commit 0579ef07)
 - [x] SV-3.2  book reader + audiobook player backends ✅ (commit 4f51206f)
 - [x] SV-3.3  client capability negotiation + loudness normalization ✅ (commit c9e5e599)
-- [x] SV-3.4  local artwork cache with sized variants ✅ (commit 1b09f897)
+- [x] SV-3.4  local artwork cache with sized variants ✅ RE-COMPLETED 2026-07-13 (perf-7): original 1b09f897 was INERT (DI landmine, poster_srcset pointed at TMDB CDN). Full 7-sub-step rebuild: sub-1 e2abc09e (non-blocking download) → sub-2+3 ac96e287 (kill DI landmine + config-drive storage dir) → [review NO FINDINGS, fix 18b9b659 include-path-depth, re-review NO FINDINGS] → sub-4 3f6c3cc1 (304 conditional caching) → [review NO FINDINGS] → sub-6 4b7ffd2/fee166c5 (phlix-contracts poster_srcset doc/fixture) → sub-7 79bb46e1 (dedicated route test, 100% coverage) → cumulative integration review (2 LOW findings: invalid 0w srcset descriptor for `original`, non-atomic variant writes) → fix c786bc79 → re-review NO FINDINGS. **DONE.** Docs cycle still owed via the batched server DOCS sweep (cross-cutting, not yet run).
 - [x] SV-3.5  metadata pipeline: concurrency, 429 backoff, bounded cache ✅ (commit fa4d400f)
 - [x] SV-3.6  build out Trakt history sync ✅ (commit cd3be89f) — S-W3 complete 🎉
 - [x] SV-4.1  segment-cap reservation before glob() ✅ (commit 9f06522b)
@@ -3425,3 +3425,82 @@ now-`protected` `atomicWriteVariant`):**
   no regression).
 - `phpstan analyze … -c phpstan.neon.dist --level=9` on the 3 changed files = **No errors**.
 - `phpcs --standard=PSR12` on the 3 changed files = **clean** (exit 0).
+
+## Implementer — SV-2.9 SimilarityWorker (2026-07-13, perf-7) — DONE
+
+**Problem (from the DI-landmine consolidation note above):** the DI fix wired `similarityJobStore`
+into `MediaScanner`, so the scanner now ENQUEUES a `SimilarityJob` per new item into
+`/tmp/phlix_similarity_jobs` — but there was **NO CONSUMER** (no worker/config/supervision, unlike
+SV-1.3's MediaAssetWorker). Enqueued jobs accumulated undrained forever → disk leak. This step builds
+the consumer, mirroring the `MediaAssetWorker` pattern, so the queue actually drains.
+
+**Commits (all pushed to master):**
+1. `70fbc60d` — `src/Media/SimilarityWorker.php` (new) + library-bounded candidate set.
+   - `SimilarityWorker` mirrors `MediaAssetWorker`: `runOnce()` dequeues up to `max_concurrent` jobs and
+     processes them via the Swoole `Channel`-as-semaphore pattern under a coroutine (sequential
+     otherwise); `runLoop()`/`stop()`/`getPendingCount()`/`start(int)` (Timer-driven) supervision;
+     per-job try/catch that ALWAYS `complete()`s so a failing item is drained, never spun on. No
+     blocking calls; `Timer::sleep` for the idle wait.
+   - `processOneJob()` calls `SimilarityService::computeSimilarForItem($job->itemId, $job->libraryId)`.
+   - **`SimilarityService::computeSimilarForItem` + `fetchItemsWithCompleteMetadata` gained an optional
+     `?string $libraryId`** that appends `AND library_id = ?` to the candidate SELECT. This is the
+     SV-2.9 acceptance core: the background computation is now bounded per-library instead of the
+     original O(N²) full-table JSON scan. `MediaScanner`'s legacy inline `computeSimilarForItem` call
+     now passes the libraryId too. Backward-compatible (null = old full-catalogue behaviour for
+     `scripts/backfill-similar.php`).
+2. `cf00a271` — `config/similarity_jobs.php` (mirrors `config/media_asset_jobs.php`: `job_queue_dir`,
+   `worker_interval`, `max_concurrent=2`); `MediaServicesProvider`: `SimilarityJobStore` now built by a
+   config-driven factory (shared queue dir for producer+consumer, mirroring the `MediaAssetJobStore`
+   idiom) + a new `SimilarityWorker` factory (reads `max_concurrent`, wires store + `SimilarityService`);
+   `config/process.php`: new enabled `similarity` managed-worker entry.
+3. `65945a24` — **process supervision**: new `config/managed_workers.php` = single-source-of-truth map
+   `process key → worker class`. `start.php` now `require`s it (inside the resilient try) instead of an
+   inline literal, and its managed-worker `@var` union was broadened. Registered `similarity =>
+   SimilarityWorker` so the drain ACTUALLY runs under `start.php` supervision. **Also registered the
+   previously-omitted `media-asset => MediaAssetWorker`** — its `config/process.php` entry was
+   `enabled:true` but was MISSING from start.php's inline map, so the media-asset queue drained only if
+   an operator hand-ran the standalone script (same disk-leak bug class SV-2.9 exists to fix). New
+   `scripts/run-similarity-worker.php` standalone CLI mirrors `run-media-asset-worker.php`. Dual-
+   entrypoint: background workers are only meaningful under the resident `start.php`; `index.php`
+   (FPM/CI) doesn't spawn them — matches how MediaAssetWorker is handled; the DI binding is shared.
+4. `<this commit>` — tests + worklog.
+
+**Acceptance mapping (SV-2.9 spec):**
+- "Move per-item similarity out of the scan path into a batched background job" → SimilarityWorker drains
+  the queue the scanner already enqueues into (consumer built).
+- "bound candidate set per library/genre instead of full-table JSON scan" → `fetchItemsWithCompleteMetadata`
+  now scopes `AND library_id = ?` from the job's libraryId; asserted by the worker test.
+- "rescans no longer O(N²); similarity still populated shortly after" → per-library bound + a supervised
+  30s-poll worker; the worker writes real `item_similar` rows (asserted).
+
+**Tests (all green):**
+- `tests/Unit/Media/SimilarityWorkerTest.php` (5) — drains a queued job and writes an `INSERT INTO
+  item_similar` (behavioural update proof) with the candidate SELECT bounded to the job's library
+  (`library_id = ?` + `lib-1` bound); empty-queue → 0; failing job drained not retried; pending count;
+  batch cap = max_concurrent per tick.
+- `tests/Unit/Config/ManagedWorkersConfigTest.php` (6) — `config/process.php` registers `similarity`
+  (+`media-asset`); `config/similarity_jobs.php` shape; `similarity` in the managed map; **every enabled
+  process entry has a spawner** (the regression guard for the exact disk-leak bug class); every mapped
+  class exists and exposes `start(int)`.
+- `ContainerFactoryTest::test_container_resolves_similarity_worker_in_prod` (1) — the real container
+  builds `SimilarityWorker` and it shares the SAME `SimilarityJobStore` the scanner enqueues into.
+- Existing `MediaScannerTest::testScanEnqueuesBackgroundJobsWhenStoresWired` (scanner-side enqueue) still
+  passes — not duplicated.
+
+**Verification:**
+- `phpunit --filter "SimilarityWorker|SimilarityJobStore|SimilarityService|ManagedWorkersConfig"` = **11/11
+  OK (57 assertions)**; `ContainerFactoryTest --filter similarity` = **2/2 OK**.
+- `phpunit --testsuite Unit --no-coverage` = **5087 tests, 0 failures/errors, 8 skipped** (5075 baseline +
+  12 new; no regression).
+- `phpstan analyze -c phpstan.neon.dist --level=9` on all changed `src/` + `start.php` + the 3 test files
+  = **No errors**.
+- `phpcs --standard=PSR12` on all changed `src/`/`config/`/`scripts/` files = **0 errors** (the test files'
+  only PSR12 notes are `test_snake_case` method names — the uniform, deliberate convention of the entire
+  existing test suite; the project lints `src/` only).
+
+**Flagged for the orchestrator (out of SV-2.9 scope, addressed minimally):** the `media-asset` spawner
+omission was a genuine pre-existing **SV-1.3** gap (config enabled, no start.php spawn → media-asset
+queue leaked). Fixed here as a one-line map entry because it is the identical disk-leak bug class and the
+new "every enabled process entry has a spawner" regression test would otherwise fail. No other SV-1.3
+behaviour touched. `SimilarityService`/`SimilarityJobStore` still have no dedicated unit test files of
+their own (only covered transitively) — a future test-top-up candidate, not required by SV-2.9.

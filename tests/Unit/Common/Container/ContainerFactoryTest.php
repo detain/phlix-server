@@ -12,6 +12,7 @@ use Phlix\Media\Library\MediaScanner;
 use Phlix\Media\MediaAsset\MediaAssetJobStore;
 use Phlix\Media\Metadata\LibraryMetadataMatcher;
 use Phlix\Media\SimilarityJobStore;
+use Phlix\Media\SimilarityWorker;
 use Phlix\Media\Storage\ArtworkStorage;
 use Phlix\Common\Container\ContainerFactory;
 use Phlix\Common\Container\Providers\AdminServicesProvider;
@@ -456,6 +457,30 @@ final class ContainerFactoryTest extends TestCase
             $this->readPrivate($scanner, 'similarityJobStore'),
             'MediaScanner must resolve with a similarity job store so the '
             . 'similarity enqueue path is reachable in prod.'
+        );
+    }
+
+    /**
+     * SV-2.9: the similarity CONSUMER (SimilarityWorker) must be resolvable from
+     * the production container so start.php's managed-worker fork can build and
+     * run it. Without a buildable worker the scanner's similarity enqueue would
+     * accumulate undrained on disk (leak). This asserts the factory wiring (store
+     * + SimilarityService deps) resolves and shares the SAME store the scanner
+     * enqueues into.
+     */
+    public function test_container_resolves_similarity_worker_in_prod(): void
+    {
+        $container = $this->containerWithMockedDb();
+
+        /** @var SimilarityWorker $worker */
+        $worker = $container->get(SimilarityWorker::class);
+        $this->assertInstanceOf(SimilarityWorker::class, $worker);
+
+        // The worker and the scanner must drain/enqueue the SAME store instance.
+        $this->assertSame(
+            $container->get(SimilarityJobStore::class),
+            $this->readPrivate($worker, 'store'),
+            'SimilarityWorker must consume the same SimilarityJobStore the scanner enqueues into.'
         );
     }
 

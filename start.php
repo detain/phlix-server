@@ -599,17 +599,16 @@ try {
 // drain unless an operator ran the standalone script by hand.
 // -----------------------------------------------------------------------------
 
-/** Managed-worker key → its DI-resolvable class exposing `start(int $pollSeconds)`. */
-$managedWorkerClasses = [
-    'library-scan'       => \Phlix\Media\Library\LibraryScanWorker::class,
-    'plugin-auto-update' => \Phlix\Plugins\Catalog\PluginAutoUpdateWorker::class,
-    'marker-detection'   => \Phlix\Media\Markers\Detection\BackgroundDetectorWorker::class,
-];
-
+// Managed-worker key → its DI-resolvable class exposing `start(int $pollSeconds)`.
+// The map lives in config/managed_workers.php (single source of truth) so a
+// config/process.php entry can never be "enabled" without a spawner — the exact
+// gap that previously left the media-asset + similarity queues undrained.
 try {
+    /** @var array<string, class-string> $managedWorkerClasses */
+    $managedWorkerClasses = require __DIR__ . '/config/managed_workers.php';
     /** @var array<string, array{enabled?: bool, count?: int, poll_seconds?: int}> $processConfig */
     $processConfig = require __DIR__ . '/config/process.php';
-    if (is_array($processConfig)) {
+    if (is_array($processConfig) && is_array($managedWorkerClasses)) {
         foreach ($managedWorkerClasses as $procKey => $workerClass) {
             $settings = $processConfig[$procKey] ?? null;
             if (!is_array($settings) || ($settings['enabled'] ?? false) !== true) {
@@ -631,7 +630,7 @@ try {
                 try {
                     // Built inside the fork so the child owns its own DB/HTTP state.
                     $container = ContainerFactory::create($config);
-                    /** @var \Phlix\Media\Library\LibraryScanWorker|\Phlix\Plugins\Catalog\PluginAutoUpdateWorker $managed */
+                    /** @var \Phlix\Media\Library\LibraryScanWorker|\Phlix\Plugins\Catalog\PluginAutoUpdateWorker|\Phlix\Media\Markers\Detection\BackgroundDetectorWorker|\Phlix\Media\MediaAsset\MediaAssetWorker|\Phlix\Media\SimilarityWorker $managed */
                     $managed = $container->get($workerClass);
                     // Arms a Workerman\Timer that polls runOnce() every $pollSeconds.
                     $managed->start($pollSeconds);

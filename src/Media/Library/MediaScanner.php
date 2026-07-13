@@ -1355,7 +1355,7 @@ class MediaScanner
             $this->similarityJobStore->enqueue($job);
         } elseif ($this->similarityService !== null) {
             try {
-                $this->similarityService->computeSimilarForItem((string) $itemId);
+                $this->similarityService->computeSimilarForItem((string) $itemId, (string) $libraryId);
             } catch (\Throwable $e) {
                 $this->logger->debug('Similarity computation failed for item', [
                     'item_id' => $itemId,

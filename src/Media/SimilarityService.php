@@ -52,10 +52,18 @@ final class SimilarityService
      * Scores are stored in `item_similar`, replacing any pre-existing rows for
      * the same `media_item_id`.
      *
-     * @param string $mediaItemId The source item to compute similarities for.
+     * SV-2.9: when a `$libraryId` is supplied the candidate set is bounded to
+     * that library, so the background {@see \Phlix\Media\SimilarityWorker} does
+     * not re-run the O(N²) full-table JSON scan the original scan-path hot loop
+     * did. Passing null preserves the legacy full-catalogue behaviour for the
+     * backfill script and any caller that still wants a cross-library set.
+     *
+     * @param string      $mediaItemId The source item to compute similarities for.
+     * @param string|null $libraryId   Optional library UUID to bound the candidate
+     *                                 search to a single library (SV-2.9).
      * @return void
      */
-    public function computeSimilarForItem(string $mediaItemId): void
+    public function computeSimilarForItem(string $mediaItemId, ?string $libraryId = null): void
     {
         $sourceItem = $this->itemRepository->findById($mediaItemId);
         if ($sourceItem === null) {
@@ -67,8 +75,9 @@ final class SimilarityService
             return;
         }
 
-        // Fetch all items with complete metadata, excluding the source item itself.
-        $candidates = $this->fetchItemsWithCompleteMetadata($mediaItemId);
+        // Fetch all items with complete metadata, excluding the source item
+        // itself. When a library is supplied the candidate set is bounded to it.
+        $candidates = $this->fetchItemsWithCompleteMetadata($mediaItemId, $libraryId);
 
         // Delete old similarity rows for this source item before inserting new ones.
         $this->db->query('DELETE FROM item_similar WHERE media_item_id = ?', [$mediaItemId]);
@@ -230,18 +239,30 @@ final class SimilarityService
     /**
      * Fetches all items that have complete metadata, excluding the given item.
      *
-     * @param string $excludeId Item ID to exclude from results.
+     * SV-2.9: when a `$libraryId` is supplied the result set is bounded with a
+     * `library_id = ?` predicate so the candidate scan is per-library rather
+     * than a full-table decode of every catalogued item.
+     *
+     * @param string      $excludeId Item ID to exclude from results.
+     * @param string|null $libraryId Optional library UUID to bound the scan.
      * @return list<array<string, mixed>>
      */
-    private function fetchItemsWithCompleteMetadata(string $excludeId): array
+    private function fetchItemsWithCompleteMetadata(string $excludeId, ?string $libraryId = null): array
     {
         // Use a subquery approach to filter items that have all required metadata.
         // We use JSON_EXTRACT for rating/year and JSON_LENGTH for the arrays.
         // Actors/directors can be either array of strings or array of objects with 'name'.
+        $libraryClause = '';
+        $params = [$excludeId];
+        if ($libraryId !== null && $libraryId !== '') {
+            $libraryClause = ' AND library_id = ?';
+            $params[] = $libraryId;
+        }
+
         $results = $this->db->query(
             "SELECT id, metadata_json
              FROM media_items
-             WHERE id != ?
+             WHERE id != ?{$libraryClause}
                AND JSON_LENGTH(metadata_json, '\$.genres') > 0
                AND JSON_LENGTH(metadata_json, '\$.actors') > 0
                AND JSON_LENGTH(metadata_json, '\$.directors') > 0
@@ -249,7 +270,7 @@ final class SimilarityService
                AND JSON_EXTRACT(metadata_json, '\$.year') IS NOT NULL
                AND JSON_TYPE(JSON_EXTRACT(metadata_json, '\$.rating')) = 'DOUBLE'
                AND JSON_TYPE(JSON_EXTRACT(metadata_json, '\$.year')) = 'INT'",
-            [$excludeId]
+            $params
         );
 
         if (!is_array($results)) {

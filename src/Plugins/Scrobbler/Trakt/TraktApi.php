@@ -381,7 +381,15 @@ class TraktApi
     }
 
     /**
-     * Get watched history for a user (for Trakt → Phlix sync).
+     * Get one page of watched history for a user (for Trakt → Phlix sync).
+     *
+     * Returns the page's items together with the total page count Trakt reports
+     * in the `X-Pagination-Page-Count` response header, so the caller can drive a
+     * page loop across the full history (SV-3.6d). The header is surfaced via the
+     * HTTP client's {@see HttpClientInterface::getWithHeaders()} sibling (plain
+     * `get()` discards headers after decoding the body). When the header is
+     * absent or unparseable, `pageCount` is `0` (unknown) and the caller falls
+     * back to loop-until-short-page.
      *
      * Implements retry with jittered exponential backoff for rate-limited
      * (429) and server (5xx) responses, following the SV-3.5 pattern.
@@ -391,7 +399,8 @@ class TraktApi
      * @param int $limit Items per page (default 100, max 1000)
      * @param string $accessToken OAuth access token
      *
-     * @return array<mixed> Watched history items
+     * @return array{items: array<mixed>, pageCount: int} This page's items plus
+     *   the reported total page count (0 when the pagination header is absent).
      *
      * @throws TraktApiException|TraktAuthenticationException On API error
      * @since 0.14.0
@@ -414,15 +423,18 @@ class TraktApi
         $lastException = null;
         for ($attempt = 0; $attempt <= self::RETRY_MAX_ATTEMPTS; $attempt++) {
             try {
-                $response = $this->http->get($url, $params, $headers);
+                $response = $this->http->getWithHeaders($url, $params, $headers);
+                $items = $response['body'];
+                $pageCount = $this->extractPageCount($response['headers']);
 
                 $this->logger->debug('Trakt watched history response', [
                     'username' => $username,
                     'page' => $page,
-                    'count' => count($response),
+                    'count' => count($items),
+                    'page_count' => $pageCount,
                 ]);
 
-                return $response;
+                return ['items' => $items, 'pageCount' => $pageCount];
             } catch (TraktRateLimitException $e) {
                 $lastException = $e;
                 if ($attempt < self::RETRY_MAX_ATTEMPTS) {
@@ -458,7 +470,32 @@ class TraktApi
             throw $lastException;
         }
 
-        return [];
+        return ['items' => [], 'pageCount' => 0];
+    }
+
+    /**
+     * Parse the total page count from Trakt's pagination response headers.
+     *
+     * Trakt reports the total number of pages in the `X-Pagination-Page-Count`
+     * header (companion to `X-Pagination-Item-Count`/`-Page`/`-Limit`). The
+     * header map is lowercased by the HTTP client, so the lookup is on
+     * `x-pagination-page-count`.
+     *
+     * @param array<string, string> $headers Lowercased response headers.
+     *
+     * @return int Reported page count, or 0 when the header is absent/unparseable
+     *   (the caller then falls back to loop-until-short-page).
+     */
+    private function extractPageCount(array $headers): int
+    {
+        $raw = $headers['x-pagination-page-count'] ?? null;
+        if (is_string($raw)) {
+            $trimmed = trim($raw);
+            if ($trimmed !== '' && ctype_digit($trimmed)) {
+                return (int) $trimmed;
+            }
+        }
+        return 0;
     }
 
     /**

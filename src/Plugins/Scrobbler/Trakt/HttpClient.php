@@ -58,6 +58,18 @@ class HttpClient implements HttpClientInterface
     /**
      * @inheritDoc
      */
+    public function getWithHeaders(string $url, array $params = [], array $headers = []): array
+    {
+        if (!empty($params)) {
+            $url .= '?' . http_build_query($params);
+        }
+
+        return $this->requestWithHeaders('GET', $url, [], $headers);
+    }
+
+    /**
+     * @inheritDoc
+     */
     public function post(string $url, array $data = [], array $headers = []): array
     {
         return $this->request('POST', $url, $data, $headers);
@@ -78,12 +90,10 @@ class HttpClient implements HttpClientInterface
     }
 
     /**
-     * Perform an HTTP request, de-blocking the transport under the event loop.
+     * Perform an HTTP request, returning only the decoded body.
      *
-     * Selects the async (coroutine cooperative-wait) client when a Workerman
-     * worker event loop is running inside a coroutine and the URL is not
-     * https-under-Swoole; otherwise falls back to blocking cURL. Status handling
-     * (401/429/4xx) is identical regardless of transport.
+     * Thin wrapper over {@see self::requestWithHeaders()} for callers that do
+     * not need the response headers (the common case).
      *
      * @param string $method HTTP method
      * @param string $url Full URL
@@ -97,6 +107,34 @@ class HttpClient implements HttpClientInterface
      * @throws TraktRateLimitException
      */
     private function request(string $method, string $url, array $data, array $headers): array
+    {
+        return $this->requestWithHeaders($method, $url, $data, $headers)['body'];
+    }
+
+    /**
+     * Perform an HTTP request, de-blocking the transport under the event loop.
+     *
+     * Selects the async (coroutine cooperative-wait) client when a Workerman
+     * worker event loop is running inside a coroutine and the URL is not
+     * https-under-Swoole; otherwise falls back to blocking cURL. Status handling
+     * (401/429/4xx) is identical regardless of transport.
+     *
+     * Returns both the decoded body and a lowercased map of response headers so
+     * paginated callers can read `X-Pagination-Page-Count` (headers are captured
+     * on both transports — the async PSR-7 response and the cURL fallback).
+     *
+     * @param string $method HTTP method
+     * @param string $url Full URL
+     * @param array<string, mixed> $data Request body
+     * @param array<string, string> $headers Additional headers
+     *
+     * @return array{body: array<string, mixed>, headers: array<string, string>}
+     *
+     * @throws TraktApiException
+     * @throws TraktAuthenticationException
+     * @throws TraktRateLimitException
+     */
+    private function requestWithHeaders(string $method, string $url, array $data, array $headers): array
     {
         if ($url === '') {
             throw new TraktApiException('URL cannot be empty');
@@ -172,7 +210,30 @@ class HttpClient implements HttpClientInterface
 
         $decoded = json_decode($raw, true);
 
-        return is_array($decoded) ? $decoded : [];
+        return [
+            'body' => is_array($decoded) ? $decoded : [],
+            'headers' => $this->extractHeaders($response),
+        ];
+    }
+
+    /**
+     * Flatten a PSR-7 response's headers into a lowercased name => value map.
+     *
+     * Header names are lowercased so callers can look up (case-insensitive)
+     * fields such as `x-pagination-page-count` uniformly regardless of the
+     * transport's original casing.
+     *
+     * @param ResponseInterface $response Response to read headers from.
+     *
+     * @return array<string, string>
+     */
+    private function extractHeaders(ResponseInterface $response): array
+    {
+        $map = [];
+        foreach (array_keys($response->getHeaders()) as $name) {
+            $map[strtolower((string) $name)] = $response->getHeaderLine((string) $name);
+        }
+        return $map;
     }
 
     /**

@@ -61,15 +61,30 @@ final class TraktApiTest extends TestCase
         $this->assertSame(7200, $result['expires_in']);
     }
 
-    public function testGetWatchedHistoryReturnsArray(): void
+    public function testGetWatchedHistoryReturnsItemsAndPageCount(): void
     {
         $history = [['id' => 1, 'title' => 'Test Movie']];
-        $http = new MockHttpClient([$history]);
+        // SV-3.6d: getWatchedHistory now returns {items, pageCount}, surfacing
+        // Trakt's X-Pagination-Page-Count header so the caller can paginate.
+        $http = new MockHttpClient([$history], [['x-pagination-page-count' => '3']]);
         $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
 
         $result = $api->getWatchedHistory('testuser', 1, 100, 'access-token');
 
-        $this->assertSame($history, $result);
+        $this->assertSame($history, $result['items']);
+        $this->assertSame(3, $result['pageCount']);
+    }
+
+    public function testGetWatchedHistoryPageCountDefaultsToZeroWhenHeaderAbsent(): void
+    {
+        // No pagination header supplied → pageCount 0 (unknown); the caller then
+        // falls back to loop-until-short-page.
+        $http = new MockHttpClient([[['id' => 1]]]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $result = $api->getWatchedHistory('testuser', 1, 100, 'access-token');
+
+        $this->assertSame(0, $result['pageCount']);
     }
 
     public function testExchangeCodeThrowsOnError(): void
@@ -204,12 +219,18 @@ final class MockHttpClient implements HttpClientInterface
     private array $responses;
     private int $responseIndex = 0;
 
+    /** @var array<int, array<string, string>> Response headers parallel to $responses. */
+    private array $headerResponses;
+
     /**
      * @param array<int, array<array-key, mixed>> $responses Queue of responses to return
+     * @param array<int, array<string, string>> $headerResponses Response headers
+     *   parallel to $responses (indexed the same); missing entries default to [].
      */
-    public function __construct(array $responses = [])
+    public function __construct(array $responses = [], array $headerResponses = [])
     {
         $this->responses = $responses;
+        $this->headerResponses = $headerResponses;
     }
 
     public function get(string $url, array $params = [], array $headers = []): array
@@ -223,6 +244,25 @@ final class MockHttpClient implements HttpClientInterface
         }
 
         return $this->getNextResponse();
+    }
+
+    public function getWithHeaders(string $url, array $params = [], array $headers = []): array
+    {
+        $this->lastMethod = 'GET';
+        $this->lastUrl = $url;
+        $this->lastHeaders = $headers;
+
+        if (!empty($params)) {
+            $this->lastUrl .= '?' . http_build_query($params);
+        }
+
+        $index = $this->responseIndex;
+        $body = $this->getNextResponse();
+
+        return [
+            'body' => $body,
+            'headers' => $this->headerResponses[$index] ?? [],
+        ];
     }
 
     public function post(string $url, array $data = [], array $headers = []): array

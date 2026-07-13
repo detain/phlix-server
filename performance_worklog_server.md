@@ -5742,6 +5742,89 @@ still owed a Fixer pass.
 
 ---
 
+## Implementer — SV-3.6d (paginate Trakt watched-history sync) — 2026-07-13
+
+**Scope (exactly this, nothing else):** make `reconcileWatchedHistory` walk the user's FULL watched
+history instead of only page 1 (`getWatchedHistory($user,1,100,$token)`). Did NOT touch resume
+positions (3.6c), the HTTP transport (3.6b), the Timer wiring (3.6a), `getPlaybackProgress` (not
+paginated by Trakt — left single-shot), or `syncPhlixToTrakt`.
+
+**How the page count is surfaced (return-shape change + new HTTP-client sibling):**
+- The 3.6b client decodes the JSON body and DISCARDS the PSR-7 response inside `HttpClient::request()`,
+  so `X-Pagination-Page-Count` was not reachable by the caller. I added a sibling
+  `HttpClientInterface::getWithHeaders()` returning `array{body, headers}` (headers lowercased for
+  case-insensitive lookup). `HttpClient::request()` is now a thin wrapper over a new
+  `requestWithHeaders()` (identical transport + 401/429/4xx status handling); a new `extractHeaders()`
+  flattens the PSR-7 response headers on BOTH transports (async PSR-7 + cURL fallback). `get()`/`post()`
+  are unchanged (`get()` still used by the untouched `getPlaybackProgress`).
+- `TraktApi::getWatchedHistory()` now returns `array{items: array<mixed>, pageCount: int}` (was
+  `array<mixed>`) — it calls `getWithHeaders()`, parses `x-pagination-page-count` via a new
+  `extractPageCount()` (returns 0 when the header is absent/unparseable = "unknown"). I chose the
+  explicit struct return over an out-param because it makes the total-page contract first-class and
+  directly assertable; the only test asserting the raw return was updated (see below). The 429
+  exponential-backoff retry loop is unchanged.
+
+**Page loop + backoff + defensive cap (`TraktHistorySync::reconcileWatchedHistory`):**
+- Rewrote the single-shot fetch into a `while(true)` page loop. Page 1 learns the reported page count
+  and narrows the effective upper bound to `min(reported, MAX_HISTORY_PAGES)`; pages 2..N are fetched
+  and reconciled with the SAME per-item logic (extracted verbatim into a new `reconcileWatchedPage()`
+  helper — the last-write-wins / don't-downgrade-completed / duration logic is byte-for-byte the same).
+- **Layered, defensive termination:** (1) a short/empty final page (`count < limit`) ends the walk —
+  this is ALSO the loop-until-short-page fallback that keeps a MISSING/malformed header from truncating
+  (pageCount 0 keeps the bound at the cap and short-page terminates); (2) the reported page count bounds
+  the loop; (3) a hard `MAX_HISTORY_PAGES = 200` cap (≈20,000 items at the 100/page size) guarantees the
+  loop can't spin forever on a malformed header — a hit is logged (warning). A reported count exceeding
+  the cap is logged + truncated.
+- **Backoff:** new `sleepBetweenPages()` mirrors the EXACT 3.6b 429 idiom — `\Co\sleep(0.25)` when
+  `function_exists('\Co\sleep')`, else `usleep`. `INTER_PAGE_DELAY_MS = 250`. Verified the pull runs
+  inside the Swoole `Coroutine::create()` (safeCall) Timer callback wired by 3.6a (start.php:284-291),
+  so `\Co\sleep` yields the event loop — no blocking sleep on the resident worker.
+- A per-page fetch failure now logs the page number + items-written-so-far and BREAKS, PRESERVING earlier
+  pages' writes (previously a page-1 failure returned 0; multi-page partial progress is now kept).
+- `syncTraktToPhlix($profileId): int` unchanged — still returns the TOTAL across all pages (loop sums).
+
+**Tests updated (why):**
+- `MockHttpClient` (in `TraktApiTest.php`) gained `getWithHeaders()` + an optional parallel
+  `$headerResponses` queue (new interface method — mock MUST implement it).
+- `testGetWatchedHistoryReturnsArray` → renamed `testGetWatchedHistoryReturnsItemsAndPageCount`: asserts
+  `$result['items']` + `pageCount` from an injected `x-pagination-page-count: 3` header (return shape
+  changed). Added `testGetWatchedHistoryPageCountDefaultsToZeroWhenHeaderAbsent`.
+  `testGetWatchedHistoryUsesCorrectEndpoint` needed no change (asserts only method/URL, which
+  `getWithHeaders` still records). The multi-page `reconcileWatchedHistory` loop test belongs to 3.6e
+  (needs the mocked-TraktApi + WatchHistory harness that step builds); my change is covered at the
+  `getWatchedHistory` level.
+
+**Verify (verbatim):**
+- `phpstan analyse -c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress` → **[OK] No errors**.
+- `phpcs --standard=PSR12 src/Plugins/Scrobbler/Trakt/` → **0 ERRORS** (only pre-existing line-length
+  WARNINGS on unchanged signatures: TraktHistorySync:409 `syncPhlixToTrakt`, TraktApi:408
+  `getWatchedHistory` sig, TraktApi:678, TraktPlugin:470/78 — none introduced by 3.6d).
+- `phpunit --filter Trakt --no-coverage` → **OK (64 tests, 133 assertions)** (was 63; +2 new, -1 renamed).
+
+**⚠️ CORRECTNESS OBSERVATION (out of 3.6d scope — for reviewer/fixer, re-confirming 3.6b/3.6c notes):**
+The Trakt client sends **NO `trakt-api-key` (client id) and NO `trakt-api-version: 2` headers** on ANY
+request. `HttpClient::request()` sends only `User-Agent`, `Content-Type`, `Accept` + the caller's headers
+(`getWatchedHistory` adds only `Authorization: Bearer`). Trakt's API MANDATES both `trakt-api-key` and
+`trakt-api-version` on every call — without them requests are rejected, so the pull sync (this step
+included) cannot actually succeed against live Trakt regardless of pagination. Grep for
+`trakt-api-key`/`trakt-api-version` across `src/Plugins/Scrobbler/Trakt/` returns nothing. NOT fixed here
+(out of scope); flagging for a dedicated fix — the `clientId` is already available on `TraktApi` (ctor
+`$clientId`), so the fix is to inject those two headers into the request headers (likely at the
+`getWatchedHistory`/`getPlaybackProgress`/scrobble call sites or a shared header builder).
+
+**Files touched (absolute):**
+- `/home/sites/phlix/phlix-server/src/Plugins/Scrobbler/Trakt/HttpClientInterface.php`
+- `/home/sites/phlix/phlix-server/src/Plugins/Scrobbler/Trakt/HttpClient.php`
+- `/home/sites/phlix/phlix-server/src/Plugins/Scrobbler/Trakt/TraktApi.php`
+- `/home/sites/phlix/phlix-server/src/Plugins/Scrobbler/Trakt/TraktHistorySync.php`
+- `/home/sites/phlix/phlix-server/tests/Unit/Plugins/Scrobbler/Trakt/TraktApiTest.php`
+
+**Git:** deferred to the Phase Coordinator per Implementer CARDINAL RULES (I edit + verify only; the
+coordinator owns the git cycle). Tree is the 5 files above (+ this worklog). Requested commit message:
+`scrobbler: SV-3.6d paginate Trakt watched-history sync (X-Pagination-Page-Count + backoff)`.
+
+---
+
 ## Implementer — SV-3.6c (reconcile Trakt resume positions + last-write-wins) — 2026-07-13
 
 **Scope (exactly this, nothing else):** stop force-writing `STATUS_COMPLETED` for every reconciled

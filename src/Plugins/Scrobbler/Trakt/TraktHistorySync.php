@@ -30,6 +30,29 @@ use Workerman\MySQL\Connection;
  */
 class TraktHistorySync
 {
+    /** Items requested per watched-history page (Trakt caps a page at 1000). */
+    private const WATCHED_HISTORY_PAGE_SIZE = 100;
+
+    /**
+     * Defensive upper bound on watched-history pages fetched per sync run.
+     *
+     * Normal termination is by the reported `X-Pagination-Page-Count` and/or a
+     * short final page; this cap only exists so a missing/malformed pagination
+     * header can never spin the page loop forever. At the page size above it
+     * covers up to 20,000 watched items — well beyond any realistic account —
+     * and a hit is logged.
+     */
+    private const MAX_HISTORY_PAGES = 200;
+
+    /**
+     * Coroutine-safe backoff between watched-history pages, in milliseconds.
+     *
+     * A small proactive pause (on top of the 429 exponential backoff inside
+     * {@see TraktApi::getWatchedHistory()}) to stay gentle on Trakt's rate limit
+     * when walking a multi-page history.
+     */
+    private const INTER_PAGE_DELAY_MS = 250;
+
     private readonly LoggerInterface $logger;
 
     /**
@@ -102,34 +125,118 @@ class TraktHistorySync
     /**
      * Reconcile Trakt fully-watched history into local completions.
      *
-     * For each Trakt watched item that maps to a local media item and is not
-     * already completed locally, marks the local entry completed — guarded by
-     * last-write-wins so an older Trakt watch never clobbers a fresher local
-     * in-progress position.
+     * Walks the user's full watched history one page at a time (SV-3.6d) rather
+     * than only the first 100 items: it fetches page 1, learns the total page
+     * count from Trakt's `X-Pagination-Page-Count` header (surfaced by
+     * {@see TraktApi::getWatchedHistory()}), then fetches pages 2..N, reconciling
+     * every page with the same last-write-wins logic. Termination is defensive
+     * and layered: the reported page count bounds the loop, a short/empty final
+     * page ends it early (and covers a missing/malformed header via
+     * loop-until-short-page), and a hard {@see self::MAX_HISTORY_PAGES} cap
+     * guarantees the loop can never spin forever. A coroutine-safe backoff is
+     * inserted between page fetches (mirroring the 429 idiom in
+     * {@see TraktApi::getWatchedHistory()}) to stay gentle on the rate limit.
+     *
+     * A fetch failure on any page is logged and ends the walk, preserving the
+     * reconciliations already written by earlier pages rather than discarding
+     * them.
      *
      * @param string $profileId Profile to reconcile into.
      *
-     * @return int Number of entries marked completed.
+     * @return int Number of entries marked completed across all pages.
      */
     private function reconcileWatchedHistory(string $profileId): int
     {
-        try {
-            $history = $this->api->getWatchedHistory(
-                $this->settings->username,
-                1,
-                100,
-                $this->settings->accessToken ?? ''
-            );
-        } catch (TraktApiException $e) {
-            $this->logger->warning('TraktHistorySync: failed to fetch Trakt watched history', [
-                'error' => $e->getMessage(),
-            ]);
-            return 0;
+        $limit = self::WATCHED_HISTORY_PAGE_SIZE;
+        $written = 0;
+        $page = 1;
+        // Effective upper bound; kept at the cap until (and unless) page 1's
+        // header narrows it, so a missing header falls back to short-page.
+        $upperBound = self::MAX_HISTORY_PAGES;
+
+        while (true) {
+            try {
+                $result = $this->api->getWatchedHistory(
+                    $this->settings->username,
+                    $page,
+                    $limit,
+                    $this->settings->accessToken ?? ''
+                );
+            } catch (TraktApiException $e) {
+                $this->logger->warning('TraktHistorySync: failed to fetch Trakt watched history page', [
+                    'page' => $page,
+                    'items_written_so_far' => $written,
+                    'error' => $e->getMessage(),
+                ]);
+                break;
+            }
+
+            $items = $result['items'];
+
+            if ($page === 1) {
+                $reported = $result['pageCount'];
+                if ($reported >= 1) {
+                    $upperBound = min($reported, self::MAX_HISTORY_PAGES);
+                    if ($reported > self::MAX_HISTORY_PAGES) {
+                        $this->logger->warning(
+                            'TraktHistorySync: watched-history page count exceeds cap, truncating',
+                            [
+                                'reported_page_count' => $reported,
+                                'cap' => self::MAX_HISTORY_PAGES,
+                            ]
+                        );
+                    }
+                }
+                // $reported < 1 (header absent/unparseable): keep the cap as the
+                // ceiling and rely on the short-page check below to terminate.
+            }
+
+            $written += $this->reconcileWatchedPage($profileId, $items);
+
+            // A short/empty page is the last page regardless of any reported
+            // count — this also terminates the loop-until-short-page fallback
+            // when the pagination header was missing.
+            if (count($items) < $limit) {
+                break;
+            }
+
+            if ($page >= $upperBound) {
+                if ($page >= self::MAX_HISTORY_PAGES) {
+                    $this->logger->warning('TraktHistorySync: hit max watched-history page cap', [
+                        'cap' => self::MAX_HISTORY_PAGES,
+                        'items_written' => $written,
+                    ]);
+                }
+                break;
+            }
+
+            $page++;
+            // Coroutine-safe backoff before the next page fetch.
+            $this->sleepBetweenPages();
         }
 
+        return $written;
+    }
+
+    /**
+     * Reconcile a single page of Trakt watched-history items into completions.
+     *
+     * Applies the same per-item last-write-wins reconciliation used before the
+     * SV-3.6d page loop was added: for each item that maps to a local media item
+     * and is not already completed locally, marks the local entry completed —
+     * unless an older Trakt watch would clobber a fresher local in-progress
+     * position.
+     *
+     * @param string $profileId Profile to reconcile into.
+     * @param array<mixed> $items One page of Trakt watched-history items.
+     *
+     * @return int Number of entries marked completed on this page.
+     */
+    private function reconcileWatchedPage(string $profileId, array $items): int
+    {
         $written = 0;
 
-        foreach ($history as $item) {
+        foreach ($items as $item) {
             if (!is_array($item)) {
                 continue;
             }
@@ -173,6 +280,24 @@ class TraktHistorySync
         }
 
         return $written;
+    }
+
+    /**
+     * Coroutine-safe pause between watched-history page fetches.
+     *
+     * Mirrors the exact 429-backoff idiom in {@see TraktApi::getWatchedHistory()}:
+     * `\Co\sleep` yields to the event loop so the resident worker keeps serving
+     * other connections during the pause (the pull runs inside the Swoole
+     * Coroutine::create() timer callback wired in start.php); `usleep` is the
+     * fallback for non-Swoole contexts (unit tests / plain CLI).
+     */
+    private function sleepBetweenPages(): void
+    {
+        if (function_exists('\Co\sleep')) {
+            \Co\sleep(self::INTER_PAGE_DELAY_MS / 1_000);
+        } else {
+            usleep(self::INTER_PAGE_DELAY_MS * 1_000);
+        }
     }
 
     /**

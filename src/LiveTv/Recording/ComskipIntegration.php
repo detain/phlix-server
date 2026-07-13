@@ -41,12 +41,23 @@ class ComskipIntegration
     private LoggerInterface $logger;
 
     /**
+     * @var ChapterMarkerService|null Attaches the parsed EDL segments to the
+     *      recording's REAL media item (SV-3.1d-comskip). Null in legacy /
+     *      stats-only construction — then no chapter markers are attached.
+     */
+    private ?ChapterMarkerService $chapterService;
+
+    /**
      * Create a new ComskipIntegration.
      *
      * @param ComskipRunner $runner Comskip binary runner
      * @param ComskipEdlParser $parser EDL file parser
      * @param Connection $db Database connection
      * @param LoggerInterface|null $logger Optional PSR logger, defaults to NullLogger
+     * @param ChapterMarkerService|null $chapterService Optional service that persists
+     *        the parsed commercial segments as chapter markers on the recording's
+     *        registered media item (SV-3.1d-comskip). When null, only the recording
+     *        row's commercial stats are stored (the historic behaviour).
      *
      * @since 0.12.0
      */
@@ -54,12 +65,14 @@ class ComskipIntegration
         ComskipRunner $runner,
         ComskipEdlParser $parser,
         Connection $db,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?ChapterMarkerService $chapterService = null
     ) {
         $this->runner = $runner;
         $this->parser = $parser;
         $this->db = $db;
         $this->logger = $logger ?? new NullLogger();
+        $this->chapterService = $chapterService;
     }
 
     /**
@@ -91,9 +104,32 @@ class ComskipIntegration
             throw new \RuntimeException("Recording file not found: {$filePath}");
         }
 
+        // When wired to attach chapter markers (production, SV-3.1d-comskip), the
+        // recording MUST already be linked to a registered media item — that is
+        // what the markers attach to, and an unregistered (failed / empty) capture
+        // is not a playable library entry. Skip WITHOUT spending a comskip run when
+        // there is nothing to attach to.
+        $mediaItemId = null;
+        if ($this->chapterService !== null) {
+            $mediaItemId = $this->resolveMediaItemId($recordingId);
+            if ($mediaItemId === null) {
+                $this->logger->info('Recording has no linked media item; skipping Comskip', [
+                    'recording_id' => $recordingId,
+                ]);
+
+                return [
+                    'edl_path' => '',
+                    'frame_count' => 0,
+                    'duration_seconds' => 0,
+                    'segments' => 0,
+                ];
+            }
+        }
+
         $this->logger->info('Processing recording with Comskip', [
             'recording_id' => $recordingId,
             'file_path' => $filePath,
+            'media_item_id' => $mediaItemId,
         ]);
 
         try {
@@ -117,6 +153,21 @@ class ComskipIntegration
                 $frameCount,
                 $totalDuration
             );
+
+            // Attach the parsed commercial segments as chapter markers on the
+            // recording's REAL media item (SV-3.1d-comskip). persistChapters
+            // overwrites metadata_json.commercial_chapters, so a re-run is
+            // idempotent (belt to the ComskipLifecycleManager already-processed
+            // guard).
+            if ($this->chapterService !== null && $mediaItemId !== null) {
+                $this->chapterService->persistChapters($mediaItemId, $chapters);
+
+                $this->logger->info('Attached commercial chapter markers to media item', [
+                    'recording_id' => $recordingId,
+                    'media_item_id' => $mediaItemId,
+                    'chapter_count' => $frameCount,
+                ]);
+            }
 
             $this->logger->info('Comskip processing completed', [
                 'recording_id' => $recordingId,
@@ -242,6 +293,38 @@ class ComskipIntegration
      *
      * @since 0.12.0
      */
+    /**
+     * Resolve the media item a completed recording is linked to.
+     *
+     * The linkage is written by {@see RecordingMediaRegistrar} (a Recorder
+     * onComplete hook that runs BEFORE the deferred comskip drain), so by the
+     * time comskip processing runs the column is populated for any genuinely
+     * registered recording.
+     *
+     * @param string $recordingId The recording identifier
+     *
+     * @return string|null The linked `media_items.id`, or null when unlinked.
+     *
+     * @since SV-3.1d-comskip
+     */
+    private function resolveMediaItemId(string $recordingId): ?string
+    {
+        /** @var mixed $result */
+        $result = $this->db->query(
+            "SELECT media_item_id FROM livetv_recordings WHERE recording_id = ?",
+            [$recordingId]
+        );
+
+        if (!is_array($result) || !isset($result[0]) || !is_array($result[0])) {
+            return null;
+        }
+
+        /** @var mixed $id */
+        $id = $result[0]['media_item_id'] ?? null;
+
+        return (is_string($id) && $id !== '') ? $id : null;
+    }
+
     /**
      * Get a recording by ID from the database.
      *

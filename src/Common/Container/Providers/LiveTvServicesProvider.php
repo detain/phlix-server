@@ -20,6 +20,7 @@ use Phlix\LiveTv\ComskipRunner;
 use Phlix\LiveTv\GuideManager;
 use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\Recording\ChapterMarkerService;
 use Phlix\LiveTv\Recording\ComskipIntegration;
 use Phlix\LiveTv\Recording\ComskipLifecycleManager;
 use Phlix\LiveTv\Recording\RecordingMediaRegistrar;
@@ -123,6 +124,16 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 return new HdHomeRunTunerDriver($discovery, $apiClient, $logger);
             }),
 
+            // Converts parsed EDL commercial segments into chapter markers on the
+            // recording's registered media item (SV-3.1d-comskip). Injected into
+            // ComskipIntegration below so the deferred comskip run attaches markers
+            // to the REAL media_item_id produced by RecordingMediaRegistrar.
+            ChapterMarkerService::class => factory(static function (ContainerInterface $c): ChapterMarkerService {
+                /** @var ItemRepository $items */
+                $items = $c->get(ItemRepository::class);
+                return new ChapterMarkerService($items);
+            }),
+
             ComskipLifecycleManager::class => factory(static function (ContainerInterface $c): ComskipLifecycleManager {
                 $livetv = self::livetvConfig($c);
                 /** @var array<string, mixed> $comskip */
@@ -139,11 +150,15 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 $logger = self::livetvLogger($c);
                 $db = self::db($c);
 
+                /** @var ChapterMarkerService $chapterService */
+                $chapterService = $c->get(ChapterMarkerService::class);
+
                 $integration = new ComskipIntegration(
                     new ComskipRunner($binaryPath, $logger),
                     new ComskipEdlParser(),
                     $db,
                     $logger,
+                    $chapterService,
                 );
 
                 return new ComskipLifecycleManager(

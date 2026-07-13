@@ -31,21 +31,35 @@ class ComskipRunner
     /** @var LoggerInterface Logger instance */
     private LoggerInterface $logger;
 
-    /** @var int Timeout for comskip execution in seconds */
+    /** @var int Default timeout for comskip execution in seconds */
     private const TIMEOUT_SECONDS = 300;
+
+    /** @var int Effective timeout for comskip execution in seconds (per-instance) */
+    private int $timeoutSeconds;
 
     /**
      * Create a new ComskipRunner.
      *
      * @param string $comskipPath Path to the comskip binary (e.g., '/usr/bin/comskip')
      * @param LoggerInterface|null $logger Optional PSR logger, defaults to NullLogger
+     * @param int|null $timeoutSeconds Optional execution timeout override in seconds
+     *                                (default {@see self::TIMEOUT_SECONDS} when null
+     *                                or non-positive). Kept configurable so the wedged
+     *                                -process timeout path (SV-4.3) is testable without
+     *                                a real 300s wait.
      *
      * @since 0.12.0
      */
-    public function __construct(string $comskipPath, ?LoggerInterface $logger = null)
-    {
+    public function __construct(
+        string $comskipPath,
+        ?LoggerInterface $logger = null,
+        ?int $timeoutSeconds = null
+    ) {
         $this->comskipPath = $comskipPath;
         $this->logger = $logger ?? new NullLogger();
+        $this->timeoutSeconds = ($timeoutSeconds !== null && $timeoutSeconds > 0)
+            ? $timeoutSeconds
+            : self::TIMEOUT_SECONDS;
     }
 
     /**
@@ -130,7 +144,7 @@ class ComskipRunner
         // stream_set_timeout alone does NOT enforce timeout on stream_get_contents
         // (it only affects select-based operations). We must use non-blocking I/O.
         $startTime = hrtime(true);
-        $timeoutNanos = self::TIMEOUT_SECONDS * 1_000_000_000;
+        $timeoutNanos = $this->timeoutSeconds * 1_000_000_000;
 
         foreach ($pipes as $pipe) {
             if (is_resource($pipe)) {
@@ -167,7 +181,7 @@ class ComskipRunner
                 }
                 proc_terminate($process, SIGKILL);
                 throw new \RuntimeException(
-                    "Comskip timed out after " . self::TIMEOUT_SECONDS . " seconds"
+                    "Comskip timed out after " . $this->timeoutSeconds . " seconds"
                 );
             }
 

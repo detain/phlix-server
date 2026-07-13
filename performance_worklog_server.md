@@ -2180,3 +2180,118 @@ Real opencode commits (worklog :91-96 hashes are WRONG/nonexistent): SV-4.1=`e26
 - **SV-4.6 [S-F20] `original` copy variant → DONE (confirmed).** `array_filter(!isCopy)` excludes the `id:'original'` `isCopy:true` passthrough from `buildMultiVariantMaster` (all-copy fallback kept); transcoded "Original" (`isCopy:false`, real IDR) stays switchable. Behavioral tests present. No action.
 
 Server Complete queue: SV-3.1d-comskip (NOW unblocked by SV-4.3) → SV-4.2 (scrub-storm, X1) → SV-4.5 (blocking I/O) → SV-4.4 (webhook reconcile). Then SV-3.1 f/g/h, SV-3.6, SV-4.13-finish, remaining re-audits (SV-4.8–4.12/4.14, SV-0.6–0.9, SV-1.x, SV-2.2/2.3/2.7, SV-3.3/3.4).
+
+## Implementer — SV-3.1d-comskip (comskip → chapter markers on real media_item_id, off the hot path) — 2026-07-12
+
+Wired comskip commercial-detection into the DVR completion path so a completed
+recording's EDL is parsed into chapter markers attached to the REAL
+`media_item_id` (produced by SV-3.1d's `RecordingMediaRegistrar`), run OFF the
+worker-0 completion coroutine. **Chose the "wire ComskipLifecycleManager directly"
+option** (the existing wired onComplete comskip handler) — NOT RecordingHooks —
+so no parallel comskip system was built. `RecordingHooks::register` /
+`ComskipPostProcessor` / `MarkerService` remain in place, still without a caller
+(alternative path not taken; kept per §0.1).
+
+### The completion → comskip → markers flow
+- Recorder fires onComplete (once, SV-3.1c atomic CAS) with `(recordingId, filePath)`.
+  Hook order in `LiveTvServicesProvider`: **#1** `ComskipLifecycleManager::enqueue`
+  (auto-wired in the Recorder ctor), **#2** `RecordingMediaRegistrar::register`
+  (sets `livetv_recordings.media_item_id`).
+- **#1 enqueue now only QUEUES + schedules an off-hot-path drain** (see below) — it no
+  longer runs comskip inline. So the completion coroutine returns immediately.
+- The deferred drain (a one-shot Workerman timer, ~1s later) fires AFTER the whole
+  completion coroutine — so #2 has committed `media_item_id`. It runs
+  `ComskipIntegration::processRecording`, which now: resolves the recording's
+  `media_item_id`, runs comskip (existing SV-4.3 `ComskipRunner`), parses the EDL
+  (`ComskipEdlParser`), stores the recording-row commercial stats (unchanged), AND
+  attaches the parsed segments as chapter markers on the real media item via
+  `ChapterMarkerService::persistChapters(media_item_id, chapters)` →
+  `media_items.metadata_json.commercial_chapters`.
+
+### Off-hot-path mechanism (why it can't stall the worker)
+`ComskipLifecycleManager::enqueue` → `scheduleDrain()`: when a Workerman worker is
+RUNNING (`WorkerContext::isEventLoopRunning()`), it arms a ONE-SHOT
+`Workerman\Timer::add(1s, …, [], false)` (guarded by a `drainScheduled` flag; new
+enqueues while one is armed just append to the queue the pending drain will pick
+up) and RETURNS — the completion coroutine is never held for the comskip duration
+(up to 300s). The drain runs in the timer's own coroutine (Swoole adapter wraps
+timer callbacks in `Coroutine::create()`), serialized (`drainQueue()` =
+`while (processNext())`, one recording at a time). Verified the hook mask
+(`SwooleRuntime::SAFE_HOOK_NAMES`): `SWOOLE_HOOK_PROC` + the blocking-function hook
+are EXCLUDED (so a raw inline comskip poll could stall the loop) but
+`SWOOLE_HOOK_STREAM_FUNCTION` (which covers `stream_select`) IS enabled — so the
+existing SV-4.3 `ComskipRunner` poll loop cooperatively yields (hooked
+`stream_select` + `Coroutine::sleep`) and does not freeze the worker. Deferring the
+run off the completion coroutine + the cooperative runner = the completion path is
+never blocked. Outside a running worker (CLI/PHPUnit/FPM — where `Workerman\Timer`
+is unusable and there is no loop to protect) `scheduleDrain()` drains synchronously
+(historic behaviour; `Timer::add` outside a live worker throws
+"Timer can only be used in workerman running environment" — the reason the gate is
+`isEventLoopRunning()`, not merely `class_exists(Timer)`).
+
+### Idempotency / guards / failure-safety
+- `ComskipIntegration::processRecording` (when wired with `ChapterMarkerService`)
+  SKIPS the comskip run entirely if the recording has NO `media_item_id` (nothing to
+  attach to — e.g. a failed/empty capture the registrar never registered); a missing
+  `.ts` throws (caught upstream). "Only run for a completed recording WITH a
+  media_item_id and a present .ts" ✔.
+- `ComskipLifecycleManager::isAlreadyProcessed` (`commercial_processed_at`) guards
+  re-enqueue; `persistChapters` overwrites `commercial_chapters` (idempotent) — no
+  double markers on reprocess.
+- comskip failure/timeout/unavailable → `processRecording` throws →
+  `processRecordingSync` catches + logs, never rethrows → drain continues, recording
+  stays playable (media item already registered, just without markers). No exception
+  escapes the completion path.
+
+### Files changed
+- `src/LiveTv/ComskipRunner.php` — optional 3rd ctor param `?int $timeoutSeconds`
+  (default = 300 const); makes the wedged-process timeout testable without a 300s
+  wait. No behavior change at default.
+- `src/LiveTv/Recording/ComskipIntegration.php` — optional 5th ctor param
+  `?ChapterMarkerService`; `processRecording` resolves `media_item_id` (new
+  `resolveMediaItemId`), skips when unlinked, and attaches chapter markers after the
+  run. When constructed WITHOUT a chapterService (legacy/tests) behaviour is
+  unchanged (no extra queries, no marker attach).
+- `src/LiveTv/Recording/ComskipLifecycleManager.php` — `enqueue` defers via
+  `scheduleDrain()`; new `shouldDeferDrain()`/`armDrainTimer()` (overridable test
+  seams), `onDrainTimer()`, public `drainQueue()`; `drainScheduled` flag +
+  `DRAIN_DELAY_SECONDS`.
+- `src/Common/Container/Providers/LiveTvServicesProvider.php` — registers
+  `ChapterMarkerService` (from `ItemRepository`) and injects it into
+  `ComskipIntegration`. **No ctor/DI-signature change to Recorder or either
+  entrypoint** — the new params are optional and wired only through this shared
+  provider (both `public/index.php` + `start.php` resolve it), so no dual-entrypoint
+  mirror is needed.
+
+### Tests added (mock the comskip subprocess like ComskipRunnerTest)
+- `ComskipRunnerTest::testRunTimesOutAndKillsWedgedProcess` — fake comskip that
+  `sleep 30`s with a 1s timeout override → `RuntimeException "Comskip timed out
+  after 1 seconds"` in <10s (SIGKILL reachable; SV-4.3 audit's recommended wedged
+  test).
+- `ComskipIntegrationTest::testProcessRecordingAttachesChaptersToLinkedMediaItem`
+  (media_item_id 'media-1' → `persistChapters('media-1', chapters)` called),
+  `::testProcessRecordingSkipsWhenNoLinkedMediaItem` (media_item_id null → comskip
+  `run` NEVER called, no persist, empty result).
+- `ComskipLifecycleManagerTest::testComskipFailureDoesNotEscapeEnqueue` (processing
+  throws → enqueue does NOT throw, runningCount released),
+  `::testEnqueueDefersToTimerAndDoesNotProcessInline` (deferred: queued + timer
+  armed, NOT processed inline; manual drain processes once),
+  `::testDeferredTimerFiringDrainsQueue` (timer fire → drains → processed once).
+  Deferral tested via an inline anon subclass overriding the seams (a real running
+  worker can't be spun in a unit test).
+
+### Verification (this box)
+- `phpstan analyse -c phpstan.neon.dist` → **[OK] No errors** (647).
+- `phpunit --testsuite Unit --no-coverage` → **4959 tests, 0 failures/errors** (5
+  pre-existing skips; baseline 4953 + 6 new). `--filter
+  'Comskip|ChapterMarker|LiveTvServicesProvider|RecordingMediaRegistrar'` → 70 OK.
+- `phpcs --standard=PSR12` on the 4 touched src files + 3 touched test files → **0
+  errors**.
+
+### On-box verify OWED (start.php / Timer / real comskip outside CI)
+Deploy, complete a real recording that registered a media item, confirm within ~1s
+the drain timer fires and (with comskip installed) `media_items.metadata_json.
+commercial_chapters` is populated for the recording's `media_item_id`, the
+`livetv_recordings.commercial_*` stats are written, and a recording with no
+`media_item_id` / no comskip binary leaves the item playable with no markers and no
+worker stall.

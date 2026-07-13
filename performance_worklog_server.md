@@ -2738,7 +2738,7 @@ No errors · `phpcs --standard=PSR12` on both touched files clean. Both callers
 (`scripts/run-migrations.php`, `bin/phlix migrate`) unchanged.
 
 ## Orchestrator — SV-4.9 implemented (2026-07-13, perf-5)
-- [~] SV-4.9 ledger — impl 1788ad35 (ensureLedgerTable bootstrap before first read; loadLedger consult; md5 checksum; skip-when-recorded-and-match; record after clean apply via INSERT ON DUP KEY positional ?; failed migration left UNRECORDED = re-run safe; checksum-divergence warn+re-apply+refresh; empty-ledger transition re-applies-once-then-records; ledger errors swallowed→degrade to historical path; kept isAlreadyAppliedNote squelch). Fixed 076 header + class docblock. 22/22 Migration + full Unit 5000/0, phpstan clean. REVIEW pending.
+- [x] SV-4.9 ledger — impl 1788ad35; REVIEW 3 findings (deploy-safety SAFE); FIX pending. (see below)
 
 ## Re-audit (perf-5) — SV-2.2/2.3/2.7
 - SV-2.2 pool hygiene (PooledMySQLConnection) — **DONE (code, wired; pool_enabled default true).** (a) dirty-txn rollback on defer-release (txPending[cid] set/clear via *Trans(), rollBack before idle push); (b) idle->pop(10.0) timeout→"pool exhausted"; (c) created-- on dead conn (SELECT 1 fail + factory throw); (d) non-coroutine bounded while-poll (no recursion). GAP: 3 core behaviors coroutine-only → UNTESTED in CI (on-box owed). Minor: txPending only via *Trans() family (raw "BEGIN" SQL wouldn't flip — codebase uses *Trans, low risk).
@@ -2840,3 +2840,45 @@ Swoole Timer). Full `--testsuite Unit` = 5002 tests OK (4 warnings / 5 skipped a
 `phpstan analyze -c phpstan.neon.dist` clean on both files. `phpcs --standard=PSR12 src/...PluginCatalogService.php`
 clean; the test-file phpcs "not in camel caps" + one fixture line-length are the file's pre-existing snake_case
 convention (new methods follow it). SV-4.11 Acceptance met.
+
+## Orchestrator — SV-4.11 DONE (2026-07-13, perf-5)
+- [x] SV-4.11 — docblock+async were done; FIX cff88617 changed defaultFetcher gate to isEventLoopRunning()&&inCoroutine()&&!requiresBlockingCurl (mirrors SV-4.5/S3Client), killing the spurious async-fetch-timeout; tests: blocking-outside-coroutine + async-wake-in-coroutine + clean-timeout(≥900ms). Full Unit 5002/0, phpstan clean. Accepted w/o re-review (verbatim reviewer fix on an already-reviewed pattern, both branches tested).
+
+## Fixer — SV-4.9 (3 review findings) — 2026-07-13 (perf-5)
+Fixed all 3 SV-4.9 review findings on top of impl 1788ad35.
+
+Finding 1 (MEDIUM — deploy-log noise regression): `MigrationRunner::run()` no longer pushes a per-file
+"<name> already applied (ledger), skipping" note into `notes[]` for a ledger skip — it only bumps
+`skipped_count`. Both callers print any note failing `isAlreadyAppliedNote()` in full, and that string
+was never matched, so steady-state deploys were echoing ~79 note lines. Now the callers render only the
+single "N statement(s) skipped (already applied)" summary line. `notes` docblock updated. Callers
+unchanged (runner-side fix). Verified by new test (h) `testSteadyStateSkipEmitsNoPerFileNotes` (2 recorded
+files → 0 executed, 0 notes, skipped_count=2) + updated test (b) assertion (notes now []).
+
+Finding 2 (LOW — test gaps): added (f) `testGenuineErrorLeavesMigrationUnrecorded` — a genuine
+non-idempotent error leaves the file UNRECORDED (no INSERT), so it re-runs next boot; (g)
+`testLedgerReadFailureDegradesToApplyAll` — the ledger SELECT throwing degrades to the historical
+apply-all path (both files applied, no crash).
+
+Finding 3 (LOW — checksum over whole file): chose the PREFERRED normalize option (low-risk). New private
+`MigrationRunner::checksum()` strips full-line `--`/`#` comments + per-line trailing whitespace before
+`md5()`, so a doc/comment-only edit to a `.sql` no longer flips the checksum → no spurious one-time
+re-apply. Normalization is narrow and CANNOT mask a real SQL change (only entirely-comment lines and
+trailing whitespace are removed; inline trailing `-- ...` on a statement line and any SQL token change are
+preserved). 076 header updated to document this. Verified by (i) `testCommentOnlyEditDoesNotDivergeChecksum`
+(comment/ws-only edit → still skipped) + (j) `testRealSqlEditStillDivergesChecksum` (INT→BIGINT → re-applied).
+
+Also fixed a pre-existing phpstan `new.resultUnused` in `testConnectionProviderIsNotCalledAtConstruction`
+(assign + assertInstanceOf) at user request.
+
+Deploy-safety preserved: re-run-safe (failed migration unrecorded), empty-ledger transition, and
+swallow-and-degrade fallback all intact.
+
+Files changed (absolute):
+- /home/sites/phlix/phlix-server/src/Common/Database/MigrationRunner.php
+- /home/sites/phlix/phlix-server/migrations/076_schema_migrations.sql
+- /home/sites/phlix/phlix-server/tests/Unit/Common/Database/MigrationRunnerTest.php
+
+Verification: `phpunit --filter Migration` 27/27 · full `--testsuite Unit` 5007 tests / 38818 assertions /
+5 skipped / 0 failures · `phpstan analyze -c phpstan.neon.dist` (src paths) No errors + clean on both
+touched files · `phpcs --standard=PSR12` clean on both touched files.

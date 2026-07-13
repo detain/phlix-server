@@ -285,8 +285,9 @@ class MigrationRunnerTest extends TestCase
             return $this->createMock(Connection::class);
         };
 
-        new MigrationRunner($provider, $this->tmpDir);
+        $runner = new MigrationRunner($provider, $this->tmpDir);
 
+        $this->assertInstanceOf(MigrationRunner::class, $runner);
         $this->assertFalse($called, 'Construction must not open a database connection.');
     }
 
@@ -361,10 +362,13 @@ class MigrationRunnerTest extends TestCase
 
         // The migration statement was NOT executed.
         $this->assertSame([], $executed);
-        // Skipped, not applied; surfaced as a note + skip count; no re-record.
+        // Skipped, not applied; counted via skipped_count ONLY — NO per-file
+        // note (SV-4.9 review finding 1: a per-file ledger-skip note would be
+        // echoed in full by both callers every steady-state deploy, defeating
+        // the skipped_count collapse). No re-record.
         $this->assertSame([], $result['applied']);
         $this->assertSame(1, $result['skipped_count']);
-        $this->assertSame(['001.sql already applied (ledger), skipping'], $result['notes']);
+        $this->assertSame([], $result['notes']);
         $this->assertSame([], $ledgerWrites);
     }
 
@@ -488,5 +492,197 @@ class MigrationRunnerTest extends TestCase
         $this->assertNotNull($createIdx, 'ledger bootstrap CREATE TABLE IF NOT EXISTS was not issued');
         $this->assertNotNull($selectIdx, 'ledger SELECT was not issued');
         $this->assertLessThan($selectIdx, $createIdx, 'bootstrap CREATE must precede the ledger read');
+    }
+
+    /**
+     * (f) SV-4.9 review finding 2a: a migration that raises a GENUINE
+     * (non-idempotent) error is left UNRECORDED in the ledger, so it is
+     * re-attempted on the next boot (the "re-run safe" contract).
+     */
+    public function testGenuineErrorLeavesMigrationUnrecorded(): void
+    {
+        $this->writeMigration('001.sql', 'CREATE TABLE a (id INT);');
+
+        $ledgerWrites = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $q, $params = null) use (&$ledgerWrites) {
+                if (str_contains($q, 'schema_migrations')) {
+                    if (stripos(ltrim($q), 'SELECT') === 0) {
+                        return []; // un-recorded → apply
+                    }
+                    if (stripos(ltrim($q), 'INSERT') === 0) {
+                        $ledgerWrites[] = $params;
+                    }
+                    return [];
+                }
+                // A genuine, non-idempotent failure (NOT an "already applied" class).
+                throw new RuntimeException('Syntax error near CREATE');
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        // The error was captured but the run did not abort.
+        $this->assertSame(['Syntax error near CREATE'], $result['errors']);
+        $this->assertSame(0, $result['skipped_count']);
+        // CRITICAL: the file was NOT recorded, so it re-runs next boot.
+        $this->assertSame([], $ledgerWrites);
+    }
+
+    /**
+     * (g) SV-4.9 review finding 2b: a ledger READ failure (the SELECT throwing)
+     * degrades to the historical apply-all path — every file is still applied,
+     * no crash, treating the ledger as empty.
+     */
+    public function testLedgerReadFailureDegradesToApplyAll(): void
+    {
+        $this->writeMigration('001.sql', 'CREATE TABLE a (id INT);');
+        $this->writeMigration('002.sql', 'CREATE TABLE b (id INT);');
+
+        $executed = [];
+        $conn = $this->createMock(Connection::class);
+        $conn->method('query')->willReturnCallback(
+            function (string $q, $params = null) use (&$executed) {
+                if (str_contains($q, 'schema_migrations')) {
+                    if (stripos(ltrim($q), 'SELECT') === 0) {
+                        // Ledger read blows up (e.g. table missing / DB hiccup).
+                        throw new RuntimeException('Table "schema_migrations" is missing');
+                    }
+                    return []; // CREATE / INSERT bookkeeping succeeds inertly.
+                }
+                $executed[] = $q;
+                return [];
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        // Degrade path: both files applied as if the ledger were empty; no crash.
+        $this->assertSame(['001.sql', '002.sql'], $result['applied']);
+        $this->assertSame([], $result['errors']);
+        $this->assertSame(
+            ['CREATE TABLE a (id INT)', 'CREATE TABLE b (id INT)'],
+            $executed
+        );
+    }
+
+    /**
+     * (h) SV-4.9 review finding 1: in steady state (the ledger records every
+     * file with a matching checksum) NO per-file "already applied" note is
+     * emitted — only `skipped_count` — so both callers render a single quiet
+     * summary line instead of one echoed line per file.
+     */
+    public function testSteadyStateSkipEmitsNoPerFileNotes(): void
+    {
+        $sqlA = 'CREATE TABLE a (id INT);';
+        $sqlB = 'CREATE TABLE b (id INT);';
+        $this->writeMigration('001.sql', $sqlA);
+        $this->writeMigration('002.sql', $sqlB);
+
+        // Ledger already records BOTH files with matching (normalised) checksums.
+        $ledgerRows = [
+            ['name' => '001.sql', 'checksum' => md5($sqlA)],
+            ['name' => '002.sql', 'checksum' => md5($sqlB)],
+        ];
+
+        $executed = [];
+        $conn = $this->connectionWithLedger($ledgerRows, function (string $sql) use (&$executed) {
+            $executed[] = $sql;
+            return [];
+        });
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        $this->assertSame([], $executed, 'no migration statement should execute in steady state');
+        $this->assertSame([], $result['applied']);
+        $this->assertSame([], $result['notes'], 'steady-state skips must NOT push per-file notes');
+        $this->assertSame(2, $result['skipped_count']);
+    }
+
+    /**
+     * (i) SV-4.9 review finding 3: a documentation-only edit (adding/changing a
+     * full-line `--` comment) does NOT diverge the normalised checksum, so an
+     * already-applied file is still skipped rather than spuriously re-applied.
+     */
+    public function testCommentOnlyEditDoesNotDivergeChecksum(): void
+    {
+        // The file as recorded had a header comment; the current file's header
+        // was edited (and trailing whitespace added) but the SQL is identical.
+        $recordedSql = "-- old header\nCREATE TABLE a (id INT);\n";
+        $currentSql = "-- a NEW, longer header line\n-- with an extra line\nCREATE TABLE a (id INT);   \n";
+
+        $this->writeMigration('001.sql', $currentSql);
+
+        // Recorded checksum = normalised md5 of the ORIGINAL file contents.
+        $recordedChecksum = self::normalisedMd5($recordedSql);
+
+        $executed = [];
+        $conn = $this->connectionWithLedger(
+            [['name' => '001.sql', 'checksum' => $recordedChecksum]],
+            function (string $sql) use (&$executed) {
+                $executed[] = $sql;
+                return [];
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        // Comment/whitespace-only divergence → checksums still match → skipped.
+        $this->assertSame([], $executed, 'a comment-only edit must not trigger a re-apply');
+        $this->assertSame([], $result['applied']);
+        $this->assertSame(1, $result['skipped_count']);
+    }
+
+    /**
+     * (j) SV-4.9 review finding 3: a REAL SQL edit still diverges the normalised
+     * checksum and triggers a (safe) one-time re-apply.
+     */
+    public function testRealSqlEditStillDivergesChecksum(): void
+    {
+        $recordedSql = "-- header\nCREATE TABLE a (id INT);\n";
+        $currentSql = "-- header\nCREATE TABLE a (id BIGINT);\n"; // INT → BIGINT
+
+        $this->writeMigration('001.sql', $currentSql);
+        $recordedChecksum = self::normalisedMd5($recordedSql);
+
+        $executed = [];
+        $conn = $this->connectionWithLedger(
+            [['name' => '001.sql', 'checksum' => $recordedChecksum]],
+            function (string $sql) use (&$executed) {
+                $executed[] = $sql;
+                return [];
+            }
+        );
+
+        $runner = new MigrationRunner(fn() => $conn, $this->tmpDir);
+        $result = $runner->run();
+
+        // The real change diverges the checksum → the file is re-applied.
+        $this->assertSame(['CREATE TABLE a (id BIGINT)'], $executed);
+        $this->assertSame(['001.sql'], $result['applied']);
+    }
+
+    /**
+     * Mirror of the runner's private checksum normalisation (strip full-line
+     * `--` / `#` comments + per-line trailing whitespace, then md5), for tests
+     * that need to compute the value the runner would record.
+     */
+    private static function normalisedMd5(string $sql): string
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $sql) ?: [];
+        $kept = [];
+        foreach ($lines as $line) {
+            if (preg_match('/^\s*(--|#)/', $line) === 1) {
+                continue;
+            }
+            $kept[] = rtrim($line);
+        }
+
+        return md5(implode("\n", $kept));
     }
 }

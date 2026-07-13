@@ -98,9 +98,10 @@ final class MigrationRunner
      *     skipped because the ledger already records it with a matching
      *     checksum is NOT listed here — see `skipped_count`/`notes`.
      *   - `notes`:   human-readable messages for idempotent errors that were
-     *     downgraded (e.g. "duplicate column" on a replay), plus one
-     *     "<file> already applied (ledger), skipping" line per ledger-skipped
-     *     file.
+     *     downgraded (e.g. "duplicate column" on a replay). A file that the
+     *     ledger already records with a matching checksum is skipped SILENTLY
+     *     (no per-file note — only `skipped_count` is bumped) so the steady-state
+     *     deploy log stays quiet; see `skipped_count`.
      *   - `errors`:  human-readable messages for genuine, non-idempotent
      *     statement failures. A non-empty list signals a failure to the
      *     caller, but — exactly like the original script — does NOT abort the
@@ -167,13 +168,22 @@ final class MigrationRunner
         foreach ($files as $file) {
             $name = basename($file);
             $sql = (string) file_get_contents($file);
-            $checksum = md5($sql);
+            $checksum = self::checksum($sql);
 
             if (isset($ledger[$name])) {
                 if ($ledger[$name] === $checksum) {
-                    // Recorded and unchanged — skip WITHOUT executing.
+                    // Recorded and unchanged — skip WITHOUT executing. Only the
+                    // `skipped_count` summary is bumped; deliberately NO per-file
+                    // note is pushed into `notes[]`. In steady state (every
+                    // deploy after the first) the ledger records all ~79 files,
+                    // so a per-file "already applied" note would be echoed IN
+                    // FULL by both callers (they print any note that is not an
+                    // `isAlreadyAppliedNote()` idempotent-class message) — the
+                    // exact per-deploy noise the `skipped_count` collapse exists
+                    // to prevent. The single "N skipped (already applied)"
+                    // summary line the callers render from `skipped_count` is
+                    // enough (SV-4.9 review finding 1).
                     $skippedCount++;
-                    $notes[] = sprintf('%s already applied (ledger), skipping', $name);
                     $this->logger?->info('Migration skipped (ledger)', ['file' => $name]);
                     continue;
                 }
@@ -329,6 +339,42 @@ final class MigrationRunner
             || str_contains($message, 'Duplicate key name')
             || str_contains($message, 'check that column/key exists')
             || str_contains($message, 'already exists');
+    }
+
+    /**
+     * Compute the ledger checksum of a migration file's contents.
+     *
+     * The hash is taken over a NORMALISED form of the file: full-line `--` /
+     * `#` comments and trailing whitespace on each line are stripped before
+     * hashing. This means a documentation-only edit to a `.sql` — e.g. keeping
+     * the rewrite-class header the `076` protocol asks operators to maintain —
+     * does NOT flip the checksum and trigger a spurious one-time re-apply on
+     * the next boot (SV-4.9 review finding 3).
+     *
+     * The normalisation is deliberately narrow and CANNOT mask a real SQL
+     * change: it only drops lines that are ENTIRELY a comment (after leading
+     * whitespace) and per-line trailing whitespace. Any change to an actual SQL
+     * token — including an inline `-- ...` comment appended to a real statement
+     * line — is preserved in the hash, so a genuine edit still diverges the
+     * checksum and re-applies (safely, migrations are re-run-safe).
+     */
+    private static function checksum(string $sql): string
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $sql);
+        if ($lines === false) {
+            return md5($sql);
+        }
+
+        $kept = [];
+        foreach ($lines as $line) {
+            // Drop full-line `--` / `#` comments (after any leading whitespace).
+            if (preg_match('/^\s*(--|#)/', $line) === 1) {
+                continue;
+            }
+            $kept[] = rtrim($line);
+        }
+
+        return md5(implode("\n", $kept));
     }
 
     /**

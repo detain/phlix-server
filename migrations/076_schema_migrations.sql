@@ -30,10 +30,15 @@
 --
 -- - `name`: migration filename without .sql (PRIMARY KEY).
 -- - `applied_at`: UNIX timestamp at time of application.
--- - `checksum`: MD5 of the .sql file at application time. If the file's MD5
---   no longer matches at the next boot, the runner logs a warning — the
---   operator may have legitimately edited a migration for a hotfix, but the
---   divergence should be visible.
+-- - `checksum`: MD5 of the .sql file at application time, taken over a
+--   NORMALISED form of the file (full-line `--` / `#` comments and per-line
+--   trailing whitespace are stripped before hashing). If the checksum no
+--   longer matches at the next boot, the runner logs a warning and re-applies
+--   the file once — the operator may have legitimately edited a migration for
+--   a hotfix, but the divergence should be visible. Because comment lines are
+--   normalised out, editing THIS header (or any full-line comment) does NOT
+--   trigger a re-apply; editing an actual SQL token (or an inline `-- ...`
+--   trailing comment on a statement line) does — a one-time, safe re-apply.
 --
 -- No `down` column — downgrades are new forward-only migration files that
 -- reverse the change (e.g. 077_undo_076_*.sql), each recorded by the runner.

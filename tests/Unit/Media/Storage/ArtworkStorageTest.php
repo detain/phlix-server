@@ -174,6 +174,96 @@ final class ArtworkStorageTest extends TestCase
     }
 
     /**
+     * FINDING 1 — the `original` variant must NOT contribute an invalid `0w`
+     * width descriptor to the srcset. `(int) preg_replace('/[^0-9]/','','original')`
+     * is 0, and a `0w` descriptor is a parse error that conformant browsers drop
+     * (silently losing the candidate). After the fix, `original` is skipped from
+     * the `w`-descriptor srcset entirely while the sized variants keep their real
+     * widths.
+     */
+    public function testSrcsetSkipsOriginalZeroWidthDescriptor(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+
+        // Write real (on-disk) variant files so getStoredVariants() sees them.
+        $itemDir = $this->tmpDir . '/item-srcset/';
+        mkdir($itemDir, 0755, true);
+        foreach (['w185', 'w342', 'w500', 'w780', 'original'] as $variant) {
+            file_put_contents($itemDir . $variant . '.jpg', 'x');
+        }
+
+        $srcset = $storage->srcset('item-srcset');
+        self::assertIsString($srcset);
+
+        // The sized variants keep their real `w`-descriptors...
+        self::assertStringContainsString('size=w185 185w', $srcset);
+        self::assertStringContainsString('size=w342 342w', $srcset);
+        self::assertStringContainsString('size=w500 500w', $srcset);
+        self::assertStringContainsString('size=w780 780w', $srcset);
+
+        // ...and `original` (with its invalid ` 0w` descriptor) is NOT present.
+        // Match the standalone descriptor token (leading space) so the legitimate
+        // `500w`/`780w` substrings don't false-positive.
+        self::assertStringNotContainsString(' 0w', $srcset);
+        self::assertStringNotContainsString('original', $srcset);
+
+        // Every entry carries a real (>=1) width descriptor.
+        foreach (explode(', ', $srcset) as $entry) {
+            self::assertMatchesRegularExpression('/ [1-9]\d*w$/', $entry, "Bad srcset entry: {$entry}");
+        }
+    }
+
+    /**
+     * FINDING 2 — a successful variant write goes through a temp-then-rename
+     * path: the final file ends up with the exact bytes in one atomic step and
+     * NO `.tmp` scratch file is left behind afterwards.
+     */
+    public function testAtomicWriteVariantRenamesAndLeavesNoTempFile(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+
+        $itemDir = $this->tmpDir . '/item-atomic/';
+        mkdir($itemDir, 0755, true);
+        $target = $itemDir . 'w185.jpg';
+
+        $bytes = 'JPEGBYTES-' . str_repeat('a', 4096);
+        self::assertTrue($storage->atomicWriteVariantPublic($target, $bytes));
+
+        // Final file exists with the COMPLETE content (atomic — never partial).
+        self::assertFileExists($target);
+        self::assertSame($bytes, file_get_contents($target));
+
+        // No leftover temp scratch file remains in the directory.
+        self::assertSame([], glob($itemDir . '*.tmp'));
+    }
+
+    /**
+     * FINDING 2 — when the rename onto the final path fails (here the final path
+     * is pre-occupied by a directory, so `rename()` of a file onto it fails), the
+     * writer returns false AND cleans up its temp file — no orphaned `.tmp`
+     * scratch files are left behind, and no partial final file is created.
+     */
+    public function testAtomicWriteVariantCleansUpTempOnRenameFailure(): void
+    {
+        $storage = new TestableArtworkStorage($this->tmpDir);
+
+        $itemDir = $this->tmpDir . '/item-atomic-fail/';
+        mkdir($itemDir, 0755, true);
+
+        // Occupy the final path with a NON-EMPTY directory so rename() fails.
+        $target = $itemDir . 'w185.jpg';
+        mkdir($target, 0755, true);
+        file_put_contents($target . '/blocker', 'x');
+
+        self::assertFalse($storage->atomicWriteVariantPublic($target, 'JPEGBYTES'));
+
+        // Temp file was cleaned up — nothing dangling in the directory.
+        self::assertSame([], glob($itemDir . '*.tmp'));
+        // The pre-existing directory is untouched (no partial file clobbered it).
+        self::assertDirectoryExists($target);
+    }
+
+    /**
      * Build a fake Workerman HTTP client whose request() resolves the given
      * handler synchronously (no network, no event loop).
      *

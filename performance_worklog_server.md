@@ -3354,3 +3354,74 @@ Verification (at HEAD `fee166c5`, changed file only + full-suite regression):
 - `phpstan analyze tests/Unit/Server/Workerman/HttpHandlerServeArtworkTest.php -c phpstan.neon.dist
   --level=9` = **No errors**.
 - `phpcs --standard=PSR12` on the changed file = **clean** (0 errors/0 warnings).
+
+## Reviewer (cumulative, SV-3.4 sub-1-7, commits e2abc09e→79bb46e1) — 2026-07-13 (perf-7)
+2 LOW findings (neither blocks the AC — posters ARE served locally, poster_srcset IS present — but both
+are genuine and NEITHER of the 7 per-sub-step narrow reviews caught them). Seams verified CLEAN: srcset
+URL format end-to-end matches serveArtwork's parsing (no w185-vs-185 mismatch); partial-state (failed
+resize) degrades to a clean 404, not a crash; matcher (write) and serveArtwork (read) share the same
+config-driven storageDir across workers; auth+304 ordering security-safe; ArtworkController.php still
+dead/unregistered, not accidentally activated; "UI cards use srcset" correctly scoped OUT to U-N7.
+FINDING 1 (LOW): `ArtworkStorage.php:284-285` (`srcset()`) — the `original` variant emits an INVALID `0w`
+width descriptor (`(int) preg_replace('/[^0-9]/', '', 'original') === 0`) — confirmed empirically:
+`…?size=original 0w, …`. Per the HTML srcset spec a `0w` descriptor is a parse error; conformant browsers
+DROP that candidate, so U-N7's srcset silently loses the `original` size. Fix: skip `original` in the
+loop (`if ($width < 1) { continue; }`) or emit its real measured width via `getimagesize()`.
+FINDING 2 (LOW): `ArtworkStorage.php:694-696` (`generateVariant`) + `:760-762` (`storeVariant`) — variant
+files written NON-ATOMICALLY (`file_put_contents($variantFile, $jpegData)` straight to the final path, no
+temp-then-rename). Sub-2 made `cacheArtworkLocally` LIVE on the scan/request path; `downloadAndStore`
+only early-returns when ALL 5 variants exist, so a partial set from a prior failed run triggers a full
+IN-PLACE OVERWRITE on retry. `serveArtwork` streams via `withFile()` — a read hitting the write's
+truncate window could serve a 0-byte/truncated JPEG with an ETag/Last-Modified computed mid-write. Low
+probability (tiny window, uncommon concurrent same-item matching) but real — exactly the concurrency seam
+a per-sub-step review wouldn't catch. Fix: write to a sibling temp file in the same dir, then `rename()`
+into place (atomic on one filesystem) — mirrors the download half's existing temp-file pattern for the
+SOURCE file, just missing for the resized VARIANTS.
+→ Fix agent spawned for both findings; will re-review after.
+
+## Fixer — SV-3.4 cumulative review findings (0w srcset descriptor + atomic variant writes) — 2026-07-13 (perf-7)
+Both LOW findings fixed. All edits scoped to `src/Media/Storage/ArtworkStorage.php` +
+`tests/Unit/Media/Storage/{ArtworkStorageTest,TestableArtworkStorage}.php`. Nothing else touched.
+
+**FINDING 1 (0w srcset descriptor) — FIXED.** In `srcset()` (was ~284-285) the width descriptor is still
+`(int) preg_replace('/[^0-9]/', '', $size)`, but after computing `$width` I added `if ($width < 1)
+{ continue; }` so the `original` variant (digits→0) is SKIPPED from the `w`-descriptor list instead of
+emitting an invalid `…?size=original 0w` entry that conformant browsers drop. Chose the simpler "skip it,
+it has no natural width" fix (per the finding's stated preference) over a `getimagesize()` measurement —
+`original` is still separately reachable via `relativePath()`/`url()` and the signed `poster_url` (which
+carries the `w500` variant), and `serveArtwork` still serves `?size=original`; none of those paths were
+touched, so the only change is that `original` no longer poisons the srcset with a `0w` candidate. The
+sized variants (185/342/500/780) keep their real `w`-descriptors unchanged.
+
+**FINDING 2 (non-atomic variant writes) — FIXED.** Added a shared `protected atomicWriteVariant(string
+$variantFile, string $jpegData): bool` helper that writes the JPEG bytes to a uniquely-named sibling temp
+file in the SAME directory (`{final}.{pid}.{16-hex-random-bytes}.tmp` — same-filesystem so `rename()` is
+atomic, PID + `random_bytes(8)` avoids collisions across concurrent same-item regeneration), `chmod`s it
+0644, then `@rename()`s it onto the final path. On any `file_put_contents` OR `rename` failure it calls
+the existing `cleanupTemp()` (`@unlink`) so no orphaned `.tmp` files leak, and returns false. `rename` is
+`@`-suppressed (boolean return is authoritative; best-effort write on a resident worker → no warning
+spam). Both `generateVariant()` (was ~694-696) and `storeVariant()` (was ~760-762) now call this helper
+instead of `file_put_contents($variantFile, …)` straight to the final path (the trailing
+`chmod($variantFile, 0644)` moved into the helper, applied to the temp file pre-rename). This mirrors the
+established `AvatarStorage::store()` temp-then-rename idiom (and the `@rename`/`@unlink` idiom in
+`ThemeMusicResolver`/`HttpInstaller`) — reused an existing pattern rather than inventing a new one. A
+read via `serveArtwork` → `withFile()` can no longer observe a truncated/0-byte JPEG mid-write.
+
+**Tests added (3, in `ArtworkStorageTest.php`; `TestableArtworkStorage` gains a public passthrough to the
+now-`protected` `atomicWriteVariant`):**
+- `testSrcsetSkipsOriginalZeroWidthDescriptor` — writes real w185/w342/w500/w780/original variant files,
+  asserts the srcset contains each `size=wNNN NNNw` entry, does NOT contain the standalone ` 0w`
+  descriptor token (leading-space match so `500w`/`780w` substrings don't false-positive) and does NOT
+  contain `original`, and that every entry ends in a `[1-9]\d*w` descriptor.
+- `testAtomicWriteVariantRenamesAndLeavesNoTempFile` — a successful write yields the COMPLETE bytes at the
+  final path in one step and leaves NO `*.tmp` scratch file behind (`glob(dir/*.tmp) === []`).
+- `testAtomicWriteVariantCleansUpTempOnRenameFailure` — occupies the final path with a non-empty directory
+  so `rename()` fails; asserts the writer returns false, cleans up its temp file (no `*.tmp` leftover),
+  and does not clobber the pre-existing target.
+
+**Verification (HEAD `79bb46e1`):**
+- `phpunit --filter ArtworkStorage --testdox` = **10/10 OK (52 assertions)** — 7 pre-existing + 3 new.
+- `phpunit --testsuite Unit --no-coverage` = **5075 tests, 0 failures, 5 skipped** (5072 baseline + 3 new;
+  no regression).
+- `phpstan analyze … -c phpstan.neon.dist --level=9` on the 3 changed files = **No errors**.
+- `phpcs --standard=PSR12` on the 3 changed files = **clean** (exit 0).

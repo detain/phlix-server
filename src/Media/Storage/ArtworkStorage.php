@@ -280,8 +280,17 @@ class ArtworkStorage
             if ($path === null) {
                 continue;
             }
-            // Extract width from size string (e.g., 'w185' -> 185)
+            // Extract width from size string (e.g., 'w185' -> 185).
             $width = (int) preg_replace('/[^0-9]/', '', $size);
+            // The 'original' variant has no digits, so this evaluates to 0.
+            // A `0w` width descriptor is a parse error per the HTML srcset spec —
+            // conformant browsers DROP that candidate — so skip it here rather
+            // than emit an invalid `…?size=original 0w` entry. 'original' remains
+            // separately reachable via relativePath()/url() and the signed
+            // poster_url; it just carries no meaningful `w`-descriptor width.
+            if ($width < 1) {
+                continue;
+            }
             $candidates[] = $path . ' ' . $width . 'w';
         }
 
@@ -692,12 +701,10 @@ class ArtworkStorage
         }
 
         $variantFile = $this->itemDir($itemId) . 'w' . $width . '.jpg';
-        $written = file_put_contents($variantFile, $jpegData);
-        if ($written === false) {
+        if (!$this->atomicWriteVariant($variantFile, $jpegData)) {
             return null;
         }
 
-        chmod($variantFile, 0644);
         return $variantFile;
     }
 
@@ -758,13 +765,58 @@ class ArtworkStorage
         }
 
         $variantFile = $this->itemDir($itemId) . $sizeName . '.jpg';
-        $written = file_put_contents($variantFile, $jpegData);
-        if ($written === false) {
+        if (!$this->atomicWriteVariant($variantFile, $jpegData)) {
             return null;
         }
 
-        chmod($variantFile, 0644);
         return $variantFile;
+    }
+
+    /**
+     * Atomically write JPEG bytes to a variant file.
+     *
+     * Writes to a uniquely-named sibling temp file in the SAME directory (so the
+     * final {@see rename()} is atomic on a single filesystem) and then renames it
+     * onto the final path. `serveArtwork` streams these files via `withFile()`,
+     * and {@see downloadAndStore()} only early-returns when ALL variants already
+     * exist — so a retry after a partial prior failure would otherwise do an
+     * in-place `file_put_contents()` overwrite, exposing a truncated/0-byte JPEG
+     * (and a mid-write ETag/Last-Modified) to a concurrent reader. The temp file
+     * is removed on any write or rename failure so no orphaned `.tmp` files leak.
+     *
+     * Mirrors {@see \Phlix\Media\Storage\AvatarStorage::store()}'s temp-then-rename idiom.
+     *
+     * Protected so a unit test can exercise the atomic path (and its failure
+     * cleanup) without a live download.
+     *
+     * @param string $variantFile Absolute final path (e.g. '…/w185.jpg').
+     * @param string $jpegData    Encoded JPEG bytes to write.
+     * @return bool               True on success, false on any I/O failure.
+     */
+    protected function atomicWriteVariant(string $variantFile, string $jpegData): bool
+    {
+        // Unique temp name in the SAME directory: keeps rename() atomic
+        // (same filesystem) and collision-safe if two coroutines/processes
+        // regenerate the same item concurrently. PID + random bytes.
+        $pid = getmypid();
+        $tmpFile = $variantFile . '.' . ($pid !== false ? $pid : 0) . '.' . bin2hex(random_bytes(8)) . '.tmp';
+
+        $written = file_put_contents($tmpFile, $jpegData);
+        if ($written === false) {
+            $this->cleanupTemp($tmpFile);
+            return false;
+        }
+
+        chmod($tmpFile, 0644);
+
+        // @-suppressed: the boolean return is authoritative and this is a
+        // best-effort write on a resident worker (no warning spam on failure).
+        if (!@rename($tmpFile, $variantFile)) {
+            $this->cleanupTemp($tmpFile);
+            return false;
+        }
+
+        return true;
     }
 
     /**

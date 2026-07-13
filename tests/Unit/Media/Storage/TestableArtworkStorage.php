@@ -39,4 +39,14 @@ final class TestableArtworkStorage extends ArtworkStorage
 
         return parent::getAsyncClient();
     }
+
+    /**
+     * Public passthrough to the protected atomic variant writer so the
+     * temp-then-rename mechanism (and its failure cleanup) can be exercised
+     * directly without a live download or the Swoole coroutine path.
+     */
+    public function atomicWriteVariantPublic(string $variantFile, string $jpegData): bool
+    {
+        return parent::atomicWriteVariant($variantFile, $jpegData);
+    }
 }

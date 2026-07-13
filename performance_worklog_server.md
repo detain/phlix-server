@@ -4619,3 +4619,121 @@ left unmerged, with the reasoning now verified (not just asserted) in this entry
 priority list remains live anywhere in `src/`. The hrtime half of SV-4.10 was already confirmed done in the
 2026-07-12 audit (line ~2575) and re-confirmed untouched by this pass (no `microtime` calls reintroduced;
 not in this step's file scope). **SV-4.10 is entirely DONE.**
+
+## Reviewer (per-step, SV-4.10, commits `174b283d`+`bc44d308`) — 2026-07-13
+
+Read the step spec (`performance_plan.md` §2 S-W4 SV-4.10 + finding `S-F48` in `performance.md`), this
+worklog's full SV-4.10 history (2026-07-12 PARTIAL audit at line ~2575 through the Implementer entry above),
+and both commits via `git show`. Independently re-derived every claim in the Implementer entry rather than
+trusting it.
+
+**Independent verification performed:**
+- Read the full `174b283d` diff (`MetadataManager.php`, `MediaServicesProvider.php`, `config/metadata.php`,
+  all 3 test files) line-by-line; confirmed the `array_merge($fallback, $configured)` merge direction is
+  correct (config wins for any type it names) and the `@include` path (`__DIR__ . '/../../../config/metadata.php'`
+  from `src/Media/Metadata/`) resolves to the real project-root `config/metadata.php` (3 `../` levels — no
+  wrong-depth landmine like the one that hit SV-3.4 sub-1-3).
+- **Reproduced the mutation test myself** (independent of the Implementer's own claim): temporarily removed
+  `MediaServicesProvider.php`'s `->constructorParameter('providerPriority', …)` binding, re-ran
+  `ContainerFactoryTest::test_metadata_manager_wires_provider_priority_in_prod` — **it still passed** — then
+  restored the binding (confirmed `git diff` clean afterwards). This independently confirms the claim: the
+  ctor's own `$providerPriority ?? self::defaultProviderPriority()` fallback and the DI factory both call the
+  *exact same* zero-argument static method, so there is no code path where they could diverge (unlike the
+  SV-1.3/1.10/2.9/3.4 landmine class, where the DI-skipped default was a *different*, stale value). The
+  explicit binding is genuinely just documentation-as-code, not load-bearing. Verified accurate, not
+  overclaimed.
+- Grepped for `registerProvider(` and `getProvidersForType(`/`refreshItemMetadata(` across `src/` to confirm
+  the dormant-code claim independently: `MetadataManager::registerProvider()` has zero call sites outside
+  `MetadataManager.php` itself and the two test files; `Application.php:3390` (`getMusicController()`) and
+  `MusicLibraryManager::refreshItemMetadata()` (the only two production consumers reachable) both construct/
+  use a `MetadataManager` with nothing ever registered onto it. Confirmed this predates the commit (neither
+  diff touches `registerProvider`/its callers) — the dormancy is pre-existing, not newly introduced or newly
+  worsened by this fix.
+- Read `PriorityConfig.php`, the `PriorityConfig::class` DI factory and the `MetadataManager::class` DI
+  factory side-by-side in `MediaServicesProvider.php`, plus grepped `MovieMetadataResolver.php`/
+  `SeriesMetadataResolver.php`/`LibraryMetadataMatcher.php` for `PriorityConfig`/`SourceRegistry`/
+  `MetadataManager` references, and confirmed `LibraryMetadataMatcher::class` is genuinely wired in both
+  `MediaServicesProvider.php` and `Application.php` (a live path), unlike `MetadataManager::registerProvider()`.
+  The "genuinely separate, correctly left unmerged" verdict holds.
+- Ran the full verification matrix myself rather than trusting the reported numbers: `--filter MetadataManager`
+  (30/30), `--filter MusicLibraryManager` (11/11), the anime integration test (5/5),
+  `ContainerFactoryTest.php` (22/22), and the **full `--testsuite Unit` suite: 5133 tests / 39245 assertions /
+  0 failures / 5 skipped** — matches the worklog's reported figures exactly. `phpstan analyze src/ -c
+  phpstan.neon.dist` (L9): no errors. `phpcs --standard=PSR12` on every changed file: `MetadataManager.php`
+  and `config/metadata.php` clean; diffed `MediaServicesProvider.php`/`ContainerFactoryTest.php`/
+  `MetadataManagerTest.php` against their pre-commit (`174b283d~1`) versions and confirmed the exact reported
+  deltas (4 pre-existing warnings unchanged, 21→22 snake_case errors [+1, the new test], 11 errors+1
+  warning→0 errors+1 warning). All verification claims in the Implementer entry check out precisely.
+- Mentally reverted each new/changed test to confirm it would go red pre-fix:
+  `testDefaultProviderPriorityMirrorsConfigMetadataFile`/`testDefaultProviderPriorityTracksArbitraryConfigFileContent`/
+  `testDefaultProviderPriorityFallsBackWhenConfigFileMissing` all call `MetadataManager::defaultProviderPriority()`,
+  which would not exist pre-fix (fatal error). `testConstructorDefaultPriorityForMovieMatchesConfigNotOldHardcodedLiteral`
+  registers `imdb` for `movie` and asserts it resolves — only true under the new config-derived default
+  (`['tmdb','imdb']`), false under the old hardcoded `['tmdb','local']` (imdb never in that list → empty
+  result → assertion fails). The anime-integration-test edit (registering `tmdb` instead of `tvdb` for
+  `series`) only resolves under the new `['tmdb','imdb']` series default, not the old
+  `['tvdb','fanart','local']` literal. All are genuine regression tests, not decorative.
+
+**One finding (LOW severity, non-blocking):**
+
+1. **`config/metadata.php:16-21` (pre-existing) vs `config/metadata.php:27-38` (added by `174b283d`) —
+   the new docblock overclaims consistency with the admin-override path.** `config/metadata.php`'s existing
+   docblock (unchanged by this commit, lines 16-21) states admins may override `metadata.provider_priority`
+   via server settings — a real, live mechanism: `MediaServicesProvider.php`'s `PriorityConfig::class` factory
+   (~lines 189-232) reads `SettingsRepository::getDefault('metadata.provider_priority')` **and**
+   `getOverride('metadata.provider_priority')`, merging any admin override per-type OVER the config
+   default — this is what `MovieMetadataResolver`/`SeriesMetadataResolver`/`LibraryMetadataMatcher` actually
+   consume via `PriorityConfig`. `MetadataManager::defaultProviderPriority()`
+   (`src/Media/Metadata/MetadataManager.php:173-201`), by contrast, reads `config/metadata.php` via a raw
+   `@include` and **never touches `SettingsRepository`** — its `providerPriority` binding in
+   `MediaServicesProvider.php:423-430` calls `MetadataManager::defaultProviderPriority()` directly, bypassing
+   the override entirely. The new docblock text (`config/metadata.php:32-34`) asserts the two subsystems "both
+   now trace back to these SAME values" — true only for the **static file default**; if an admin sets a live
+   `metadata.provider_priority` override via `AdminMetadataSourceController`, `PriorityConfig`-driven resolvers
+   would honor it while `MetadataManager`'s cascade would silently keep using the stale file-only default —
+   reintroducing a config divergence at the override layer instead of the file layer. **This is currently
+   inert in production** (verified above: `MetadataManager::registerProvider()` has zero callers, so its
+   priority map governs nothing reachable today) — so it is not a live bug and does not block SV-4.10, whose
+   declared **Effort: S** scope (per `performance_plan.md` and finding `S-F48`'s literal text, "Load the map
+   from config in `MetadataManager`") says nothing about the admin-override layer. But the new docblock's
+   "same values" framing is not fully accurate, and if the separately-flagged dormant-`registerProvider()` gap
+   is ever closed in a future step, this divergence would become live and worth remembering. Recommend a
+   one-line docblock caveat (e.g. "MetadataManager's default does not consult the live admin override —
+   only PriorityConfig-driven resolvers do") the next time this file is touched, and/or folding a note into
+   the already-flagged future `registerProvider()` follow-up finding. Not required to re-open SV-4.10 for.
+
+No other findings. Scope is clean (only SV-4.10-relevant files touched across both commits); no security,
+async/resident-memory, or Webman-convention issues found; PSR-12/PHPStan-L9 clean; test quality is genuine
+(every new/changed test verified to go red under a mental revert, and the two most consequential Implementer
+claims — the DI-binding non-load-bearing claim and the dormant-`registerProvider()` claim — were independently
+reproduced/reconfirmed rather than taken on faith). **SV-4.10 stands as DONE; the one finding above is an
+informational follow-up, not a blocker.**
+
+## Implementer — SV-4.10 docblock fix (Reviewer LOW finding) — 2026-07-13
+
+Addressed the single LOW-severity finding from the SV-4.10 per-step Reviewer entry above
+(`config/metadata.php:16-21` vs `:27-38`, commits `174b283d`+`bc44d308`): the docblock added by `174b283d`
+claimed `MetadataManager` and `PriorityConfig` "both now trace back to these SAME values", which is only true
+for the static file default. Re-verified the two facts the finding turns on before editing anything:
+`MetadataManager::defaultProviderPriority()` (`src/Media/Metadata/MetadataManager.php:173-201`) reads
+`config/metadata.php` via a raw `@include` and never touches `SettingsRepository`; `PriorityConfig`'s DI
+factory (`src/Common/Container/Providers/MediaServicesProvider.php:189-232`) reads both
+`SettingsRepository::getDefault('metadata.provider_priority')` and `getOverride('metadata.provider_priority')`
+and merges any admin override per-type over the default. So the two subsystems only agree while no admin
+override is set; `MetadataManager`'s cascade would keep using the stale file-only default if one is. Per the
+finding, this is inert today (`MetadataManager::registerProvider()` still has zero callers — same dormant-cascade
+fact re-confirmed by the Reviewer entry above), so this is a doc-accuracy fix only, not a functional change.
+
+**Change:** `config/metadata.php` (~lines 39-45) — appended a short caveat paragraph after the existing
+"both now trace back to these SAME values" text, without rewriting the surrounding docblock: notes the
+equivalence holds only for the static file default, that `MetadataManager::defaultProviderPriority()` does not
+consult `SettingsRepository`, and that only `PriorityConfig` (built in `MediaServicesProvider`'s DI factory via
+`SettingsRepository::getOverride()`) honors a live `metadata.provider_priority` admin override — so the two
+subsystems diverge the moment an override is set. No code changed; `MetadataManager.php` and
+`MediaServicesProvider.php` are untouched.
+
+**Verification:** `php -l config/metadata.php` clean; `phpcs --standard=PSR12 config/metadata.php` clean;
+`phpstan analyze src/ -c phpstan.neon.dist` (L9) — no errors; `phpunit --filter MetadataManager` — 30/30 passed,
+21071 assertions (unchanged from the SV-4.10 Reviewer's reported baseline — confirms the doc-only edit didn't
+perturb behavior). Commit: `docs: SV-4.10 fix config/metadata.php docblock — PriorityConfig honors admin
+overrides, MetadataManager doesn't`.

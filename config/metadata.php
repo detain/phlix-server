@@ -37,6 +37,14 @@
  * `track` (media types this file's schema does not cover) from its own
  * fallback — see `MetadataManager::defaultProviderPriority()`.
  *
+ * CAVEAT: that "same values" equivalence holds only for this file's STATIC
+ * DEFAULT. `MetadataManager::defaultProviderPriority()` reads this file via a
+ * raw `@include` and never consults `SettingsRepository`, so it does NOT see
+ * a live `metadata.provider_priority` admin override — only
+ * {@see \Phlix\Media\Metadata\Resolution\PriorityConfig} (built in
+ * `MediaServicesProvider`'s DI factory via `SettingsRepository::getOverride()`)
+ * honors overrides. The two subsystems diverge the moment an override is set.
+ *
  * @since 0.22.0
  */
 

@@ -3849,3 +3849,63 @@ here). No dropped/empty DATA frames are emitted on zero-length local reads.
 **Scope note:** `sendCancel()` (HTTP_CANCEL sender, a separate frame path not cited in the audit gap list
 or the plan's line ranges for this step) still ignores its `send()` return — left untouched as out of
 scope for SV-2.3 (not part of the raw byte-pipe DATA-frame path S-F36 describes).
+
+## Implementer — server-twin FD-churn fix, `PooledMySQLConnection::acquire` — 2026-07-13 (perf-7)
+
+Small, well-understood fix carried over from a prior paused session (queued since perf-6/perf-7's
+IMMEDIATE QUEUE item "Server-twin FD-churn fix"; the in-progress diff was sitting in a git stash titled
+"WIP: server-twin FD-churn fix (PooledMySQLConnection)…" and was popped to resume). Mirrors phlix-hub's
+already-shipped fix, commit `a203070` (`git -C phlix-hub show a203070`): `PooledMySQLConnection::acquire()`'s
+dead-idle-connection branch discarded an evicted idle connection from the pool WITHOUT calling
+`closeConnection()` on it first, so its (possibly not-fully-dead) socket FD lingered until PHP GC
+instead of being released immediately — a bounded but real FD-churn risk under a burst of DB-side
+connection drops (idle timeout/failover). `src/Common/Database/PooledMySQLConnection.php` is the exact
+byte-identical twin of hub's class (confirmed by prior sessions' review), and had the identical gap at
+the identical line (`acquire()`'s `if (!$this->isConnectionAlive($conn))` branch, ~line 319).
+
+**Verified the stashed work before trusting it** (per task instruction — reviewed critically, did not
+blindly accept): the popped diff already had the correct one-line fix
+(`$conn->closeConnection();` inserted before `$this->created--; return $this->acquire();`, with an
+explanatory comment matching hub's) plus a genuine regression test. Both were correct and complete as
+found — no additional fix work was needed, only verification + commit + push.
+
+**Fix:** `src/Common/Database/PooledMySQLConnection.php` `acquire()` — before discarding a dead idle
+connection popped from `$this->idle` and recursing to acquire a replacement, call
+`$conn->closeConnection()` so the FD is released immediately. Byte-for-byte the same remediation shape
+as hub `a203070`.
+
+**Test:** `tests/Unit/Common/Database/PooledMySQLConnectionTest.php` —
+`testDeadIdleConnectionIsClosedBeforeEviction()` (new, `@requires extension swoole`, self-skips if
+Swoole isn't loaded). Drives the REAL Swoole coroutine scheduler in-process (`\Swoole\Coroutine\go()` +
+`\Swoole\Event::wait()`, no live DB, no child-process fixture needed — a lighter-weight approach than
+hub's child-process harness since this is a single narrow regression rather than hub's fuller
+lease/release/exhaustion/rollback/eviction suite): a socket-free anonymous `Connection` subclass tracks
+`closes` (incremented in its overridden `closeConnection()`) and treats the `SELECT 1` liveness probe as
+throwing when `alive=false`. Coroutine A (pool `maxSize=1`) leases the only connection and ends,
+returning it to idle via `Coroutine::defer`; the test then flips that connection's `alive=false`
+(simulating the DB dropping it while idle); coroutine B then leases again, which must evict + close the
+dead connection and open a brand-new one. Asserts: exactly 2 connections were ever created, the FIRST
+(evicted) connection's `closes === 1` (closed exactly once, not merely dropped), and the SECOND
+(replacement) connection's `closes === 0` (untouched).
+
+**Verification (actual commands run):**
+- `phpunit --filter PooledMySQLConnection` → **OK, 7 tests, 18 assertions** (the server test file only
+  carries the CLI/delegation-path tests + this one new eviction test — server never needed hub's
+  separate coroutine-harness suite since `PooledMySQLConnectionTest` here already had CLI-path coverage
+  hub's own Finding 1 had to add from scratch).
+- `phpunit --testsuite Unit --no-coverage` (full suite) → **OK, 5100 tests, 39141 assertions, 5 skipped,
+  0 failures** (up from the perf-7 pause baseline of 5096/0/5-skip by exactly the 1 new test added here;
+  no regression).
+- `phpstan analyze -c phpstan.neon.dist` (src/ gate, level 9) → **[OK] No errors** — clean on the whole
+  configured `src/` path including the changed file.
+- `phpcs --standard=PSR12 src/Common/Database/PooledMySQLConnection.php
+  tests/Unit/Common/Database/PooledMySQLConnectionTest.php` → **0 errors, 0 warnings** on both changed
+  files.
+- No dual-entrypoint (`index.php`/`start.php`) mirroring needed: `PooledMySQLConnection`'s public
+  constructor signature and DI wiring are untouched — this is a private-method internal-logic fix only.
+
+**Commit:** `a9bbae2b` — `db: server-twin FD-churn fix in PooledMySQLConnection::acquire (mirrors hub
+a203070)`. Pushed to `origin/master` (rebased first; no new commits had landed in the interim — the
+concurrent read-only review agent working elsewhere in this repo made no pushes, as expected).
+
+**Server-twin FD-churn fix item is CLOSED** — both server and hub now carry the matching remediation.

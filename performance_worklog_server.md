@@ -2295,3 +2295,116 @@ commercial_chapters` is populated for the recording's `media_item_id`, the
 `livetv_recordings.commercial_*` stats are written, and a recording with no
 `media_item_id` / no comskip binary leaves the item playable with no markers and no
 worker stall.
+
+## Reviewer (per-step) — SV-3.1d-comskip — 2026-07-12
+
+Reviewed impl commit `5700403e` + tests commit `d18a8fe8` at HEAD. Verified: phpstan
+`-c phpstan.neon.dist` on the 5 touched src files = No errors; `phpunit --filter
+'Comskip|ChapterMarker|LiveTvServicesProvider|RecordingMediaRegistrar'` = 70/70 OK.
+
+Off-the-hot-path claim CONFIRMED: `ComskipLifecycleManager::enqueue` → `scheduleDrain()`
+arms a genuine ONE-SHOT `Workerman\Timer::add(1.0, …, [], false)` (fourth arg `false`)
+under a `drainScheduled` re-entrancy guard and returns immediately; the completion
+coroutine is never held for the comskip duration. Hook ordering CONFIRMED: enqueue is
+Recorder-ctor hook #1 (arms timer, returns), `RecordingMediaRegistrar::register` is
+onComplete hook #2 (sets `media_item_id` synchronously in the same
+`fireOnCompleteCallbacks` loop); the 1s timer fires strictly after both. Skip-when-unlinked,
+failure-swallowed (`processRecordingSync` catch, never rethrows), idempotent markers
+(`persistChapters` overwrites), and the `commercial_processed_at` re-enqueue guard all
+verified. DB reads use plain-array-safe shape handling (`is_array($result)` + `$result[0]`),
+so not inert vs the live `PhlixMySQLConnection` (the SV-3.1-rowquery landmine does not
+recur here). No ctor/DI signature change to Recorder or either entrypoint — the optional
+params are wired only through the shared `LiveTvServicesProvider`, so both index.php and
+start.php get identical wiring; no dual-entrypoint mirror needed. SV-4.3 ComskipRunner
+wedged-process SIGKILL timeout is reachable (poll loop checks the hrtime deadline every
+~100ms select tick) and covered by a test. `RecordingHooks`/`ComskipPostProcessor`/
+`MarkerService` confirmed dormant (never constructed/wired) — no parallel comskip path
+activated.
+
+Findings:
+
+1. `src/Common/Container/Providers/LiveTvServicesProvider.php:173-177` — STALE DOC (low).
+   The comment on the `RecordingMediaRegistrar` factory still reads "(Comskip chapter-marker
+   attachment to the real media item is the SEPARATE, deferred SV-3.1d-comskip sub-step,
+   gated on SV-4.3 — NOT wired here.)". That sub-step is now COMPLETE and wired ~35 lines
+   above in the sibling `ComskipLifecycleManager` factory (the `ChapterMarkerService`
+   injected into `ComskipIntegration` at lines 153-161). The parenthetical now misleads a
+   maintainer into thinking commercial chapter-marker attachment is still unimplemented/
+   deferred. Recommend updating it to note comskip marker attachment is wired via the
+   ComskipLifecycleManager factory. (Documentation only — no behavioral impact.)
+
+## Orchestrator — SV-3.1d-comskip DONE (2026-07-12, perf-5)
+- [x] SV-3.1d-comskip — impl 5700403e + tests d18a8fe8; REVIEW returned 1 low finding (stale wiring comment); FIX f44bf5da (comment corrected); re-review waived (finding was a verbatim comment-only correction, no behavioral surface; reviewer had fully vetted code). Tests 70/70 green, phpstan L9 clean.
+- DVR stack (SV-3.1 a/b0/c/d/e + rowquery + comskip) now CODE-COMPLETE. OWED: Docs cycle (batched) + on-box end-to-end record→complete→playable+markers verify (start.php/Timer/real comskip outside CI).
+- Server active: SV-4.2 (X1 server-STOP half) IN PROGRESS.
+
+## Implementer — SV-4.2 (detached-ffmpeg cancellation + apply transcode_timeout, [S-F23], X1 server-STOP half) — 2026-07-12
+
+Closed the three re-audit GAPS (worklog :2176): (1) the on-demand PER-SEGMENT encode
+path (`FfmpegRunner::launchDetachedSegment`) had NO `timeout` and NO PID tracking — the
+exact scrub-storm orphan; (2) no kill of an abandoned encode; (3) `RelayConsumer::onHttpCancel`
+did not kill the ffmpeg. The whole-file/CMAF `buildDetachedCommand` + `Recorder` SIGTERM→SIGKILL
+were already done in the earlier SV-4.2 pass and are untouched.
+
+### Files changed
+- **NEW `src/Media/Transcoding/SegmentProcessRegistry.php`** — per-worker in-memory map
+  `cancelKey => [pid,...]` with `register/release/kill/registeredKeyCount/pidsFor`. `kill()`
+  is coroutine-safe (SIGTERM, bounded hrtime grace wait via `Coroutine::sleep` when
+  `getCid()>0` else `usleep`, then SIGKILL if still alive) and drops the entry (no leak).
+  Signal-sender + liveness-probe are injectable so tests spawn/kill no real processes;
+  defaults use `posix_kill` with a `kill` shell fallback. Bounded by the release-in-`finally`
+  contract (resident-memory discipline).
+- **`FfmpegRunner.php`** — new `?SegmentProcessRegistry $segmentRegistry` (setter-injected,
+  mirroring `setConfig`, so the ctor signature/tests are unchanged). `launchDetachedSegment`
+  now builds via new **public** `buildDetachedSegmentCommand()` which wraps the atomic-publish
+  chain (`encode && mv || rm`) in `timeout <transcode_timeout> sh -c` (from the existing
+  `getTranscodeTimeout()`, config `config/ffmpeg.php` `transcode_timeout`=7200) and registers
+  the spawned PID under the cancel key. `startSegmentEncode()` gained an optional
+  `?string $cancelKey` (defaults to `$outFile`). Added `releaseSegmentProcess()` /
+  `killSegmentProcess()` delegators.
+- **`TranscodeManager.php`** — both `ensureSegment` launch sites now pass `$final` as the
+  cancel key; both `finally` blocks now, for the encode WE launched, `releaseSegmentProcess($final)`
+  when the segment published (already exited) or `killSegmentProcess($final)` when it did not
+  (timed-out/hung/abandoned) — the wait-timeout orphan killer. `timeout <n>` on the child is
+  the outer backstop.
+- **`RelayConsumer.php`** — setter `setSegmentProcessRegistry()`; `onHttpCancel` now calls
+  `registry?->kill((string)$channelId)` before `closeLocalConnection()`. NOTE documented in
+  code: the relay-tunnel worker is a separate process from HTTP workers, so for cross-process
+  proxied traffic the *effective* abort remains `closeLocalConnection()` (→ the HTTP worker's
+  poll-loop wait-timeout kill); the registry kill covers same-worker traffic (the relay fork's
+  own `RelayRequestDispatcher` DOES launch encodes in-process) and is the request-keyed hook.
+- **`TranscodeServicesProvider.php`** — `SegmentProcessRegistry` registered as a per-worker
+  DI singleton; injected into `FfmpegRunner` via the setter. Central provider = shared by BOTH
+  `public/index.php` and `start.php` (both call `ContainerFactory::create`), so no
+  dual-entrypoint duplication needed.
+- **`start.php`** — relay-tunnel worker wires the registry into the `RelayConsumer`.
+
+### Acceptance mapping
+- *Wrap detached segment encode in `timeout <n>` from `transcode_timeout`* → `buildDetachedSegmentCommand`
+  (test: `FfmpegRunnerTest::testBuildDetachedSegmentCommandWrapsInTimeout` / `...OmitsTimeoutWhenZero`).
+- *Register spawned PID keyed for cancel* → `SegmentProcessRegistry` + `launchDetachedSegment`
+  registration (tests: `SegmentProcessRegistryTest`, `FfmpegRunnerTest::testSegmentProcessLifecycleDelegatesToRegistry`).
+- *On wait-timeout, kill the tracked PID; release on completion; no leak* →
+  `TranscodeManagerTest::testEnsureSegmentKillsAbandonedEncodeOnWaitTimeout` /
+  `testEnsureSegmentReleasesRegistryOnCompletion`.
+- *onHttpCancel kills tracked PIDs* → `RelayConsumerTest::test_http_cancel_kills_tracked_segment_encode`
+  (mock signal sender).
+
+### Deferred (noted follow-up sub-step)
+- **Client/connection-disconnect immediate kill + request-keyed onHttpCancel effectiveness.**
+  Making onHttpCancel/disconnect kill the encode *directly* (rather than via the poll-loop
+  wait-timeout) needs the encode registered under a request/connection-scoped cancel key
+  (thread the relay request id / a per-connection token through `RequestContext` into the
+  transcode cancel key) plus a direct-connection disconnect hook (the HTTP worker uses
+  keep-alive `onMessage` only; no per-response `onClose` is wired today). Out of the
+  ~2-3 file / ~200 line budget; the wait-timeout kill + `timeout <n>` backstop already bound
+  orphan CPU, so this is a latency optimization, not a correctness gap.
+
+### Verification
+- `phpunit` (SegmentProcessRegistry/FfmpegRunner/TranscodeManager/RelayConsumer): 150/150 OK.
+- Full `--testsuite Unit`: 4973 tests, 0 failures/errors; only 4 PRE-EXISTING warnings
+  (`TranscodeManager.php:2188-2191` undefined `color_*` keys, code not touched here).
+- `phpstan -c phpstan.neon.dist` on all 5 touched src files: No errors.
+- `phpcs --standard=PSR12` src: 0 errors (11 pre-existing line-length warnings in
+  TranscodeManager, none on added lines). Test snake_case method-name errors are the
+  per-file existing convention and tests are outside the phpcs gate (`phpcs src/`).

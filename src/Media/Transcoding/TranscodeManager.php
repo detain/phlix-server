@@ -809,7 +809,9 @@ class TranscodeManager
                 // Throws SegmentCacheFullException if below threshold; the HLS
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
-                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
+                // SV-4.2: pass $final as the cancel key so the spawned ffmpeg PID
+                // is tracked and can be killed on wait-timeout / cancel.
+                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams, $final);
             }
 
             // Poll using non-blocking sleep when in Swoole coroutine context.
@@ -839,6 +841,18 @@ class TranscodeManager
             // e.g. a hard coroutine kill).
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
+                // SV-4.2 ([S-F23]): the detached encode WE launched must not leak a
+                // registry entry, and — if it never published within the poll window
+                // (client abandoned the seek, or it is hung) — must be killed rather
+                // than left to run to completion burning CPU. `is_file($final)` true
+                // means the encode already renamed + exited, so we only release; false
+                // means still running/failed, so kill (SIGTERM→SIGKILL) which also
+                // drops the entry. `timeout <n>` on the child is the outer backstop.
+                if (is_file($final)) {
+                    $this->ffmpeg->releaseSegmentProcess($final);
+                } else {
+                    $this->ffmpeg->killSegmentProcess($final);
+                }
             }
         }
 
@@ -995,7 +1009,8 @@ class TranscodeManager
                 // Throws SegmentCacheFullException if below threshold; the HLS
                 // controller catches it, sweeps the cache, and returns 503.
                 $this->ensureDiskSpace();
-                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams);
+                // SV-4.2: track the spawned PID under $final for cancel/timeout.
+                $this->ffmpeg->startSegmentEncode($inputPath, $final, $start, $segLen, $segParams, $final);
             }
 
             $waited = 0;
@@ -1010,6 +1025,18 @@ class TranscodeManager
         } finally {
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
+                // SV-4.2 ([S-F23]): the detached encode WE launched must not leak a
+                // registry entry, and — if it never published within the poll window
+                // (client abandoned the seek, or it is hung) — must be killed rather
+                // than left to run to completion burning CPU. `is_file($final)` true
+                // means the encode already renamed + exited, so we only release; false
+                // means still running/failed, so kill (SIGTERM→SIGKILL) which also
+                // drops the entry. `timeout <n>` on the child is the outer backstop.
+                if (is_file($final)) {
+                    $this->ffmpeg->releaseSegmentProcess($final);
+                } else {
+                    $this->ffmpeg->killSegmentProcess($final);
+                }
             }
         }
 

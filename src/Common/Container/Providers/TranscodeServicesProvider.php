@@ -16,6 +16,7 @@ use Phlix\Common\Container\ServiceProviderInterface;
 use Phlix\Config\HwAccelConfig;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Media\Transcoding\TranscodeManager;
 use Psr\Container\ContainerInterface;
 use Workerman\MySQL\Connection;
@@ -81,6 +82,17 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
             ? $hlsConfig['cache_max_age'] : null;
 
         $builder->addDefinitions([
+            // SV-4.2: shared per-worker registry of detached segment-encode PIDs so
+            // abandoned/timed-out on-demand encodes can be killed (see FfmpegRunner
+            // + TranscodeManager). A singleton within each worker process.
+            SegmentProcessRegistry::class => factory(
+                static function (ContainerInterface $c): SegmentProcessRegistry {
+                    /** @var \Psr\Log\LoggerInterface $logger */
+                    $logger = $c->get('logger.media');
+                    return new SegmentProcessRegistry($logger);
+                }
+            ),
+
             FfmpegRunner::class => factory(
                 static function (ContainerInterface $c) use ($ffmpegPath, $ffprobePath, $transcodeDir): FfmpegRunner {
                     /** @var \Psr\Log\LoggerInterface $logger */
@@ -94,6 +106,12 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
 
                     $runner = new FfmpegRunner($ffmpegPath, $ffprobePath, $transcodeDir, $logger);
                     $runner->setConfig($mergedConfig);
+
+                    // SV-4.2: wire the segment-process registry so on-demand encode
+                    // PIDs are tracked for cancellation / wait-timeout kill.
+                    /** @var SegmentProcessRegistry $segmentRegistry */
+                    $segmentRegistry = $c->get(SegmentProcessRegistry::class);
+                    $runner->setSegmentProcessRegistry($segmentRegistry);
 
                     // Probe hardware acceleration once at container build time and cache
                     // the result on the runner. This avoids per-request probing (which

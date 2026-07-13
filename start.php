@@ -562,6 +562,17 @@ try {
                 => $relayDispatcher->dispatch($req),
         );
 
+        // SV-4.2 ([S-F23], X1): wire the segment-process registry so HTTP_CANCEL
+        // frames can kill any tracked on-demand encode. This relay fork's
+        // dispatcher ($relayApplication) launches segment encodes in THIS process,
+        // so they register into this same registry singleton. (Full request-keyed
+        // matching — registering encodes under the relay request id so a cancel
+        // finds them directly — is the deferred follow-up; today closeLocalConnection
+        // below triggers the HTTP poll-loop wait-timeout kill.)
+        /** @var \Phlix\Media\Transcoding\SegmentProcessRegistry $segmentRegistry */
+        $segmentRegistry = $container->get(\Phlix\Media\Transcoding\SegmentProcessRegistry::class);
+        $consumer->setSegmentProcessRegistry($segmentRegistry);
+
         $consumer->start();
     };
 } catch (\Throwable $e) {

@@ -215,6 +215,24 @@ final class RelayConsumer
     private $httpDispatcher;
 
     /**
+     * Optional per-worker segment-process registry used to kill any tracked
+     * on-demand ffmpeg encode when the browser abandons a streaming request
+     * (SV-4.2 [S-F23], the server half of the X1 HTTP_CANCEL chain). Null unless
+     * wired via {@see setSegmentProcessRegistry()}.
+     *
+     * NOTE: the RelayConsumer runs in the relay-tunnel worker, a separate process
+     * from the HTTP workers that launch segment encodes; that per-process registry
+     * is therefore empty for cross-process relay traffic, so the *effective* abort
+     * for proxied requests is {@see closeLocalConnection()} (which tears down the
+     * forwarded request in the HTTP worker, whose own poll-loop wait-timeout then
+     * kills the encode). This registry kill additionally covers the case where the
+     * relay and encode share a worker and is the request-keyed cancellation hook.
+     *
+     * @var \Phlix\Media\Transcoding\SegmentProcessRegistry|null
+     */
+    private $segmentRegistry = null;
+
+    /**
      * @param RelayConfig      $config                  Relay configuration.
      * @param HubClient        $hubClient               Hub client (for enrollment info).
      * @param StructuredLogger $logger                  Logger instance.
@@ -247,6 +265,21 @@ final class RelayConsumer
         $this->hubConnectionFactory = $hubConnectionFactory;
         $this->localConnectionFactory = $localConnectionFactory;
         $this->httpDispatcher = $httpDispatcher;
+    }
+
+    /**
+     * Wire the segment-process registry so {@see onHttpCancel()} can kill any
+     * tracked on-demand ffmpeg encode for a cancelled request (SV-4.2).
+     *
+     * @param \Phlix\Media\Transcoding\SegmentProcessRegistry $registry Registry.
+     *
+     * @return void
+     *
+     * @since SV-4.2
+     */
+    public function setSegmentProcessRegistry(\Phlix\Media\Transcoding\SegmentProcessRegistry $registry): void
+    {
+        $this->segmentRegistry = $registry;
     }
 
     /**
@@ -1450,6 +1483,20 @@ final class RelayConsumer
         // Drop any partial chunked-request assembly for this id so a cancelled
         // request in mid-upload cannot leave a dangling accumulator.
         $this->discardRequestAccumulator($channelId);
+
+        // SV-4.2 ([S-F23], X1 server half): kill any on-demand ffmpeg encode
+        // tracked for this request so an abandoned scrub-storm segment stops
+        // burning CPU immediately rather than running to completion. Keyed by the
+        // request id; a no-op when nothing is tracked (see the $segmentRegistry
+        // docblock on the cross-process caveat — closeLocalConnection below is the
+        // effective abort for proxied traffic).
+        $killed = $this->segmentRegistry?->kill((string) $channelId) ?? 0;
+        if ($killed > 0) {
+            $this->logger->info('RelayConsumer: killed abandoned encode(s) on HTTP_CANCEL', [
+                'request_id' => $channelId,
+                'killed' => $killed,
+            ]);
+        }
 
         // Close the local connection to abort any in-progress streaming response.
         // The requestId in the frame IS the channelId (set by the hub at

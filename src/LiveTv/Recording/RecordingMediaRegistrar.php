@@ -248,8 +248,78 @@ final class RecordingMediaRegistrar
      */
     private function ensureRecordingsLibrary(string $recordingPath): string
     {
+        $existing = $this->findRecordingsLibraryId();
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        $id = Uuid::v4();
+        $storageDir = \dirname($recordingPath);
+        try {
+            $this->db->query(
+                "INSERT INTO libraries (id, name, type, paths, options) VALUES (?, ?, ?, ?, ?)",
+                [
+                    $id,
+                    $this->libraryName,
+                    self::LIBRARY_TYPE,
+                    json_encode([$storageDir]),
+                    json_encode(['dvr' => true]),
+                ]
+            );
+        } catch (\Throwable $e) {
+            // A concurrent first-completion may have created the library between
+            // our SELECT and INSERT. If a UNIQUE(type, name) index is ever present
+            // this INSERT raises a duplicate-key error; either way fall through to
+            // the reconciling re-SELECT below rather than propagating.
+            $this->logger->debug('DVR recordings library insert raced; reconciling', [
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // Re-SELECT the canonical id. Two DIFFERENT recordings completing
+        // concurrently before the library first exists can each miss the initial
+        // SELECT and both INSERT (there is no UNIQUE(type, name) constraint on
+        // `libraries`). The deterministic ORDER BY in findRecordingsLibraryId()
+        // makes EVERY caller converge on the SAME single library id, so recordings
+        // are never split across duplicate DVR libraries — the method returns the
+        // one canonical id under concurrency.
+        $canonical = $this->findRecordingsLibraryId();
+        if ($canonical !== null) {
+            if ($canonical === $id) {
+                $this->logger->info('Created DVR recordings library', [
+                    'library_id' => $id,
+                    'name' => $this->libraryName,
+                ]);
+            } else {
+                $this->logger->info('Reused existing DVR recordings library after concurrent create', [
+                    'library_id' => $canonical,
+                    'name' => $this->libraryName,
+                ]);
+            }
+            return $canonical;
+        }
+
+        // Extremely defensive: the re-SELECT should always see our own INSERT.
+        return $id;
+    }
+
+    /**
+     * Look up the canonical DVR recordings library id.
+     *
+     * A deterministic `ORDER BY created_at ASC, id ASC` (not a bare `LIMIT 1`,
+     * whose row order is undefined) so that if a concurrent first-completion race
+     * ever creates two rows, every caller converges on the SAME single library —
+     * the earliest-created one, id-tie-broken — instead of picking arbitrarily.
+     *
+     * @return string|null The canonical library id, or null when none exists yet.
+     *
+     * @since SV-3.1-rowquery
+     */
+    private function findRecordingsLibraryId(): ?string
+    {
         $result = $this->db->query(
-            "SELECT id FROM libraries WHERE type = ? AND name = ? LIMIT 1",
+            "SELECT id FROM libraries WHERE type = ? AND name = ?
+             ORDER BY created_at ASC, id ASC LIMIT 1",
             [self::LIBRARY_TYPE, $this->libraryName]
         );
         if (is_array($result) && isset($result[0]) && is_array($result[0])) {
@@ -259,25 +329,7 @@ final class RecordingMediaRegistrar
             }
         }
 
-        $id = Uuid::v4();
-        $storageDir = \dirname($recordingPath);
-        $this->db->query(
-            "INSERT INTO libraries (id, name, type, paths, options) VALUES (?, ?, ?, ?, ?)",
-            [
-                $id,
-                $this->libraryName,
-                self::LIBRARY_TYPE,
-                json_encode([$storageDir]),
-                json_encode(['dvr' => true]),
-            ]
-        );
-
-        $this->logger->info('Created DVR recordings library', [
-            'library_id' => $id,
-            'name' => $this->libraryName,
-        ]);
-
-        return $id;
+        return null;
     }
 
     /**

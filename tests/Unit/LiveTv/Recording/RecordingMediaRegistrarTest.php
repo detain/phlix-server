@@ -319,4 +319,132 @@ final class RecordingMediaRegistrarTest extends TestCase
         // ...and the media item was created under that exact new library id.
         $this->assertSame($insertedLibrary[0], $upsertLibraryId);
     }
+
+    /**
+     * SV-3.1-rowquery finding #2 (library find-or-create race).
+     *
+     * Two DIFFERENT recordings completing concurrently before the DVR library
+     * first exists can each miss the initial SELECT and both INSERT (there is no
+     * UNIQUE(type, name) constraint on `libraries`). The find-or-create must still
+     * converge every caller on ONE canonical library id: after its own INSERT the
+     * registrar re-SELECTs with a deterministic ORDER BY, so it reuses the
+     * canonical row (here 'lib-canonical') rather than its own just-inserted id —
+     * recordings never split across duplicate DVR libraries.
+     */
+    public function testConcurrentLibraryCreateConvergesOnCanonicalId(): void
+    {
+        $path = $this->tempTs(64);
+        $row = $this->recordingRow();
+
+        $selectSql = null;
+        $insertedId = null;
+        $upsertLibraryId = null;
+        $selectCount = 0;
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use ($row, &$selectSql, &$insertedId, &$selectCount) {
+                if (str_contains($sql, 'FROM livetv_recordings')) {
+                    return [$row];
+                }
+                if (str_contains($sql, 'FROM libraries')) {
+                    $selectSql = $sql;
+                    $selectCount++;
+                    // 1st SELECT: library absent → proceed to INSERT.
+                    // Re-SELECT (after INSERT): a concurrent completer already
+                    // created the canonical row, ordered earlier.
+                    return $selectCount === 1 ? [] : [['id' => 'lib-canonical']];
+                }
+                if (str_starts_with($sql, 'INSERT INTO libraries')) {
+                    $insertedId = $params[0];
+                    return null;
+                }
+                if (str_starts_with($sql, 'UPDATE livetv_recordings')) {
+                    return 1;
+                }
+                return null;
+            }
+        );
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('upsertByPath')->willReturnCallback(
+            function (array $data) use (&$upsertLibraryId) {
+                $upsertLibraryId = $data['library_id'];
+                return 'media-3';
+            }
+        );
+
+        $registrar = new RecordingMediaRegistrar(
+            $db,
+            $items,
+            'DVR Recordings',
+            $this->createMock(StructuredLogger::class)
+        );
+
+        $result = $registrar->register('rec-1', $path);
+
+        $this->assertSame('media-3', $result);
+        // The library lookup is deterministic (not a bare LIMIT 1 with undefined
+        // order) so racing callers converge on the same row.
+        $this->assertIsString($selectSql);
+        $this->assertStringContainsString('ORDER BY created_at', $selectSql);
+        // We DID insert our own row, but converged on the canonical one for the item.
+        $this->assertNotNull($insertedId);
+        $this->assertNotSame('lib-canonical', $insertedId);
+        $this->assertSame('lib-canonical', $upsertLibraryId, 'item registered under the single canonical library');
+    }
+
+    /**
+     * Forward-compat: if a UNIQUE(type, name) index is ever added, a racing INSERT
+     * raises a duplicate-key error. The registrar must swallow it and reconcile via
+     * the re-SELECT to the canonical id rather than propagating the exception.
+     */
+    public function testDuplicateKeyOnLibraryInsertReconcilesToCanonicalId(): void
+    {
+        $path = $this->tempTs(64);
+        $row = $this->recordingRow();
+
+        $upsertLibraryId = null;
+        $selectCount = 0;
+
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturnCallback(
+            function (string $sql, array $params = []) use ($row, &$selectCount) {
+                if (str_contains($sql, 'FROM livetv_recordings')) {
+                    return [$row];
+                }
+                if (str_contains($sql, 'FROM libraries')) {
+                    $selectCount++;
+                    return $selectCount === 1 ? [] : [['id' => 'lib-canonical']];
+                }
+                if (str_starts_with($sql, 'INSERT INTO libraries')) {
+                    throw new \RuntimeException('Duplicate entry for key libraries.uniq_type_name');
+                }
+                if (str_starts_with($sql, 'UPDATE livetv_recordings')) {
+                    return 1;
+                }
+                return null;
+            }
+        );
+
+        $items = $this->createMock(ItemRepository::class);
+        $items->method('upsertByPath')->willReturnCallback(
+            function (array $data) use (&$upsertLibraryId) {
+                $upsertLibraryId = $data['library_id'];
+                return 'media-4';
+            }
+        );
+
+        $registrar = new RecordingMediaRegistrar(
+            $db,
+            $items,
+            'DVR Recordings',
+            $this->createMock(StructuredLogger::class)
+        );
+
+        $result = $registrar->register('rec-1', $path);
+
+        $this->assertSame('media-4', $result, 'duplicate-key INSERT does not propagate');
+        $this->assertSame('lib-canonical', $upsertLibraryId, 'reconciled to the canonical library after the dup-key INSERT');
+    }
 }

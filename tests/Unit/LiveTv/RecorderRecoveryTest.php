@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Workerman\MySQL\Connection;
 
 /**
@@ -96,7 +97,7 @@ final class RecorderRecoveryTest extends TestCase
     {
         $db     = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         // A pid we are confident does not exist on this host.
         $deadPid = 2_000_000_001;
@@ -137,7 +138,7 @@ final class RecorderRecoveryTest extends TestCase
         $db     = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
         // No LiveTvManager => resolveTunerStreamUrl() returns null.
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $row = $this->recordingRow([
             'recording_id' => 'rec-due',
@@ -169,7 +170,7 @@ final class RecorderRecoveryTest extends TestCase
     {
         $db     = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         // The current PHP pid is guaranteed alive.
         $livePid = getmypid();
@@ -212,7 +213,13 @@ final class RecorderRecoveryTest extends TestCase
         // maxStorageBytes=0 => hasStorageSpace() uses disk_free_space only (no DB,
         // fail-open when the dir is absent), so the only DB writes are the ones we
         // assert on.
-        $recorder = new Recorder($db, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorder = new Recorder(
+            $db,
+            new DbTimeShiftSessionStore($db),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
 
         $scheduledRow = $this->recordingRow([
             'recording_id' => 'rec-no-tuner',

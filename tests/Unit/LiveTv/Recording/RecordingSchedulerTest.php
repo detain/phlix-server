@@ -9,6 +9,7 @@ use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
 use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\Common\Logger\StructuredLogger;
 use PHPUnit\Framework\MockObject\MockObject;
 use Workerman\MySQL\Connection;
@@ -377,7 +378,16 @@ class RecordingSchedulerTest extends TestCase
         // and activeRecordings stays empty (the cancel exercises the non-live
         // onStop fallback path).
         $recorder = $this->getMockBuilder(Recorder::class)
-            ->setConstructorArgs([$db, '/tmp/phlix-nonexistent', 0, $this->mockLogger, null, '/usr/bin/ffmpeg', null])
+            ->setConstructorArgs([
+                $db,
+                new DbTimeShiftSessionStore($db),
+                '/tmp/phlix-nonexistent',
+                0,
+                $this->mockLogger,
+                null,
+                '/usr/bin/ffmpeg',
+                null,
+            ])
             ->onlyMethods(['startRecording'])
             ->getMock();
         $recorder->method('startRecording')->willReturn(true);

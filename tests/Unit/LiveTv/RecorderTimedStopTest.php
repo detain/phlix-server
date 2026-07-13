@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\Dto\ResultSet;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Workerman\MySQL\Connection;
 
 /**
@@ -93,7 +94,7 @@ final class RecorderTimedStopTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $this->assertSame(1_060, $recorder->effectiveEndTime(1_000, 60), 'end + padding');
         $this->assertSame(1_000, $recorder->effectiveEndTime(1_000, 0), 'no padding');
@@ -104,7 +105,7 @@ final class RecorderTimedStopTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         /** @var array{sql:string,params:array<int,mixed>} $captured */
         $captured = ['sql' => '', 'params' => []];
@@ -140,7 +141,7 @@ final class RecorderTimedStopTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $db->method('query')->willReturn($this->fakeResult([]));
 
@@ -159,7 +160,13 @@ final class RecorderTimedStopTest extends TestCase
         $logger = $this->createMock(StructuredLogger::class);
         // A directory that does not exist so file_exists()/filesize() short-circuit
         // and the only DB writes are the ones under assertion.
-        $recorder = new Recorder($db, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorder = new Recorder(
+            $db,
+            new DbTimeShiftSessionStore($db),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
 
         $deadPid = 2_000_000_002; // Confident this pid is not alive on this host.
         $row = $this->recordingRow([
@@ -232,7 +239,13 @@ final class RecorderTimedStopTest extends TestCase
     {
         $db = $this->createMock(Connection::class);
         $logger = $this->createMock(StructuredLogger::class);
-        $recorder = new Recorder($db, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorder = new Recorder(
+            $db,
+            new DbTimeShiftSessionStore($db),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
 
         // pid=null so no process kill / cooperative sleep — fully deterministic.
         $row = $this->recordingRow([
@@ -290,7 +303,13 @@ final class RecorderTimedStopTest extends TestCase
                     ? $this->fakeResult([$this->recordingRow(['recording_id' => 'rec-live'])])
                     : 1
         );
-        $recorderA = new Recorder($dbA, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorderA = new Recorder(
+            $dbA,
+            new DbTimeShiftSessionStore($dbA),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
         $active = new \ReflectionProperty(Recorder::class, 'activeRecordings');
         $active->setValue($recorderA, [
             'rec-live' => [
@@ -319,7 +338,13 @@ final class RecorderTimedStopTest extends TestCase
                     ])])
                     : 1
         );
-        $recorderB = new Recorder($dbB, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorderB = new Recorder(
+            $dbB,
+            new DbTimeShiftSessionStore($dbB),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
         $stoppedB = [];
         $recorderB->onStop(function (string $id) use (&$stoppedB): void {
             $stoppedB[] = $id;
@@ -338,7 +363,13 @@ final class RecorderTimedStopTest extends TestCase
                     ])])
                     : 1
         );
-        $recorderC = new Recorder($dbC, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorderC = new Recorder(
+            $dbC,
+            new DbTimeShiftSessionStore($dbC),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
         $stoppedC = [];
         $recorderC->onStop(function (string $id) use (&$stoppedC): void {
             $stoppedC[] = $id;

@@ -5279,3 +5279,89 @@ spurious semicolon split). Committed `4f7d2c89`, pushed to origin/master.
 persists the child `pid` via `updatePid()`, and advances `updateBufferWindow()`; then wires the
 store into the DI provider with the real consumer. f-c replaces the `LiveTvStreamController`
 501 stub, resolving a session (by session_id / id) and serving from `buffer_dir` via `withFile`/HLS.
+
+## Implementer — SV-3.1 f-b (rolling time-shift buffer writer + store-backed cross-worker sessions) — 2026-07-13
+
+Second sub-step of SV-3.1 **f**. Turns `Recorder`'s metadata-only time-shift stub into a REAL
+on-disk rolling buffer writer, persisted via f-a's `DbTimeShiftSessionStore` so a session started
+on one worker is resolvable on any other. Consumes f-a (`4f7d2c89`); does NOT touch the
+`LiveTvStreamController` 501 stub (that's f-c).
+
+**Buffer approach chosen — HLS rolling window (no prune Timer).** `startTimeShift()` spawns a
+DETACHED ffmpeg via the same nohup/`timeout`/`echo $!` machinery as `spawnRecording()` (extracted
+into a shared `launchDetached()` helper), writing:
+`ffmpeg -y -hide_banner -loglevel error -i <tunerUrl> -c copy -f hls -hls_time 6 -hls_list_size <N>
+-hls_flags delete_segments+append_list -hls_segment_type mpegts -hls_segment_filename
+<dir>/seg_%05d.ts <dir>/buffer.m3u8`. Windowing math: `N = ceil(TIMESHIFT_BUFFER_SECONDS(7200) /
+TIMESHIFT_SEGMENT_SECONDS(6)) = 1200` segments ⇒ `N * hls_time ≈ 7200s ≈ 2h`. `delete_segments`
+auto-prunes older segments, so there is **no separate prune Timer** (avoids the SV-0.5 timer-storm
+class entirely). Constants added: `TIMESHIFT_SEGMENT_SECONDS=6`, `TIMESHIFT_PLAYLIST_NAME='buffer.m3u8'`.
+The detached process is bounded by the same `transcode_timeout` wrapper as recordings so a
+never-stopped capture cannot hold a tuner forever.
+
+**How `startTimeShift()` now works:** tear down any prior session for the playback session
+(idempotent restart) → generate the time-shift UUID → create per-session buffer dir at
+`<storage_path>/timeshift/<id>` → resolve the tuner URL via `resolveTunerStreamUrl()` → spawn the
+rolling HLS buffer → build a `TimeShiftSession` (id, session_id, channel_id, buffer_dir, real pid,
+buffer_start_at/end_at, window_seconds=7200, status=active) and `save()` it to the store (failure-safe)
+→ keep the in-memory `$activeTimeShifts` fast-path entry (now also carrying `buffer_dir`/`pid`).
+Failure-safe: no tuner (or spawn returns 0) ⇒ session persisted with a NULL pid and empty buffer,
+never throws; the return contract `{time_shift_id, stream_url, buffer_start, buffer_end}` is unchanged.
+
+**How `stopTimeShift()` now works:** resolves the session cross-worker (`findBySessionId`, falling
+back to the in-memory entry) → `terminateRecording($pid)` (SIGTERM→SIGKILL, coroutine-guarded,
+works cross-process on the same host; a missing/dead pid resolves instantly) → `removeBufferDir()`
+(recursive delete, **path-jailed** under `<storage_path>/timeshift/` via a string-prefix + realpath
+check so a spoofed buffer_dir can't delete anything outside the subtree; a missing dir is a no-op)
+→ `delete()` the store row → unset the in-memory entry. Every step is failure-safe (try/catch +
+guards). Returns true if a session existed in memory OR the store.
+
+**Cross-worker read:** `getTimeShift()` now falls back to the store (`findBySessionId`) when this
+worker has no in-memory entry, mapping the row to the same array shape existing consumers expect
+(so f-c can resolve `buffer_dir` by session_id from any worker; a `stopped` store row returns null).
+Left `seekTimeShift()`/`getTimeShiftPosition()` on the in-memory model deliberately — the store's
+`cursor_position` is a buffer-offset while those use a live epoch timestamp; reconciling the two
+cursor semantics is f-c's call, so I did not introduce a mismatched cross-worker cursor here.
+
+**DI wiring (landmine-safe):** bound `DbTimeShiftSessionStore` as an EXPLICIT factory in
+`LiveTvServicesProvider` and injected it as a **NON-NULLABLE** `Recorder` ctor dependency
+(constructor param #2, before the optional params) — sidestepping the "PHP-DI skips optional
+nullable ctor params" landmine (§0.3). The Recorder factory now resolves the store and passes it.
+**Dual-entrypoint check:** neither `public/index.php` nor `start.php` constructs `Recorder`/
+`LiveTvManager` directly — both resolve `LiveTvManager` from the shared `ContainerFactory` (which
+registers this provider), and `Application::getLiveTvStreamController()` gets the Recorder via
+`LiveTvManager::getRecorder()` — so the single provider change covers both entrypoints; nothing to
+mirror. Provider docblock updated.
+
+**Files changed:**
+- `src/LiveTv/Recorder.php` — imports; new non-nullable `$timeShiftStore` ctor dep + property;
+  `TIMESHIFT_SEGMENT_SECONDS`/`TIMESHIFT_PLAYLIST_NAME` consts; rewrote `startTimeShift()`/
+  `stopTimeShift()`/`getTimeShift()`; new `spawnTimeShiftBuffer()` (protected seam),
+  `launchDetached()` (shared detached-spawn helper, `spawnRecording()` refactored onto it),
+  `timeShiftBufferDir()`/`timeShiftRoot()`/`removeBufferDir()` (path-jailed) helpers.
+- `src/Common/Container/Providers/LiveTvServicesProvider.php` — `DbTimeShiftSessionStore` factory
+  binding + injected into the Recorder factory (non-nullable); docblock.
+- `tests/Unit/LiveTv/RecorderTimeShiftBufferTest.php` — NEW: 7 tests (spawn+persist; no-tuner
+  null-pid/no-spawn; stop terminates+cleans+deletes-store; stop failure-safe when dir gone; stop
+  false when neither; getTimeShift cross-worker store fallback; getTimeShift null for stopped row).
+  Spawn stubbed via mock-builder `onlyMethods(['spawnTimeShiftBuffer'])` (RecordingSchedulerTest
+  pattern) so no real ffmpeg runs.
+- `tests/Unit/Common/Container/Providers/LiveTvServicesProviderTest.php` — NEW DI-wiring test:
+  the resolved Recorder carries a NON-NULL `DbTimeShiftSessionStore` (reflection), same shared
+  singleton via manager/direct/`DbTimeShiftSessionStore::class`.
+- Constructor-arg updates for the store in `RecorderTest`, `RecorderTimedStopTest`,
+  `RecorderRecoveryTest`, `RecorderPlainArrayReadPathTest`, `RecordingSchedulerTest`.
+
+**Verification (actual):** `phpunit tests/Unit/LiveTv/ + LiveTvServicesProviderTest` → **344 tests /
+884 assertions / 0 failures**; the new buffer test alone → **7/7 (40 assertions)**. phpstan L9
+(`-c phpstan.neon.dist`) on all 9 changed files → **0 errors**. phpcs PSR12 on all changed files →
+**0 errors, 0 warnings** (the 2 remaining `Recorder.php` >120-char warnings are PRE-EXISTING on HEAD
+at the comskip closure + `getStorageStats` docblock — confirmed via phpcs on `git show HEAD:` — not
+introduced here).
+
+**For f-c (controller) to match:** the buffer is served as an HLS rolling playlist —
+`buffer.m3u8` + `seg_%05d.ts` segments in `buffer_dir` (NOT a single `.ts`). f-c should resolve the
+session cross-worker (via the store / `getTimeShift()` which now falls back to it), then serve
+`buffer_dir/buffer.m3u8` + segments (define the seek/cursor semantics against the store's
+`cursor_position` — left untouched here). A no-tuner session has a NULL pid and empty buffer dir,
+so f-c must handle a not-yet-populated playlist gracefully.

@@ -18,6 +18,8 @@ use Phlix\Common\Uuid;
 use Phlix\LiveTv\Dto\RowAccess;
 use Phlix\LiveTv\Dto\RowQuery;
 use Phlix\LiveTv\Recording\ComskipLifecycleManager;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
+use Phlix\LiveTv\TimeShift\TimeShiftSession;
 use Workerman\MySQL\Connection;
 
 /**
@@ -70,8 +72,11 @@ class Recorder
     /** @var array<string, array{id:string, started_at:int, channel_id:string, stream_url:string, effective_start?:int, pid?:int|null, log_dir?:string}> Currently active recordings */
     private array $activeRecordings = [];
 
-    /** @var array<string, array{id:string, session_id:string, channel_id:string, started_at:int, buffer_start:int, buffer_end:int, current_position?:int}> Active time-shift sessions */
+    /** @var array<string, array{id:string, session_id:string, channel_id:string, started_at:int, buffer_start:int, buffer_end:int, buffer_dir?:string, pid?:int|null, current_position?:int}> Active time-shift sessions */
     private array $activeTimeShifts = [];
+
+    /** @var DbTimeShiftSessionStore Cross-worker DB-backed time-shift session store (SV-3.1 f-b) */
+    private DbTimeShiftSessionStore $timeShiftStore;
 
     /** @var callable[] Post-complete callbacks (media_item_id, recording_path) => void */
     private array $onCompleteCallbacks = [];
@@ -159,6 +164,27 @@ class Recorder
     public const TIMESHIFT_BUFFER_SECONDS = 7200;
 
     /**
+     * Target duration of each rolling time-shift HLS segment, in seconds.
+     *
+     * The rolling window keeps roughly {@see TIMESHIFT_BUFFER_SECONDS} of
+     * broadcast on disk as `ceil(TIMESHIFT_BUFFER_SECONDS / TIMESHIFT_SEGMENT_SECONDS)`
+     * segments; ffmpeg auto-prunes older ones via `hls_flags delete_segments`,
+     * so no separate prune Timer is needed.
+     *
+     * @var int
+     */
+    public const TIMESHIFT_SEGMENT_SECONDS = 6;
+
+    /**
+     * Filename of the rolling time-shift HLS media playlist inside a session's
+     * buffer directory. The stream controller (SV-3.1 f-c) serves this playlist
+     * plus its `seg_*.ts` segments.
+     *
+     * @var string
+     */
+    public const TIMESHIFT_PLAYLIST_NAME = 'buffer.m3u8';
+
+    /**
      * Default maximum number of recordings to return in getAllRecordings().
      *
      * @var int
@@ -176,6 +202,7 @@ class Recorder
      * Creates a new Recorder instance.
      *
      * @param Connection $db Database connection
+     * @param DbTimeShiftSessionStore $timeShiftStore Cross-worker time-shift session store (SV-3.1 f-b)
      * @param string $storagePath Base path for recording files (default: /var/recordings)
      * @param int $maxStorageBytes Maximum storage limit in bytes (0 = unlimited)
      * @param StructuredLogger|null $logger Optional logger, defaults to Livetv channel
@@ -185,6 +212,7 @@ class Recorder
      */
     public function __construct(
         Connection $db,
+        DbTimeShiftSessionStore $timeShiftStore,
         string $storagePath = '/var/recordings',
         int $maxStorageBytes = 0,
         ?StructuredLogger $logger = null,
@@ -193,6 +221,7 @@ class Recorder
         ?\Phlix\LiveTv\LiveTvManager $liveTvManager = null
     ) {
         $this->db = $db;
+        $this->timeShiftStore = $timeShiftStore;
         $this->storagePath = $storagePath;
         $this->maxStorageBytes = $maxStorageBytes;
         $this->logger = $logger ?? LoggerFactory::get(LogChannels::LIVETV);
@@ -1032,12 +1061,107 @@ class Recorder
 
         $logFile = $logDir . '/ffmpeg_recording.log';
 
-        // SV-4.2: wrap in timeout to enforce transcode_timeout (7200s default).
-        // If timeout kills the process, .timed_out marker is created.
+        $pid = $this->launchDetached($cmd, $logFile);
+        if ($pid <= 0) {
+            $this->logger->error('Failed to spawn ffmpeg recording process');
+            return 0;
+        }
+
+        $this->logger->debug('Recording process spawned', [
+            'pid' => $pid,
+            'stream_url' => $streamUrl,
+            'output_path' => $outputPath,
+        ]);
+
+        return $pid;
+    }
+
+    /**
+     * Spawn a DETACHED ffmpeg process that writes a rolling on-disk HLS window.
+     *
+     * The window is bounded to {@see TIMESHIFT_BUFFER_SECONDS} of broadcast:
+     * ffmpeg emits ~{@see TIMESHIFT_SEGMENT_SECONDS}-second segments and, with
+     * `hls_flags delete_segments+append_list` and an `hls_list_size` of
+     * `ceil(TIMESHIFT_BUFFER_SECONDS / TIMESHIFT_SEGMENT_SECONDS)`, auto-prunes
+     * anything older than the window — so no separate prune Timer is required
+     * (avoiding the SV-0.5 timer-storm class entirely). Reuses the same detached
+     * launch machinery as {@see spawnRecording()} (nohup + optional `timeout`
+     * wrapper + `echo $!`), so PHP returning does not kill the child and the
+     * event loop is never blocked (the PROC hook is excluded by design; §0.3).
+     *
+     * `protected` so a test double can override it to avoid spawning real ffmpeg.
+     *
+     * @param string $streamUrl Tuner source URL to capture
+     * @param string $bufferDir Per-session buffer directory (already created)
+     *
+     * @return int The child PID (0 if the spawn failed)
+     *
+     * @since SV-3.1 f-b
+     */
+    protected function spawnTimeShiftBuffer(string $streamUrl, string $bufferDir): int
+    {
+        $listSize = (int) ceil(self::TIMESHIFT_BUFFER_SECONDS / self::TIMESHIFT_SEGMENT_SECONDS);
+        if ($listSize < 1) {
+            $listSize = 1;
+        }
+
+        $playlistPath = $bufferDir . '/' . self::TIMESHIFT_PLAYLIST_NAME;
+        $segmentPattern = $bufferDir . '/seg_%05d.ts';
+
+        $cmd = sprintf(
+            '%s -y -hide_banner -loglevel error -i %s -c copy -f hls'
+            . ' -hls_time %d -hls_list_size %d -hls_flags delete_segments+append_list'
+            . ' -hls_segment_type mpegts -hls_segment_filename %s %s',
+            escapeshellarg($this->ffmpegPath),
+            escapeshellarg($streamUrl),
+            self::TIMESHIFT_SEGMENT_SECONDS,
+            $listSize,
+            escapeshellarg($segmentPattern),
+            escapeshellarg($playlistPath)
+        );
+
+        $logFile = $bufferDir . '/ffmpeg_timeshift.log';
+
+        $pid = $this->launchDetached($cmd, $logFile);
+        if ($pid <= 0) {
+            return 0;
+        }
+
+        $this->logger->debug('Time-shift buffer process spawned', [
+            'pid' => $pid,
+            'stream_url' => $streamUrl,
+            'buffer_dir' => $bufferDir,
+            'hls_list_size' => $listSize,
+        ]);
+
+        return $pid;
+    }
+
+    /**
+     * Launch a shell command DETACHED and return the child PID.
+     *
+     * Shared by {@see spawnRecording()} and {@see spawnTimeShiftBuffer()}: wraps
+     * the command in `timeout <transcode_timeout>` (when configured) so a leaked
+     * capture cannot hold a tuner forever, then `nohup … & echo $!` so SIGHUP on
+     * PHP-shell exit does not kill the child and the real PID is returned. The
+     * spawn is fire-and-return (the single Workerman worker is never blocked; the
+     * PROC hook is excluded by design per §0.3).
+     *
+     * @param string $ffmpegCmd The fully-escaped ffmpeg command to run
+     * @param string $logFile   Absolute path for the combined stdout/stderr log
+     *
+     * @return int The child PID (0 if the spawn failed)
+     *
+     * @since SV-3.1 f-b
+     */
+    private function launchDetached(string $ffmpegCmd, string $logFile): int
+    {
+        // SV-4.2: wrap in timeout to enforce transcode_timeout (7200s default) so
+        // a never-stopped capture cannot hold a tuner / run unbounded.
         $timeoutSecs = $this->getTranscodeTimeout();
         $timeoutCmd = $timeoutSecs > 0
-            ? 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($cmd)
-            : 'sh -c ' . escapeshellarg($cmd);
+            ? 'timeout ' . (int) $timeoutSecs . ' sh -c ' . escapeshellarg($ffmpegCmd)
+            : 'sh -c ' . escapeshellarg($ffmpegCmd);
 
         // nohup so SIGHUP doesn't kill ffmpeg when the PHP shell returns.
         // Redirect both stdout+stderr to the log file.
@@ -1049,19 +1173,98 @@ class Recorder
 
         $pidStr = shell_exec($full);
         if (!is_string($pidStr) || trim($pidStr) === '') {
-            $this->logger->error('Failed to spawn ffmpeg recording process');
             return 0;
         }
 
-        $pid = (int) trim($pidStr);
-        $this->logger->debug('Recording process spawned', [
-            'pid' => $pid,
-            'stream_url' => $streamUrl,
-            'output_path' => $outputPath,
-            'timeout_secs' => $timeoutSecs,
-        ]);
+        return (int) trim($pidStr);
+    }
 
-        return $pid;
+    /**
+     * Absolute per-session rolling time-shift buffer directory.
+     *
+     * Nested under `<storage_path>/timeshift/<timeShiftId>` so
+     * {@see removeBufferDir()} can jail deletions to the time-shift subtree.
+     *
+     * @param string $timeShiftId The time-shift session id (UUID)
+     *
+     * @return string
+     *
+     * @since SV-3.1 f-b
+     */
+    private function timeShiftBufferDir(string $timeShiftId): string
+    {
+        return $this->timeShiftRoot() . '/' . $timeShiftId;
+    }
+
+    /**
+     * Root directory holding all per-session time-shift buffers.
+     *
+     * @return string
+     *
+     * @since SV-3.1 f-b
+     */
+    private function timeShiftRoot(): string
+    {
+        return rtrim($this->storagePath, '/') . '/timeshift';
+    }
+
+    /**
+     * Recursively delete a rolling time-shift buffer directory.
+     *
+     * Failure-safe (a missing directory is a no-op) and PATH-JAILED: only paths
+     * under `<storage_path>/timeshift/` are ever removed, so a corrupt / spoofed
+     * buffer_dir cannot delete anything outside the time-shift subtree.
+     *
+     * @param string $bufferDir The buffer directory to remove
+     *
+     * @return void
+     *
+     * @since SV-3.1 f-b
+     */
+    private function removeBufferDir(string $bufferDir): void
+    {
+        $root = $this->timeShiftRoot();
+
+        // Jail: the buffer dir must live strictly under the time-shift root.
+        // Use the string prefix (dirs we constructed) plus a realpath check as
+        // defence-in-depth when the path exists on disk.
+        if (!str_starts_with($bufferDir, $root . '/')) {
+            $this->logger->warning('Refusing to remove time-shift buffer outside jail', [
+                'buffer_dir' => $bufferDir,
+            ]);
+            return;
+        }
+
+        if (!is_dir($bufferDir)) {
+            return;
+        }
+
+        $real = realpath($bufferDir);
+        $realRoot = realpath($root);
+        if ($real !== false && $realRoot !== false && !str_starts_with($real, $realRoot . DIRECTORY_SEPARATOR)) {
+            $this->logger->warning('Refusing to remove time-shift buffer outside jail (realpath)', [
+                'buffer_dir' => $bufferDir,
+            ]);
+            return;
+        }
+
+        $entries = @scandir($bufferDir);
+        if (is_array($entries)) {
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+                $path = $bufferDir . '/' . $entry;
+                if (is_file($path) || is_link($path)) {
+                    @unlink($path);
+                } elseif (is_dir($path)) {
+                    // No nested dirs are created, but stay defensive.
+                    @unlink($path);
+                }
+            }
+        }
+
+        @rmdir($bufferDir);
     }
 
     /**
@@ -1489,7 +1692,19 @@ class Recorder
     /**
      * Start time-shifting for a session.
      *
-     * Creates a time-shift buffer allowing pause/rewind of live TV.
+     * Resolves the channel's tuner stream URL and spawns a DETACHED ffmpeg
+     * process that writes a rolling on-disk HLS window (bounded to
+     * {@see TIMESHIFT_BUFFER_SECONDS} via `hls_flags delete_segments`) into a
+     * per-session buffer directory under the DVR storage path. The session —
+     * including its `buffer_dir` and the real capture `pid` — is persisted to the
+     * DB-backed {@see DbTimeShiftSessionStore} so ANY worker (notably a
+     * `/livetv/timeshift/{session}/stream` request routed elsewhere) can resolve
+     * it; the in-memory {@see $activeTimeShifts} entry is kept as the same-worker
+     * fast path (SV-3.1 f-b).
+     *
+     * Failure-safe: if no tuner is available (or the spawn fails) the session is
+     * still recorded with a NULL pid and an empty buffer rather than throwing, so
+     * the caller gets a consistent response and cross-worker lookup still works.
      *
      * @param string $sessionId The playback session ID
      * @param string $channelId The channel to time-shift
@@ -1497,43 +1712,153 @@ class Recorder
      */
     public function startTimeShift(string $sessionId, string $channelId): array
     {
+        // Tear down any prior session for this playback session (in-memory + store
+        // + capture process + buffer dir) so a restart is idempotent.
         $this->stopTimeShift($sessionId);
 
         $timeShiftId = $this->generateUuid();
-        $bufferStart = time() - self::TIMESHIFT_BUFFER_SECONDS;
+        $bufferDir = $this->timeShiftBufferDir($timeShiftId);
+        $now = time();
 
+        if (!is_dir($bufferDir)) {
+            @mkdir($bufferDir, 0755, true);
+        }
+
+        // Resolve the tuner stream URL and spawn the rolling-buffer capture.
+        $streamUrl = $this->resolveTunerStreamUrl($channelId);
+        $pid = null;
+        if ($streamUrl !== null && $streamUrl !== '') {
+            $spawned = $this->spawnTimeShiftBuffer($streamUrl, $bufferDir);
+            if ($spawned > 0) {
+                $pid = $spawned;
+            } else {
+                $this->logger->error('Failed to spawn time-shift buffer process', [
+                    'session_id' => $sessionId,
+                    'channel_id' => $channelId,
+                ]);
+            }
+        } else {
+            $this->logger->warning('No tuner stream URL; time-shift buffer will not fill', [
+                'session_id' => $sessionId,
+                'channel_id' => $channelId,
+            ]);
+        }
+
+        // Persist to the cross-worker store (authoritative) — failure-safe.
+        $session = new TimeShiftSession(
+            id: $timeShiftId,
+            session_id: $sessionId,
+            channel_id: $channelId,
+            buffer_dir: $bufferDir,
+            buffer_start_at: $now,
+            buffer_end_at: $now,
+            window_seconds: self::TIMESHIFT_BUFFER_SECONDS,
+            cursor_position: 0,
+            pid: $pid,
+            status: TimeShiftSession::STATUS_ACTIVE,
+        );
+        try {
+            $this->timeShiftStore->save($session);
+        } catch (\Throwable $e) {
+            $this->logger->error('Failed to persist time-shift session', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        // Same-worker fast path.
         $this->activeTimeShifts[$sessionId] = [
             'id' => $timeShiftId,
             'session_id' => $sessionId,
             'channel_id' => $channelId,
-            'started_at' => time(),
-            'buffer_start' => $bufferStart,
-            'buffer_end' => time(),
+            'started_at' => $now,
+            'buffer_start' => $now,
+            'buffer_end' => $now,
+            'buffer_dir' => $bufferDir,
+            'pid' => $pid,
         ];
 
         $this->logger->info('Time-shift started', [
             'session_id' => $sessionId,
             'channel_id' => $channelId,
+            'buffer_dir' => $bufferDir,
+            'pid' => $pid,
         ]);
 
         return [
             'time_shift_id' => $timeShiftId,
             'stream_url' => "/livetv/timeshift/$sessionId/stream",
-            'buffer_start' => $bufferStart,
-            'buffer_end' => time(),
+            'buffer_start' => $now,
+            'buffer_end' => $now,
         ];
     }
 
     /**
      * Stop time-shifting for a session.
      *
+     * Terminates the detached capture process (via {@see terminateRecording()},
+     * which works cross-process on the same host), deletes the on-disk rolling
+     * buffer directory, and removes the store session so a stale row can never
+     * be resolved after teardown. Resolves the pid / buffer_dir from the store
+     * (cross-worker) when they are not present in this worker's in-memory map.
+     *
+     * Failure-safe: a missing pid, an already-gone buffer directory, or a store
+     * error never throws.
+     *
      * @param string $sessionId The session to stop
-     * @return bool True if stopped, false if not active
+     * @return bool True if a session (in-memory OR in the store) was stopped
      */
     public function stopTimeShift(string $sessionId): bool
     {
-        if (!isset($this->activeTimeShifts[$sessionId])) {
+        $inMemory = $this->activeTimeShifts[$sessionId] ?? null;
+
+        $stored = null;
+        try {
+            $stored = $this->timeShiftStore->findBySessionId($sessionId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to resolve time-shift session for stop', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        if ($inMemory === null && $stored === null) {
             return false;
+        }
+
+        // Terminate the detached capture (same-host cross-process kill by pid).
+        // Prefer the store (authoritative, cross-worker) then the in-memory entry.
+        $pid = null;
+        if ($stored !== null) {
+            $pid = $stored->pid;
+        } elseif (isset($inMemory['pid']) && is_int($inMemory['pid'])) {
+            $pid = $inMemory['pid'];
+        }
+        if (is_int($pid) && $pid > 0) {
+            $this->terminateRecording($pid);
+        }
+
+        // Remove the rolling buffer directory (jailed under the DVR storage path).
+        $bufferDir = null;
+        if ($stored !== null) {
+            $bufferDir = $stored->buffer_dir;
+        } elseif (isset($inMemory['buffer_dir']) && is_string($inMemory['buffer_dir'])) {
+            $bufferDir = $inMemory['buffer_dir'];
+        }
+        if (is_string($bufferDir) && $bufferDir !== '') {
+            $this->removeBufferDir($bufferDir);
+        }
+
+        // Remove the store session so no worker resolves a torn-down session.
+        if ($stored !== null) {
+            try {
+                $this->timeShiftStore->delete($stored->id);
+            } catch (\Throwable $e) {
+                $this->logger->warning('Failed to delete time-shift session row', [
+                    'session_id' => $sessionId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         unset($this->activeTimeShifts[$sessionId]);
@@ -1546,12 +1871,45 @@ class Recorder
     /**
      * Get time-shift info for a session.
      *
+     * Prefers this worker's in-memory entry (fast path); when absent, falls back
+     * to the cross-worker store so a session started on another worker is still
+     * resolvable (SV-3.1 f-b). The returned array mirrors the in-memory shape so
+     * existing consumers keep working.
+     *
      * @param string $sessionId The session identifier
      * @return array<string, mixed>|null Time-shift data or null
      */
     public function getTimeShift(string $sessionId): ?array
     {
-        return $this->activeTimeShifts[$sessionId] ?? null;
+        if (isset($this->activeTimeShifts[$sessionId])) {
+            return $this->activeTimeShifts[$sessionId];
+        }
+
+        try {
+            $stored = $this->timeShiftStore->findBySessionId($sessionId);
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed to resolve time-shift session', [
+                'session_id' => $sessionId,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        if ($stored === null || $stored->status !== TimeShiftSession::STATUS_ACTIVE) {
+            return null;
+        }
+
+        return [
+            'id' => $stored->id,
+            'session_id' => $stored->session_id,
+            'channel_id' => $stored->channel_id,
+            'started_at' => $stored->buffer_start_at,
+            'buffer_start' => $stored->buffer_start_at,
+            'buffer_end' => $stored->buffer_end_at,
+            'buffer_dir' => $stored->buffer_dir,
+            'pid' => $stored->pid,
+            'current_position' => $stored->cursor_position,
+        ];
     }
 
     /**

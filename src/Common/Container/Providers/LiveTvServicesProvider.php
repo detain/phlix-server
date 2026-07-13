@@ -25,6 +25,7 @@ use Phlix\LiveTv\Recording\ComskipIntegration;
 use Phlix\LiveTv\Recording\ComskipLifecycleManager;
 use Phlix\LiveTv\Recording\RecordingMediaRegistrar;
 use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunApiClient;
 use Phlix\LiveTv\Tuners\HdHomeRun\HdHomeRunDiscovery;
@@ -53,8 +54,12 @@ use function DI\get;
  *  - {@see ComskipLifecycleManager} — commercial-detection lifecycle, built from
  *    the `livetv.comskip` config and registered as a {@see Recorder} onComplete
  *    hook by the Recorder constructor.
- *  - {@see Recorder} — FULLY wired ($db, storage_path, max_storage_bytes, logger,
- *    comskip lifecycle manager, ffmpeg path). Built WITHOUT a LiveTvManager to
+ *  - {@see DbTimeShiftSessionStore} — cross-worker time-shift session store
+ *    (SV-3.1 f-b), injected into the Recorder so a rolling time-shift buffer
+ *    started on one worker is resolvable on any other.
+ *  - {@see Recorder} — FULLY wired ($db, time-shift store, storage_path,
+ *    max_storage_bytes, logger, comskip lifecycle manager, ffmpeg path). Built
+ *    WITHOUT a LiveTvManager to
  *    break the Recorder↔LiveTvManager cycle; the LiveTvManager factory injects
  *    itself back via {@see Recorder::setLiveTvManager()} so
  *    {@see Recorder::resolveTunerStreamUrl()} becomes reachable.
@@ -195,6 +200,15 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 );
             }),
 
+            // SV-3.1 f-b: cross-worker DB-backed time-shift session store. Bound
+            // EXPLICITLY (not autowired) and injected as a NON-NULLABLE Recorder
+            // ctor dependency — sidestepping the "PHP-DI skips optional nullable
+            // ctor params" landmine (§0.3) that would otherwise leave the store
+            // null and silently no-op every time-shift.
+            DbTimeShiftSessionStore::class => factory(static function (ContainerInterface $c): DbTimeShiftSessionStore {
+                return new DbTimeShiftSessionStore(self::db($c));
+            }),
+
             // Fully-wired Recorder. Built WITHOUT a LiveTvManager here to break
             // the Recorder↔LiveTvManager cycle — the LiveTvManager factory below
             // calls Recorder::setLiveTvManager() on this same singleton so
@@ -207,8 +221,12 @@ final class LiveTvServicesProvider implements ServiceProviderInterface
                 /** @var ComskipLifecycleManager $comskip */
                 $comskip = $c->get(ComskipLifecycleManager::class);
 
+                /** @var DbTimeShiftSessionStore $timeShiftStore */
+                $timeShiftStore = $c->get(DbTimeShiftSessionStore::class);
+
                 $recorder = new Recorder(
                     self::db($c),
+                    $timeShiftStore,
                     $storagePath,
                     $maxStorageBytes,
                     self::livetvLogger($c),

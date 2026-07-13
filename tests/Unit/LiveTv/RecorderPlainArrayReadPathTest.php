@@ -7,6 +7,7 @@ namespace Phlix\Tests\Unit\LiveTv;
 use PHPUnit\Framework\TestCase;
 use Phlix\Common\Logger\StructuredLogger;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Workerman\MySQL\Connection;
 
 /**
@@ -77,7 +78,7 @@ final class RecorderPlainArrayReadPathTest extends TestCase
         // The PROD shape: a plain list of associative row arrays (NOT a ResultSet).
         $db->method('query')->willReturn([$this->recordingRow()]);
 
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $recording = $recorder->getRecording('rec-1');
 
@@ -95,7 +96,7 @@ final class RecorderPlainArrayReadPathTest extends TestCase
         // A SELECT that matched no rows returns [] in production.
         $db->method('query')->willReturn([]);
 
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $this->assertNull($recorder->getRecording('missing'));
     }
@@ -110,7 +111,7 @@ final class RecorderPlainArrayReadPathTest extends TestCase
             ['recording_id' => 'rec-2'],
         ]);
 
-        $recorder = new Recorder($db, '/tmp/recordings', 0, $logger);
+        $recorder = new Recorder($db, new DbTimeShiftSessionStore($db), '/tmp/recordings', 0, $logger);
 
         $ids = $recorder->getRecordingsDueToStop(1_700_000_000);
 
@@ -150,7 +151,13 @@ final class RecorderPlainArrayReadPathTest extends TestCase
             }
         );
 
-        $recorder = new Recorder($db, '/tmp/phlix-nonexistent-recordings', 0, $logger);
+        $recorder = new Recorder(
+            $db,
+            new DbTimeShiftSessionStore($db),
+            '/tmp/phlix-nonexistent-recordings',
+            0,
+            $logger
+        );
 
         $fired = [];
         $recorder->onComplete(function (string $id, string $path) use (&$fired): void {

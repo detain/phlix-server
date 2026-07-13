@@ -11,6 +11,7 @@ use Phlix\LiveTv\LiveTvManager;
 use Phlix\LiveTv\Recorder;
 use Phlix\LiveTv\Recording\RecordingMediaRegistrar;
 use Phlix\LiveTv\Recording\RecordingScheduler;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\Media\Library\ItemRepository;
 use PHPUnit\Framework\TestCase;
 use Workerman\MySQL\Connection;
@@ -98,6 +99,39 @@ final class LiveTvServicesProviderTest extends TestCase
         $callbacks = $this->readPrivate($recorder, 'onCompleteCallbacks');
         $this->assertIsArray($callbacks);
         $this->assertCount(2, $callbacks, 'comskip + media-item registrar hooks must be wired');
+    }
+
+    /**
+     * SV-3.1 f-b: the resolved Recorder must carry a NON-NULL cross-worker
+     * time-shift store. This guards against the "PHP-DI skips optional nullable
+     * ctor params" landmine — a null store would silently no-op every time-shift
+     * on the manual-factory / LiveTvManager::getRecorder() path.
+     */
+    public function testRecorderIsWiredWithNonNullTimeShiftStore(): void
+    {
+        $container = $this->buildContainer();
+
+        /** @var LiveTvManager $manager */
+        $manager = $container->get(LiveTvManager::class);
+        $recorder = $manager->getRecorder();
+
+        $store = $this->readPrivate($recorder, 'timeShiftStore');
+        $this->assertInstanceOf(
+            DbTimeShiftSessionStore::class,
+            $store,
+            'Recorder must be wired with a non-null DbTimeShiftSessionStore'
+        );
+
+        // Same instance whether resolved via the manager or directly, and the
+        // store itself is a shared per-worker singleton.
+        /** @var Recorder $directRecorder */
+        $directRecorder = $container->get(Recorder::class);
+        $this->assertSame($store, $this->readPrivate($directRecorder, 'timeShiftStore'));
+        $this->assertSame(
+            $container->get(DbTimeShiftSessionStore::class),
+            $store,
+            'the store is the same shared singleton the provider binds'
+        );
     }
 
     public function testRecordingMediaRegistrarIsWiredAsSharedSingleton(): void

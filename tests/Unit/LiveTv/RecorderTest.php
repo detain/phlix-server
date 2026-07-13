@@ -5,6 +5,7 @@ namespace Phlix\Tests\Unit\LiveTv;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Phlix\LiveTv\Recorder;
+use Phlix\LiveTv\TimeShift\DbTimeShiftSessionStore;
 use Phlix\Common\Logger\StructuredLogger;
 use Workerman\MySQL\Connection;
 
@@ -22,7 +23,13 @@ class RecorderTest extends TestCase
 
         $this->mockDb = $this->createMock(Connection::class);
         $this->mockLogger = $this->createMock(StructuredLogger::class);
-        $this->recorder = new Recorder($this->mockDb, '/tmp/recordings', 10000000000, $this->mockLogger);
+        $this->recorder = new Recorder(
+            $this->mockDb,
+            new DbTimeShiftSessionStore($this->mockDb),
+            '/tmp/recordings',
+            10000000000,
+            $this->mockLogger
+        );
     }
 
     public function testCanCreateRecorder(): void

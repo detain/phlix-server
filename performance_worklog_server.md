@@ -1922,3 +1922,119 @@ impl+migration, `0f20be7b` tests). Tree clean, local==origin at `0f20be7b`.
   recording, confirm a `media_items` row exists for the `.ts` and
   `livetv_recordings.media_item_id` is set; confirm a zero-length/failed capture
   leaves `media_item_id` NULL.
+
+## Reviewer (per-step) — SV-3.1d — 2026-07-12
+
+Reviewed `git diff 34bd569b..5f9c8857` = `c8845464` (impl + migration 077) + `0f20be7b`
+(tests). Read the step's plan entry, the SV-3.1d implementer note, RowQuery/ResultSet,
+PhlixMySQLConnection + parent `Workerman\MySQL\Connection::query()`, Recorder completion
+chain, ItemRepository working-idiom, migration 077 + 022, config/livetv.php,
+LiveTvServicesProvider, and both entrypoints. Read-only gates (this box):
+`phpunit --filter 'RecordingMediaRegistrar|LiveTvServicesProvider'` = **OK (10 tests,
+44 assertions)**; `phpstan analyse -c phpstan.neon.dist` on the touched files = **[OK]
+No errors**.
+
+The SV-3.1d registration DIFF itself is correct — CHECKS #2–#6 pass (see below). The
+one blocking issue is CHECK #1, the RowQuery/ResultSet landmine, which is **PRE-EXISTING**
+(not introduced by SV-3.1d) but renders the whole DVR read path — and therefore the
+SV-3.1d `onComplete` hook — inert in production.
+
+### Findings
+
+1. **[BLOCKING — PRE-EXISTING, NOT an SV-3.1d change] The LiveTv `RowQuery` read path
+   yields EMPTY against the production DB, so the entire DVR read path (and hence the
+   SV-3.1d `onComplete` registrar) never fires against a live database.**
+   - `src/LiveTv/Dto/RowQuery.php:45,65,82` — `rows()/firstRow()/hasRows()` all narrow
+     on `if (!$result instanceof \Phlix\LiveTv\Dto\ResultSet) { return [] / null / false; }`.
+   - `ResultSet` (`src/LiveTv/Dto/ResultSet.php:34`) is an **abstract** class with a
+     `num_rows` property + `fetch()` method. The ONLY things that `extends ResultSet` are
+     the 6 LiveTv unit-test mock files; `grep -rn "ResultSet" src/` finds nothing in `src/`
+     that ever constructs or returns one.
+   - Production shape: `PhlixMySQLConnection::query()` (`src/Common/Database/PhlixMySQLConnection.php:258`)
+     delegates to `parent::query()`, and `Workerman\MySQL\Connection::query()`
+     (`vendor/workerman/mysql/src/Connection.php:1857-1858`) for a SELECT returns
+     `$this->sQuery->fetchAll($fetchmode)` — a **plain `array<int,array<string,mixed>>`**,
+     never a `ResultSet` object. `Connection::class` is bound to the real
+     `PhlixMySQLConnection` via `CoreServicesProvider.php:81` → `ConnectionPool::getConnection('mysql')`.
+   - Net effect in prod: for every real SELECT, `$result instanceof ResultSet` is false, so
+     `RowQuery::firstRow()` → `null`, `rows()` → `[]`, `hasRows()` → `false`. This poisons
+     `Recorder::getRecording()` (`Recorder.php:359`), `getAllRecordings()`,
+     `getRecordingsDueToStop()` (`:967`, the SV-3.1c timed-stop scan),
+     `resumeActiveRecordings()` (SV-3.1e boot recovery), `RecordingScheduler::processDueRecordings`
+     (`RecordingScheduler.php:133`), plus GuideManager/SeriesRuleManager/RecordingDeduplicator.
+   - Failure scenario for THIS step: `Recorder::stopRecording()` (`:774-777`) and
+     `endRecording()` (`:866`) both do `$recording = $this->getRecording(...); if (!$recording) return false;`
+     BEFORE the atomic completion CAS + `fireOnCompleteCallbacks()` (`:828`/`:919`). In prod
+     `getRecording()` is always `null`, so completion short-circuits and the SV-3.1d
+     `onComplete` registrar is NEVER invoked. Green unit tests hide this exactly because the
+     Recorder tests inject `ResultSet`-shaped mocks while production returns plain arrays —
+     the "green tests masking inert prod code" failure mode.
+   - Provenance: RowQuery/ResultSet are `@since Wave 5a (post-O.7)` — they predate SV-3.1.
+     This is a PRE-EXISTING defect surfaced (and correctly flagged) by the SV-3.1d
+     implementer, NOT a regression in `c8845464`/`0f20be7b`. The SV-3.1d registrar itself
+     is correct: it reads via the plain-array media-layer convention
+     (`RecordingMediaRegistrar::fetchRecording` at `:215-232`, `is_array($result[0])`), which
+     is the idiom that provably works in prod (same as `ItemRepository::findByPath`/`firstRow`).
+   - Fix direction (its OWN sub-step, regardless of which sub-step is credited): make
+     `RowQuery::rows/firstRow/hasRows` accept the plain-array shape `query()` actually returns
+     (iterate `array<int,array<string,mixed>>` and drop the `instanceof ResultSet` narrowing —
+     keeping a fallback for the mock shape if desired), OR route all LiveTv reads through the
+     same plain-array idiom the working repositories use. Then re-point the LiveTv unit-test
+     mocks off `ResultSet` onto plain arrays so the tests exercise the real prod shape. This
+     is the already-OWED on-box DVR verification made concrete: without it, SV-3.1 a/b0/c/d/e
+     are all inert in production despite green mock-DB tests.
+
+2. **[LOW — non-blocking; dominated by finding #1] `RecordingMediaRegistrar::ensureRecordingsLibrary`
+   can create duplicate "DVR Recordings" libraries under a concurrent first-completion race.**
+   - `src/LiveTv/Recording/RecordingMediaRegistrar.php:249-281` does a `SELECT id FROM
+     libraries WHERE type=? AND name=? LIMIT 1` then, on miss, `INSERT INTO libraries ...`.
+     `libraries` has no unique constraint on `(type, name)` (migration 001), and the registrar
+     is a per-worker singleton, so two DIFFERENT recordings completing concurrently (e.g. a
+     manual stop on an HTTP worker + the worker-0 scheduler, or two coroutines on worker 0)
+     before the library first exists can each miss the SELECT and both INSERT → 2+ duplicate
+     DVR libraries. Subsequent completions reuse whichever `LIMIT 1` returns.
+   - Failure scenario: cosmetic split of DVR recordings across duplicate libraries on a fresh
+     install; self-limiting (happens once, early). Benign TODAY because finding #1 makes the
+     whole completion path inert, but it becomes real once #1 is fixed.
+   - Fix direction (fold into the #1 fix or a follow-up): add a UNIQUE index on
+     `libraries(type, name)` (or re-SELECT after a failed INSERT, mirroring
+     `ItemRepository::upsertByPath`'s race-collision reuse), so find-or-create is idempotent.
+
+### CHECKS #2–#6 — SV-3.1d registration diff: CLEAN
+
+- **#2 Registration correctness:** all four guards short-circuit BEFORE `upsertByPath`
+  (`register()` `:126` row-not-found → null; `:136-138` `status != 'completed'` → null, so a
+  FAILED row from `resumeActiveRecordings()` never registers; `:142-145` already-linked →
+  returns existing id, no insert; `:149-155` missing/zero-length file → null). onComplete is
+  registered exactly once: PHP-DI shares the `Recorder::class` factory (`LiveTvServicesProvider.php:186`)
+  as a singleton, and `$recorder->onComplete([$registrar,'register'])` runs once in that
+  factory (Recorder carries exactly 2 hooks: comskip + registrar, asserted by the provider test).
+- **#3 Insert correctness:** `ItemRepository::upsertByPath` (path-deduped, returns non-null
+  `string`) is used with `library_id / name (EPG title) / type='video' / path=.ts /
+  metadata_json`. The returned id is captured and persisted by the parameterized, colon-free
+  `UPDATE livetv_recordings SET media_item_id = ?, updated_at = NOW() WHERE recording_id = ?`
+  (`:192-195`) — no injection. All read columns exist in the `livetv_recordings` schema
+  (012a + 022 + 077).
+- **#4 Library find-or-create:** direct parameterized/colon-free SQL against `libraries`,
+  deliberately NOT via LibraryManager/FolderWatcher (so the storage path is never scanned/
+  double-registered); INSERT columns mirror `createLibrary`. (Race caveat = finding #2.)
+- **#5 Migration 077:** MySQL-8 compatible — no `IF NOT EXISTS`, one ALTER per clause,
+  `media_item_id CHAR(36) NULL` matches `media_items.id`; replay-safety relies on the runner
+  downgrading 1060/1061, confirmed the real idiom (`MigrationRunner::isAlreadyAppliedNote`
+  matches "Duplicate column name"/"Duplicate key name") and identical to migration 022's
+  `pid` ALTER pair.
+- **#6 Scope/policy:** no comskip wiring (correctly deferred to SV-3.1d-comskip/SV-4.3;
+  `media_item_id` is produced + persisted for it); no ctor/DI-signature change — both
+  `public/index.php:72` and `start.php` build the container via `ContainerFactory::create`,
+  which registers `LiveTvServicesProvider` (`ContainerFactory.php:131`), so no entrypoint
+  mirror is needed; nothing stubbed/deleted; tests are genuine (each rejection path asserts
+  `upsertByPath` is NEVER called; the happy path asserts the insert fields + the exact
+  `['media-1','rec-1']` linkage UPDATE params; the library test asserts the INSERT name +
+  'video' type + that the item uses the new library id; test mocks return PLAIN ARRAYS,
+  matching the real prod shape).
+
+**Verdict:** 2 findings. #1 is BLOCKING for the SV-3.1 DVR stack as a whole but is
+PRE-EXISTING (RowQuery/ResultSet, `@since Wave 5a`) and out of SV-3.1d's own scope — the
+SV-3.1d registration diff (`c8845464`/`0f20be7b`) is itself correct and complete. The
+RowQuery fix must be its own sub-step (it also fixes SV-3.1 a/b0/c/e inertness); finding #2
+(LOW) should fold into that fix.

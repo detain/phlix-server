@@ -7,6 +7,15 @@ and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plugin-safe `LoggerInterface` binding fix.** Added `LoggerInterface::class` as an alias to `StructuredLogger::class` in `CoreServicesProvider` so plugins that request `Psr\Log\LoggerInterface` from the container resolve correctly instead of failing to autowire.
+
+### Added
+
+- **Plugin test credentials endpoint.** New `testCredentials` endpoint in `PluginAdminController` allows the admin UI to verify whether plugin credentials (e.g. API keys) are valid before saving them.
+- **Plugin `redirect_url` support.** `PluginLoader` now reads and validates the optional `redirect_url` field from plugin manifests, enabling OAuth-style callback URLs in first-party plugins.
+
 ## [SV-0.2] — 2026-07-10
 
 **Reconciled hardware acceleration config sources.** Consolidates conflicting hwaccel settings from multiple config files into a single source of truth.

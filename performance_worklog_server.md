@@ -3153,3 +3153,44 @@ warnings on untouched lines).
   tests/Unit/Common/Container = 55/55 OK (real-container matcher resolve doesn't throw); phpstan L9 (dist)
   5 files = No errors; phpcs PSR12 src+config+new test = clean (only pre-existing LineLength warns off my
   lines + ContainerFactoryTest's file-wide test_snake_case convention my 2 methods follow).
+
+## Reviewer (per-step, SV-3.4 sub-steps 1-3, commits e2abc09e + ac96e287) — 2026-07-13 (perf-7)
+1 LOW finding + 1 informational note (not blocking). Core sound: DI landmine genuinely killed
+(prod-wiring test resolves from a REAL container, not mock-only); async dispatch mirrors the proven
+MetadataHttpClient gate exactly (real runtime probes, not an always-false-guard-class bug); 30s bounded
+Channel timeout; fclose leak fixed + no partial dirs on error; dual entrypoint mirrored (both build via
+ContainerFactory::create()); poster_srcset correctness asserted both wired (LOCAL, not TMDB CDN) and
+unwired (fallback, no crash); config-drive dir confirmed. Suites reproduce green at HEAD (65/65 + 55/55
+targeted; phpstan/phpcs clean).
+FINDING 1 (LOW): `MediaServicesProvider.php:627` — the defensive `@include` fallback for
+`'artwork.storage_path'` uses 5× `../` (resolves to a non-existent path one level ABOVE the repo root),
+should be 4× `../` (matches the correct `theme_music` include at :129). Dead in practice — the primary
+`app.config` path is populated by both real entrypoints — but the fallback silently no-ops instead of
+reading config/artwork.php, so an env-only ARTWORK_STORAGE_PATH override would be lost IF that path were
+ever exercised. Same pre-existing bug also present in 4 sibling factories (marker_detection/media_asset_jobs
+at :496/514/545/570) — fix all 5 while in there.
+INFORMATIONAL (no fix needed): TMDB https downloads still block via cURL under the Swoole event loop
+(EventLoopTls::requiresBlockingCurl() is true for https — the project's documented, accepted tradeoff;
+identical to the sibling MetadataHttpClient already on the same match path). Not a regression.
+→ Fix agent spawned for finding 1.
+
+## Fixer — SV-3.4 review finding — 2026-07-13
+Fixed FINDING 1 (LOW): the `@include` config-fallback path depth in `MediaServicesProvider.php`.
+- Root cause: the `@include __DIR__ . '/.../config/*.php'` fallbacks used 5× `../`, which from
+  `src/Common/Container/Providers/` resolves to `/home/sites/phlix/config/*.php` — one dir ABOVE the
+  repo root (a non-existent path). `@include` then returns `false`, the branch no-ops, and the cfg
+  array stays `[]`, silently discarding an env-only override (e.g. `ARTWORK_STORAGE_PATH`) whenever
+  that fallback is the exercised path. Correct depth is 4× `../` (Providers→Container→Common→src→repo
+  root, then `/config`), matching the working `theme_music` include at :129.
+- Depth verified empirically from the `Providers/` dir with `php -r "realpath(...)"`: 5× → bool(false)
+  for all three targets; 4× → the real `/home/sites/phlix/phlix-server/config/{artwork,marker_detection,
+  media_asset_jobs}.php` (all three files exist). Correct include at :129 already uses 4×.
+- Fixed all 5 occurrences (5× `../` → 4× `../`), no other change to the file:
+  * :627 `artwork.storage_path` factory (the new SV-3.4 site) → config/artwork.php
+  * :496, :514 marker_detection factories (MarkerCandidateStore, IntroDetectionJob) → config/marker_detection.php
+  * :545, :570 media_asset_jobs factories (MediaAssetJobStore, MediaAssetWorker) → config/media_asset_jobs.php
+- Verification: `php -l` clean; `phpstan analyze -c phpstan.neon.dist src/.../MediaServicesProvider.php`
+  = No errors; `phpcs --standard=PSR12` = 0 errors (2 pre-existing LineLength WARNINGS on untouched
+  lines 537/562); `phpunit --filter "MediaServicesProvider|ContainerFactory" --testdox` = 28/28 OK
+  (incl. "Artwork storage dir is config driven"); full `--testsuite Unit` = 5050 tests, 0 fail, 5 skip
+  (up from the 5040 baseline by the SV-3.4 sub-step tests). No regression.

@@ -493,7 +493,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 $markerCfg = $appConfig['marker_detection'] ?? null;
                 if (!is_array($markerCfg)) {
                     /** @var mixed $inc */
-                    $inc = @include __DIR__ . '/../../../../../config/marker_detection.php';
+                    $inc = @include __DIR__ . '/../../../../config/marker_detection.php';
                     $markerCfg = is_array($inc) ? $inc : [];
                 }
                 $queueDir = is_string(($markerCfg['job_queue_dir'] ?? null))
@@ -511,7 +511,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 $markerCfg = $appConfig['marker_detection'] ?? null;
                 if (!is_array($markerCfg)) {
                     /** @var mixed $inc */
-                    $inc = @include __DIR__ . '/../../../../../config/marker_detection.php';
+                    $inc = @include __DIR__ . '/../../../../config/marker_detection.php';
                     $markerCfg = is_array($inc) ? $inc : [];
                 }
                 $minEpisodes = is_int(($markerCfg['min_episodes_for_detection'] ?? null))
@@ -542,7 +542,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 $assetCfg = $appConfig['media_asset_jobs'] ?? null;
                 if (!is_array($assetCfg)) {
                     /** @var mixed $inc */
-                    $inc = @include __DIR__ . '/../../../../../config/media_asset_jobs.php';
+                    $inc = @include __DIR__ . '/../../../../config/media_asset_jobs.php';
                     $assetCfg = is_array($inc) ? $inc : [];
                 }
                 $queueDir = is_string(($assetCfg['job_queue_dir'] ?? null))
@@ -567,7 +567,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 $assetCfg = $appConfig['media_asset_jobs'] ?? null;
                 if (!is_array($assetCfg)) {
                     /** @var mixed $inc */
-                    $inc = @include __DIR__ . '/../../../../../config/media_asset_jobs.php';
+                    $inc = @include __DIR__ . '/../../../../config/media_asset_jobs.php';
                     $assetCfg = is_array($inc) ? $inc : [];
                 }
                 $maxConcurrent = is_int(($assetCfg['max_concurrent'] ?? null))
@@ -624,7 +624,7 @@ final class MediaServicesProvider implements ServiceProviderInterface
                 $artworkCfg = $appConfig['artwork'] ?? null;
                 if (!is_array($artworkCfg)) {
                     /** @var mixed $inc */
-                    $inc = @include __DIR__ . '/../../../../../config/artwork.php';
+                    $inc = @include __DIR__ . '/../../../../config/artwork.php';
                     $artworkCfg = is_array($inc) ? $inc : [];
                 }
                 $path = $artworkCfg['storage_path'] ?? null;

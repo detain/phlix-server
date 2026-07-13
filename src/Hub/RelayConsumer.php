@@ -178,6 +178,25 @@ final class RelayConsumer
     private array $localConnections = [];
 
     /**
+     * Channel ids whose local connection has been {@see AsyncTcpConnection::pauseRecv()}'d
+     * because the hub tunnel's send buffer was full when {@see sendDataFrame()}
+     * tried to relay their bytes (SV-2.3, [S-F36], the local->hub direction).
+     *
+     * The tunnel connection is a SINGLE shared object multiplexing every
+     * channel, so it exposes only one `onBufferDrain` slot — a naive
+     * per-channel callback registration would clobber earlier channels'
+     * resume callbacks. Instead every paused channel id is recorded here and
+     * {@see armTunnelDrainResume()} arms (idempotently) ONE handler that
+     * resumes every pending channel when the tunnel drains. Entries are
+     * removed as soon as their channel closes (see {@see onLocalClose()},
+     * {@see closeLocalConnection()}, {@see closeAllLocalConnections()}) so
+     * this cannot grow unbounded across the life of a resident worker.
+     *
+     * @var array<int, true>
+     */
+    private array $pausedForTunnelDrain = [];
+
+    /**
      * In-flight chunked-request assemblies keyed by relay request id (HB-2.1).
      *
      * A relayed request whose body exceeds a single 65535-byte frame arrives as
@@ -1576,6 +1595,11 @@ final class RelayConsumer
      * owning channel id so the hub routes them back to the correct client, and
      * sends to the hub.
      *
+     * A zero-length read never emits a frame (SV-2.3, [S-F36]): the loop
+     * condition is checked BEFORE building the first chunk, so an empty
+     * `$data` (e.g. a spurious zero-byte onMessage) is a pure no-op instead of
+     * relaying a meaningless empty DATA frame to the hub.
+     *
      * @param int    $channelId Owning channel id.
      * @param string $data      Raw response bytes from the local listener.
      *
@@ -1593,11 +1617,20 @@ final class RelayConsumer
         $length = strlen($data);
         $maxChunk = 65535;
 
-        do {
+        while ($offset < $length) {
             $chunk = substr($data, $offset, $maxChunk);
-            $this->sendDataFrame($channelId, $chunk);
+            if (!$this->sendDataFrame($channelId, $chunk)) {
+                // The hub tunnel's send buffer is full — sendDataFrame() has
+                // already paused this channel's local connection and armed
+                // the drain-resume handler. Stop feeding it more chunks from
+                // this already-read buffer rather than repeatedly dropping
+                // payloads into an over-full buffer (mirrors the
+                // check-return-then-break discipline streamFileChunks() uses
+                // for the HTTP_RESPONSE file-streaming path).
+                break;
+            }
             $offset += $maxChunk;
-        } while ($offset < $length);
+        }
     }
 
     /**
@@ -1613,6 +1646,7 @@ final class RelayConsumer
     {
         if (isset($this->localConnections[$channelId])) {
             unset($this->localConnections[$channelId]);
+            unset($this->pausedForTunnelDrain[$channelId]);
             $this->logger->info('RelayConsumer: local connection closed', [
                 'channel_id' => $channelId,
             ]);
@@ -1654,6 +1688,7 @@ final class RelayConsumer
         }
 
         unset($this->localConnections[$channelId]);
+        unset($this->pausedForTunnelDrain[$channelId]);
         $conn->close();
     }
 
@@ -1670,6 +1705,7 @@ final class RelayConsumer
             $conn->close();
         }
         $this->localConnections = [];
+        $this->pausedForTunnelDrain = [];
     }
 
     /**
@@ -1677,6 +1713,14 @@ final class RelayConsumer
      *
      * Used for HEARTBEAT and other non-client-scoped frames. Client-scoped DATA
      * uses {@see sendDataFrame()} so the channel id is preserved.
+     *
+     * Tunnel-scoped frames are not tied to any single channel, so unlike
+     * {@see sendDataFrame()} there is no single local connection to pause when
+     * the tunnel's send buffer is full — the shared tunnel being backed up is
+     * already surfaced (and backpressured) via whichever channel(s) are
+     * actively relaying DATA through {@see sendDataFrame()}. This method still
+     * checks the return value (SV-2.3, [S-F36]) so a dropped tunnel-scoped
+     * frame (e.g. a HEARTBEAT) is observable rather than silently ignored.
      *
      * @param RelayFrameType $type    Frame type.
      * @param string         $payload Raw payload bytes (<= 65535).
@@ -1693,7 +1737,11 @@ final class RelayConsumer
 
         // Tunnel-scoped frames carry no channel — channel id 0.
         $encoded = $this->codec->encode($type, 0, $payload);
-        $this->connection->send($encoded);
+        if ($this->connection->send($encoded) === false) {
+            $this->logger->warning('RelayConsumer: tunnel-scoped frame dropped, send buffer full', [
+                'type' => $type->label(),
+            ]);
+        }
     }
 
     /**
@@ -1702,21 +1750,90 @@ final class RelayConsumer
      * The channel id travels in the frame's `seq` field so the hub routes the
      * response back to the correct client.
      *
+     * When the hub tunnel's send buffer is full (SV-2.3, [S-F36]), this
+     * applies back-pressure to the LOCAL connection that produced the bytes
+     * (the source, on the opposite side of the pipe from the destination
+     * that's full) by pausing its recv until the tunnel drains — mirroring
+     * the {@see onData()} discipline used for the opposite (hub->local)
+     * direction. Because the tunnel connection is shared by every
+     * multiplexed channel (unlike each channel's own dedicated local
+     * connection), the paused channel is tracked in
+     * {@see $pausedForTunnelDrain} and resumed via {@see armTunnelDrainResume()}
+     * rather than registering a callback directly on the tunnel per call,
+     * which would clobber any other channel's pending resume.
+     *
      * @param int    $channelId Owning channel id.
      * @param string $payload   Raw payload bytes (<= 65535).
      *
-     * @return void
+     * @return bool True if the frame was sent; false if it was dropped
+     *              because there is no active tunnel, or its send buffer was
+     *              full (in which case the channel's local connection has
+     *              been paused and will resume once the tunnel drains).
      *
      * @since 0.5.0
      */
-    private function sendDataFrame(int $channelId, string $payload): void
+    private function sendDataFrame(int $channelId, string $payload): bool
     {
         if ($this->connection === null || $this->state !== self::STATE_ACTIVE) {
-            return;
+            return false;
         }
 
         $encoded = $this->codec->encode(RelayFrameType::DATA, $channelId, $payload);
-        $this->connection->send($encoded);
+
+        if ($this->connection->send($encoded) === false) {
+            $local = $this->localConnections[$channelId] ?? null;
+            if ($local !== null) {
+                $local->pauseRecv();
+                $this->pausedForTunnelDrain[$channelId] = true;
+                $this->armTunnelDrainResume();
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Idempotently arm a single hub-tunnel `onBufferDrain` handler that
+     * resumes every channel recorded in {@see $pausedForTunnelDrain} once the
+     * tunnel's send buffer empties (SV-2.3, [S-F36]).
+     *
+     * The tunnel connection exposes exactly one `onBufferDrain` slot, shared
+     * by every multiplexed channel, so this must NOT be re-armed (and
+     * overwrite an earlier channel's pending resume) while already armed —
+     * callers add to {@see $pausedForTunnelDrain} first and rely on this
+     * no-op-if-already-armed guard.
+     *
+     * @return void
+     *
+     * @since SV-2.3
+     */
+    private function armTunnelDrainResume(): void
+    {
+        $tunnel = $this->connection;
+        if ($tunnel === null || $tunnel->onBufferDrain !== null) {
+            return;
+        }
+
+        $tunnel->onBufferDrain = function () use ($tunnel): void {
+            // Clean up the drain handler first to avoid double-resume, but
+            // only if the tunnel hasn't already been replaced by a reconnect
+            // (in which case this is a stale callback on a dead object).
+            if ($this->connection === $tunnel) {
+                $tunnel->onBufferDrain = null;
+            }
+
+            $pendingChannelIds = array_keys($this->pausedForTunnelDrain);
+            $this->pausedForTunnelDrain = [];
+
+            foreach ($pendingChannelIds as $channelId) {
+                $conn = $this->localConnections[$channelId] ?? null;
+                if ($conn !== null && $conn->getStatus() === TcpConnection::STATUS_ESTABLISHED) {
+                    $conn->resumeRecv();
+                }
+            }
+        };
     }
 
     /**

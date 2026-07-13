@@ -34,15 +34,47 @@ class FakeRelayConnection extends AsyncTcpConnection
     /** @var bool Whether close() was called. */
     public bool $closed = false;
 
+    /**
+     * Controls what send() returns (SV-2.3 backpressure tests): defaults to
+     * true so every pre-existing test keeps its original always-succeeds
+     * behavior; set to false to simulate a full Workerman send buffer.
+     */
+    public bool $sendShouldSucceed = true;
+
+    /** @var int Number of times pauseRecv() was called. */
+    public int $pauseRecvCalls = 0;
+
+    /** @var int Number of times resumeRecv() was called. */
+    public int $resumeRecvCalls = 0;
+
     public function connect(): void
     {
         $this->connected = true;
+        // The real AsyncTcpConnection transitions to ESTABLISHED once the
+        // underlying socket connects; this double never opens a real socket,
+        // so set it synchronously here so getStatus() checks in the
+        // backpressure resume paths (RelayConsumer::armTunnelDrainResume()/
+        // onData()) see a live connection, exactly like production.
+        $this->status = self::STATUS_ESTABLISHED;
     }
 
     public function send(mixed $sendBuffer, bool $raw = false): bool|null
     {
+        if (!$this->sendShouldSucceed) {
+            return false;
+        }
         $this->sent[] = is_string($sendBuffer) ? $sendBuffer : '';
         return true;
+    }
+
+    public function pauseRecv(): void
+    {
+        $this->pauseRecvCalls++;
+    }
+
+    public function resumeRecv(): void
+    {
+        $this->resumeRecvCalls++;
     }
 
     public function close(mixed $data = null, bool $raw = false): void
@@ -66,6 +98,14 @@ class FakeRelayConnection extends AsyncTcpConnection
     {
         if ($this->onMessage !== null) {
             ($this->onMessage)($this, $data);
+        }
+    }
+
+    /** Simulate this connection's outbound send buffer draining. */
+    public function fireBufferDrain(): void
+    {
+        if ($this->onBufferDrain !== null) {
+            ($this->onBufferDrain)($this);
         }
     }
 }
@@ -345,6 +385,98 @@ class RelayConsumerTest extends TestCase
             $reassembled .= $frame->payload;
         }
         $this->assertSame($big, $reassembled);
+    }
+
+    public function test_zero_length_local_read_emits_no_data_frame(): void
+    {
+        // SV-2.3 ([S-F36]): onLocalData() used to be a do…while loop, which
+        // always ran its body at least once — a spurious zero-length
+        // onMessage (an empty local read) would relay a meaningless empty
+        // DATA frame to the hub. It must now be a pure no-op.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
+
+        $hubSentBefore = count($this->hub->sent);
+
+        $this->local(0)->fireMessage('');
+
+        $this->assertCount($hubSentBefore, $this->hub->sent, 'a zero-length local read must not emit a DATA frame');
+    }
+
+    public function test_local_to_hub_backpressure_pauses_and_resumes_on_drain(): void
+    {
+        // SV-2.3 ([S-F36]): the local->hub direction was previously
+        // fire-and-forget (send()'s boolean return was ignored). Simulate a
+        // full hub-tunnel send buffer and confirm the LOCAL connection that
+        // produced the bytes gets paused, then resumes once the tunnel's
+        // buffer drains — mirroring the already-fixed hub->local (onData)
+        // discipline, applied to the opposite side of the pipe.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $connect = json_encode(['client_id' => 'client-1', 'session_id' => 's'], JSON_THROW_ON_ERROR);
+        $this->hub->fireMessage($this->codec->encode(RelayFrameType::CLIENT_CONNECT, 1, $connect));
+        $local = $this->local(0);
+
+        // Simulate the hub tunnel's send buffer being full.
+        $this->hub->sendShouldSucceed = false;
+
+        $hubSentBefore = count($this->hub->sent);
+        $local->fireMessage('a slow-reader response chunk');
+
+        $this->assertSame(
+            $hubSentBefore,
+            count($this->hub->sent),
+            'the dropped frame must not appear in sent (buffer was full)',
+        );
+        $this->assertSame(1, $local->pauseRecvCalls, 'local connection must be paused while the tunnel is full');
+        $this->assertSame(0, $local->resumeRecvCalls, 'must not resume before the tunnel actually drains');
+
+        // The tunnel drains — resume must fire for the paused channel.
+        $this->hub->sendShouldSucceed = true;
+        $this->hub->fireBufferDrain();
+
+        $this->assertSame(1, $local->resumeRecvCalls, 'local connection must resume once the tunnel drains');
+    }
+
+    public function test_local_to_hub_backpressure_resumes_every_paused_channel_on_one_drain(): void
+    {
+        // The hub tunnel is ONE shared connection multiplexing every
+        // channel, so it exposes a single onBufferDrain slot. Two channels
+        // hitting a full tunnel buffer back-to-back must BOTH still resume
+        // when it drains — a naive per-call callback registration would
+        // clobber the first channel's pending resume with the second's.
+        $consumer = $this->createConsumer();
+        $this->activate($consumer);
+
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            1,
+            json_encode(['client_id' => 'client-1', 'session_id' => 's1'], JSON_THROW_ON_ERROR),
+        ));
+        $this->hub->fireMessage($this->codec->encode(
+            RelayFrameType::CLIENT_CONNECT,
+            2,
+            json_encode(['client_id' => 'client-2', 'session_id' => 's2'], JSON_THROW_ON_ERROR),
+        ));
+        $local1 = $this->local(0);
+        $local2 = $this->local(1);
+
+        $this->hub->sendShouldSucceed = false;
+        $local1->fireMessage('resp-one');
+        $local2->fireMessage('resp-two');
+
+        $this->assertSame(1, $local1->pauseRecvCalls);
+        $this->assertSame(1, $local2->pauseRecvCalls);
+
+        $this->hub->sendShouldSucceed = true;
+        $this->hub->fireBufferDrain();
+
+        $this->assertSame(1, $local1->resumeRecvCalls, 'first channel must still resume, not be clobbered');
+        $this->assertSame(1, $local2->resumeRecvCalls, 'second channel must resume too');
     }
 
     public function test_client_disconnect_closes_local_connection(): void

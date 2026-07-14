@@ -435,14 +435,26 @@ final class RelayConsumer
      */
     private function connect(): void
     {
+        $this->logger->debug('RelayConsumer::connect() START', [
+            'current_state' => $this->state,
+            'connection_exists' => $this->connection !== null,
+            'connection_status' => $this->connection?->getStatus(),
+            'running' => $this->running,
+            'reconnect_attempts' => $this->reconnectAttempts,
+            'last_disconnect_time' => $this->lastDisconnectTime?->format('c'),
+            'server_id' => $this->serverId,
+        ]);
+
         // Prevent concurrent connect attempts while already active.
         if ($this->state === self::STATE_ACTIVE) {
+            $this->logger->debug('RelayConsumer::connect() early return - already STATE_ACTIVE');
             return;
         }
 
         // During HANDSHAKING with an existing connection, close it first so a
         // racing reconnect can replace the stale socket cleanly.
         if ($this->state === self::STATE_HANDSHAKING && $this->connection === null) {
+            $this->logger->debug('RelayConsumer::connect() early return - HANDSHAKING and connection is null');
             return;
         }
 
@@ -452,6 +464,9 @@ final class RelayConsumer
         // NOT re-enter handleDisconnect() and schedule a competing reconnect —
         // then close it, releasing the socket instead of leaking it.
         if ($this->connection !== null) {
+            $this->logger->debug('RelayConsumer::connect() closing stale connection', [
+                'stale_connection_status' => $this->connection->getStatus(),
+            ]);
             $stale = $this->connection;
             $this->connection = null;
             $stale->onConnect = null;
@@ -462,6 +477,10 @@ final class RelayConsumer
         }
 
         $wsUrl = $this->config->buildHubRelayWsUrl();
+        $this->logger->debug('RelayConsumer::connect() built hub relay WS URL', [
+            'ws_url' => $wsUrl,
+            'ws_url_empty' => $wsUrl === '',
+        ]);
         if ($wsUrl === '') {
             $this->logger->error('RelayConsumer: no hub relay WS endpoint configured');
             $this->scheduleReconnect();
@@ -469,6 +488,9 @@ final class RelayConsumer
         }
 
         $enrollment = $this->hubClient->loadEnrollment();
+        $this->logger->debug('RelayConsumer::connect() loaded enrollment', [
+            'enrollment_exists' => $enrollment !== null,
+        ]);
         if ($enrollment === null) {
             $this->logger->error('RelayConsumer: cannot connect without enrollment');
             $this->scheduleReconnect();
@@ -482,19 +504,45 @@ final class RelayConsumer
 
         $this->recvBuffer = '';
         $this->state = self::STATE_HANDSHAKING;
-        $this->connection = $this->openHubConnection($wsUrl);
+        $this->logger->debug('RelayConsumer::connect() calling openHubConnection()', [
+            'ws_url' => $wsUrl,
+            'url_scheme' => parse_url($wsUrl, PHP_URL_SCHEME),
+        ]);
+
+        try {
+            $this->connection = $this->openHubConnection($wsUrl);
+            $this->logger->debug('RelayConsumer::connect() openHubConnection() returned', [
+                'connection_class' => get_class($this->connection),
+                'connection_id' => spl_object_id($this->connection),
+                'connection_status' => $this->connection->getStatus(),
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->error('RelayConsumer::connect() openHubConnection() threw exception', [
+                'exception_class' => get_class($e),
+                'exception_message' => $e->getMessage(),
+                'exception_code' => $e->getCode(),
+                'exception_file' => $e->getFile(),
+                'exception_line' => $e->getLine(),
+                'exception_trace' => $e->getTraceAsString(),
+            ]);
+            $this->scheduleReconnect();
+            return;
+        }
 
         $enrollmentJwt = $enrollment->enrollmentJwt;
 
+        $this->logger->debug('RelayConsumer::connect() setting onConnect callback');
         $this->connection->onConnect = function (AsyncTcpConnection $conn) use ($enrollmentJwt): void {
             $this->logger->info('RelayConsumer connected; sending HELLO');
             $this->sendHello($enrollmentJwt);
         };
 
+        $this->logger->debug('RelayConsumer::connect() setting onMessage callback');
         $this->connection->onMessage = function (ConnectionInterface $conn, string $data): void {
             $this->onHubMessage($data);
         };
 
+        $this->logger->debug('RelayConsumer::connect() setting onError callback');
         $this->connection->onError = function (ConnectionInterface $conn, int $code, string $msg): void {
             $this->logger->error('RelayConsumer connection error', [
                 'code' => $code,
@@ -502,12 +550,33 @@ final class RelayConsumer
             ]);
         };
 
+        $this->logger->debug('RelayConsumer::connect() setting onClose callback');
         $this->connection->onClose = function (ConnectionInterface $conn): void {
             $this->logger->warning('RelayConsumer connection closed');
             $this->handleDisconnect();
         };
 
-        $this->connection->connect();
+        $this->logger->debug('RelayConsumer::connect() calling $connection->connect()', [
+            'connection_id' => spl_object_id($this->connection),
+            'connection_status_before_connect' => $this->connection->getStatus(),
+        ]);
+        try {
+            $this->connection->connect();
+            $this->logger->debug('RelayConsumer::connect() $connection->connect() returned', [
+                'connection_id' => spl_object_id($this->connection),
+                'connection_status_after_connect' => $this->connection->getStatus(),
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->error('RelayConsumer::connect() $connection->connect() threw exception', [
+                'exception_class' => get_class($e),
+                'exception_message' => $e->getMessage(),
+                'exception_code' => $e->getCode(),
+                'exception_file' => $e->getFile(),
+                'exception_line' => $e->getLine(),
+                'exception_trace' => $e->getTraceAsString(),
+            ]);
+            $this->scheduleReconnect();
+        }
     }
 
     /**
@@ -521,8 +590,21 @@ final class RelayConsumer
      */
     private function openHubConnection(string $wsUrl): AsyncTcpConnection
     {
+        $this->logger->debug('RelayConsumer::openHubConnection() START', [
+            'ws_url' => $wsUrl,
+            'ws_url_scheme' => parse_url($wsUrl, PHP_URL_SCHEME),
+            'ws_url_host' => parse_url($wsUrl, PHP_URL_HOST),
+            'ws_url_port' => parse_url($wsUrl, PHP_URL_PORT),
+            'has_hub_connection_factory' => $this->hubConnectionFactory !== null,
+        ]);
+
         if ($this->hubConnectionFactory !== null) {
-            return ($this->hubConnectionFactory)($wsUrl);
+            $this->logger->debug('RelayConsumer::openHubConnection() using hubConnectionFactory');
+            $result = ($this->hubConnectionFactory)($wsUrl);
+            $this->logger->debug('RelayConsumer::openHubConnection() hubConnectionFactory returned', [
+                'connection_class' => get_class($result),
+            ]);
+            return $result;
         }
 
         $context = [
@@ -534,7 +616,25 @@ final class RelayConsumer
             ],
         ];
 
-        return new AsyncTcpConnection($wsUrl, $context);
+        $this->logger->debug('RelayConsumer::openHubConnection() SSL context options being set', [
+            'context' => $context,
+            'ssl_verify_peer' => $context['ssl']['verify_peer'],
+            'ssl_verify_peer_name' => $context['ssl']['verify_peer_name'],
+            'ssl_cafile' => $context['ssl']['cafile'],
+            'ssl_sni_enabled' => $context['ssl']['SNI_enabled'],
+            'cafile_exists' => file_exists($context['ssl']['cafile']),
+            'cafile_readable' => is_readable($context['ssl']['cafile']),
+        ]);
+
+        $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');
+        $connection = new AsyncTcpConnection($wsUrl, $context);
+        $this->logger->debug('RelayConsumer::openHubConnection() AsyncTcpConnection created', [
+            'connection_class' => get_class($connection),
+            'connection_id' => spl_object_id($connection),
+            'connection_status' => $connection->getStatus(),
+        ]);
+
+        return $connection;
     }
 
     /**

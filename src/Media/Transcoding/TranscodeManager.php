@@ -1932,6 +1932,25 @@ class TranscodeManager
             $params['audio_bitrate'] = is_string($params['audio_bitrate'] ?? null) ? $params['audio_bitrate'] : '128k';
         }
 
+        // SV-1.1(b): when computeHlsParams() flagged this item as needing HDR
+        // tone-mapping, resolve the tone-map filter STRING once — here, from the
+        // SAME probe/color metadata the require_hdr_tone_map flag was derived from
+        // — and thread it through segment_params. FfmpegRunner::buildSegmentCommand
+        // / buildHwaccelSegmentCommand then use the threaded string directly, so
+        // NO per-segment probe()/needsToneMapping()/getToneMappingProfile()
+        // re-derive runs (killing the per-segment ffprobe storm). The string is
+        // resolved with the FINAL video codec (post copy→libx264 upgrade above) so
+        // it is byte-identical to what the per-segment fallback would emit. When it
+        // cannot be resolved (e.g. tone_mapping_mode='none'), the flag alone rides
+        // through and the builders fall back to the legacy per-segment path.
+        if (($params['require_hdr_tone_map'] ?? false) === true) {
+            $videoCodec = FfmpegRunner::paramString($params, 'video_codec') ?? 'libx264';
+            $toneMapFilter = $this->ffmpeg->resolveToneMapFilterFromProbe($probe, $videoCodec);
+            if (is_string($toneMapFilter) && $toneMapFilter !== '') {
+                $params['tone_map_filter'] = $toneMapFilter;
+            }
+        }
+
         // SV-1.6: persisted job-level (not per-rendition) burn-in toggle. Every
         // rendition's segParams gets this merged back in by
         // {@see subtitleBurnInFromRow()} at segment-production time (both the

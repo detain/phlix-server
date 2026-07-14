@@ -300,6 +300,80 @@ class TranscodeManagerTest extends TestCase
         $this->assertFalse($p['force_subtitle_burn_in']);
     }
 
+    /**
+     * SV-1.1(b): for an HDR source, computeSegmentParams resolves the tone-map
+     * filter STRING once (via FfmpegRunner::resolveToneMapFilterFromProbe, with
+     * the FINAL video codec) and threads it into `segment_params` alongside
+     * `require_hdr_tone_map` — and the pair survives the segment_params JSON
+     * encode→decode (capturedJobInsert decodes the persisted JSON).
+     */
+    public function testEnsureHlsJobThreadsResolvedToneMapFilterForHdrSource(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+
+        $canon = 'zscale=t=linear:npl=100,format=gbrpf32le,'
+            . 'zscale=p=bt709,tonemap=hable:desat=0,'
+            . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'hevc', 'width' => 3840, 'height' => 2160],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+        // HDR color metadata → computeHlsParams sets require_hdr_tone_map.
+        $ff->method('extractColorMetadata')->willReturn([
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ]);
+        // The filter is resolved ONCE, with the final (post copy→libx264) codec.
+        $ff->expects($this->once())
+            ->method('resolveToneMapFilterFromProbe')
+            ->with($this->anything(), 'libx264')
+            ->willReturn($canon);
+
+        // Not via manager() — that stubs extractColorMetadata to a NON-HDR shape.
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $manager->ensureHlsJob('media-1', 'web');
+
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertTrue($p['require_hdr_tone_map']);
+        $this->assertSame($canon, $p['tone_map_filter']);
+    }
+
+    /**
+     * SV-1.1(b): a NON-HDR source neither flags require_hdr_tone_map nor threads a
+     * tone_map_filter — so the resolver is never consulted and the extra key stays
+     * absent from segment_params (no behavior change for the common SDR case).
+     */
+    public function testEnsureHlsJobOmitsToneMapFilterForSdrSource(): void
+    {
+        $captured = [];
+        $db = $this->mockDb([], 0, ['path' => '/m.mkv'], [], $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $ff->method('probe')->willReturn([
+            'streams' => [
+                ['codec_type' => 'video', 'codec_name' => 'hevc', 'width' => 3840, 'height' => 2160],
+                ['codec_type' => 'audio', 'codec_name' => 'aac', 'channels' => 2],
+            ],
+            'format' => ['duration' => '600.0'],
+        ]);
+        $ff->expects($this->never())->method('resolveToneMapFilterFromProbe');
+
+        // manager() stubs a NON-HDR extractColorMetadata (bt709).
+        $this->manager($db, $ff)->ensureHlsJob('media-1', 'web');
+
+        $p = $this->capturedJobInsert($captured)['segment_params'];
+        $this->assertArrayNotHasKey('require_hdr_tone_map', $p);
+        $this->assertArrayNotHasKey('tone_map_filter', $p);
+    }
+
     public function testEnsureHlsJobEncodesHevcAndDownscales4kForWeb(): void
     {
         $captured = [];

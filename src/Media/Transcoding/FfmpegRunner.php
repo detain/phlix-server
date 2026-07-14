@@ -424,11 +424,29 @@ class FfmpegRunner
             return false;
         }
 
-        $colorMeta = $this->extractColorMetadata($probe);
+        return $this->isHdrColorMeta($this->extractColorMetadata($probe));
+    }
 
-        // HDR content is identified by bt2020 color space with HDR transfer functions
-        // HLG: arib-std-b67 transfer
-        // HDR10: smpte2084 (PQ) transfer
+    /**
+     * Decides whether a probe's color metadata identifies HDR content that
+     * needs tone-mapping to SDR — WITHOUT re-probing.
+     *
+     * HDR content is identified by bt2020 color space/primaries paired with an
+     * HDR transfer function:
+     *  - HLG: arib-std-b67 transfer
+     *  - HDR10: smpte2084 (PQ) transfer
+     *
+     * Extracted from {@see needsToneMapping()} so the identical decision can be
+     * made from an already-known probe (SV-1.1(b): the tone-map filter is
+     * resolved once at job-creation time from the probe already in hand, instead
+     * of being re-derived — with a fresh probe — for every segment).
+     *
+     * @param array<string, mixed> $colorMeta Color metadata from {@see extractColorMetadata()}.
+     *
+     * @return bool True when the content is HDR (HLG or HDR10) and needs tone mapping.
+     */
+    private function isHdrColorMeta(array $colorMeta): bool
+    {
         $isHdr = in_array($colorMeta['color_transfer'], ['smpte2084', 'arib-std-b67'], true);
         $isBt2020 = $colorMeta['color_primaries'] === 'bt2020'
             || $colorMeta['color_space'] === 'bt2020nc'
@@ -466,16 +484,46 @@ class FfmpegRunner
      */
     public function getToneMappingProfile(string $inputPath, string $outputPath, string $codec): ?string
     {
-        if (!$this->needsToneMapping($inputPath)) {
-            return null;
-        }
+        // SV-1.1(b): the resolution logic now lives in
+        // resolveToneMapFilterFromProbe() so the exact same filter STRING can be
+        // computed either from a path (this legacy, per-segment fallback — which
+        // probes, memoised by path+mtime) OR from an already-known probe at
+        // job-creation time ({@see \Phlix\Media\Transcoding\TranscodeManager}),
+        // which threads the result through segment_params so no per-segment
+        // re-derive happens. `$outputPath` is (and always was) unused.
+        return $this->resolveToneMapFilterFromProbe($this->probe($inputPath), $codec);
+    }
 
-        $probe = $this->probe($inputPath);
+    /**
+     * Resolves the HDR tone-map filter STRING from an ALREADY-KNOWN ffprobe
+     * result — without probing.
+     *
+     * This is the single source of truth for the tone-map graph;
+     * {@see getToneMappingProfile()} is simply the path-based (probing) wrapper
+     * around it. The output is byte-identical to {@see getToneMappingProfile()}
+     * for the same probe + codec — SV-1.1(b) relies on that equality so that
+     * threading the string through `segment_params` yields the exact same ffmpeg
+     * `-vf` graph as the legacy per-segment re-derive.
+     *
+     * @param array<string, mixed>|null $probe Raw ffprobe result (as returned by
+     *                                          {@see probe()}), or null.
+     * @param string                     $codec Video codec being used for encoding.
+     *
+     * @return string|null FFmpeg video filter chain for tone mapping, or null if
+     *                     not needed / not HDR / probe unavailable.
+     *
+     * @since SV-1.1(b)
+     */
+    public function resolveToneMapFilterFromProbe(?array $probe, string $codec): ?string
+    {
         if ($probe === null) {
             return null;
         }
 
         $colorMeta = $this->extractColorMetadata($probe);
+        if (!$this->isHdrColorMeta($colorMeta)) {
+            return null;
+        }
 
         // Determine tone mapping mode from config (default: zscale)
         $toneMapMode = $this->config['tone_mapping_mode'] ?? 'zscale';
@@ -1637,7 +1685,19 @@ class FfmpegRunner
             // when hwaccel is enabled but temporarily unavailable (returns null).
             $require_hdr_tone_map = ($params['require_hdr_tone_map'] ?? false) === true;
             $filters = [];
-            if ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
+            // SV-1.1(b): prefer the tone-map filter STRING resolved ONCE at
+            // job-creation time (TranscodeManager::computeSegmentParams) and
+            // threaded through segment_params — using it directly means ZERO
+            // per-segment probe()/needsToneMapping()/getToneMappingProfile()
+            // re-derivation (which is what caused the per-segment ffprobe storm).
+            $threadedToneMapFilter = self::paramString($params, 'tone_map_filter');
+            if ($require_hdr_tone_map && $threadedToneMapFilter !== null) {
+                $filters[] = $threadedToneMapFilter;
+            } elseif ($require_hdr_tone_map || $this->needsToneMapping($inputPath)) {
+                // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned
+                // items where the filter string was not threaded. Re-derive from
+                // the input; probe() is memoised by path+mtime, so this is at most
+                // one ffprobe per file per worker lifetime.
                 $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
                 if ($toneMapFilter !== null && $toneMapFilter !== '') {
                     $filters[] = $toneMapFilter;
@@ -1953,18 +2013,32 @@ class FfmpegRunner
             'hevc_videotoolbox',
             'hevc_amf',
         ];
-        $needsToneMap = $require_hdr_tone_map || (
-            $this->needsToneMapping($inputPath)
-            && !in_array($capability->encoder, $hdrCapableEncoders, true)
-        );
-
         // Build filter chain: tone-mapping (if needed) + scale (if dimensions supplied)
         $filters = [];
 
-        if ($needsToneMap) {
-            $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
-            if ($toneMapFilter !== null && $toneMapFilter !== '') {
-                $filters[] = $toneMapFilter;
+        // SV-1.1(b): prefer the tone-map filter STRING resolved ONCE at
+        // job-creation time (TranscodeManager::computeSegmentParams) and threaded
+        // through segment_params — using it directly means ZERO per-segment
+        // probe()/needsToneMapping()/getToneMappingProfile() re-derivation.
+        $threadedToneMapFilter = self::paramString($params, 'tone_map_filter');
+        if ($require_hdr_tone_map && $threadedToneMapFilter !== null) {
+            $filters[] = $threadedToneMapFilter;
+        } else {
+            // Legacy fallback: pre-SV-1.1(b) persisted params / un-rescanned items
+            // where the filter string was not threaded. Re-derive from the input;
+            // probe() is memoised by path+mtime, so this is at most one ffprobe per
+            // file per worker lifetime. HDR-capable hardware encoders pass HDR
+            // through directly, so they only tone-map when the job-level
+            // require_hdr_tone_map flag forces it.
+            $needsToneMap = $require_hdr_tone_map || (
+                $this->needsToneMapping($inputPath)
+                && !in_array($capability->encoder, $hdrCapableEncoders, true)
+            );
+            if ($needsToneMap) {
+                $toneMapFilter = $this->getToneMappingProfile($inputPath, $outFile, $videoCodec);
+                if ($toneMapFilter !== null && $toneMapFilter !== '') {
+                    $filters[] = $toneMapFilter;
+                }
             }
         }
 

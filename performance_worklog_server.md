@@ -6480,3 +6480,83 @@ waiter-aware.
   this chunk does not touch `FfmpegRunner`; the failures are in the INTEGRATION suite and pre-date
   this change (full Unit suite is the Test agent's gate).
 - Committed + pushed directly to master.
+
+## Reviewer (per-step) — SV-4.2-disconnect, Chunk 1 (waiter ref-count guard) — 2026-07-13
+
+Reviewed commit `07fc71b4` (on `91a31eb0`): 3 src + 2 test files. Verified the mechanical
+implementation is correct: the ref-count is incremented as the first statement inside the poll
+`try` (TranscodeManager.php:919 video, :1148 audio) BEFORE any launch/yield and decremented first
+in the `finally` (:965, :1186) — airtight pairing, no leak path (the only pre-`try` throw is the
+cap `SegmentBusyException` at :907/:1137, before any increment). The registry guard is null-safe
+(SegmentProcessRegistry.php:306, short-circuits when unset → pre-change behavior), the `> 1`
+predicate is exact for the launcher-contributes-1 case, and the DI wiring binds the guard to the
+same singleton `SegmentProcessRegistry` that `FfmpegRunner` uses (one production
+`new TranscodeManager`, one `setWaiterGuard` call). `php -l` clean on all three src files.
+RelayConsumer::onHttpCancel is untouched (killGroup call unchanged; defers transparently).
+
+Findings:
+
+1. [Medium] `SegmentProcessRegistry::kill()` (SegmentProcessRegistry.php:306-335) narrows but does
+   NOT fully close the shared-encode landmine, and the commit message / docblock overstate the
+   guarantee. A non-deferred kill signals the ffmpeg + removes the PID + cleans the `.part-*` temp,
+   but does NOT invalidate the manager's dedup reservation `segmentEncodesInFlight[$final]`
+   (set at TranscodeManager.php:887/1131; read by segmentEncodeInFlight() :1428 via the dedup check
+   at :881/1130). A requester that dedups onto `$final` AFTER a kill — but before the launcher's
+   own poll-timeout `finally` clears the reservation (:980/1188) or the reconcile self-heal fires
+   (SEGMENT_INFLIGHT_STALE_GRACE_MS = 5000, up to ~5s) — piggybacks onto a killed encode whose
+   `$final` will never publish, polls to `segmentMaxWaitMs`, and 404s. This bites even the plain
+   sole-launcher-cancel case (count = 1 at kill → not deferred), not just concurrency subtleties;
+   the guard only protects requesters ALREADY counted at kill time. Why it matters: the exact
+   scenario the chunk targets (two hub channels / two viewers on the same `$final`) can still 404 a
+   requester whose request arrives during the ~5s stale-reservation window. Mitigating: pre-existing
+   coupling gap (Chunk 1 is a strict improvement over the prior always-kill behavior) and the client
+   retry self-heals (transient 404), which is why this is Medium not High — but the commit's
+   unqualified "closes the latent relay-path bug (two hub channels requesting the same $final)" and
+   the hasOtherWaiter docblock (TranscodeManager.php:1207-1222) claim more than is delivered. Fix
+   options: (a) on a real (non-deferred) kill, also clear `segmentEncodesInFlight[$final]` + the
+   snapshot (needs a registry→manager callback, mirroring the guard wiring in reverse), OR (b)
+   downgrade the claim to "narrows the concurrent-waiter case" and explicitly document the residual
+   (client retry + reconcile-grace) as the backstop.
+
+2. [Low] The "a later kill reaps it once they leave" invariant (SegmentProcessRegistry.php:299-305;
+   class docblock :52-57; TranscodeManager.php comments) is not realized in production. After a
+   deferred cancel, NO second kill fires on either path: the relay cancel (RelayConsumer.php:1541)
+   and any direct onClose fire ONCE; the piggybacker is `!reserved` so it never calls
+   startSegmentEncode (TranscodeManager.php:920-945) and never registers a group — only the
+   launcher's group ever contains `$final`; and the launcher's `finally` uses release-not-kill
+   (releaseSegmentProcessAfterWaitTimeout, :997). So a deferred encode is actually reaped by natural
+   publish or the `timeout <n>` wrapper, never by "a later kill." The registry tests
+   `test_kill_signals_once_the_other_waiter_has_left` and `test_kill_group_defers_when_a_second_
+   channel_still_waits` assert a second-kill-reaps mechanism that production never triggers, so they
+   don't reflect the real reap path. No leak (the launcher's `finally` always drops the registry
+   entry; `timeout <n>` kills the ffmpeg), hence Low. Fix: correct the comments to name the real
+   reaper (launcher release + `timeout <n>`), which also removes the mental-model that masks
+   Finding 1.
+
+3. [Low] Test-coverage gaps. (a) No test exercises the REAL DI-wired guard
+   (TranscodeServicesProvider.php:168, `fn => $manager->hasOtherWaiter($key)`) against a REAL
+   `SegmentProcessRegistry::kill()` during a REAL concurrent `produceSegment` + cancel — the
+   registry tests inject a FAKE guard closure and the manager tests never call kill(), so the
+   end-to-end wiring (does a real kill defer while a real piggyback is parked in its poll?) is
+   unproven; a broken `setWaiterGuard` binding would stay green. (b) No leak-on-exception test (a
+   `produceSegment`/`produceAudioSegment` throwing mid-poll — e.g. SegmentCacheFullException from
+   ensureDiskSpace at :931 — still decrementing its waiter); the `finally` makes it airtight by
+   construction but only reasoning, not a test, asserts it. (c) The one genuine-concurrency test is
+   `extension_loaded('swoole')`-gated and SKIPS (not fails) where swoole is absent — minor here
+   (swoole is present in this environment), but a non-swoole CI lane would silently lose the only
+   real coroutine-scheduling proof.
+
+4. [Info] The guard callable is invoked without a try/catch (SegmentProcessRegistry.php:306). If
+   `hasOtherWaiter` ever threw, `kill()` would abort before reaping (fail-unsafe). In practice it is
+   a pure array read (`($this->segmentWaiters[$final] ?? 0) > 1`, TranscodeManager.php:1223-1225)
+   that cannot throw, so no live risk — noted only for defensiveness.
+
+5. [Info] Doc drift at the relay call site: the comment in RelayConsumer::onHttpCancel
+   (src/Hub/RelayConsumer.php ~1534-1539) still says the encode is killed "immediately rather than
+   running to completion," which is no longer unconditionally true now that `killGroup` can defer
+   per-key when a piggybacker is present. Chunk 1 updated the SegmentProcessRegistry class/killGroup
+   docblocks but not this consumer-side comment. Cosmetic.
+
+Count: 5 findings (1 Medium, 2 Low, 2 Info). No High / no regression — the delivered ref-count +
+defer mechanism is correct; the Medium concerns an overstated closure claim + a residual (largely
+pre-existing) dedup-onto-corpse window.

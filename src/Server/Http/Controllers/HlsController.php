@@ -161,6 +161,28 @@ class HlsController
         }
 
         $dir = $this->hlsStreamer->getJobDirectory($jobId);
+
+        // If a playlist file doesn't exist, the job directory may have been
+        // evicted by the LRU sweep — attempt to regenerate the VOD playlists
+        // from the persisted job data before falling through to serveJobFile.
+        if (!is_file("{$dir}/{$file}") && $this->isPlaylistFile($file)) {
+            $this->transcodeManager?->ensurePlaylistRegenerated($jobId);
+        }
+
         return $this->serveJobFile($request, $dir, $file);
+    }
+
+    /**
+     * Returns true if the given filename is an HLS playlist that can be
+     * regenerated from the persisted job data.
+     *
+     * @param string $file Requested filename.
+     */
+    private function isPlaylistFile(string $file): bool
+    {
+        // master.m3u8, media_0.m3u8 (legacy), media_v{id}.m3u8 (multi-variant),
+        // media_a{id}.m3u8 (audio-only).
+        return $file === 'master.m3u8'
+            || preg_match('/^media_(v\w+|a\d+|0)\.m3u8$/i', $file) === 1;
     }
 }

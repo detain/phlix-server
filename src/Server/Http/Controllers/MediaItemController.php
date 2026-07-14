@@ -364,9 +364,12 @@ class MediaItemController
         $timelinePath = is_string($item['trickplay_timeline_path'] ?? null) ? $item['trickplay_timeline_path'] : null;
 
         if ($spritePath === null || $timelinePath === null) {
-            return (new Response())->status(404)->json([
-                'error' => 'Not Found',
-                'message' => 'Trickplay data not available for this media item',
+            // Return empty success (not 404) so the UI gracefully handles missing
+            // trickplay without logging errors — trickplay may simply not be
+            // generated yet for this item, or the feature may be disabled.
+            return (new Response())->json([
+                'sprite_url' => null,
+                'timeline_url' => null,
             ]);
         }
 

@@ -3595,6 +3595,144 @@ class TranscodeManager
     }
 
     /**
+     * Ensures the VOD master playlist (and per-variant media playlists) exist in
+     * the job directory, regenerating them if the directory was evicted by the LRU
+     * sweep but the DB row still references the job.
+     *
+     * Returns true if playlists are present (either pre-existing or successfully
+     * regenerated), false if the job row doesn't exist or lacks the data needed to
+     * reconstruct the playlists.
+     *
+     * @param string $jobId Transcode job id.
+     *
+     * @return bool True if playlists exist (or were regenerated), false otherwise.
+     */
+    public function ensurePlaylistRegenerated(string $jobId): bool
+    {
+        $dir = "{$this->segmentDir}/{$jobId}";
+
+        // Already present — nothing to do.
+        if (is_file("{$dir}/master.m3u8")) {
+            return true;
+        }
+
+        // Load the job row to reconstruct the playlists.
+        $cacheEntry = $this->jobRowEntry($jobId);
+        if ($cacheEntry === null) {
+            return false;
+        }
+        $row = $cacheEntry['row'];
+
+        // Ensure the directory exists (may have been evicted by LRU sweep).
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+            if (!is_dir($dir)) {
+                return false;
+            }
+        }
+
+        $variantsRaw = $row['variants'] ?? null;
+        $duration = is_numeric($row['duration_seconds'] ?? null) ? (float) $row['duration_seconds'] : 0.0;
+        $segSeconds = is_numeric($row['segment_seconds'] ?? null) ? (int) $row['segment_seconds'] : $this->segmentSeconds;
+
+        if ($duration <= 0.0) {
+            return false;
+        }
+
+        if (is_string($variantsRaw) && $variantsRaw !== '') {
+            // Multi-variant (A5+) job: decode persisted ladder and reconstruct.
+            $decoded = $cacheEntry['variants'];
+            if (!is_array($decoded)) {
+                return false;
+            }
+
+            $renditionArrays = $decoded['renditions'] ?? null;
+            if (!is_array($renditionArrays)) {
+                return false;
+            }
+
+            // Build Rendition objects from the stored array data.
+            $variants = [];
+            foreach ($renditionArrays as $rArr) {
+                if (!is_array($rArr)) {
+                    continue;
+                }
+                $variants[] = new \Phlix\Media\Streaming\Rendition(
+                    id: is_string($rArr['id'] ?? null) ? $rArr['id'] : '',
+                    label: is_string($rArr['label'] ?? null) ? $rArr['label'] : '',
+                    width: is_numeric($rArr['width'] ?? null) ? (int) $rArr['width'] : 0,
+                    height: is_numeric($rArr['height'] ?? null) ? (int) $rArr['height'] : 0,
+                    bitrate: is_numeric($rArr['bitrate'] ?? null) ? (int) $rArr['bitrate'] : 0,
+                    videoBitrate: is_numeric($rArr['video_bitrate'] ?? null) ? (int) $rArr['video_bitrate'] : 0,
+                    codecs: is_string($rArr['codecs'] ?? null) ? $rArr['codecs'] : '',
+                    isOriginal: ($rArr['is_original'] ?? false) === true,
+                    isCopy: ($rArr['is_copy'] ?? false) === true,
+                );
+            }
+
+            // Top variant drives the master playlist metadata.
+            $topVariant = $variants[0] ?? null;
+            $width = $topVariant?->width;
+            $height = $topVariant?->height;
+            $bandwidth = $topVariant?->bandwidth();
+
+            // Audio tracks may be stored separately. Validate structure for PHPStan.
+            $audioTracks = null;
+            $audioTracksRaw = $row['audio_tracks'] ?? null;
+            if (is_string($audioTracksRaw) && $audioTracksRaw !== '') {
+                $decodedTracks = json_decode($audioTracksRaw, true);
+                if (is_array($decodedTracks)) {
+                    $audioTracks = [];
+                    foreach ($decodedTracks as $track) {
+                        if (is_array($track)
+                            && array_key_exists('index', $track)
+                            && array_key_exists('stream_index', $track)
+                            && array_key_exists('language', $track)
+                            && array_key_exists('label', $track)
+                            && array_key_exists('default', $track)
+                            && array_key_exists('codec', $track)
+                        ) {
+                            $audioTracks[] = [
+                                'index' => is_numeric($track['index']) ? (int) $track['index'] : 0,
+                                'stream_index' => is_numeric($track['stream_index']) ? (int) $track['stream_index'] : 0,
+                                'language' => is_string($track['language']) ? $track['language'] : '',
+                                'label' => is_string($track['label']) ? $track['label'] : '',
+                                'default' => $track['default'] === true,
+                                'codec' => is_string($track['codec']) ? $track['codec'] : '',
+                            ];
+                        }
+                    }
+                    if ($audioTracks === []) {
+                        $audioTracks = null;
+                    }
+                }
+            }
+
+            $this->writeVodPlaylists($dir, $duration, $segSeconds, $width, $height, $bandwidth, $variants, $audioTracks);
+
+            return is_file("{$dir}/master.m3u8");
+        }
+
+        // Legacy single-variant job (variants IS NULL): use segment_params.
+        $segParamsRaw = $row['segment_params'] ?? null;
+        if (!is_string($segParamsRaw) || $segParamsRaw === '') {
+            return false;
+        }
+        $segParams = json_decode($segParamsRaw, true);
+        if (!is_array($segParams)) {
+            return false;
+        }
+
+        $width = is_numeric($segParams['width'] ?? null) ? (int) $segParams['width'] : null;
+        $height = is_numeric($segParams['height'] ?? null) ? (int) $segParams['height'] : null;
+        $bandwidth = is_numeric($segParams['bandwidth'] ?? null) ? (int) $segParams['bandwidth'] : null;
+
+        $this->writeVodPlaylists($dir, $duration, $segSeconds, $width, $height, $bandwidth, null, null);
+
+        return is_file("{$dir}/master.m3u8");
+    }
+
+    /**
      * Generates a UUID v4 identifier.
      *
      * @return string UUID string

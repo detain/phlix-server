@@ -2371,12 +2371,11 @@ class Application
     }
 
     /**
-     * Compute and record a storage snapshot per dashboard media type.
-     *
-     * Aggregates `media_items` by type, summing the `file_size` carried in each
-     * row's `metadata_json`, and folds the granular item types into the four
-     * buckets the dashboard (and `stats_storage`) understands. Failures are
-     * logged and swallowed so a snapshot run can never take down the worker.
+     * Scans the actual filesystem at /vault1 and /vault2 to get real storage sizes,
+     * since the file_size field in media_items.metadata_json is never populated.
+     * Folders are mapped to media types: anime/movies->movie, tv->series, music->music.
+     * Item counts still come from the database to reflect indexed media.
+     * Failures are logged and swallowed so a snapshot run can never take down the worker.
      *
      * @param \Phlix\Stats\StatsCollector $collector Collector to write through.
      * @param \Workerman\MySQL\Connection $db        Live MySQL connection.
@@ -2390,14 +2389,59 @@ class Application
         \Phlix\Common\Logger\StructuredLogger $logger
     ): void {
         try {
+            // Map storage folders to media type buckets
+            // anime/ and movies/ -> movie, tv/ -> series, music/ -> music
+            $folderToBucket = [
+                'anime' => 'movie',
+                'movies' => 'movie',
+                'tv' => 'series',
+                'music' => 'music',
+            ];
+
+            // Initialize buckets with filesystem-sourced sizes and DB-sourced counts
+            $buckets = [
+                'movie' => ['count' => 0, 'bytes' => 0],
+                'series' => ['count' => 0, 'bytes' => 0],
+                'music' => ['count' => 0, 'bytes' => 0],
+                'photo' => ['count' => 0, 'bytes' => 0],
+            ];
+
+            // Scan filesystem for actual storage sizes
+            $vaultRoots = ['/vault1', '/vault2'];
+            foreach ($vaultRoots as $vaultRoot) {
+                if (!is_dir($vaultRoot)) {
+                    continue;
+                }
+
+                $entries = @scandir($vaultRoot) ?: [];
+                foreach ($entries as $entry) {
+                    if ($entry === '.' || $entry === '..') {
+                        continue;
+                    }
+                    $bucket = $folderToBucket[$entry] ?? null;
+                    if ($bucket === null) {
+                        continue;
+                    }
+                    $dirPath = $vaultRoot . '/' . $entry;
+                    if (!is_dir($dirPath)) {
+                        continue;
+                    }
+                    // Use du -sb to get apparent size in bytes (follows symlinks)
+                    $output = @shell_exec('du -sb ' . escapeshellarg($dirPath));
+                    if (!is_string($output)) {
+                        continue;
+                    }
+                    $matches = [];
+                    if (preg_match('/^(\d+)/', $output, $matches) === 1) {
+                        $buckets[$bucket]['bytes'] += (int) $matches[1];
+                    }
+                }
+            }
+
+            // Get item counts from database
             /** @var array<array<string, mixed>> $rows */
             $rows = $db->query(
-                "SELECT type,
-                        COUNT(*) AS item_count,
-                        COALESCE(
-                            SUM(CAST(JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.file_size')) AS UNSIGNED)),
-                            0
-                        ) AS total_bytes
+                "SELECT type, COUNT(*) AS item_count
                  FROM media_items
                  GROUP BY type"
             );
@@ -2405,13 +2449,7 @@ class Application
             // Fold the granular media_items.type ENUM into the four buckets the
             // dashboard / stats_storage ENUM supports. Types with no bucket
             // (e.g. book, video) are intentionally dropped.
-            $buckets = [
-                'movie' => ['count' => 0, 'bytes' => 0],
-                'series' => ['count' => 0, 'bytes' => 0],
-                'music' => ['count' => 0, 'bytes' => 0],
-                'photo' => ['count' => 0, 'bytes' => 0],
-            ];
-            $map = [
+            $typeToBucket = [
                 'movie' => 'movie',
                 'series' => 'series', 'season' => 'series', 'episode' => 'series',
                 'music' => 'music', 'album' => 'music', 'artist' => 'music', 'audio' => 'music',
@@ -2420,14 +2458,12 @@ class Application
 
             foreach ($rows as $row) {
                 $type = is_string($row['type'] ?? null) ? $row['type'] : '';
-                $bucket = $map[$type] ?? null;
+                $bucket = $typeToBucket[$type] ?? null;
                 if ($bucket === null) {
                     continue;
                 }
                 $count = is_numeric($row['item_count'] ?? null) ? (int) $row['item_count'] : 0;
-                $bytes = is_numeric($row['total_bytes'] ?? null) ? (int) $row['total_bytes'] : 0;
                 $buckets[$bucket]['count'] += $count;
-                $buckets[$bucket]['bytes'] += $bytes;
             }
 
             foreach ($buckets as $mediaType => $totals) {
@@ -2436,9 +2472,13 @@ class Application
 
             $logger->info('Storage snapshot recorded', [
                 'movie' => $buckets['movie']['count'],
+                'movie_bytes' => $buckets['movie']['bytes'],
                 'series' => $buckets['series']['count'],
+                'series_bytes' => $buckets['series']['bytes'],
                 'music' => $buckets['music']['count'],
+                'music_bytes' => $buckets['music']['bytes'],
                 'photo' => $buckets['photo']['count'],
+                'photo_bytes' => $buckets['photo']['bytes'],
             ]);
         } catch (\Throwable $e) {
             $logger->error('Failed to record storage snapshot', [

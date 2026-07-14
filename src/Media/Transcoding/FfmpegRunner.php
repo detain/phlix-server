@@ -12,10 +12,8 @@ declare(strict_types=1);
 namespace Phlix\Media\Transcoding;
 
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
-use Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelProfileFactory;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
-use Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface;
 use Phlix\Media\Transcoding\HardwareAccelerator;
 use Phlix\Media\Transcoding\Subtitles\SubtitleBurner;
 use Phlix\Media\Transcoding\Subtitles\SubtitleFormat;
@@ -1410,67 +1408,6 @@ class FfmpegRunner
     }
 
     /**
-     * Builds a transcode command using a hardware encoder profile.
-     *
-     * This method delegates to HwaccelCommandBuilder to construct a complete
-     * FFmpeg command with hardware-specific flags in the correct order.
-     *
-     * @param string $inputPath Source file path
-     * @param string $outputPath Destination file path
-     * @param HwaccelEncoderProfileInterface $profile Encoder profile to use
-     * @param HwaccelCapability $capability Hardware capability
-     * @param string $codec Codec to encode (e.g., 'h264', 'hevc')
-     * @param array<string, mixed> $params Additional encoding parameters
-     * @param string $quality Quality level (e.g., 'ultra', 'high', 'medium', 'low')
-     *
-     * @return string Complete FFmpeg command
-     *
-     * @since 0.11.0
-     */
-    public function buildTranscodeCommandWithProfile(
-        string $inputPath,
-        string $outputPath,
-        HwaccelEncoderProfileInterface $profile,
-        HwaccelCapability $capability,
-        string $codec,
-        array $params = [],
-        string $quality = 'medium'
-    ): string {
-        $builder = (new HwaccelCommandBuilder($profile, $capability, $quality))
-            ->setFfmpegPath($this->ffmpegPath)
-            ->setInput($inputPath)
-            ->setOutput($outputPath)
-            ->setVideoCodec($codec);
-
-        $audioCodec = self::paramString($params, 'audio_codec');
-        if ($audioCodec !== null) {
-            $builder->setAudioCodec($audioCodec);
-        }
-
-        $bitrate = self::paramInt($params, 'bitrate');
-        if ($bitrate !== null) {
-            $builder->setBitrate($bitrate);
-        }
-
-        $width = self::paramInt($params, 'width');
-        $height = self::paramInt($params, 'height');
-        if ($width !== null && $height !== null) {
-            $builder->setResolution($width, $height);
-        }
-
-        $filters = $params['filters'] ?? null;
-        if (is_array($filters)) {
-            foreach ($filters as $filter) {
-                if (is_string($filter)) {
-                    $builder->addFilter($filter);
-                }
-            }
-        }
-
-        return $builder->build();
-    }
-
-    /**
      * Gets the configured default transcode output directory.
      *
      * @return string Transcode output directory
@@ -1707,8 +1644,7 @@ class FfmpegRunner
                 }
             }
             // SV-1.6: subtitle burn-in — a software (libass) filter, so it must run
-            // BEFORE any scale (scale operates on the already-composited frame, same
-            // ordering HwaccelCommandBuilder uses for the whole-file path) and,
+            // BEFORE any scale (scale operates on the already-composited frame) and,
             // for the hwaccel builder below, before the hardware-surface hwupload.
             $subtitleBurnInFilter = $this->resolveSubtitleBurnInFilter($params);
             if ($subtitleBurnInFilter !== null) {
@@ -2098,10 +2034,11 @@ class FfmpegRunner
      * per-vendor flags here (which historically diverged from the profiles and
      * emitted `-hwaccel_output_format cuda`/`vaapi`, forcing decoded frames to
      * stay as HARDWARE surfaces incompatible with the software `scale=`/tonemap
-     * filters the segment command appends), this now delegates to the same
+     * filters the segment command appends), this delegates to the resolved
+     * profile's
      * {@see \Phlix\Media\Transcoding\Hwaccel\Profiles\HwaccelEncoderProfileInterface::getInputDeviceArgs()}
-     * used by {@see HwaccelCommandBuilder} for the whole-file transcode path, so
-     * the two paths share ONE source of truth and cannot drift.
+     * as the single source of truth for per-vendor input-device flags, so the
+     * segment command's input-side flags cannot drift from the profiles.
      *
      * None of the profiles emit `-hwaccel_output_format`, so decoded frames land
      * in system memory where the software scale/tonemap filters are valid. Any

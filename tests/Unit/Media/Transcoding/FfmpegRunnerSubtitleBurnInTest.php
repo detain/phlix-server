@@ -12,12 +12,10 @@ use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
 /**
  * SV-1.6 gap #3: {@see FfmpegRunner::buildSegmentCommand()} and
  * {@see FfmpegRunner::buildHwaccelSegmentCommand()} — the REAL per-segment
- * builders used by {@see FfmpegRunner::startSegmentEncode()} — previously
- * never referenced subtitles at all, leaving {@see \Phlix\Media\Transcoding\Subtitles\SubtitleBurner}
- * unreachable from real playback (its only prior consumer,
- * {@see \Phlix\Media\Transcoding\Hwaccel\HwaccelCommandBuilder}, is only used
- * by the zero-caller {@see FfmpegRunner::buildTranscodeCommandWithProfile()}
- * — out of scope here, left for SV-4.13).
+ * builders used by {@see FfmpegRunner::startSegmentEncode()} — wire subtitle
+ * burn-in ({@see \Phlix\Media\Transcoding\Subtitles\SubtitleBurner}) into the
+ * live per-segment transcode pipeline; previously they never referenced
+ * subtitles at all.
  *
  * These tests assert a per-segment command built with subtitle burn-in
  * enabled (via the new `subtitle_burn_in` segment param) actually includes

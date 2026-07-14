@@ -6332,3 +6332,65 @@ cumulative review flagged as the AC-critical gap (finding #2). Tested the FINAL 
   `for` loop always returns on success or throws on the last attempt).
 
 No production bug found — the shipped SV-3.6 shape behaves correctly against every case tested. GREEN.
+
+## Implementer — SV-4.13-finish (remove dead `buildTranscodeCommandWithProfile` + fix stale whole-file docrefs) — 2026-07-13
+
+Finishes the last deferred piece of SV-4.13. The main whole-file builders (`buildTranscodeCommand`/
+`buildHlsCommand`/`buildHwaccelCommand`) were already removed in `c8f94c04` (checklist line 104);
+`buildTranscodeCommandWithProfile` was left behind at the time because SV-1.6 was mid-flight. §6/R1
+user-approved its removal.
+
+**STEP 1 — zero-caller re-confirmation (grep, HEAD `0cf506f0`):**
+- Definition: `src/Media/Transcoding/FfmpegRunner.php:1430` (`public function buildTranscodeCommandWithProfile(`).
+- ONE test-side docblock `{@see}`: `tests/Unit/Media/Transcoding/FfmpegRunnerSubtitleBurnInTest.php:19`.
+- Worklog prose only (documentation, not code).
+- **ZERO** method-call sites (`->buildTranscodeCommandWithProfile(`) anywhere in `src/`, `tests/`,
+  `start.php`, `public/index.php`, `config/`, `bin/`, `scripts/`. Safe to remove.
+
+**STEP 2 — removal:**
+- Deleted `buildTranscodeCommandWithProfile` in full (docblock + method body, old lines 1412–1471) from
+  `FfmpegRunner.php`.
+- Removed the now-orphaned `use ...\Hwaccel\HwaccelCommandBuilder;` import (old line 15) — its only code
+  user was the deleted method's body (`new HwaccelCommandBuilder(...)`). No remaining code references it
+  (verified by grep + phpstan L9 = 0 errors).
+- ALSO removed the `use ...\Hwaccel\Profiles\HwaccelEncoderProfileInterface;` import (old line 17) — it was
+  orphaned by the same removal (its only code use was the deleted method's `$profile` parameter type; the
+  one surviving reference at line ~2040 is a fully-qualified `{@see \Phlix\...\HwaccelEncoderProfileInterface::getInputDeviceArgs()}`
+  doc, which does not consume the import). Neither phpcs (PSR12, no unused-use sniff) nor phpstan flags
+  unused imports, so this is a correctness cleanup of code newly-orphaned by my own edit, not a scope
+  creep. phpstan L9 confirms nothing dangles.
+- Did NOT touch any private helper (`paramString`/`paramInt`/`browserSafeVideoFlags` remain shared with
+  the live builders), nor `HwaccelCommandBuilder` the class, `HwaccelProfileFactory`, `SubtitleBurner`,
+  or `StreamManager::setSubtitleBurnIn`.
+
+**STEP 3 — docref fixes:**
+- REQUIRED (breaking `@see`): `FfmpegRunnerSubtitleBurnInTest.php` class docblock — dropped the dangling
+  `{@see FfmpegRunner::buildTranscodeCommandWithProfile()}` and the "HwaccelCommandBuilder is only used by
+  the zero-caller ..." clause; rewrote the paragraph to describe what the tests actually exercise (the
+  LIVE `buildSegmentCommand`/`buildHwaccelSegmentCommand` per-segment subtitle burn-in path, keeping the
+  live `{@see SubtitleBurner}` reference). Test METHODS unchanged (still green).
+- Prose "whole-file path" cleanups (non-breaking):
+  - `FfmpegRunner.php` (SV-1.6 ordering comment, old ~:1711): dropped ", same ordering
+    HwaccelCommandBuilder uses for the whole-file path"; kept the accurate "before scale / before hwupload"
+    ordering rationale.
+  - `FfmpegRunner.php` (`buildHwaccelInputFlags` docblock, old ~:2103): reworded "used by
+    {@see HwaccelCommandBuilder} for the whole-file transcode path, so the two paths share ONE source of
+    truth" → "delegates to the resolved profile's `getInputDeviceArgs()` as the single source of truth for
+    per-vendor input-device flags, so the segment command's input-side flags cannot drift from the
+    profiles."
+  - `HwaccelProfileFactory.php` (`getProfileForVendor` docblock, old ~:106): "shared by the whole-file and
+    segment transcode paths" → "used by the segment transcode path (so the profiles and the emitted flags
+    cannot diverge)."
+- Deliberately LEFT ALONE (perf-9's refs there were stale/wrong): `SoftwareProfile.php:21` (references the
+  LIVE `buildCmafCommand()`, correct) and `TranscodeManager.php:2006` (unrelated to this method).
+
+**Acceptance mapping / verification:**
+- `php -l` on all 3 touched files: clean.
+- phpstan L9 (`-c phpstan.neon.dist --level=9 --memory-limit=512M --no-progress`): **[OK] No errors** — the
+  real proof no dangling symbol/reference remains.
+- phpcs PSR12 on the 3 changed files: **0 errors** (1 pre-existing line-length WARNING at
+  `FfmpegRunner.php:954`, outside my diff; the `SubtitleBurnerTest`/`SubtitleStyleOptionsTest`
+  snake_case-method-name errors are pre-existing on HEAD in files I did not touch).
+- `phpunit --filter FfmpegRunner`: **OK (60 tests, 254 assertions)**.
+- `phpunit tests/Unit/Media/Transcoding/`: **OK (343 tests, 1182 assertions)** — the SubtitleBurnIn
+  live-path test methods stay green.

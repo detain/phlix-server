@@ -71,17 +71,33 @@ final class RequestContext
     public const KEY_PROFILE_ID = 'phlix.profileId';
 
     /**
-     * Namespaced context key for the relay cancel group of the current
-     * request. When a request is being serviced on behalf of a relayed
-     * hub connection ({@see \Phlix\Hub\RelayConsumer}), this carries the
-     * hub-allocated channel/request id so any on-demand ffmpeg segment
-     * encode launched during the dispatch can be registered under it in the
-     * {@see \Phlix\Media\Transcoding\SegmentProcessRegistry}. That lets an
-     * HTTP_CANCEL frame (SV-4.2 / X1) find and kill the encode by channel id
-     * even though the encode itself is tracked by its segment path.
+     * Namespaced context key for the cancel group of the current request —
+     * either a relay channel id OR a per-request direct-connection cancel id.
      *
-     * Unset (null) for direct-LAN HTTP requests — those carry no relay
-     * channel, so encodes are tracked by segment path only.
+     * This one key backs BOTH transport paths because they are mutually
+     * exclusive by construction (each request-servicing coroutine is either a
+     * relayed hub request OR a direct-LAN request, never both, and they run in
+     * separate worker processes with separate per-worker registries):
+     *
+     *  - RELAY: when a request is serviced on behalf of a relayed hub connection
+     *    ({@see \Phlix\Hub\RelayConsumer}), this carries the hub-allocated
+     *    channel/request id, so an HTTP_CANCEL frame (SV-4.2 / X1) can find and
+     *    kill the encode by channel id via {@see setRelayCancelGroup()}.
+     *  - DIRECT-LAN: when a request hits the server's HTTP worker directly
+     *    ({@see \Phlix\Server\Workerman\HttpHandler}), this carries a per-request
+     *    direct-connection cancel id (SV-4.2-disconnect), so the connection's
+     *    onClose can kill the encode when the socket FINs/RSTs mid-encode via
+     *    {@see setCancelGroup()}.
+     *
+     * Either way, any on-demand ffmpeg segment encode launched during the
+     * dispatch is registered under this id in the
+     * {@see \Phlix\Media\Transcoding\SegmentProcessRegistry} — even though the
+     * encode itself is tracked by its segment path — so a group kill finds it.
+     * {@see \Phlix\Media\Transcoding\TranscodeManager} reads this via
+     * {@see getRelayCancelGroup()} for both transports with no per-transport
+     * branching.
+     *
+     * Unset (null) for a request that launches no cancellable encode.
      *
      * @var string
      */
@@ -214,6 +230,10 @@ final class RequestContext
      * dispatch can be tracked under this id for HTTP_CANCEL-driven kill
      * (SV-4.2 / X1).
      *
+     * The direct-LAN transport publishes into the SAME key via the transport-
+     * neutral alias {@see setCancelGroup()} — see {@see KEY_RELAY_CANCEL_GROUP}
+     * for why one key safely serves both paths.
+     *
      * @param string|null $group Relay channel/request id, or null to clear.
      *
      * @return void
@@ -224,10 +244,12 @@ final class RequestContext
     }
 
     /**
-     * Read the relay cancel group of the current request, or null when the
-     * request is not being serviced on behalf of a relayed hub connection.
+     * Read the cancel group of the current request (relay channel id OR direct-
+     * connection cancel id), or null when the request launched no cancellable
+     * encode. Read by {@see \Phlix\Media\Transcoding\TranscodeManager} for both
+     * transports; the transport-neutral name is {@see getCancelGroup()}.
      *
-     * @return string|null Relay channel/request id, or null if unset/empty.
+     * @return string|null Cancel group id, or null if unset/empty.
      */
     public static function getRelayCancelGroup(): ?string
     {
@@ -243,5 +265,43 @@ final class RequestContext
     public static function clearRelayCancelGroup(): void
     {
         Context::set(self::KEY_RELAY_CANCEL_GROUP, null);
+    }
+
+    /**
+     * Transport-neutral alias of {@see setRelayCancelGroup()} — publishes the
+     * current request's cancel group (a per-request direct-connection cancel id)
+     * into the shared {@see KEY_RELAY_CANCEL_GROUP} key. Used by the DIRECT-LAN
+     * path ({@see \Phlix\Server\Workerman\HttpHandler}) so its call sites read
+     * naturally ("cancel group", not "relay cancel group") while still landing
+     * in the one key {@see \Phlix\Media\Transcoding\TranscodeManager} reads. The
+     * two transports never share a coroutine, so there is no collision.
+     *
+     * @param string|null $group Direct-connection cancel id, or null to clear.
+     *
+     * @return void
+     */
+    public static function setCancelGroup(?string $group): void
+    {
+        self::setRelayCancelGroup($group);
+    }
+
+    /**
+     * Transport-neutral alias of {@see getRelayCancelGroup()}.
+     *
+     * @return string|null Cancel group id, or null if unset/empty.
+     */
+    public static function getCancelGroup(): ?string
+    {
+        return self::getRelayCancelGroup();
+    }
+
+    /**
+     * Transport-neutral alias of {@see clearRelayCancelGroup()}.
+     *
+     * @return void
+     */
+    public static function clearCancelGroup(): void
+    {
+        self::clearRelayCancelGroup();
     }
 }

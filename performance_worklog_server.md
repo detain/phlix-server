@@ -6560,3 +6560,102 @@ Findings:
 Count: 5 findings (1 Medium, 2 Low, 2 Info). No High / no regression — the delivered ref-count +
 defer mechanism is correct; the Medium concerns an overstated closure claim + a residual (largely
 pre-existing) dedup-onto-corpse window.
+
+## Implementer — SV-4.2-disconnect, Chunk 2 (direct-LAN disconnect→kill wiring) — 2026-07-13
+
+Implemented SS-3 + SS-4 on top of Chunk 1 (`07fc71b4`). Closes the confirmed direct-LAN bug: a
+client hitting the :8096 HTTP worker DIRECTLY (not via the hub relay) that disconnects mid-encode
+did NOT get its ffmpeg killed — only the relay path (`RelayConsumer::onHttpCancel` →
+`killGroup(channelId)`) killed. Root cause: direct requests carried no cancel group, so
+`TranscodeManager::produceSegment` registered the encode under `group=null` and nothing could reap
+it on disconnect. Used the audit-recommended REUSE approach — the direct path publishes into the
+SAME `RequestContext` cancel-group key the relay path reads, so **`TranscodeManager` needed ZERO
+edits** (confirmed: `getRelayCancelGroup()` reads at `TranscodeManager.php:943` video / `:1169`
+audio are untouched).
+
+### Files changed (absolute under /home/sites/phlix/phlix-server)
+- **`src/Server/Http/RequestContext.php`** (SS-3): broadened the `KEY_RELAY_CANCEL_GROUP` docblock
+  + `setRelayCancelGroup`/`getRelayCancelGroup` docblocks to state the key holds a relay channel id
+  OR a per-request direct-connection cancel id, and documented WHY one key safely serves both (the
+  two transports never share a coroutine — relay dispatch runs in the `phlix-relay-tunnel` worker,
+  direct in the `phlix-server-http` workers; separate processes/registries). Added thin
+  transport-neutral aliases `setCancelGroup()`/`getCancelGroup()`/`clearCancelGroup()` that delegate
+  to the same key so the direct path (`HttpHandler`) reads naturally. **No second key; no
+  `TranscodeManager` edit.**
+- **`src/Server/Workerman/HttpHandler.php`** (SS-4):
+  - New `private const DIRECT_CANCEL_PREFIX = 'dl-'` + `private static int $directCancelSeq = 0` (a
+    resident-worker monotonic counter — NOT request state) + `private static mintDirectCancelId()`
+    returning `"dl-<n>"`. Unique across BOTH concurrent connections AND sequential keep-alive
+    requests on one connection (bare `spl_object_id($connection)` repeats across sequential
+    keep-alive requests — deliberately NOT used). `++` carries no coroutine yield point so it is
+    effectively atomic across a worker's coroutines. Prefix keeps direct ids visually distinct from
+    integer relay channel ids (belt-and-braces; the registries are never the same instance anyway).
+  - New `private armDirectCancelHook(TcpConnection): string` — mints the id, publishes it via
+    `RequestContext::setCancelGroup($id)`, resolves the shared per-worker
+    `SegmentProcessRegistry::class` singleton from the container, and sets
+    `$connection->onClose = static fn() => $registry->killGroup($id)`. `start.php:389` wires only
+    `$w->onMessage` (no worker-level `onClose`), so the per-connection hook clobbers nothing.
+  - New `private disarmDirectCancelHook(TcpConnection): void` — `RequestContext::clearCancelGroup()`
+    + `$connection->onClose = null`.
+  - `__invoke`: calls `armDirectCancelHook($connection)` immediately BEFORE the
+    `$this->application->dispatch($request)` line (`:179` region) — the /hls, /dash, /stream encode
+    routes are owned by that Application router, and early-return paths (static file, media direct-
+    play, avatar, artwork) never reach it. Added `disarmDirectCancelHook($connection)` as the FIRST
+    statement in the existing `finally` (before `recordRequestMetrics`), so a NORMAL completion
+    (encode already released by `produceSegment`'s finally) resets `onClose` and a later real socket
+    close can't fire a stale `killGroup` against a reused-object connection. Crucially, when the
+    client disconnects WHILE the handler coroutine is parked in `produceSegment`'s yieldable poll,
+    `__invoke` has NOT returned → `finally` has NOT run → `onClose` is still armed → the event loop
+    fires it → the encode is killed. Added imports for `SegmentProcessRegistry` + `RequestContext`.
+
+**Chunk-1 guard inherited for free:** the new `onClose` is just another caller of the existing
+waiter-aware `killGroup`. A piggybacking peer still waiting on the same `$final` defers the kill
+(Chunk 1) — verified by a dedicated test — so a disconnecting owner won't 404 a still-waiting peer.
+The guard is NOT bypassed.
+
+### Dual-entrypoint
+`HttpHandler` is Workerman/Swoole-only (used solely by `start.php`; `public/index.php` merely
+mentions it in a doc comment — grep-confirmed it is never invoked there). FPM/CGI has no persistent
+`TcpConnection`/event loop, so there is nothing to hook and no `index.php` mirror is needed. The
+`RequestContext` docblock/alias change is shared code but harmless under FPM (it just never sets a
+direct group).
+
+### Tests
+- **`tests/Unit/Server/Workerman/HttpHandlerDirectCancelHookTest.php`** (+8 tests, 37 assertions):
+  id uniqueness+monotonicity across sequential AND concurrent invokes; `arm` publishes the id into
+  the cancel group (readable via both `getCancelGroup()` and `getRelayCancelGroup()` — same key);
+  `onClose` closure fires `killGroup` and signals + drops the registered PID (real
+  `SegmentProcessRegistry` with a spy signal sender); `onClose` no-ops when nothing registered;
+  **Chunk-1 defer inherited** (a true waiter guard → `onClose` signals nothing + leaves the encode
+  fully tracked); `disarm` clears the group AND nulls `onClose`; and a full **`__invoke`
+  integration** test proving `onClose` + the published group exist DURING dispatch (captured via a
+  stub `Application::dispatch` that registers an encode under the group as `TranscodeManager` would),
+  `onClose` is reset + the group cleared in the `finally` after normal completion, and the closure
+  captured mid-dispatch still kills the request-group encode.
+- OUT OF SCOPE for unit tests (owed on-box verify, stated in the test docblock): the real
+  socket-close→`onClose` timing while the coroutine is parked in `Coroutine::sleep`.
+
+### Verification (real numbers)
+- `php -l` clean on all 3 changed files.
+- **phpstan L9 (`-c phpstan.neon.dist`): [OK] No errors** on both changed src files AND on the new
+  test file.
+- **phpcs PSR12: 0 issues** on both changed src files AND the test file.
+- **New test file: OK (8 tests, 37 assertions).**
+- **Filtered `--testsuite Unit --filter 'HttpHandler|RequestContext|SegmentProcess|Transcode'`: OK
+  (275 tests, 1054 assertions).** (The dedicated Test agent runs the FULL Unit suite later.)
+
+### Acceptance mapping
+- *SS-3 reuse the relay cancel-group key for the direct path, no TranscodeManager edit* →
+  RequestContext docblock broadening + `setCancelGroup`/`getCancelGroup` aliases delegating to
+  `KEY_RELAY_CANCEL_GROUP`; TranscodeManager unchanged (tests assert the alias and
+  `getRelayCancelGroup` return the same value).
+- *SS-4(a) per-request unique id, unique across concurrent + sequential keep-alive* →
+  `mintDirectCancelId()` + monotonic `$directCancelSeq` (tests: sequential + concurrent uniqueness).
+- *SS-4(b) publish before dispatch* → `armDirectCancelHook` called immediately before
+  `application->dispatch` (integration test asserts the group is set during dispatch).
+- *SS-4(c) singleton registry + onClose → killGroup* → `armDirectCancelHook` resolves the singleton
+  and sets `onClose` (tests: onClose fires killGroup + drops the encode).
+- *SS-4(d) clear group + reset onClose in finally* → `disarmDirectCancelHook` in the `finally`
+  (tests: disarm clears + nulls; integration asserts reset after normal completion).
+
+Committed + pushed directly to master (see final commit hash in the Orchestrator note / commit log).

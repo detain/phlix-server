@@ -22,11 +22,13 @@ use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\Http\Controllers\TranscodeFileServer;
 use Phlix\Media\Library\ItemRepository;
 use Phlix\Media\Storage\ArtworkStorage;
+use Phlix\Media\Transcoding\SegmentProcessRegistry;
 use Phlix\Server\Http\Middleware\AdminMiddleware;
 use Phlix\Server\Http\Middleware\CorsManager;
 use Phlix\Server\Http\Middleware\SecurityHeaders;
 use Phlix\Server\Http\Request;
 use Phlix\Server\Http\RequestAuthenticator;
+use Phlix\Server\Http\RequestContext;
 use Phlix\Server\Http\Response;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
 use Phlix\Server\WebPortal\Controllers\BookPageController;
@@ -72,6 +74,29 @@ final class HttpHandler
      * threshold used by CDNs / web servers for exactly this trade-off.
      */
     private const GZIP_MIN_BYTES = 1024;
+
+    /**
+     * Prefix for the per-request direct-LAN cancel id (SV-4.2-disconnect).
+     *
+     * A distinct prefix from any relay channel id (those are bare integer
+     * strings minted in a different worker/process/registry) — belt-and-braces,
+     * since the direct and relay registries are never the same instance anyway.
+     */
+    private const DIRECT_CANCEL_PREFIX = 'dl-';
+
+    /**
+     * Per-worker monotonic sequence backing {@see mintDirectCancelId()}.
+     *
+     * Deliberately a resident-process `static` (NOT request state in
+     * {@see RequestContext}): the id must be unique across every request the
+     * worker handles — both concurrent connections AND sequential keep-alive
+     * requests on ONE connection (bare `spl_object_id($connection)` would repeat
+     * across sequential keep-alive requests, so it is not used). Under Swoole,
+     * coroutines are cooperatively scheduled and a `++` carries no yield point,
+     * so the increment is effectively atomic across the worker's coroutines.
+     * Overflow is a non-issue (64-bit int).
+     */
+    private static int $directCancelSeq = 0;
 
     public function __construct(
         private readonly ContainerInterface $container,
@@ -169,6 +194,23 @@ final class HttpHandler
                 return;
             }
 
+            // SV-4.2-disconnect: arm the direct-LAN disconnect→kill hook before
+            // any dispatch that could launch an on-demand ffmpeg segment encode
+            // (the /hls, /dash, /stream routes below are owned by this
+            // Application router). A direct-LAN client — hitting this :8096 HTTP
+            // worker directly, NOT via the hub relay — that disconnects mid-encode
+            // otherwise leaves ffmpeg running to natural completion or the
+            // `timeout ... 7200` backstop. The hook mints a per-request cancel id,
+            // publishes it as the request's cancel group (the SAME RequestContext
+            // key the relay path uses — the two transports never share a
+            // coroutine, so TranscodeManager::produceSegment registers the encode
+            // under this id with ZERO extra wiring), and sets a per-connection
+            // onClose that killGroup()s it if the socket FINs/RSTs while this
+            // handler coroutine is parked in produceSegment's yieldable poll. The
+            // kill is waiter-aware (Chunk 1): a piggybacking peer still waiting on
+            // the same segment defers it. Torn down in the finally.
+            $this->armDirectCancelHook($connection);
+
             // 1) Try the fully-populated Application router first. It
             //    owns every /api/*, /health, /system/info, /.well-known,
             //    /hls/, /dash/, /stream/, /opds/, and the browser-form
@@ -238,6 +280,17 @@ final class HttpHandler
                 '<h1>500 Internal Server Error</h1>',
             ));
         } finally {
+            // SV-4.2-disconnect: neutralise the per-connection disconnect→kill hook
+            // and clear the request's cancel group now the request has fully
+            // completed (the coroutine is no longer parked mid-encode; the encode,
+            // if any, has already published + released). Idempotent and safe on
+            // every path — including requests that returned before the hook was
+            // armed. Keep-alive serves sequentially, so the next __invoke rebinds a
+            // fresh id + closure; nulling onClose here means a later real socket
+            // close on this connection cannot fire a stale killGroup against an id
+            // whose encode is already gone.
+            $this->disarmDirectCancelHook($connection);
+
             // Record on EVERY path — success, early return, or exception. Uses the
             // always-defined Workerman request ($wr) for method/route so a throw in
             // Request::fromWorkerman() above cannot leave $request undefined here.
@@ -250,6 +303,78 @@ final class HttpHandler
                 $startBytesWritten,
             );
         }
+    }
+
+    /**
+     * Arm the per-connection direct-LAN disconnect→kill hook for this request
+     * (SV-4.2-disconnect).
+     *
+     * Mints a unique per-request cancel id, publishes it as the request's cancel
+     * group (via {@see RequestContext::setCancelGroup()} — the same
+     * {@see RequestContext::KEY_RELAY_CANCEL_GROUP} key
+     * {@see \Phlix\Media\Transcoding\TranscodeManager::produceSegment()} reads,
+     * so a segment encode launched during dispatch is registered under this id
+     * with no extra wiring), and sets a per-connection `onClose` that kills that
+     * group when the socket closes. Because `start.php` wires only the worker's
+     * `onMessage` (no worker-level `onClose`), setting the per-connection hook
+     * clobbers nothing. Idempotently torn down by {@see disarmDirectCancelHook()}
+     * in the caller's `finally`.
+     *
+     * The kill closure calls {@see SegmentProcessRegistry::killGroup()}, which is
+     * O(1) and a no-op when nothing is registered under the id (every
+     * non-streaming request), and is waiter-aware (Chunk 1) so a piggybacking
+     * peer still waiting on the same segment defers the kill.
+     *
+     * @param TcpConnection $connection The live connection for this request.
+     *
+     * @return string The minted cancel id (returned for tests / observability).
+     */
+    private function armDirectCancelHook(TcpConnection $connection): string
+    {
+        $id = self::mintDirectCancelId();
+        RequestContext::setCancelGroup($id);
+
+        /** @var SegmentProcessRegistry $registry */
+        $registry = $this->container->get(SegmentProcessRegistry::class);
+        $connection->onClose = static function () use ($registry, $id): void {
+            $registry->killGroup($id);
+        };
+
+        return $id;
+    }
+
+    /**
+     * Tear down the direct-LAN disconnect→kill hook after the request completes
+     * (SV-4.2-disconnect).
+     *
+     * Clears the request's cancel group and nulls the per-connection `onClose`
+     * (restoring the worker's default) so a later real socket close on a
+     * keep-alive connection cannot fire a stale {@see SegmentProcessRegistry::killGroup()}
+     * against an id whose encode already published + released. Idempotent — safe
+     * on every path, including requests that returned before the hook was armed.
+     *
+     * @param TcpConnection $connection The connection whose hook to reset.
+     */
+    private function disarmDirectCancelHook(TcpConnection $connection): void
+    {
+        RequestContext::clearCancelGroup();
+        $connection->onClose = null;
+    }
+
+    /**
+     * Mint a per-request unique direct-LAN cancel id (SV-4.2-disconnect).
+     *
+     * Uses the per-worker monotonic {@see $directCancelSeq} so the id is unique
+     * across BOTH concurrent connections AND sequential keep-alive requests on
+     * one connection — the property `spl_object_id($connection)` lacks (it
+     * repeats across sequential requests reusing a connection object). Prefixed
+     * to keep it visually distinct from a relay channel id.
+     *
+     * @return string The minted id, e.g. `"dl-42"`.
+     */
+    private static function mintDirectCancelId(): string
+    {
+        return self::DIRECT_CANCEL_PREFIX . (string) (++self::$directCancelSeq);
     }
 
     /**

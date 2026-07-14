@@ -3703,6 +3703,7 @@ class Application
     {
         $logger = null;
         $settings = null;
+        $plugins = null;
         if ($this->container !== null) {
             try {
                 /** @var \Psr\Log\LoggerInterface */
@@ -3717,6 +3718,12 @@ class Application
                 // Settings repository not available — fall back to env/file config.
                 $settings = null;
             }
+            try {
+                /** @var \Phlix\Plugins\Repository\PluginRepository */
+                $plugins = $this->container->get(\Phlix\Plugins\Repository\PluginRepository::class);
+            } catch (\Throwable) {
+                // Plugin repository not available
+            }
         }
 
         $db = $this->connectionPool->getPooledConnection('mysql');
@@ -3726,6 +3733,7 @@ class Application
             stateStore: null,
             configFile: null,
             settings: $settings,
+            plugins: $plugins,
             db: $db,
         );
     }

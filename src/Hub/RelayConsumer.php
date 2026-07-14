@@ -522,6 +522,8 @@ final class RelayConsumer
         $context = [
             'ssl' => [
                 'verify_peer' => true,
+                'verify_peer_name' => true,
+                'cafile' => '/etc/ssl/certs/ca-certificates.crt',
                 'SNI_enabled' => true,
             ],
         ];

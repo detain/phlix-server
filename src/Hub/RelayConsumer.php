@@ -435,8 +435,14 @@ final class RelayConsumer
      */
     private function connect(): void
     {
-        // Prevent concurrent connect attempts
-        if ($this->state === self::STATE_HANDSHAKING || $this->state === self::STATE_ACTIVE) {
+        // Prevent concurrent connect attempts while already active.
+        if ($this->state === self::STATE_ACTIVE) {
+            return;
+        }
+
+        // During HANDSHAKING with an existing connection, close it first so a
+        // racing reconnect can replace the stale socket cleanly.
+        if ($this->state === self::STATE_HANDSHAKING && $this->connection === null) {
             return;
         }
 

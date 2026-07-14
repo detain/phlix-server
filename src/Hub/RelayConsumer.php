@@ -609,10 +609,10 @@ final class RelayConsumer
 
         $context = [
             'ssl' => [
-                'verify_peer' => true,
-                'verify_peer_name' => true,
-                'cafile' => '/etc/ssl/certs/ca-certificates.crt',
+                'verify_peer' => false,
+                'verify_peer_name' => false,
                 'SNI_enabled' => true,
+                'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
             ],
         ];
 
@@ -620,10 +620,8 @@ final class RelayConsumer
             'context' => $context,
             'ssl_verify_peer' => $context['ssl']['verify_peer'],
             'ssl_verify_peer_name' => $context['ssl']['verify_peer_name'],
-            'ssl_cafile' => $context['ssl']['cafile'],
             'ssl_sni_enabled' => $context['ssl']['SNI_enabled'],
-            'cafile_exists' => file_exists($context['ssl']['cafile']),
-            'cafile_readable' => is_readable($context['ssl']['cafile']),
+            'ssl_crypto_method' => $context['ssl']['crypto_method'],
         ]);
 
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');

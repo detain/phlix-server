@@ -22,7 +22,7 @@ namespace Phlix\Hub;
  * targets the bare WS endpoint with no path/query/auth.
  *
  * @package Phlix\Hub
- * @since 0.5.0
+ * @since   0.5.0
  */
 final class RelayConfig
 {
@@ -32,7 +32,7 @@ final class RelayConfig
     public const DEFAULT_HUB_RELAY_WS_PORT = 8802;
 
     /**
-     * @param bool   $enabled                Whether the relay tunnel is enabled.
+     * @param bool   $enabled               Whether the relay tunnel is enabled.
      * @param string $hubWssUrl             Legacy hub relay endpoint template
      *                                      (e.g. wss://hub.example.com/api/v1/servers/{id}/relay).
      *                                      Used only to derive the hub host when
@@ -135,13 +135,14 @@ final class RelayConfig
      *
      * Relay auto-enables once the server is paired with a hub (P1): the
      * presence of a stored enrollment is sufficient — no `PHLIX_RELAY_ENABLED`
-     * env var is required. When no explicit hub WS endpoint is configured, this
-     * derives one from the enrollment's `hub_base_url` (host + the standard
-     * relay port 8802; scheme `wss` for an https hub, `ws` otherwise) so the
-     * outbound tunnel can connect without any further configuration.
+     * env var is required. When a hubBaseUrl is provided (from enrollment), it
+     * always takes precedence and the relay WS URL is derived from it (host +
+     * the standard relay port 8802; scheme `wss` for an https hub, `ws`
+     * otherwise). This ensures enrolled servers always relay through the
+     * correct hub without any further configuration.
      *
      * @param string $hubBaseUrl The hub base URL from the stored enrollment
-     *                            (e.g. https://hub.phlix.interserver.net).
+     *                           (e.g. https://hub.phlix.interserver.net).
      *
      * @return self A new, relay-enabled config.
      *

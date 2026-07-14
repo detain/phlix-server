@@ -45,7 +45,7 @@ final class TraktOAuthController
     private ?SettingsRepository $settings;
     private ?PluginRepository $plugins;
     /**
-     * @var mixed 
+     * @var mixed
      */
     private $cipher = null;
 
@@ -214,7 +214,8 @@ final class TraktOAuthController
             $codeVerifier = $this->consumeState($state);
         } catch (InvalidOAuthStateException $e) {
             $this->logger?->warning(
-                'Trakt OAuth state validation failed', [
+                'Trakt OAuth state validation failed',
+                [
                 'reason' => $e->getMessage(),
                 ]
             );
@@ -280,7 +281,8 @@ final class TraktOAuthController
             }
 
             $this->logger?->info(
-                'Trakt OAuth success', [
+                'Trakt OAuth success',
+                [
                 'username' => $username,
                 ]
             );
@@ -288,7 +290,8 @@ final class TraktOAuthController
             return $this->redirect('/app/admin/services?trakt=connected');
         } catch (\Exception $e) {
             $this->logger?->warning(
-                'Trakt OAuth token exchange failed', [
+                'Trakt OAuth token exchange failed',
+                [
                 'error' => $e->getMessage(),
                 ]
             );
@@ -358,12 +361,13 @@ final class TraktOAuthController
         try {
             $plugin = $this->plugins->findByName(self::TRAKT_PLUGIN_NAME);
             /**
- * @var array<string, mixed> 
+ * @var array<string, mixed>
 */
             return $plugin->settings;
         } catch (\Exception $e) {
             $this->logger?->error(
-                'Failed to load Trakt settings array', [
+                'Failed to load Trakt settings array',
+                [
                 'error' => $e->getMessage(),
                 ]
             );
@@ -383,12 +387,12 @@ final class TraktOAuthController
         $config = [];
         if (is_file($configFile)) {
             /**
- * @var mixed $loaded 
+ * @var mixed $loaded
 */
             $loaded = include $configFile;
             if (is_array($loaded)) {
                 /**
- * @var array<string, mixed> $config 
+ * @var array<string, mixed> $config
 */
                 $config = $loaded;
             }
@@ -522,7 +526,8 @@ HTML;
                 $username = $connected ? $currentSettings->username : null;
             } catch (\Exception $e) {
                 $this->logger?->warning(
-                    'Failed to load Trakt settings', [
+                    'Failed to load Trakt settings',
+                    [
                     'error' => $e->getMessage(),
                     ]
                 );
@@ -573,7 +578,8 @@ HTML;
                 $this->plugins->updateSettings(self::TRAKT_PLUGIN_NAME, $clearedSettings);
             } catch (\Exception $e) {
                 $this->logger?->warning(
-                    'Failed to clear Trakt tokens on disconnect', [
+                    'Failed to clear Trakt tokens on disconnect',
+                    [
                     'error' => $e->getMessage(),
                     ]
                 );

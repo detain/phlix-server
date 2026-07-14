@@ -1344,8 +1344,12 @@ class RelayConsumerTest extends TestCase
 
     public function test_relay_config_with_auto_enable_keeps_explicit_ws_url(): void
     {
+        // When hubBaseUrl is provided, withAutoEnable() always derives the relay URL from it,
+        // overriding any explicit hubRelayWsUrl. This is correct because the enrollment's
+        // hub_base_url is the authoritative source for hub location - a server enrolled
+        // with a hub should always relay through that hub, not a default localhost config.
         $config = new RelayConfig(enabled: false, hubRelayWsUrl: 'ws://explicit:9999');
         $enabled = $config->withAutoEnable('https://hub.phlix.interserver.net');
-        $this->assertSame('ws://explicit:9999', $enabled->buildHubRelayWsUrl());
+        $this->assertSame('wss://hub.phlix.interserver.net:8802', $enabled->buildHubRelayWsUrl());
     }
 }

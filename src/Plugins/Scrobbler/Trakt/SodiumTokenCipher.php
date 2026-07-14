@@ -21,7 +21,7 @@ namespace Phlix\Plugins\Scrobbler\Trakt;
  * base64, hex, or raw 32 bytes.
  *
  * @package Phlix\Plugins\Scrobbler\Trakt
- * @since 0.14.0
+ * @since   0.14.0
  */
 final class SodiumTokenCipher implements TokenCipher
 {
@@ -39,11 +39,13 @@ final class SodiumTokenCipher implements TokenCipher
     public function __construct(private readonly string $key)
     {
         if (strlen($this->key) !== SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
-            throw new \InvalidArgumentException(sprintf(
-                'Trakt token encryption key must be exactly %d bytes, got %d.',
-                SODIUM_CRYPTO_SECRETBOX_KEYBYTES,
-                strlen($this->key),
-            ));
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'Trakt token encryption key must be exactly %d bytes, got %d.',
+                    SODIUM_CRYPTO_SECRETBOX_KEYBYTES,
+                    strlen($this->key),
+                )
+            );
         }
     }
 

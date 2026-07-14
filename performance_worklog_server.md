@@ -7064,7 +7064,7 @@ File now: `OK (2 tests, 25 assertions)` — no longer erroring. phpcs on the fil
 
 ## Implementer — SV-1.1 sub-step (b′): thread tone-map flag+filter through the ABR rendition path — 2026-07-14
 
-**Commit `<pending>`** (on `fcb74530`). phpstan L9 `-c phpstan.neon.dist` on changed files = 0 NEW errors (2 pre-existing errors in `TranscodeManagerTest.php` at the master-playlist + SV-4.2 tests — confirmed present on HEAD via `git stash`), phpcs PSR12 = 0 errors, `--filter 'Transcode|Ffmpeg'` = **237/237 green** (+4 new). NO caliber (standing directive; no pre-commit hook present anyway).
+**Commit `0a738cbd`** (on `fcb74530`). phpstan L9 `-c phpstan.neon.dist` on changed files = 0 NEW errors (2 pre-existing errors in `TranscodeManagerTest.php` at the master-playlist + SV-4.2 tests — confirmed present on HEAD via `git stash`), phpcs PSR12 = 0 errors, `--filter 'Transcode|Ffmpeg'` = **237/237 green** (+4 new). NO caliber (standing directive; no pre-commit hook present anyway).
 
 ### ABR-gap claim: HELD (verified anchors at HEAD)
 - `ensureSegment` multi-variant branch = **:707-733**: `segmentParamsForRendition($rendition)` (**:719**) → `applySubtitleBurnIn` (**:731**). `segmentParamsForRendition` = **:1435** — a transcode rung returns `video_codec=libx264` + rung scale/level/VBV; a copy rung returns only `video_codec=copy,audio_codec=copy`. NEITHER carries `require_hdr_tone_map`/`tone_map_filter`.

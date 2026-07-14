@@ -7033,3 +7033,31 @@ File now: `OK (2 tests, 25 assertions)` — no longer erroring. phpcs on the fil
 - `af31abc9` — `SV-4.2 tests: drop obsolete FfmpegHlsTranscodeTest whole-file HLS cases (startHlsTranscode removed in SV-4.13 015ea7a7)`
 
 **GREEN.**
+
+## Implementer — SV-1.1 sub-step (b): thread resolved tone-map FILTER STRING through segParams — 2026-07-14
+
+**Commit `6c115e04`** (on `da69c2e1`). Pushed to origin/master (in sync). phpstan L9 (src) clean, phpcs PSR12 clean on changed files, `--filter 'Transcode|Ffmpeg'` = 228/228 green (includes 11 new tests). NO caliber (standing directive).
+
+### Verified anchors at HEAD (audit line refs had drifted post-SV-4.2)
+- `TranscodeManager::computeHlsParams` = **:2531**; sets `require_hdr_tone_map` at **:2574-2576** from `$colorMeta = extractColorMetadata($probe)` (**:2569**).
+- `TranscodeManager::computeSegmentParams` = **:1913** (calls computeHlsParams :1920; copy→libx264 upgrade :1922-1929). segment_params JSON persisted at **:545 / INSERT :552-561**.
+- `FfmpegRunner::buildSegmentCommand` tone-map gate = **:1685-1704** (was 1638-1645). `buildHwaccelSegmentCommand` = **:2016-2044** (was 1956-1969). `getToneMappingProfile` = **:485**, `needsToneMapping` = **:420**, `buildZscale/LibplaceboToneMapFilter` = **:560 / :624**.
+- Legacy single-variant decode (where `require_hdr_tone_map` is decoded) = `ensureSegment` **:741-750** (json_decode of the whole segment_params blob → $segParams).
+
+### What was threaded + round-trip path
+1. New **`FfmpegRunner::resolveToneMapFilterFromProbe(?array $probe, string $codec): ?string`** — single source of truth for the tone-map graph, resolves from an already-known probe WITHOUT probing. `getToneMappingProfile()` now delegates to it (`resolveToneMapFilterFromProbe($this->probe($inputPath), $codec)`) → byte-identical output. Extracted HDR-detection into private `isHdrColorMeta()` (shared by `needsToneMapping()` + the resolver) so the HDR decision is identical on both paths.
+2. **`computeSegmentParams`** (:1935-1951): when `require_hdr_tone_map` is set, resolves `$params['tone_map_filter']` once via `resolveToneMapFilterFromProbe($probe, $videoCodec)` using the FINAL codec (`FfmpegRunner::paramString($params,'video_codec') ?? 'libx264'`, i.e. post copy→libx264 upgrade — exactly what buildSegmentCommand derives). It rides the SAME persisted segment_params JSON as `require_hdr_tone_map` and round-trips through the encode(json_encode :545)→decode(json_decode :741) legacy single-variant path.
+3. **`buildSegmentCommand` / `buildHwaccelSegmentCommand`**: when `require_hdr_tone_map === true` AND `tone_map_filter` is present → append the threaded string DIRECTLY (zero `probe()`/`needsToneMapping()`/`getToneMappingProfile()`). Legacy re-derive kept ONLY as the `else`/`elseif` fallback for absent flag/string (pre-threaded persisted params / un-rescanned items).
+
+### Byte-identity + SV-1.6 ordering
+- The threaded string is produced by the exact builder chain `getToneMappingProfile` uses (same probe, same codec, same `$this->config` on the resident FfmpegRunner instance), so the emitted ffmpeg `-vf` graph is unchanged for HDR content (WHERE-computed, not WHAT-changed). Verified in test by handing in the canonical SV-1.4 zscale graph and asserting it appears verbatim in `-vf`.
+- SV-1.6 ordering preserved: tone-map filter is pushed to `$filters[]` BEFORE the subtitle burn-in filter and BEFORE scale (unchanged insertion order). New test `testSoftwareSegmentThreadedFilterPrecedesScale` pins tone-map-before-scale; existing FfmpegRunnerSubtitleBurnInTest (green) guards burn-in ordering.
+
+### Tests (real numbers)
+- New `tests/Unit/Media/Transcoding/FfmpegRunnerToneMapThreadingTest.php` (7 tests) + PSR-4 spy `ToneMapThreadingSpyRunner.php` (call-counting FfmpegRunner double): threaded path emits the exact graph with 0 probe/needsToneMapping/getToneMappingProfile calls (software + hwaccel); legacy fallbacks re-derive exactly once; flag-gating + ordering. Mutation sense: goes red if the builders re-derive instead of using the threaded string.
+- Added to `TranscodeManagerTest`: `testEnsureHlsJobThreadsResolvedToneMapFilterForHdrSource` (HDR → resolver called ONCE with 'libx264'; `tone_map_filter` present in decoded segment_params) + `testEnsureHlsJobOmitsToneMapFilterForSdrSource` (SDR → resolver never called, key absent). `stubColorMetadata()` left intact.
+- `--filter 'Transcode|Ffmpeg'`: **OK (228 tests, 1058 assertions)**. phpstan L9 on src (2 files) + new test files: **No errors**. phpcs PSR12 `-n` on changed files: **0 errors** (pre-existing line-length WARNINGS in TranscodeManager/TranscodeManagerTest are outside my added ranges).
+
+### SCOPE NOTE for orchestrator (NEXT pass, not mine)
+- **Sub-step (a)** — read persisted `media_streams` color columns (mig 073) to reconstruct the HDR decision at `ensureHlsJob` so scanned items hit **0 HDR-probes** (today always exactly 1 live probe) — is the NEXT pass, OUT OF SCOPE here. Did NOT touch scanner and added NO migration.
+- Observed (pre-existing, informational): `require_hdr_tone_map` (and hence the new `tone_map_filter`) is threaded through the **legacy single-variant** segment_params only. The multi-variant/ABR path (`ensureSegment` :719 → `segmentParamsForRendition` :1435) rebuilds params fresh per-rendition and carries NEITHER flag, so it relies on the `needsToneMapping()` memo fallback — same as before my change (I preserved that fallback). Threading them into the per-rendition path (mirroring SV-1.6's `applySubtitleBurnIn` merge in `ensureSegment`) would let new ABR jobs also skip the per-segment re-derive; flagging as a possible follow-up, deliberately NOT done (beyond this sub-step's enumerated scope).

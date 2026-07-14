@@ -29,6 +29,7 @@ use Phlix\Media\Library\PhotoScanner;
 use Phlix\Media\Music\MusicLibraryScanner;
 use Phlix\Media\Music\MusicLibraryService;
 use Phlix\Media\Transcoding\FfmpegRunner;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Media\Markers\MarkerService;
 use Phlix\Media\Markers\PlaybackMarkerService;
 use Phlix\Media\RecommendationService;
@@ -40,6 +41,7 @@ use Phlix\Media\Metadata\MetadataManager;
 use Phlix\Media\Metadata\OpdsFeedBuilder;
 use Phlix\Server\Http\Controllers\BookController;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
+use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Server\Http\Controllers\PhotoController;
 use Phlix\Server\WebPortal\Controllers\AudiobookPageController;
@@ -182,6 +184,12 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                     $musicLibraryScanner = new MusicLibraryScanner($db, $ffmpegRunner);
                     $musicLibraryService = new MusicLibraryService($db, $musicLibraryScanner);
 
+                    /** @var TranscodeManager|null $transcodeManager */
+                    $transcodeManager = $c->get(TranscodeManager::class);
+                    $transcodeController = $transcodeManager !== null
+                        ? new TranscodeController($transcodeManager)
+                        : null;
+
                     return new WebPortalRouter(
                         $libraryManager,
                         $itemRepository,
@@ -200,6 +208,7 @@ final class WebPortalServicesProvider implements ServiceProviderInterface
                         $avatarStorage,
                         $userAvatarController,
                         null, // MediaRatingsController (not wired in this context)
+                        $transcodeController,
                         $similarityService,
                         $recommendationService,
                         null, // CollectionService (not wired in this context)

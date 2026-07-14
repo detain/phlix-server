@@ -43,6 +43,7 @@ use Phlix\Media\Playback\PlaybackPreferences;
 use Phlix\Server\Http\Controllers\MediaUserDataController;
 use Phlix\Server\Http\Controllers\MediaPosterController;
 use Phlix\Server\Http\Controllers\MediaRatingsController;
+use Phlix\Server\Http\Controllers\TranscodeController;
 use Phlix\Server\Http\Controllers\UserAvatarController;
 use Phlix\Media\Storage\AvatarStorage;
 
@@ -111,6 +112,9 @@ class WebPortalRouter
 
     /** @var UserAvatarController|null Handles avatar upload/delete routes; null when not wired */
     private ?UserAvatarController $userAvatarController;
+
+    /** @var TranscodeController|null Handles transcode job start/status routes; null when not wired */
+    private ?TranscodeController $transcodeController;
 
     /** @var SimilarityService|null Computes and retrieves item similarity scores; null when not wired */
     private ?SimilarityService $similarityService;
@@ -191,6 +195,7 @@ class WebPortalRouter
         ?AvatarStorage $avatarStorage = null,
         ?UserAvatarController $userAvatarController = null,
         ?MediaRatingsController $mediaRatingsController = null,
+        ?TranscodeController $transcodeController = null,
         ?SimilarityService $similarityService = null,
         ?RecommendationService $recommendationService = null,
         ?CollectionService $collectionService = null,
@@ -216,6 +221,7 @@ class WebPortalRouter
         $this->avatarStorage = $avatarStorage;
         $this->userAvatarController = $userAvatarController;
         $this->mediaRatingsController = $mediaRatingsController;
+        $this->transcodeController = $transcodeController;
         $this->similarityService = $similarityService;
         $this->recommendationService = $recommendationService;
         $this->collectionService = $collectionService;
@@ -283,6 +289,10 @@ class WebPortalRouter
 
             // P4-S3: TMDB box-set collection membership for a media item
             $r->get('/api/v1/media/{id}/collection', [$this, 'getMediaItemCollection']);
+
+            // Transcode routes (HLS job start + status polling)
+            $r->post('/api/v1/media/{id}/transcode', [$this, 'startTranscode']);
+            $r->get('/api/v1/transcode/{jobId}/status', [$this, 'statusTranscode']);
 
             // User activity routes
             $r->get('/api/v1/users/me/continue-watching', [$this, 'getContinueWatching']);
@@ -1908,6 +1918,48 @@ class WebPortalRouter
         $this->recommendationService->dismissRecommendation($userId, $mediaItemId);
 
         return (new Response())->json(['message' => 'Recommendation dismissed']);
+    }
+
+    /**
+     * Starts an on-demand HLS transcode job for a media item.
+     *
+     * Thin delegate to {@see TranscodeController::start()}; responds
+     * 503 when the transcode feature is not wired.
+     *
+     * @param Request $request The HTTP request.
+     * @param array<string, string> $params Route params including 'id'.
+     *
+     * @api_endpoint POST /api/v1/media/{id}/transcode
+     */
+    public function startTranscode(Request $request, array $params): Response
+    {
+        if ($this->transcodeController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Transcode is not configured on this server',
+            ]);
+        }
+        return $this->transcodeController->start($request, $params);
+    }
+
+    /**
+     * Returns the status of an HLS transcode job.
+     *
+     * Thin delegate to {@see TranscodeController::status()}; responds
+     * 503 when the transcode feature is not wired.
+     *
+     * @param Request $request The HTTP request.
+     * @param array<string, string> $params Route params including 'jobId'.
+     *
+     * @api_endpoint GET /api/v1/transcode/{jobId}/status
+     */
+    public function statusTranscode(Request $request, array $params): Response
+    {
+        if ($this->transcodeController === null) {
+            return (new Response())->status(503)->json([
+                'error' => 'Transcode is not configured on this server',
+            ]);
+        }
+        return $this->transcodeController->status($request, $params);
     }
 
     /**

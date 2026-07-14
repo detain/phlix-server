@@ -59,17 +59,21 @@ class TraktApi
      *
      * @param string $state CSRF protection state token
      * @param string $codeVerifier PKCE code verifier (will be hashed to code_challenge)
+     * @param string|null $redirectUri Optional override for the redirect_uri.
+     *     When provided the caller is responsible for ensuring it matches the
+     *     URI registered with Trakt (e.g. the admin-settings override).
+     *     When null the redirect_uri is read from the local config file.
      *
      * @return string Full authorization URL to redirect user to
      *
      * @since 0.14.0
      */
-    public function getAuthUrl(string $state, string $codeVerifier): string
+    public function getAuthUrl(string $state, string $codeVerifier, ?string $redirectUri = null): string
     {
         $codeChallenge = $this->base64UrlEncode(hash('sha256', $codeVerifier, true));
         $params = [
             'client_id' => $this->clientId,
-            'redirect_uri' => $this->getRedirectUri(),
+            'redirect_uri' => $redirectUri ?? $this->getRedirectUri(),
             'response_type' => 'code',
             'state' => $state,
             'code_challenge' => $codeChallenge,
@@ -84,19 +88,23 @@ class TraktApi
      *
      * @param string $code Authorization code from OAuth callback
      * @param string $codeVerifier PKCE code verifier used in initial request
+     * @param string|null $redirectUri Optional override for the redirect_uri.
+     *     When provided the caller is responsible for ensuring it matches the
+     *     URI registered with Trakt (e.g. the admin-settings override).
+     *     When null the redirect_uri is read from the local config file.
      *
      * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
      *
      * @throws TraktApiException When token exchange fails
      * @since 0.14.0
      */
-    public function exchangeCode(string $code, string $codeVerifier): array
+    public function exchangeCode(string $code, string $codeVerifier, ?string $redirectUri = null): array
     {
         $params = [
             'code' => $code,
             'client_id' => $this->clientId,
             'client_secret' => $this->clientSecret,
-            'redirect_uri' => $this->getRedirectUri(),
+            'redirect_uri' => $redirectUri ?? $this->getRedirectUri(),
             'grant_type' => 'authorization_code',
             'code_verifier' => $codeVerifier,
         ];
@@ -121,19 +129,23 @@ class TraktApi
      * Refresh an expired access token.
      *
      * @param string $refreshToken Current refresh token
+     * @param string|null $redirectUri Optional override for the redirect_uri.
+     *     When provided the caller is responsible for ensuring it matches the
+     *     URI registered with Trakt (e.g. the admin-settings override).
+     *     When null the redirect_uri is read from the local config file.
      *
      * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
      *
      * @throws TraktApiException When refresh fails
      * @since 0.14.0
      */
-    public function refreshAccessToken(string $refreshToken): array
+    public function refreshAccessToken(string $refreshToken, ?string $redirectUri = null): array
     {
         $params = [
             'refresh_token' => $refreshToken,
             'client_id' => $this->clientId,
             'client_secret' => $this->clientSecret,
-            'redirect_uri' => $this->getRedirectUri(),
+            'redirect_uri' => $redirectUri ?? $this->getRedirectUri(),
             'grant_type' => 'refresh_token',
         ];
 
@@ -165,13 +177,17 @@ class TraktApi
      * 2. flock() for cross-process safety (multiple Workerman workers)
      *
      * @param string $refreshToken Current refresh token
+     * @param string|null $redirectUri Optional override for the redirect_uri.
+     *     When provided the caller is responsible for ensuring it matches the
+     *     URI registered with Trakt (e.g. the admin-settings override).
+     *     When null the redirect_uri is read from the local config file.
      *
      * @return array<string, mixed> Token response with access_token, refresh_token, expires_in
      *
      * @throws TraktApiException When refresh fails
      * @since 0.14.0
      */
-    public function refreshAfterAuthFailure(string $refreshToken): array
+    public function refreshAfterAuthFailure(string $refreshToken, ?string $redirectUri = null): array
     {
         static $inFlightRefresh = [];
         static $lockFile = null;
@@ -235,7 +251,7 @@ class TraktApi
         }
 
         try {
-            $result = $this->refreshAccessToken($refreshToken);
+            $result = $this->refreshAccessToken($refreshToken, $redirectUri);
             $inFlightRefresh[$tokenKey] = $result;
             flock($fp, LOCK_UN);
             fclose($fp);

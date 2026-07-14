@@ -367,4 +367,74 @@ final class TraktApiTest extends TestCase
 
         $api->getPlaybackProgress('access-token');
     }
+
+    /**
+     * When a custom redirect_uri is passed to getAuthUrl, it must be included
+     * in the generated authorization URL instead of the default config value.
+     */
+    public function testGetAuthUrlUsesProvidedRedirectUri(): void
+    {
+        $http = new MockHttpClient();
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $customUri = 'https://custom.example.com/callback';
+        $authUrl = $api->getAuthUrl('test-state', 'test-verifier', $customUri);
+
+        $this->assertStringContainsString(
+            'redirect_uri=' . urlencode($customUri),
+            $authUrl
+        );
+    }
+
+    /**
+     * When exchangeCode receives a custom redirect_uri it must be included in
+     * the token request body rather than the default config value.
+     */
+    public function testExchangeCodeUsesProvidedRedirectUri(): void
+    {
+        $http = new MockHttpClient([
+            ['access_token' => 'at', 'refresh_token' => 'rt', 'expires_in' => 3600]
+        ]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $customUri = 'https://custom.example.com/callback';
+        $api->exchangeCode('auth-code', 'code-verifier', $customUri);
+
+        $this->assertSame($customUri, $http->lastData['redirect_uri']);
+    }
+
+    /**
+     * When refreshAccessToken receives a custom redirect_uri it must be
+     * included in the refresh request body.
+     */
+    public function testRefreshAccessTokenUsesProvidedRedirectUri(): void
+    {
+        $http = new MockHttpClient([
+            ['access_token' => 'at', 'refresh_token' => 'rt', 'expires_in' => 3600]
+        ]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $customUri = 'https://custom.example.com/callback';
+        $api->refreshAccessToken('refresh-token', $customUri);
+
+        $this->assertSame($customUri, $http->lastData['redirect_uri']);
+    }
+
+    /**
+     * refreshAfterAuthFailure must forward the custom redirect_uri to
+     * refreshAccessToken so that the token refresh still uses the correct URI.
+     */
+    public function testRefreshAfterAuthFailureForwardsRedirectUri(): void
+    {
+        $http = new MockHttpClient([
+            ['access_token' => 'at', 'refresh_token' => 'rt', 'expires_in' => 3600]
+        ]);
+        $api = new TraktApi($http, self::CLIENT_ID, self::CLIENT_SECRET, new NullLogger());
+
+        $customUri = 'https://custom.example.com/callback';
+        // Use a unique refresh token to avoid same-process cache hits
+        $api->refreshAfterAuthFailure('unique-refresh-token-' . __METHOD__, $customUri);
+
+        $this->assertSame($customUri, $http->lastData['redirect_uri']);
+    }
 }

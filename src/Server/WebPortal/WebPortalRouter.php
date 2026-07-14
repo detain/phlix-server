@@ -491,8 +491,13 @@ class WebPortalRouter
             $items = $this->itemRepository->getByLibrary($libraryId, $limit, $offset);
         }
 
+        $shapedItems = array_map(
+            fn(array $item): array => $this->shapeMediaItem($item),
+            $items
+        );
+
         return (new Response())->json([
-            'items' => $items,
+            'items' => $shapedItems,
             'limit' => $limit,
             'offset' => $offset,
         ]);

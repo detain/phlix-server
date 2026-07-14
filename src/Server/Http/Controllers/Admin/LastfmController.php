@@ -11,6 +11,7 @@ declare(strict_types=1);
 
 namespace Phlix\Server\Http\Controllers\Admin;
 
+use Phlix\Admin\SettingsRepository;
 use Phlix\Plugins\Scrobbler\Lastfm\DbLastfmOAuthStateStore;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmApi;
 use Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig;
@@ -49,6 +50,20 @@ final class LastfmController
      * Server-side CSRF `state => userId` store for the SPA OAuth flow.
      */
     private readonly LastfmOAuthStateStore $stateStore;
+    private ?SettingsRepository $settings;
+
+    /**
+     * Maps the dotted server-settings keys to the local config keys they
+     * override. {@see self::applySettingsOverrides()} overlays a DB value
+     * on top of the env/file value whenever an operator has saved it in
+     * the admin Settings page (DB-set wins over environment, which wins
+     * over the file literal).
+     */
+    private const SETTING_KEY_MAP = [
+        'lastfm.api_key'       => 'api_key',
+        'lastfm.shared_secret' => 'shared_secret',
+        'lastfm.enabled'       => 'enabled',
+    ];
 
     /**
      * @param LastfmConfig                 $config     Wraps `config/lastfm.php`.
@@ -61,6 +76,9 @@ final class LastfmController
      * @param Connection|null             $db         Workerman MySQL connection.
      *     When supplied, the DB-backed {@see DbLastfmOAuthStateStore} is used
      *     instead of the `$_SESSION`-backed store to avoid race conditions.
+     * @param SettingsRepository|null      $settings   When supplied, operator
+     *     credentials saved in the admin Settings page (server_settings table)
+     *     take precedence over the environment/file config.
      */
     public function __construct(
         private readonly LastfmConfig $config,
@@ -68,6 +86,7 @@ final class LastfmController
         private readonly LastfmApi $api,
         ?LastfmOAuthStateStore $stateStore = null,
         ?Connection $db = null,
+        ?SettingsRepository $settings = null,
     ) {
         if ($stateStore !== null) {
             $this->stateStore = $stateStore;
@@ -76,6 +95,7 @@ final class LastfmController
         } else {
             $this->stateStore = new SessionLastfmOAuthStateStore();
         }
+        $this->settings = $settings;
     }
 
     /**
@@ -317,6 +337,55 @@ final class LastfmController
     }
 
     /**
+     * Overlay operator credentials saved in the admin Settings page on top of
+     * the env/file config. A string DB value wins only when it is non-empty,
+     * so an unset (or blank) setting falls back to the environment/file value.
+     * A boolean DB value (e.g. `lastfm.enabled`) always wins.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function applySettingsOverrides(array $config): array
+    {
+        if ($this->settings === null) {
+            return $config;
+        }
+
+        foreach (self::SETTING_KEY_MAP as $settingKey => $configKey) {
+            $override = $this->settings->getOverride($settingKey);
+            $value = $override['value'] ?? null;
+
+            if (is_string($value) && $value !== '') {
+                $config[$configKey] = $value;
+            } elseif (is_bool($value)) {
+                $config[$configKey] = $value;
+            }
+        }
+
+        return $config;
+    }
+
+    /**
+     * Build the raw config array with DB overrides applied, then construct
+     * a {@see LastfmConfig} from it.
+     */
+    private function buildOverrideAwareConfig(): LastfmConfig
+    {
+        $configArray = [
+            'api_key'       => $this->config->apiKey,
+            'shared_secret' => $this->config->sharedSecret,
+            'enabled'       => $this->config->enabled,
+            'callback_url'  => $this->config->callbackUrl,
+            'username'      => $this->config->username,
+        ];
+
+        $configArray = $this->applySettingsOverrides($configArray);
+
+        return LastfmConfig::fromArray($configArray);
+    }
+
+    /**
      * Build the absolute URL of this server's new API callback endpoint
      * (`/api/v1/oauth/lastfm/callback`) from the inbound request host.
      *
@@ -363,10 +432,13 @@ final class LastfmController
         $session = $this->sessions->findByUserId($userId);
         $username = $session !== null ? ($this->config->username ?: $userId) : null;
 
+        // Use override-aware config so DB-stored credentials are respected
+        $overrideAwareConfig = $this->buildOverrideAwareConfig();
+
         return (new Response())->json([
             'connected'   => $session !== null,
             'username'    => $username,
-            'api_key_set' => $this->config->isUsable(),
+            'api_key_set' => $overrideAwareConfig->isUsable(),
         ]);
     }
 

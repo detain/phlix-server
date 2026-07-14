@@ -543,9 +543,7 @@ final class AdminHubController
                 ]);
             }
 
-            if (!$relayApp->isRunning()) {
-                $relayApp->start();
-            }
+            $relayApp->ensureStarted();
 
             return (new Response())->json([
                 'success' => true,

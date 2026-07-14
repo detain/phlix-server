@@ -319,6 +319,89 @@ class Application
             ]);
         });
 
+        // Servers list endpoint — returns the local server info for the admin
+        // "all servers" dropdown (Issue 1 fix)
+        $this->router->get('/api/v1/servers', function (Request $request): Response {
+            // Get server name from config
+            $serverConfig = $this->config['server'] ?? [];
+            $serverName = is_array($serverConfig) && isset($serverConfig['name']) && is_string($serverConfig['name'])
+                ? $serverConfig['name']
+                : 'Phlix Media Server';
+
+            // Get server ID: try hub enrollment first, then config, then generate
+            $serverId = null;
+            $enrolledAt = null;
+
+            $configDirRaw = $this->config['_config_dir'] ?? 'config';
+            $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+            $enrollmentPath = rtrim($configDir, '/') . '/hub-enrollment.json';
+
+            if (file_exists($enrollmentPath)) {
+                $content = @file_get_contents($enrollmentPath);
+                if ($content !== false) {
+                    $data = json_decode($content, true);
+                    if (is_array($data)) {
+                        if (isset($data['server_id']) && is_string($data['server_id'])) {
+                            $serverId = $data['server_id'];
+                        }
+                        if (isset($data['enrolled_at']) && is_int($data['enrolled_at'])) {
+                            $enrolledAt = $data['enrolled_at'];
+                        }
+                    }
+                }
+            }
+
+            // Fall back to config server.id if not enrolled
+            if ($serverId === null || $serverId === '') {
+                if (is_array($serverConfig) && isset($serverConfig['id']) && is_string($serverConfig['id'])) {
+                    $serverId = $serverConfig['id'];
+                }
+            }
+
+            // Generate a persistent ID if still missing (first run)
+            if ($serverId === null || $serverId === '') {
+                $serverId = \Phlix\Common\Uuid::v4();
+            }
+
+            // Build hostname from hub config
+            $hubConfig = $this->config['hub'] ?? [];
+            $publicUrl = is_array($hubConfig) && isset($hubConfig['public_url']) && is_string($hubConfig['public_url'])
+                ? $hubConfig['public_url'] : '';
+
+            if (
+                $publicUrl === ''
+                && is_array($hubConfig)
+                && isset($hubConfig['domain'])
+                && is_string($hubConfig['domain'])
+            ) {
+                $tlsEnabled = is_bool($hubConfig['tls_enabled'] ?? null)
+                    ? $hubConfig['tls_enabled']
+                    : true;
+                $publicUrl = ($tlsEnabled ? 'https://' : 'http://') . $hubConfig['domain'];
+            }
+
+            $hostnameCandidates = [];
+            if ($publicUrl !== '') {
+                $hostnameCandidates[] = $publicUrl;
+            }
+            // Always include localhost as a fallback candidate
+            $hostnameCandidates[] = 'http://localhost:8096';
+
+            return (new Response())->json([
+                'success' => true,
+                'data' => [
+                    [
+                        'id' => $serverId,
+                        'name' => $serverName,
+                        'hostname' => $publicUrl ?: 'http://localhost:8096',
+                        'online' => true,
+                        'last_seen_at' => $enrolledAt ?? time(),
+                        'hostname_candidates' => array_values(array_unique($hostnameCandidates)),
+                    ],
+                ],
+            ]);
+        });
+
         // Username/password authentication endpoints. The controller validates
         // input and delegates to AuthManager; `me` enforces 401 internally by
         // checking $request->userId (set by upstream auth middleware), matching
@@ -1235,11 +1318,23 @@ class Application
             $config->apiKey,
             $config->sharedSecret,
         );
+
+        $settings = null;
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Admin\SettingsRepository $settings */
+                $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+            } catch (\Throwable) {
+                // Settings repository not available — fall back to env/file config.
+            }
+        }
+
         return new \Phlix\Server\Http\Controllers\Admin\LastfmController(
             $config,
             $sessions,
             $api,
             db: $db,
+            settings: $settings,
         );
     }
 
@@ -1254,6 +1349,16 @@ class Application
      */
     private function loadLastfmRoutes(): void
     {
+        $settings = null;
+        if ($this->container !== null) {
+            try {
+                /** @var \Phlix\Admin\SettingsRepository $settings */
+                $settings = $this->container->get(\Phlix\Admin\SettingsRepository::class);
+            } catch (\Throwable) {
+                // Settings repository not available — fall back to env/file config.
+            }
+        }
+
         try {
             $rawConfig = include __DIR__ . '/../../../config/lastfm.php';
             $config = \Phlix\Plugins\Scrobbler\Lastfm\LastfmConfig::fromArray(
@@ -1270,6 +1375,7 @@ class Application
                 $sessions,
                 $api,
                 db: $db,
+                settings: $settings,
             );
 
             $this->router->get('/admin/lastfm', [$controller, 'index']);

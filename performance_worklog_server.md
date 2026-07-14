@@ -6659,3 +6659,241 @@ direct group).
   (tests: disarm clears + nulls; integration asserts reset after normal completion).
 
 Committed + pushed directly to master (see final commit hash in the Orchestrator note / commit log).
+
+## Reviewer (cumulative — Chunk 2 `495912c1` + SV-4.2-disconnect seam across both chunks) — 2026-07-13
+
+Reviewed Chunk 2 (`495912c1`: RequestContext aliases + HttpHandler arm/disarm + 8 tests) for
+correctness AND the integration/seam with Chunk 1 (`07fc71b4`) end-to-end through
+`TranscodeManager::produceSegment`/`produceAudioSegment`, `SegmentProcessRegistry`, and the relay
+`RelayConsumer::onHttpCancel`. Read the DI wiring (`TranscodeServicesProvider`) and `start.php`
+worker bootstrap. **Chunk 2's mechanical wiring is correct.** Verified positively (NOT findings):
+
+- **Registry singleton identity (item 4): OK.** `start.php` builds one `ContainerFactory::create()`
+  per worker (`start.php:154`) and passes that SAME `$container` to both `Application` (:172) and
+  `new HttpHandler($container, ...)` (:389-395). PHP-DI `factory()` entries are cached/shared, so
+  `HttpHandler::armDirectCancelHook` → `$this->container->get(SegmentProcessRegistry::class)` returns
+  the identical singleton that `FfmpegRunner::setSegmentProcessRegistry` (provider :113-114) registers
+  PIDs into. The kill targets the populated registry.
+- **id uniqueness/collision (item 1): OK.** `dl-` prefix + per-worker `static $directCancelSeq`;
+  `++` has no coroutine yield point (cooperative scheduling) so it is atomic within a worker. Relay
+  channelIds are minted in the SEPARATE `phlix-relay-tunnel` worker (`start.php:627/663` builds its
+  own container → own registry + own `support\Context`), so the two transports never share a
+  coroutine, a registry, or a Context — no collision is possible even though both publish into
+  `KEY_RELAY_CANCEL_GROUP`. Cross-worker `dl-N` duplication is harmless (per-worker registries).
+- **onClose does not clobber worker bookkeeping (item 3): OK.** `start.php` wires only
+  `$w->onMessage` (no worker-level `onClose`), so accepted connections start `onClose=null`; arm sets,
+  disarm nulls — Workerman's internal `destroy()` bookkeeping is unaffected.
+- **Context is coroutine-local: OK.** `RequestContext` proxies `support\Context` (per-coroutine
+  isolation), so concurrent direct requests on DIFFERENT connections each carry their own cancel group
+  and cannot trample each other; the onClose closure captures `$id` directly (not via Context), so it
+  is Context-independent.
+- **No collateral from always-setting the cancel group: OK.** Grep confirms the ONLY readers of
+  `getRelayCancelGroup()` are `TranscodeManager.php:943/1169` (passed as the encode's registry group).
+  Nothing branches on "is this a relay request?" via this key, so Chunk 2 now publishing a non-null
+  `dl-N` for every dispatched direct request has no side effect beyond encode registration (the intent).
+- **Mutation sense of the 8 tests (item 8): mostly OK.** `testMintsUniqueMonotonicIdsAcrossSequential
+  Invocations` goes red if the id were `spl_object_id`-based (non-monotonic on a reused keep-alive
+  connection); `testDisarmClearsCancelGroupAndNullsOnClose` + `testInvokeArmsHookBeforeDispatchAnd
+  ResetsInFinally` go red if `disarm` did not null `onClose` or if `arm` were placed after dispatch.
+  Defer-inheritance is covered. Gaps noted in Finding 4 below.
+
+Findings:
+
+1. [Medium — INTEGRATION REFINEMENT of Chunk-1 per-step Medium #1; NOT a new defect, elevated
+   frequency + concrete safe design for the Fixer] The dedup **reservation `segmentEncodesInFlight
+   [$final]` is not invalidated when a kill reaps the encode**, and Chunk 2 turns disconnect-kill into
+   a COMMON trigger (every abandoned direct-LAN scrub), so the "dedup-onto-a-killed-corpse → 404"
+   window (`TranscodeManager.php:887/1131` set; read via `segmentEncodeInFlight()` :1426/:881/:1130)
+   now bites the ordinary direct path, not just two-hub-channel relay races. Scenario (multi-device,
+   the targeted case): client A (direct) launches + is mid-encode on `$final`; A disconnects →
+   `onClose` → `killGroup(dl-A)` → `kill($final)` — the waiter guard sees NO other waiter (B has not
+   arrived yet, count==1) → it SIGNALS ffmpeg + cleans the `.part-*` + drops the registry entry, but
+   `segmentEncodesInFlight[$final]` stays set. Client B arrives ~200 ms later for the same `$final`,
+   `segmentEncodeInFlight($final)` is still TRUE → B piggybacks onto the corpse, polls to
+   `segmentMaxWaitMs`, and **404s** until the reservation clears via either A's still-parked
+   coroutine's own poll-timeout `finally` (`:980/:1188`, A's socket close does NOT interrupt its
+   coroutine) OR the reconcile self-heal (`reconcileInFlightSegments` :1507-1518, up to
+   `SEGMENT_INFLIGHT_STALE_GRACE_MS`=5000 ms from launch, since the `.part-*` was removed by the
+   kill so the snapshot no longer backs it). **Real severity: Medium** — a transient ≤~5 s 404 burst
+   that hls.js self-heals by retrying; single-client-retry-on-new-connection and multi-device-same-
+   segment both hit it, but only within that bounded window. Why it still matters: Chunk 2's own
+   docblocks/commit ("registers the encode under this id with ZERO extra wiring", "the kill is
+   waiter-aware ... defers it") read as if the shared-encode case is fully closed; it narrows but does
+   not close it.
+
+   **Concrete, safe fix design for the Fixer (this is the landmine — read before touching it):** the
+   naive fix "on a real (non-deferred) kill, also `unset($this->segmentEncodesInFlight[$final])`"
+   RE-OPENS the SV-4.1 double-encode race AND adds a registry cross-clobber, because BOTH the
+   reservation map and the registry are keyed by a BARE `$final` string with no launcher identity, and
+   the launcher's `finally` clears them UNCONDITIONALLY (`:980` unset + `:994-998`
+   `releaseSegmentProcess`/`releaseSegmentProcessAfterWaitTimeout`, the latter → `registry->
+   releaseAfterWaitTimeout($final)` → `drop($final)`). Break-sequence with the naive fix: (a) A
+   reserves `$final`, launches, parks; (b) A disconnect-kill invalidates the reservation; (c) NEW
+   launcher B passes the now-false dedup check, reserves `$final`, launches a FRESH encode + registers
+   its PID under `$final`; (d) A's still-parked coroutine times out and its `finally` runs
+   `unset(segmentEncodesInFlight[$final])` (clobbers B's fresh reservation → a THIRD requester
+   double-encodes) AND `releaseSegmentProcessAfterWaitTimeout($final)` → `drop($final)` (clobbers B's
+   registry tracking → B's encode can no longer be cancelled on B's disconnect). Note the current
+   (unfixed) code is safe from this ONLY because the leaked reservation is exactly what serializes
+   launchers on `$final` — so any invalidate-on-reap MUST restore that serialization with a token:
+     - Give each reservation a launcher **generation token**: store `segmentEncodesInFlight[$final] =
+       ['at' => monotonicMs, 'gen' => ++$this->reservationSeq]` (the current bare `monotonicMs()`
+       marker is NOT a safe token — ms resolution can tie between two launchers); the launcher
+       captures its own `$myGen`.
+     - Make the launcher's `finally` a **compare-and-clear**: only `unset` the reservation AND only
+       call the registry release for `$final` when `(segmentEncodesInFlight[$final]['gen'] ?? null) ===
+       $myGen`; otherwise it is a complete no-op (a newer launcher B now owns `$final`). This is the
+       load-bearing coupling — the reservation-gen and the registry-ownership must be gated together.
+     - Add an **invalidate-on-reap callback** on `SegmentProcessRegistry` (mirror of the Chunk-1
+       waiter-guard wiring, in reverse): only on the SIGNALLED branch of `kill()` (past the defer
+       guard, `SegmentProcessRegistry.php:314+`) call `$manager->invalidateReservation($final)`, which
+       clears `segmentEncodesInFlight[$final]` (+ the `globalInFlightSnapshot` entry). Because kill()
+       reaps the current sole owner and the launcher's `finally` is now gen-guarded, the killed
+       launcher's later `finally` cannot re-clobber B. Do NOT invalidate on the DEFERRED branch.
+     - Cover BOTH `produceSegment` (video) and `produceAudioSegment` (audio) — identical reservation
+       shape at `:1131/:1188`.
+
+2. [Low — new, Chunk-2-specific] **Per-connection `onClose` + per-request arm/disarm assumes strict
+   request serialization on a connection, which the Swoole coroutine loop does not guarantee under
+   HTTP pipelining.** `$connection->onClose` is a single per-connection slot, but each `onMessage` runs
+   in its own coroutine and `produceSegment` yields (`Coroutine::sleep` :951-952). If a second request
+   is delivered on the SAME keep-alive connection while request 1 is parked mid-encode (HTTP/1.1
+   pipelining, or simply a fast follow-up the event loop dispatches during the park), request 2's
+   `armDirectCancelHook` OVERWRITES request 1's armed `onClose`, and request 2's `finally` →
+   `disarmDirectCancelHook` NULLS it (`HttpHandler.php:292/347-350`) — even a trivial non-streaming
+   request 2 that early-returns still runs the `finally` disarm. Net: request 1's disconnect-kill is
+   silently lost and its encode falls back to the `timeout <n>` backstop. Failure mode is a MISSED kill
+   (degrades to pre-Chunk-2 behavior), never a wrong-kill or crash, and mainstream clients (browsers /
+   hls.js) do not pipeline segment fetches — hence **Low**. But the code comments assert "keep-alive
+   serves sequentially" as load-bearing, which is not strictly true under the coroutine loop. Fix
+   direction: (a) at minimum, document the assumption honestly; (b) cheap partial guard — capture the
+   exact closure armed by THIS request and in `disarm` only null when it is still identical
+   (`if ($connection->onClose === $armedClosure) $connection->onClose = null;`), preventing request 2's
+   disarm from nulling request 1's live hook; full correctness under overlap would need a per-connection
+   id→closure map rather than a single slot.
+
+3. [Info — INTEGRATION observation on Chunk-1 Low #2 / all-waiters-disconnect on a SHARED encode; item
+   6] When A launches and B piggybacks on the SAME `$final` (B is `!reserved` at
+   `TranscodeManager.php:920-923`, so it registers NO PID and NO group), a disconnect by A defers
+   (guard: B still parked) and a subsequent disconnect by B is a genuine **no-op** (`killGroup(dl-B)`
+   finds no keys — B never registered one). So after BOTH leave, neither disconnect reaps the encode.
+   This is **acceptable and should be documented as such, not "fixed"**: `startSegmentEncode` encodes a
+   single bounded segment (~`segment_seconds` of content), so it completes within seconds and publishes
+   `$final`; A's and B's coroutines keep polling despite the socket closes and exit on `is_file`, and
+   A's `finally` plain-releases the registry entry. No CPU runaway (bounded work), no leak. The
+   `timeout <transcode_timeout>` wrapper remains the ONLY backstop for a genuinely STUCK (not merely
+   abandoned) shared encode — do not advertise disconnect-kill as covering that. A reap-on-last-waiter-
+   leave would be a marginal improvement but is not warranted given the bounded self-limit; record it
+   as a known accepted tradeoff.
+
+4. [Info — relay parity, item 7 + test gap, item 8] (a) **Relay parity confirmed:** `RelayConsumer::
+   onHttpCancel` (`RelayConsumer.php:1541`) reaps via the SAME `SegmentProcessRegistry::killGroup` →
+   `kill()`, so BOTH the Chunk-1 defer AND the Finding-1 reservation-invalidation gap apply identically
+   to the relay transport. The Fixer's invalidate-on-reap therefore belongs in the shared registry
+   `kill()`→manager callback so it covers relay and direct with one change (do not special-case the
+   transport). Also carry the cosmetic Chunk-1 Info #5 doc fix at `RelayConsumer.php:1534-1539` ("killed
+   immediately ... rather than running to completion" is no longer unconditionally true). (b) **Test
+   gaps:** no end-to-end test wires a REAL `HttpHandler` onClose → REAL `TranscodeManager` reservation
+   to demonstrate the Finding-1 dedup-onto-corpse 404 window (a regression there would stay green — same
+   class as Chunk-1 Reviewer finding 3a); the same-connection-pipelining onClose-clobber (Finding 2) is
+   untested; and there is no test that an EARLY-return request (before `arm`, e.g. static/media-stream)
+   still disarms idempotently. The on-box real-socket-close→onClose timing is correctly out-of-scope and
+   not counted here.
+
+Count: 4 findings (1 Medium [integration refinement of Chunk-1 #1, with the concrete token-based fix +
+clobber landmine spelled out], 1 Low [new: same-connection onClose clobber under pipelining], 2 Info
+[all-waiters-disconnect accepted tradeoff; relay parity + test gaps]). No High. Chunk 2's wiring is
+correct and the singleton/id/Context/onClose mechanics all check out; the Medium is the load-bearing
+seam the Fixer must close carefully (bare-`$final`-keyed reservation+registry = the double-encode/
+registry-clobber landmine).
+
+## Fixer — SV-4.2-disconnect (close ALL findings from both review passes) — 2026-07-13
+
+Closed every finding from the Chunk-1 per-step review (5) and the cumulative Chunk-2/seam review (4).
+Two commits: F1 alone first (concurrency change), then F2–F7. phpstan L9 + phpcs clean on all changed
+src; filtered Unit suites green. Origin master synced before each commit (local==remote, no rebase
+needed).
+
+### F1 [MEDIUM] — invalidate the dedup reservation on reap (commit 1, `41ee8b3a`)
+Implemented the cumulative reviewer's generation-token compare-and-clear design AS SPECIFIED (no
+material deviation):
+- `TranscodeManager::$segmentEncodesInFlight` reservation value changed from a bare launch-ms `int` to
+  `array{at:int, gen:int}`; `gen` minted from a new per-worker `$reservationSeq` counter (ms markers
+  can tie between two launchers, so a monotonic counter is the safe token).
+- Launcher `finally` in BOTH `produceSegment` (video) and `produceAudioSegment` (audio) is now
+  **compare-and-clear**: it clears the reservation AND calls the registry release ONLY while it still
+  owns the current generation for `$final`. A stale launcher (its encode reaped, its coroutine timing
+  out later) is a complete no-op → it cannot clobber a fresher launcher's reservation or drop its
+  registry registration (guards the SV-4.1 double-encode race + the registry cross-clobber landmine).
+  The over-cap rollback uses the same `clearReservationIfMine($final, $gen)` helper.
+- `TranscodeManager::invalidateReservation($final)` (new public) clears the in-worker reservation AND
+  the cross-worker `globalInFlightSnapshot` entry so the ≤1s snapshot can't re-dedup onto the corpse.
+- `SegmentProcessRegistry::setReapCallback()` (new) + a `$onReap` invoked ONLY on the signalled
+  branch of `kill()` (past the waiter-guard defer, with PIDs present) and BEFORE the coroutine-yielding
+  SIGTERM→SIGKILL wait, so it can only clear the reaped launcher's reservation, never a fresh
+  re-launch's. NOT invoked on the deferred branch, NOT when no PIDs.
+- Wired in `TranscodeServicesProvider` next to the existing `setWaiterGuard` (one shared registry
+  singleton → covers relay `killGroup` AND direct `onClose` AND both video+audio with one binding).
+- Files: `src/Media/Transcoding/TranscodeManager.php`, `.../SegmentProcessRegistry.php`,
+  `src/Common/Container/Providers/TranscodeServicesProvider.php`.
+- Tests (commit 1): registry-level — reap callback fires on genuine reap / NOT on defer / NOT on empty
+  (`SegmentProcessRegistryTest` +3 = 25). Manager-level (`TranscodeManagerTest`) — re-launch-after-reap
+  (i), deferred-no-invalidate, stale-launcher-finally no-clobber via a REAL `produceSegment` run (ii),
+  audio gen-stamp (iv-audio), relay `killGroup` parity (v), dedup-intact-when-not-killed (iii, SV-4.1).
+  Existing reconcile-shape tests updated to `{at,gen}`. Note: an arrow fn cannot declare `: void` — the
+  reap-callback wiring uses a normal closure (caught by `php -l` pre-commit).
+
+### F2 [claim-accuracy/doc] — corrected overclaiming docblocks/comments (commit 2)
+- `SegmentProcessRegistry` class docblock + `$hasOtherWaiter` docblock + `kill()` inline comment: the
+  guard now says it NARROWS the shared-encode 404 window; the RESERVATION gap is closed separately by
+  the F1 reap callback. Removed the "a later kill reaps it once they leave" claim everywhere — a
+  DEFERRED encode is NOT re-killed later; it completes+publishes normally and is dropped by the
+  launcher's own wait-timeout release (`timeout <n>` backstops a genuinely stuck one).
+- `TranscodeManager::hasOtherWaiter` docblock: clarified it only protects an ALREADY-parked
+  piggybacker; a just-after-reap requester is handled by `invalidateReservation` (F1).
+
+### F3 [Low, pipelining clobber] — identity-guarded disarm (commit 2)
+- `HttpHandler::disarmDirectCancelHook(TcpConnection, mixed $armed)`: clears the (per-coroutine) cancel
+  group unconditionally, but nulls `$connection->onClose` ONLY when it is still the exact closure THIS
+  request armed. `__invoke` captures `$armedOnClose = $connection->onClose` right after arming (declared
+  `null` before the try so it's defined on every finally path incl. early returns). A pipelined 2nd
+  request's disarm can no longer null a parked 1st request's live hook; an early-return request
+  (`$armed = null`) leaves a parked sibling hook intact. Fails safe either way.
+- Tests: `testDisarmOnlyNullsTheClosureThisRequestArmed`, `testDisarmDoesNotNullAParkedHookWhenThisRequestNeverArmed`.
+
+### F4 [Info] — guard try/catch (commit 2)
+- `SegmentProcessRegistry::kill()` now wraps the `hasOtherWaiter` guard call in try/catch: a throwing
+  guard is treated as "no other waiter" and the kill PROCEEDS to reap (fail-safe — never strand a PID),
+  logging a warning. Covered by the F4 change; the pure-array-read guard cannot throw in practice.
+
+### F5 [Info] — RelayConsumer comment (commit 2)
+- `RelayConsumer::onHttpCancel` comment corrected: the kill is waiter-aware since SV-4.2-disconnect
+  (killGroup DEFERS a key with a live piggybacker rather than killing immediately) and invalidates the
+  reservation on a genuine reap (F1) — no longer an unconditional immediate reap.
+
+### F6 [Info] — all-waiters-disconnect accepted tradeoff (commit 2)
+- Added a comment in `produceSegment`'s piggyback branch documenting that a piggybacker registers no
+  registry PID/group, so if the launcher AND every piggybacker disconnect neither reaps the shared
+  encode — INTENTIONAL and bounded (single-segment encode self-limits + coroutine poll-timeout +
+  `timeout <n>` backstop). No reap-on-last-waiter machinery built.
+
+### F7 — remaining test gaps (commit 2)
+- leak-on-exception: `testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows` — the waiter ref-count
+  decrements in the finally even when the poll body throws (no phantom waiter deferring future kills).
+- real-DI-guard integration: `TranscodeServicesProviderTest::test_provider_wires_real_waiter_guard_and_reap_callback`
+  builds the FULL container and proves the provider binds the REAL `hasOtherWaiter` guard AND the REAL
+  `invalidateReservation` reap callback (a broken binding goes RED; unit registry tests use fake
+  closures and cannot catch that). Signalling neutralised via reflection so no real process group is hit.
+- e2e HttpHandler onClose → real reservation: `HttpHandlerDirectCancelHookTest::testOnCloseReapsPidAndInvalidatesRealManagerReservation`
+  wires a REAL registry↔REAL TranscodeManager, arms the hook, registers a PID + reservation, fires
+  onClose, asserts the PID is reaped AND the reservation invalidated (ties F1 + Chunk 2).
+- pipelining-clobber: the two F3 tests above.
+
+### Verification (real numbers)
+- `php -l` clean on all changed files.
+- phpstan L9 (`-c phpstan.neon.dist`): [OK] No errors on all 5 changed src files (F1 subset + F2–F6).
+- phpcs PSR12: 0 ERRORS on all changed src (only pre-existing >120-char WARNINGS; none on added lines).
+- Filtered Unit `--filter 'Transcode|SegmentProcess|Ffmpeg|HttpHandler|RelayConsumer|RequestContext'`:
+  OK (406 tests, 1632 assertions). Per file: TranscodeManagerTest 100, SegmentProcessRegistryTest 25,
+  HttpHandlerDirectCancelHookTest 11, TranscodeServicesProviderTest 3, RelayConsumerTest 50.
+- Commits: F1 `41ee8b3a` (pushed), F2–F7 `<second-hash>` (pushed). Origin master synced.

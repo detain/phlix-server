@@ -1533,11 +1533,16 @@ final class RelayConsumer
 
         // SV-4.2 ([S-F23], X1 server half): kill any on-demand ffmpeg encode this
         // relayed request launched so an abandoned scrub-storm segment stops
-        // burning CPU immediately rather than running to completion. The encode is
-        // tracked in the registry by its segment path but grouped under this
-        // channel/request id (the group is published into RequestContext during
-        // dispatch — see dispatchWithDeadline), so a group kill finds it by
-        // channel id. A no-op when nothing is tracked for this channel.
+        // burning CPU instead of running to completion. The encode is tracked in
+        // the registry by its segment path but grouped under this channel/request
+        // id (the group is published into RequestContext during dispatch — see
+        // dispatchWithDeadline), so a group kill finds it by channel id. A no-op
+        // when nothing is tracked for this channel. Since SV-4.2-disconnect the
+        // kill is WAITER-AWARE: if a second client is still piggybacked on the same
+        // shared encode, killGroup DEFERS that key (leaving it running for the
+        // remaining waiter) rather than killing it immediately — so this is not an
+        // unconditional immediate reap. On a genuine reap it also invalidates the
+        // manager's dedup reservation (F1) so the next requester re-launches.
         $killed = $this->segmentRegistry?->killGroup((string) $channelId) ?? 0;
         if ($killed > 0) {
             $this->logger->info('RelayConsumer: killed abandoned encode(s) on HTTP_CANCEL', [

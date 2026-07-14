@@ -118,6 +118,12 @@ final class HttpHandler
         // wall-clock adjustments (NTP/DST), unlike microtime(true).
         $startTime = hrtime(true);
         $responseStatus = 200;
+        // SV-4.2-disconnect F3: the exact onClose closure THIS request armed (null
+        // until/unless it reaches the arm site). Captured so the finally's disarm
+        // compares identity and never nulls a parked sibling request's live hook on
+        // a keep-alive connection. Declared here so it is defined on EVERY finally
+        // path, including an early return before the hook is armed.
+        $armedOnClose = null;
 
         try {
             $request = Request::fromWorkerman($wr, $connection);
@@ -210,6 +216,10 @@ final class HttpHandler
             // kill is waiter-aware (Chunk 1): a piggybacking peer still waiting on
             // the same segment defers it. Torn down in the finally.
             $this->armDirectCancelHook($connection);
+            // F3: remember EXACTLY the closure we just armed so the finally's disarm
+            // only nulls onClose when it is still ours — a pipelined 2nd request on
+            // this keep-alive connection must not null a parked 1st request's hook.
+            $armedOnClose = $connection->onClose;
 
             // 1) Try the fully-populated Application router first. It
             //    owns every /api/*, /health, /system/info, /.well-known,
@@ -285,11 +295,11 @@ final class HttpHandler
             // completed (the coroutine is no longer parked mid-encode; the encode,
             // if any, has already published + released). Idempotent and safe on
             // every path — including requests that returned before the hook was
-            // armed. Keep-alive serves sequentially, so the next __invoke rebinds a
-            // fresh id + closure; nulling onClose here means a later real socket
-            // close on this connection cannot fire a stale killGroup against an id
-            // whose encode is already gone.
-            $this->disarmDirectCancelHook($connection);
+            // armed. Nulling onClose is IDENTITY-GUARDED (F3): only our own armed
+            // closure is cleared, so a later real socket close on this connection
+            // cannot fire a stale killGroup for an already-gone encode, AND a
+            // pipelined sibling request's live hook is never clobbered.
+            $this->disarmDirectCancelHook($connection, $armedOnClose);
 
             // Record on EVERY path — success, early return, or exception. Uses the
             // always-defined Workerman request ($wr) for method/route so a throw in
@@ -347,18 +357,28 @@ final class HttpHandler
      * Tear down the direct-LAN disconnect→kill hook after the request completes
      * (SV-4.2-disconnect).
      *
-     * Clears the request's cancel group and nulls the per-connection `onClose`
-     * (restoring the worker's default) so a later real socket close on a
-     * keep-alive connection cannot fire a stale {@see SegmentProcessRegistry::killGroup()}
-     * against an id whose encode already published + released. Idempotent — safe
-     * on every path, including requests that returned before the hook was armed.
+     * Clears the request's (per-coroutine) cancel group unconditionally, then
+     * nulls the per-connection `onClose` ONLY when it is still the exact closure
+     * THIS request armed (F3 identity guard). This restores the worker default so
+     * a later real socket close on a keep-alive connection cannot fire a stale
+     * {@see SegmentProcessRegistry::killGroup()} for an already-gone encode, while
+     * NOT clobbering a pipelined sibling request's live hook: if a 2nd request is
+     * delivered on the same connection while a 1st is parked mid-encode, the 1st's
+     * armed closure differs from `$armed` here, so it is left intact. When this
+     * request never armed (an early return before the arm site), `$armed` is null
+     * and the identity check is a safe no-op. Fails safe either way — a missed
+     * null is at worst a stale hook the next arm overwrites.
      *
      * @param TcpConnection $connection The connection whose hook to reset.
+     * @param mixed         $armed      The onClose closure this request armed
+     *                                  (null when it never armed).
      */
-    private function disarmDirectCancelHook(TcpConnection $connection): void
+    private function disarmDirectCancelHook(TcpConnection $connection, mixed $armed): void
     {
         RequestContext::clearCancelGroup();
-        $connection->onClose = null;
+        if ($connection->onClose === $armed) {
+            $connection->onClose = null;
+        }
     }
 
     /**

@@ -2329,6 +2329,41 @@ class TranscodeManagerTest extends TestCase
         );
     }
 
+    public function testSegmentWaiterCountReturnsToZeroWhenPollBodyThrows(): void
+    {
+        // SV-4.2-disconnect F7 (leak-on-exception): the waiter ref-count
+        // (segmentWaiters) must decrement in the finally even when the poll body
+        // throws mid-launch. A leaked waiter would keep the segment permanently
+        // "wanted" (hasOtherWaiter true) and wrongly DEFER every future kill for it.
+        $dir = $this->segmentDir . '/f7-waiter-throw';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->onDemandJobRow($dir, $input), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $manager = $this->segManager($db, $ff, null, null, null, 100);
+
+        $final = "{$dir}/seg-00008.ts";
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function () use ($manager, $final): int {
+                $this->assertSame(1, $manager->waiterCount($final), 'the launcher is counted before the throw');
+                throw new \RuntimeException('ffmpeg arg builder blew up');
+            }
+        );
+
+        $thrown = null;
+        try {
+            $manager->ensureSegment('seg-job', null, 8);
+        } catch (\RuntimeException $e) {
+            $thrown = $e;
+        }
+
+        $this->assertNotNull($thrown, 'the exception propagates, it is not swallowed');
+        $this->assertSame(0, $manager->waiterCount($final), 'F7: waiter ref-count decremented on a mid-poll throw — no leak');
+        $this->assertFalse($manager->hasOtherWaiter($final), 'no phantom waiter left to defer future kills');
+    }
+
     public function testEnsureSegmentResolvesCopyOriginalVariant(): void
     {
         // The copy "original" (H.264 + AAC source) resolves to a genuine -c copy

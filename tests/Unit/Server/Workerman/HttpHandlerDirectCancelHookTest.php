@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Phlix\Tests\Unit\Server\Workerman;
 
 use Phlix\Auth\AuthManager;
+use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\SegmentProcessRegistry;
+use Phlix\Media\Transcoding\TranscodeManager;
 use Phlix\Server\Core\Application;
 use Phlix\Server\Http\RequestAuthenticator;
 use Phlix\Server\Http\RequestContext;
@@ -14,7 +16,9 @@ use Phlix\Server\Workerman\HttpHandler;
 use PHPUnit\Framework\TestCase;
 use Psr\Container\ContainerInterface;
 use ReflectionMethod;
+use ReflectionProperty;
 use Workerman\Connection\TcpConnection;
+use Workerman\MySQL\Connection;
 use Workerman\Protocols\Http\Request as WorkermanRequest;
 
 /**
@@ -120,11 +124,11 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
         return $id;
     }
 
-    private function disarm(HttpHandler $handler, TcpConnection $conn): void
+    private function disarm(HttpHandler $handler, TcpConnection $conn, mixed $armed = null): void
     {
         $m = new ReflectionMethod(HttpHandler::class, 'disarmDirectCancelHook');
         $m->setAccessible(true);
-        $m->invoke($handler, $conn);
+        $m->invoke($handler, $conn, $armed);
     }
 
     // --- SS-4(a): id minting is unique + monotonic --------------------------
@@ -269,10 +273,60 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
         self::assertIsCallable($conn->onClose);
         self::assertNotNull(RequestContext::getCancelGroup());
 
-        $this->disarm($handler, $conn);
+        // Disarm with the closure this request armed (F3 identity guard) → nulled.
+        $this->disarm($handler, $conn, $conn->onClose);
 
         self::assertNull($conn->onClose, 'onClose must be reset so a later close cannot fire a stale kill');
         self::assertNull(RequestContext::getCancelGroup(), 'the cancel group must be cleared after the request');
+    }
+
+    // --- F3: disarm is identity-guarded (pipelining-clobber safety) ----------
+
+    public function testDisarmOnlyNullsTheClosureThisRequestArmed(): void
+    {
+        // Two requests overlap on ONE keep-alive connection: request 1 arms C1 and
+        // parks mid-encode; request 2 arms C2 (overwriting the slot). When request
+        // 1's disarm runs with ITS armed closure (C1), it must NOT null the current
+        // hook — which is now request 2's live C2 — so request 2's disconnect-kill
+        // survives. Only a disarm carrying the CURRENT closure nulls it.
+        $signalled = [];
+        $handler = $this->makeHandler($this->makeRegistry($signalled));
+        $conn = $this->makeConnection();
+
+        $this->arm($handler, $conn);
+        $armed1 = $conn->onClose;          // request 1's hook (C1)
+        self::assertIsCallable($armed1);
+
+        $this->arm($handler, $conn);
+        $armed2 = $conn->onClose;          // request 2's hook (C2), now installed
+        self::assertIsCallable($armed2);
+        self::assertNotSame($armed1, $armed2, 'each arm installs a distinct closure');
+
+        // Request 1's (stale) disarm must leave request 2's live hook intact.
+        $this->disarm($handler, $conn, $armed1);
+        self::assertSame($armed2, $conn->onClose, 'a stale disarm must not null a sibling request live hook');
+
+        // Request 2's own disarm (carrying the current closure) does null it.
+        $this->disarm($handler, $conn, $armed2);
+        self::assertNull($conn->onClose, 'the owning request disarm nulls its own hook');
+    }
+
+    public function testDisarmDoesNotNullAParkedHookWhenThisRequestNeverArmed(): void
+    {
+        // An early-return request (before the arm site) disarms with $armed = null.
+        // It must NOT null a parked sibling request's live hook on the connection.
+        $signalled = [];
+        $handler = $this->makeHandler($this->makeRegistry($signalled));
+        $conn = $this->makeConnection();
+
+        $this->arm($handler, $conn);       // a sibling request armed a live hook
+        $parked = $conn->onClose;
+        self::assertIsCallable($parked);
+
+        // This request never armed → $armed is null.
+        $this->disarm($handler, $conn, null);
+
+        self::assertSame($parked, $conn->onClose, 'an unarmed request disarm must leave a parked hook intact');
     }
 
     // --- Full __invoke: arm-before-dispatch + reset-in-finally --------------
@@ -320,5 +374,68 @@ final class HttpHandlerDirectCancelHookTest extends TestCase
         self::assertIsCallable($captured['onClose']);
         ($captured['onClose'])();
         self::assertSame([4242], $signalled, 'the armed onClose must kill the request-group encode');
+    }
+
+    // --- F7 e2e: onClose → REAL registry → REAL TranscodeManager reservation ---
+
+    public function testOnCloseReapsPidAndInvalidatesRealManagerReservation(): void
+    {
+        // Ties Chunk 2 (HttpHandler onClose) to F1 (reservation invalidation) with a
+        // REAL SegmentProcessRegistry wired to a REAL TranscodeManager exactly as the
+        // provider does. A direct-LAN disconnect mid-encode must BOTH reap the PID
+        // AND release the dedup reservation, so a subsequent requester for the same
+        // segment re-launches instead of deduping onto the killed corpse (a 404).
+        $signalled = [];
+        $registry = $this->makeRegistry($signalled);
+
+        $segmentDir = sys_get_temp_dir() . '/phlix_hh_f7_' . bin2hex(random_bytes(4));
+        @mkdir($segmentDir, 0700, true);
+        $manager = new TranscodeManager(
+            $this->createMock(Connection::class),
+            $this->createMock(FfmpegRunner::class),
+            $segmentDir,
+            null,
+            6,
+        );
+        // Wire the two callbacks the way TranscodeServicesProvider does.
+        $registry->setWaiterGuard(static fn (string $key): bool => $manager->hasOtherWaiter($key));
+        $registry->setReapCallback(static function (string $key) use ($manager): void {
+            $manager->invalidateReservation($key);
+        });
+
+        $handler = $this->makeHandler($registry);
+        $conn = $this->makeConnection();
+        $id = $this->arm($handler, $conn);
+
+        // Model an on-demand encode launched during dispatch: a live reservation in
+        // the manager + a tracked PID under the request's cancel group.
+        $final = $segmentDir . '/job/seg-v720p-00012.ts';
+        $resv = new ReflectionProperty(TranscodeManager::class, 'segmentEncodesInFlight');
+        $resv->setAccessible(true);
+        $resv->setValue($manager, [$final => ['at' => 1, 'gen' => 1]]);
+        $registry->register($final, 9999, $id);
+
+        // Sanity: a fresh requester would currently dedup onto this in-flight encode.
+        $inFlight = new ReflectionMethod(TranscodeManager::class, 'segmentEncodeInFlight');
+        $inFlight->setAccessible(true);
+        self::assertTrue($inFlight->invoke($manager, $final));
+
+        // The socket FINs/RSTs mid-encode → Workerman fires onClose.
+        $onClose = $conn->onClose;
+        self::assertIsCallable($onClose);
+        ($onClose)();
+
+        // The PID was reaped...
+        self::assertSame([9999], $signalled, 'the abandoned encode PID was signalled');
+        self::assertSame([], $registry->pidsFor($final), 'the PID was dropped from the registry');
+        // ...AND the dedup reservation was invalidated, so the next requester
+        // re-launches (F1) — no dedup-onto-corpse 404.
+        self::assertFalse(
+            $inFlight->invoke($manager, $final),
+            'F1+Chunk2: onClose reap invalidates the reservation so the next requester re-launches',
+        );
+
+        @rmdir($segmentDir . '/job');
+        @rmdir($segmentDir);
     }
 }

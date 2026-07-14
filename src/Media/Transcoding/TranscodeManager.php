@@ -949,6 +949,18 @@ class TranscodeManager
             if (!$reserved) {
                 // segmentEncodeInFlight was true — an encode for this exact segment
                 // is already running; piggyback on it rather than spawning a duplicate.
+                // SV-4.2-disconnect F6 (ACCEPTED TRADEOFF): a piggybacker registers
+                // NO registry PID and NO cancel group of its own, so its disconnect
+                // is a no-op reap. If the launcher AND every piggybacker on a shared
+                // encode all disconnect, neither disconnect reaps it. This is
+                // intentional and NOT a bug: startSegmentEncode encodes a single
+                // bounded segment (~segment_seconds), so it self-limits — it
+                // completes and publishes within seconds while the abandoned
+                // coroutines keep polling (they exit on is_file, and the launcher's
+                // finally plain-releases the registry entry). The `timeout <n>`
+                // wrapper remains the ONLY backstop for a genuinely STUCK (not merely
+                // abandoned) shared encode. We deliberately do NOT build
+                // reap-on-last-waiter machinery for this bounded case.
                 $this->touchJobDir($dir);
             } else {
                 // We hold the reservation. Launch the encode.
@@ -1265,6 +1277,12 @@ class TranscodeManager
      * launcher contributes exactly 1 to the count. A count above 1 therefore
      * means at least one PIGGYBACKER joined the same in-flight encode and still
      * wants the segment, so the shared encode must not be killed.
+     *
+     * This guard only NARROWS the shared-encode 404 window (it protects a
+     * piggybacker that is ALREADY parked at kill time). It does not, on its own,
+     * cover a requester that arrives just AFTER a genuine reap — that case is
+     * handled separately by {@see invalidateReservation()} (F1), invoked from the
+     * registry's reap callback on the signalled kill branch.
      *
      * @param string $final Final segment path (the registry cancel key).
      *

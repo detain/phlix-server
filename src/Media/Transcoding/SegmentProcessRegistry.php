@@ -53,9 +53,19 @@ use Psr\Log\NullLogger;
  * optional waiter guard ({@see setWaiterGuard()}, wired from
  * {@see \Phlix\Media\Transcoding\TranscodeManager::hasOtherWaiter()}) and
  * DEFERS the kill (leaving the entry tracked) whenever another waiter is still
- * present; the encode keeps running for them and a later kill reaps it once
- * they leave. With no other waiter — the common case — the kill signals + reaps
- * exactly as before.
+ * present. A deferred encode is NOT re-killed later: it keeps running for the
+ * remaining waiter(s) and completes + publishes normally, and its registry entry
+ * is then dropped by the launcher's own wait-timeout release (or, for a genuinely
+ * stuck encode, the `timeout <n>` wrapper). With no other waiter — the common
+ * case — the kill signals + reaps exactly as before.
+ *
+ * On a genuine (non-deferred) reap, {@see kill()} also invokes an optional reap
+ * callback ({@see setReapCallback()}, SV-4.2-disconnect F1) so the owner
+ * ({@see TranscodeManager}) can invalidate its dedup RESERVATION for the reaped
+ * segment — otherwise the next requester would dedup onto the killed encode and
+ * 404 until the reservation self-heals. That reservation invalidation, NOT this
+ * guard, is what closes the shared-encode dedup gap; the guard only narrows the
+ * live-piggybacker 404 window.
  *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
@@ -146,8 +156,10 @@ final class SegmentProcessRegistry
      * segment (a piggybacker that joined the launcher's in-flight encode rather
      * than launching its own), so the shared encode MUST NOT be killed: doing so
      * would 404 the other waiter. The kill is then DEFERRED (the entry is left
-     * fully tracked) so the encode keeps running for the remaining waiter(s) and
-     * a later kill (once they leave) can still reap it.
+     * fully tracked) so the encode keeps running for the remaining waiter(s); it
+     * is NOT re-killed later — it completes + publishes normally and its entry is
+     * dropped by the launcher's own wait-timeout release (`timeout <n>` backstops
+     * a genuinely stuck one).
      *
      * Wired at container-build time from the {@see TranscodeManager} per-worker
      * singleton ({@see \Phlix\Media\Transcoding\TranscodeManager::hasOtherWaiter()})
@@ -334,13 +346,32 @@ final class SegmentProcessRegistry
         // in-flight encode rather than spawning its own — do NOT signal. Killing
         // the shared encode here would 404 that other waiter. Leave the entry
         // FULLY tracked (PIDs, temps, group links) so the encode keeps running for
-        // the remaining waiter(s); once they leave, a later kill reaps it. The
+        // the remaining waiter(s). It is NOT re-killed later: it completes +
+        // publishes normally and its entry is then dropped by the launcher's own
+        // wait-timeout release (`timeout <n>` backstops a genuinely stuck one). The
         // launcher whose cancel reached this kill is itself counted as a waiter,
         // so the guard fires ONLY when a SECOND waiter genuinely exists — the
         // overwhelmingly common sole-waiter cancel still signals + reaps exactly
-        // as before. This closes the latent relay-path bug (two hub channels
-        // requesting the same $final) without weakening normal cancellation.
-        if ($this->hasOtherWaiter !== null && ($this->hasOtherWaiter)($key)) {
+        // as before. This NARROWS the shared-encode 404 window (two hub channels /
+        // two viewers on the same $final); the dedup RESERVATION gap is closed
+        // separately by the reap callback on the signalled branch below (F1).
+        $defer = false;
+        if ($this->hasOtherWaiter !== null) {
+            try {
+                $defer = ($this->hasOtherWaiter)($key);
+            } catch (\Throwable $e) {
+                // F4 fail-safe: a throwing guard must NEVER strand a PID. Treat a
+                // guard exception as "no other waiter" and proceed to reap — a lost
+                // kill (orphaned ffmpeg burning CPU) is strictly worse than a rare
+                // 404 for a hypothetical piggybacker the guard could not confirm.
+                $this->logger->warning(
+                    'SegmentProcessRegistry: waiter guard threw; proceeding to reap (fail-safe)',
+                    ['key' => $key, 'exception' => $e::class, 'message' => $e->getMessage()],
+                );
+                $defer = false;
+            }
+        }
+        if ($defer) {
             $this->logger->debug(
                 'SegmentProcessRegistry: deferring kill — another waiter still present',
                 ['key' => $key],

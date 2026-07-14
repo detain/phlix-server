@@ -1927,6 +1927,162 @@ class TranscodeManagerTest extends TestCase
     }
 
     /**
+     * SV-1.1(b′): segmentParamsForRendition() rebuilds a multi-variant job's
+     * segParams FRESH per-rendition and carries NEITHER `require_hdr_tone_map`
+     * nor the resolved `tone_map_filter` STRING — so proving a MULTI-VARIANT
+     * (ABR) job's per-rendition segment encode uses the threaded tone-map string
+     * (instead of re-deriving the HDR decision per segment) requires
+     * {@see TranscodeManager::applyToneMap()} to merge both back in from the
+     * row's persisted base `segment_params`. This is the persist→decode→merge
+     * round-trip: the flag+filter resolved ONCE at job creation
+     * ({@see TranscodeManager::computeSegmentParams()}) reach the per-rendition
+     * encode contract without any per-segment probe.
+     */
+    public function testEnsureSegmentThreadsToneMapFilterForMultiVariantHdrJob(): void
+    {
+        $canon = 'zscale=t=linear:npl=100,format=gbrpf32le,'
+            . 'zscale=p=bt709,tonemap=hable:desat=0,'
+            . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+
+        $dir = $this->segmentDir . '/mv-tonemap';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $jobRow = $this->multiVariantJobRow($dir, $input, $ladderJson);
+        // Base segment_params as computeSegmentParams() persists it for an HDR
+        // source: the job-level flag + the tone-map filter resolved ONCE (final
+        // codec libx264, post copy→libx264 upgrade).
+        $jobRow['segment_params'] = json_encode([
+            'video_codec' => 'libx264',
+            'audio_codec' => 'aac',
+            'require_hdr_tone_map' => true,
+            'tone_map_filter' => $canon,
+        ]);
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $jobRow, $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        // The threaded filter must reach the encode WITHOUT any per-segment
+        // re-derive: neither needsToneMapping() nor getToneMappingProfile() (nor a
+        // probe) is consulted on the multi-variant produce path.
+        $ff->expects($this->never())->method('needsToneMapping');
+        $ff->expects($this->never())->method('getToneMappingProfile');
+        $ff->expects($this->never())->method('resolveToneMapFilterFromProbe');
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertTrue($captParams['require_hdr_tone_map'] ?? null);
+        $this->assertSame($canon, $captParams['tone_map_filter'] ?? null);
+        // The rendition-specific encode contract (transcode rung → libx264) is
+        // untouched by the merge — the tone-map keys ride ALONGSIDE it.
+        $this->assertSame('libx264', $captParams['video_codec']);
+    }
+
+    /**
+     * SV-1.1(b′) fallback: a multi-variant job whose persisted base
+     * `segment_params` carries NO `require_hdr_tone_map`/`tone_map_filter` (a
+     * pre-b′ job, un-rescanned item, or plain SDR source) must NOT have either
+     * key injected into its per-rendition segParams — so the ABR builders keep
+     * their legacy per-segment fallback (unchanged behaviour). Mutation sense:
+     * red if applyToneMap injects a key unconditionally.
+     */
+    public function testEnsureSegmentOmitsToneMapForMultiVariantJobWithoutBaseFlag(): void
+    {
+        $dir = $this->segmentDir . '/mv-tonemap-sdr';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        // multiVariantJobRow()'s default base segment_params carries neither key.
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+        $ff = $this->createMock(FfmpegRunner::class);
+        $captParams = null;
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out, float $start, float $len, array $params) use (&$captParams): int {
+                $captParams = $params;
+                file_put_contents($out, 'encoded');
+                return 1;
+            }
+        );
+
+        $this->manager($db, $ff)->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertNotNull($captParams);
+        $this->assertArrayNotHasKey('require_hdr_tone_map', $captParams);
+        $this->assertArrayNotHasKey('tone_map_filter', $captParams);
+    }
+
+    /**
+     * SV-1.1(b′) build proof: the REAL per-rendition params
+     * ({@see TranscodeManager::segmentParamsForRendition()}) for a transcode rung,
+     * once the tone-map flag+filter are merged in (as
+     * {@see TranscodeManager::applyToneMap()} does), drive
+     * {@see FfmpegRunner::buildSegmentCommand()} to emit the threaded string
+     * VERBATIM (byte-identical `-vf` graph, tone-map BEFORE scale per SV-1.6) with
+     * ZERO probe()/needsToneMapping()/getToneMappingProfile() re-derivation. Uses
+     * the call-counting {@see ToneMapThreadingSpyRunner} from sub-step (b).
+     */
+    public function testMultiVariantRenditionToneMapParamsBuildWithoutReDeriving(): void
+    {
+        $canon = 'zscale=t=linear:npl=100,format=gbrpf32le,'
+            . 'zscale=p=bt709,tonemap=hable:desat=0,'
+            . 'zscale=t=bt709:m=bt709:r=tv,format=yuv420p';
+
+        // The genuine per-rendition encode contract for a 480p transcode rung.
+        $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
+        $forRendition->setAccessible(true);
+        /** @var array<string, mixed> $segParams */
+        $segParams = $forRendition->invoke(null, [
+            'is_copy' => false,
+            'video_bitrate' => 1400000,
+            'codecs' => 'avc1.64001f,mp4a.40.2',
+            'width' => 854,
+            'height' => 480,
+        ]);
+        $this->assertSame('libx264', $segParams['video_codec']);
+
+        // Merge the tone-map flag+filter exactly as applyToneMap() would.
+        $segParams['require_hdr_tone_map'] = true;
+        $segParams['tone_map_filter'] = $canon;
+
+        $runner = new ToneMapThreadingSpyRunner('FALLBACK_DERIVED_TONEMAP_FILTER');
+        $cmd = $runner->buildSegmentCommand('/in.mkv', '/out/seg-v480p-00002.ts', 12.0, 6.0, $segParams);
+
+        $this->assertStringContainsString('-vf "' . $canon, $cmd);
+        $this->assertStringNotContainsString('FALLBACK_DERIVED_TONEMAP_FILTER', $cmd);
+        // SV-1.6 ordering: tone-map precedes the rung scale in the -vf chain.
+        $tonePos = strpos($cmd, $canon);
+        $scalePos = strpos($cmd, 'scale=854:480');
+        $this->assertIsInt($tonePos);
+        $this->assertIsInt($scalePos);
+        $this->assertLessThan($scalePos, $tonePos, 'tone-map must precede scale');
+        // Zero per-segment re-derive on the ABR build path.
+        $this->assertSame(0, $runner->probeCalls);
+        $this->assertSame(0, $runner->needsToneMappingCalls);
+        $this->assertSame(0, $runner->getToneMappingProfileCalls);
+    }
+
+    /**
      * SV-4.2 ([S-F23]) fix (findings #1/#2): when a launched segment encode never
      * publishes within THIS request's poll window, that is a WAIT-TIMEOUT, not
      * abandonment. The poll loop's finally must NOT kill the encode — a

@@ -7,7 +7,9 @@ namespace Phlix\Tests\Unit\Media\Transcoding;
 use Phlix\Media\Transcoding\FfmpegRunner;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelCapability;
 use Phlix\Media\Transcoding\Hwaccel\HwaccelRegistry;
+use Phlix\Media\Transcoding\TranscodeManager;
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 
 /**
  * SV-1.1(b): the HDR tone-map filter STRING is resolved ONCE at job-creation
@@ -250,5 +252,57 @@ final class FfmpegRunnerToneMapThreadingTest extends TestCase
         $this->assertNotNull($cmd);
         $this->assertStringContainsString(self::FALLBACK_TONE_MAP, $cmd);
         $this->assertSame(1, $runner->getToneMappingProfileCalls, 'fallback must re-derive exactly once');
+    }
+
+    // ---- ABR rendition params (SV-1.1(b′)) --------------------------------
+
+    /**
+     * SV-1.1(b′): the REAL per-rendition params
+     * ({@see TranscodeManager::segmentParamsForRendition()}) for a transcode rung,
+     * with the tone-map flag+filter merged in (as
+     * {@see TranscodeManager::applyToneMap()} threads them from the job's base
+     * segment_params), drive the HWACCEL builder to emit the threaded string
+     * VERBATIM (tone-map before scale per SV-1.6) with ZERO
+     * probe()/needsToneMapping()/getToneMappingProfile() re-derivation — matching
+     * the single-variant path. Together with the software builder proof in
+     * {@see \Phlix\Tests\Unit\Media\Transcoding\TranscodeManagerTest::testMultiVariantRenditionToneMapParamsBuildWithoutReDeriving()}
+     * this covers BOTH ABR segment builders.
+     */
+    public function testAbrRenditionHwaccelSegmentUsesThreadedFilterWithoutReDeriving(): void
+    {
+        // Genuine 480p transcode-rung encode contract (libx264 + rung scale/VBV).
+        $forRendition = new ReflectionMethod(TranscodeManager::class, 'segmentParamsForRendition');
+        $forRendition->setAccessible(true);
+        /** @var array<string, mixed> $segParams */
+        $segParams = $forRendition->invoke(null, [
+            'is_copy' => false,
+            'video_bitrate' => 1400000,
+            'codecs' => 'avc1.64001f,mp4a.40.2',
+            'width' => 854,
+            'height' => 480,
+        ]);
+        $this->assertSame('libx264', $segParams['video_codec']);
+        // Merge exactly what applyToneMap() threads in from base segment_params.
+        $segParams['require_hdr_tone_map'] = true;
+        $segParams['tone_map_filter'] = self::CANON_TONE_MAP;
+
+        $registry = $this->seedRegistry(['nvenc' => $this->hdrCapableNvenc()]);
+        $runner = $this->spyRunner();
+        $runner->setConfig(['enabled' => true, 'prefer_hardware' => true]);
+        $runner->probeHardwareAcceleration($registry);
+        $runner->resetCounters();
+
+        $cmd = $runner->buildHwaccelSegmentCommand('/in.mkv', '/out/seg-v480p-00002.ts', 12.0, 6.0, $segParams);
+
+        $this->assertNotNull($cmd);
+        $this->assertStringContainsString(self::CANON_TONE_MAP, $cmd);
+        $this->assertStringNotContainsString(self::FALLBACK_TONE_MAP, $cmd);
+        // SV-1.6 ordering: tone-map precedes the rung scale in the filter chain.
+        $tonePos = strpos($cmd, self::CANON_TONE_MAP);
+        $scalePos = strpos($cmd, 'scale=854:480');
+        $this->assertIsInt($tonePos);
+        $this->assertIsInt($scalePos);
+        $this->assertLessThan($scalePos, $tonePos, 'tone-map must precede scale');
+        $this->assertNoReDerive($runner);
     }
 }

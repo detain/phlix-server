@@ -723,6 +723,15 @@ class TranscodeManager
             if ($this->audioTracksOf($entry) !== null) {
                 $segParams['video_only'] = true;
             }
+            // SV-1.1(b′): segmentParamsForRendition() likewise rebuilds params fresh
+            // per-rendition and carries NEITHER the job-level require_hdr_tone_map nor
+            // the resolved tone_map_filter STRING — so without this merge every ABR
+            // rendition segment would re-derive the HDR decision per segment via
+            // needsToneMapping()/getToneMappingProfile() (the per-segment re-derive
+            // SV-1.1 kills). Merge the flag+filter (resolved ONCE at job creation by
+            // computeSegmentParams()) back in from the row's persisted base
+            // segment_params so every rendition uses the threaded string directly.
+            $segParams = $this->applyToneMap($row, $segParams);
             // SV-1.6: segmentParamsForRendition() rebuilds params fresh per-rendition
             // from the ABR ladder and therefore does NOT carry the job-level
             // subtitle_burn_in_index/force_subtitle_burn_in persisted in the row's
@@ -754,6 +763,64 @@ class TranscodeManager
         $segParams = $this->applySubtitleBurnIn($row, $segParams);
 
         return $this->produceSegment($jobId, $row, null, $index, $segParams);
+    }
+
+    /**
+     * Merges the job-level HDR tone-map decision — `require_hdr_tone_map` plus the
+     * resolved `tone_map_filter` STRING (SV-1.1(b)) — from the job row's persisted
+     * base `segment_params` JSON into a per-rendition `$segParams` (SV-1.1(b′)).
+     *
+     * The multi-variant/ABR path rebuilds `$segParams` fresh per-rendition via
+     * {@see segmentParamsForRendition()}, which carries NEITHER key. Without this
+     * merge, every ABR rendition segment falls into the legacy per-segment
+     * re-derive in {@see FfmpegRunner::buildSegmentCommand()} /
+     * {@see FfmpegRunner::buildHwaccelSegmentCommand()} — i.e. a
+     * {@see FfmpegRunner::needsToneMapping()} +
+     * {@see FfmpegRunner::getToneMappingProfile()} call PER SEGMENT (the exact
+     * re-derive SV-1.1 exists to eliminate). Threading the flag+filter — resolved
+     * ONCE at job creation by {@see computeSegmentParams()} via the single source
+     * of truth {@see FfmpegRunner::resolveToneMapFilterFromProbe()} and persisted
+     * in the same base `segment_params` — lets the ABR builders use the threaded
+     * string DIRECTLY, byte-identically to the legacy single-variant path, with
+     * ZERO per-segment probe.
+     *
+     * The tone-map graph is codec/color-driven, not resolution-driven, so the one
+     * resolved string is correct for every rung: every transcode rendition encodes
+     * with libx264 — the same FINAL codec {@see computeSegmentParams()} resolved
+     * the base filter with. A copy (`original`) rendition ignores it entirely
+     * ({@see FfmpegRunner::buildSegmentCommand()} emits no `-vf` on the `-c:v copy`
+     * path), so the merge is inert there. When the base `segment_params` carries
+     * no flag/filter (a pre-SV-1.1(b′) persisted job / un-rescanned item), nothing
+     * is merged and the builders keep their legacy per-segment fallback.
+     *
+     * @param array<string, mixed> $row       Job row (needs `segment_params`).
+     * @param array<string, mixed> $segParams Per-rendition segment params to augment.
+     *
+     * @return array<string, mixed> `$segParams`, with the tone-map flag+filter added when present.
+     *
+     * @since SV-1.1(b′)
+     */
+    private function applyToneMap(array $row, array $segParams): array
+    {
+        $segParamsRaw = $row['segment_params'] ?? null;
+        if (!is_string($segParamsRaw) || $segParamsRaw === '') {
+            return $segParams;
+        }
+        $decoded = json_decode($segParamsRaw, true);
+        if (!is_array($decoded)) {
+            return $segParams;
+        }
+        if (($decoded['require_hdr_tone_map'] ?? false) !== true) {
+            return $segParams;
+        }
+
+        $segParams['require_hdr_tone_map'] = true;
+        $filter = $decoded['tone_map_filter'] ?? null;
+        if (is_string($filter) && $filter !== '') {
+            $segParams['tone_map_filter'] = $filter;
+        }
+
+        return $segParams;
     }
 
     /**

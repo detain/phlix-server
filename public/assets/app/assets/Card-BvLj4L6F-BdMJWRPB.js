@@ -1,2 +1,0 @@
-import{t as e}from"./_plugin-vue_export-helper-B3ysoDQm-BDNMzG2s.js";import{M as t,_ as n,k as r,u as i,vt as a}from"./runtime-core.esm-bundler-B2z2gGMs.js";var o=e(n({__name:`Card`,props:{padding:{type:Boolean,default:!0}},setup(e){return(n,o)=>(r(),i(`div`,{class:a([`phlix-card`,{"phlix-card--no-padding":!e.padding}])},[t(n.$slots,`default`,{},void 0,!0)],2))}}),[[`__scopeId`,`data-v-0e99c3b2`]]);export{o as t};
-//# sourceMappingURL=Card-BvLj4L6F-BdMJWRPB.js.map

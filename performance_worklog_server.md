@@ -7120,3 +7120,66 @@ File now: `OK (2 tests, 25 assertions)` — no longer erroring. phpcs on the fil
 ### SCOPE NOTE (follow-up, not this pass)
 - True **0 probes** per job needs persisting subtitle/audio stream descriptors so the single `ensureHlsJob` probe can be dropped — separate "S6" follow-up, deliberately NOT attempted here.
 - ABR per-rendition path already carries the flag+filter via sub-step (b′)'s `applyToneMap` from the persisted base `segment_params`; sub-step (a) only changes HOW that base decision is sourced (columns vs probe), so (b′) is unaffected.
+
+## Reviewer (cumulative: SV-1.1 sub-steps b + b′ + a) — 2026-07-14
+
+**NO FINDINGS**
+
+Reviewed the integrated result of `6c115e04` (b) + `0a738cbd` (b′) + `ff0eec64` (a) against the
+plan §2 SV-1.1 AC (lines 654-662) and the ten enumerated seams. Verified end-to-end, not just by
+reading claims:
+
+- **Byte-identity across all four paths (single vs ABR × column vs probe):** the tone-map graph is
+  decided by `isHdrColorMeta` + config (`tone_mapping_mode`/`prefer_hdr_output`) + codec ONLY —
+  `buildZscaleToneMapFilter` hardcodes the graph and `buildLibplaceboToneMapFilter` reads tags off the
+  frame; both ignore the color VALUES (FfmpegRunner.php:623-635, 687-692). `resolveToneMapFilterFromProbe`
+  delegates to `resolveToneMapFilterFromColorMeta` after `extractColorMetadata` (FfmpegRunner.php:517-523),
+  so the two resolve entry points are provably equal for equivalent meta (asserted via `===` in
+  `FfmpegRunnerToneMappingTest::testResolveToneMapFilterFromColorMetaMatchesProbeEntryPoint`). Codec passed
+  is the FINAL post-copy→libx264 codec in every path: `computeSegmentParams` resolves with
+  `paramString($params,'video_codec') ?? 'libx264'` after the copy→libx264 upgrade
+  (TranscodeManager.php:1996-2029); ABR transcode rungs are all libx264 (`segmentParamsForRendition`:1526);
+  copy/original rungs emit no `-vf` (`buildSegmentCommand` :1688-1692) so the merge is inert there.
+- **Threading chain composes:** `getVideoStreamColorMetadata` → `computeHlsParams` sets
+  `require_hdr_tone_map` (TranscodeManager.php:2688-2695) → `computeSegmentParams` threads `tone_map_filter`
+  → both persisted in the SHARED job INSERT `segment_params` column (:555-567) for single AND multi-variant
+  jobs → `ensureSegment` multi-variant reads `$row['segment_params']` and `applyToneMap` decodes+merges
+  (:744, :810-836) before `applySubtitleBurnIn` → builders consume the threaded string with zero re-derive
+  (:1726-1728, :2056-2058). Single-variant reads `segment_params` directly (:756-768). No break in the chain.
+- **Fallback correctness:** `getVideoStreamColorMetadata` returns null for no-video-row and all-three-color-
+  columns-NULL (ItemRepository.php:1436-1444), whereupon `computeHlsParams` falls back to
+  `extractColorMetadata($probe)` (:2688). Per-field defaults (`bt2020nc`/`bt709`/`bt2020`/`1000.0`/`200.0`)
+  match `extractColorMetadata` exactly (FfmpegRunner.php:1441-1453 vs ItemRepository.php:1447-1451) for every
+  reachable input — the scanner's `stringOrNull` normalizes '' → NULL before persistence
+  (MediaScanner.php:1594-1596, 1646-1649), so a NULL column maps to the same default an absent probe field
+  does.
+- **isHdr decision parity:** `computeHlsParams` uses the identical predicate (`smpte2084`/`arib-std-b67`
+  transfer + `bt2020`/`bt2020nc`/`bt2020_ncl`) as `FfmpegRunner::isHdrColorMeta` — same for column and probe
+  sources.
+- **Column→colorMeta shape:** returns all 5 keys guard-free; DECIMAL luminance cast via
+  `is_numeric ? (float) : default` (ItemRepository.php:1450-1451); phpstan L9 clean.
+- **`new ItemRepository($this->db)` per job:** ctor is a two-field assign (ItemRepository.php:108-112),
+  runs once per job at `ensureHlsJob` (NOT per segment), uses the shared Connection. Per-job `new` is fine
+  here; DI would not materially improve it.
+- **Honest probe count:** code comments (TranscodeManager.php:2685-2687) and
+  `testEnsureHlsJobHdrDecisionFromColumnsAddsZeroProbes` assert `probe()` == exactly 1 (subtitle/audio
+  detection) and `extractColorMetadata` == 0 on the column path. No "0 probes" overclaim.
+- **SV-1.6 ordering + SV-4.2 non-interference:** tone-map precedes subtitle burn-in precedes scale on both
+  builders and both variant paths (FfmpegRunner.php:1726-1748, 2056-2091). SV-4.2 in-flight/waiter/reconcile
+  machinery lives in `produceSegment`/`startSegmentEncode` and is untouched — `applyToneMap` only augments
+  `$segParams` before `produceSegment`.
+- **Quality gates:** `php -l` clean ×3; phpstan L9 `-c phpstan.neon.dist` on the three changed src =
+  `[OK] No errors`; phpcs PSR-12 = 0 errors (line-length warnings only, house style); targeted suite
+  `112 tests, 362 assertions` green. New read query starts with SELECT, parameterized `[$mediaItemId]`,
+  uses `$this->db->query` (no raw PDO); no new statics/globals/exit/die/blocking-sleep; coroutine-safe.
+- **Scope:** only in-scope `FfmpegRunner.php` + `TranscodeManager.php` + the `ItemRepository` read (the
+  read-side realization of the plan's "scanner stream persistence" bullet) + tests touched. No scanner code
+  changed and no migration added because migration 073 already shipped in a prior pass. No out-of-scope file
+  touched.
+
+Non-blocking observation (verified benign, NOT a finding): `getVideoStreamColorMetadata` coerces an empty-
+string column to the per-field default (`!== ''` guard, ItemRepository.php:1429-1434), whereas
+`extractColorMetadata` preserves a literal `''`. The only case this could diverge (an HDR transfer paired
+with a literal-`''` color_space/primaries flipping `isBt2020`) is unreachable: the scanner's `stringOrNull`
+collapses `''` → NULL before persistence and real ffprobe emits `unknown`/omits rather than `''` for these
+tags. Mentioned for the record only.

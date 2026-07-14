@@ -374,7 +374,8 @@ final class RelayConsumer
      */
     public function isConnected(): bool
     {
-        return $this->connection !== null;
+        return $this->connection !== null
+            && $this->connection->getStatus() === \Workerman\Connection\TcpConnection::STATUS_ESTABLISHED;
     }
 
     /**

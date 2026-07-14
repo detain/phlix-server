@@ -609,19 +609,18 @@ final class RelayConsumer
 
         $context = [
             'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
+                'verify_peer' => true,
+                'verify_peer_name' => true,
+                'cafile' => '/etc/ssl/certs/ca-certificates.crt',
                 'SNI_enabled' => true,
                 'crypto_method' => STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT | STREAM_CRYPTO_METHOD_TLSv1_3_CLIENT,
             ],
         ];
 
-        $this->logger->debug('RelayConsumer::openHubConnection() SSL context options being set', [
-            'context' => $context,
-            'ssl_verify_peer' => $context['ssl']['verify_peer'],
-            'ssl_verify_peer_name' => $context['ssl']['verify_peer_name'],
-            'ssl_sni_enabled' => $context['ssl']['SNI_enabled'],
-            'ssl_crypto_method' => $context['ssl']['crypto_method'],
+        $hubWsUrl = $wsUrl;
+        $this->logger->debug('RelayConsumer: connecting with SSL verification enabled', [
+            'hub_url' => $hubWsUrl,
+            'verify_peer' => true,
         ]);
 
         $this->logger->debug('RelayConsumer::openHubConnection() creating new AsyncTcpConnection');

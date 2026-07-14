@@ -99,17 +99,47 @@ class SeriesMetadataResolver
         }
 
         try {
+            $this->logger()->info('SeriesMetadataResolver: searching', [
+                'title' => $title,
+                'year' => $year,
+            ]);
+
             $tmdbId = $this->searchSeriesId($title, $year);
             if ($tmdbId === null) {
+                $this->logger()->info('SeriesMetadataResolver: search returned no id', [
+                    'title' => $title,
+                    'year' => $year,
+                ]);
                 return null;
             }
+
+            $this->logger()->info('SeriesMetadataResolver: fetching details', [
+                'title' => $title,
+                'year' => $year,
+                'tmdb_id' => $tmdbId,
+            ]);
 
             $details = $this->tmdb->getTvDetails($tmdbId);
             if ($details === []) {
+                $this->logger()->info('SeriesMetadataResolver: details returned empty', [
+                    'title' => $title,
+                    'tmdb_id' => $tmdbId,
+                ]);
                 return null;
             }
 
-            return $this->format($tmdbId, $details, $priorityOverride);
+            $result = $this->format($tmdbId, $details, $priorityOverride);
+
+            $resultExternalIds = is_array($result['external_ids'] ?? null) ? $result['external_ids'] : [];
+            $this->logger()->info('SeriesMetadataResolver: resolved', [
+                'title' => $title,
+                'year' => $year,
+                'tmdb_id' => $tmdbId,
+                'imdb_id' => $resultExternalIds['imdb'] ?? null,
+                'tvdb_id' => $resultExternalIds['tvdb'] ?? null,
+            ]);
+
+            return $result;
         } catch (Throwable $e) {
             $this->logger()->warning('SeriesMetadataResolver: resolve failed', [
                 'title' => $title,
@@ -190,13 +220,27 @@ class SeriesMetadataResolver
         $options = $year !== null ? ['first_air_date_year' => $year] : [];
         $results = $this->tmdb->searchTv($title, $options);
         if ($results === [] && $year !== null) {
+            $this->logger()->debug('SeriesMetadataResolver: year-scoped search empty, retrying without year', [
+                'title' => $title,
+                'year' => $year,
+            ]);
             $results = $this->tmdb->searchTv($title); // retry without the year filter
         }
         if ($results === []) {
+            $this->logger()->info('SeriesMetadataResolver: searchTv returned no results', [
+                'title' => $title,
+                'year' => $year,
+            ]);
             return null;
         }
 
         $id = MetadataValue::asNullableString($results[0]['id'] ?? null);
+        $this->logger()->info('SeriesMetadataResolver: searchTv result', [
+            'title' => $title,
+            'year' => $year,
+            'first_result_tmdb_id' => $id,
+            'total_results' => count($results),
+        ]);
         return ($id !== null && $id !== '') ? $id : null;
     }
 

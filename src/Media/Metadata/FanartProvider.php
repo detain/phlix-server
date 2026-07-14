@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
@@ -62,18 +65,23 @@ class FanartProvider implements MetadataProviderInterface
     /** @var array<string, array<string, mixed>> In-memory response cache keyed by "fanart_{idType}_{id}" */
     private array $cache = [];
 
+    /** @var StructuredLogger Structured logger instance */
+    private StructuredLogger $logger;
+
     /**
      * Constructor for FanartProvider.
      *
-     * @param string $apiKey Fanart.tv API client key
-     *                       Get your key at https://fanart.tv/api/
+     * @param string                $apiKey Fanart.tv API client key
+     *                                      Get your key at https://fanart.tv/api/
+     * @param StructuredLogger|null $logger Optional logger; defaults to MEDIA channel.
      */
-    public function __construct(string $apiKey)
+    public function __construct(string $apiKey, ?StructuredLogger $logger = null)
     {
         $this->http = new MetadataHttpClient(
             'https://webservice.fanart.tv/v3',
             $apiKey
         );
+        $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**
@@ -113,10 +121,22 @@ class FanartProvider implements MetadataProviderInterface
         $response = $this->fetchArtwork($idType, $externalId);
 
         if ($response === null) {
+            $this->logger->debug('FanartProvider: getDetails miss', [
+                'id_type' => $idType,
+                'external_id' => $externalId,
+            ]);
             return [];
         }
 
-        return $this->formatDetails($response);
+        $details = $this->formatDetails($response);
+
+        $this->logger->debug('FanartProvider: getDetails', [
+            'id_type' => $idType,
+            'external_id' => $externalId,
+            'name' => $details['name'] ?? null,
+        ]);
+
+        return $details;
     }
 
     /**
@@ -144,10 +164,23 @@ class FanartProvider implements MetadataProviderInterface
         $response = $this->fetchArtwork($idType, $externalId);
 
         if ($response === null) {
+            $this->logger->debug('FanartProvider: getImages miss', [
+                'id_type' => $idType,
+                'external_id' => $externalId,
+            ]);
             return [];
         }
 
-        return $this->formatImages($response);
+        $images = $this->formatImages($response);
+        $totalImages = array_sum(array_map('count', $images));
+
+        $this->logger->debug('FanartProvider: getImages', [
+            'id_type' => $idType,
+            'external_id' => $externalId,
+            'image_count' => $totalImages,
+        ]);
+
+        return $images;
     }
 
     /**
@@ -187,10 +220,21 @@ class FanartProvider implements MetadataProviderInterface
         $response = $this->fetchArtwork('imdb', $imdbId);
 
         if ($response === null) {
+            $this->logger->debug('FanartProvider: getMovieImages miss', [
+                'imdb_id' => $imdbId,
+            ]);
             return [];
         }
 
-        return $this->formatImages($response);
+        $images = $this->formatImages($response);
+        $totalImages = array_sum(array_map('count', $images));
+
+        $this->logger->debug('FanartProvider: getMovieImages', [
+            'imdb_id' => $imdbId,
+            'image_count' => $totalImages,
+        ]);
+
+        return $images;
     }
 
     /**
@@ -212,10 +256,21 @@ class FanartProvider implements MetadataProviderInterface
         $response = $this->fetchArtwork('tvdb', $tvdbId);
 
         if ($response === null) {
+            $this->logger->debug('FanartProvider: getTvShowImages miss', [
+                'tvdb_id' => $tvdbId,
+            ]);
             return [];
         }
 
-        return $this->formatImages($response);
+        $images = $this->formatImages($response);
+        $totalImages = array_sum(array_map('count', $images));
+
+        $this->logger->debug('FanartProvider: getTvShowImages', [
+            'tvdb_id' => $tvdbId,
+            'image_count' => $totalImages,
+        ]);
+
+        return $images;
     }
 
     /**
@@ -238,10 +293,21 @@ class FanartProvider implements MetadataProviderInterface
         $response = $this->fetchArtwork('musicbrainz', $musicbrainzId);
 
         if ($response === null) {
+            $this->logger->debug('FanartProvider: getMusicImages miss', [
+                'musicbrainz_id' => $musicbrainzId,
+            ]);
             return [];
         }
 
-        return $this->formatImages($response);
+        $images = $this->formatImages($response);
+        $totalImages = array_sum(array_map('count', $images));
+
+        $this->logger->debug('FanartProvider: getMusicImages', [
+            'musicbrainz_id' => $musicbrainzId,
+            'image_count' => $totalImages,
+        ]);
+
+        return $images;
     }
 
     /**

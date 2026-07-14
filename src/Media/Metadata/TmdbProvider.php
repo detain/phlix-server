@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
@@ -59,14 +62,18 @@ class TmdbProvider implements MetadataProviderInterface
     /** @var string TMDB API v3 authentication key (empty when unconfigured). */
     private string $apiKey;
 
+    /** @var StructuredLogger Structured logger instance */
+    private StructuredLogger $logger;
+
     /**
      * Constructor for TmdbProvider.
      *
      * @param string                  $apiKey TMDB API v3 authentication key.
      * @param MetadataHttpClient|null $http   Optional HTTP client (injected in
      *                                        tests); defaults to a real TMDB client.
+     * @param StructuredLogger|null   $logger Optional logger; defaults to MEDIA channel.
      */
-    public function __construct(string $apiKey, ?MetadataHttpClient $http = null)
+    public function __construct(string $apiKey, ?MetadataHttpClient $http = null, ?StructuredLogger $logger = null)
     {
         $this->apiKey = $apiKey;
         $this->http = $http ?? new MetadataHttpClient(
@@ -74,6 +81,7 @@ class TmdbProvider implements MetadataProviderInterface
             $apiKey
         );
         $this->imageBaseUrl = 'https://image.tmdb.org/t/p';
+        $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**
@@ -111,6 +119,7 @@ class TmdbProvider implements MetadataProviderInterface
     {
         $language = MetadataValue::asString($options['language'] ?? null, 'en-US');
         $includeAdult = (bool) ($options['include_adult'] ?? false);
+        $year = $options['year'] ?? null;
 
         $params = [
             'query' => $query,
@@ -121,6 +130,11 @@ class TmdbProvider implements MetadataProviderInterface
         $response = $this->http->get('/search/movie', $params);
 
         if ($response === null || !isset($response['results'])) {
+            $this->logger->debug('TmdbProvider: search miss', [
+                'query' => $query,
+                'year' => $year,
+                'endpoint' => '/search/movie',
+            ]);
             return [];
         }
 
@@ -142,6 +156,13 @@ class TmdbProvider implements MetadataProviderInterface
                 'vote_count' => MetadataValue::asInt($result['vote_count'] ?? null),
             ];
         }
+
+        $this->logger->debug('TmdbProvider: search', [
+            'query' => $query,
+            'year' => $year,
+            'result_count' => count($output),
+            'endpoint' => '/search/movie',
+        ]);
 
         return $output;
     }
@@ -168,11 +189,19 @@ class TmdbProvider implements MetadataProviderInterface
         ]);
 
         if ($response === null) {
+            $this->logger->debug('TmdbProvider: findByImdbId miss', [
+                'imdb_id' => $imdbId,
+                'endpoint' => "/find/{$imdbId}",
+            ]);
             return null;
         }
 
         $movieResults = MetadataValue::asAssocList($response['movie_results'] ?? null);
         if ($movieResults === []) {
+            $this->logger->debug('TmdbProvider: findByImdbId no results', [
+                'imdb_id' => $imdbId,
+                'endpoint' => "/find/{$imdbId}",
+            ]);
             return null;
         }
 
@@ -187,11 +216,19 @@ class TmdbProvider implements MetadataProviderInterface
             }
         }
 
+        $tmdbId = MetadataValue::asString($first['id'] ?? null);
+        $title = MetadataValue::asString($first['title'] ?? ($first['name'] ?? null));
+
+        $this->logger->debug('TmdbProvider: findByImdbId matched', [
+            'imdb_id' => $imdbId,
+            'tmdb_id' => $tmdbId,
+            'title' => $title,
+            'endpoint' => "/find/{$imdbId}",
+        ]);
+
         return [
-            'id' => MetadataValue::asString($first['id'] ?? null),
-            'title' => MetadataValue::asString(
-                $first['title'] ?? ($first['name'] ?? null)
-            ),
+            'id' => $tmdbId,
+            'title' => $title,
             'overview' => MetadataValue::asString($first['overview'] ?? null),
             'year' => $year,
         ];
@@ -214,6 +251,10 @@ class TmdbProvider implements MetadataProviderInterface
         ]);
 
         if ($response === null) {
+            $this->logger->debug('TmdbProvider: getDetails miss', [
+                'tmdb_id' => $externalId,
+                'endpoint' => "/movie/{$externalId}",
+            ]);
             return [];
         }
 
@@ -232,7 +273,15 @@ class TmdbProvider implements MetadataProviderInterface
             }
         }
 
-        return $this->formatMovieDetails($response);
+        $details = $this->formatMovieDetails($response);
+
+        $this->logger->debug('TmdbProvider: getDetails', [
+            'tmdb_id' => $externalId,
+            'title' => $details['title'] ?? null,
+            'endpoint' => "/movie/{$externalId}",
+        ]);
+
+        return $details;
     }
 
     /**
@@ -362,6 +411,11 @@ class TmdbProvider implements MetadataProviderInterface
 
         $response = $this->http->get('/search/tv', $params);
         if ($response === null || !isset($response['results'])) {
+            $this->logger->debug('TmdbProvider: searchTv miss', [
+                'query' => $query,
+                'year' => $year,
+                'endpoint' => '/search/tv',
+            ]);
             return [];
         }
 
@@ -377,6 +431,13 @@ class TmdbProvider implements MetadataProviderInterface
                 'vote_average' => MetadataValue::asFloat($result['vote_average'] ?? null),
             ];
         }
+
+        $this->logger->debug('TmdbProvider: searchTv', [
+            'query' => $query,
+            'year' => $year,
+            'result_count' => count($output),
+            'endpoint' => '/search/tv',
+        ]);
 
         return $output;
     }
@@ -397,10 +458,22 @@ class TmdbProvider implements MetadataProviderInterface
             'append_to_response' => $append,
         ]);
         if ($response === null) {
+            $this->logger->debug('TmdbProvider: getTvDetails miss', [
+                'tmdb_id' => $externalId,
+                'endpoint' => "/tv/{$externalId}",
+            ]);
             return [];
         }
 
-        return $this->formatTvDetails($response);
+        $details = $this->formatTvDetails($response);
+
+        $this->logger->debug('TmdbProvider: getTvDetails', [
+            'tmdb_id' => $externalId,
+            'name' => $details['name'] ?? null,
+            'endpoint' => "/tv/{$externalId}",
+        ]);
+
+        return $details;
     }
 
     /**
@@ -439,6 +512,11 @@ class TmdbProvider implements MetadataProviderInterface
             'append_to_response' => 'credits',
         ]);
         if ($response === null) {
+            $this->logger->debug('TmdbProvider: getTvSeason miss', [
+                'tmdb_id' => $externalId,
+                'season' => $seasonNumber,
+                'endpoint' => "/tv/{$externalId}/season/{$seasonNumber}",
+            ]);
             return ['poster_path' => null, 'overview' => '', 'episodes' => []];
         }
 
@@ -462,6 +540,13 @@ class TmdbProvider implements MetadataProviderInterface
                 'crew' => $this->buildEpisodeCrew(MetadataValue::asAssocList($ep['crew'] ?? null)),
             ];
         }
+
+        $this->logger->debug('TmdbProvider: getTvSeason', [
+            'tmdb_id' => $externalId,
+            'season' => $seasonNumber,
+            'episode_count' => count($episodes),
+            'endpoint' => "/tv/{$externalId}/season/{$seasonNumber}",
+        ]);
 
         return [
             'poster_path' => MetadataValue::asNullableString($response['poster_path'] ?? null),

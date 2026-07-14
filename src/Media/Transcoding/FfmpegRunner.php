@@ -1328,7 +1328,12 @@ class FfmpegRunner
      */
     public function getVersion(): ?string
     {
+        // Try shell fallback if isAvailable() is false (is_executable may fail in web context)
         if (!$this->isAvailable()) {
+            $output = shell_exec('ffmpeg -version 2>&1');
+            if (is_string($output) && preg_match('/ffmpeg version (\S+)/', $output, $m) === 1) {
+                return $m[1];
+            }
             return null;
         }
 

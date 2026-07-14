@@ -11,6 +11,9 @@ declare(strict_types=1);
 
 namespace Phlix\Media\Metadata;
 
+use Phlix\Common\Logger\LogChannels;
+use Phlix\Common\Logger\LoggerFactory;
+use Phlix\Common\Logger\StructuredLogger;
 use Phlix\Media\Metadata\Dto\MetadataValue;
 
 /**
@@ -53,21 +56,26 @@ class TvdbProvider implements MetadataProviderInterface
     /** @var string Default language code for API requests (ISO 639-1) */
     private string $language;
 
+    /** @var StructuredLogger Structured logger instance */
+    private StructuredLogger $logger;
+
     /**
      * Constructor for TvdbProvider.
      *
-     * @param string $apiKey TVDB API v3 authentication key
-     *                       Get your key at https://www.thetvdb.com/?tab=apiregister
-     * @param string $language Default language code (ISO 639-1, default: 'eng')
-     *                         Supported: 'eng', ' spa', 'ger', 'fre', 'ita', 'jpn', etc.
+     * @param string                  $apiKey   TVDB API v3 authentication key
+     *                                          Get your key at https://www.thetvdb.com/?tab=apiregister
+     * @param string                  $language Default language code (ISO 639-1, default: 'eng')
+     *                                          Supported: 'eng', ' spa', 'ger', 'fre', 'ita', 'jpn', etc.
+     * @param StructuredLogger|null   $logger   Optional logger; defaults to MEDIA channel.
      */
-    public function __construct(string $apiKey, string $language = 'eng')
+    public function __construct(string $apiKey, string $language = 'eng', ?StructuredLogger $logger = null)
     {
         $this->http = new MetadataHttpClient(
             'https://api.thetvdb.com',
             $apiKey
         );
         $this->language = $language;
+        $this->logger = $logger ?? LoggerFactory::get(LogChannels::MEDIA);
     }
 
     /**
@@ -103,6 +111,10 @@ class TvdbProvider implements MetadataProviderInterface
         $response = $this->http->get('/search/series', $params);
 
         if ($response === null || !isset($response['data'])) {
+            $this->logger->debug('TvdbProvider: search miss', [
+                'query' => $query,
+                'endpoint' => '/search/series',
+            ]);
             return [];
         }
 
@@ -125,6 +137,12 @@ class TvdbProvider implements MetadataProviderInterface
                 'rating' => MetadataValue::asNullableFloat($result['siteRating'] ?? null),
             ];
         }
+
+        $this->logger->debug('TvdbProvider: search', [
+            'query' => $query,
+            'result_count' => count($output),
+            'endpoint' => '/search/series',
+        ]);
 
         return $output;
     }
@@ -153,6 +171,10 @@ class TvdbProvider implements MetadataProviderInterface
         $seriesResponse = $this->http->get("/series/{$externalId}", $params);
 
         if ($seriesResponse === null || !isset($seriesResponse['data'])) {
+            $this->logger->debug('TvdbProvider: getDetails miss', [
+                'tvdb_id' => $externalId,
+                'endpoint' => "/series/{$externalId}",
+            ]);
             return [];
         }
 
@@ -179,7 +201,7 @@ class TvdbProvider implements MetadataProviderInterface
             }
         }
 
-        return [
+        $details = [
             'name' => MetadataValue::asString($series['seriesName'] ?? null),
             'original_name' => MetadataValue::asString($series['seriesName'] ?? null),
             'overview' => MetadataValue::asString($series['overview'] ?? null),
@@ -197,6 +219,15 @@ class TvdbProvider implements MetadataProviderInterface
             'episode_count' => count($episodes),
             'season_count' => $this->countSeasons($episodes),
         ];
+
+        $this->logger->debug('TvdbProvider: getDetails', [
+            'tvdb_id' => $externalId,
+            'name' => $details['name'],
+            'episode_count' => $details['episode_count'],
+            'endpoint' => "/series/{$externalId}",
+        ]);
+
+        return $details;
     }
 
     /**

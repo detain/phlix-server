@@ -71,6 +71,25 @@ $config['web_portal']         = array_merge(
 
 $container = ContainerFactory::create($config);
 
+// ---------------------------------------------------------------------------
+// Bootstrap storage snapshot for admin dashboard (PHP-FPM fallback).
+//
+// When served via PHP-FPM instead of the Workerman daemon, the storage
+// snapshot timer never runs. Record one snapshot now so the admin dashboard
+// has data rather than showing "No storage data".
+// ---------------------------------------------------------------------------
+if ($container->has(\Phlix\Stats\StatsCollector::class) && $container->has(\Workerman\MySQL\Connection::class)) {
+    try {
+        /** @var \Phlix\Stats\StatsCollector $statsCollector */
+        $statsCollector = $container->get(\Phlix\Stats\StatsCollector::class);
+        /** @var \Workerman\MySQL\Connection $db */
+        $db = $container->get(\Workerman\MySQL\Connection::class);
+        \Phlix\Stats\StorageSnapshotHelper::bootstrapSnapshot($statsCollector, $db);
+    } catch (\Throwable) {
+        // Log but do not fail - dashboard degrades gracefully without storage data
+    }
+}
+
 /**
  * Resolve the services this entry point hands to controllers.
  *

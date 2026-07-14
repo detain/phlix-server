@@ -141,29 +141,56 @@ class MovieMetadataResolver
         $tmdbDetails = null;
         if ($tmdbId !== null) {
             $tmdbDetails = $this->safeTmdbDetails($tmdbId);
+            $this->logger->debug('MovieMetadataResolver: TMDB details fetched', [
+                'title' => $title,
+                'tmdb_id' => $tmdbId,
+                'returned' => $tmdbDetails !== null,
+            ]);
             if ($tmdbDetails !== null && $imdbId === null) {
                 $fromTmdb = MetadataValue::asNullableString($tmdbDetails['imdb_id'] ?? null);
                 if ($fromTmdb !== null) {
                     $imdbId = $fromTmdb;
                 }
             }
+        } else {
+            $this->logger->debug('MovieMetadataResolver: TMDB id not resolved', [
+                'title' => $title,
+                'year' => $year,
+                'imdb_id_used' => $imdbId,
+            ]);
         }
 
         // 4. Fetch offline IMDb data for the (possibly cross-populated) id.
         $imdbData = $imdbLookupData;
+        $imdbSource = $imdbLookupData !== null ? 'lookup' : null;
         if ($imdbId !== null && ($imdbData === null || ($imdbData['imdb_id'] ?? null) !== $imdbId)) {
             $byId = $this->safeImdbGetById($imdbId);
             if ($byId !== null) {
                 $imdbData = $byId;
+                $imdbSource = 'getById';
             }
         }
 
+        $this->logger->debug('MovieMetadataResolver: IMDb data fetched', [
+            'title' => $title,
+            'imdb_id' => $imdbId,
+            'returned' => $imdbData !== null,
+            'source' => $imdbSource, // null, 'lookup', or 'getById'
+        ]);
+
         // 5. Merge — bail out only when NEITHER source produced anything.
         if ($tmdbDetails === null && $imdbData === null) {
+            $this->logger->info('MovieMetadataResolver: no match', [
+                'title' => $title,
+                'year' => $year,
+                'providers_tried' => ['tmdb', 'imdb'],
+                'tmdb_returned' => false,
+                'imdb_returned' => false,
+            ]);
             return null;
         }
 
-        return $this->merge(
+        $result = $this->merge(
             $existingExternalIds,
             $tmdbId,
             $imdbId,
@@ -171,6 +198,19 @@ class MovieMetadataResolver
             $imdbData,
             $priorityOverride,
         );
+
+        $this->logger->info('MovieMetadataResolver: resolved', [
+            'title' => $title,
+            'year' => $year,
+            'tmdb_id' => $tmdbId,
+            'imdb_id' => $imdbId,
+            'sources' => $result['sources'] ?? [],
+            'providers_tried' => ['tmdb', 'imdb'],
+            'tmdb_returned' => $tmdbDetails !== null,
+            'imdb_returned' => $imdbData !== null,
+        ]);
+
+        return $result;
     }
 
     /**

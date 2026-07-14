@@ -64,6 +64,10 @@ final class HubServicesProvider implements ServiceProviderInterface
     {
         $hubConfig = is_array($appConfig['hub'] ?? null) ? $appConfig['hub'] : [];
         $configDir = is_string($hubConfig['config_dir'] ?? null) ? $hubConfig['config_dir'] : 'config';
+        // Resolve relative configDir to absolute path for HubClient
+        if ($configDir !== '' && $configDir[0] !== '/') {
+            $configDir = dirname(__DIR__, 3) . '/' . $configDir;
+        }
         $defaultKeyPath = $configDir . '/hub-server-key.pem';
         $keyPath = is_string($hubConfig['key_path'] ?? null) ? $hubConfig['key_path'] : $defaultKeyPath;
         $heartbeatInterval = is_int($hubConfig['heartbeat_interval'] ?? null) ? $hubConfig['heartbeat_interval'] : 60;

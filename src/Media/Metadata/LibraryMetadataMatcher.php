@@ -182,6 +182,15 @@ class LibraryMetadataMatcher
     private ?array $activeImageTypes = null;
 
     /**
+     * When true, re-process items that already have metadata
+     * (i.e., items with `metadata_refreshed_at IS NOT NULL`).
+     * When false (default), skip already-processed items.
+     *
+     * @var bool
+     */
+    private bool $forceRefresh = false;
+
+    /**
      * Map of flat metadata image KEY => the canonical {@see ImageType} const it
      * carries. Only keys in this map are gated by the per-library selection; any
      * image key NOT listed here passes through unfiltered (we only filter the
@@ -238,6 +247,10 @@ class LibraryMetadataMatcher
      * @param ArtworkStorage|null          $artworkStorage  Local artwork cache for
      *                                                   offline/LAN installs (SV-3.4).
      *                                                   Null in legacy construction.
+     * @param bool                        $forceRefresh   When true, re-process items
+     *                                                   that already have metadata
+     *                                                   (metadata_refreshed_at IS NOT NULL).
+     *                                                   When false (default), skip them.
      *
      * @since 0.21.0
      */
@@ -252,7 +265,8 @@ class LibraryMetadataMatcher
         ?LibraryPriorityResolver $priorityResolver = null,
         ?ThemeMusicResolver $themeMusic = null,
         ?FuzzyMatcher $fuzzyMatcher = null,
-        ?ArtworkStorage $artworkStorage = null
+        ?ArtworkStorage $artworkStorage = null,
+        bool $forceRefresh = false
     ) {
         $this->items = $items;
         $this->resolver = $resolver;
@@ -269,6 +283,7 @@ class LibraryMetadataMatcher
         $this->themeMusic = $themeMusic;
         $this->fuzzyMatcher = $fuzzyMatcher;
         $this->artworkStorage = $artworkStorage;
+        $this->forceRefresh = $forceRefresh;
     }
 
     /**
@@ -1060,10 +1075,28 @@ class LibraryMetadataMatcher
 
         $externalIds = $this->extractExternalIds($existingMetadata);
 
+        $this->logger->info('LibraryMetadataMatcher: resolving movie', [
+            'title' => $name,
+            'year' => $year,
+            'external_ids' => $externalIds,
+        ]);
+
         $resolved = $this->resolver->resolve($name, $year, $externalIds, $priorityOverride);
         if ($resolved === null) {
+            $this->logger->info('LibraryMetadataMatcher: movie not matched', [
+                'title' => $name,
+                'year' => $year,
+            ]);
             return false;
         }
+
+        $resolvedExternalIds = is_array($resolved['external_ids'] ?? null) ? $resolved['external_ids'] : [];
+        $this->logger->info('LibraryMetadataMatcher: movie matched', [
+            'title' => $name,
+            'year' => $year,
+            'tmdb_id' => $resolved['tmdb_id'] ?? null,
+            'imdb_id' => $resolvedExternalIds['imdb'] ?? null,
+        ]);
 
         // P1-S5: If the resolved TMDB/IMDb id has a manual override, skip the
         // automatic match — the user's explicit override takes precedence and
@@ -1870,6 +1903,15 @@ class LibraryMetadataMatcher
             if (!$isMovie && !$isSeries) {
                 continue;
             }
+
+            // Skip already-processed items unless force refresh is enabled
+            if (!$this->forceRefresh) {
+                $refreshedAt = $item['metadata_refreshed_at'] ?? null;
+                if ($refreshedAt !== null) {
+                    continue;
+                }
+            }
+
             $id = is_string($item['id'] ?? null) ? $item['id'] : '';
             $name = is_string($item['name'] ?? null) ? $item['name'] : '';
             $matchable[] = [

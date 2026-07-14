@@ -7089,7 +7089,7 @@ File now: `OK (2 tests, 25 assertions)` — no longer erroring. phpcs on the fil
 
 ## Implementer — SV-1.1 sub-step (a): source the HDR tone-map decision from the persisted `media_streams` color columns — 2026-07-14
 
-**Commit `<pending>`** (on `d481fe00`). Closes the perf-5 gap (worklog ~:2897): mig-073 color columns were WRITE-ONLY — the scanner wrote them but `computeHlsParams` always derived the HDR decision from a live probe. Now the decision (and the resolved `tone_map_filter`) is sourced from the persisted columns for scanned items, with a live-probe fallback for pre-073 / un-rescanned rows. NO scanner change, NO migration, NO (b)/(b′) threading change. NO caliber (standing directive).
+**Commit `ff0eec64`** (on `d481fe00`). Closes the perf-5 gap (worklog ~:2897): mig-073 color columns were WRITE-ONLY — the scanner wrote them but `computeHlsParams` always derived the HDR decision from a live probe. Now the decision (and the resolved `tone_map_filter`) is sourced from the persisted columns for scanned items, with a live-probe fallback for pre-073 / un-rescanned rows. NO scanner change, NO migration, NO (b)/(b′) threading change. NO caliber (standing directive).
 
 ### The read (ItemRepository) — verified anchors
 - New **`ItemRepository::getVideoStreamColorMetadata(string $mediaItemId): ?array`** (`src/Media/Library/ItemRepository.php`, placed right before `addStream`, after `getItemStreams`). Query (starts with SELECT):

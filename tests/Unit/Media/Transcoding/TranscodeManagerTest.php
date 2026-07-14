@@ -1930,6 +1930,165 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame($final, $path);
     }
 
+    /**
+     * SV-4.2-disconnect (SS-1): a SOLE requester is counted as exactly one waiter
+     * on its `$final` while it is in the poll, `hasOtherWaiter()` is false, and the
+     * ref-count returns to 0 (map entry removed) once the request finishes — no
+     * leak. Sampled inside the launch callback, which runs while the launcher is
+     * mid-produceSegment (already counted).
+     */
+    public function testSegmentWaiterCountIsOneForSoleRequesterAndReturnsToZero(): void
+    {
+        $dir = $this->segmentDir . '/mv-waiter-solo';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+
+        $final = "{$dir}/seg-v480p-00002.ts";
+        $observedCount = null;
+        $observedOther = null;
+        /** @var TranscodeManager|null $manager (assigned below; captured by-ref in the launch callback) */
+        $manager = null;
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->stubColorMetadata($ff);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use (&$observedCount, &$observedOther, &$manager, $final): int {
+                assert($manager instanceof TranscodeManager);
+                // The launcher is already counted (SS-1 increments at the top of
+                // the poll try, before startSegmentEncode).
+                $observedCount = $manager->waiterCount($final);
+                $observedOther = $manager->hasOtherWaiter($final);
+                file_put_contents($out, 'encoded'); // publish → the poll exits at once
+                return 4321;
+            }
+        );
+
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $path = $manager->ensureSegment('seg-job', '480p', 2);
+
+        $this->assertSame($final, $path);
+        $this->assertSame(1, $observedCount, 'the sole launcher is counted as exactly one waiter');
+        $this->assertFalse($observedOther, 'a sole requester has no OTHER waiter');
+        $this->assertSame(0, $manager->waiterCount($final), 'count returns to 0 after finishing — no leak');
+    }
+
+    /**
+     * SV-4.2-disconnect (SS-1): TWO concurrent requesters for the same `$final` —
+     * a launcher plus a piggybacker that joins the in-flight encode — push the
+     * waiter ref-count to 2 (so `hasOtherWaiter()` is true), and it returns to 0
+     * with the map entry removed once BOTH finish. Driven with real Swoole
+     * coroutines: the launcher spawns the second requester inside its launch
+     * callback and yields, so the two genuinely overlap in their poll loops.
+     */
+    public function testSegmentWaitersReachTwoWithConcurrentRequestersAndReturnToZero(): void
+    {
+        if (! extension_loaded('swoole')) {
+            $this->markTestSkipped('Swoole extension required for the concurrent-waiter test.');
+        }
+
+        $dir = $this->segmentDir . '/mv-waiter-concurrent';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiVariantJobRow($dir, $input, $ladderJson), $captured);
+
+        $final = "{$dir}/seg-v480p-00002.ts";
+        $peakCount = 0;
+        $peakOther = false;
+        /** @var TranscodeManager|null $manager (assigned below; captured by-ref in the launch callback) */
+        $manager = null;
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->stubColorMetadata($ff);
+        // Only the LAUNCHER calls startSegmentEncode; the second requester
+        // deduplicates onto the same $final and piggybacks (no encode of its own).
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use (&$peakCount, &$peakOther, &$manager, $final): int {
+                // We (the launcher) hold the reservation and are counted as a
+                // waiter. Spawn a SECOND requester that sees the in-flight encode
+                // and piggybacks (count → 2), then yield so it parks in its poll
+                // before we sample and publish.
+                \Swoole\Coroutine\go(static function () use (&$manager): void {
+                    assert($manager instanceof TranscodeManager);
+                    $manager->ensureSegment('seg-job', '480p', 2);
+                });
+                \Swoole\Coroutine::sleep(0.05);
+                assert($manager instanceof TranscodeManager);
+                $peakCount = $manager->waiterCount($final);
+                $peakOther = $manager->hasOtherWaiter($final);
+                file_put_contents($out, 'encoded'); // publish so BOTH requesters exit
+                return 4321;
+            }
+        );
+
+        // Generous poll ceiling so neither requester times out during the handoff.
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6, null, null, null, null, null, null, 5000);
+
+        \Swoole\Coroutine\run(static function () use ($manager): void {
+            // The launcher runs in this top coroutine; the piggyback is spawned
+            // inside startSegmentEncode. Co\run returns only once BOTH have run.
+            $manager->ensureSegment('seg-job', '480p', 2);
+        });
+
+        $this->assertSame(2, $peakCount, 'launcher + piggyback are both counted as waiters');
+        $this->assertTrue($peakOther, 'a piggybacker is a genuine OTHER waiter (guards the shared encode)');
+        $this->assertSame(0, $manager->waiterCount($final), 'both finished → count back to 0, entry removed (no leak)');
+    }
+
+    /**
+     * SV-4.2-disconnect (SS-1): the AUDIO-only poll path (produceAudioSegment)
+     * also ref-counts its waiter and returns to 0 — the guard covers both the
+     * video and audio segment paths.
+     */
+    public function testAudioSegmentAlsoRefCountsWaiterAndReturnsToZero(): void
+    {
+        $dir = $this->segmentDir . '/ma-waiter';
+        mkdir($dir, 0755, true);
+        $input = $dir . '/in.mkv';
+        file_put_contents($input, 'x');
+        $captured = [];
+        $db = $this->mockDb([], 0, [], $this->multiAudioJobRow($dir, $input), $captured);
+
+        $final = "{$dir}/seg-a1-00001.ts";
+        $observedCount = null;
+        /** @var TranscodeManager|null $manager (assigned below; captured by-ref in the launch callback) */
+        $manager = null;
+
+        $ff = $this->createMock(FfmpegRunner::class);
+        $this->stubColorMetadata($ff);
+        $ff->expects($this->once())->method('startSegmentEncode')->willReturnCallback(
+            function (string $in, string $out) use (&$observedCount, &$manager, $final): int {
+                assert($manager instanceof TranscodeManager);
+                $observedCount = $manager->waiterCount($final);
+                file_put_contents($out, 'audio');
+                return 1;
+            }
+        );
+
+        $manager = new TranscodeManager($db, $ff, $this->segmentDir, null, 6);
+        $path = $manager->ensureSegment('seg-job', null, 1, 'a1');
+
+        $this->assertSame($final, $path);
+        $this->assertSame(1, $observedCount, 'the audio launcher is counted as a waiter too');
+        $this->assertSame(0, $manager->waiterCount($final), 'audio path also returns the count to 0 — no leak');
+    }
+
     public function testEnsureSegmentResolvesCopyOriginalVariant(): void
     {
         // The copy "original" (H.264 + AAC source) resolves to a genuine -c copy

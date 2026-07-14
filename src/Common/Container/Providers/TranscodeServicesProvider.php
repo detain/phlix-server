@@ -139,7 +139,7 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                     $db = $c->get(Connection::class);
                     /** @var FfmpegRunner $ffmpeg */
                     $ffmpeg = $c->get(FfmpegRunner::class);
-                    return new TranscodeManager(
+                    $manager = new TranscodeManager(
                         $db,
                         $ffmpeg,
                         $segmentDir,
@@ -152,6 +152,24 @@ final class TranscodeServicesProvider implements ServiceProviderInterface
                         $cacheMaxBytes,
                         $cacheMaxAge
                     );
+
+                    // SV-4.2-disconnect (SS-2): make the shared per-worker
+                    // segment-process registry waiter-aware. A cancel/disconnect
+                    // kill must SKIP (defer) an encode a SECOND client is still
+                    // piggybacked on (the shared-encode landmine). This is the SAME
+                    // registry singleton already injected into FfmpegRunner above,
+                    // so this one wiring covers every kill path (relay killGroup and
+                    // any direct kill). Resolving TranscodeManager always precedes
+                    // launching — hence registering — any encode, so the guard is
+                    // set before a kill can ever find a key to reap. Shared provider
+                    // → both entrypoints (public/index.php + start.php) get it.
+                    /** @var SegmentProcessRegistry $registry */
+                    $registry = $c->get(SegmentProcessRegistry::class);
+                    $registry->setWaiterGuard(
+                        static fn (string $key): bool => $manager->hasOtherWaiter($key)
+                    );
+
+                    return $manager;
                 }
             ),
         ]);

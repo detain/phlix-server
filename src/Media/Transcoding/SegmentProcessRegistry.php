@@ -45,6 +45,18 @@ use Psr\Log\NullLogger;
  * `timeout <transcode_timeout>` wrapper is the backstop for a genuinely stuck
  * encode; genuine abandonment kills promptly via the cancel path.
  *
+ * Shared-encode landmine guard (SV-4.2-disconnect): an on-demand encode is
+ * deduplicated by its output path, so a SECOND concurrent requester piggybacks
+ * on the launcher's in-flight encode instead of spawning its own. If the
+ * launcher is then cancelled, killing the shared encode would 404 the
+ * piggybacker who still wants the segment. {@see kill()} therefore consults an
+ * optional waiter guard ({@see setWaiterGuard()}, wired from
+ * {@see \Phlix\Media\Transcoding\TranscodeManager::hasOtherWaiter()}) and
+ * DEFERS the kill (leaving the entry tracked) whenever another waiter is still
+ * present; the encode keeps running for them and a later kill reaps it once
+ * they leave. With no other waiter — the common case — the kill signals + reaps
+ * exactly as before.
+ *
  * Resident-memory discipline (this is Workerman, NOT php-fpm): the maps are
  * bounded — every caller MUST {@see release()}, {@see releaseAfterWaitTimeout()},
  * {@see kill()} or {@see killGroup()} its key (the transcode path does so in a
@@ -128,6 +140,27 @@ final class SegmentProcessRegistry
     private $tempCleaner;
 
     /**
+     * Optional waiter guard: fn(string $key): bool (SV-4.2-disconnect landmine
+     * guard). When set, {@see kill()} consults it BEFORE signalling — if it
+     * returns true, another client is still actively waiting on that exact
+     * segment (a piggybacker that joined the launcher's in-flight encode rather
+     * than launching its own), so the shared encode MUST NOT be killed: doing so
+     * would 404 the other waiter. The kill is then DEFERRED (the entry is left
+     * fully tracked) so the encode keeps running for the remaining waiter(s) and
+     * a later kill (once they leave) can still reap it.
+     *
+     * Wired at container-build time from the {@see TranscodeManager} per-worker
+     * singleton ({@see \Phlix\Media\Transcoding\TranscodeManager::hasOtherWaiter()})
+     * via {@see setWaiterGuard()}, which breaks the registry↔manager DI cycle.
+     * Null (the default) means "no guard" — every kill signals immediately,
+     * exactly preserving the pre-SV-4.2-disconnect behavior (all direct-construct
+     * callers, including the unit tests, run without one).
+     *
+     * @var (callable(string): bool)|null
+     */
+    private $hasOtherWaiter = null;
+
+    /**
      * Seconds to wait for graceful SIGTERM exit before escalating to SIGKILL.
      * Deliberately short: segment encodes are small and disposable.
      */
@@ -150,6 +183,20 @@ final class SegmentProcessRegistry
         $this->isAlive = $isAlive ?? self::defaultLivenessProbe();
         $this->tempCleaner = $tempCleaner ?? self::defaultTempCleaner();
         $this->gracePeriodSeconds = $gracePeriodSeconds;
+    }
+
+    /**
+     * Wire the waiter guard consulted by {@see kill()} (SV-4.2-disconnect
+     * landmine guard). See {@see $hasOtherWaiter} for the full rationale. Passing
+     * null clears it (restores unconditional signalling).
+     *
+     * @param (callable(string): bool)|null $hasOtherWaiter fn($key): bool — true
+     *        when a waiter OTHER than the one being cancelled is still present on
+     *        that segment, so its shared encode must not be killed.
+     */
+    public function setWaiterGuard(?callable $hasOtherWaiter): void
+    {
+        $this->hasOtherWaiter = $hasOtherWaiter;
     }
 
     /**
@@ -245,6 +292,25 @@ final class SegmentProcessRegistry
      */
     public function kill(string $key): int
     {
+        // SV-4.2-disconnect (landmine guard): if another client is still actively
+        // waiting on this exact segment — a piggybacker that joined the launcher's
+        // in-flight encode rather than spawning its own — do NOT signal. Killing
+        // the shared encode here would 404 that other waiter. Leave the entry
+        // FULLY tracked (PIDs, temps, group links) so the encode keeps running for
+        // the remaining waiter(s); once they leave, a later kill reaps it. The
+        // launcher whose cancel reached this kill is itself counted as a waiter,
+        // so the guard fires ONLY when a SECOND waiter genuinely exists — the
+        // overwhelmingly common sole-waiter cancel still signals + reaps exactly
+        // as before. This closes the latent relay-path bug (two hub channels
+        // requesting the same $final) without weakening normal cancellation.
+        if ($this->hasOtherWaiter !== null && ($this->hasOtherWaiter)($key)) {
+            $this->logger->debug(
+                'SegmentProcessRegistry: deferring kill — another waiter still present',
+                ['key' => $key],
+            );
+            return 0;
+        }
+
         $pids = $this->pids[$key] ?? [];
         $tmps = $this->tmpsByKey[$key] ?? [];
         $this->drop($key);
@@ -275,7 +341,10 @@ final class SegmentProcessRegistry
      * Kill every encode registered under a cancel group (the relay
      * channel/request id) — the HTTP_CANCEL / disconnect path (SV-4.2 / X1).
      * Each owned key is killed via {@see kill()} (group leader signalled + temp
-     * cleaned + entry dropped). Safe (returns 0) for unknown groups.
+     * cleaned + entry dropped), EXCEPT a key whose encode a second client is
+     * still piggybacked on, which {@see kill()} defers via the waiter guard
+     * (SV-4.2-disconnect) so the remaining waiter is still served. Safe
+     * (returns 0) for unknown groups.
      *
      * @param string $group Cancel-group id (relay channel/request id).
      *

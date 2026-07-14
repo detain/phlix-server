@@ -144,6 +144,25 @@ class TranscodeManager
     private array $segmentEncodesInFlight = [];
 
     /**
+     * SV-4.2-disconnect (landmine guard): per-segment waiter ref-count, keyed by
+     * final segment path. EVERY concurrent {@see produceSegment()} /
+     * {@see produceAudioSegment()} call — the launcher that spawned the encode AND
+     * every piggybacker that joined it — increments its `$final` on entry to the
+     * poll wait and decrements in the `finally`, so the count reflects how many
+     * clients are actively waiting on that exact segment right now. Consulted via
+     * {@see hasOtherWaiter()} by {@see SegmentProcessRegistry::kill()} so a
+     * cancel/disconnect kill skips (defers) an encode a SECOND client still wants,
+     * rather than 404-ing that piggybacker.
+     *
+     * Bounded (Workerman resident memory): the map entry is removed the instant a
+     * key's count returns to 0, and every increment is matched by a `finally`
+     * decrement, so it can never leak.
+     *
+     * @var array<string, int>
+     */
+    private array $segmentWaiters = [];
+
+    /**
      * Last global snapshot of EVERY worker's in-flight segment encodes, keyed by
      * absolute final segment path, refreshed by {@see reconcileInFlightSegments()}
      * at most once per {@see SEGMENT_INFLIGHT_RECONCILE_INTERVAL_MS}.
@@ -893,6 +912,11 @@ class TranscodeManager
 
         $launched = false;
         try {
+            // SV-4.2-disconnect (SS-1): count this client as an active waiter on
+            // $final for BOTH the launcher and the piggyback branch, BEFORE any
+            // launch/yield, so a concurrent cancel/disconnect kill can tell that a
+            // SECOND client still wants this exact segment (the finally decrements).
+            $this->incrementSegmentWaiter($final);
             if (!$reserved) {
                 // segmentEncodeInFlight was true — an encode for this exact segment
                 // is already running; piggyback on it rather than spawning a duplicate.
@@ -932,6 +956,13 @@ class TranscodeManager
                 $waited += self::SEGMENT_POLL_INTERVAL_MS;
             }
         } finally {
+            // SV-4.2-disconnect (SS-1): this client is no longer waiting on $final;
+            // decrement unconditionally (the launcher AND a piggyback both
+            // incremented) so the ref-count returns to 0 with no leak. Runs before
+            // the launched-only registry release below; both execute synchronously
+            // in this coroutine (no yield between), so no concurrent cancel can
+            // observe an inconsistent waiter/registry state.
+            $this->decrementSegmentWaiter($final);
             // Release this worker's fast-path record for the encode WE launched,
             // whether it completed, failed before/while launching, timed out, or the
             // poll threw. Always removing it here means a launched increment can
@@ -1111,6 +1142,10 @@ class TranscodeManager
 
         $launched = false;
         try {
+            // SV-4.2-disconnect (SS-1): count this client as an active waiter on
+            // $final (launcher AND piggyback), BEFORE any launch/yield, so a
+            // concurrent cancel/disconnect kill sees a second still-wanting client.
+            $this->incrementSegmentWaiter($final);
             if (!$reserved) {
                 // Dedup hit — an encode for this exact segment is already running.
                 $this->touchJobDir($dir);
@@ -1145,6 +1180,10 @@ class TranscodeManager
                 $waited += self::SEGMENT_POLL_INTERVAL_MS;
             }
         } finally {
+            // SV-4.2-disconnect (SS-1): drop this client's waiter ref-count for
+            // $final (unconditional — launcher and piggyback both incremented) so
+            // the map returns to 0 with no leak.
+            $this->decrementSegmentWaiter($final);
             if ($launched) {
                 unset($this->segmentEncodesInFlight[$final]);
                 // SV-4.2 ([S-F23]): WAIT RELEASE, not cancel — see the identical
@@ -1163,6 +1202,68 @@ class TranscodeManager
         }
 
         return is_file($final) ? $final : null;
+    }
+
+    /**
+     * Whether a client OTHER than the one being cancelled is still actively
+     * waiting on the given final segment path — the SV-4.2-disconnect landmine
+     * guard consulted by {@see SegmentProcessRegistry::kill()}.
+     *
+     * The launcher that spawned an encode is itself a waiter (it stays in its
+     * poll loop until the segment publishes or its wait-timeout), and a kill only
+     * ever reaches a still-tracked key while that launcher is present — so the
+     * launcher contributes exactly 1 to the count. A count above 1 therefore
+     * means at least one PIGGYBACKER joined the same in-flight encode and still
+     * wants the segment, so the shared encode must not be killed.
+     *
+     * @param string $final Final segment path (the registry cancel key).
+     *
+     * @return bool True when more than one waiter is present (a piggybacker exists).
+     */
+    public function hasOtherWaiter(string $final): bool
+    {
+        return ($this->segmentWaiters[$final] ?? 0) > 1;
+    }
+
+    /**
+     * The number of clients currently waiting on the given final segment path
+     * (launcher + piggybackers). Exposed for observability and leak assertions in
+     * tests; returns to 0 once every waiter's `finally` has run.
+     *
+     * @param string $final Final segment path.
+     */
+    public function waiterCount(string $final): int
+    {
+        return $this->segmentWaiters[$final] ?? 0;
+    }
+
+    /**
+     * Record that a client has entered the poll wait for `$final`
+     * (SV-4.2-disconnect SS-1). Called for BOTH the launcher and the piggyback
+     * branch, before any launch/yield.
+     *
+     * @param string $final Final segment path.
+     */
+    private function incrementSegmentWaiter(string $final): void
+    {
+        $this->segmentWaiters[$final] = ($this->segmentWaiters[$final] ?? 0) + 1;
+    }
+
+    /**
+     * Record that a client has left the poll wait for `$final`; drops the map
+     * entry once the count returns to 0 so the ref-count map never leaks
+     * (SV-4.2-disconnect SS-1).
+     *
+     * @param string $final Final segment path.
+     */
+    private function decrementSegmentWaiter(string $final): void
+    {
+        $remaining = ($this->segmentWaiters[$final] ?? 0) - 1;
+        if ($remaining > 0) {
+            $this->segmentWaiters[$final] = $remaining;
+        } else {
+            unset($this->segmentWaiters[$final]);
+        }
     }
 
     /**

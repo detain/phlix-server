@@ -251,6 +251,122 @@ final class SegmentProcessRegistryTest extends TestCase
     // default temp cleaner against actual files.
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // SV-4.2-disconnect (landmine guard): kill must be waiter-aware. When a
+    // SECOND client is still piggybacked on the launcher's shared encode, a
+    // cancel of the launcher must NOT signal the encode (it would 404 the other
+    // waiter) — it defers, leaving the entry fully tracked. With no other waiter
+    // (the common sole-cancel case) it signals + reaps exactly as before.
+    // -------------------------------------------------------------------------
+
+    public function test_kill_defers_when_another_waiter_is_present(): void
+    {
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static fn (string $key): bool => true); // a piggybacker exists
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        $killed = $registry->kill('/tmp/hls/job/seg-00001.ts');
+
+        $this->assertSame(0, $killed, 'no PID signalled while another waiter wants the segment');
+        $this->assertSame([], $this->signals, 'the shared encode must NOT be signalled');
+        $this->assertSame([], $this->cleaned, 'the live shared temp must NOT be cleaned');
+        $this->assertSame(
+            [4242],
+            $registry->pidsFor('/tmp/hls/job/seg-00001.ts'),
+            'the entry is LEFT tracked so the encode keeps running for the other waiter',
+        );
+        $this->assertSame(1, $registry->registeredKeyCount(), 'deferral must not drop the entry');
+    }
+
+    public function test_kill_signals_once_the_other_waiter_has_left(): void
+    {
+        // Model the count dropping: guard true while B waits, false after B leaves.
+        /** @var int $waiters (mutated below; captured by-ref by the guard) */
+        $waiters = 2;
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static function (string $key) use (&$waiters): bool {
+            return $waiters > 1;
+        });
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        // First cancel while B is still a waiter → deferred.
+        $this->assertSame(0, $registry->kill('/tmp/hls/job/seg-00001.ts'));
+        $this->assertSame([], $this->signals);
+        $this->assertSame(1, $registry->registeredKeyCount(), 'still tracked after deferral');
+
+        // B leaves; a subsequent kill now signals + reaps.
+        $waiters = 1;
+        $killed = $registry->kill('/tmp/hls/job/seg-00001.ts');
+
+        $this->assertSame(1, $killed);
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals);
+        $this->assertSame(['/tmp/hls/job/seg-00001.ts.part-aaa'], $this->cleaned);
+        $this->assertSame(0, $registry->registeredKeyCount(), 'reaped — no leak');
+    }
+
+    public function test_kill_signals_when_launcher_is_the_sole_waiter(): void
+    {
+        // The overwhelmingly common case: one client cancels its own sole encode.
+        // The guard reports no OTHER waiter (only the launcher) → signal + reap,
+        // exactly as before the guard existed (no relay-cancel regression).
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static fn (string $key): bool => false);
+        $registry->register('/tmp/hls/job/seg-00001.ts', 4242, null, '/tmp/hls/job/seg-00001.ts.part-aaa');
+
+        $killed = $registry->kill('/tmp/hls/job/seg-00001.ts');
+
+        $this->assertSame(1, $killed);
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals);
+        $this->assertSame(['/tmp/hls/job/seg-00001.ts.part-aaa'], $this->cleaned);
+        $this->assertSame(0, $registry->registeredKeyCount());
+    }
+
+    public function test_kill_group_defers_when_a_second_channel_still_waits(): void
+    {
+        // Relay-path regression: channel A launched the encode (group 'A' owns the
+        // key); channel B requested the same $final and piggybacked (registers no
+        // PID/group of its own — only the waiter count reflects it). A being
+        // cancelled must NOT kill the encode B still wants. Then, once B leaves,
+        // a later cancel of A does signal + reap.
+        /** @var int $waiters A (launcher) + B (piggyback); mutated below, captured by-ref by the guard */
+        $waiters = 2;
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static function (string $key) use (&$waiters): bool {
+            return $waiters > 1;
+        });
+        $final = '/tmp/hls/job/seg-v-00001.ts';
+        $registry->register($final, 4242, 'A', $final . '.part-aaa');
+
+        // Channel A cancelled while B still waits → group kill signals nothing.
+        $this->assertSame(0, $registry->killGroup('A'));
+        $this->assertSame([], $this->signals, 'B must keep being served');
+        $this->assertSame([], $this->cleaned);
+        $this->assertSame(1, $registry->registeredKeyCount(), 'encode left running for B');
+        $this->assertSame(1, $registry->registeredGroupCount(), 'group link preserved for a later reap');
+
+        // B leaves; A cancels again → now the group kill reaps the encode.
+        $waiters = 1;
+        $this->assertSame(1, $registry->killGroup('A'));
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals);
+        $this->assertSame([$final . '.part-aaa'], $this->cleaned);
+        $this->assertSame(0, $registry->registeredKeyCount(), 'reaped — no leak');
+        $this->assertSame(0, $registry->registeredGroupCount());
+    }
+
+    public function test_kill_group_signals_when_sole_channel_waiter(): void
+    {
+        // No piggybacker: the guard reports no other waiter → the relay HTTP_CANCEL
+        // path signals + reaps exactly as today.
+        $registry = $this->registry(static fn (int $pid): bool => false);
+        $registry->setWaiterGuard(static fn (string $key): bool => false);
+        $registry->register('/tmp/hls/job/seg-v-00001.ts', 4242, 'A', '/tmp/hls/job/seg-v-00001.ts.part-aaa');
+
+        $this->assertSame(1, $registry->killGroup('A'));
+        $this->assertSame([['pid' => 4242, 'signal' => SIGTERM]], $this->signals);
+        $this->assertSame(0, $registry->registeredKeyCount());
+        $this->assertSame(0, $registry->registeredGroupCount());
+    }
+
     public function test_kill_with_default_cleaner_removes_only_own_temp_not_sibling(): void
     {
         $dir = sys_get_temp_dir() . '/phlix-sv42-' . bin2hex(random_bytes(4));

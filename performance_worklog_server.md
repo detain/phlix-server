@@ -6394,3 +6394,89 @@ user-approved its removal.
 - `phpunit --filter FfmpegRunner`: **OK (60 tests, 254 assertions)**.
 - `phpunit tests/Unit/Media/Transcoding/`: **OK (343 tests, 1182 assertions)** — the SubtitleBurnIn
   live-path test methods stay green.
+
+## Implementer — SV-4.2-disconnect, Chunk 1 (shared-encode waiter ref-count landmine guard) — 2026-07-13
+
+Implemented SS-1 (make waiters countable) + SS-2 (registry kills only when there is no OTHER
+waiter). Fixes the latent **shared/deduped-encode landmine**: client A launches+owns a segment
+encode keyed by its output path `$final`; client B (a second relay channel requesting the SAME
+`$final`) piggybacks with NO PID/group of its own. Before this change, A being cancelled →
+`SegmentProcessRegistry::killGroup($G_A)` → `kill($final)` → signalled the shared ffmpeg → B's
+poll times out → **B 404s** even though B still wants the segment. No new kill call site was added
+(Chunk 2 wires the direct-disconnect caller); this chunk only makes the EXISTING `killGroup`/`kill`
+waiter-aware.
+
+### Files changed (all absolute under /home/sites/phlix/phlix-server)
+- **`src/Media/Transcoding/TranscodeManager.php`** (SS-1):
+  - New `private array $segmentWaiters = []` — per-segment waiter ref-count keyed by `$final`
+    (bounded: entry removed when count hits 0; every increment matched by a `finally` decrement).
+  - New `incrementSegmentWaiter()` / `decrementSegmentWaiter()` (private) + public predicates
+    `hasOtherWaiter(string $final): bool` (= `waiterCount > 1`) and `waiterCount(string $final): int`.
+  - `produceSegment()` (video) and `produceAudioSegment()` (audio): increment as the FIRST
+    statement inside the poll `try` (covers BOTH the launcher and the piggyback branch, before any
+    launch/yield); decrement as the FIRST statement inside the `finally` (unconditional). Registry
+    release/killGroup lines are otherwise untouched.
+  - Design invariant (documented in code): `killGroup`/`kill` only reaches a still-tracked `$final`
+    while its LAUNCHER is still in its poll (the launcher's `finally` drops the key + decrements on
+    exit and tears down the group link), so the launcher always contributes exactly 1 to the count.
+    `count > 1` therefore means "a genuine piggybacker (besides the one being cancelled) still wants
+    the segment." No `?int $excluding` needed — the "> 1" shape answers SS-2's question exactly.
+- **`src/Media/Transcoding/SegmentProcessRegistry.php`** (SS-2):
+  - New `private (callable(string):bool)|null $hasOtherWaiter` + `setWaiterGuard(?callable): void`.
+  - `kill()` now consults the guard FIRST (before the drop): if another waiter is present it DEFERS
+    — returns 0, signals nothing, cleans no temp, and LEAVES the entry fully tracked (PIDs, temps,
+    group links) so the encode keeps serving the remaining waiter(s) and a later kill (once they
+    leave) can still reap it. With no other waiter (guard null OR returns false — the common
+    sole-cancel case, and every direct-construct test) it signals + reaps EXACTLY as before. Guard
+    covers both `killGroup` (loops `kill` per key) and any direct `kill`.
+  - Class/`killGroup` docblocks updated to describe the landmine guard.
+- **`src/Common/Container/Providers/TranscodeServicesProvider.php`** (SS-2 DI wiring):
+  - The `TranscodeManager` factory now, after building `$manager`, grabs the SAME per-worker
+    `SegmentProcessRegistry` singleton already injected into `FfmpegRunner` and calls
+    `$registry->setWaiterGuard(fn($key) => $manager->hasOtherWaiter($key))`. Setter-based (no ctor/DI
+    shape change), breaking the registry↔manager cycle. Shared provider → BOTH entrypoints
+    (`public/index.php` + `start.php`) get it with one edit; no dual-entrypoint divergence.
+    Resolving `TranscodeManager` always precedes launching (hence registering) any encode, so the
+    guard is guaranteed set before any kill can find a key to reap.
+
+### Tests (mutation-proof)
+- **`tests/Unit/Media/Transcoding/SegmentProcessRegistryTest.php`** (+5): `kill` defers when
+  another waiter present (entry LEFT tracked, nothing signalled/cleaned); `kill` signals once the
+  other waiter has left; `kill` signals when the launcher is the sole waiter (no relay-cancel
+  regression); **mirrored relay regression** `killGroup` defers with a second channel waiting then
+  reaps after it leaves; `killGroup` signals when the sole channel waiter. Existing `killGroup`/temp
+  cases unchanged.
+- **`tests/Unit/Media/Transcoding/TranscodeManagerTest.php`** (+3): sole requester → waiterCount==1,
+  hasOtherWaiter false, returns to 0 (no leak); **two concurrent requesters** for the same `$final`
+  (real Swoole coroutines — launcher spawns a piggyback inside its launch callback and yields) →
+  waiterCount reaches 2, hasOtherWaiter true, returns to 0 after both finish; audio-only path
+  (`produceAudioSegment`) also ref-counts + returns to 0. The pre-existing SV-4.2
+  `killSegmentProcess`-never / release-only assertions remain green.
+
+### Acceptance mapping
+- *SS-1 waiters countable in both video+audio launcher+piggyback branches, decremented in finally,
+  no leak* → `segmentWaiters` + inc/dec in both `produceSegment`/`produceAudioSegment` (tests:
+  solo/concurrent/audio waiter-count tests, all asserting return-to-0).
+- *SS-1 predicate for "another waiter besides the one being cancelled"* → `hasOtherWaiter()`
+  (= count > 1); `waiterCount()` exposed for tests.
+- *SS-2 registry kills only when no OTHER waiter; preserves existing relay behavior in the common
+  no-other-waiter case* → `kill()` guard (defer vs signal) + DI wiring (tests: registry defer/signal
+  + mirrored relay `killGroup` regression + sole-waiter no-regression).
+
+### Verification (real numbers)
+- `php -l` on all 5 files: clean.
+- **phpstan L9 (`-c phpstan.neon.dist`) on the 3 changed src files: [OK] No errors.** On the 2
+  changed test files: only 2 PRE-EXISTING errors (`TranscodeManagerTest.php:1723` list-offset,
+  `:1920` unused-`$captOut` — both confirmed present on clean HEAD via `git stash`, in tests I did
+  not write; phpstan's gate is `src` only regardless).
+- **phpcs PSR12 on the 3 changed src files: 0 errors** (only pre-existing >120-char WARNINGS, none
+  on my added lines). Test-file snake_case method names match `SegmentProcessRegistryTest`'s existing
+  per-file convention; phpcs gate is `src/` only.
+- **`phpunit --testsuite Unit --filter 'Transcode|SegmentProcess|Ffmpeg|RelayConsumer|RequestContext'`
+  → OK (280 tests, 1293 assertions).** `SegmentProcessRegistryTest` alone: 22 OK (was 17);
+  `TranscodeManagerTest` alone: 93 OK (was 90).
+- Note (pre-existing, NOT mine): `tests/Integration/Media/Transcoding/FfmpegHlsTranscodeTest` errors
+  with `FfmpegRunner::startHlsTranscode()` undefined — that method was removed by a prior step and
+  this chunk does not touch `FfmpegRunner`; the failures are in the INTEGRATION suite and pre-date
+  this change (full Unit suite is the Test agent's gate).
+- Committed + pushed directly to master.

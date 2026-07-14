@@ -47,7 +47,12 @@ final class HealthController
     public function __construct(?ContainerInterface $container = null, string $configDir = '')
     {
         $this->container = $container;
-        $this->configDir = $configDir !== '' ? $configDir : dirname(__DIR__, 4) . '/config';
+        // Use the same config directory source as HubServicesProvider: when configDir
+        // is empty, derive it from this file's location (5 levels up = phlix-server/).
+        // This must match hub.php's config_dir (which is __DIR__) so that the fallback
+        // HubClient in getHubClient() finds hub-enrollment.json in the same location
+        // as the container-wired HubClient.
+        $this->configDir = $configDir !== '' ? $configDir : dirname(__DIR__, 5) . '/config';
     }
 
     // ─────────────────────────────────────────────────────────────────────────

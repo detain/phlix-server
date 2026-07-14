@@ -268,8 +268,11 @@ class Application
         });
 
         // P3B-S7: Network health monitoring endpoints
-        $configDirRaw = $this->config['_config_dir'] ?? 'config';
-        $configDir = is_string($configDirRaw) ? $configDirRaw : 'config';
+        // Use the same config_dir source as HubServicesProvider so the fallback
+        // HubClient in HealthController::getHubClient() finds enrollment files
+        // in the same directory the container-wired HubClient uses.
+        $hubConfig = is_array($this->config['hub'] ?? null) ? $this->config['hub'] : [];
+        $configDir = is_string($hubConfig['config_dir'] ?? null) ? $hubConfig['config_dir'] : 'config';
         $healthController = new \Phlix\Server\Http\Controllers\Admin\HealthController(
             $this->container,
             $configDir,

@@ -2193,6 +2193,29 @@ class TranscodeManagerTest extends TestCase
     }
 
     /**
+     * SV-1.1(b′) guards: applyToneMap() leaves $segParams untouched (no
+     * flag/filter injected) when the job row carries no base segment_params at
+     * all, or carries a malformed (non-JSON) segment_params — both degrade to the
+     * legacy per-segment fallback rather than throwing. Exercised directly via
+     * reflection so the defensive early-returns are pinned.
+     */
+    public function testApplyToneMapLeavesParamsUntouchedForMissingOrMalformedBase(): void
+    {
+        $captured = [];
+        $manager = $this->manager($this->mockDb([], 0, [], [], $captured), $this->createMock(FfmpegRunner::class));
+        $apply = new ReflectionMethod(TranscodeManager::class, 'applyToneMap');
+        $apply->setAccessible(true);
+        $seg = ['video_codec' => 'libx264'];
+
+        // No base segment_params on the row → returned unchanged.
+        $this->assertSame($seg, $apply->invoke($manager, [], $seg));
+        // Empty-string base → unchanged.
+        $this->assertSame($seg, $apply->invoke($manager, ['segment_params' => ''], $seg));
+        // Malformed (non-JSON) base → unchanged (json_decode yields non-array).
+        $this->assertSame($seg, $apply->invoke($manager, ['segment_params' => 'not-json{'], $seg));
+    }
+
+    /**
      * SV-1.1(b′) build proof: the REAL per-rendition params
      * ({@see TranscodeManager::segmentParamsForRendition()}) for a transcode rung,
      * once the tone-map flag+filter are merged in (as
@@ -2240,6 +2263,113 @@ class TranscodeManagerTest extends TestCase
         $this->assertSame(0, $runner->probeCalls);
         $this->assertSame(0, $runner->needsToneMappingCalls);
         $this->assertSame(0, $runner->getToneMappingProfileCalls);
+    }
+
+    /**
+     * SV-1.1 END-TO-END SESSION (the plan §2 L654-662 acceptance criterion):
+     * "a 2-hour playback triggers ≤1 ffprobe for HDR detection (ideally 0 if
+     * scanned), not ~3 per segment." This is the mandated
+     * "count probe invocations across a simulated multi-segment session" test.
+     *
+     * It drives ONE real {@see TranscodeManager::ensureHlsJob()} (the sole probe a
+     * job is allowed — subtitle/audio stream detection) followed by MANY segment
+     * builds across BOTH the legacy single-variant {@see TranscodeManager::produceSegment()}
+     * path AND the ABR-rendition path, sharing ONE call-counting
+     * {@see ToneMapSessionSpyRunner} so probe()/needsToneMapping()/getToneMappingProfile()
+     * accumulate across the whole session. The segment builds run the REAL
+     * {@see FfmpegRunner::buildSegmentCommand()} (where any per-segment re-derive
+     * would live) without spawning ffmpeg.
+     *
+     * The item is SCANNED (persisted media_streams HDR color columns, mig 073), so
+     * the HDR *decision* contributes ZERO probes — the observable TOTAL across the
+     * entire session is therefore exactly 1 (the job-creation probe), 0 additional
+     * for any of the segments. Mutation sense: red the instant any segment
+     * re-derives the HDR decision (a probe(), a needsToneMapping(), or a
+     * getToneMappingProfile() on any segment build bumps a counter).
+     */
+    public function testMultiSegmentPlaybackSessionMakesAtMostOneProbe(): void
+    {
+        $spy = new ToneMapSessionSpyRunner();
+
+        // ---- Phase 1: job creation — the ONE permitted probe -----------------
+        // Scanned HDR item: the persisted color columns supply the HDR decision
+        // (0 probes), so the single probe() is purely subtitle/audio detection.
+        $jobCaptured = [];
+        $jobDb = $this->mockDb([], 0, ['path' => '/session.mkv'], [], $jobCaptured, $this->hdrColorRow());
+        $manager = new TranscodeManager($jobDb, $spy, $this->segmentDir, null, 6);
+        $manager->ensureHlsJob('media-session', 'web');
+
+        $this->assertSame(1, $spy->probeCalls, 'job creation must probe exactly once (subtitle/audio detection)');
+
+        // The base segment_params computeSegmentParams() persisted for the HDR
+        // source: require_hdr_tone_map + the tone_map_filter resolved ONCE from the
+        // columns. Round-trip THIS into the segment job rows below.
+        $base = $this->capturedJobInsert($jobCaptured)['segment_params'];
+        $this->assertTrue($base['require_hdr_tone_map'] ?? null, 'HDR job must persist require_hdr_tone_map');
+        $this->assertSame(
+            self::CANON_TONE_MAP,
+            $base['tone_map_filter'] ?? null,
+            'tone_map_filter resolved once at job creation'
+        );
+        $baseJson = (string) json_encode($base);
+
+        // ---- Phase 2: single-variant segment sequence (produceSegment) -------
+        $svDir = $this->segmentDir . '/session-sv';
+        mkdir($svDir, 0755, true);
+        $svInput = $svDir . '/in.mkv';
+        file_put_contents($svInput, 'x');
+        $svRow = $this->onDemandJobRow($svDir, $svInput);
+        $svRow['segment_params'] = $baseJson; // the HDR base params, round-tripped
+        $svCaptured = [];
+        $svDb = $this->mockDb([], 0, [], $svRow, $svCaptured);
+        $svManager = new TranscodeManager($svDb, $spy, $this->segmentDir, null, 6);
+        foreach ([0, 1, 2, 3, 4] as $i) {
+            $path = $svManager->ensureSegment('seg-job', null, $i);
+            $this->assertSame("{$svDir}/seg-" . sprintf('%05d', $i) . '.ts', $path);
+            $this->assertFileExists((string) $path);
+        }
+
+        // ---- Phase 3: ABR rendition segment sequence -------------------------
+        // (segmentParamsForRendition rebuilds fresh per-rendition → applyToneMap
+        //  merges the flag+filter back in → produceSegment → buildSegmentCommand.)
+        $abrDir = $this->segmentDir . '/session-abr';
+        mkdir($abrDir, 0755, true);
+        $abrInput = $abrDir . '/in.mkv';
+        file_put_contents($abrInput, 'x');
+        $ladderJson = (string) json_encode(
+            (new AbrLadder())->build(
+                new SourceProfile(width: 1920, height: 1080, videoCodec: 'h264', videoBitrate: 6000000, audioCodec: 'aac'),
+                'web'
+            )->toArray()
+        );
+        $abrRow = $this->multiVariantJobRow($abrDir, $abrInput, $ladderJson);
+        $abrRow['segment_params'] = $baseJson; // carries require_hdr_tone_map + filter
+        $abrCaptured = [];
+        $abrDb = $this->mockDb([], 0, [], $abrRow, $abrCaptured);
+        $abrManager = new TranscodeManager($abrDb, $spy, $this->segmentDir, null, 6);
+        foreach ([['480p', 0], ['480p', 1], ['720p', 0], ['1080p', 2], ['360p', 3]] as [$variant, $i]) {
+            $path = $abrManager->ensureSegment('seg-job', $variant, $i);
+            $this->assertNotNull($path, "ABR {$variant}#{$i} must produce a segment");
+            $this->assertFileExists((string) $path);
+        }
+
+        // ---- The AC assertion: TOTAL probes across the WHOLE session ≤ 1 -----
+        // 5 single-variant + 5 ABR segment builds re-derived HDR ZERO times.
+        $this->assertSame(
+            1,
+            $spy->probeCalls,
+            'a full multi-segment session must probe AT MOST once (job creation only)'
+        );
+        $this->assertSame(
+            0,
+            $spy->needsToneMappingCalls,
+            'no segment may re-derive the HDR decision via needsToneMapping()'
+        );
+        $this->assertSame(
+            0,
+            $spy->getToneMappingProfileCalls,
+            'no segment may re-derive the HDR decision via getToneMappingProfile()'
+        );
     }
 
     /**

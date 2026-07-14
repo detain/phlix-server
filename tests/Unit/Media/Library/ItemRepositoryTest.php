@@ -1724,6 +1724,21 @@ class ItemRepositoryTest extends TestCase
         $this->assertNull($repo->getVideoStreamColorMetadata('movie-1'));
     }
 
+    /**
+     * SV-1.1(a): a malformed result set whose first element is not an
+     * associative row (defensive guard) resolves to null → the caller falls back
+     * to the live probe rather than crashing on a non-array row.
+     */
+    public function testGetVideoStreamColorMetadataReturnsNullForNonArrayRow(): void
+    {
+        $db = $this->createMock(Connection::class);
+        $db->method('query')->willReturn([42]);
+
+        $repo = new ItemRepository($db);
+
+        $this->assertNull($repo->getVideoStreamColorMetadata('movie-1'));
+    }
+
     public function testAddStreamInsertsStream(): void
     {
         $db = $this->createMock(Connection::class);

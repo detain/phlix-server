@@ -7183,3 +7183,86 @@ string column to the per-field default (`!== ''` guard, ItemRepository.php:1429-
 with a literal-`''` color_space/primaries flipping `isBt2020`) is unreachable: the scanner's `stringOrNull`
 collapses `''` → NULL before persistence and real ffprobe emits `unknown`/omits rather than `''` for these
 tags. Mentioned for the record only.
+
+## Test — SV-1.1 — 2026-07-14
+
+**GREEN.** Validated the integrated SV-1.1 result (`6c115e04` b + `0a738cbd` b′ + `ff0eec64` a, HEAD
+`ad57b99d`). Added the AC's explicit probe-count SESSION test + closed the last per-method coverage gaps
+on the SV-1.1 methods. NO src changed (test-only pass); NO caliber (standing directive).
+
+### FULL Unit suite (`./vendor/bin/phpunit --testsuite Unit`) — real output
+```
+...................................                           5342 / 5342 (100%)
+Time: 01:41.615, Memory: 132.50 MB
+OK, but some tests were skipped!
+Tests: 5342, Assertions: 40826, Skipped: 5.
+```
+- **5342 tests / 40826 assertions / 0 Failures / 0 Errors / 5 Skipped**, exit 0.
+- vs post-SV-4.2 baseline `da69c2e1` = 5316/0F/0E/5S → **+26** (SV-1.1 sub-steps added +22; this Test
+  pass added +4). Same 5 pre-existing skips — no regression, no new red.
+
+### Probe-count SESSION test (the AC mandate, lines 654-662) — ADDED
+No prior test simulated a WHOLE multi-segment session with a cumulative probe counter — the sub-steps'
+tests each asserted per-call (`testEnsureHlsJobHdrDecisionFromColumnsAddsZeroProbes` = job-creation only;
+`testMultiVariantRenditionToneMapParamsBuildWithoutReDeriving` = one ABR segment; the
+`FfmpegRunnerToneMapThreadingTest` builders = one segment each). So I ADDED
+`TranscodeManagerTest::testMultiSegmentPlaybackSessionMakesAtMostOneProbe` + a new PSR-4 call-counting
+spy `tests/Unit/Media/Transcoding/ToneMapSessionSpyRunner.php` (a fixed HDR HEVC-4K probe so the REAL
+`ensureHlsJob` runs; `startSegmentEncode()` drives the REAL `buildSegmentCommand` — where any re-derive
+lives — without spawning ffmpeg, publishing the segment so `produceSegment`'s poll resolves).
+- Drives ONE real `ensureHlsJob` (scanned HDR item, columns present) → **`probeCalls == 1`** (the sole
+  permitted subtitle/audio-detection probe; HDR decision is column-sourced → 0), captures the persisted
+  base `segment_params` (`require_hdr_tone_map` + `tone_map_filter` == canonical zscale graph), then
+  round-trips it through **5 single-variant** `ensureSegment(null,i)` builds AND **5 ABR-rendition**
+  builds (`480p×2, 720p, 1080p, 360p`, all libx264 transcode rungs via `segmentParamsForRendition` +
+  `applyToneMap`). Final assertion: **`probeCalls == 1`, `needsToneMappingCalls == 0`,
+  `getToneMappingProfileCalls == 0`** across the entire 10-segment session — i.e. ≤1 total probe, 0 per
+  segment, NOT ~3/segment.
+- **Mutation-verified:** temporarily disabling the threaded-filter branch in
+  `FfmpegRunner::buildSegmentCommand` (`if (false && …)`) turned it RED —
+  `getToneMappingProfileCalls == 10` (one re-derive per segment: 5 single + 5 ABR), the exact storm the
+  test guards. Reverted; src is byte-identical to HEAD (`git diff --stat -- src/` empty).
+
+### Coverage on the SV-1.1 changed methods (PCOV clover, focused instrumentation) — near/at 100%
+| method | lines | % |
+|---|---|---|
+| `ItemRepository::getVideoStreamColorMetadata` | 25/25 | 100% |
+| `FfmpegRunner::resolveToneMapFilterFromColorMeta` | 15/15 | 100% |
+| `FfmpegRunner::resolveToneMapFilterFromProbe` | 4/4 | 100% |
+| `FfmpegRunner::isHdrColorMeta` | 5/5 | 100% |
+| `TranscodeManager::computeHlsParams` (column-vs-probe decision) | 49/49 | 100% |
+| `TranscodeManager::computeSegmentParams` (column-vs-probe decision) | 21/21 | 100% |
+| `TranscodeManager::applyToneMap` | 13/13 | 100% |
+| `TranscodeManager::persistedVideoColorMetadata` | 1/1 | 100% |
+| `FfmpegRunner::buildSegmentCommand` (tone-map branch) | 100% (method 65/69 = 94.2%) |
+| `FfmpegRunner::buildHwaccelSegmentCommand` (tone-map branch) | 100% (method 90/96 = 93.8%) |
+
+- Both builders' **SV-1.1 threaded tone-map branches are fully covered**; the residual uncovered lines
+  are UNRELATED to SV-1.1 (copy-passthrough / audio-codec / encoder-preset branches — 1675/1686/1764/1779
+  and 1960/2002/2022/2113/2117/2123).
+- To reach 100% on the SV-1.1-owned methods I added 3 focused tests:
+  `FfmpegRunnerToneMappingTest::testResolveToneMapFilterFromColorMetaHonoursConfigBranches` (the
+  `prefer_hdr_output`+HDR-codec / `tone_mapping_mode=none` / `libplacebo` config branches — was 73.3%),
+  `TranscodeManagerTest::testApplyToneMapLeavesParamsUntouchedForMissingOrMalformedBase` (missing /
+  empty / non-JSON base guards — was 84.6%),
+  `ItemRepositoryTest::testGetVideoStreamColorMetadataReturnsNullForNonArrayRow` (the defensive
+  non-array-row guard — was 96%).
+- Not SV-1.1 targets, noted for honesty: `getToneMappingProfile` 0/1 (its lone line is the legacy
+  delegation that needs a REAL ffprobe on a real file — byte-covered by the `resolveToneMapFilterFromProbe`
+  tests) and `needsToneMapping` 3/4 (pre-existing probe-null branch). Neither is in the AC's target list.
+
+### Static gates
+- **phpstan L9 (`-c phpstan.neon.dist`):** `[OK] No errors` on the new spy + `FfmpegRunnerToneMappingTest`
+  + `ItemRepositoryTest`. `TranscodeManagerTest` reports exactly the **2 PRE-EXISTING** errors
+  (`offsetAccess.notFound` at the master-playlist test :1958, `closure.unusedUse $captOut` at the SV-4.2
+  test — now :2441) — both in code I did not write, confirmed present on HEAD; my additions introduce
+  ZERO new phpstan errors.
+- **phpcs PSR-12:** 0 errors on all touched files (only pre-existing >120-char line-length WARNINGS, the
+  files' established house style; my additions add none).
+- `php -m | grep -E 'swoole|uv'` → both present.
+
+### Files (all absolute)
+- ADDED `tests/Unit/Media/Transcoding/ToneMapSessionSpyRunner.php`
+- `tests/Unit/Media/Transcoding/TranscodeManagerTest.php` (+ session test, + applyToneMap-guard test)
+- `tests/Unit/Media/Transcoding/FfmpegRunnerToneMappingTest.php` (+ config-branch test)
+- `tests/Unit/Media/Library/ItemRepositoryTest.php` (+ non-array-row guard test)

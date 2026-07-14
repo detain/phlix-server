@@ -250,4 +250,45 @@ final class FfmpegRunnerToneMappingTest extends TestCase
 
         $this->assertNull($runner->resolveToneMapFilterFromColorMeta(null, 'libx264'));
     }
+
+    /**
+     * SV-1.1(a): the config-driven branches of the column-sourced resolver
+     * (extracted verbatim from resolveToneMapFilterFromProbe, so this pins the
+     * shared decision logic). HDR metadata still yields NO tone-map filter when
+     * (a) prefer_hdr_output is on AND the final codec can carry HDR (the output
+     * stays HDR10), or (b) tone-mapping is disabled; and it routes to the
+     * libplacebo builder when that mode is selected.
+     */
+    public function testResolveToneMapFilterFromColorMetaHonoursConfigBranches(): void
+    {
+        $hdr = [
+            'color_space' => 'bt2020nc',
+            'color_transfer' => 'smpte2084',
+            'color_primaries' => 'bt2020',
+            'max_luminance' => 1000.0,
+            'avg_luminance' => 200.0,
+        ];
+
+        // (a) prefer_hdr_output + an HDR-capable codec → keep HDR, no tone-map.
+        $preferHdr = $this->runner();
+        $preferHdr->setConfig(['prefer_hdr_output' => true]);
+        $this->assertNull($preferHdr->resolveToneMapFilterFromColorMeta($hdr, 'libx265'));
+        // ...but a non-HDR-capable codec (libx264) still tone-maps to SDR.
+        $this->assertNotNull($preferHdr->resolveToneMapFilterFromColorMeta($hdr, 'libx264'));
+
+        // (b) tone-mapping explicitly disabled → null even for HDR.
+        $noneMode = $this->runner();
+        $noneMode->setConfig(['tone_mapping_mode' => 'none']);
+        $this->assertNull($noneMode->resolveToneMapFilterFromColorMeta($hdr, 'libx264'));
+
+        // (c) libplacebo mode routes to the libplacebo builder (forced-available).
+        $libplacebo = $this->runner();
+        $libplacebo->setConfig(['tone_mapping_mode' => 'libplacebo']);
+        $this->forceLibplaceboDetected($libplacebo, true);
+        $this->assertSame(
+            'libplacebo=tonemapping=hable:colorspace=bt709:'
+                . 'color_primaries=bt709:color_trc=bt709:range=tv,format=yuv420p',
+            $libplacebo->resolveToneMapFilterFromColorMeta($hdr, 'libx264')
+        );
+    }
 }
